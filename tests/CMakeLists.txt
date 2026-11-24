@@ -3410,6 +3410,13 @@ wowee_add_test(test_collision_swim
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_swim.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_swim_motion ─────────────────────────────────────────
+# How a swimmer and a flyer move by their keys: along the pitch, up and down at
+# the speed itself, no buoyancy. Header-only.
+wowee_add_test(test_swim_motion
+    SOURCES test_swim_motion.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_mover_report ────────────────────────────────────────
 # What the movement state is told of a step: a fall ended on ground however it
 # came there, a swim its flags do not say. Header-only.

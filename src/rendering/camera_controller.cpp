@@ -27,6 +27,7 @@
 #include "rendering/collision_fall.hpp"
 #include "rendering/collision_swim.hpp"
 #include "rendering/collision_hover.hpp"
+#include "rendering/swim_motion.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
@@ -675,11 +676,6 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
     }
 
     if (!externalFollow_) {
-        // The water's surface here, for the swimmer's float to it.
-        std::optional<float> waterH;
-        if (waterRenderer) {
-            waterH = waterRenderer->getWaterHeightAt(targetPos.x, targetPos.y);
-        }
         // Whether the unit swims is the client's decision (0x00730d10) from
         // the liquid where it looks (portLiquidLevelAt); a jump out of the
         // water is the swim step's (0x00760b40, portMove).
@@ -707,96 +703,37 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         }
         swimming = true;
         jumpLocked_ = false;
-        // Swim movement follows look pitch (f.forward/back), while strafe stays
-        // lateral for stable control.
-        float swimSpeed = (swimSpeedOverride_ > 0.0f && swimSpeedOverride_ < 100.0f && !std::isnan(swimSpeedOverride_))
-                              ? swimSpeedOverride_ : f.speed * SWIM_SPEED_FACTOR;
-        float waterSurfaceZ = waterH ? (*waterH - swimFloatDepth()) : targetPos.z;
-
-        // For auto-run/auto-swim: use character facing (immune to camera pan)
-        // For manual W key: use camera direction (swim where you look)
-        glm::vec3 swimForward;
-        if (autoRunning || (leftMouseDown && rightMouseDown)) {
-            // Auto-running: use character's horizontal facing direction
-            swimForward = f.forward;
-        } else {
-            // Manual control: use camera's 3D direction (swim where you look)
-            swimForward = glm::normalize(f.swimForward3D);
-            if (glm::dot(swimForward, swimForward) < 1e-8f) {
-                swimForward = f.forward;
-            }
-        }
-        // Use character's facing direction for strafe, not camera's right vector
-        glm::vec3 swimRight = f.right;  // Character's right (horizontal facing), not camera's
-
-        float swimBackSpeed = (swimBackSpeedOverride_ > 0.0f && swimBackSpeedOverride_ < 100.0f
-                                && !std::isnan(swimBackSpeedOverride_))
-                                   ? swimBackSpeedOverride_ : swimSpeed * 0.5f;
-
-        glm::vec3 swimMove(0.0f);
-        if (f.nowForward) swimMove += swimForward;
-        if (f.nowBackward) swimMove -= swimForward;
-        if (f.nowStrafeLeft) swimMove += swimRight;
-        if (f.nowStrafeRight) swimMove -= swimRight;
-
-        float swimMoveLenSq = glm::dot(swimMove, swimMove);
-        if (swimMoveLenSq > 1e-6f) {
-            swimMove *= glm::inversesqrt(swimMoveLenSq);
-            // Use backward swim speed when moving backwards only (not when combining with strafe)
-            float applySpeed = (f.nowBackward && !f.nowForward) ? swimBackSpeed : swimSpeed;
-            targetPos += swimMove * applySpeed * f.physicsDeltaTime;
-            locomotionSpeed_ = applySpeed;
-        }
-
-        // Spacebar = swim up, X = swim down (both continuous, not a jump)
-        // Flags2 0x1 holds the rise and the dive as well (0x009898e0).
-        bool diveKey = f.xDown && !f.noAscendDescend;
-        bool diveIntent = diveKey || (f.nowForward && (f.swimForward3D.z < -0.28f));
+        const float swimSpeed =
+            (swimSpeedOverride_ > 0.0f && swimSpeedOverride_ < 100.0f && !std::isnan(swimSpeedOverride_))
+                ? swimSpeedOverride_ : f.speed * SWIM_SPEED_FACTOR;
+        const float swimBackSpeed = (swimBackSpeedOverride_ > 0.0f && swimBackSpeedOverride_ < 100.0f &&
+                                     !std::isnan(swimBackSpeedOverride_))
+                                        ? swimBackSpeedOverride_ : swimSpeed * 0.5f;
+        // By its keys alone (0x00987b50): along its facing at its pitch, up
+        // and down at the swim speed. A depth kept is a depth held - there is
+        // no buoyancy, and one that logs in a yard under the surface drowns
+        // there if nothing is pressed, as the server has it.
+        collision::SwimFlyKeys keys;
+        keys.forward = f.nowForward;
+        keys.backward = f.nowBackward;
+        keys.left = f.nowStrafeLeft;
+        keys.right = f.nowStrafeRight;
+        // Flags2 0x1 holds the rise and the dive (0x009898e0).
+        keys.rising = f.spaceHeld && !f.noAscendDescend;
+        keys.sinking = !keys.rising && f.xDown && !f.noAscendDescend;
         // The swim-up and swim-down keys held, which tilt the body 45
         // degrees as it swims (swim_pitch.hpp).
-        swimRising_ = f.spaceHeld && !f.noAscendDescend;
-        swimDiving_ = !swimRising_ && diveKey;
-        if (f.spaceHeld && !f.noAscendDescend) {
-            verticalVelocity = SWIM_BUOYANCY;
-        } else if (diveKey) {
-            verticalVelocity = -SWIM_BUOYANCY;
-        } else {
-            // No vertical key held. Retail holds depth here rather than
-            // pulling the swimmer back to the surface: a character can idle
-            // underwater and drown doing it, which a surface spring would
-            // make impossible. The old behaviour yanked you up unless you
-            // were actively diving, so a dive only held while a key was
-            // down. Bleed off whatever vertical momentum was carried in and
-            // then hover.
-            verticalVelocity *= std::max(0.0f, 1.0f - SWIM_VERTICAL_DAMPING * f.physicsDeltaTime);
-            if (std::abs(verticalVelocity) < 0.05f) verticalVelocity = 0.0f;
-
-            // Near the surface a body does float up to it, which is what
-            // keeps a swimmer's head out of the water instead of drifting
-            // just below. Only within a short band, and not while the look
-            // direction says the player is diving.
-            const float surfaceErr = waterSurfaceZ - targetPos.z;
-            if (!diveIntent && surfaceErr > 0.0f && surfaceErr < SWIM_FLOAT_BAND) {
-                verticalVelocity += surfaceErr * 6.0f * f.physicsDeltaTime;
-                if (surfaceErr < 0.06f && std::abs(verticalVelocity) < 0.35f) {
-                    verticalVelocity = 0.0f;
-                }
-            }
-        }
-
-        targetPos.z += verticalVelocity * f.physicsDeltaTime;
-
-        // Don't rise above water surface - unless rising: the swim step
-        // (0x00760b40, portMove) holds the swimmer under the surface itself,
-        // the liquid swept as a ceiling three quarters of a body over its
-        // feet, and a swimmer rising (+0x44 0x400000) into that ceiling
-        // jumps out of the water (0x009883f0, at 9.1 yd/s). Clamped here,
-        // the rise never reached the ceiling and the swimmer could not
-        // leave the water at the surface nor hop onto a ledge from it.
-        if (waterH && targetPos.z > *waterH - swimFloatDepth() && !portAscending_) {
-            targetPos.z = *waterH - swimFloatDepth();
-            if (verticalVelocity > 0.0f) verticalVelocity = 0.0f;
-        }
+        swimRising_ = keys.rising;
+        swimDiving_ = keys.sinking;
+        const float applySpeed = collision::swimFlySpeed(keys, swimSpeed, swimBackSpeed);
+        targetPos += collision::swimFlyVelocity(keys, glm::vec2(f.forward), glm::vec2(f.right),
+                                                glm::radians(swimPitchDeg_), applySpeed) *
+                     f.physicsDeltaTime;
+        if (keys.moves()) locomotionSpeed_ = applySpeed;
+        // What holds it under the surface is the swim step itself (0x00760b40,
+        // portMove): the liquid swept as a ceiling three quarters of a body
+        // over its feet, and a swimmer rising into it jumps out.
+        verticalVelocity = 0.0f;
 
         grounded = false;
         } else {
@@ -821,35 +758,29 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             jumpLocked_ = false;
             verticalVelocity = 0.0f;
 
-            // Forward/back along the mount's facing at the flight pitch - see
-            // flightForward. The camera's own look direction is not it.
-            glm::vec3 flyFwd = f.flightForward;
-            if (glm::dot(flyFwd, flyFwd) < 1e-8f) flyFwd = f.forward;
-            glm::vec3 flyMove(0.0f);
-            if (f.nowForward)     flyMove += flyFwd;
-            if (f.nowBackward)    flyMove -= flyFwd;
-            if (f.nowStrafeLeft)  flyMove += f.right;
-            if (f.nowStrafeRight) flyMove -= f.right;
+            // Along the mount's facing at the flight pitch. The camera's own
+            // look direction is not it.
+            const float flySpeed = (flightSpeedOverride_ > 0.0f && flightSpeedOverride_ < 200.0f &&
+                                    !std::isnan(flightSpeedOverride_))
+                                       ? flightSpeedOverride_ : f.speed;
+            const float flyBackSpeed = (flightBackSpeedOverride_ > 0.0f && flightBackSpeedOverride_ < 200.0f &&
+                                        !std::isnan(flightBackSpeedOverride_))
+                                           ? flightBackSpeedOverride_ : flySpeed * 0.5f;
             // Space = ascend, X = descend while airborne (works on foot too,
-            // e.g. .gm fly, not just on a flying mount).
-            // Flags2 0x1 holds both (0x009898e0).
-            bool flyDescend = !f.uiWantsKeyboard && f.xDown && !f.noAscendDescend;
-            if (f.spaceHeld && !f.noAscendDescend) flyMove.z += 1.0f;
-            if (flyDescend)      flyMove.z -= 1.0f;
-            float flyMoveLenSq = glm::dot(flyMove, flyMove);
-            if (flyMoveLenSq > 1e-6f) {
-                flyMove *= glm::inversesqrt(flyMoveLenSq);
-                float flyFwdSpeed = (flightSpeedOverride_ > 0.0f && flightSpeedOverride_ < 200.0f
-                                     && !std::isnan(flightSpeedOverride_))
-                                        ? flightSpeedOverride_ : f.speed;
-                float flyBackSpeed = (flightBackSpeedOverride_ > 0.0f && flightBackSpeedOverride_ < 200.0f
-                                      && !std::isnan(flightBackSpeedOverride_))
-                                         ? flightBackSpeedOverride_ : flyFwdSpeed * 0.5f;
-                float flySpeed = (f.nowBackward && !f.nowForward) ? flyBackSpeed : flyFwdSpeed;
-                targetPos += flyMove * flySpeed * f.physicsDeltaTime;
-                locomotionSpeed_ = flySpeed;
-            }
-            targetPos.z += verticalVelocity * f.physicsDeltaTime;
+            // e.g. .gm fly, not just on a flying mount). Flags2 0x1 holds both
+            // (0x009898e0).
+            collision::SwimFlyKeys keys;
+            keys.forward = f.nowForward;
+            keys.backward = f.nowBackward;
+            keys.left = f.nowStrafeLeft;
+            keys.right = f.nowStrafeRight;
+            keys.rising = f.spaceHeld && !f.noAscendDescend;
+            keys.sinking = !keys.rising && !f.uiWantsKeyboard && f.xDown && !f.noAscendDescend;
+            const float applySpeed = collision::swimFlySpeed(keys, flySpeed, flyBackSpeed);
+            targetPos += collision::swimFlyVelocity(keys, glm::vec2(f.forward), glm::vec2(f.right),
+                                                    glm::radians(flightPitchDeg_), applySpeed) *
+                         f.physicsDeltaTime;
+            if (keys.moves()) locomotionSpeed_ = applySpeed;
 
             // Skip all ground physics - go straight to collision/WMO sections
         } else {
