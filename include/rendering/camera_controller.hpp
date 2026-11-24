@@ -455,6 +455,11 @@ public:
     void setMoverHeld(bool held) { moverHeld_ = held; }
     /// Whether the mover's keys move it at all (0x005fac90, game/mover_keys.hpp).
     void setMoverKeysMove(bool may) { moverKeysMove_ = may; }
+    /// Whether its keys, and the mouse, turn it (0x005fa0d0, 0x005fa110).
+    void setMoverTurns(bool byKeys, bool byMouse) {
+        moverKeysTurn_ = byKeys;
+        moverMouseTurns_ = byMouse;
+    }
     /// The mover stopped with its keys as they are (0x0071ae10): forward and
     /// back start nothing until they come to rest (forwardBackStopHolds).
     void stopForwardBack() { forwardBackStopped_ = true; }
@@ -1304,6 +1309,8 @@ private:
     bool moverNoJump_ = false;    ///< the mover's flags2 0x2
     bool moverHeld_ = false;      ///< 0x0074ba40: the mover may not move
     bool moverKeysMove_ = true;
+    bool moverKeysTurn_ = true;
+    bool moverMouseTurns_ = true;
     bool forwardBackStopped_ = false;  ///< 0x0071ae10 with the input's +4 0x10000 kept
     bool yawFollowsVehicleCamera_ = false;  ///< a driver's vehicle camera turns the camera (0x00604490)
     // Server-driven gravity disable (levitate/hover): skip gravity accumulation.

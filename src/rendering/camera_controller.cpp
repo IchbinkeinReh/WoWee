@@ -2320,6 +2320,7 @@ void CameraController::update(float deltaTime) {
     // Nor a turn or a jump for a held mover (0x005fa0d0, 0x005fbf80 ->
     // 0x0074ba40).
     if (moverHeld_) nowTurnLeft = nowTurnRight = nowJump = false;
+    if (!moverKeysTurn_) nowTurnLeft = nowTurnRight = false;
     if (!moverKeysMove_) nowJump = false;
     if (nowJump && thirdPerson && followTarget && moverState_.jumpPressed) {
         const auto liquid = portLiquidLevelAt(*followTarget);
@@ -2371,7 +2372,7 @@ void CameraController::update(float deltaTime) {
     // brought to the mover's pitch (0x005fa910), so the two pitch together.
     const int pitchKeys = int(held(kControlPitchUp)) - int(held(kControlPitchDown));
     const bool pitchKeysPitch = pitchKeys != 0 && !uiWantsKeyboard && !movementSuppressed && !rightMouseDown &&
-                                !moverHeld_ && (swimming || isFlightAirborne());
+                                !moverHeld_ && moverKeysTurn_ && (swimming || isFlightAirborne());
     nowPitchKeys_ = pitchKeysPitch ? pitchKeys : 0;
     if (pitchKeysPitch) {
         const float pitched = float(pitchKeys) * 180.0f * (moverState_.pitchShare ? moverState_.pitchShare() : 1.0f) *
@@ -2448,8 +2449,10 @@ void CameraController::update(float deltaTime) {
     // character turns to face where the player is looking, so that walking
     // forward goes where the screen points.
     // Not a swimmer click-to-move steers: it turns the mover itself.
-    bool cameraDrivesFacing = rightMouseDown || mouseAutorun || steering_ ||
-                              (swimming && hasMoveInput && !clickToMoveActive_);
+    // Nor one that may not be turned: the stunned, the dead, one sitting.
+    const bool mouseSteers = (rightMouseDown || mouseAutorun || steering_) && moverMouseTurns_;
+    bool cameraDrivesFacing =
+        mouseSteers || (swimming && hasMoveInput && !clickToMoveActive_ && moverKeysTurn_);
     // During taxi flights, orientation is controlled by the flight path, not player input
     if (cameraDrivesFacing && !externalFollow_) {
         facingYaw = yaw;
@@ -2512,7 +2515,7 @@ void CameraController::update(float deltaTime) {
     }
     // Not "swimming and moving", which turns the facing here: the pitch
     // follows the camera only while the camera steers.
-    if ((rightMouseDown || mouseAutorun || steering_) && !externalFollow_) {
+    if (mouseSteers && !externalFollow_) {
         const float len = glm::length(forward3D);
         if (len > 1e-4f) swimPitchDeg_ = glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f)));
     }

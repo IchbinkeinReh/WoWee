@@ -63,3 +63,21 @@ TEST_CASE("the dead are not moved by their keys", "[mover_keys]") {
     CHECK_FALSE(keysMayMove(0, 0));
     CHECK_FALSE(keysMayMove(100, 7));
 }
+
+// A stunned character turned, a dead one too, and the mouse turned one that sat.
+TEST_CASE("the stunned and the dead do not turn, nor does the mouse turn one sitting", "[mover_keys]") {
+    using namespace wowee::game;
+    CHECK(keysMayTurn(100, 0));
+    CHECK(keysMayTurn(1, 0x8));
+    CHECK_FALSE(keysMayTurn(100, 0x40000));
+    CHECK_FALSE(keysMayTurn(0, 0));
+    CHECK(mouseMayTurn(100, 0, 0));
+    CHECK_FALSE(mouseMayTurn(100, 0, 1));
+    CHECK_FALSE(mouseMayTurn(100, 0, 8));
+    CHECK_FALSE(mouseMayTurn(100, 0x40000, 0));
+    // Knocked down, neither.
+    CHECK_FALSE(keysMayTurn(100, 0, 121));
+    CHECK_FALSE(keysMayMove(100, 0, 121));
+    CHECK_FALSE(keysMayMove(100, 0, 350));
+    CHECK(keysMayMove(100, 0, 5));
+}

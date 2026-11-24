@@ -4790,10 +4790,29 @@ void Application::applyServerMovementState(float deltaTime) {
         const auto moverEntity = gameHandler->getEntityManager().getEntity(gameHandler->activeMover());
         const auto* moverUnit =
             moverEntity && moverEntity->isUnit() ? static_cast<const game::Unit*>(moverEntity.get()) : nullptr;
-        const bool keysMove = !moverUnit || game::keysMayMove(static_cast<int32_t>(moverUnit->getHealth()),
-                                                              moverUnit->getStandState());
+        bool keysMove = true, keysTurn = true, mouseTurns = true;
+        if (moverUnit) {
+            uint32_t animation = 0;
+            float timeMs = 0.0f, durationMs = 0.0f;
+            const uint32_t instance = entitySpawner_ ? entitySpawner_->unitAnimationInstance(moverUnit->getGuid()) : 0;
+            if (auto* cr = renderer->getCharacterRenderer(); !cr || instance == 0 ||
+                                                             !cr->getAnimationState(instance, animation, timeMs, durationMs))
+                animation = 0;
+            const auto health = static_cast<int32_t>(moverUnit->getHealth());
+            // The player's own as its keys have it already (0x006dcb40), the dead's
+            // as the server says.
+            constexpr uint8_t kSits = 1, kStandDead = 7;
+            uint8_t stand = moverUnit->getStandState();
+            if (moverUnit->getGuid() == gameHandler->getPlayerGuid() && gameHandler->getStandState() != kStandDead)
+                stand = renderer->getCameraController()->isSitting() ? kSits : 0;
+            keysMove = game::keysMayMove(health, stand, animation);
+            // Stunned it does not turn either, nor does the mouse turn it sitting.
+            keysTurn = game::keysMayTurn(health, moverUnit->getUnitFlags(), animation);
+            mouseTurns = game::mouseMayTurn(health, moverUnit->getUnitFlags(), stand, animation);
+        }
         renderer->getCameraController()->setMovementRooted(gameHandler->isPlayerRooted());
         renderer->getCameraController()->setMoverKeysMove(keysMove);
+        renderer->getCameraController()->setMoverTurns(keysTurn, mouseTurns);
         // The mover's flags2 hold its strafe and jump keys.
         const auto held = game::vehicle::moverKeyRestrictions(gameHandler->getMovementInfo().flags2);
         renderer->getCameraController()->setMoverKeyRestrictions(held.noStrafe, held.noJump);
