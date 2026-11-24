@@ -2746,6 +2746,16 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
             owner_.playerDeadRef() = true;
             LOG_INFO("Player logged in as ghost (PLAYER_FLAGS)");
             if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
+        } else if (unit->getHealth() > 0 && (owner_.playerDeadRef() || owner_.releasedSpiritRef()) &&
+                   ((unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0 || playerFeigningDeath_)) {
+            // A death is over where the player's new object has health and is
+            // no ghost's: brought back between the maps (0x0073d530 asks the
+            // health, whatever the object before it had).
+            if (owner_.releasedSpiritRef() && owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(false);
+            owner_.playerDeadRef() = false;
+            owner_.releasedSpiritRef() = false;
+            owner_.selfResAvailableRef() = false;
+            LOG_INFO("Player alive again in its new object");
         }
         // 0x00528010, a world entered: no corpse and no graveyard, and a ghost
         // asks where its own lies.
