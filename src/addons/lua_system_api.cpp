@@ -7543,6 +7543,19 @@ static int lua_PlayerIsPVPInactive(lua_State* L) {
 //
 // The description is nil: BattlemasterList.dbc carries no blurb, and the panel
 // treats a missing one as "no description" rather than raising on it.
+/// The player's side by its race's faction (0x006d6e90): 0 the Horde's, 1 the
+/// Alliance's, -1 neither.
+static int playerFactionSide(game::GameHandler* gh) {
+    auto races = loadedDBC(gh, "ChrRaces.dbc");
+    auto templates = loadedDBC(gh, "FactionTemplate.dbc");
+    if (!races || !templates || races->getFieldCount() < 3 || templates->getFieldCount() < 4) return -1;
+    const int32_t race = races->findRecordById(gh->getPlayerRace());
+    const int32_t faction = race >= 0 ? templates->findRecordById(races->getUInt32(static_cast<uint32_t>(race), 2)) : -1;
+    if (faction < 0) return -1;
+    const uint32_t group = templates->getUInt32(static_cast<uint32_t>(faction), 3);
+    return (group & 4u) != 0 ? 0 : (group & 2u) != 0 ? 1 : -1;
+}
+
 static int lua_GetBattlefieldInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return luaReturnNil(L);
@@ -7552,7 +7565,15 @@ static int lua_GetBattlefieldInfo(lua_State* L) {
     if (!info || info->name.empty()) return luaReturnNil(L);
     const auto& bg = bgs.back();
     lua_pushstring(L, info->name.c_str());   // 1: mapName
-    lua_pushnil(L);                          // 2: mapDescription
+    // 2: what Map.dbc says of its first map to the player's side (0x0054d770).
+    auto maps = loadedDBC(gh, "Map.dbc");
+    const int32_t map = maps && !info->mapIds.empty() ? maps->findRecordById(info->mapIds.front()) : -1;
+    const int side = playerFactionSide(gh);
+    constexpr uint32_t kMapDescription[2] = {23, 40};
+    if (map >= 0 && side >= 0 && maps->getFieldCount() > kMapDescription[1])
+        lua_pushstring(L, maps->getString(static_cast<uint32_t>(map), kMapDescription[side]).c_str());
+    else
+        lua_pushnil(L);
     lua_pushnumber(L, info->maxGroupSize);   // 3: maxGroup
     // Three more, all of which the panel reads. Whether the player is inside
     // the level bracket the server sent, whether this is the week's call to
