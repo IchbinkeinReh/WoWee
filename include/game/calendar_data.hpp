@@ -254,6 +254,17 @@ constexpr uint32_t kRaidReset       = 0x0200;
 constexpr uint32_t kGuildEvent      = 0x0400;
 }  // namespace calendar_flag
 
+/// CalendarGetDayEvent's texture (0x005c0fb0), always a string: a holiday's
+/// own, the dungeon's of an event of players or a guild that names one, else
+/// none. `dungeonTexture(id)` answers "" for a dungeon there is not.
+template <typename DungeonTexture>
+[[nodiscard]] std::string calendarRowTexture(uint32_t flags, int32_t dungeonId, const std::string& holidayTexture,
+                                             DungeonTexture&& dungeonTexture) {
+    if (flags & calendar_flag::kHoliday) return holidayTexture;
+    if ((flags & 0x543u) != 0 && dungeonId >= 0) return dungeonTexture(dungeonId);
+    return {};
+}
+
 /// CalendarInviteStatus values the handlers act on.
 namespace calendar_status {
 constexpr uint8_t kInvited     = 0;

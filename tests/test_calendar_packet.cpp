@@ -1495,3 +1495,16 @@ TEST_CASE("The table's holidays stand beside the ones the server sends", "[calen
     // Without the table, what the server sends.
     CHECK(calendarMergedHolidays({}, {unknown}).size() == 1);
 }
+
+TEST_CASE("A day's row names its texture, never a number", "[calendar]") {
+    // 0x005c0fb0
+    const auto dungeon = [](int32_t id) { return id == 214 ? std::string("Naxxramas") : std::string(); };
+    CHECK(calendarRowTexture(calendar_flag::kHoliday, 214, "Calendar_ThanksGiving", dungeon) ==
+          "Calendar_ThanksGiving");
+    CHECK(calendarRowTexture(calendar_flag::kPlayer, 214, "", dungeon) == "Naxxramas");
+    CHECK(calendarRowTexture(calendar_flag::kGuildEvent, 214, "", dungeon) == "Naxxramas");
+    CHECK(calendarRowTexture(calendar_flag::kPlayer, 999, "", dungeon).empty());
+    CHECK(calendarRowTexture(calendar_flag::kPlayer, -1, "x", dungeon).empty());
+    CHECK(calendarRowTexture(calendar_flag::kRaidLockout, 214, "x", dungeon).empty());
+    CHECK(calendarRowTexture(calendar_flag::kSystem, 214, "x", dungeon).empty());
+}

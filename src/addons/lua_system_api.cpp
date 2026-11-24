@@ -11831,16 +11831,25 @@ void registerSystemLuaAPI(lua_State* L) {
                 //   inviteType, sequenceIndex, numSequenceDays, difficultyName
                 //
                 // A nil title is how the list ends - the interface tests
-                // `if ( title and sequenceType ~= "ONGOING" )` - so an index
-                // past the day's rows answers nothing at all rather than a row
-                // of blanks, which would draw an empty button on every day.
+                // `if ( title and sequenceType ~= "ONGOING" )` - with the other
+                // fourteen blank (0x005c1070).
                 {"CalendarGetDayEvent", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: CalendarGetDayEvent([-1.0.1], monthDay, index)");
+            const auto none = [L]() {
+                lua_pushnil(L);
+                for (const char v : std::string_view("00ss0ss0s0000s")) {
+                    if (v == '0') lua_pushnumber(L, 0);
+                    else lua_pushstring(L, "");
+                }
+                return 15;
+            };
             const auto rows = calendarDayRows(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 3, 0));
-            if (index < 1 || static_cast<size_t>(index) > rows.size()) return 0;
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 3)));
+            if (index < 1 || static_cast<size_t>(index) > rows.size()) return none();
             const auto& row = rows[static_cast<size_t>(index) - 1];
             auto* gh = getGameHandler(L);
-            if (!gh) return 0;
+            if (!gh) return none();
             const wowee::game::CalendarData& cal = gh->getCalendarData();
 
             if (row.kind == wowee::game::CalendarEntryKind::RaidLockout) {
@@ -11851,17 +11860,24 @@ void registerSystemLuaAPI(lua_State* L) {
                 lua_pushstring(L, "RAID_LOCKOUT");
                 lua_pushstring(L, "");             // sequenceType
                 lua_pushnumber(L, 0);              // eventType
-                lua_pushnumber(L, 0);              // texture
+                lua_pushstring(L, "");             // texture
                 lua_pushstring(L, "");             // modStatus
                 lua_pushnumber(L, 1);              // inviteStatus
                 lua_pushstring(L, "");             // invitedBy
-                lua_pushnumber(L, lock.difficulty);
+                lua_pushnumber(L, lock.difficulty + 1);
                 lua_pushnumber(L, 1);              // inviteType
                 lua_pushnumber(L, row.sequenceIndex + 1);
                 lua_pushnumber(L, row.numSequenceDays);
-                lua_pushstring(L, "");             // difficultyName
+                lua_pushstring(L, gh->savedInstanceDifficultyName(lock.mapId, lock.difficulty).c_str());
                 return 15;
             }
+            const auto texture = [gh](uint32_t flags, int32_t dungeonId, const std::string& holiday) {
+                return wowee::game::calendarRowTexture(flags, dungeonId, holiday, [gh](int32_t id) {
+                    for (const auto& d : gh->getLfgDungeons())
+                        if (d.id == static_cast<uint32_t>(id)) return d.texture;
+                    return std::string();
+                });
+            };
             if (row.kind == wowee::game::CalendarEntryKind::Holiday) {
                 const auto& holiday = cal.holidays[row.index];
                 // Its HolidayNames name (0x005b9430).
@@ -11877,7 +11893,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 lua_pushstring(L, calendarSequenceType(wowee::game::calendar_flag::kHoliday, row.sequenceIndex,
                                                        row.numSequenceDays));
                 lua_pushnumber(L, 0);              // eventType
-                lua_pushnumber(L, static_cast<double>(holiday.id));  // texture
+                lua_pushstring(L, texture(wowee::game::calendar_flag::kHoliday, -1,
+                                          holiday.textureFilename.empty() && text ? text->texture
+                                                                                  : holiday.textureFilename).c_str());
                 lua_pushstring(L, "");             // modStatus
                 lua_pushnumber(L, 1);              // inviteStatus
                 lua_pushstring(L, "");             // invitedBy
@@ -11903,10 +11921,10 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushstring(L, calendarTypeName(ev));
             lua_pushstring(L, "");                 // sequenceType: single day
             lua_pushnumber(L, static_cast<double>(ev.type) + 1);
-            lua_pushnumber(L, 0);                  // texture
+            lua_pushstring(L, texture(ev.flags, ev.dungeonId, {}).c_str());
             lua_pushstring(L, calendarModeratorText(rec.invite.flags));
             lua_pushnumber(L, rec.invite.status + 1);
-            lua_pushstring(L, "");                 // invitedBy
+            lua_pushstring(L, gh->lookupName(ev.creatorGuid).c_str());   // invitedBy (0x0067d770)
             lua_pushnumber(L, 0);                  // difficulty
             lua_pushnumber(L, calendarInviteType(rec));
             lua_pushnumber(L, row.sequenceIndex + 1);
