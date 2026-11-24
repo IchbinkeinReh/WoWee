@@ -96,6 +96,19 @@ QuestGiverStatus QuestHandler::getQuestGiverStatus(uint64_t guid) const {
     return (it != npcQuestStatus_.end()) ? it->second : QuestGiverStatus::NONE;
 }
 
+QuestLogRows<QuestHandler::QuestLogEntry> QuestHandler::questLogRows() const {
+    const auto titleOf = [this](int32_t group) {
+        std::string name;
+        if (group > 0) name = owner_.getWhoAreaName(static_cast<uint32_t>(group));
+        else if (group < 0) name = owner_.getQuestSortName(static_cast<uint32_t>(-group));
+        // A quest whose query response has not landed has no zone yet, and one
+        // whose zone is not in the file still has to sit somewhere nameable.
+        return name.empty() ? std::string("Miscellaneous") : name;
+    };
+    return wowee::game::questLogRows(questLog_, collapsedQuestGroups_, titleOf,
+                                     static_cast<int32_t>(owner_.getPlayerLevel()));
+}
+
 void QuestHandler::reconcileItemObjectivesFromInventory(
     const std::unordered_map<uint32_t, uint32_t>& carriedCounts) {
     bool changedAny = false;
@@ -783,11 +796,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                         owner_.questProgressCallbackRef()(quest.title, creatureName, count, reqCount);
                     }
                     if (owner_.addonEventCallbackRef()) {
-                        // The log INDEX, not the quest id. QuestLog_OnEvent
-                        // hands arg1 straight to GetNumQuestLeaderBoards and
-                        // AddQuestWatch, both of which count positions in the
-                        // log - so a quest id addressed whichever quest
-                        // happened to sit at that position, or none.
+                        // The log index, headers counted, not the quest id:
+                        // QuestLog_OnEvent hands arg1 straight to
+                        // GetNumQuestLeaderBoards and AddQuestWatch.
                         owner_.addonEventCallbackRef()("QUEST_WATCH_UPDATE",
                             {std::to_string(questLogIndexOf(questId))});
                         owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});

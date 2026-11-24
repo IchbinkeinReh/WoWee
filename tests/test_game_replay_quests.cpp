@@ -189,3 +189,39 @@ TEST_CASE("no key asks for the time played", "[replay][played]") {
     REQUIRE(text.size() > 1000);
     CHECK(text.find("requestPlayedTime") == std::string::npos);
 }
+
+// Quest 9340 under its zone's header, with 9387 before it: the interface counts
+// the header as well.
+TEST_CASE("a quest is named by its row in the log, headers counted", "[replay][quest]") {
+    std::vector<std::pair<std::string, std::string>> events;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 9387}, {slotField(1, 0, 5), 9340}}));
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>& args) {
+        if (name == "QUEST_WATCH_UPDATE") events.emplace_back(name, args.empty() ? std::string() : args[0]);
+    });
+    auto* quests = s.handler().getQuestHandler();
+    for (auto& q : quests->questLogRef()) {
+        q.zoneOrSort = 3483;
+        q.level = q.questId == 9387 ? 60 : 61;
+    }
+    CHECK(quests->questLogIndexOf(9387) == 2);
+    CHECK(quests->questLogIndexOf(9340) == 3);
+    CHECK(quests->questLogIndexOf(1) == 0);
+
+    wowee::network::Packet kill(wowee::game::wireOpcode(Opcode::SMSG_QUESTUPDATE_ADD_KILL));
+    kill.writeUInt32(9340);
+    kill.writeUInt32(16927);
+    kill.writeUInt32(2);
+    kill.writeUInt32(8);
+    kill.writeUInt64(0xF130004221000099ull);
+    s.receive(kill);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].second == "3");
+
+    // Folded away, they keep places behind what is shown.
+    quests->collapsedQuestGroups().insert(3483);
+    CHECK(quests->questLogRows().visible == 1);
+    CHECK(quests->questLogIndexOf(9340) == 3);
+    s.handler().setAddonEventCallback(nullptr);
+}

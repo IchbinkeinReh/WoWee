@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/quest_log_rows.hpp"
 #include "game/quest_progress.hpp"
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -214,16 +216,13 @@ public:
     /// drawn without a running realm. Not used on the live path.
     std::vector<QuestLogEntry>& questLogRef() { return questLog_; }
 
-    /// Where a quest sits in the log, counting from one, or zero if it is not
-    /// in it. This is what the interface means by a quest index - every quest
-    /// log API takes it, and QUEST_WATCH_UPDATE carries it - and it is not the
-    /// quest id, which is what was being sent in its place.
-    [[nodiscard]] int questLogIndexOf(uint32_t questId) const {
-        for (size_t i = 0; i < questLog_.size(); ++i) {
-            if (questLog_[i].questId == questId) return static_cast<int>(i) + 1;
-        }
-        return 0;
-    }
+    /// The log as the interface counts it, headers and all (quest_log_rows.hpp).
+    [[nodiscard]] QuestLogRows<QuestLogEntry> questLogRows() const;
+    /// The headers folded away, by zoneOrSort.
+    std::set<int32_t>& collapsedQuestGroups() { return collapsedQuestGroups_; }
+    /// A quest's place there, from one, or zero if it is not in the log: what
+    /// QUEST_WATCH_UPDATE and QUEST_ACCEPTED name it by (0x005deeb0).
+    [[nodiscard]] int questLogIndexOf(uint32_t questId) const { return questLogRows().indexOf(questId); }
     // Seconds left on every timed quest, paired with its quest id, in quest log
     // order. The last field of each PLAYER_QUEST_LOG slot is when the quest
     // fails, as a Unix timestamp; zero means the quest is not timed.
@@ -425,6 +424,7 @@ private:
     std::array<uint32_t, 25> slotQuestStates_{};
     bool slotsSeen_ = false;
     QuestSlotWatch questSlotWatch_;
+    std::set<int32_t> collapsedQuestGroups_;
     /// What SMSG_QUEST_QUERY_RESPONSE told of a quest: its QuestInfo type
     /// (+0x14) and title.
     struct QueriedQuest {

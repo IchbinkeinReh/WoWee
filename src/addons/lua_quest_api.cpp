@@ -18,6 +18,7 @@
 #include "game/quest_objectives.hpp"
 #include "game/quest_poi_icons.hpp"
 #include "game/quest_poi_blobs.hpp"
+#include "game/quest_handler.hpp"
 #include "game/quest_rewards.hpp"
 #include "game/quest_text.hpp"
 #include "game/glyph_socket.hpp"
@@ -78,84 +79,21 @@ static const game::AccountState& accountStateOf(game::GameHandler* gh) {
 // no longer the same number: quest 3 of the log can be row 5 of the display.
 namespace {
 
-struct QuestRow {
-    bool isHeader = false;
-    int32_t group = 0;                              ///< zoneOrSort of the group
-    std::string headerTitle;                        ///< headers only
-    const game::GameHandler::QuestLogEntry* quest = nullptr;     ///< quests only
-};
+using QuestRow = game::QuestLogRows<game::GameHandler::QuestLogEntry>::Row;
 
-/// Headers the player has collapsed, by group key. Interface state, so it lives
-/// here rather than in the model - and it is deliberately not persisted, which
-/// is what WoW does with a fresh session too.
-std::set<int32_t>& collapsedQuestGroups() {
-    static std::set<int32_t> collapsed;
-    return collapsed;
+/// Headers the player has collapsed, by group key.
+std::set<int32_t>& collapsedQuestGroups(game::GameHandler* gh) {
+    static std::set<int32_t> none;
+    auto* qh = gh ? gh->getQuestHandler() : nullptr;
+    return qh ? qh->collapsedQuestGroups() : none;
 }
 
-/// What a group's header row is called.
-std::string questGroupTitle(game::GameHandler* gh, int32_t group) {
-    if (!gh) return "Miscellaneous";
-    if (group > 0) {
-        std::string name = gh->getAreaName(static_cast<uint32_t>(group));
-        if (!name.empty()) return name;
-    } else if (group < 0) {
-        std::string name = gh->getQuestSortName(static_cast<uint32_t>(-group));
-        if (!name.empty()) return name;
-    }
-    // A quest whose query response has not landed has no zone yet, and one
-    // whose zone is not in the file still has to sit somewhere nameable.
-    return "Miscellaneous";
-}
-
-/// The display list: one row per header, then the rows of its quests unless the
-/// header is collapsed. Rebuilt per call - the log holds tens of entries, and a
-/// cache here would have to be invalidated by every quest update, every query
-/// response and every collapse.
+/// Every row of the log, those under a collapsed header last. Rebuilt per call
+/// - the log holds tens of entries, and a cache here would have to be
+/// invalidated by every quest update, every query response and every collapse.
 std::vector<QuestRow> questRows(game::GameHandler* gh) {
-    std::vector<QuestRow> rows;
-    if (!gh) return rows;
-    const auto& ql = gh->getQuestLog();
-
-    // Group, keeping each group's quests in the order the log holds them.
-    std::map<int32_t, std::vector<const game::GameHandler::QuestLogEntry*>> groups;
-    for (const auto& q : ql) {
-        if (q.questId == 0) continue;
-        groups[q.zoneOrSort].push_back(&q);
-    }
-
-    // Zones first and in name order, then the QuestSort groups (Epic, class,
-    // profession), then the not-yet-known ones - which is the order the real
-    // log reads in, and stable so the list does not reshuffle under the cursor
-    // as query responses land.
-    struct Group { int32_t key; std::string title; int rank; };
-    std::vector<Group> ordered;
-    ordered.reserve(groups.size());
-    for (const auto& [key, _] : groups) {
-        const int rank = (key > 0) ? 0 : (key < 0 ? 1 : 2);
-        ordered.push_back({key, questGroupTitle(gh, key), rank});
-    }
-    std::sort(ordered.begin(), ordered.end(), [](const Group& a, const Group& b) {
-        if (a.rank != b.rank) return a.rank < b.rank;
-        if (a.title != b.title) return a.title < b.title;
-        return a.key < b.key;
-    });
-
-    for (const Group& g : ordered) {
-        QuestRow header;
-        header.isHeader = true;
-        header.group = g.key;
-        header.headerTitle = g.title;
-        rows.push_back(std::move(header));
-        if (collapsedQuestGroups().count(g.key)) continue;
-        for (const auto* q : groups[g.key]) {
-            QuestRow row;
-            row.group = g.key;
-            row.quest = q;
-            rows.push_back(std::move(row));
-        }
-    }
-    return rows;
+    auto* qh = gh ? gh->getQuestHandler() : nullptr;
+    return qh ? qh->questLogRows().rows : std::vector<QuestRow>{};
 }
 
 /// Server text as the player should read it.
@@ -177,14 +115,8 @@ std::string forPlayer(lua_State* L, const std::string& text) {
 // Declared in lua_api_helpers.hpp; defined here because questRows above is the
 // one list every quest log index is counted against.
 int questLogRowForQuest(game::GameHandler* gh, uint32_t questId) {
-    if (!gh || questId == 0) return 0;
-    const auto rows = questRows(gh);
-    for (size_t i = 0; i < rows.size(); ++i) {
-        if (!rows[i].isHeader && rows[i].quest && rows[i].quest->questId == questId) {
-            return static_cast<int>(i) + 1;  // the interface counts from one
-        }
-    }
-    return 0;
+    auto* qh = gh && questId != 0 ? gh->getQuestHandler() : nullptr;
+    return qh ? qh->questLogIndexOf(questId) : 0;
 }
 
 void openInterfaceQuestLog(game::GameHandler& gh, uint32_t questId) {
@@ -305,7 +237,7 @@ static int lua_GetNumQuestLogEntries(lua_State* L) {
     // numEntries counts the rows the log displays - headers included, and the
     // quests under a collapsed header excluded, because that is what the frame
     // walks with GetQuestLogTitle.
-    lua_pushnumber(L, questRows(gh).size());
+    lua_pushnumber(L, gh->getQuestHandler() ? static_cast<double>(gh->getQuestHandler()->questLogRows().visible) : 0.0);
     // numQuests is every quest held, whatever is collapsed: it is what
     // QuestLog_UpdateQuestCount prints against MAX_QUESTLOG_QUESTS, and
     // QuestLogFrame only picks a first selection when it is above zero.
@@ -868,7 +800,7 @@ static int lua_GetQuestLogTitle(lua_State* L) {
         lua_pushnil(L);                                                    // 3: questTag
         lua_pushnumber(L, 0);                                              // 4: suggestedGroup
         luaPushOneOrNil(L, 1);                                             // 5: isHeader
-        luaPushOneOrNil(L, collapsedQuestGroups().count(row.group) ? 1 : 0); // 6: isCollapsed
+        luaPushOneOrNil(L, collapsedQuestGroups(gh).count(row.group) ? 1 : 0); // 6: isCollapsed
         lua_pushnil(L);                                                    // 7: isComplete
         luaPushOneOrNil(L, 0);                                             // 8: isDaily
         lua_pushnumber(L, 0);                                              // 9: questID
@@ -1909,16 +1841,16 @@ static int setQuestHeaderCollapsed(lua_State* L, bool collapse) {
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const auto rows = questRows(gh);
     if (index == 0) {
-        collapsedQuestGroups().clear();
+        collapsedQuestGroups(gh).clear();
         if (collapse) {
             for (const auto& row : rows) {
-                if (row.isHeader) collapsedQuestGroups().insert(row.group);
+                if (row.isHeader) collapsedQuestGroups(gh).insert(row.group);
             }
         }
     } else if (index >= 1 && index <= static_cast<int>(rows.size()) &&
                rows[index - 1].isHeader) {
-        if (collapse) collapsedQuestGroups().insert(rows[index - 1].group);
-        else          collapsedQuestGroups().erase(rows[index - 1].group);
+        if (collapse) collapsedQuestGroups(gh).insert(rows[index - 1].group);
+        else          collapsedQuestGroups(gh).erase(rows[index - 1].group);
     }
     // The list the frame is walking just changed length underneath it, so it
     // has to be told to walk it again - nothing else fires for this.
