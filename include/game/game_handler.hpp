@@ -2285,6 +2285,10 @@ public:
     /// The skill's SkillRaceClassInfo row for this race and class, the
     /// tables read first (0x00810ed0).
     const SkillUps::RaceClassInfo* skillRaceClassInfo(uint32_t skillId);
+    /// Whether the skill is on the skills tab (SkillUps::listed). Every one is
+    /// before WotLK, whose tables were not looked into, and where the table
+    /// cannot be read.
+    bool skillListed(uint32_t skillId);
     /// The player's skill points, PLAYER_CHARACTER_POINTS2 (0x005cd970(1)).
     uint32_t getSkillPoints() const;
     /// GetAdjustedSkillPoints (0x005ce540): the points less those pending.

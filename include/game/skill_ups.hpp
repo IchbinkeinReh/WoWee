@@ -42,6 +42,14 @@ public:
     /// The row for this race and class: the first whose masks are empty or
     /// hold them (0x00810ed0).
     const RaceClassInfo* raceClassInfo(uint32_t skillId, uint8_t race, uint8_t classId) const;
+    /// Whether a skill of the player's is on the skills tab (0x005cd9b0): its
+    /// race and class have a row for it, without flag 2, and it has flag 1, a
+    /// rank, or flag 4 and the player the row's level.
+    [[nodiscard]] static bool listed(const RaceClassInfo* info, uint32_t rank, uint32_t level) {
+        if (!info || (info->flags & 2u) != 0) return false;
+        return (info->flags & 1u) != 0 || rank != 0 || ((info->flags & 4u) != 0 && info->minLevel <= level);
+    }
+    [[nodiscard]] bool hasRaceClassInfo() const { return !raceClass_.empty(); }
     bool hasSkillLine(uint32_t skillId) const { return skillCostsId_.count(skillId) != 0; }
     /// One SkillLineAbility.dbc row: its skill (+4) and the masks at +0xc..+0x18.
     struct Ability {

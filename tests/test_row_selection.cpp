@@ -1,6 +1,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "addons/header_fold.hpp"
+#include "game/skill_ups.hpp"
 #include "addons/row_selection.hpp"
 
 #include <cstdint>
@@ -48,4 +49,19 @@ TEST_CASE("folding a heading reaches what the client's does", "[fold]") {
     CHECK(wowee::addons::skillFold(3, 0) == FoldReach::All);
     CHECK(wowee::addons::skillFold(3, 2) == FoldReach::One);
     CHECK(wowee::addons::skillFold(3, 4) == FoldReach::None);
+}
+
+TEST_CASE("the skills tab lists what SkillRaceClassInfo says", "[skills]") {
+    using wowee::game::SkillUps;
+    // Rows of 3.3.5's table (0x005cd9b0).
+    const SkillUps::RaceClassInfo mounts{.skillId = 777, .flags = 2}, bloodElf{.skillId = 756, .flags = 146},
+        runeforging{.skillId = 776, .flags = 128}, always{.flags = 1}, atLevel{.flags = 4, .minLevel = 40};
+    CHECK_FALSE(SkillUps::listed(&mounts, 400, 80));
+    CHECK_FALSE(SkillUps::listed(&bloodElf, 400, 80));
+    CHECK_FALSE(SkillUps::listed(nullptr, 400, 80));
+    CHECK(SkillUps::listed(&runeforging, 1, 55));
+    CHECK_FALSE(SkillUps::listed(&runeforging, 0, 55));
+    CHECK(SkillUps::listed(&always, 0, 1));
+    CHECK_FALSE(SkillUps::listed(&atLevel, 0, 39));
+    CHECK(SkillUps::listed(&atLevel, 0, 40));
 }

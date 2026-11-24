@@ -1,5 +1,6 @@
 // game_handler_skill_ups.cpp - GameHandler's side of the skill-point
 // purchase (SkillUps): the player's skills, points and the wire.
+#include "game/game_utils.hpp"
 #include "game/game_handler.hpp"
 #include "game/skill_ups.hpp"
 #include "game/update_field_table.hpp"
@@ -15,6 +16,15 @@ const SkillUps::RaceClassInfo* GameHandler::skillRaceClassInfo(uint32_t skillId)
 uint32_t GameHandler::spellSkillLine(uint32_t spellId) {
     skillUps_.load(services_.assetManager);
     return skillUps_.abilitySkillLine(spellId, getPlayerRace(), getPlayerClass());
+}
+
+bool GameHandler::skillListed(uint32_t skillId) {
+    if (isPreWotlk()) return true;
+    const auto* info = skillRaceClassInfo(skillId);
+    if (!skillUps_.hasRaceClassInfo()) return true;
+    const auto& skills = getPlayerSkills();
+    const auto it = skills.find(skillId);
+    return SkillUps::listed(info, it != skills.end() ? it->second.value : 0u, getPlayerLevel());
 }
 
 uint32_t GameHandler::getSkillPoints() const {

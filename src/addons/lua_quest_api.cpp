@@ -1967,14 +1967,17 @@ static std::vector<SkillRow> skillRows(game::GameHandler* gh) {
     std::vector<SkillRow> rows;
     if (!gh) return rows;
 
-    // Category 12 is "Not Displayed", and it means it. A skill the file does
-    // not categorise at all is kept rather than dropped: it is something the
-    // player has, and losing it silently is worse than filing it last.
+    // Which skills are listed is SkillRaceClassInfo's to say (0x005cd9b0): the
+    // companions, the mounts and a race's own are not. Category 12 is "Not
+    // Displayed", and every row of it in 3.3.5 is hidden there; where the
+    // table cannot be read it stands in. A skill the file does not categorise
+    // at all is kept rather than dropped: it is something the player has, and
+    // losing it silently is worse than filing it last.
     constexpr uint32_t kNotDisplayed = 12;
     std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> grouped;
     for (uint32_t id : skillOrder(gh)) {
         const uint32_t cat = gh->getSkillCategory(id);
-        if (cat == kNotDisplayed) continue;
+        if (cat == kNotDisplayed || !gh->skillListed(id)) continue;
         grouped[{gh->getSkillCategorySortIndex(cat), cat}].push_back(id);
     }
 
