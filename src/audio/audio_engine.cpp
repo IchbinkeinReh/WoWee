@@ -3,6 +3,7 @@
 #include "audio/finite_audio.hpp"
 #include "audio/sound_key.hpp"
 #include "audio/sound_names.hpp"
+#include "audio/stream_times.hpp"
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/sound_distance.hpp"
@@ -1222,15 +1223,6 @@ void AudioEngine::noteStarted(int priority, float volume, Channel channel, bool 
 std::vector<AudioEngine::Shown> AudioEngine::playing() const {
     std::vector<Shown> out;
     if (!initialized_) return out;
-    const auto times = [](const ma_sound* sound, Shown& shown) {
-        ma_uint64 cursor = 0, length = 0;
-        ma_uint32 rate = 0;
-        if (ma_sound_get_data_format(sound, nullptr, nullptr, &rate, nullptr, 0) != MA_SUCCESS || rate == 0) return;
-        if (ma_sound_get_cursor_in_pcm_frames(sound, &cursor) == MA_SUCCESS)
-            shown.seconds = static_cast<double>(cursor) / rate;
-        if (ma_sound_get_length_in_pcm_frames(sound, &length) == MA_SUCCESS)
-            shown.length = static_cast<double>(length) / rate;
-    };
     for (const auto& active : activeSounds_) {
         if (!voice_priority::stillGoing(active.held, active.culled, goesOn(active))) continue;
         Shown shown;
@@ -1246,7 +1238,7 @@ std::vector<AudioEngine::Shown> AudioEngine::playing() const {
             shown.position = {p.x, p.y, p.z};
             shown.distance = glm::length(shown.position - listenerPosition_);
         }
-        times(active.sound, shown);
+        readSoundTimes(active.sound, nullptr, shown.seconds, shown.length);
         out.push_back(std::move(shown));
     }
     const auto streamed = [&](const ma_sound* sound, const std::vector<uint8_t>* data, bool held, const char* kind) {
@@ -1258,7 +1250,7 @@ std::vector<AudioEngine::Shown> AudioEngine::playing() const {
         shown.loops = ma_sound_is_looping(sound) == MA_TRUE;
         shown.heard = !held;
         shown.why = held ? "loading screen" : "";
-        times(sound, shown);
+        readSoundTimes(sound, data, shown.seconds, shown.length);
         out.push_back(std::move(shown));
     };
     for (const auto& stream : activeStreams_) streamed(stream.sound, stream.data.get(), stream.held, "stream");

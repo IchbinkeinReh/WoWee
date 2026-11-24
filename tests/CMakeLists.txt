@@ -3493,6 +3493,13 @@ wowee_add_test(test_liquid_place
 target_compile_definitions(test_liquid_place PRIVATE
     WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
+# ── test_stream_times ────────────────────────────────────────
+# The length shown of a stream is not asked of the decoder the audio thread
+# reads. The audio library without a device.
+wowee_add_test(test_stream_times
+    SOURCES test_stream_times.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_polygon_triangulate ─────────────────────────────────
 # Ear clipping for quest blob outlines, which are regularly concave. The
 # check is that the triangles cover the ring's own area and no more.
