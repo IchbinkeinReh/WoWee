@@ -275,6 +275,7 @@ void WorldEntryCallbackHandler::setupCallbacks() {
         if (worldLoader_ && worldLoader_->isLoadingWorld()) {
             LOG_WARNING("World entry deferred: map ", mapId, " while loading (will process after current load)");
             worldLoader_->setPendingEntry(mapId, x, y, z);
+            if (auto* mh = gameHandler_.getMovementHandler()) mh->holdWorldportAck();
             return;
         }
 
@@ -288,7 +289,10 @@ void WorldEntryCallbackHandler::setupCallbacks() {
         // the old facing from it - a teleport to another map kept the way the
         // player faced before it, whatever the server said.
         faceServerOrientation();
-        if (worldLoader_) worldLoader_->setPendingEntry(mapId, x, y, z);
+        if (worldLoader_) {
+            worldLoader_->setPendingEntry(mapId, x, y, z);
+            if (auto* mh = gameHandler_.getMovementHandler()) mh->holdWorldportAck();
+        }
     });
 
     // /unstuck - nudge player forward and snap to floor at destination.

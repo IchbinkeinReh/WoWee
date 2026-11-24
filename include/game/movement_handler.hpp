@@ -356,10 +356,19 @@ public:
     bool releaseTeleportAck();
     [[nodiscard]] bool hasPendingTeleportAck() const { return teleportAck_.pending(); }
     /// A new session's world: a teleport of the last one is not answered.
-    void dropTeleportAck() { teleportAck_.drop(); }
+    void dropTeleportAck() {
+        teleportAck_.drop();
+        worldportAck_.drop();
+    }
+    /// MSG_MOVE_WORLDPORT_ACK goes out once the new world is in (0x00403b70 loads
+    /// it, then sends 0xdc): held and let go as the teleport's.
+    void holdWorldportAck() { worldportAck_.hold(); }
+    bool releaseWorldportAck();
 
 private:
     TeleportAckGate teleportAck_;
+    TeleportAckGate worldportAck_;
+    void sendWorldportAck();
     void sendTeleportAck(const TeleportAckGate::Ack& pending);
 
     /// A monster move held for a vehicle's enter or exit animation, kept as

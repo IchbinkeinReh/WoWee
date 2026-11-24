@@ -236,7 +236,10 @@ void WorldLoader::processPendingEntry() {
 
 void WorldLoader::releaseTeleportAck() {
     if (!gameHandler_) return;
-    if (auto* mh = gameHandler_->getMovementHandler()) mh->releaseTeleportAck();
+    if (auto* mh = gameHandler_->getMovementHandler()) {
+        mh->releaseTeleportAck();
+        mh->releaseWorldportAck();
+    }
 }
 
 void WorldLoader::reloadAfterDeviceLoss(uint32_t mapId, float x, float y, float z) {
@@ -1113,6 +1116,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         gameHandler_->respawnKnownEntities();
     }
 
+    // The world is loaded: the server is told (MovementHandler::holdWorldportAck)
+    // and puts the player and the units about into it.
+    if (gameHandler_) {
+        if (auto* mh = gameHandler_->getMovementHandler()) mh->releaseWorldportAck();
+    }
+
     // Keep the loading screen visible until all spawn/equipment/gameobject queues
     // are fully drained. This ensures the player sees a fully populated world
     // (character clothed, NPCs placed, game objects loaded) when the screen drops.
@@ -1354,7 +1363,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             }
 
             // Exit when: (min time passed AND queues drained AND ground ready) OR hard cap
-            bool readyToExit = (elapsed >= kMinWarmupSeconds && idleIterations >= kIdleThreshold && groundReady);
+            // And the player in it (the screen ends with the player's object,
+            // 0x006e7f50 -> 0x00409550).
+            const bool playerIn =
+                !gameHandler_ || gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid()) != nullptr;
+            bool readyToExit =
+                (elapsed >= kMinWarmupSeconds && idleIterations >= kIdleThreshold && groundReady && playerIn);
             // Past the queue cap with the floor there, go; without it, wait
             // for the floor up to its own cap.
             const bool capped = groundReady ? elapsed >= kMaxWarmupSeconds

@@ -845,3 +845,33 @@ TEST_CASE("a spell's damage is one text", "[replay][playtest]") {
     CHECK(hit(kPet, kFireball, 100, 0, 0, 0, 0) == Types{T::SPELL_DAMAGE});
     CHECK(hit(0xF130000BEC001599ull, kFireball, 100, 0, 0, 0, 0).empty());
 }
+
+// The acknowledgement went as SMSG_NEW_WORLD came, and the player stood in the new
+// world for as long as its client loaded it.
+TEST_CASE("a worldport is acknowledged once the world is in", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    const auto acks = [&] { return s.sent().of(Opcode::MSG_MOVE_WORLDPORT_ACK).size(); };
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    world.writeFloat(-2328.0f);
+    world.writeFloat(-358.0f);
+    world.writeFloat(-8.7f);
+    world.writeFloat(0.4f);
+    auto* mh = s.handler().getMovementHandler();
+    SECTION("loaded") {
+        s.handler().setWorldEntryCallback([&](uint32_t, float, float, float, bool) { mh->holdWorldportAck(); });
+        s.receive(world);
+        CHECK(acks() == 0);
+        CHECK(mh->releaseWorldportAck());
+        CHECK(acks() == 1);
+        CHECK_FALSE(mh->releaseWorldportAck());
+    }
+    SECTION("with nothing to load") {
+        s.handler().setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+        s.receive(world);
+        CHECK(acks() == 1);
+        CHECK_FALSE(mh->releaseWorldportAck());
+    }
+    s.handler().setWorldEntryCallback({});
+}
