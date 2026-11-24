@@ -37,7 +37,7 @@
 //     vec4 giVolumeMod[2];
 //     vec4 giSky;        // w = strength
 //     vec4 giGround;     // w = largest ratio
-//     vec4 giParams;     // x = on, y = debug view, z = chroma
+//     vec4 giParams;     // x = on, y = debug view, z = chroma, w the least ratio
 //     vec4 rtTune;       // x shadow darkness, y point lights, z baked-lamp
 //                        // shadows; w 1 when these three blocks are set
 //     vec4 lightTune;    // x baked light, y traced sun shadows, z point
@@ -364,7 +364,7 @@ vec3 rtGiRatio(vec3 worldPos, vec3 n) {
                           worldPos, n, v);
     float lift = texelFetch(uRtGiProbes, GI_EXPOSURE_TEXEL, 0).r;
     vec3 ratio = giAmbientRatio(e, giSky.rgb, giGround.rgb, n, giSky.w, giGround.w, giParams.z,
-                                lift > 0.0 ? lift : 1.0);
+                                lift > 0.0 ? lift : 1.0, giParams.w);
     ratio = mix(vec3(1.0), ratio, rtBounceStrength());
 
     int debugView = int(giParams.y + 0.5);

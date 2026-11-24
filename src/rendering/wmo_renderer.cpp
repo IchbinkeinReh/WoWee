@@ -5402,7 +5402,32 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
             const uint8_t oneSided = (matFlags & 0x4u) ? 0 : 1;
             const uint32_t end = std::min<uint32_t>(batch.startIndex + batch.indexCount,
                                                     static_cast<uint32_t>(group.collisionIndices.size()));
+            // A room's painted light goes with its faces: nothing traced
+            // holds it - most of a room's colour is no lamp's - and without
+            // it the probes found a closed room black, and a unit in it,
+            // which the tracing lights by the probes, with it.
+            namespace wl = pipeline::wmo_doodad_light;
+            const wl::GroupDraw draw{ .unified = (model.mohdFlags & 0x2u) != 0,
+                                      .vertexColors = (group.groupFlags & 0x4u) != 0,
+                                      .groupFlags = group.groupFlags };
+            const wl::BatchKind kind = batch.transition ? wl::BatchKind::Transition
+                                     : batch.interior ? wl::BatchKind::Interior
+                                     : wl::BatchKind::Exterior;
+            const bool painted = group.collisionColors.size() == group.collisionVertices.size();
             for (uint32_t i = batch.startIndex; i + 2 < end; i += 3) {
+                uint32_t room = 0;
+                if (painted) {
+                    std::array<glm::vec3, 3> mocv;
+                    for (uint32_t k = 0; k < 3; ++k) {
+                        mocv[k] = glm::vec3(group.collisionColors[group.collisionIndices[i + k]]);
+                    }
+                    if (const auto c = wl::roomLight(draw, kind, matFlags, mocv, model.mohdFlags,
+                                                     glm::vec4(model.wmoAmbientColor, 1.0f))) {
+                        room = packRtRoomLight(static_cast<uint32_t>(c->r), static_cast<uint32_t>(c->g),
+                                               static_cast<uint32_t>(c->b));
+                    }
+                }
+                src.roomLight.push_back(room);
                 src.indices.push_back(base + group.collisionIndices[i]);
                 src.indices.push_back(base + group.collisionIndices[i + 1]);
                 src.indices.push_back(base + group.collisionIndices[i + 2]);

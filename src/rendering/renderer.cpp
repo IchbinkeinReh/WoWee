@@ -758,7 +758,7 @@ void Renderer::updatePerFrameUBO() {
         }
         currentFrameData.giSky = rt.gi.sky;
         currentFrameData.giGround = rt.gi.ground;
-        currentFrameData.giParams = rt.gi.params;
+        currentFrameData.giParams = glm::vec4(glm::vec3(rt.gi.params), rtMinBrightnessFactor(rtMinBrightnessPercent_));
         // The debug view: WOWEE_GI_DEBUG's when set, else the settings'. The
         // traced terms' views (5-7) work in every mode; the probes' need Full.
         if (currentFrameData.giParams.y < 0.5f) {

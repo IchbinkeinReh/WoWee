@@ -308,6 +308,7 @@ RtScene::MeshId RtScene::addMesh(MeshSource source, bool urgent) {
     if (!source.masks.empty() && source.masks.size() != triCount) source.masks.clear();
     if (!source.uvs.empty() && source.uvs.size() != source.positions.size()) source.uvs.clear();
     if (!source.details.empty() && source.details.size() != triCount) source.details.clear();
+    if (!source.roomLight.empty() && source.roomLight.size() != triCount) source.roomLight.clear();
     if (!source.terrainLayers.empty() && source.terrainLayers.size() != kTerrainRecordWords) {
         source.terrainLayers.clear();
     }
@@ -367,10 +368,11 @@ void RtScene::buildMesh(Mesh& m) {
         const float surface = src.surfaces.size() == 1 ? src.surfaces[0] : src.surfaces[t];
         RtTriangle& tri = m.tris[t];
         uint32_t i0 = src.indices[t * 3], i1 = src.indices[t * 3 + 1], i2 = src.indices[t * 3 + 2];
-        // v1.w: 1 when the triangle has a front, which its winding gives
-        // (rtClosestEx). The data's own winding is not relied on: the
-        // terrain and the buildings are drawn unculled here.
-        float front = 0.0f;
+        // v1.w: whether the triangle has a front, which its winding gives
+        // (rtClosestEx), and its room's painted light (packRtFace). The data's
+        // own winding is not relied on: the terrain and the buildings are
+        // drawn unculled here.
+        bool front = false;
         if (!src.normals.empty() && (src.oneSided.empty() || src.oneSided[t])) {
             const glm::vec3 g = glm::cross(src.positions[i1] - src.positions[i0],
                                            src.positions[i2] - src.positions[i0]);
@@ -378,11 +380,11 @@ void RtScene::buildMesh(Mesh& m) {
             const float d = glm::dot(g, vn);
             if (d != 0.0f && std::isfinite(d)) {
                 if (d < 0.0f) std::swap(i1, i2);
-                front = 1.0f;
+                front = true;
             }
         }
         tri.v0 = glm::vec4(src.positions[i0], surface);
-        tri.v1 = glm::vec4(src.positions[i1], front);
+        tri.v1 = glm::vec4(src.positions[i1], packRtFace(front, src.roomLight.empty() ? 0u : src.roomLight[t]));
         // v2.w: 1 + the index of the cutout's UVs and mask in the extras
         // pool, as bits; 0 for none. Local here, made absolute on upload,
         // since the hierarchy build reorders the triangles.
@@ -1768,7 +1770,8 @@ void RtScene::memoryReport(std::vector<MemoryEntry>& out) const {
         const MeshSource& s = m.source;
         const uint64_t bytes = vectorBytes(s.positions) + vectorBytes(s.indices) + vectorBytes(s.surfaces) +
                                vectorBytes(s.normals) + vectorBytes(s.oneSided) + vectorBytes(s.uvs) +
-                               vectorBytes(s.masks) + vectorBytes(s.details) + vectorBytes(s.terrainLayers);
+                               vectorBytes(s.masks) + vectorBytes(s.details) + vectorBytes(s.roomLight) +
+                               vectorBytes(s.terrainLayers);
         sources += bytes;
         if (s.flags & kMeshTerrain) srcTerrain += bytes;
         else if (s.flags & kMeshBuilding) srcBuildings += bytes;

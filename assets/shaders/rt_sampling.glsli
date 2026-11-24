@@ -55,4 +55,15 @@ vec4 rtUnpackSurface(float packed) {
     return unpackUnorm4x8(floatBitsToUint(packed));
 }
 
+// A triangle's v1.w (packRtFace, rt_bvh.hpp): whether it has a front, and
+// the light a building's room is painted with there.
+const uint RT_FACE_FRONT = 0x01000000u;
+const uint RT_FACE_ROOM_LIGHT = 0x02000000u;
+bool rtFaceHasFront(float packed) { return (floatBitsToUint(packed) & RT_FACE_FRONT) != 0u; }
+bool rtFaceRoomLight(float packed, out vec3 light) {
+    uint bits = floatBitsToUint(packed);
+    light = unpackUnorm4x8(bits).rgb;
+    return (bits & RT_FACE_ROOM_LIGHT) != 0u;
+}
+
 #endif

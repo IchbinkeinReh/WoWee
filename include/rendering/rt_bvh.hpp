@@ -12,6 +12,7 @@
 /// The hardware backend does not use these nodes; the driver builds its own
 /// acceleration structures from the same triangle pool.
 
+#include <bit>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -81,6 +82,19 @@ RtBvh buildRtTriangleBvh(std::vector<RtTriangle>& tris, uint32_t maxLeafSize = 4
 /// Pack a linear colour and opacity the way RtTriangle::v0.w stores them.
 float packRtSurface(const glm::vec3& albedo, float opacity);
 glm::vec4 unpackRtSurface(float packed);
+
+/// What RtTriangle::v1.w stores, as bits (rt_sampling.glsli): whether the
+/// triangle has a front, and the light a building's room is painted with
+/// there (bytes, as WMORenderer gives them), where it is a room's.
+inline constexpr uint32_t kRtFaceFront = 0x01000000u;
+inline constexpr uint32_t kRtFaceRoomLight = 0x02000000u;
+/// `roomLight`: kRtFaceRoomLight and the colour, or 0 for none.
+[[nodiscard]] constexpr uint32_t packRtRoomLight(uint32_t r, uint32_t g, uint32_t b) {
+    return kRtFaceRoomLight | r | (g << 8) | (b << 16);
+}
+[[nodiscard]] inline float packRtFace(bool front, uint32_t roomLight) {
+    return std::bit_cast<float>((front ? kRtFaceFront : 0u) | roomLight);
+}
 
 struct RtHit {
     float t = -1.0f;

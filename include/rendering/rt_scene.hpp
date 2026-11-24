@@ -136,6 +136,9 @@ public:
         /// The texture a traced hit is coloured by (addDetail), per triangle
         /// with `uvs`; kInvalid for none - the triangle's one colour.
         std::vector<uint32_t> details;  // per triangle; kInvalid for none
+        /// The light a building's room is painted with (packRtRoomLight), per
+        /// triangle; 0 for what is no room's. The probes' rays bring it back.
+        std::vector<uint32_t> roomLight;
         /// A terrain chunk's layers (terrainRecord), kTerrainRecordWords
         /// words; empty for none.
         std::vector<uint32_t> terrainLayers;

@@ -191,7 +191,7 @@ bool rtClosestEx(vec3 origin, vec3 dir, float tMax, inout uint rng,
     // has a front (RtScene::MeshSource::normals) faces along its winding.
     // An opaque one met from behind means the ray began inside it.
     below = (inst.flags & RT_MESH_TERRAIN) != 0u ? dot(dir, normal) * normal.z > 0.0
-          : hit.v1.w > 0.5 && rtUnpackSurface(hit.v0.w).a >= 1.0 && dot(dir, normal) > 0.0;
+          : rtFaceHasFront(hit.v1.w) && rtUnpackSurface(hit.v0.w).a >= 1.0 && dot(dir, normal) > 0.0;
     if (dot(normal, dir) > 0.0) normal = -normal;
     surface = rtUnpackSurface(hit.v0.w);
     return true;

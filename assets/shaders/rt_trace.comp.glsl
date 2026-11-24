@@ -395,9 +395,9 @@ float rtProbesSeen(vec3 p, vec3 n, inout uint rng) {
     float lift = texelFetch(uGiAtlas, GI_EXPOSURE_TEXEL, 0).r;
     lift = lift > 0.0 ? lift : 1.0;
     vec3 rAll = giAmbientRatio(eAll, pass.giOpenSky.rgb, pass.giOpenGround.rgb, n, pass.giOpenSky.w,
-                               pass.giOpenGround.w, pass.giOpenParams.z, lift);
+                               pass.giOpenGround.w, pass.giOpenParams.z, lift, pass.giOpenParams.w);
     vec3 rSeen = giAmbientRatio(seen, pass.giOpenSky.rgb, pass.giOpenGround.rgb, n, pass.giOpenSky.w,
-                                pass.giOpenGround.w, pass.giOpenParams.z, lift);
+                                pass.giOpenGround.w, pass.giOpenParams.z, lift, pass.giOpenParams.w);
     float lAll = dot(rAll, GI_LUMA);
     if (lAll <= 1e-4) return 1.0;
     return clamp(dot(rSeen, GI_LUMA) / lAll, 0.0, 1.0);

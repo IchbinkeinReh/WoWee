@@ -5,6 +5,7 @@
 // relies on without re-checking: every triangle reachable exactly once, and
 // every box enclosing what is under it.
 #include <catch_amalgamated.hpp>
+#include <bit>
 
 #include <cmath>
 #include <random>
@@ -192,4 +193,19 @@ TEST_CASE("a pool mostly empty is packed into a smaller one") {
     CHECK(packedPoolCapacity(3'000'000, kInitial) == 4'500'000);
     // Packed once, not again.
     CHECK_FALSE(poolWorthPacking(3'000'000, packedPoolCapacity(3'000'000, kInitial), kInitial));
+}
+
+TEST_CASE("A triangle's face word says its front and its room's light apart", "[rt]") {
+    const auto bits = [](float f) { return std::bit_cast<uint32_t>(f); };
+    CHECK(bits(packRtFace(false, 0)) == 0u);
+    CHECK(bits(packRtFace(true, 0)) == kRtFaceFront);
+    const uint32_t room = packRtRoomLight(200, 30, 10);
+    CHECK((bits(packRtFace(false, room)) & kRtFaceFront) == 0u);
+    CHECK((bits(packRtFace(true, room)) & kRtFaceFront) != 0u);
+    CHECK((bits(packRtFace(true, room)) & kRtFaceRoomLight) != 0u);
+    CHECK((bits(packRtFace(true, room)) & 0xFFu) == 200u);
+    CHECK(((bits(packRtFace(true, room)) >> 8) & 0xFFu) == 30u);
+    CHECK(((bits(packRtFace(true, room)) >> 16) & 0xFFu) == 10u);
+    // A black room is a room's light all the same.
+    CHECK(bits(packRtFace(false, packRtRoomLight(0, 0, 0))) == kRtFaceRoomLight);
 }
