@@ -35,6 +35,8 @@ struct GuardContext {
     bool wotlkWire = true;
     /// Who is selected, which is whom a game master's command is about.
     uint64_t targetGuid = 0;
+    /// The vehicle the character sits in, 0 for none.
+    uint64_t vehicleGuid = 0;
     /// Whether a guid is another player's pet, totem or guardian.
     std::function<bool(uint64_t)> belongsToOtherPlayer;
 };

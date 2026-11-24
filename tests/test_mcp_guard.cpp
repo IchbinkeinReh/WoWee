@@ -236,6 +236,29 @@ TEST_CASE("spells, items and attacks are not aimed at other players", "[mcp][gua
     CHECK(sends("CMSG_CAST_SPELL", cast(0, 0), old));
 }
 
+TEST_CASE("the vehicle the character drives may be left", "[mcp][guard]") {
+    constexpr uint64_t kVehicle = 0xF15000C2E0000010ULL;
+    const auto leaves = [](uint64_t mover, const GuardContext& c) {
+        Bytes b;
+        b.packed(mover).u32(0);
+        return sends("CMSG_DISMISS_CONTROLLED_VEHICLE", b, c);
+    };
+    GuardContext c = context();
+    CHECK_FALSE(leaves(kVehicle, c));
+    c.vehicleGuid = kVehicle;
+    CHECK(leaves(kVehicle, c));
+    CHECK_FALSE(leaves(kWolf, c));
+    CHECK_FALSE(leaves(0, c));
+    CHECK_FALSE(sends("CMSG_DISMISS_CONTROLLED_VEHICLE", Bytes{}, c));
+    // Another player's mount, and another player's creature.
+    c.vehicleGuid = kOther;
+    CHECK_FALSE(leaves(kOther, c));
+    c.vehicleGuid = kOthersPet;
+    CHECK_FALSE(leaves(kOthersPet, c));
+    c.allow = static_cast<uint32_t>(Social::Players);
+    CHECK(leaves(kOther, c));
+}
+
 TEST_CASE("a guid is a player's by its high part", "[mcp][guard]") {
     CHECK(isPlayerGuid(kMe));
     CHECK(isPlayerGuid(0x0000FFFFFFFFFFFFULL));
