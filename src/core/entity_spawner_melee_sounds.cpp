@@ -197,10 +197,8 @@ void EntitySpawner::onMeleeHit(const game::AttackerStateUpdateData& data) {
     }
     settleKeptMeleeHit(hit.attacker);
     pendingMeleeHits_[hit.attacker] = hit;
-    // 0x00755130: the attacker's exertion, by its slot's chance - a
-    // creature's; a player's voice is the ActivitySoundManager's.
-    if (const auto attacker = entities.getEntity(hit.attacker);
-        attacker && attacker->getType() == game::ObjectType::UNIT) {
+    // 0x00755130: the attacker's exertion, by its slot's chance.
+    if (const auto attacker = entities.getEntity(hit.attacker); attacker && attacker->isUnit()) {
         const auto& unit = static_cast<const game::Unit&>(*attacker);
         if (ms::exertsOnArrival(hit, unit.getHealth() > 0)) playUnitSlot(unit, ms::exertionSlot(hit), false, nullptr);
     }
@@ -405,9 +403,8 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
     }
     if (ms::absorbs(hit)) {
         player.playOnce(player.idByName("(DONOTRENAME)AbsorbGetHit", assetManager_), &above, volume, assetManager_);
-    } else if (const auto slot = ms::injurySlot(hit); slot && target->getType() == game::ObjectType::UNIT) {
-        // A creature's injury, by its slot's chance; a player's voice is
-        // the ActivitySoundManager's.
+    } else if (const auto slot = ms::injurySlot(hit)) {
+        // Its injury, by its slot's chance.
         playUnitSlot(static_cast<const game::Unit&>(*target), *slot, false, nullptr);
     }
 }

@@ -191,7 +191,6 @@ void ActivitySoundManager::rebuildJumpClipsForProfile(const std::string& raceFol
     const std::string prefix = "Sound\\Character\\" + raceFolder + "\\";
     const std::string stem = raceBase + gender;
 
-    // PlayerExertions prefixes (same naming quirks as combat vocals)
     std::vector<std::string> candidates;
     for (const auto& exert : exertionPrefixes(raceBase, male)) {
         candidates.push_back(exert + "Jump.wav");
@@ -382,14 +381,10 @@ void ActivitySoundManager::setCharacterVoiceProfile(const std::string& modelName
     rebuildJumpClipsForProfile(folder, base, male);
     rebuildSwimLoopClipsForProfile(folder, base, male);
     rebuildHardLandClipsForProfile(folder, base, male);
-    rebuildCombatVocalClipsForProfile(folder, base, male);
     core::Logger::getInstance().info("Activity SFX voice profile: ", voiceProfileKey,
                                      " jump clips=", jumpClips.size(),
                                      " swim clips=", swimLoopClips.size(),
-                                     " hardLand clips=", hardLandClips.size(),
-                                     " attackGrunt clips=", attackGruntClips.size(),
-                                     " wound clips=", woundClips.size(),
-                                     " death clips=", deathClips.size());
+                                     " hardLand clips=", hardLandClips.size());
 }
 
 void ActivitySoundManager::setCharacterVoiceProfile(const std::string& raceFolder, const std::string& raceBase, bool male) {
@@ -400,143 +395,11 @@ void ActivitySoundManager::setCharacterVoiceProfile(const std::string& raceFolde
     rebuildJumpClipsForProfile(raceFolder, raceBase, male);
     rebuildSwimLoopClipsForProfile(raceFolder, raceBase, male);
     rebuildHardLandClipsForProfile(raceFolder, raceBase, male);
-    rebuildCombatVocalClipsForProfile(raceFolder, raceBase, male);
     core::Logger::getInstance().info("Activity SFX voice profile (explicit): ", voiceProfileKey,
                                      " jump clips=", jumpClips.size(),
                                      " swim clips=", swimLoopClips.size(),
-                                     " hardLand clips=", hardLandClips.size(),
-                                     " attackGrunt clips=", attackGruntClips.size(),
-                                     " wound clips=", woundClips.size(),
-                                     " death clips=", deathClips.size());
+                                     " hardLand clips=", hardLandClips.size());
 }
 
-void ActivitySoundManager::rebuildCombatVocalClipsForProfile(const std::string& raceFolder, const std::string& raceBase, bool male) {
-    attackGruntClips.clear();
-    woundClips.clear();
-    woundCritClips.clear();
-    deathClips.clear();
-
-    const std::string gender = male ? "Male" : "Female";
-    const std::string stem = raceBase + gender;  // e.g. HumanFemale
-
-    // WoW 3.3.5a has two sound sources for player combat vocalizations:
-    //
-    // 1) Vox files (some races only):
-    //    Sound\Character\{Race}\{Gender}\m{Race}{Gender}{Type}Vox{Letter}.wav
-    //    e.g. Sound\Character\Human\Female\mHumanFemaleAttackVoxA.wav
-    //
-    // 2) PlayerExertions (all races):
-    //    Sound\Character\PlayerExertions\{Race}{Gender}Final\{Race}{Gender}Main{Type}{Letter}.wav
-    //    e.g. Sound\Character\PlayerExertions\HumanMaleFinal\HumanMaleMainAttackA.wav
-    //    EXCEPTIONS:
-    //    - OrcMale uses folder "OrcMale" (no "Final" suffix)
-    //    - HumanFemale files have Blizzard typo: "HumanFeamle" instead of "HumanFemale"
-
-    const std::vector<std::string> exertPrefixes_ = exertionPrefixes(raceBase, male);
-    const std::string voxPrefix = "Sound\\Character\\" + raceFolder + "\\" + gender + "\\m" + stem;
-
-    // Attack grunts
-    std::vector<std::string> attackPaths;
-    for (char c = 'A'; c <= 'F'; ++c) {
-        std::string s(1, c);
-        for (const auto& exert : exertPrefixes_) {
-            attackPaths.push_back(exert + "Attack" + s + ".wav");
-        }
-        attackPaths.push_back(voxPrefix + "AttackVox" + s + ".wav");
-    }
-    preloadCandidates(attackGruntClips, attackPaths);
-
-    // Wound sounds (UndeadFemale ships one variant with no letter suffix)
-    std::vector<std::string> woundPaths;
-    for (char c = 'A'; c <= 'F'; ++c) {
-        std::string s(1, c);
-        for (const auto& exert : exertPrefixes_) {
-            woundPaths.push_back(exert + "Wound" + s + ".wav");
-        }
-        woundPaths.push_back(voxPrefix + "WoundVox" + s + ".wav");
-    }
-    for (const auto& exert : exertPrefixes_) {
-        woundPaths.push_back(exert + "Wound.wav");
-    }
-    preloadCandidates(woundClips, woundPaths);
-
-    // Wound crit sounds. Some races have WoundCrit without a letter suffix,
-    // and UndeadFemale's is typo'd "WoundCriatA".
-    std::vector<std::string> woundCritPaths;
-    for (char c = 'A'; c <= 'C'; ++c) {
-        std::string s(1, c);
-        for (const auto& exert : exertPrefixes_) {
-            woundCritPaths.push_back(exert + "WoundCrit" + s + ".wav");
-            woundCritPaths.push_back(exert + "WoundCriat" + s + ".wav");
-        }
-        woundCritPaths.push_back(voxPrefix + "WoundCriticalVox" + s + ".wav");
-    }
-    for (const auto& exert : exertPrefixes_) {
-        woundCritPaths.push_back(exert + "WoundCrit.wav");
-    }
-    preloadCandidates(woundCritClips, woundCritPaths);
-
-    // Death sounds (NightElf/Troll/Undead ship "Death" with no letter suffix)
-    std::vector<std::string> deathPaths;
-    for (char c = 'A'; c <= 'C'; ++c) {
-        std::string s(1, c);
-        for (const auto& exert : exertPrefixes_) {
-            deathPaths.push_back(exert + "Death" + s + ".wav");
-        }
-        deathPaths.push_back(voxPrefix + "DeathVox" + s + ".wav");
-    }
-    for (const auto& exert : exertPrefixes_) {
-        deathPaths.push_back(exert + "Death.wav");
-    }
-    preloadCandidates(deathClips, deathPaths);
-
-    LOG_INFO("Combat vocals for ", stem, ": attack=", attackGruntClips.size(),
-             " wound=", woundClips.size(), " woundCrit=", woundCritClips.size(),
-             " death=", deathClips.size());
-    if (!attackGruntClips.empty()) LOG_INFO("  First attack: ", attackGruntClips[0].path);
-    if (!woundClips.empty()) LOG_INFO("  First wound: ", woundClips[0].path);
-    if (attackGruntClips.empty() && woundClips.empty()) {
-        LOG_WARNING("No combat vocal sounds found for ", stem);
-        LOG_WARNING("  Tried ", exertPrefixes_.size(), " exert prefixes, first: ",
-                    exertPrefixes_.empty() ? "(none)" : exertPrefixes_[0]);
-        LOG_WARNING("  Tried vox prefix: ", voxPrefix);
-    }
-}
-
-void ActivitySoundManager::playAttackGrunt() {
-    if (!AudioEngine::instance().isInitialized() || attackGruntClips.empty()) return;
-    auto now = std::chrono::steady_clock::now();
-    if (lastAttackGruntAt.time_since_epoch().count() != 0) {
-        if (std::chrono::duration<float>(now - lastAttackGruntAt).count() < 1.5f) return;
-    }
-    // ~30% chance per swing to grunt (not every hit)
-    std::uniform_int_distribution<int> chance(0, 9);
-    if (chance(rng) > 2) return;
-
-    std::uniform_int_distribution<size_t> dist(0, attackGruntClips.size() - 1);
-    const Sample& sample = attackGruntClips[dist(rng)];
-    float volume = 0.0f, pitch = 1.0f;
-    askedByRow(sample, 0.62f, volume, pitch);
-    if (AudioEngine::instance().playSound2D(sample.data, volume, pitch)) {
-        lastAttackGruntAt = now;
-    }
-}
-
-void ActivitySoundManager::playWound(bool isCrit) {
-    if (!AudioEngine::instance().isInitialized()) return;
-    auto& clips = (isCrit && !woundCritClips.empty()) ? woundCritClips : woundClips;
-    if (clips.empty()) return;
-    auto now = std::chrono::steady_clock::now();
-    if (lastWoundAt.time_since_epoch().count() != 0) {
-        if (std::chrono::duration<float>(now - lastWoundAt).count() < 0.8f) return;
-    }
-    std::uniform_int_distribution<size_t> dist(0, clips.size() - 1);
-    const Sample& sample = clips[dist(rng)];
-    float volume = 0.0f, pitch = 1.0f;
-    askedByRow(sample, isCrit ? 0.80f : 0.65f, volume, pitch);
-    if (AudioEngine::instance().playSound2D(sample.data, volume, pitch)) {
-        lastWoundAt = now;
-    }
-}
 } // namespace audio
 } // namespace wowee

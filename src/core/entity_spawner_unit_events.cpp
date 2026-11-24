@@ -141,7 +141,11 @@ void EntitySpawner::playUnitSlot(const game::Unit& unit, uint32_t slot, bool alw
     // 0x00747310, a unit's sound slot: by its chance unless asked for
     // outright; the Stand sound at most every ten seconds of all units.
     if (!renderer_ || !gameHandler_ || !assetManager_) return;
-    if (!always && !ue::slotPlays(slot, nextRandom(unitEventRandom_))) return;
+    // A player's by 0x007631a0: the same row, its own chances and place.
+    const bool player = unit.getType() == game::ObjectType::PLAYER;
+    if (!always && !ue::slotPlays(player ? ue::playerSlotChance(slot) : ue::slotChance(slot),
+                                  nextRandom(unitEventRandom_)))
+        return;
     if (slot == ue::kSlotStand) {
         const auto nowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                      std::chrono::steady_clock::now().time_since_epoch())
@@ -161,22 +165,25 @@ void EntitySpawner::playUnitSlot(const game::Unit& unit, uint32_t slot, bool alw
         const auto it = info.find(unit.getEntry());
         moreAudible = it != info.end() && (it->second.typeFlags & ue::kCreatureTypeFlagMoreAudible) != 0;
     }
-    const audio::PlayLimit type = ue::slotPlayType(slot, moreAudible);
-    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+    rendering::M2EventSounds& sound3d = renderer_->getM2EventSounds();
     // The active player's own, and the vehicle it drives: kept over a
     // crowd's (0x6e) and, with the listener at the character, where the
     // listener is and fainter.
     const uint64_t guid = unit.getGuid();
-    const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
+    const bool self = guid == gameHandler_->getPlayerGuid();
+    const bool own = self || (!player && guid == gameHandler_->activeMover());
+    const audio::PlayLimit type =
+        player ? ue::playerSlotPlayType(slot, self) : ue::slotPlayType(slot, moreAudible);
     const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
     if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
-        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_, type, false, priority);
+        sound3d.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_, type, false, priority);
         return;
     }
     std::optional<glm::vec3> where;
-    if (at) where = *at;
+    if (at && !player) where = *at;
     else where = unitSoundPosition(guid);
-    if (where) player.playOnce(sound, &*where, 1.0f, assetManager_, type, false, priority);
+    if (where && player) where->z += ue::kPlayerSlotHeight;
+    if (where) sound3d.playOnce(sound, &*where, 1.0f, assetManager_, type, false, priority);
 }
 
 void EntitySpawner::updateUnitLoopSounds() {

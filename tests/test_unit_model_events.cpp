@@ -57,17 +57,35 @@ TEST_CASE("a slot's CreatureSoundData column", "[unit_model_events]") {
 
 TEST_CASE("a slot's chance out of 101 draws", "[unit_model_events]") {
     // The draw times 101, its high word: 0..100, played up to the chance.
-    CHECK(ue::slotPlays(ue::kSlotWingFlap, 0xFFFFFFFFu));
-    CHECK(ue::slotPlays(ue::kSlotStand, 0));
+    CHECK(ue::slotPlays(ue::slotChance(ue::kSlotWingFlap), 0xFFFFFFFFu));
+    CHECK(ue::slotPlays(ue::slotChance(ue::kSlotStand), 0));
     // 40: a roll of 40 plays, 41 does not.
     const auto drawFor = [](uint32_t roll) {
         return static_cast<uint32_t>(((static_cast<uint64_t>(roll) << 32) + 100) / 101);
     };
-    CHECK(ue::slotPlays(ue::kSlotStand, drawFor(40)));
-    CHECK_FALSE(ue::slotPlays(ue::kSlotStand, drawFor(41)));
+    CHECK(ue::slotPlays(ue::slotChance(ue::kSlotStand), drawFor(40)));
+    CHECK_FALSE(ue::slotPlays(ue::slotChance(ue::kSlotStand), drawFor(41)));
     CHECK(ue::slotChance(ue::kSlotStand) == 40);
     CHECK(ue::slotChance(0) == 70);
     CHECK(ue::slotChance(2) == 60);
+}
+
+TEST_CASE("a player's slots are its model's, at its own chances", "[unit_model_events]") {
+    // 0x007631a0 and 0x00adba74. A player's cries were files of guessed names,
+    // and the blood elves' and draenei's have others.
+    CHECK(ue::playerSlotChance(ue::kSlotExertion) == 35);
+    CHECK(ue::playerSlotChance(ue::kSlotExertionCritical) == 100);
+    CHECK(ue::playerSlotChance(ue::kSlotInjury) == 30);
+    CHECK(ue::playerSlotChance(ue::kSlotInjuryCritical) == 100);
+    CHECK(ue::playerSlotChance(ue::kSlotStand) == 40);
+    CHECK(ue::playerSlotChance(13) == 0);
+    // The player's own injuries, one at a time.
+    using wowee::audio::PlayLimit;
+    CHECK(ue::playerSlotPlayType(ue::kSlotInjury, true) == PlayLimit::OwnInjury);
+    CHECK(ue::playerSlotPlayType(ue::kSlotInjuryCrushingBlow, true) == PlayLimit::OwnInjury);
+    CHECK(ue::playerSlotPlayType(ue::kSlotInjury, false) == PlayLimit::Injury);
+    CHECK(ue::playerSlotPlayType(ue::kSlotExertion, true) == PlayLimit::Exertion);
+    CHECK(wowee::audio::play_limit::maxPlaying(PlayLimit::OwnInjury) == 1);
 }
 
 TEST_CASE("a slot's play type", "[unit_model_events]") {

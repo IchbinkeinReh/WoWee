@@ -29,8 +29,6 @@ public:
     void setSwimmingState(bool swimming, bool moving);
     void setCharacterVoiceProfile(const std::string& modelName);
     void setCharacterVoiceProfile(const std::string& raceFolder, const std::string& raceBase, bool male);
-    void playAttackGrunt();
-    void playWound(bool isCrit = false);
     void setVolumeScale(float scale) { volumeScale = scale; }
     [[nodiscard]] float getVolumeScale() const { return volumeScale; }
 
@@ -55,10 +53,6 @@ private:
     std::vector<Sample> jumpClips;
     std::vector<Sample> swimLoopClips;
     std::vector<Sample> hardLandClips;
-    std::vector<Sample> attackGruntClips;
-    std::vector<Sample> woundClips;
-    std::vector<Sample> woundCritClips;
-    std::vector<Sample> deathClips;
     std::array<SurfaceLandingSet, 7> landingSets;
 
     bool swimmingActive = false;
@@ -69,8 +63,6 @@ private:
 
     std::chrono::steady_clock::time_point lastJumpAt{};
     std::chrono::steady_clock::time_point lastLandAt{};
-    std::chrono::steady_clock::time_point lastAttackGruntAt{};
-    std::chrono::steady_clock::time_point lastWoundAt{};
     std::chrono::steady_clock::time_point lastSwimStrokeAt{};
     std::string voiceProfileKey;
     float volumeScale = 1.0f;
@@ -90,7 +82,6 @@ private:
     void rebuildJumpClipsForProfile(const std::string& raceFolder, const std::string& raceBase, bool male);
     void rebuildSwimLoopClipsForProfile(const std::string& raceFolder, const std::string& raceBase, bool male);
     void rebuildHardLandClipsForProfile(const std::string& raceFolder, const std::string& raceBase, bool male);
-    void rebuildCombatVocalClipsForProfile(const std::string& raceFolder, const std::string& raceBase, bool male);
     void startSwimLoop();
     void stopSwimLoop();
     void stopOneShot();

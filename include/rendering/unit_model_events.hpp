@@ -189,12 +189,18 @@ constexpr uint32_t slotChance(uint32_t slot) {
     return slot < 13 ? kChance[slot] : 0;
 }
 
+/// A player's (0x007631a0): the exertions and the injuries half as often
+/// (0x00adba74).
+constexpr uint32_t playerSlotChance(uint32_t slot) {
+    return slot == 0 ? 35 : slot == 2 ? 30 : slotChance(slot);
+}
+
 /// Whether a slot plays for a 32-bit random draw: the draw times 101, its
 /// high word, no more than the chance (0x00747310) - so 40 plays 41 times in
 /// 101, and 100 always.
-constexpr bool slotPlays(uint32_t slot, uint32_t random32) {
+constexpr bool slotPlays(uint32_t chance, uint32_t random32) {
     const auto roll = static_cast<uint32_t>((static_cast<uint64_t>(random32) * 101u) >> 32);
-    return roll <= slotChance(slot);
+    return roll <= chance;
 }
 
 /// The slots a melee hit asks for: the attacker's exertion as the hit
@@ -219,6 +225,14 @@ constexpr audio::PlayLimit slotPlayType(uint32_t slot, bool moreAudible) {
         return audio::PlayLimit::None;
     }
 }
+
+/// A player's: the active player's own injuries are counted apart (0x007631a0).
+constexpr audio::PlayLimit playerSlotPlayType(uint32_t slot, bool self) {
+    const audio::PlayLimit type = slotPlayType(slot, false);
+    return self && type == audio::PlayLimit::Injury ? audio::PlayLimit::OwnInjury : type;
+}
+/// Where it is heard from: this far over the player's feet (0x007631a0).
+constexpr float kPlayerSlotHeight = 2.0f;
 
 /// $FDX's Stand sound: at most once in this long, of every unit (0x00ca12d4).
 constexpr uint32_t kStandSoundIntervalMs = 10000;
