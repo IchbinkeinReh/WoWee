@@ -1,4 +1,5 @@
 #include "game/transport_manager.hpp"
+#include "game/transport_path_time.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "game/game_object_rotation.hpp"
 #include "game/transport_local.hpp"
@@ -610,14 +611,15 @@ void TransportManager::noteServerPathTime(uint64_t transportGuid, uint32_t pathT
 }
 
 void TransportManager::seedFromServerPathTime(ActiveTransport& transport) {
-    // Elevators only - a z-only path played on the client's clock. A ship's or
-    // a zeppelin's block carries the server's own ms instead, and its phase
-    // comes from the route fields (applyServerRouteClock).
+    // A path of TransportAnimation.dbc. A ship's or a zeppelin's block carries
+    // the server's own ms instead, and its phase comes from the route fields
+    // (applyServerRouteClock). The Deeprun Tram ran on the wall clock, elsewhere
+    // than the server had it, and ahead by the time the map took to load.
     if (!transport.useClientAnimation || transport.routeClock.valid()) return;
     auto it = serverPathTimes_.find(transport.guid);
     if (it == serverPathTimes_.end()) return;
     const auto* pathEntry = pathRepo_.findPath(transport.pathId);
-    if (!pathEntry || !pathEntry->zOnly) return;
+    if (!pathEntry || !runsOnServerTime(*pathEntry, isPreWotlk()) || transport.borrowedPath) return;
     const uint32_t durationMs = pathEntry->spline.durationMs();
     if (durationMs == 0) return;
     const ServerPathTime sample = it->second;
