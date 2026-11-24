@@ -961,7 +961,15 @@ static int lua_WoweeTryOn(lua_State* L) {
     return 0;
 }
 
-/// __WoweeSetModelCreature(frame, displayId) - what a model frame is showing.
+void showAskedCreature(ui::Widget& w, game::GameHandler* gh) {
+    if (w.modelCreatureAsked == 0 || !gh) return;
+    const uint32_t display = gh->getCreatureDisplayIdForEntry(w.modelCreatureAsked);
+    if (display == 0) return;
+    w.modelDisplayId = display;
+    w.modelCreatureAsked = 0;
+}
+
+/// __WoweeSetModelCreature(frame, creatureId) - what a model frame is showing.
 ///
 /// The companion preview and the stable's paperdoll both name a creature this
 /// way. The id is written onto the frame rather than acted on here, because
@@ -975,7 +983,11 @@ static int lua_WoweeSetModelCreature(lua_State* L) {
     const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
     lua_pop(L, 1);
     if (auto* w = tree->get(id)) {
-        w->modelDisplayId = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
+        // A creature's id, as 0x00597960 takes it; one whose template is
+        // not known yet is asked for, and shown once it is.
+        w->modelCreatureAsked = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
+        showAskedCreature(*w, getGameHandler(L));
+        if (w->modelCreatureAsked == 0 && luaL_optnumber(L, 2, 0) == 0) w->modelDisplayId = 0;
     }
     return 0;
 }

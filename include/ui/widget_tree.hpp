@@ -804,6 +804,9 @@ struct Widget {
     /// and resolves it - and read by the render loop, which is where the
     /// model is actually built. Zero is "nothing chosen".
     uint32_t modelDisplayId = 0;
+    /// The creature SetCreature named, until its template is known and its
+    /// display taken from it (0x00597960); 0 for none.
+    uint32_t modelCreatureAsked = 0;
 
     /// A model frame's model file (Model:SetModel, <Model file="">,
     /// 0x0095f990) and the client's pose for it (0x0095fba0): SetPosition

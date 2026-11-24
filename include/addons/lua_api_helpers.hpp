@@ -1193,6 +1193,10 @@ inline const game::ItemSlot* containerItemSlot(const game::Inventory& inv,
     return nullptr;
 }
 
+/// Defined in lua_inventory_api.cpp: SetCreature's creature on its model
+/// frame, once its template is known (0x00597960).
+void showAskedCreature(ui::Widget& w, game::GameHandler* gh);
+
 /// One slot named by an *inventory* slot id, the interface's 1-based numbering.
 ///
 /// Equipment is 1 to 23 and everything above it was answered as absent, which

@@ -2335,6 +2335,7 @@ static int lua_SetPetStablePaperdoll(lua_State* L) {
     // one the creature cache does not hold yet is asked for, and the found
     // answer raises PET_STABLE_UPDATE_PAPERDOLL (0x005a1530 -> 0x005a0ea0).
     w->modelDisplayId = 0;
+    w->modelCreatureAsked = 0;
     if (const auto* pet = stablePetAt(gh, selectedStableIndex(gh))) {
         if (gh->getCreatureInfoCache().count(pet->entry)) {
             w->modelDisplayId = gh->getCreatureDisplayIdForEntry(pet->entry);

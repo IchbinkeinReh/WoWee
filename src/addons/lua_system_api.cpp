@@ -9300,24 +9300,18 @@ void registerSystemLuaAPI(lua_State* L) {
             const auto& list = gh->getCompanions(mounts);
             if (index > static_cast<int>(list.size())) return luaReturnNil(L);
             const auto& c = list[static_cast<size_t>(index) - 1];
-            // A display id, and both kinds have to be asked for one. What is
-            // held is a creature *template entry* either way: the summon's
-            // misc value for a critter, and the mounted aura's for a mount -
-            // AzerothCore reads that one with GetCreatureTemplate and picks
-            // the model with ChooseDisplayId, so it is an entry there too.
-            //
-            // A mount's was handed to CompanionModelFrame:SetCreature
-            // unresolved, on the reading that it was already a display id. An
-            // entry used as a display id names a real CreatureDisplayInfo row
-            // belonging to something else, so the mount tab previewed whatever
-            // creature happened to sit at that row.
-            //
-            // Zero until the answer arrives, which draws nothing for a round
-            // trip rather than drawing the wrong thing; COMPANION_UPDATE brings
-            // the tab back when it lands.
-            const uint32_t displayId = gh->getCreatureDisplayIdForEntry(c.creatureId);
-            lua_pushnumber(L, displayId);
-            lua_pushstring(L, c.name.c_str());
+            // The creature itself, for a critter and a mount alike, and its
+            // name - nil until the cache has it, which is asked here
+            // (0x0053e2c0 -> 0x0067b6a0). What it looks like is SetCreature's
+            // to find out; this answered its display, which was 0 until the
+            // answer came, and 0 is what the window took for the creature
+            // shown and never asked again.
+            gh->getCreatureDisplayIdForEntry(c.creatureId);
+            lua_pushnumber(L, c.creatureId);
+            if (const std::string name = gh->getCachedCreatureName(c.creatureId); !name.empty())
+                lua_pushstring(L, name.c_str());
+            else
+                lua_pushnil(L);
             lua_pushnumber(L, c.spellId);
             lua_pushstring(L, gh->getSpellIconPath(c.spellId).c_str());
             // Whether it is out. A mount is an aura on the player; a critter is

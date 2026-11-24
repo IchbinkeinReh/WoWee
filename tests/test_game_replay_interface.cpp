@@ -119,3 +119,32 @@ TEST_CASE("the wheel reaches the list under its rows", "[replay][interface]") {
     CHECK(ui.is("turned == 2"));
 }
 
+// P54: GetCompanionInfo answers the creature (0x0053e2c0), and SetCreature
+// shows it once its template is known (0x00597960).
+TEST_CASE("a model frame shows the creature it is given once that is known", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("model = CreateFrame('PlayerModel', 'PlayModel', UIParent) model:SetCreature(4269)");
+    auto* w = ui.engine.widgets().findByName("PlayModel");
+    REQUIRE(w);
+    CHECK(w->modelDisplayId == 0);
+    CHECK(w->modelCreatureAsked == 4269);
+    CHECK_FALSE(s.sent().of(Opcode::CMSG_CREATURE_QUERY).empty());
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CREATURE_QUERY_RESPONSE));
+    p.writeUInt32(4269);
+    p.writeString("Chestnut Mare");
+    for (int i = 0; i < 5; ++i) p.writeString("");
+    for (uint32_t v : {0u, 0u, 0u, 0u, 0u, 0u, 2405u, 0u, 0u, 0u}) p.writeUInt32(v);
+    for (int i = 0; i < 20; ++i) p.writeUInt32(0);
+    s.receive(p);
+    wowee::addons::showAskedCreature(*w, &s.handler());
+    CHECK(w->modelDisplayId == 2405);
+    CHECK(w->modelCreatureAsked == 0);
+    // Known now, it is shown at once; the stable's paperdoll takes its place.
+    w->modelDisplayId = 0;
+    ui.run("model:SetCreature(4269)");
+    CHECK(w->modelDisplayId == 2405);
+    ui.run("model:SetCreature(4270) if SetPetStablePaperdoll then SetPetStablePaperdoll(model) end");
+    CHECK(w->modelCreatureAsked == 0);
+}

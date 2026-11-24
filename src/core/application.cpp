@@ -7590,6 +7590,7 @@ void Application::render() {
                         *cm.widgetId = frame ? frame->id : 0;
                     }
                     bool shown = false;
+                    if (frame) addons::showAskedCreature(*frame, gameHandler.get());
                     if (frame && frame->visible && frame->modelDisplayId != 0 &&
                         entitySpawner_) {
                         const std::string modelPath =
