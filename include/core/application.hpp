@@ -245,8 +245,6 @@ private:
     uint32_t shownPlayerDisplay_ = 0;
     /// An event of the player's own movement, on its animation (0x0073ed10).
     void animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, bool launchedBefore);
-    /// In the air off a ledge, long enough for a fall the server is told of.
-    [[nodiscard]] bool playerOffLedge() const;
     /// The player's collision height (+0x854), mounted or not.
     [[nodiscard]] float playerCollisionHeight();
     /// MOVEMENTFLAG_FALLING_FAR: half a second off a ledge, or below where a

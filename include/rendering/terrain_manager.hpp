@@ -372,6 +372,13 @@ public:
      */
     [[nodiscard]] bool isTileLoadedAt(float glX, float glY) const;
 
+    /// Whether the tile covering a world position is still to come: not in,
+    /// and one the map has. Nothing comes on a map of one building (streaming
+    /// off) or where the map has no tile (open sea) - the client's gather
+    /// finds nothing there and does not fail (0x007a5a60), and what is there
+    /// falls on through.
+    [[nodiscard]] bool isTileComingAt(float glX, float glY) const;
+
     /// The tile at (x, y) - ADT indices, as worldToTile gives them - is in,
     /// or nothing of it is coming: no ADT there (open sea), it failed, or it
     /// was never asked for. What a same-map teleport waits for behind its

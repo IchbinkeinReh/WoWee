@@ -124,3 +124,107 @@ TEST_CASE("taking to the air ends a fall and a swim (0x00989890)", "[movementfla
     wowee::game::startFlying(info, 12u);
     CHECK(info.flags == bit(MovementFlags::FALLING));
 }
+
+TEST_CASE("a landing goes out where the fall was told of, or was one (0x0073d4a0)", "[movementflags]") {
+    using wowee::game::fallLandSent;
+    CHECK(fallLandSent(true, 0.0f));
+    CHECK_FALSE(fallLandSent(false, 0.0f));
+    CHECK_FALSE(fallLandSent(false, 0.027f));
+    CHECK(fallLandSent(false, 0.028f));
+}
+
+TEST_CASE("a fall starts where the mover may fall (0x0098b710, 0x00988370)", "[movementflags]") {
+    using wowee::game::mayStartFall;
+    CHECK(mayStartFall(0));
+    CHECK(mayStartFall(bit(MovementFlags::FORWARD) | bit(MovementFlags::WALKING) | bit(MovementFlags::CAN_FLY)));
+    for (auto f : {MovementFlags::FALLING, MovementFlags::SWIMMING, MovementFlags::FLYING, MovementFlags::LEVITATING,
+                   MovementFlags::ROOT, MovementFlags::ONTRANSPORT})
+        CHECK_FALSE(mayStartFall(bit(f)));
+    // What it takes off, and the pitch's two with it unless flags2 0x20.
+    const uint32_t before = bit(MovementFlags::FORWARD) | bit(MovementFlags::ASCENDING) |
+                            bit(MovementFlags::PITCH_UP) | bit(MovementFlags::FLYING) | bit(MovementFlags::CAN_FLY);
+    const uint32_t after = bit(MovementFlags::FORWARD) | bit(MovementFlags::CAN_FLY) | bit(MovementFlags::FALLING);
+    CHECK(wowee::game::fallFlags(before, 0) == after);
+    CHECK(wowee::game::fallFlags(before, 0x20) == (after | bit(MovementFlags::PITCH_UP)));
+}
+
+TEST_CASE("stopping to swim starts a fall the packet carries (0x0098bff0)", "[movementflags]") {
+    MovementInfo info = withFlags(bit(MovementFlags::FORWARD) | bit(MovementFlags::SWIMMING) |
+                                  bit(MovementFlags::ASCENDING));
+    info.pitch = 0.5f;
+    CHECK(wowee::game::stopSwimming(info));
+    CHECK(info.flags == (bit(MovementFlags::FORWARD) | bit(MovementFlags::FALLING)));
+    CHECK(info.pitch == 0.0f);
+    // Not swimming: nothing stops, nothing falls.
+    info = withFlags(bit(MovementFlags::FORWARD));
+    CHECK_FALSE(wowee::game::stopSwimming(info));
+    CHECK(info.flags == bit(MovementFlags::FORWARD));
+    // On a transport none starts.
+    info = withFlags(bit(MovementFlags::SWIMMING) | bit(MovementFlags::ONTRANSPORT));
+    CHECK_FALSE(wowee::game::stopSwimming(info));
+    CHECK(info.flags == bit(MovementFlags::ONTRANSPORT));
+}
+
+TEST_CASE("a root that comes in a fall holds from the landing on (0x0098c4f0, 0x00988490)", "[movementflags]") {
+    MovementInfo info = withFlags(bit(MovementFlags::FORWARD) | bit(MovementFlags::FALLING));
+    wowee::game::rootMover(info);
+    CHECK_FALSE(info.isPlayerRooted());
+    CHECK((info.flags & bit(MovementFlags::PENDING_ROOT)) != 0);
+    wowee::game::endFall(info, 100u);
+    CHECK(info.flags == bit(MovementFlags::ROOT));
+    // On the ground at once, and stopped with it.
+    info = withFlags(bit(MovementFlags::FORWARD) | bit(MovementFlags::TURN_LEFT));
+    wowee::game::rootMover(info);
+    CHECK(info.flags == bit(MovementFlags::ROOT));
+    wowee::game::unrootMover(info);
+    CHECK(info.flags == 0);
+    info = withFlags(bit(MovementFlags::FALLING) | bit(MovementFlags::PENDING_ROOT));
+    wowee::game::unrootMover(info);
+    CHECK(info.flags == bit(MovementFlags::FALLING));
+}
+
+TEST_CASE("being put somewhere ends a fall and keeps what is not the mover's doing (0x0098ba90)", "[movementflags]") {
+    MovementInfo info = withFlags(bit(MovementFlags::FORWARD) | bit(MovementFlags::WALKING) |
+                                  bit(MovementFlags::FALLING) | bit(MovementFlags::FALLINGFAR) |
+                                  bit(MovementFlags::ASCENDING) | bit(MovementFlags::CAN_FLY) |
+                                  bit(MovementFlags::WATER_WALK) | bit(MovementFlags::HOVER) |
+                                  bit(MovementFlags::FEATHER_FALL) | bit(MovementFlags::ROOT));
+    info.pitch = 0.3f;
+    wowee::game::placeMover(info, 250u);
+    CHECK(info.flags == (bit(MovementFlags::WALKING) | bit(MovementFlags::CAN_FLY) | bit(MovementFlags::WATER_WALK) |
+                         bit(MovementFlags::HOVER) | bit(MovementFlags::FEATHER_FALL) | bit(MovementFlags::ROOT)));
+    CHECK(info.pitch == 0.0f);
+    CHECK(info.fallTime == 250u);
+}
+
+TEST_CASE("a knockback's fall has the packet's own jump block (0x006e9ff0)", "[movementflags]") {
+    MovementInfo info = withFlags(bit(MovementFlags::FORWARD) | bit(MovementFlags::SWIMMING) |
+                                  bit(MovementFlags::CAN_FLY));
+    info.pitch = 0.4f;
+    wowee::game::knockBackMover(info, 0.6f, -0.8f, 15.0f, -10.0f);
+    CHECK(info.flags == (bit(MovementFlags::FORWARD) | bit(MovementFlags::FALLING)));
+    CHECK(info.pitch == 0.0f);
+    CHECK(info.jumpVelocity == -10.0f);
+    CHECK(info.jumpSinAngle == 0.6f);
+    CHECK(info.jumpCosAngle == -0.8f);
+    CHECK(info.jumpXYSpeed == 15.0f);
+    // Rooted: held again from the landing on.
+    info = withFlags(bit(MovementFlags::ROOT));
+    wowee::game::knockBackMover(info, 1.0f, 0.0f, 5.0f, -5.0f);
+    CHECK(info.flags == (bit(MovementFlags::FALLING) | bit(MovementFlags::PENDING_ROOT)));
+}
+
+// The jump block is the wire's, and so is the facing its direction goes by:
+// north (0 there) is a quarter turn back here, and a jump running north went
+// out as one to the east.
+TEST_CASE("our own jump goes where the wire's facing points", "[movementflags]") {
+    MovementInfo info = withFlags(bit(MovementFlags::FORWARD));
+    info.orientation = wowee::core::coords::serverToCanonicalYaw(0.0f);
+    auto north = wowee::game::ownJumpBlock(info, 2.5f, 7.0f, 4.5f);
+    CHECK(north.dirX == Catch::Approx(1.0f));
+    CHECK(north.dirY == Catch::Approx(0.0f).margin(1e-6));
+    info.orientation = wowee::core::coords::serverToCanonicalYaw(1.5707963f);
+    const auto west = wowee::game::ownJumpBlock(info, 2.5f, 7.0f, 4.5f);
+    CHECK(west.dirX == Catch::Approx(0.0f).margin(1e-6));
+    CHECK(west.dirY == Catch::Approx(1.0f));
+}

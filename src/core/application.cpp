@@ -4067,7 +4067,7 @@ void Application::connectWorldHooks() {
     // Wire up movement opcodes from camera controller
     if (renderer && renderer->getCameraController()) {
         auto* cc = renderer->getCameraController();
-        cc->setMovementCallback([this](uint32_t opcode) {
+        cc->setMovementCallback([this, cc](uint32_t opcode) {
             if (!gameHandler) return;
             // A landing goes out from where the feet landed. The client moves
             // the unit by the fall step's collided move and lands it in that
@@ -4120,8 +4120,40 @@ void Application::connectWorldHooks() {
                 }
                 gameHandler->setPosition(landed.x, landed.y, landed.z);
             }
+            if (opcode == static_cast<uint32_t>(game::Opcode::MSG_MOVE_FALL_LAND)) {
+                if (auto* mh = gameHandler->getMovementHandler()) mh->landFall(cc->lastFallDrop());
+                return;
+            }
             gameHandler->sendMovement(static_cast<game::Opcode>(opcode));
         });
+        // The movement state of whatever the keys move (MoverStep).
+        rendering::CameraController::MoverStateHooks state;
+        state.falling = [this]() {
+            return gameHandler && gameHandler->getMovementInfo().hasFlag(game::MovementFlags::FALLING);
+        };
+        state.swimming = [this]() {
+            return gameHandler && gameHandler->getMovementInfo().hasFlag(game::MovementFlags::SWIMMING);
+        };
+        // Off a ledge without a jump: the client falls from the step its
+        // ground went missing in (0x007620f0 -> 0x00988370(0)), FALLING set
+        // and the fall time counting from there, and no packet of its own.
+        // Not on a transport, where the client does not mark a passenger
+        // standing on it as falling and the server measured a lift's whole
+        // descent as one, nor while one carries the player to another map:
+        // it is off the transport only until the transport is known there.
+        state.fallBegan = [this](uint32_t sinceMs) {
+            if (!gameHandler || gameHandler->isOnTransport() || gameHandler->isOnTaxiFlight() || hasM2RideLock_ ||
+                gameHandler->hasPendingPlayerTransportWorldTransfer())
+                return;
+            if (auto* mh = gameHandler->getMovementHandler()) mh->startFall(sinceMs);
+        };
+        state.fallsFar = [this]() {
+            if (auto* mh = gameHandler ? gameHandler->getMovementHandler() : nullptr) mh->setFallingFar();
+        };
+        state.fallOver = [this]() {
+            if (auto* mh = gameHandler ? gameHandler->getMovementHandler() : nullptr) mh->endFallUnsaid();
+        };
+        cc->setMoverStateHooks(std::move(state));
         // The player sitting down or getting up: the request to the server,
         // and the animation at once (0x006d SetStandState -> 0x0073f060).
         const auto standTo = [this](uint8_t state) {
@@ -5112,8 +5144,6 @@ void Application::applyServerMovementState(float deltaTime) {
                  " isM2=", isM2Transport,
                  " guid=0x", std::hex, gameHandler->getPlayerTransportGuid(), std::dec);
         wasOnTransport = onTransportNowDbg;
-        // Boarded or left: where the player last stood was another frame's.
-        if (auto* cc = renderer->getCameraController()) cc->forgetPortPlace();
     }
 
     if (onTaxi) {
@@ -5488,7 +5518,7 @@ void Application::applyServerMovementState(float deltaTime) {
                 // grounded frame and silently accumulates fall velocity the
                 // entire ride - reported live as clipping through the world
                 // "at a weird angle" right after disembarking, and as being
-                // unable to jump while riding (coyote time never has a
+                // unable to jump while riding (a jump never has a
                 // grounded frame to key off). Suppress it every frame the
                 // lock is active so nothing is queued up to unleash later.
                 if (isDeeprunTram && renderer->getCameraController()) {
@@ -5544,24 +5574,6 @@ void Application::applyServerMovementState(float deltaTime) {
 
         glm::vec3 canonical = core::coords::renderToCanonical(renderPos);
         gameHandler->setPosition(canonical.x, canonical.y, canonical.z);
-
-        // Off a ledge without a jump: the client falls from the step its
-        // ground went missing in (0x00762980 -> 0x00988370(0)), FALLING set
-        // and the fall time counting from there. Here once the drop has
-        // lasted as long as a fall the landing is sent for (playerOffLedge),
-        // counted from when the ground went: a bump that breaks contact for
-        // a frame is no fall. Not on a transport, where the client does not
-        // mark a passenger standing on it as falling and the server measured
-        // a lift's whole descent as one.
-        // Nor while a transport carries the player to another map: it is off
-        // the transport only until the transport is known there.
-        if (playerOffLedge() && !gameHandler->isOnTransport() && !gameHandler->isOnTaxiFlight() &&
-            !gameHandler->hasPendingPlayerTransportWorldTransfer()) {
-            if (auto* mh = gameHandler->getMovementHandler()) {
-                const float airborne = renderer->getCameraController()->airborneSeconds();
-                mh->startFall(static_cast<uint32_t>(std::lround(airborne * 1000.0f)));
-            }
-        }
 
         // Sync orientation: camera yaw (degrees) → WoW orientation (radians)
         float yawDeg = renderer->getCharacterYaw();
@@ -5728,16 +5740,6 @@ void Application::playTextEmoteLocally(uint32_t textEmoteId) {
         ghost = (self->getField(pf) & 0x10u) != 0;
     if (!rendering::upper_body::localEmotePlays(u, ghost)) return;
     cr->playAnimation(instanceId, row.animId, row.specProc == 2);
-}
-
-// A drop off a ledge the player is in the air for: not a jump, not in water,
-// in flight or on a ride locked to a transport, and lasting as long as a fall
-// the landing is sent for (CameraController, MSG_MOVE_FALL_LAND).
-bool Application::playerOffLedge() const {
-    const auto* cc = renderer ? renderer->getCameraController() : nullptr;
-    constexpr float kFallSeconds = 0.15f;
-    return cc && !cc->isGrounded() && !cc->isSwimming() && !cc->isFlightAirborne() && !hasM2RideLock_ &&
-           cc->airborneSeconds() >= kFallSeconds;
 }
 
 // The player's collision height (+0x854): what the server gave last, else

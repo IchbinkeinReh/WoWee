@@ -552,30 +552,10 @@ uint32_t MovementHandler::movementClockMs() const {
 
 void MovementHandler::startFall(uint32_t sinceMs) {
     if (activeMover() != owner_.getPlayerGuid()) return;
-    if (isFalling_ || movementInfo.hasFlag(MovementFlags::FALLING)) return;
-    // 0x00988370 does not start a fall for a rooted mover (flags & 0x800).
-    if (movementInfo.hasFlag(MovementFlags::ROOT)) return;
+    if (!mayStartFall(movementInfo.flags)) return;
     const uint32_t now = movementClockMs();
-    isFalling_ = true;
-    fallStartMs_ = now > sinceMs ? now - sinceMs : 0u;
-    movementInfo.fallTime = 0;
-    // 0x00988370: FALLING on; swimming, ascending, descending and flying off
-    // (flags & 0xf91fffff), and the pitch's two flags with them unless the
-    // mover may pitch (flags2 & 0x20; 0xf91fff3f).
-    uint32_t flags = movementInfo.flags & 0xf91fffffu;
-    if ((movementInfo.flags2 & 0x0020) == 0) flags &= 0xf91fff3fu;
-    movementInfo.flags = flags | static_cast<uint32_t>(MovementFlags::FALLING);
-    // Its jump block: +0xb8 the speed it was given, 0 here; the direction
-    // the keys move it (0x009881d0 -> 0x00987ef0) and its speed (+0x8c) as
-    // the walk had them - the jump's block (outgoingJumpBlock) without the
-    // jump's upward speed.
-    const OutgoingJump jump = outgoingJumpBlock(movementInfo.flags, movementInfo.orientation, serverWalkSpeed_,
-                                                serverRunSpeed_ > 0.0f ? serverRunSpeed_ : 7.0f,
-                                                serverRunBackSpeed_);
-    movementInfo.jumpVelocity = 0.0f;
-    movementInfo.jumpSinAngle = jump.dirX;
-    movementInfo.jumpCosAngle = jump.dirY;
-    movementInfo.jumpXYSpeed = jump.horizontalSpeed;
+    movementInfo.flags = fallFlags(movementInfo.flags, movementInfo.flags2);
+    fallBegan(now > sinceMs ? now - sinceMs : 0u);
     static const bool kFallDebug = [] {
         const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
         return v && v[0] && v[0] != '0';
@@ -584,6 +564,46 @@ void MovementHandler::startFall(uint32_t sinceMs) {
         LOG_WARNING("FALL START: walk-off z=", movementInfo.z, " since=", sinceMs, "ms start=", fallStartMs_,
                     " now=", now, " flags=0x", std::hex, movementInfo.flags, std::dec);
     }
+}
+
+void MovementHandler::fallBegan(uint32_t startMs) {
+    isFalling_ = true;
+    fallStartMs_ = startMs;
+    movementInfo.fallTime = 0;
+    // Its jump block: +0xb8 the speed it was given, 0 here; the direction
+    // the keys move it (0x009881d0 -> 0x00987ef0) and its speed (+0x8c) as
+    // the walk had them - the jump's block (outgoingJumpBlock) without the
+    // jump's upward speed.
+    const OutgoingJump jump = ownJumpBlock(movementInfo, serverWalkSpeed_,
+                                           serverRunSpeed_ > 0.0f ? serverRunSpeed_ : 7.0f, serverRunBackSpeed_);
+    movementInfo.jumpVelocity = 0.0f;
+    movementInfo.jumpSinAngle = jump.dirX;
+    movementInfo.jumpCosAngle = jump.dirY;
+    movementInfo.jumpXYSpeed = jump.horizontalSpeed;
+}
+
+void MovementHandler::setFallingFar() {
+    if (movementInfo.hasFlag(MovementFlags::FALLING))
+        movementInfo.flags |= static_cast<uint32_t>(MovementFlags::FALLINGFAR);
+}
+
+void MovementHandler::landFall(float droppedYards) {
+    if (!landingSent(movementInfo.flags)) return;
+    if (fallLandSent(fallSaid_, droppedYards)) sendMovement(Opcode::MSG_MOVE_FALL_LAND);
+    // Landed all the same where no packet says so - the step was too short to
+    // tell of, or the server takes no movement now: the step clears FALLING
+    // (0x00988490) whatever becomes of the packet.
+    if (landingSent(movementInfo.flags)) endFallUnsaid();
+}
+
+void MovementHandler::endFallUnsaid() {
+    const uint32_t flagsBefore = movementInfo.flags;
+    const bool launchedBefore = movementInfo.jumpVelocity != 0.0f;
+    movementInfo.time = movementClockMs();
+    endFall(movementInfo, endFallTimer());
+    // Its animation goes with the landing (0x0073d3d0), not the packet.
+    if (activeMover() == owner_.getPlayerGuid())
+        moverEvent(Opcode::MSG_MOVE_FALL_LAND, flagsBefore, launchedBefore);
 }
 
 bool MovementHandler::restoreWorldTransferFallbackIfNearOrigin(const char* context) {
@@ -706,6 +726,13 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             LOG_WARNING("Movement: not sent while ", heldReason,
                         " - the server keeps the last position it was told");
         }
+        // The mover starts and stops to swim all the same: its state changes
+        // first and the packet is asked after (0x006ef860, 0x0071ef80).
+        if (moverIsPlayer && opcode == Opcode::MSG_MOVE_START_SWIM) {
+            startSwimming(movementInfo, endFallTimer());
+        } else if (moverIsPlayer && opcode == Opcode::MSG_MOVE_STOP_SWIM && stopSwimming(movementInfo)) {
+            fallBegan(movementClockMs());
+        }
         return;
     }
 
@@ -825,9 +852,9 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
                 // +7.96, sin before cos and the facing alone, so every other
                 // client drew our jump falling straight down and heading off
                 // mirrored across the facing.
-                const OutgoingJump jump = outgoingJumpBlock(
-                    movementInfo.flags, movementInfo.orientation, serverWalkSpeed_,
-                    serverRunSpeed_ > 0.0f ? serverRunSpeed_ : 7.0f, serverRunBackSpeed_);
+                const OutgoingJump jump = ownJumpBlock(movementInfo, serverWalkSpeed_,
+                                                       serverRunSpeed_ > 0.0f ? serverRunSpeed_ : 7.0f,
+                                                       serverRunBackSpeed_);
                 movementInfo.jumpVelocity = jump.verticalSpeed;
                 movementInfo.jumpSinAngle = jump.dirX;   // wire order: x, then y
                 movementInfo.jumpCosAngle = jump.dirY;
@@ -855,16 +882,7 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             // time (+0x80) as the fall step counted it (0x007618b0,
             // 0x007612b0); only a fall's start zeroes it (0x00988370,
             // 0x00987410). It went out as 0.
-            if (isFalling_ && wrapMsDiff(movementInfo.time, fallStartMs_) >= 0) {
-                movementInfo.fallTime = static_cast<uint32_t>(wrapMsDiff(movementInfo.time, fallStartMs_));
-            }
-            movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::FALLING);
-            isFalling_ = false;
-            fallStartMs_ = 0;
-            movementInfo.jumpVelocity = 0.0f;
-            movementInfo.jumpSinAngle = 0.0f;
-            movementInfo.jumpCosAngle = 0.0f;
-            movementInfo.jumpXYSpeed = 0.0f;
+            endFall(movementInfo, endFallTimer());
             break;
         case Opcode::MSG_MOVE_HEARTBEAT:
             timeSinceLastMoveHeartbeat_ = 0.0f;
@@ -905,15 +923,12 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             startSwimming(movementInfo, endFallTimer());
             break;
         case Opcode::MSG_MOVE_STOP_SWIM:
-            // 0x0098bff0: swimming, rising and sinking end together
-            // (+0x44 & 0xff1fff3f), before the packet goes out.
-            movementInfo.flags &= ~(static_cast<uint32_t>(MovementFlags::SWIMMING) |
-                                    static_cast<uint32_t>(MovementFlags::ASCENDING) |
-                                    static_cast<uint32_t>(MovementFlags::DESCENDING));
-            // Out of the water level again, so the next packet that does carry
-            // a pitch - a flying mount - starts from horizontal rather than
-            // from however the swimmer was last angled.
-            movementInfo.pitch = 0.0f;
+            // 0x0098bff0: swimming, rising and sinking end together, and the
+            // mover falls from there, before the packet goes out. Out of the
+            // water level again, so the next packet that does carry a pitch -
+            // a flying mount - starts from horizontal rather than from however
+            // the swimmer was last angled.
+            if (stopSwimming(movementInfo)) fallBegan(movementInfo.time);
             break;
         case Opcode::MSG_MOVE_START_PITCH_UP:
             movementInfo.flags = (movementInfo.flags & ~static_cast<uint32_t>(MovementFlags::PITCH_DOWN)) |
@@ -1218,6 +1233,8 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
     if ((movementInfo.flags & (static_cast<uint32_t>(MovementFlags::PITCH_UP) |
                                static_cast<uint32_t>(MovementFlags::PITCH_DOWN))) != 0)
         pitchStartSent_ = true;
+    // Whether the server was told of the fall (+0xa30 0x80, 0x0071ef80).
+    if (!includeTransportInWire) fallSaid_ = movementInfo.hasFlag(MovementFlags::FALLING);
     lastSentPos_ = glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
     hasSentMovement_ = true;
     if (movementHeldReason_) {
@@ -1535,9 +1552,9 @@ void MovementHandler::handleForceMoveRootState(network::Packet& packet, bool roo
     if (!info) return;
 
     if (rooted) {
-        info->flags |= static_cast<uint32_t>(MovementFlags::ROOT);
+        rootMover(*info);
     } else {
-        info->flags &= ~static_cast<uint32_t>(MovementFlags::ROOT);
+        unrootMover(*info);
     }
 
     if (!owner_.getSocket()) return;
@@ -1647,6 +1664,17 @@ void MovementHandler::handleMoveKnockBack(network::Packet& packet) {
 
     if (owner_.knockBackCallbackRef()) {
         owner_.knockBackCallbackRef()(vcos, vsin, hspeed, vspeed);
+    }
+    // 0x006e9ff0, before the acknowledgement that carries it and no jump with
+    // it: the mover falls with the packet's own jump block (+0xb8 and the
+    // direction as they came, the speed +0x8c).
+    if (MovementInfo* info = movementFor(guid)) {
+        knockBackMover(*info, vcos, vsin, hspeed, vspeed);
+        if (info == &movementInfo) {
+            isFalling_ = true;
+            fallStartMs_ = movementClockMs();
+            fallSaid_ = true;
+        }
     }
 
     if (!owner_.getSocket()) return;
@@ -2737,13 +2765,11 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         movementInfo.y = canonical.y;
         movementInfo.z = canonical.z;
         movementInfo.orientation = core::coords::serverToCanonicalYaw(orientation);
-        // What the mover is doing ends here; what an aura gives it does not. The
-        // server does not send it again, and water walking went at every .go
-        // with the buff still on.
-        movementInfo.flags &= static_cast<uint32_t>(MovementFlags::WATER_WALK) |
-                              static_cast<uint32_t>(MovementFlags::FEATHER_FALL) |
-                              static_cast<uint32_t>(MovementFlags::HOVER) |
-                              static_cast<uint32_t>(MovementFlags::CAN_FLY);
+        // What the mover is doing ends here; what an aura gives it does not,
+        // nor walking, a root or no gravity (placeMover). The server does not
+        // send them again, and water walking went at every .go with the buff
+        // still on.
+        placeMover(movementInfo, endFallTimer());
         // Off whatever transport it was on, or onto the one the teleport
         // names. Kept, the old one went on placing the player by its offset
         // on it, so a .go away from a lift left them riding it.

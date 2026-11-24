@@ -744,8 +744,7 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     }
     movementInfo.time = nextMovementTimestampMs();
     if (movementHandler_) {
-        movementHandler_->setFalling(false);
-        movementHandler_->setFallStartMs(0);
+        movementHandler_->forgetFall();
     }
     movementInfo.fallTime = 0;
     movementInfo.jumpVelocity = 0.0f;

@@ -350,8 +350,9 @@ FallResult integrate(Mover& m, uint32_t ms, glm::vec3 d, Sweeper& sweeper) {
     out.ceiling = ceiling;
     if (m.falling) {
         // 0x0075cf80 inline: falling far after half a second, or a ninth of
-        // a yard below where a jump began.
-        if (!m.fallingFar) {
+        // a yard below where a jump began; never with a safe fall
+        // (+0x44 & 0x20002000).
+        if (!m.fallingFar && !m.safeFall) {
             if (m.fallV0 == 0.0f ? m.fallMs > 499 : m.pos.z <= m.fallStartZ - 1.0f / 9.0f) m.fallingFar = true;
         }
     }
@@ -389,6 +390,12 @@ float timeToApex(const Mover& m) { return m.falling ? m.fallV0 * -kInvG : 0.0f; 
 void startFallAt(Mover& m, float v0) {
     startFall(m);
     m.fallV0 = v0;
+}
+
+float fallDropped(const Mover& m) {
+    float d = m.fallStartZ - m.pos.z;
+    if (m.fallV0 < -kEpsA) d += m.fallV0 * m.fallV0 * 0.025918681f;
+    return std::max(d, 0.0f);
 }
 
 void land(Mover& m) {

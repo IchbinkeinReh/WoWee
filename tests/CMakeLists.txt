@@ -3397,6 +3397,13 @@ wowee_add_test(test_collision_swim
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_swim.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_mover_report ────────────────────────────────────────
+# What the movement state is told of a step: a fall ended on ground however it
+# came there, a swim its flags do not say. Header-only.
+wowee_add_test(test_mover_report
+    SOURCES test_mover_report.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_fall ──────────────────────────────────────
 # The client's fall: its curve and the time read back off it, landing, a
 # jump's arc, a ceiling, a wall slid down, a walk off an edge.

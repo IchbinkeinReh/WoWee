@@ -271,6 +271,17 @@ public:
     /// while it falls (0x006f09f0 sends them for flags & 0xc0100f), the
     /// landing - carries it. Nothing while a fall is already on.
     void startFall(uint32_t sinceMs);
+    /// The fall gone far (0x007612b0: +0x44 0x2000), carried by the next
+    /// packet.
+    void setFallingFar();
+    /// A fall's step landed the mover (0x007612b0 -> 0x00988490), having
+    /// fallen \p droppedYards from its highest point (0x00986fb0). FALLING
+    /// goes with it; MSG_MOVE_FALL_LAND goes out where the server was told of
+    /// the fall or the drop was one (0x0073d4a0). Nothing without a fall on.
+    void landFall(float droppedYards);
+    /// The fall over with nothing said: too short to tell of, held back, or
+    /// the mover carried off by something else.
+    void endFallUnsaid();
     void sanitizeMovementForTaxi();
 
     // Heartbeat / movement timing (for GameHandler::update())
@@ -296,8 +307,11 @@ public:
 
     // Movement clock / fall state setters (formerly accessed via friend)
     void resetMovementClock() { movementClockStart_ = std::chrono::steady_clock::now(); lastMovementTimestampMs_ = 0; }
-    void setFalling(bool falling) { isFalling_ = falling; }
-    void setFallStartMs(uint32_t ms) { fallStartMs_ = ms; }
+    void forgetFall() {
+        isFalling_ = false;
+        fallStartMs_ = 0;
+        fallSaid_ = false;
+    }
 
     // Taxi state references for GameHandler update/processing
     bool& onTaxiFlightRef() { return onTaxiFlight_; }
@@ -433,8 +447,13 @@ private:
     // Fall/jump tracking
     /// The fall's timer stopped: how long it ran, none where it did not.
     std::optional<uint32_t> endFallTimer();
+    /// The fall time from here, and the fall's jump block (0x00988370).
+    void fallBegan(uint32_t startMs);
     bool isFalling_ = false;
     uint32_t fallStartMs_ = 0;
+    /// The last packet that went out off a transport told of a fall
+    /// (+0xa30 0x80, 0x0071ef80).
+    bool fallSaid_ = false;
     std::optional<float> collisionHeightGiven_;
 
     // Heartbeat timing

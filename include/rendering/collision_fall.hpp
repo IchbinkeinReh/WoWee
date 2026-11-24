@@ -42,6 +42,9 @@ float timeToApex(const Mover& m);
 
 /// 0x00988370 with the speed it starts at (0 walking off an edge).
 void startFallAt(Mover& m, float v0);
+/// 0x00986fb0: how far it is below the highest point of its fall - below where
+/// it began, and what a jump rose above that (v0 * v0 / 2g).
+float fallDropped(const Mover& m);
 /// 0x00988490, as far as the movement is concerned.
 void land(Mover& m);
 

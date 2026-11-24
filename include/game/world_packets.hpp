@@ -442,6 +442,9 @@ enum class MovementFlags : uint32_t {
     // fall sat on those two, so a client under either told the server in every
     // packet that it was in a pending stop, and never saw the state it had
     // actually been put into.
+    /// A root that came while the mover falls, held from its landing on
+    /// (0x0098c4f0, 0x00988490).
+    PENDING_ROOT        = 0x00100000,
     SWIMMING            = 0x00200000,
     ASCENDING           = 0x00400000,
     DESCENDING          = 0x00800000,

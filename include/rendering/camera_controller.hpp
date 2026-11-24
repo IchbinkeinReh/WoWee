@@ -7,6 +7,7 @@
 #include "rendering/camera.hpp"
 #include "game/vehicle_camera.hpp"
 #include "rendering/collision_walk.hpp"
+#include "rendering/mover_report.hpp"
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -138,10 +139,6 @@ public:
     /// (portMove), not when `onTransport` - 0x00988370 starts no fall for a
     /// passenger (+0x44 & 0x200).
     void teleportTo(const glm::vec3& pos, bool onTransport = false);
-    /// The world changed under the unit - a map change, a teleport, a
-    /// transport boarded or left: the world round the new place waits to be
-    /// loaded before the unit moves.
-    void forgetPortPlace() { portWorldReady_ = false; }
     void setOnlineMode(bool online) { onlineMode = online; }
 
     // Last known safe position (grounded, not falling)
@@ -205,20 +202,11 @@ public:
     /// and this frame's step does not move them across it (see rideHeld_).
     void setRideHeld(bool held) { rideHeld_ = held; }
     void suppressVerticalPhysics() {
-        // Caught by a ship's deck on the way down from a jump on it: that is
-        // its landing (0x00988490 ends the fall, MSG_MOVE_FALL_LAND), and it
-        // goes out on the next update. The deck held the rider before the
-        // landing test there saw any time in the air, and a jump on a
-        // zeppelin's deck sent MSG_MOVE_JUMP and never landed - FALLING stayed
-        // on every packet after it. Only a fall of the length a jump takes:
-        // the time a transport let go of the rider at a map change is not one.
-        if (!grounded && verticalVelocity <= 0.0f && airborneSeconds_ >= kDeckLandingMinSeconds &&
-            airborneSeconds_ < kDeckLandingMaxSeconds) {
-            deckLandingPending_ = true;
-        }
+        // Caught by a ship's deck on the way down from a jump on it, that is
+        // its landing (0x00988490 ends the fall, MSG_MOVE_FALL_LAND), and the
+        // next update says so: it stands, and its fall is still on.
         verticalVelocity = 0.0f;
         grounded = true;
-        deckHeld_ = true;
         // On a transport: no fall from a placing (0x00988370, +0x44 & 0x200).
         portPlacedFall_ = false;
         // Standing on the deck: no time in the air. Counted on through a
@@ -344,6 +332,20 @@ public:
     // Movement callback for sending opcodes to server
     using MovementCallback = std::function<void(uint32_t opcode)>;
     void setMovementCallback(MovementCallback cb) { movementCallback = std::move(cb); }
+    /// The mover's movement state, which the step's swims and falls are told
+    /// to (mover_report.hpp).
+    struct MoverStateHooks {
+        std::function<bool()> falling;   ///< FALLING is set
+        std::function<bool()> swimming;  ///< SWIMMING is set
+        /// The ground gone without a jump, this long ago.
+        std::function<void(uint32_t sinceMs)> fallBegan;
+        std::function<void()> fallsFar;  ///< 0x2000 (isFallingFar)
+        std::function<void()> fallOver;  ///< FallChange::Over
+    };
+    void setMoverStateHooks(MoverStateHooks hooks) { moverState_ = std::move(hooks); }
+    /// How far the fall that landed last dropped from its highest point
+    /// (0x00986fb0), in yards.
+    [[nodiscard]] float lastFallDrop() const { return lastFallDrop_; }
 
     // Callback invoked when the player stands up via local input (space/X/movement key
     // while server-sitting), so the caller can send CMSG_STAND_STATE_CHANGE(0).
@@ -617,10 +619,9 @@ public:
     void suppressHeldMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
 
-    // Apply server-driven knockback impulse.
-    // dir: render-space 2D direction unit vector (from vcos/vsin in packet)
-    // hspeed: horizontal speed magnitude (units/s)
-    // vspeed: raw packet vspeed field (server sends negative for upward launch)
+    /// A knockback's fall (0x006e9ff0): begun at the packet's vertical speed
+    /// (negative is up), along its direction at its horizontal speed, which
+    /// the fall keeps. The packet's direction is the render axes' already.
     void applyKnockBack(float vcos, float vsin, float hspeed, float vspeed);
 
     /// A CameraShakes row added to the camera where it happened (0x00606330):
@@ -706,11 +707,6 @@ private:
     glm::vec3 portMove(const glm::vec3& from, const glm::vec3& wanted, float dt);
     /// The facets round a box from the ground, buildings and doodads.
     void gatherPortFacets(const glm::vec3& lo, const glm::vec3& hi, std::vector<collision::Facet>& out) const;
-    /// No face at all in the column under `at`: the ground's tile, or the
-    /// building there, not streamed in yet. A fall over it is held.
-    [[nodiscard]] bool fallOverUnloadedWorld(const glm::vec3& at) const;
-    /// A fall is being held over a world not loaded yet (logged once).
-    bool portFallHeld_ = false;
     /// Placed by a teleport or a world entry: the unit starts falling once
     /// the world under it is loaded (0x006ecf80 / 0x006f1520 -> 0x0098b710
     /// -> 0x00988370), landing at once where it stands on ground.
@@ -723,7 +719,6 @@ private:
     bool portLastOutValid_ = false;
     bool portBlocked_ = false;
     collision::StepUpTrace portStepTrace_;
-    bool portWorldReady_ = false;
     /// The unit rising (+0x44 0x400000) while it swims or flies: jump held.
     bool portAscending_ = false;
     /// The unit moving along (+0x44 & 0xf: forward, back or sideways) this
@@ -734,10 +729,6 @@ private:
     bool portSurfaceJump_ = false;
     /// How long the port's unit has flown, for 0x0073a890's two seconds.
     uint32_t portFlyMs_ = 0;
-    /// The transport's deck held the rider where the application last placed
-    /// it (suppressVerticalPhysics): standing on a lift, however fast it runs
-    /// down, which the fall checks here read as the floor dropping away.
-    bool deckHeld_ = false;
     /// Standing still on a transport's deck (setRideHeld). The client moves
     /// a unit only while it moves (0x00762e00 runs for flags 0x40c0100f), so
     /// nothing here shifts a rider who is not walking: the wall push-out and
@@ -745,11 +736,7 @@ private:
     /// frame, until the deck placed them back - the rider, and the camera
     /// with them, stepping to the side and back during the flight.
     bool rideHeld_ = false;
-    /// A jump on a ship's deck that the deck caught (suppressVerticalPhysics):
-    /// its landing goes out on the next update.
-    bool deckLandingPending_ = false;
-    static constexpr float kDeckLandingMinSeconds = 0.15f;
-    static constexpr float kDeckLandingMaxSeconds = 10.0f;
+    float lastFallDrop_ = 0.0f;
     collision::Facet portBlocking_;
     float portDebugTimer_ = 0.0f;
     // The physics started a jump from the ground this frame: the jump packet
@@ -1130,10 +1117,9 @@ private:
     float lastGroundZ = 0.0f;  // Last known ground height (fallback when no terrain)
     static constexpr float GRAVITY = -30.0f;
     static constexpr float JUMP_VELOCITY = 15.0f;
-    float jumpBufferTimer = 0.0f;   // Time since space was pressed
-    float coyoteTimer = 0.0f;       // Time since last grounded
-    static constexpr float JUMP_BUFFER_TIME = 0.15f;  // 150ms input buffer
-    static constexpr float COYOTE_TIME = 0.10f;        // 100ms grace after leaving ground
+    /// A jump starts where the mover may jump (0x009883f0): on the press, on
+    /// ground - falling, it starts none - and not rooted.
+    bool takeJump(FrameInput& f);
 
     // Cached isInsideWMO result (throttled to avoid per-frame cost)
     bool cachedInsideWMO = false;
@@ -1249,15 +1235,7 @@ private:
     bool wasStrafingRight = false;
     bool wasTurningLeft = false;
     bool wasTurningRight = false;
-    bool wasJumping = false;
-    bool wasFalling = false;
-    /// How long the player has been off the ground and moving downward.
-    ///
-    /// A landing is only worth telling the server about if there was a fall.
-    /// Riding over uneven ground breaks contact for a frame at a time, and each
-    /// of those used to send MSG_MOVE_FALL_LAND - which every other client in
-    /// range plays as a landing, so a mounted player crossing a field looked to
-    /// everyone else like one landing over and over.
+    /// How long the player has been off the ground.
     float airborneSeconds_ = 0.0f;
     /// How many physics steps this frame is split into (updateThirdPersonCamera):
     /// the client moves a unit by the whole frame at once, and keeps it to the
@@ -1286,6 +1264,11 @@ private:
 
     // Movement callback
     MovementCallback movementCallback;
+    MoverStateHooks moverState_;
+    /// What the step left the mover doing, against what its flags say.
+    [[nodiscard]] MoverStep moverStep() const;
+    /// FALLING made to say what the step did.
+    void tellFall();
     StandUpCallback standUpCallback_;
     SitDownCallback sitDownCallback_;
 
@@ -1370,13 +1353,6 @@ private:
     bool hasRealGround_ = false; // True only when terrain/WMO/M2 floor is detected
     static constexpr float SAFE_POS_SAVE_INTERVAL = 2.0f; // Save every 2 seconds
 
-    // Server-driven knockback state.
-    // When the server sends SMSG_MOVE_KNOCK_BACK, we apply horizontal + vertical
-    // impulse here and let the normal physics loop (gravity, collision) resolve it.
-    bool knockbackActive_ = false;
-    glm::vec2 knockbackHorizVel_ = glm::vec2(0.0f); // render-space horizontal velocity (units/s)
-    // Horizontal velocity decays via WoW-like drag so the player doesn't slide forever.
-    static constexpr float KNOCKBACK_HORIZ_DRAG = 4.5f; // exponential decay rate (1/s)
 
     // The camera's shakes (0x00606970) and the clock they run on.
     std::vector<camera_shake::Active> shakes_;

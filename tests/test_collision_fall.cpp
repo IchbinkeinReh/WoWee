@@ -172,3 +172,42 @@ TEST_CASE("a walk off an edge falls to the ground below", "[collision_fall]") {
     CHECK(m.pos.z == Approx(0.0f).margin(0.01f));
     CHECK(m.pos.x > 0.5f);
 }
+
+TEST_CASE("how far a fall dropped is from its highest point (0x00986fb0)", "[collision_fall]") {
+    Mover m;
+    m.pos = {0, 0, 10};
+    startFallAt(m, 0.0f);
+    CHECK(fallDropped(m) == 0.0f);
+    m.pos.z = 7.5f;
+    CHECK(fallDropped(m) == Approx(2.5f));
+    // Up somewhere: nothing dropped.
+    m.pos.z = 12.0f;
+    CHECK(fallDropped(m) == 0.0f);
+    // A jump landing level with where it began fell the height it rose.
+    m.pos = {0, 0, 10};
+    startFallAt(m, kJumpSpeed);
+    CHECK(fallDropped(m) == Approx(kJumpSpeed * kJumpSpeed / (2.0f * kGravity)).epsilon(1e-4));
+}
+
+TEST_CASE("a safe fall is never a far one (+0x44 & 0x20002000)", "[collision_fall]") {
+    std::vector<Facet> world;
+    auto s = sweeperOver(world);
+    for (const bool safe : {false, true}) {
+        Mover m;
+        m.pos = {0, 0, 100};
+        m.safeFall = safe;
+        startFallAt(m, 0.0f);
+        for (int i = 0; i < 50; ++i) fallStep(m, 20, 0.0f, {1, 0}, s);
+        CHECK(m.fallingFar == !safe);
+    }
+}
+
+TEST_CASE("over nothing a fall goes on and on", "[collision_fall]") {
+    std::vector<Facet> world;
+    auto s = sweeperOver(world);
+    Mover m;
+    m.pos = {0, 0, -8.5f};
+    startFallAt(m, 0.0f);
+    CHECK(fallUntilLanded(m, 0.0f, {1, 0}, s, 200) == -1);
+    CHECK(m.pos.z < -100.0f);
+}

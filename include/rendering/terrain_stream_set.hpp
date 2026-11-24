@@ -57,6 +57,12 @@ inline float loadReach(float farClip) {
     return std::max(farClip, 0.0f) + kClientMargin + kMaxEyeOffset;
 }
 
+/// Whether a tile is still to come, where a unit stands: streamed at all (not
+/// on a map of one building), not in, and not one the map does not have.
+inline constexpr bool tileComing(bool streaming, bool loaded, bool missing) {
+    return streaming && !loaded && !missing;
+}
+
 /// The reach a loaded tile is kept to.
 inline float unloadReach(float loadReachYards) { return loadReachYards + kUnloadHysteresis; }
 

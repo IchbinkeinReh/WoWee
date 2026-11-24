@@ -177,7 +177,7 @@ struct OutgoingJump {
 
 /// What the client puts in it on a jump. The vertical speed is the jump
 /// impulse, -7.955547 - the fall's speeds are downward-positive (FUN_009883f0
-/// -> FUN_00988370). The direction is the way the keys move the unit, not
+/// -> FUN_00988370). `orientation` is the wire's. The direction is the way the keys move the unit, not
 /// only the facing: backing up turns it by pi, a strafe by pi/2 to the left,
 /// diagonals half way (FUN_00988df0). The speed is the unit's current one
 /// (FUN_00987570): walk when walking, run-back when only backing up, else

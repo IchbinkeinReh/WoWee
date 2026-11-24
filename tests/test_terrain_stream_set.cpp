@@ -211,3 +211,13 @@ TEST_CASE("the square is held to the map's 64 x 64 tiles", "[terrain_stream]") {
     CHECK(r.yMin >= 0);
     CHECK(r.yMax <= 63);
 }
+
+TEST_CASE("a unit is held only over a tile that is still to come", "[terrain_stream]") {
+    CHECK(tileComing(true, false, false));
+    // In: what is under it now is all there is, and under the ground there is
+    // nothing.
+    CHECK_FALSE(tileComing(true, true, false));
+    // None there: open sea, or a map of one building.
+    CHECK_FALSE(tileComing(true, false, true));
+    CHECK_FALSE(tileComing(false, false, false));
+}

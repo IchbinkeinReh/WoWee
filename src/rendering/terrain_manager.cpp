@@ -2598,6 +2598,12 @@ bool TerrainManager::isTileLoadedAt(float glX, float glY) const {
     return loadedTiles.find(worldToTile(glX, glY)) != loadedTiles.end();
 }
 
+bool TerrainManager::isTileComingAt(float glX, float glY) const {
+    const TileCoord coord = worldToTile(glX, glY);
+    return terrain_stream::tileComing(streamingEnabled, loadedTiles.find(coord) != loadedTiles.end(),
+                                      failedTiles.find(coord) != failedTiles.end());
+}
+
 bool TerrainManager::isTileSettledAt(float glX, float glY) {
     const TileCoord coord = worldToTile(glX, glY);
     return isTileSettled(coord.x, coord.y);

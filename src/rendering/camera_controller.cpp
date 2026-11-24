@@ -66,16 +66,6 @@ std::optional<std::vector<collision::Facet>> CameraController::gatherWorldFacets
     return out;
 }
 
-bool CameraController::fallOverUnloadedWorld(const glm::vec3& at) const {
-    if (groundNotStreamedYet(at.x, at.y)) return true;
-    // Any face at all in the column under the unit, down to the bottom of
-    // the world: the ground's, a building's, a doodad's.
-    constexpr float kColumnDepth = 2000.0f;
-    std::vector<collision::Facet> below;
-    gatherPortFacets(at - glm::vec3(1.0f, 1.0f, kColumnDepth), at + glm::vec3(1.0f, 1.0f, 1.0f), below);
-    return below.empty();
-}
-
 glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wanted, float dt) {
     collision::Mover& m = portMover_;
     // A water walker's ground includes the liquid's surface: 0x0075e3d0 adds
@@ -94,19 +84,14 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // teleport, a transport); its stepping state only holds where it left it.
     if (glm::length(m.pos - from) > 0.01f) m.stepping = false;
     // The client does not move a unit before the world round it is loaded
-    // (it is behind the loading screen). Here buildings stream in after the
-    // player is placed: so after a jump in position, hold still until
-    // there is something loaded below - anywhere below, so a teleport into
-    // the air still falls to the ground far under it.
-    if (glm::length(m.pos - from) > 5.0f) portWorldReady_ = false;
-    if (!portWorldReady_) {
-        if (fallOverUnloadedWorld(from + glm::vec3(0.0f, 0.0f, 1.0f))) {
-            m.pos = from;
-            verticalVelocity = 0.0f;
-            return from;
-        }
-        portWorldReady_ = true;
-    }
+    // (it is behind the loading screen, and its sweep fails over a tile or a
+    // building that is not in, 0x007a5a60, 0x007a55e0). A tile here is in
+    // with everything that stands on it (TerrainManager commits it last), and
+    // where it is still coming nothing is moved at all (groundNotStreamedYet,
+    // moveFollowedCharacter): so what is not there now is not there, and a
+    // unit under the ground falls on through the bottom of the world, as the
+    // client's does. Asked for a face somewhere below it, one put a foot
+    // under the ground hung there for good, falling and unable to move.
     // Put somewhere by a teleport or a world entry, a unit that is not
     // moving starts to fall. The same-map teleport (0x006ecf80) sets the
     // place (0x0098ba90, which keeps only +0x44 & 0xf9003f00 of the
@@ -297,27 +282,6 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
             m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
         }
-        // Nothing loaded below - the ground's tile or a building not
-        // streamed in yet - is no ground to fall to: the unit is held
-        // where it is, its fall's time with it, until something is there
-        // (as at a teleport, above). The client has the world loaded
-        // behind its loading screen before it moves anything; a long fall
-        // onto ground that is there plays out as the client's does.
-        if (fallOverUnloadedWorld(m.pos)) {
-            if (!portFallHeld_) {
-                portFallHeld_ = true;
-                LOG_INFO("Collision: a fall at (", m.pos.x, ", ", m.pos.y, ", ", m.pos.z,
-                         ") is held until the world below it has loaded");
-            }
-            verticalVelocity = 0.0f;
-            grounded = false;
-            return m.pos;
-        }
-        if (portFallHeld_) {
-            portFallHeld_ = false;
-            LOG_INFO("Collision: the world below has loaded, the fall goes on at (", m.pos.x, ", ",
-                     m.pos.y, ", ", m.pos.z, ")");
-        }
         const auto r = collision::fallStep(m, ms, m.fallSpeed * dt, m.fallDir, sweeper);
         // WOWEE_FLOOR_DEBUG: a rise stopped by a ceiling over the body (0x0075de40).
         static const bool kCeilingDebug = std::getenv("WOWEE_FLOOR_DEBUG") != nullptr;
@@ -325,6 +289,7 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             LOG_WARNING("FALL CEILING: the rise stopped at (", m.pos.x, ", ", m.pos.y, ", ", m.pos.z, ")");
         }
         if (r.landed || !m.falling) {
+            lastFallDrop_ = collision::fallDropped(m);
             grounded = true;
             verticalVelocity = 0.0f;
             lastGroundZ = m.pos.z;
@@ -639,6 +604,49 @@ glm::vec3 CameraController::sweepAgainstWalls(const glm::vec3& from, const glm::
 // The movement intent - walking, swimming, flying, jumping, falling - and the
 // swept wall collision that keeps it out of geometry. Answers the position it
 // arrived at; the floor has not been consulted yet.
+bool CameraController::takeJump(FrameInput& f) {
+    if (!f.nowJump || !grounded || movementRooted_) return false;
+    f.nowJump = false;
+    verticalVelocity = f.jumpVel;
+    jumpStarted_ = true;
+    jumpLocked_ = true;
+    jumpMoveDir_ = f.movement;
+    jumpMoveSpeed_ = f.speed;
+    grounded = false;
+    return true;
+}
+
+MoverStep CameraController::moverStep() const {
+    MoverStep s;
+    s.onGround = grounded;
+    s.swimming = swimming;
+    s.flying = isFlightAirborne();
+    s.floating = gravityDisabled_;
+    s.carried = externalFollow_;
+    s.saidFalling = moverState_.falling && moverState_.falling();
+    s.saidSwimming = moverState_.swimming ? moverState_.swimming() : wasSwimming;
+    return s;
+}
+
+void CameraController::tellFall() {
+    if (!moverState_.falling) return;
+    switch (fallChange(moverStep())) {
+        case FallChange::None: break;
+        case FallChange::Began:
+            if (moverState_.fallBegan)
+                moverState_.fallBegan(static_cast<uint32_t>(std::lround(airborneSeconds_ * 1000.0f)));
+            break;
+        case FallChange::Landed:
+            if (movementCallback) movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_FALL_LAND));
+            lastFallDrop_ = 0.0f;
+            break;
+        case FallChange::Over:
+            if (moverState_.fallOver) moverState_.fallOver();
+            break;
+    }
+    if (isFallingFar() && moverState_.fallsFar) moverState_.fallsFar();
+}
+
 void CameraController::setFlyingActive(bool active) {
     // Said when it changes, as take-off and landing are: whether space climbs
     // or jumps comes down to this one flag from the server, and a report that
@@ -812,8 +820,6 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             grounded = true;  // suppress fall-damage checks
             jumpLocked_ = false;
             verticalVelocity = 0.0f;
-            jumpBufferTimer = 0.0f;
-            coyoteTimer = 0.0f;
 
             // Forward/back along the mount's facing at the flight pitch - see
             // flightForward. The camera's own look direction is not it.
@@ -864,39 +870,8 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             locomotionSpeed_ = f.speed;
         }
 
-        // Apply server-driven knockback horizontal velocity (decays over time).
-        if (knockbackActive_) {
-            targetPos.x += knockbackHorizVel_.x * f.physicsDeltaTime;
-            targetPos.y += knockbackHorizVel_.y * f.physicsDeltaTime;
-            // Exponential drag: reduce each frame so the player decelerates naturally.
-            float drag = std::exp(-KNOCKBACK_HORIZ_DRAG * f.physicsDeltaTime);
-            knockbackHorizVel_ *= drag;
-            // Once negligible, clear the flag so collision/grounding work normally.
-            if (glm::dot(knockbackHorizVel_, knockbackHorizVel_) < 0.0025f) {
-                knockbackActive_ = false;
-                knockbackHorizVel_ = glm::vec2(0.0f);
-            }
-        }
-
-        // Jump with input buffering and coyote time
-        if (f.nowJump) jumpBufferTimer = JUMP_BUFFER_TIME;
-        if (grounded) coyoteTimer = COYOTE_TIME;
-
         // Mounted as on foot (0x009883f0 asks nothing of a mount).
-        bool canJump = (coyoteTimer > 0.0f) && (jumpBufferTimer > 0.0f);
-        if (canJump) {
-            verticalVelocity = f.jumpVel;
-            jumpStarted_ = true;
-            jumpLocked_ = true;
-            jumpMoveDir_ = f.movement;
-            jumpMoveSpeed_ = f.speed;
-            grounded = false;
-            jumpBufferTimer = 0.0f;
-            coyoteTimer = 0.0f;
-        }
-
-        jumpBufferTimer -= f.physicsDeltaTime;
-        coyoteTimer -= f.physicsDeltaTime;
+        takeJump(f);
 
         // Apply gravity (skip when server has disabled f.gravity, e.g. Levitate spell)
         //
@@ -1783,23 +1758,7 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
             newPos += f.movement * f.speed * f.physicsDeltaTime;
         }
 
-        // Jump with input buffering and coyote time
-        if (f.nowJump) jumpBufferTimer = JUMP_BUFFER_TIME;
-        if (grounded) coyoteTimer = COYOTE_TIME;
-
-        if (coyoteTimer > 0.0f && jumpBufferTimer > 0.0f) {
-            verticalVelocity = f.jumpVel;
-            jumpStarted_ = true;
-            jumpLocked_ = true;
-            jumpMoveDir_ = f.movement;
-            jumpMoveSpeed_ = f.speed;
-            grounded = false;
-            jumpBufferTimer = 0.0f;
-            coyoteTimer = 0.0f;
-        }
-
-        jumpBufferTimer -= f.physicsDeltaTime;
-        coyoteTimer -= f.physicsDeltaTime;
+        takeJump(f);
 
         // Apply f.gravity, unless the ground under the character has not
         // streamed in yet. See the note at the other gravity site.
@@ -2135,6 +2094,7 @@ void CameraController::update(float deltaTime) {
 
     // During taxi flights, skip movement logic but keep camera orbit/zoom controls.
     if (externalFollow_) {
+        tellFall();
         // Carried by a server spline, the character is followed here and not
         // below - so this is where the Fear state is planned. It was only in
         // the path below, which a spline never reaches, and never ran.
@@ -2807,28 +2767,10 @@ void CameraController::update(float deltaTime) {
         // server heard of it only from the heartbeats, and the client's jump
         // (0x009883f0 -> 0x00988370 with -7.955547, MSG_MOVE_JUMP 0xbb from
         // the event, 0x006ef860 case 10) never went out.
-        if (!isFlightAirborne() && (jumpStarted_ || (nowJump && !wasJumping && (grounded || deckHeld_)))) {
+        if (!isFlightAirborne() && jumpStarted_) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
         }
         jumpStarted_ = false;
-        deckHeld_ = false;
-
-        // Fall landing, for a fall that actually happened.
-        //
-        // A bump at riding speed breaks ground contact for a frame, and the
-        // frame after it this read as a landing: the packet went out, and
-        // every client in range played the landing animation on the mount.
-        // Crossing open ground did that several times a second, which is what
-        // other players see as a mount behaving erratically.
-        //
-        // Long enough to be a fall rather than a step. Well under the shortest
-        // real drop - a jump is airborne for about a second - so nothing a
-        // player would call a fall is lost.
-        constexpr float kFallReportSeconds = 0.15f;
-        if ((wasFalling && grounded && airborneSeconds_ >= kFallReportSeconds) || deckLandingPending_) {
-            movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_FALL_LAND));
-        }
-        deckLandingPending_ = false;
     }
 
     // The pitch keys' way (0x005fb1a0): MSG_MOVE_START_PITCH_UP or _DOWN
@@ -2854,9 +2796,9 @@ void CameraController::update(float deltaTime) {
                 movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_ASCEND));
             }
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
-        } else if (swimming && !wasSwimming) {
+        } else if (const SwimChange swim = swimChange(moverStep()); swim == SwimChange::Starts) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_SWIM));
-        } else if (!swimming && wasSwimming) {
+        } else if (swim == SwimChange::Stops) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP_SWIM));
             // Out of the water: the rise and the dive went with swimming
             // (0x0098bff0, +0x44 & 0xff1fff3f), on the STOP_SWIM itself,
@@ -2909,6 +2851,11 @@ void CameraController::update(float deltaTime) {
         wasDescending_ = nowDescending;
     }
 
+    // Last, on what the packets before it made of the flags: a swim's stop is
+    // a fall's start (0x0098bff0), which its next step lands.
+    airborneSeconds_ = grounded || swimming || isFlightAirborne() ? 0.0f : (airborneSeconds_ + deltaTime);
+    tellFall();
+
     // Update previous-frame state
     wasSwimming = swimming;
     swimJumpPending_ = false;
@@ -2924,15 +2871,6 @@ void CameraController::update(float deltaTime) {
     turningRightActive = nowTurnRight;
     wasTurningLeft = nowTurnLeft;
     wasTurningRight = nowTurnRight;
-    wasJumping = nowJump;
-    wasFalling = !grounded && verticalVelocity <= 0.0f;
-    // Counted while airborne and zeroed the moment the ground is back, so the
-    // landing test above reads the length of the fall that just ended.
-    // Nor in the water or in flight: a fall out of either starts where that
-    // ends (0x0098bff0, 0x0098c240 -> 0x00988370, fall time 0), not when the
-    // player last stood.
-    airborneSeconds_ = grounded || swimming || isFlightAirborne() ? 0.0f : (airborneSeconds_ + deltaTime);
-
     // R key is now handled above with chat safeguard (WantTextInput check)
 
     // The camera's shakes move it, the strongest in each direction as the
@@ -3251,7 +3189,6 @@ void CameraController::reset() {
     pitch = defaultPitch;
     verticalVelocity = 0.0f;
     grounded = true;
-    forgetPortPlace();
     // Entering the world, the player's unit falls from where it is put
     // unless it moves (0x006f1520 -> 0x0098b710; portMove).
     portPlacedFall_ = true;
@@ -3267,8 +3204,6 @@ void CameraController::reset() {
     wasStrafingRight = false;
     wasTurningLeft = false;
     wasTurningRight = false;
-    wasJumping = false;
-    wasFalling = false;
     wasSwimming = false;
     moveForwardActive = false;
     moveBackwardActive = false;
@@ -3511,7 +3446,6 @@ void CameraController::teleportTo(const glm::vec3& pos, bool onTransport) {
     // (movement::teleportLandingFloor), and a floor cached at the old place
     // is not this one.
     lastGroundZ = pos.z;
-    forgetPortPlace();
     // And it falls from there unless it is on ground (0x006ecf80 ->
     // 0x0098b710; portMove), or a passenger.
     portPlacedFall_ = !onTransport;
@@ -3556,7 +3490,7 @@ void CameraController::teleportTo(const glm::vec3& pos, bool onTransport) {
 }
 
 bool CameraController::groundNotStreamedYet(float x, float y) const {
-    return terrainManager != nullptr && !terrainManager->isTileLoadedAt(x, y);
+    return terrainManager != nullptr && terrainManager->isTileComingAt(x, y);
 }
 
 std::optional<glm::vec3> CameraController::eyePoint() const {
@@ -3728,26 +3662,23 @@ void CameraController::clearMovementInputs() {
 }
 
 void CameraController::applyKnockBack(float vcos, float vsin, float hspeed, float vspeed) {
-    // The server sends (vcos, vsin) as the 2D direction vector in server/wire
-    // coordinate space.  After the server→canonical→render swaps, the direction
-    // in render space is simply (vcos, vsin) - the two swaps cancel each other.
-    knockbackHorizVel_ = glm::vec2(vcos, vsin) * hspeed;
-    knockbackActive_ = true;
-
-    // vspeed in the wire packet is negative when the server wants to launch the
-    // player upward (matches TrinityCore: data << float(-speedZ)).  Negate it
-    // here to obtain the correct upward initial velocity.
+    // Out of the water and the air, whatever fall it was in over and this one
+    // begun where it is (0x0098bff0 / 0x0098c240, 0x00988370(vspeed)). The
+    // server's and the render axes swap x and y twice between them, so the
+    // direction is as the packet has it.
+    if (followTarget) portMover_.pos = *followTarget;
+    portMover_.swimming = false;
+    swimming = false;
+    flightAirborne_ = false;
+    collision::startFallAt(portMover_, vspeed);
+    portMover_.fallingFar = false;
+    portMover_.fallSpeed = hspeed;
+    portMover_.fallDir = glm::vec2(vcos, vsin);
+    portPlacedFall_ = false;
+    jumpLocked_ = false;
     verticalVelocity = -vspeed;
     grounded = false;
-    coyoteTimer = 0.0f;
-    jumpBufferTimer = 0.0f;
-
-    // Notify the server that the player left the ground so the FALLING flag is
-    // set in subsequent movement heartbeats.  The normal jump detection
-    // (nowJump && grounded) does not fire during a server-driven knockback.
-    if (movementCallback) {
-        movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
-    }
+    airborneSeconds_ = 0.0f;
 }
 
 void CameraController::faceAfterTeleport(float yawDeg) {
