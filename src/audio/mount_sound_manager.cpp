@@ -481,43 +481,6 @@ void MountSoundManager::setGrounded(bool grounded) {
     setFlying(!grounded);
 }
 
-void MountSoundManager::playRearUpSound() {
-    if (!mounted_) return;
-
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastActionSoundTime_).count();
-    if (elapsed < 200) return;
-    lastActionSoundTime_ = now;
-
-    if (currentMountType_ == MountType::GROUND) {
-        const auto& sounds = getCurrentFamilySounds();
-        if (!sounds.move.empty()) {
-            static std::mt19937 rng(std::random_device{}());
-            std::uniform_int_distribution<size_t> dist(0, sounds.move.size() - 1);
-            const auto& sample = sounds.move[dist(rng)];
-            if (!sample.data.empty()) {
-                float volume = 0.0f, pitch = 1.0f;
-                askedByRow(sample, 0.7f, volume, pitch);
-                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
-            }
-        }
-    } else if (currentMountType_ == MountType::FLYING && !wingIdleSounds_.empty()) {
-        static std::mt19937 rng(std::random_device{}());
-        std::uniform_int_distribution<size_t> dist(0, wingIdleSounds_.size() - 1);
-        const auto& sample = wingIdleSounds_[dist(rng)];
-        if (!sample.data.empty()) {
-            // The pitch these plays used to shift by (1.1 here, 0.85 on a
-            // landing, 0.95 idle) is nowhere in the data: a row asks for a
-            // pitch only through its 0x400 bit, and none of the rows naming
-            // these clips asks for one. So a clip no row names plays at its
-            // own pitch rather than at a made-up one.
-            float volume = 0.0f, pitch = 1.0f;
-            askedByRow(sample, 0.6f, volume, pitch);
-            AudioEngine::instance().playSound2D(sample.data, volume, pitch);
-        }
-    }
-}
-
 void MountSoundManager::playJumpSound() {
     if (!mounted_) return;
 

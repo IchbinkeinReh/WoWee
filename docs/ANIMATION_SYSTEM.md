@@ -1,125 +1,75 @@
 # Animation System
 
-FSM-based animation system. `CharacterAnimator` is written for any character
-(player, NPC, companion), but today only the local player runs through it: the
-Renderer owns one `AnimationController`, which owns one `CharacterAnimator`.
-NPCs and other players are animated by direct `CharacterRenderer::playAnimation`
-calls from `src/core/` (the per-frame creature and player loops in
-`application.cpp`, `entity_spawner_processing.cpp`, and the combat, emote and
-death callbacks in `animation_callback_handler.cpp`).
+Every unit - the player, other players, creatures and the mounts under them -
+is animated by the same rules, the original client's. There is no state machine
+of our own: a unit's movement flags, stand state, casts and swings say what it
+plays, and `CharacterRenderer` plays it.
 
-## Architecture
+## How a unit's animation is chosen
 
-```
-AnimationController          (thin adapter - bridges Renderer ↔ CharacterAnimator)
-  └─ CharacterAnimator       (FSM composer - implements ICharacterAnimator)
-       ├─ CombatFSM          (stun, hit reaction, spell cast, melee, ranged, charge)
-       ├─ ActivityFSM         (emote, loot, sit/stand/kneel/sleep)
-       ├─ LocomotionFSM       (idle, walk, run, sprint, jump, swim, strafe)
-       └─ MountFSM            (mount idle, mount run, flight)
+`CharacterRenderer` keeps a unit's state (`upper_body::Unit`, handed over each
+frame by `src/core/application.cpp`) and plays two layers of it: the whole
+body, and the upper body where the legs go on with another animation.
 
-AnimationManager             (registry of CharacterAnimator instances by ID - unused)
-AnimCapabilitySet            (probed once per model - cached resolved anim IDs)
-AnimCapabilityProbe          (queries which animations a model supports)
-```
+1. **Asked** (`CharacterRenderer::playAnimation`, 0x007385c0): an emote, a
+   swing, a spell visual kit's animation, a jump. Asked of one that rides, it
+   is its mount's where a mount has it (`rider_mount::takes`), the rider's own
+   body keeping its pose.
+2. **Base** (`playBaseAnimation`, 0x0073ac30 -> 0x00724500): what the unit is
+   in when nothing else is asked of it - dead, asleep, stunned, swimming,
+   flying, running, its combat ready, its emote state, standing. Asked again at
+   each event of its movement (`mover_event`, 0x0073ed10) and at the end of a
+   one-shot (0x0073b510).
+3. **The model's own answer** (`anim::AnimationDataTable`): a sequence the
+   model lacks is replaced by the one AnimationData.dbc's Fallback leads to
+   (0x00826350); a looping one is rolled again among its variations, which is
+   where a standing unit's or mount's fidgets come from.
 
-### Priority Resolution
-
-`CharacterAnimator::resolveAnimation()` runs every frame. The first FSM to
-return a valid `AnimOutput` wins:
-
-1. **Mount** - if mounted, return `MOUNT` (overrides everything)
-2. **Combat** - stun > hit reaction > spell > charge > melee/ranged > combat idle
-3. **Activity** - emote > loot > sit/stand transitions
-4. **Locomotion** - run/walk/sprint/jump/swim/strafe/idle
-
-If no FSM produces a valid output, the last animation continues (STAY policy).
-
-### Overlay Layer
-
-After resolution, `applyOverlays()` substitutes stealth animation variants
-(stealth idle, stealth walk, stealth run) without changing sub-FSM state.
-
-## File Map
-
-### Headers (`include/rendering/animation/`)
+## File map (`include/rendering/animation/`, `src/rendering/animation/`)
 
 | File | Purpose |
 |---|---|
-| `i_animator.hpp` | Base interface: `onEvent()`, `update()` |
-| `i_character_animator.hpp` | 20 virtual methods (combat, spells, emotes, mounts, etc.) |
-| `character_animator.hpp` | FSM composer - the single animator class |
-| `locomotion_fsm.hpp` | Movement states: idle, walk, run, sprint, jump, swim |
-| `combat_fsm.hpp` | Combat states: melee, ranged, spell cast, stun, hit reaction, sheathe/unsheathe. A dual-wielder's hand is chosen once, when a swing begins |
-| `activity_fsm.hpp` | Activity states: emote, loot, sit/stand/kneel |
-| `mount_fsm.hpp` | Mount states: idle, run, jump, rear-up, flight (taxi flights configured separately) |
-| `anim_capability_set.hpp` | Probed capability flags + resolved animation IDs |
-| `anim_capability_probe.hpp` | Probes a model for available animations |
-| `anim_event.hpp` | `AnimEvent` enum (MOVE_START, MOVE_STOP, JUMP, etc.) |
-| `animation_ids.hpp` | `anim::` constants for every AnimationData.dbc ID, `nameFromId()`, `validateAgainstDBC()` |
-| `melee_anim_chains.hpp` | Ordered attack fallback chains per weapon kind, shared by AnimationController and the capability probe |
-| `animation_manager.hpp` | Registry of CharacterAnimator instances (`get`/`remove` only; nothing creates or owns one) |
-| `weapon_type.hpp` | `WeaponLoadout` struct, `RangedWeaponType` enum |
-| `emote_registry.hpp` | Emote name → animation ID lookup |
-| `footstep_driver.hpp` | Footstep sound event driver |
-| `sfx_state_driver.hpp` | State-transition SFX (jump, land, swim enter/exit) |
+| `animation_ids` | `anim::` constants for every AnimationData.dbc id, names, the check against the DBC |
+| `animation_data` | AnimationData.dbc: fallbacks, behaviours, weapon flags |
+| `base_animation` | 0x00724500: the base animation, and what follows a one-shot |
+| `upper_body` | The unit's state, and which animations go on the upper body alone |
+| `mover_event` | What an event of the player's own movement does to its animation |
+| `kit_animation` | What a spell visual kit does to the unit's animation (0x0073b140) |
+| `rider_mount` | What the mount under a rider plays |
+| `mount_motion` | The mount's bank in flight, the rider's bob, its idle sounds |
+| `jump_landing` | JumpEnd, JumpLandRun or straight back to moving (0x0073d2b0) |
+| `body_yaw` | The yaw a body is drawn at, apart from the facing it moves at |
+| `melee_anim_chains` | Attack fallbacks per weapon kind |
+| `weapon_type` | `WeaponLoadout`, the ranged weapon kinds |
+| `emote_registry` | Emotes.dbc: emote name and id to animation |
+| `footstep_driver` | The prints and splashes of the player's and its mount's steps |
+| `sfx_state_driver` | Landing and swimming sounds of the player |
 
-### Sources (`src/rendering/animation/`)
+`AnimationController` (`include/rendering/animation_controller.hpp`) is the
+player's link between the camera controller and the renderer: it attaches the
+mount, seats the rider and plays what the interface asks of the player.
 
-| File | Purpose |
-|---|---|
-| `character_animator.cpp` | ICharacterAnimator implementation + priority resolver |
-| `locomotion_fsm.cpp` | Locomotion state transitions + resolve logic |
-| `combat_fsm.cpp` | Combat state transitions + resolve logic |
-| `activity_fsm.cpp` | Activity state transitions + resolve logic |
-| `mount_fsm.cpp` | Mount state transitions + resolve logic |
-| `anim_capability_probe.cpp` | Model animation probing |
-| `animation_ids.cpp` | ID → name table, DBC cross-check |
-| `animation_manager.cpp` | Registry lookup and removal |
-| `emote_registry.cpp` | Emote database |
-| `footstep_driver.cpp` | Footstep timing logic |
-| `sfx_state_driver.cpp` | SFX transition detection |
+Other units are driven from `src/core/`: the per-frame loops in
+`application.cpp`, `entity_spawner_processing.cpp`, and the combat, emote,
+jump, mount special and death callbacks in `animation_callback_handler.cpp`.
 
-### Controller (`include/rendering/animation_controller.hpp` + `src/rendering/animation_controller.cpp`)
+## Sounds of an animation
 
-Thin adapter that:
-- Collects per-frame input from camera/renderer → `CharacterAnimator::FrameInput`
-- Forwards state changes (combat, emote, spell, mount, etc.) → `CharacterAnimator`
-- Reads `AnimOutput` → applies via `CharacterRenderer`
-- Discovers the mount's animations in `setMounted()`, runs `MountFSM::evaluate()`
-  for the mount and seats the rider (`updateMountedAnimation()`)
-- Resolves the melee sequence and its duration through `melee_anim_chains.hpp`
-- Owns footstep and SFX drivers
+A model's animation carries events (`$FSD`, `$CSS`, `$CAH`, `$FD1`, ...), which
+`EntitySpawner::playUnitModelEvents` answers each frame: the footsteps, swings,
+impacts, fidgets and the unit's CreatureSoundData slots
+(`rendering/unit_model_events.hpp`, `rendering/melee_sound.hpp`).
 
-## Key Types
+## Adding to it
 
-- **`AnimEvent`** - discrete events: `MOVE_START`, `MOVE_STOP`, `JUMP`, `LANDED`, `MOUNT`, `DISMOUNT`, etc.
-- **`AnimOutput`** - result of FSM resolution: `{animId, loop, valid}`. `valid=false` means STAY.
-- **`AnimCapabilitySet`** - probed once per model load. Caches resolved IDs and capability flags.
-- **`CharacterAnimator::FrameInput`** - per-frame input struct (movement flags, timers, animation state queries).
-
-## Adding a New Animation State
-
-1. Decide which FSM owns the state (combat, activity, locomotion, or mount).
-2. Add the state enum to the FSM's `State` enum (`MountState` for the mount).
-3. Add transitions in the FSM's `updateTransitions()` and the animation choice in
-   its `resolve()` (`MountFSM::evaluate()` for the mount).
-4. Add resolved ID fields to `AnimCapabilitySet` if the animation needs model probing.
-5. If the state needs external triggering, add a method to `ICharacterAnimator` and implement in `CharacterAnimator`.
+Find what the client does first. Each rule above names the function it is a
+port of; a new one goes beside it as a pure function of the unit's state with a
+test, and the renderer asks it.
 
 ## Tests
 
-Locomotion, combat and activity FSMs each have a test file in `tests/`
-(MountFSM has none):
-- `test_locomotion_fsm.cpp`
-- `test_combat_fsm.cpp`
-- `test_activity_fsm.cpp`
-- `test_anim_capability.cpp`
-- `test_animation_ids.cpp`
-- `test_melee_anim_chains.cpp`
-- `test_footstep_paths.cpp`, `test_m2_footstep_events.cpp`
-
-Run all tests:
-```bash
-cd build && ctest --output-on-failure
-```
+`test_base_animation`, `test_upper_body`, `test_mover_event`,
+`test_kit_animation`, `test_rider_mount`, `test_jump_landing`,
+`test_animation_data`, `test_animation_ids`, `test_melee_anim_chains`,
+`test_body_yaw`, `test_mount_special`, `test_footstep_paths`,
+`test_m2_footstep_events`.

@@ -73,7 +73,6 @@ public:
     void setGrounded(bool grounded);
 
     // Play semantic mount action sounds (triggered on animation state changes)
-    void playRearUpSound();   // Rear-up flourish (whinny/roar)
     void playJumpSound();     // Jump start (grunt/snort)
     void playLandSound();     // Landing (thud/hoof)
     void playIdleSound();     // Ambient idle (snort/stomp/breath)
