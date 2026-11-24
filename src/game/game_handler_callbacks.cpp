@@ -2649,7 +2649,9 @@ bool GameHandler::isAutoAttacking() const {
 }
 
 bool GameHandler::isInCombat() const {
-    return combatHandler_ ? combatHandler_->isInCombat() : false;
+    const auto me = getEntityManager().getEntity(playerGuid);
+    const uint16_t flags = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    return me && flags != 0xFFFF && (me->getField(flags) & 0x80000u) != 0;
 }
 
 bool GameHandler::isInCombatWith(uint64_t guid) const {

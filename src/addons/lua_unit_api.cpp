@@ -3015,27 +3015,11 @@ static int lua_GetRestState(lua_State* L) {
 
 static int lua_UnitAffectingCombat(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitAffectingCombat(\"unit\")");   // 0x0060f860
-    const char* uid = luaL_optstring(L, 1, "player");
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    if (uidStr == "player") {
-        luaPushOneOrNil(L, gh->isInCombat());
-    } else {
-        // Check UNIT_FLAG_IN_COMBAT (0x00080000) in UNIT_FIELD_FLAGS
-        uint64_t guid = resolveUnitGuid(gh, uidStr);
-        bool inCombat = false;
-        if (guid != 0) {
-            auto entity = gh->getEntityManager().getEntity(guid);
-            if (entity) {
-                uint32_t flags = entity->getField(
-                    game::fieldIndex(game::UF::UNIT_FIELD_FLAGS));
-                inCombat = (flags & 0x00080000) != 0; // UNIT_FLAG_IN_COMBAT
-            }
-        }
-        luaPushOneOrNil(L, inCombat);
-    }
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
+    const auto entity = gh && guid ? gh->getEntityManager().getEntity(guid) : nullptr;
+    const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+    luaPushOneOrNil(L, entity && flags != 0xFFFF && (entity->getField(flags) & 0x80000u) != 0);
     return 1;
 }
 

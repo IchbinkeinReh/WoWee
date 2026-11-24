@@ -1498,6 +1498,9 @@ public:
     void startAutoAttack(uint64_t targetGuid);
     void stopAutoAttack();
     bool isAutoAttacking() const;
+    /// The player's UNIT_FLAG_IN_COMBAT, as UnitAffectingCombat (0x0060f860) and
+    /// the macros' [combat] ask it; the fight of its own swings and those seen
+    /// against it is CombatHandler's (isInCombatWith).
     bool isInCombat() const;
     bool isInCombatWith(uint64_t guid) const;
     uint64_t getAutoAttackTargetGuid() const;

@@ -106,3 +106,23 @@ TEST_CASE("a pet that comes into sight is told to its owner", "[replay][pet]") {
     s.receive(UpdateObject().create(0xEF, ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}}));
     CHECK(heard.count("UNIT_PET player") == 0);
 }
+
+// UNIT_FLAG_IN_COMBAT, whoever is seen swinging (0x0060f860): set while only
+// the pet is fought, and with nobody swinging at the player at all.
+TEST_CASE("the player is in combat by its flag", "[replay][combat]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    CHECK_FALSE(s.handler().isInCombat());
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0x80000u}}));
+    CHECK(s.handler().isInCombat());
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0x8u}}));
+    CHECK_FALSE(s.handler().isInCombat());
+
+    // SMSG_ATTACKSTART (Unit::SendMeleeAttackStart) against it is not it.
+    s.receive(UpdateObject().create(kVehicle, ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}}));
+    wowee::network::Packet swing(wowee::game::wireOpcode(Opcode::SMSG_ATTACKSTART));
+    swing.writeUInt64(kVehicle);
+    swing.writeUInt64(Session::kPlayerGuid);
+    s.receive(swing);
+    CHECK_FALSE(s.handler().isInCombat());
+}
