@@ -59,33 +59,6 @@ namespace ui {
 
 
 // ============================================================
-// Raid Warning / Boss Emote Center-Screen Overlay
-// ============================================================
-
-// ============================================================================
-// The sound a whisper makes
-// ============================================================================
-//
-// What is left of the raid warning overlay. RaidWarningFrame is FrameXML's and
-// answers CHAT_MSG_RAID_WARNING itself, so the banner went; the walk through
-// new chat lines stayed, because the whisper sound was being played from
-// inside it and belongs to no element - FrameXML plays none for a whisper.
-void CombatUI::playSoundsForNewChat(game::GameHandler& gameHandler) {
-    const auto& chatHistory = gameHandler.getChatHistory();
-    const size_t newCount = chatHistory.size();
-    if (newCount <= raidWarnChatSeenCount_) return;
-
-    for (size_t i = raidWarnChatSeenCount_; i < newCount; ++i) {
-        if (chatHistory[i].type != game::ChatType::WHISPER) continue;
-        if (auto* ac = services_.audioCoordinator) {
-            if (auto* ui = ac->getUiSoundManager()) ui->playWhisperReceived();
-        }
-    }
-    raidWarnChatSeenCount_ = newCount;
-}
-
-
-// ============================================================
 // Floating Combat Text
 // ============================================================
 

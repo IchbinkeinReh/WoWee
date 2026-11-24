@@ -961,7 +961,7 @@ private:
     void queryNextMailTime();
     /// The time to the next letter changed: UPDATE_PENDING_MAIL, and the
     /// letter sound when it has just reached zero.
-    void nextMailTimeChanged(bool wasNew);
+    void nextMailTimeChanged();
     /// Senders whose letters are all read leave the list (0x0056de00).
     void dropReadPendingSenders();
     void handleEquipmentSetList(network::Packet& packet);

@@ -1745,8 +1745,15 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             uint64_t oldMoney = owner_.playerMoneyCopperRef();
             owner_.playerMoneyCopperRef() = val;
             LOG_DEBUG("Money ", isCreate ? "set from update fields: " : "updated via VALUES: ", val, " copper");
-            if (val != oldMoney)
+            if (val != oldMoney) {
+                // Any change of it, either way (0x006da070).
+                if (!isCreate) {
+                    if (auto* ac = owner_.services().audioCoordinator) {
+                        if (auto* sfx = ac->getUiSoundManager()) sfx->playLootCoinSmall();
+                    }
+                }
                 pendingEvents_.emit("PLAYER_MONEY", {});
+            }
         }
         else if (pfi.honor != 0xFFFF && key == pfi.honor) {
             owner_.playerHonorPointsRef() = val;

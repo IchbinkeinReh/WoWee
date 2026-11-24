@@ -382,15 +382,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     // Set up UI error frame callback (once)
     if (!uiErrorCallbackSet_) {
         gameHandler.setUIErrorCallback([this](const std::string& msg) {
-            // The sound first, and outside the gate. It belongs to no
-            // element - the error is the same error whoever draws the text -
-            // and it sat after the return, so handing the errors over would
-            // have taken the sound with them.
-            if (auto* ac = services_.audioCoordinator) {
-                if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
-            }
-            // UIErrorsFrame draws the text now. The sound above is still
-            // ours: FrameXML plays none for these, so it would go silent.
+            // UIErrorsFrame draws the text, and what is heard is the game
+            // error's own (0x005216f0, playGameErrorSound) - most have none.
             (void)msg;
         });
         uiErrorCallbackSet_ = true;
@@ -702,7 +695,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         renderer->getCameraController()->setDistanceMax(yards);
     }
     renderLightKindOverlay();       // Debug Graphics: the lights' kinds
-    combatUI_.playSoundsForNewChat(gameHandler);
     offerPendingTradeItem(gameHandler);
     // Not under enableCombatText: that is Blizzard_CombatText's switch, and
     // the numbers over the world answer to CombatDamage and CombatHealing,

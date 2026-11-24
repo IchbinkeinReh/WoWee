@@ -83,12 +83,8 @@ public:
 
     // Loot sounds
     void playLootCoinSmall();
-    void playLootCoinLarge();
-    void playLootItem();
 
     // Item sounds
-    void playDropOnGround();
-    void playPickupBag();
     /// Picking an item up sounds like the thing it is - cloth, food or a gem.
     /// Chosen by item class; anything else keeps the bag rustle.
     void playPickupBook();
@@ -98,9 +94,6 @@ public:
     // Level up
     void playLevelUp();
 
-    // Achievement
-    void playAchievementAlert();
-
     // Error/feedback
     void playError();
     void playTargetSelect();
@@ -108,7 +101,6 @@ public:
 
     // Chat notifications
     void playWhisperReceived();
-    void playMailReceived();
 
     // Minimap ping
     void playMinimapPing();
@@ -157,22 +149,16 @@ private:
     std::vector<UISample> questUpdateSounds_;
 
     std::vector<UISample> lootCoinSmallSounds_;
-    std::vector<UISample> lootCoinLargeSounds_;
-    std::vector<UISample> lootItemSounds_;
 
-    std::vector<UISample> dropSounds_;
-    std::vector<UISample> pickupBagSounds_;
     std::vector<UISample> pickupBookSounds_;
 
 
     std::vector<UISample> levelUpSounds_;
-    std::vector<UISample> achievementSounds_;
 
     std::vector<UISample> errorSounds_;
     std::vector<UISample> selectTargetSounds_;
     std::vector<UISample> deselectTargetSounds_;
     std::vector<UISample> whisperSounds_;
-    std::vector<UISample> mailSounds_;
     std::vector<UISample> minimapPingSounds_;
 
     // State tracking

@@ -704,10 +704,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     if (owner_.questCompleteCallbackRef()) {
                         owner_.questCompleteCallbackRef()(questId, it->title);
                     }
-                    // Play quest-complete sound
+                    // 0x006d0e10.
                     if (auto* ac = owner_.services().audioCoordinator) {
-                        if (auto* sfx = ac->getUiSoundManager())
-                            sfx->playQuestComplete();
+                        if (auto* sfx = ac->getUiSoundManager()) sfx->playByName("igQuestListComplete");
                     }
                     questLog_.erase(it);
                     owner_.setQuestTracked(questId, false);
@@ -1320,8 +1319,6 @@ void QuestHandler::acceptQuest() {
         // and lets the server refuse. This was an English line in chat too.
         owner_.addUIError(interfaceString("ERR_QUEST_LOG_FULL", "Your quest log is full."));
         owner_.playGameErrorSound("ERR_QUEST_LOG_FULL");
-        if (auto* ac = owner_.services().audioCoordinator)
-            if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
         return;
     }
 
@@ -1341,12 +1338,6 @@ void QuestHandler::acceptQuest() {
     // through addQuestToLocalLogIfMissing without tracking, so the tracker's
     // "show all when nothing tracked" fallback still applies to those.
     owner_.setQuestTracked(questId, true);
-
-    // Play quest-accept sound
-    if (auto* ac = owner_.services().audioCoordinator) {
-        if (auto* sfx = ac->getUiSoundManager())
-            sfx->playQuestActivate();
-    }
 
     dismissQuestDetails();
 }

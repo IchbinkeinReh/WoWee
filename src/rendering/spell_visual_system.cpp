@@ -101,6 +101,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             p = pipeline::modelPathToM2(p);
             effectPaths[id] = p;
             effectNamePaths_[id] = p;
+            effectIdsByName_[fxDbc->getString(i, 1)] = id;
             if (fxScaleField < fxDbc->getFieldCount()) {
                 effectScales[id] = fxDbc->getFloat(i, fxScaleField);
                 effectNameScales_[id] = effectScales[id];
@@ -1916,6 +1917,13 @@ void SpellVisualSystem::playEffectModelOnUnit(uint32_t effectNameId, uint32_t re
     m2Renderer_->setInstanceTransform(instanceId, transform);
     addKitModel(instanceId, spell_kit::KitModelLife::Once, false, 0, true,
                 static_cast<uint32_t>(attachment), renderInstanceId, scale, glm::mat4(1.0f));
+}
+
+void SpellVisualSystem::playNamedEffectOnUnit(const std::string& name, uint32_t renderInstanceId) {
+    loadSpellVisualDbc();
+    constexpr int32_t kBase = 19;
+    if (const auto id = effectIdsByName_.find(name); id != effectIdsByName_.end())
+        playEffectModelOnUnit(id->second, renderInstanceId, kBase);
 }
 
 void SpellVisualSystem::hideAuraKitModels(AuraKit& aura) {

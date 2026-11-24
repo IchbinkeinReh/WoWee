@@ -110,36 +110,6 @@ constexpr uint8_t kSpellFailedSpellInProgress = 105;
 constexpr uint8_t kSpellFailedTooClose = 128;
 constexpr uint8_t kSpellFailedUnitNotInFront = 134;
 
-/// A rejection the player caused by pressing a key a moment too early, or from
-/// half a step out of place.
-///
-/// These arrive once per keypress and a held key repeats them, so a few seconds
-/// of a fight produces several a second: the cooldown, the power cost, the
-/// range, the facing. The red line above the middle of the screen is what the
-/// real client shows for them - no chat line, and no error chime, since a beep
-/// per rejected keypress is the same spam in another channel. The character's
-/// line for them is still spoken (sayCastFailure), one at a time.
-///
-/// Codes checked against AzerothCore's SharedDefines.h rather than inferred:
-/// 128 is TOO_CLOSE, not the in-progress code it reads like.
-bool isRoutineCastRejection(uint8_t result) {
-    switch (result) {
-        case kSpellFailedItemNotReady:
-        case kSpellFailedMoving:
-        case kSpellFailedNotBehind:
-        case kSpellFailedNotReady:
-        case kSpellFailedNoPower:
-        case kSpellFailedOutOfRange:
-        case kSpellFailedSpellInProgress:
-        case kSpellFailedTooClose:
-        case kSpellFailedTryAgain:
-        case kSpellFailedUnitNotInFront:
-            return true;
-        default:
-            return false;
-    }
-}
-
 /// A spell's name as the learn and unlearn lines give it: "Name (Rank)", or
 /// the name alone where Spell.dbc has no rank (0x00542030, 0x006e71d0).
 std::string spellNameWithRank(const GameHandler& owner, uint32_t spellId) {
@@ -4753,14 +4723,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // On screen and nowhere else. A cast failure went to the chat log as well
     // from here and from handleCastResult both, so the fix that took it out of
     // GameHandler::raiseUiError changed nothing that was being reported.
-    const bool routine = isRoutineCastRejection(data.result);
-
-    if (!routine && !errMsg.empty()) {
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* sfx = ac->getUiSoundManager())
-                sfx->playError();
-        }
-    }
 
     // And the character's line for the failure's game error ("Not enough
     // mana", "That ability isn't ready yet"), the routine ones included -
@@ -6188,6 +6150,10 @@ void SpellHandler::handleAchievementEarned(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;  // achievementId(4) + packedTime(4)
     uint32_t achievementId = packet.readUInt32();
     uint32_t earnDate      = packet.readUInt32();
+    const bool quiet = packet.hasRemaining(4) && packet.readUInt32() != 0;
+    // 0x005b3020: "HARDCODED Achievement Base" on whoever earned it - its
+    // model's one event is the sound (SoundEntries 12891).
+    if (!quiet) owner_.playUnitEffect(guid, GameHandler::UnitEffect::Achievement);
 
     owner_.loadAchievementNameCache();
     auto nameIt = owner_.achievementNameCacheRef().find(achievementId);
@@ -6202,13 +6168,6 @@ void SpellHandler::handleAchievementEarned(network::Packet& packet) {
         // "Achievement earned: X" in English on top.
         owner_.earnedAchievementsRef().insert(achievementId);
         owner_.achievementDatesRef()[achievementId] = earnDate;
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* sfx = ac->getUiSoundManager())
-                sfx->playAchievementAlert();
-        }
-        if (owner_.achievementEarnedCallbackRef()) {
-            owner_.achievementEarnedCallbackRef()(achievementId, achName);
-        }
         // Inside the branch, not after it. ACHIEVEMENT_EARNED is what raises
         // FrameXML's badge, and it is about the player who is reading it -
         // somebody else's is CHAT_MSG_ACHIEVEMENT, which the server sends

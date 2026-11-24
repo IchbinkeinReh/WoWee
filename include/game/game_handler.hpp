@@ -4074,9 +4074,6 @@ public:
     using OtherPlayerLevelUpCallback = std::function<void(uint64_t guid, uint32_t newLevel)>;
     void setOtherPlayerLevelUpCallback(OtherPlayerLevelUpCallback cb) { otherPlayerLevelUpCallback_ = std::move(cb); }
 
-    // Achievement earned callback - fires when SMSG_ACHIEVEMENT_EARNED is received
-    using AchievementEarnedCallback = std::function<void(uint32_t achievementId, const std::string& name)>;
-    void setAchievementEarnedCallback(AchievementEarnedCallback cb) { achievementEarnedCallback_ = std::move(cb); }
     const std::unordered_set<uint32_t>& getEarnedAchievements() const { return earnedAchievements_; }
 
     // Title system - earned title bits and the currently displayed title
@@ -5911,7 +5908,6 @@ public:
     auto& tabCycleStaleRef() { return tabCycleStale; }
 
     // ── UI & Event Callbacks ─────────────────────────────────────────
-    auto& achievementEarnedCallbackRef() { return achievementEarnedCallback_; }
     auto& addonEventCallbackRef() { return addonEventCallback_; }
     auto& combatLogEventCallbackRef() { return combatLogEventCallback_; }
     auto& appearanceChangedCallbackRef() { return appearanceChangedCallback_; }
@@ -5951,7 +5947,6 @@ public:
     auto& npcDeathCallbackRef() { return npcDeathCallback_; }
     auto& unitDiedCallbackRef() { return unitDiedCallback_; }
     auto& npcRespawnCallbackRef() { return npcRespawnCallback_; }
-    auto& npcVendorCallbackRef() { return npcVendorCallback_; }
     auto& openLfgCallbackRef() { return openLfgCallback_; }
     auto& otherPlayerLevelUpCallbackRef() { return otherPlayerLevelUpCallback_; }
     auto& otherPlayerMountCallbackRef() { return otherPlayerMountCallback_; }
@@ -7724,7 +7719,7 @@ private:
     OtherPlayerMountCallback otherPlayerMountCallback_;
     GrowthFitCallback growthFitCallback_;
     MountRoomCallback mountRoomCallback_;
-    AchievementEarnedCallback achievementEarnedCallback_;
+    UnitEffectCallback unitEffectCallback_;
     AreaDiscoveryCallback areaDiscoveryCallback_;
     QuestProgressCallback questProgressCallback_;
     MountCallback mountCallback_;

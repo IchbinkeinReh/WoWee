@@ -782,6 +782,8 @@ void GameHandler::registerCoreOpcodes() {
         }
         if (isLost) knownTitleBits_.erase(titleBit);
         else        knownTitleBits_.insert(titleBit);
+        // 0x0050c520: a title earned shows as a reputation does.
+        if (!isLost && !titleStr.empty()) playUnitEffect(playerGuid, UnitEffect::Reputation);
         // And announce it - unless the realm keeps a known-titles mask and this
         // layout can read one. The client raises KNOWN_TITLES_UPDATE (498) from
         // watchers installed on the mask's three pairs of dwords, and from
@@ -1464,9 +1466,6 @@ void GameHandler::registerCoreOpcodes() {
         ping.age  = 0.0f;
         minimapPings_.push_back(ping);
         const uint64_t senderGuid = read.senderGuid;
-        if (senderGuid != playerGuid) {
-                            withSoundManager(&audio::AudioCoordinator::getUiSoundManager, [](auto* sfx) { sfx->playMinimapPing(); });
-        }
         // The ping is drawn by this client from minimapPings_ and was never
         // announced, so a handed-over minimap heard the sound and showed
         // nothing.

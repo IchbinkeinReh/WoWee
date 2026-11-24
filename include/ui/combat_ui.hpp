@@ -37,12 +37,7 @@ public:
     bool showCombatLog_ = false;
     bool showThreatWindow_ = false;
 
-    size_t raidWarnChatSeenCount_ = 0;
-
     // ---- Public render methods ----
-    /// The whisper sound, taken from a walk of new chat lines. What is left
-    /// of the raid warning overlay, whose banner is FrameXML's.
-    void playSoundsForNewChat(game::GameHandler& gameHandler);
     void renderCombatText(game::GameHandler& gameHandler);
     // inventoryScreen supplies the weapon item icons shown for temporary weapon enchants.
     void renderCombatLog(game::GameHandler& gameHandler,

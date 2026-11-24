@@ -2,6 +2,7 @@
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "rendering/animation_controller.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -81,12 +82,16 @@ void AudioCallbackHandler::setupCallbacks() {
         }
     });
 
-    // Achievement earned callback - show toast banner
-    gameHandler_.setAchievementEarnedCallback([this](uint32_t /*achievementId*/,
-                                                    const std::string& /*name*/) {
-        if (uiManager_) {
-            uiManager_->getGameScreen().toastManager().playAchievementEarned();
-        }
+    gameHandler_.setUnitEffectCallback([this](uint64_t guid, game::GameHandler::UnitEffect effect) {
+        auto* svs = renderer_ ? renderer_->getSpellVisualSystem() : nullptr;
+        uint32_t instance = gameHandler_.resolveUnitRenderInstance(guid);
+        if (instance == 0 && guid == gameHandler_.getPlayerGuid() && renderer_)
+            instance = renderer_->getCharacterInstanceId();
+        if (!svs || instance == 0) return;
+        const char* name = effect == game::GameHandler::UnitEffect::Achievement ? "HARDCODED Achievement Base"
+                           : effect == game::GameHandler::UnitEffect::Reputation ? "HARDCODED Reputation"
+                                                                                 : "HARDCODED Unit Level Up";
+        svs->playNamedEffectOnUnit(name, instance);
     });
 
     // SMSG_PLAY_MUSIC: the sound goes to the music's slot 3 (0x004c92b0).

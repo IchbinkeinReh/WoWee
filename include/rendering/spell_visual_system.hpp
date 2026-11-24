@@ -76,6 +76,9 @@ public:
     /// a kit's impact model is (0x006f94c0 with 0x00744870) - a blood spurt.
     /// Nothing where the unit's model has no such attachment.
     void playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment);
+    /// The SpellVisualEffectName row of this name on a unit's base (attachment 19), as
+    /// 0x006f9260 puts one of the client's own on it.
+    void playNamedEffectOnUnit(const std::string& name, uint32_t renderInstanceId);
 
     /// A ground-aimed cast's area kits at its destination (0x0080e1b0): the
     /// InstantAreaKit (+0x5c), and the ImpactAreaKit (+0x60) unless a
@@ -1066,6 +1069,7 @@ private:
                               bool isPrecast, uint32_t castTimeMs);
     WeaponEffectHolder weaponEffectHolder_;
     /// SpellVisualEffectName's models by id, kept for playEffectModelOnUnit.
+    std::unordered_map<std::string, uint32_t> effectIdsByName_;
     std::unordered_map<uint32_t, std::string> effectNamePaths_;
     std::unordered_map<uint32_t, float> effectNameScales_;  ///< SpellVisualEffectName Scale
     /// SpellVisual.dbc's rows, whole, for 0x00720f80's merges.
