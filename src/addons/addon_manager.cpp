@@ -1,4 +1,5 @@
 #include "addons/addon_manager.hpp"
+#include "addons/addon_trust.hpp"
 #include "game/game_handler.hpp"
 #include <zlib.h>
 #include "addons/interface_prefetch.hpp"
@@ -1756,10 +1757,12 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
 /// verifies as Blizzard-signed has +0x24 cleared, and is loaded secure). The
 /// signatures live in the game's archives and do not survive extraction, so
 /// here the name stands in for them: Blizzard ships its own interface addons
-/// as Blizzard_*, and only those are signed.
-static int addonTaint(const TocFile& addon) {
-    if (addon.addonName.rfind("Blizzard_", 0) == 0) return 0;
-    return taint::intern(addon.addonName);
+/// as Blizzard_*, and only those are signed. This client's own, which replaces
+/// the bag functions the bars read, is as little an addon's (addonIsTheClients):
+/// tainted, it took the running code of every vehicle and every bar with it,
+/// which FrameXML sets up in combat.
+static int addonTaint(const TocFile& addon, bool fromPlayersFolder) {
+    return addonIsTheClients(addon.addonName, fromPlayersFolder) ? 0 : taint::intern(addon.addonName);
 }
 
 bool AddonManager::loadAddon(const TocFile& addon) {
@@ -1769,12 +1772,12 @@ bool AddonManager::loadAddon(const TocFile& addon) {
     // variables included. ADDON_LOADED goes out after, secure again.
     bool success = true;
     {
-        const int loadTaint = addonTaint(addon);
+        const bool clientAddon = isClientAddon(addon.basePath);
+        const int loadTaint = addonTaint(addon, clientAddon);
         taint::Scope scope(loadTaint, loadTaint);
         // The player's own addon: its files from the original's WTF first,
         // copied when missing or newer there. Like the original's loader,
         // which runs both files when they exist, whatever the .toc declares.
-        const bool clientAddon = isClientAddon(addon.basePath);
         if (clientAddon) copyClientSavedVariables(addon);
         // Load SavedVariables before addon code (so globals are available at load time)
         auto savedVars = addon.getSavedVariables();

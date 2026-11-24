@@ -22,6 +22,7 @@ extern "C" {
 #include <vector>
 
 #include "addons/lua_handler_globals.hpp"
+#include "addons/addon_trust.hpp"
 #include "addons/lua_taint.hpp"
 
 namespace taint = wowee::addons::taint;
@@ -492,4 +493,16 @@ TEST_CASE("The taint log names the global an addon tainted (0x0052a650)", "[tain
     text << in.rdbuf();
     CHECK(text.str().find("Global variable SomeGlobal tainted by SomeAddon") != std::string::npos);
     CHECK(text.str().find("Execution tainted by SomeAddon while reading SomeGlobal") != std::string::npos);
+}
+
+TEST_CASE("the client's own addons run secure", "[lua]") {
+    using wowee::addons::addonIsTheClients;
+    CHECK(addonIsTheClients("Blizzard_TimeManager", false));
+    CHECK(addonIsTheClients("Blizzard_TimeManager", true));
+    CHECK(addonIsTheClients("WoweeAllBags", false));
+    // One the player has put into the original's folder is the player's.
+    CHECK_FALSE(addonIsTheClients("WoweeAllBags", true));
+    CHECK_FALSE(addonIsTheClients("Bagnon", false));
+    CHECK_FALSE(addonIsTheClients("WoweeAllBags2", false));
+    CHECK_FALSE(addonIsTheClients("Blizz", false));
 }
