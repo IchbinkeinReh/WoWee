@@ -335,6 +335,47 @@ struct Emitter {
         }
     }
 
+    /// What a FontString's element says of its text besides its place
+    /// (0x00487310's loader): the font - an object or a file, with FontHeight
+    /// and outline -, spacing, Shadow, and how its lines are broken.
+    void emitFontStringAttributes(const XmlNode& node, const std::string& var) {
+        const auto flag = [&](const char* attr, const char* method) {
+            if (node.attr(attr))
+                line(var + ":" + method + "(" + (node.attrBool(attr) ? "true" : "false") + ")");
+        };
+        if (const std::string* font = node.attr("font"); font && !font->empty()) {
+            const std::string* outline = node.attr("outline");
+            float height = 0.0f;
+            if (const XmlNode* fh = node.child("FontHeight")) {
+                if (const XmlNode* abs = fh->child("AbsValue")) height = abs->attrFloat("val", 0.0f);
+                else                                           height = fh->attrFloat("val", 0.0f);
+            }
+            line("if type(_G[" + quote(*font) + "]) == \"table\" then " + var + ":SetFontObject(" + quote(*font) +
+                 ") else " + var + ":SetFont(" + quote(*font) + ", " +
+                 (height > 0.0f ? std::to_string(height) : std::string("nil")) + ", " +
+                 (outline ? quote(*outline) : std::string("nil")) + ") end");
+        }
+        if (node.attr("spacing")) line(var + ":SetSpacing(" + std::to_string(node.attrFloat("spacing", 0.0f)) + ")");
+        if (const XmlNode* sh = node.child("Shadow")) emitShadow(*sh, var);
+        flag("nonspacewrap", "SetNonSpaceWrap");
+        flag("wordwrap", "SetWordWrap");
+        flag("indented", "SetIndentedWordWrap");
+    }
+
+    /// <Shadow> of a font string or a frame's own font.
+    void emitShadow(const XmlNode& sh, const std::string& var) {
+        float sx = 1.0f, sy = -1.0f;
+        if (const XmlNode* off = sh.child("Offset")) {
+            if (const XmlNode* abs = off->child("AbsDimension")) {
+                sx = abs->attrFloat("x", 1.0f);
+                sy = abs->attrFloat("y", -1.0f);
+            }
+        }
+        line(var + ":SetShadowOffset(" + std::to_string(sx) + ", " + std::to_string(sy) + ")");
+        if (const XmlNode* sc = sh.child("Color"))
+            line(var + ":SetShadowColor(" + xmlColorArgs(*sc) + ")");   // 0x00815c30
+    }
+
     /// Everything a region declares about itself, applied to a region that
     /// already exists. Separate from creating one because a virtual Texture or
     /// FontString is exactly this and nothing else: a set of properties waiting
@@ -394,10 +435,7 @@ struct Emitter {
             line(var + ":SetHorizTile(" + (node.attrBool("horizTile") ? "true" : "false") + ")");
         if (isTexture && node.attr("vertTile"))
             line(var + ":SetVertTile(" + (node.attrBool("vertTile") ? "true" : "false") + ")");
-        if (!isTexture && node.attr("indented")) {
-            line(var + ":SetIndentedWordWrap(" +
-                 (node.attrBool("indented") ? "true" : "false") + ")");
-        }
+        if (!isTexture) emitFontStringAttributes(node, var);
         if (node.attrBool("setAllPoints")) {
             line("__WoweeXmlSetAllPoints(" + var + ", " + parentVar + ")");
         }
@@ -708,20 +746,7 @@ struct Emitter {
         if (const XmlNode* col = node.child("Color")) {
             line(var + ":SetTextColor(" + xmlColorArgs(*col) + ")");   // 0x00815c30
         }
-        if (const XmlNode* sh = node.child("Shadow")) {
-            float sx = 1.0f, sy = -1.0f;
-            if (const XmlNode* off = sh->child("Offset")) {
-                if (const XmlNode* abs = off->child("AbsDimension")) {
-                    sx = abs->attrFloat("x", 1.0f);
-                    sy = abs->attrFloat("y", -1.0f);
-                }
-            }
-            line(var + ":SetShadowOffset(" + std::to_string(sx) + ", " +
-                 std::to_string(sy) + ")");
-            if (const XmlNode* sc = sh->child("Color")) {
-                line(var + ":SetShadowColor(" + xmlColorArgs(*sc) + ")");   // 0x00815c30
-            }
-        }
+        if (const XmlNode* sh = node.child("Shadow")) emitShadow(*sh, var);
         if (const std::string* j = node.attr("justifyH"))
             line(var + ":SetJustifyH(" + quote(*j) + ")");
         if (const std::string* jv = node.attr("justifyV"))

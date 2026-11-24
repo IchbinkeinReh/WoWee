@@ -325,7 +325,18 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     // added to the schema could be reached however correctly it registered.
     const bool spansX = anchorsSpanAxis(w->anchors, true);
     const bool spansY = anchorsSpanAxis(w->anchors, false);
-    if (spansX && spansY) return;
+    // What it was measured as before it was held there is not its size.
+    const auto forget = [w] {
+        if (w->autoSized) w->width = w->height = 0.0f;
+        if (w->wrapsBetweenAnchors) w->height = 0.0f;
+        w->autoSized = w->wrapsBetweenAnchors = false;
+        w->measuredText.clear();
+    };
+    if (spansX && spansY) {
+        if (w->autoSized || w->wrapsBetweenAnchors) forget();
+        return;
+    }
+    if (!spansX && w->wrapsBetweenAnchors) forget();
 
     // A width with no height is a paragraph, not a request to be measured.
     //
@@ -371,7 +382,13 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     const bool sameMeasurement = w->measuredText == w->text &&
                                  w->measuredSize == size &&
                                  w->measuredFace == w->fontFace;
-    if (paragraph) {
+    // Held by its sides: as wide as they are apart (textWrapWidth), and as
+    // tall as that makes it where it has no height of its own.
+    const float between = spansX ? textWrapWidth(*w) : 0.0f;
+    if (between > 0.0f) {
+        if (sameMeasurement && !w->autoSized && w->measuredWidth == between) return;
+        if (w->autoSized) forget();
+    } else if (paragraph) {
         if (sameMeasurement) return;
     } else {
         if (w->autoSized && sameMeasurement) return;
@@ -388,6 +405,23 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     const auto measureRun = [&](const std::string& piece) {
         return runFont->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
     };
+
+    if (between > 0.0f) {
+        const int rows = static_cast<int>(
+            wrapText(parseMarkup(w->text), w->wordWrap ? between : 0.0f, w->nonSpaceWrap, measureRun,
+                     w->indentedWordWrap && linkScale_ > 0.0f ? kIndentedWrapPixels / linkScale_ : 0.0f)
+                .size());
+        w->wrappedLines = rows > 0 ? rows : 1;
+        if (w->height <= 0.0f || w->wrapsBetweenAnchors) {
+            w->height = size * 1.2f * static_cast<float>(w->wrappedLines);
+            w->wrapsBetweenAnchors = true;
+        }
+        w->measuredText = w->text;
+        w->measuredSize = size;
+        w->measuredFace = w->fontFace;
+        w->measuredWidth = between;
+        return;
+    }
 
     if (paragraph) {
         // The width stays as declared and the height follows the wrap.
@@ -1507,6 +1541,11 @@ void WidgetRenderer::layout(WidgetTree& tree, float screenW, float screenH) {
     mark(times.sizing, [&] { sizeArtAndText(tree); });
 
     mark(times.solve, [&] { tree.layout(screenW, screenH); });
+    // Labels whose sides have moved: as tall as that makes them.
+    if (tree.takeWrapChanged()) {
+        mark(times.sizing, [&] { sizeArtAndText(tree); });
+        mark(times.solve, [&] { tree.layout(screenW, screenH); });
+    }
 
     if (profile) {
         ++times.frames;

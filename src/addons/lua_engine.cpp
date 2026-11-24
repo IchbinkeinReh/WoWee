@@ -1875,18 +1875,17 @@ int lua_Region_GetFieldSize(lua_State* L) {
 /// so a two-line objective was given a one-line row and the rows below it were
 /// drawn over its second line.
 ///
-/// The width it wraps inside is the renderer's own rule: a declared width with
-/// no height is a paragraph, and so is anything the interface has marked as
-/// wrapping. A label sized by its own text wraps at nothing and is one line
-/// unless it carries a |n.
+/// The width it wraps inside is the renderer's own rule (textWrapWidth): a
+/// declared width with no height is a paragraph, and so is anything the
+/// interface has marked as wrapping or held by its two sides. A label sized by
+/// its own text wraps at nothing and is one line unless it carries a |n.
 double fontStringTextHeight(const wowee::ui::Widget& w) {
     // The size it is actually drawn at, which is what interfaceFontSize
     // answers. Three places asked this question with three different
     // fallbacks - twelve here, twelve below, fourteen in the edit box - and a
     // label with no declared height is drawn at none of them.
     const float line = wowee::ui::interfaceFontSize(w.fontHeight);
-    const float wrapWidth =
-        (w.wrapsToWidth || (!w.autoSized && w.width > 0.0f)) ? w.width : 0.0f;
+    const float wrapWidth = w.wordWrap ? wowee::ui::textWrapWidth(w) : 0.0f;
     const int lines = std::max(1, wowee::ui::interfaceTextLines(
                                       w.text, w.fontFace, w.fontHeight,
                                       wrapWidth, w.nonSpaceWrap));
@@ -1896,6 +1895,7 @@ double fontStringTextHeight(const wowee::ui::Widget& w) {
 int lua_Region_GetTextHeight(lua_State* L) {
     const auto* w = textWidgetOf(L, 1);
     if (!w) { lua_pushnumber(L, 0.0); return 1; }
+    if (auto* tree = wowee::addons::getWidgetTree(L)) tree->resolveWidget(w->id);
     lua_pushnumber(L, fontStringTextHeight(*w));
     return 1;
 }
@@ -1960,8 +1960,10 @@ int lua_Region_GetHeight(lua_State* L) {
     // one line, and the spirit healer's seven-line warning ran out of its
     // box with the Accept and Cancel buttons drawn over the middle of it.
     const bool staleParagraph =
-        w && w->kind == wowee::ui::WidgetKind::FontString && w->wrapsToWidth &&
-        !w->text.empty() && w->text != w->measuredText;
+        w && w->kind == wowee::ui::WidgetKind::FontString && !w->text.empty() &&
+        ((w->wrapsToWidth && w->text != w->measuredText) ||
+         (w->wrapsBetweenAnchors &&
+          (w->text != w->measuredText || wowee::ui::textWrapWidth(*w) != w->measuredWidth)));
     if (w && !w->text.empty() && w->kind == wowee::ui::WidgetKind::FontString &&
         (staleAutoSize || staleParagraph || (w->rectH <= 0.0f && w->height <= 0.0f))) {
         // A font string that was never given a height is as tall as its text,

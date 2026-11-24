@@ -342,6 +342,11 @@ struct Widget {
     /// whatever anchored below sitting on top of the lines that should have
     /// pushed it down.
     bool wrapsToWidth = false;
+    /// The same of a label held by its left and right: its lines are broken at
+    /// the width between them, and its height is theirs where it has none of
+    /// its own. And the width they were broken at.
+    bool wrapsBetweenAnchors = false;
+    float measuredWidth = 0.0f;
 
     FrameStrata strata = FrameStrata::Medium;
     bool strataExplicit = false;
@@ -955,6 +960,15 @@ struct LinkRect {
     float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
 };
 
+/// The width a font string's lines are broken at, in its own units, whatever
+/// it comes from: its anchors where they hold both of its sides, else its
+/// declared width. 0 where it is as wide as its text.
+[[nodiscard]] inline float textWrapWidth(const Widget& w) {
+    if (anchorsSpanAxis(w.anchors, true))
+        return w.rectW > 0.0f ? w.rectW / (w.effScale > 0.0f ? w.effScale : 1.0f) : 0.0f;
+    return w.wrapsToWidth || (!w.autoSized && w.width > 0.0f) ? w.width : 0.0f;
+}
+
 class WidgetTree {
 public:
     WidgetTree();
@@ -1170,6 +1184,13 @@ public:
     /// The next widget at or above `from` waiting to be measured, taken off
     /// the list; zero when there are no more.
     uint32_t takeMeasureDirty(uint32_t from) { return measureDirty_.takeFrom(from); }
+    /// Whether a layout since the last call has changed the width a font
+    /// string's lines are broken at: it is measured, and laid out, again.
+    [[nodiscard]] bool takeWrapChanged() {
+        const bool was = wrapChanged_;
+        wrapChanged_ = false;
+        return was;
+    }
 
     /// A widget whose `visible` may differ from what the interface was last
     /// told, set wherever either changes; read by LuaEngine::updateVisibility.
@@ -1519,6 +1540,7 @@ private:
     uint32_t lastVisibleCount_ = 0;
     /// See markMeasureDirty, markVisibilityPending and markResizePending.
     IdBits measureDirty_;
+    bool wrapChanged_ = false;
     IdBits visibilityPending_;
     IdBits resizePending_;
     /// Every widget that has been `visible` since collectDrawOrder last saw it
