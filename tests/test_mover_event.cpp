@@ -55,6 +55,16 @@ TEST_CASE("Taking off and landing from flight", "[mover_event]") {
     CHECK(react(Opcode::CMSG_MOVE_SET_FLY, 0, false, false).play == Play::JumpLandRun);
 }
 
+TEST_CASE("A jump's and a flight's slots are asked whatever the seat", "[mover_event]") {
+    CHECK(react(Opcode::MSG_MOVE_JUMP, kForward, false, false).sound == Sound::JumpStart);
+    CHECK(react(Opcode::MSG_MOVE_JUMP, kForward, false, true).sound == Sound::JumpStart);
+    CHECK(react(Opcode::CMSG_MOVE_SET_FLY, kFlying, false, true).sound == Sound::JumpStart);
+    CHECK(react(Opcode::CMSG_MOVE_SET_FLY, kFlying, true, false).sound == Sound::None);
+    CHECK(react(Opcode::CMSG_MOVE_SET_FLY, 0, false, false).sound == Sound::JumpEnd);
+    CHECK(react(Opcode::CMSG_MOVE_KNOCK_BACK_ACK, 0, false, false).sound == Sound::None);
+    CHECK(react(Opcode::MSG_MOVE_STOP, 0, false, false).sound == Sound::None);
+}
+
 TEST_CASE("A heartbeat or a landing asks nothing here", "[mover_event]") {
     CHECK(react(Opcode::MSG_MOVE_HEARTBEAT, kForward, false, false).play == Play::Nothing);
     CHECK(react(Opcode::MSG_MOVE_FALL_LAND, kForward, false, false).play == Play::Nothing);

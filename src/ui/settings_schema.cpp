@@ -1266,7 +1266,7 @@ constexpr SettingDesc kSchema[] = {
      "Sound Effects", "Effects",
      "Off silences every effect below at once.", "", 1},
     {"effectsvolume", "All effects", SettingKind::Int, 0, 100, 5, "Sound Effects", "",
-     "One scale over the seven below. This is the slider the game's own\n"
+     "One scale over the five below. This is the slider the game's own\n"
      "Sound panel called Sound Effects.", "", 100},
     {"uivolume", "Interface", SettingKind::Int, 0, 100, 5, "Sound Effects", "",
      "Clicks, bag sounds and window noises.", "", 100},
@@ -1278,10 +1278,6 @@ constexpr SettingDesc kSchema[] = {
      "Jumping, landing, swimming and armour rustle.", "", 100},
     {"footstepvolume", "Footsteps", SettingKind::Int, 0, 100, 5, "Sound Effects", "",
      "Your own and others' footsteps, by the ground underfoot.", "", 100},
-    {"mountvolume", "Mounts", SettingKind::Int, 0, 100, 5, "Sound Effects", "",
-     "Hoofbeats, wingbeats and mount calls.", "", 70},
-    {"activityvolume", "Activity", SettingKind::Int, 0, 100, 5, "Sound Effects", "",
-     "Fishing, mining, forges and the rest of the world at work.", "", 100},
 
     // -------------------------------------------------------------------- Chat
     //

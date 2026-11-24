@@ -9,7 +9,6 @@
 #include "rendering/footprint_renderer.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/footstep_manager.hpp"
-#include "audio/mount_sound_manager.hpp"
 #include "addons/lua_api_registrations.hpp"
 
 #include <algorithm>
@@ -31,28 +30,6 @@ bool containsAnyToken(const std::string& text, std::initializer_list<const char*
         }
     }
     return false;
-}
-
-FootprintFallback fallbackForMount(audio::MountFamily family) {
-    switch (family) {
-        case audio::MountFamily::HORSE:
-        case audio::MountFamily::UNDEAD_HORSE:
-        case audio::MountFamily::RAM:
-        case audio::MountFamily::MECHANOSTRIDER:
-            return FootprintFallback::HOOF;
-        case audio::MountFamily::WOLF:
-        case audio::MountFamily::TIGER:
-            return FootprintFallback::PAW;
-        case audio::MountFamily::RAPTOR:
-        case audio::MountFamily::TALLSTRIDER:
-        case audio::MountFamily::DRAGON:
-            return FootprintFallback::CLAW;
-        case audio::MountFamily::KODO:
-            return FootprintFallback::CLOVEN;
-        case audio::MountFamily::UNKNOWN:
-            return FootprintFallback::BIPED;
-    }
-    return FootprintFallback::BIPED;
 }
 
 void spawnFootprint(Renderer* renderer, CharacterRenderer* characterRenderer,
@@ -196,6 +173,22 @@ void FootstepDriver::playWaterStepExtras(Renderer* renderer) const {
 
 // ── Footstep update (moved from AnimationController::updateFootsteps) ────────
 
+// What prints a mount's model leaves where the data names none, and whether
+// it strides on two legs, by its model's path.
+void FootstepDriver::setMountModel(const std::string& modelPath) {
+    std::string path = modelPath;
+    for (char& ch : path) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const auto has = [&](std::initializer_list<const char*> tokens) { return containsAnyToken(path, tokens); };
+    if (has({"tallstrider", "plainstrider", "hawkstrider"})) mountPrints_ = {FootprintFallback::CLAW, true};
+    else if (has({"wolf", "tiger", "nightsaber", "panther", "frostsaber"})) mountPrints_ = {FootprintFallback::PAW, false};
+    else if (has({"raptor"})) mountPrints_ = {FootprintFallback::CLAW, false};
+    else if (has({"kodo"})) mountPrints_ = {FootprintFallback::CLOVEN, false};
+    else if (has({"mechastrider", "mechanostrider"})) mountPrints_ = {FootprintFallback::HOOF, true};
+    else if (has({"ram", "horse"})) mountPrints_ = {FootprintFallback::HOOF, false};
+    else if (has({"dragon", "drake", "gryphon", "wyvern"})) mountPrints_ = {FootprintFallback::CLAW, true};
+    else mountPrints_ = {FootprintFallback::BIPED, false};
+}
+
 void FootstepDriver::update(float deltaTime, Renderer* renderer,
                              bool mounted, uint32_t mountInstanceId, bool taxiFlight,
                              bool isFootstepState) {
@@ -247,11 +240,6 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
                     return mountFootstepLastNormTime_ < eventNorm || eventNorm <= norm;
                 };
 
-                auto* mountSounds = renderer->getAudioCoordinator()->getMountSoundManager();
-                const auto family = mountSounds
-                    ? mountSounds->getCurrentMountFamily()
-                    : audio::MountFamily::UNKNOWN;
-
                 // Beat timing: prefer the model's authored $FSD footfall
                 // keyframes (exact hoof-strike sync). Models without them fall
                 // back to a synthetic gait: quadrupeds gallop - four beats
@@ -269,9 +257,7 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
                         }
                     }
                 } else {
-                    const bool biped = family == audio::MountFamily::MECHANOSTRIDER ||
-                                       family == audio::MountFamily::TALLSTRIDER ||
-                                       family == audio::MountFamily::DRAGON;
+                    const bool biped = mountPrints_.biped;
                     beat = biped
                         ? (crossed(0.25f) || crossed(0.75f))
                         : (crossed(0.05f) || crossed(0.20f) || crossed(0.35f) || crossed(0.50f));
@@ -286,7 +272,7 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
                         playWaterStepExtras(renderer);
                     } else if (showPrints) {
                         spawnFootprint(renderer, characterRenderer, mountInstanceId,
-                                       nextMountFootLeft_, fallbackForMount(family));
+                                       nextMountFootLeft_, mountPrints_.shape);
                         nextMountFootLeft_ = !nextMountFootLeft_;
                     }
                 }

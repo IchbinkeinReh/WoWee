@@ -23,8 +23,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/footstep_manager.hpp"
-#include "audio/activity_sound_manager.hpp"
-#include "audio/mount_sound_manager.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/movement_sound_manager.hpp"
 #include "rendering/swim_effects.hpp"
@@ -375,10 +373,7 @@ void AnimationController::setMounted(uint32_t mountInstId, uint32_t mountDisplay
     LOG_INFO("Mount configured: displayId=", mountDisplayId, " taxiFlight=", taxiFlight_);
     mountMotion_.reset();
 
-    if (renderer_->getAudioCoordinator()->getMountSoundManager()) {
-        bool isFlying = taxiFlight_;
-        renderer_->getAudioCoordinator()->getMountSoundManager()->onMount(mountDisplayId, isFlying, modelPath);
-    }
+    footstepDriver_.setMountModel(modelPath);
 }
 
 void AnimationController::clearMount() {
@@ -395,10 +390,6 @@ void AnimationController::clearMount() {
         cameraController->setMounted(false);
         cameraController->setMountHeightOffset(0.0f);
         cameraController->setMountPivot(std::nullopt);
-    }
-
-    if (renderer_->getAudioCoordinator()->getMountSoundManager()) {
-        renderer_->getAudioCoordinator()->getMountSoundManager()->onDismount();
     }
 }
 
@@ -537,16 +528,6 @@ void AnimationController::applyMountPositioning(float mountBob, float mountRoll,
 
 // ── The mount each frame ────────────────────────────────────────────────────
 
-void AnimationController::mountJumped() {
-    if (!isMounted()) return;
-    if (auto* sounds = renderer_->getAudioCoordinator()->getMountSoundManager()) sounds->playJumpSound();
-}
-
-void AnimationController::mountLanded() {
-    if (!isMounted()) return;
-    if (auto* sounds = renderer_->getAudioCoordinator()->getMountSoundManager()) sounds->playLandSound();
-}
-
 // What the mount plays is its rider's unit's (CharacterRenderer::
 // setRiderMount, rider_mount.hpp); here it goes where the player is, banks
 // in flight and carries its rider.
@@ -565,7 +546,6 @@ void AnimationController::updateMount(float deltaTime) {
     in.forwardOrBack = cameraController->isMovingForward() || cameraController->isMovingBackward();
     // In the air, not allowed to be: on the ground a flying mount runs.
     in.flying = cameraController->isFlightAirborne();
-    in.swimming = cameraController->isSwimming();
     in.taxiFlight = taxiFlight_;
     in.deltaTime = deltaTime;
     in.characterYaw = characterYaw;
@@ -603,10 +583,6 @@ void AnimationController::updateMount(float deltaTime) {
         characterRenderer->playAnimation(characterInstanceId, riderAnim, true);
     }
 
-    if (out.playIdleSound) {
-        if (auto* sounds = renderer_->getAudioCoordinator()->getMountSoundManager()) sounds->playIdleSound();
-    }
-
     // On a taxi the roll is the route's (setMountPitchRoll).
     applyMountPositioning(out.bob, taxiFlight_ ? mountRoll_ : out.roll, characterYaw);
 }
@@ -637,13 +613,6 @@ void AnimationController::updateFootsteps(float deltaTime) {
     footstepDriver_.update(deltaTime, renderer_, isMounted(), mountInstanceId_,
                             taxiFlight_,
                             renderer_->getCameraController() && renderer_->getCameraController()->isMoving());
-}
-
-// ── Activity SFX state tracking ──────────────────────────────────────────────
-
-void AnimationController::updateSfxState(float deltaTime) {
-    sfxStateDriver_.update(deltaTime, renderer_, isMounted(), taxiFlight_,
-                           footstepDriver_);
 }
 
 } // namespace rendering

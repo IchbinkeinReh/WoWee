@@ -922,8 +922,6 @@ set(WOWEE_SOURCES
     src/audio/audio_coordinator.cpp
     src/audio/music_manager.cpp
     src/audio/footstep_manager.cpp
-    src/audio/activity_sound_manager.cpp
-    src/audio/mount_sound_manager.cpp
     src/audio/npc_voice_manager.cpp
     src/audio/player_voice_manager.cpp
     src/audio/sound_filter.cpp
@@ -1228,7 +1226,6 @@ set(WOWEE_SOURCES
     src/rendering/animation/mover_event.cpp
     src/rendering/animation/emote_registry.cpp
     src/rendering/animation/footstep_driver.cpp
-    src/rendering/animation/sfx_state_driver.cpp
     src/rendering/animation/mount_motion.cpp
     src/rendering/animation/rider_mount.cpp
     src/rendering/loading_screen.cpp
@@ -1345,7 +1342,6 @@ set(WOWEE_HEADERS
     include/network/world_socket.hpp
     include/network/net_platform.hpp
 
-    include/platform/process.hpp
 
     include/auth/auth_handler.hpp
     include/auth/auth_opcodes.hpp
@@ -1369,8 +1365,6 @@ set(WOWEE_HEADERS
     include/audio/audio_engine.hpp
     include/audio/music_manager.hpp
     include/audio/footstep_manager.hpp
-    include/audio/activity_sound_manager.hpp
-    include/audio/mount_sound_manager.hpp
     include/audio/npc_voice_manager.hpp
     include/audio/player_voice_manager.hpp
     include/audio/ambient_sound_manager.hpp

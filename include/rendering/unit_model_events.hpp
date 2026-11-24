@@ -70,6 +70,16 @@ constexpr uint32_t kSlotStand = 5;      ///< $FDX
 constexpr uint32_t kSlotWingFlap = 7;   ///< $WNG
 constexpr uint32_t kSlotWingGlide = 10; ///< $WGG
 
+/// Which CreatureSoundData row a unit's slots, fidgets, footfalls and loop are
+/// read from (0x0071a3f0): its mount's (+0x978, the mount display's by
+/// 0x007195d0) while it rides one that has a row; else its own display's
+/// (+0x974), or the pet row that one names while the unit has a pet number.
+enum class SoundRow { Mount, Own, Pet };
+constexpr SoundRow soundRowOf(bool mountHasRow, uint32_t petNumber, int32_t petRow) {
+    if (mountHasRow) return SoundRow::Mount;
+    return petNumber != 0 && petRow > 0 ? SoundRow::Pet : SoundRow::Own;
+}
+
 /// The slots a jump's own sound is, asked outright (0x0073ed10, 0x0073d2b0):
 /// as the unit leaves the ground, and as it comes down again - a jump, a
 /// take-off into flight and a landing out of it. Only 30 of the 1306

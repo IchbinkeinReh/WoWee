@@ -61,13 +61,11 @@
 #include "game/lfg_update.hpp"
 #include "game/pet_action.hpp"
 #include "game/server_notices.hpp"
-#include "audio/activity_sound_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/combat_sound_manager.hpp"
 #include "audio/footstep_manager.hpp"
-#include "audio/mount_sound_manager.hpp"
 #include "audio/movement_sound_manager.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
@@ -1026,7 +1024,7 @@ static void applySoundCVars(lua_State* L) {
     }
 
     // The volume itself is a client setting now, reached through SetCVar, and
-    // applied by applyAudioVolumes as one scale over the seven effect volumes
+    // applied by applyAudioVolumes as one scale over the effect volumes
     // this client keeps separately. Only the switch is left here, and it zeroes
     // them on top of whatever that applied.
     // The world's reverb (0x004d0bc0, Sound_EnableReverb, off by default).
@@ -1037,8 +1035,6 @@ static void applySoundCVars(lua_State* L) {
         if (auto* m = ac->getCombatSoundManager())    m->setVolumeScale(0.0f);
         if (auto* m = ac->getMovementSoundManager())  m->setVolumeScale(0.0f);
         if (auto* m = ac->getFootstepManager())       m->setVolumeScale(0.0f);
-        if (auto* m = ac->getActivitySoundManager())  m->setVolumeScale(0.0f);
-        if (auto* m = ac->getMountSoundManager())     m->setVolumeScale(0.0f);
         if (auto* m = ac->getNpcVoiceManager())       m->setVolumeScale(0.0f);
         if (auto* m = ac->getPlayerVoiceManager())    m->setVolumeScale(0.0f);
         // The Effects channel: a doodad's fire or a spell's sound, which

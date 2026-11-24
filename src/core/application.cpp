@@ -40,6 +40,7 @@
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/jump_landing.hpp"
 #include "rendering/animation/mover_event.hpp"
+#include "rendering/unit_model_events.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/movement_limits.hpp"
 #include <bit>
@@ -87,7 +88,6 @@
 #include "rendering/world_text_renderer.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/footstep_manager.hpp"
-#include "audio/activity_sound_manager.hpp"
 #include "audio/audio_engine.hpp"
 #include "ui/screen_keyboard_sync.hpp"
 #include "ui/android_ime.hpp"
@@ -5971,17 +5971,22 @@ void Application::animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, b
     cr->setLocomotionSpeed(mountInstance != 0 ? mountInstance : instanceId, speed);
     const bool fellFar = playerAnimationSeen_.fellFar;
     syncPlayerAnimation(static_cast<const game::Unit&>(*self));
-    if (mounted && op == game::Opcode::MSG_MOVE_JUMP) ac->mountJumped();
-
+    // The jump's own sound, its mount's where it rides one (0x00747310).
+    const auto jumpSound = [&](uint32_t slot) {
+        if (entitySpawner_) entitySpawner_->playUnitJumpSound(static_cast<const game::Unit&>(*self), slot);
+    };
     if (op == game::Opcode::MSG_MOVE_FALL_LAND) {
-        if (mounted && launchedBefore) ac->mountLanded();
         const auto landed = rendering::landed(flagsBefore | (fellFar ? kMoveFallingFar : 0u), flags,
                                               launchedBefore, speed > speeds.walk + speeds.walk);
         switch (landed) {
             case rendering::Landed::Nothing: break;
             case rendering::Landed::Base: cr->playBaseAnimation(instanceId); break;
-            case rendering::Landed::End: cr->playAnimation(instanceId, rendering::anim::JUMP_END, false); break;
+            case rendering::Landed::End:
+                jumpSound(rendering::unit_event::kSlotJumpEnd);
+                cr->playAnimation(instanceId, rendering::anim::JUMP_END, false);
+                break;
             case rendering::Landed::LandRun:
+                jumpSound(rendering::unit_event::kSlotJumpEnd);
                 cr->playAnimation(instanceId, rendering::anim::JUMP_LAND_RUN, false);
                 break;
         }
@@ -5999,6 +6004,9 @@ void Application::animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, b
     const bool seatHolds = movement.transportSeat >= 0 && entitySpawner_ &&
                            (entitySpawner_->vehicleFlags(movement.transportGuid) & 0x4000000u) != 0;
     const me::Reaction r = me::react(op, flags, fallPlaying, seatHolds);
+    if (r.sound != me::Sound::None)
+        jumpSound(r.sound == me::Sound::JumpStart ? rendering::unit_event::kSlotJumpStart
+                                                  : rendering::unit_event::kSlotJumpEnd);
     switch (r.play) {
         case me::Play::Nothing: break;
         case me::Play::Base: cr->playBaseAnimation(instanceId); break;
@@ -8673,21 +8681,6 @@ void Application::spawnPlayerCharacter() {
                 static_cast<int>(spawnPos.z), ")");
         playerCharacterSpawned = true;
 
-        // Set voice profile to match character race/gender
-        if (auto* asm_ = audioCoordinator_ ? audioCoordinator_->getActivitySoundManager() : nullptr) {
-            // Voice art is filed under the same race folder as the models -
-            // Scourge for the Undead - so it comes from the one table in
-            // core/character_paths.hpp. The two names here were always equal.
-            const char* raceFolder = core::raceModelFolder(static_cast<uint32_t>(playerRace_));
-            const char* raceBase = raceFolder;
-            bool useFemaleVoice = (playerGender_ == game::Gender::FEMALE);
-            if (playerGender_ == game::Gender::NONBINARY && gameHandler) {
-                if (const game::Character* ch = gameHandler->getActiveCharacter()) {
-                    useFemaleVoice = ch->useFemaleModel;
-                }
-            }
-            asm_->setCharacterVoiceProfile(std::string(raceFolder), std::string(raceBase), !useFemaleVoice);
-        }
 
         // Track which character's appearance this instance represents so we can
         // respawn if the user logs into a different character without restarting.

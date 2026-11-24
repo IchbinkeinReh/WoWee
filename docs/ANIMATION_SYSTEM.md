@@ -43,7 +43,6 @@ body, and the upper body where the legs go on with another animation.
 | `weapon_type` | `WeaponLoadout`, the ranged weapon kinds |
 | `emote_registry` | Emotes.dbc: emote name and id to animation |
 | `footstep_driver` | The prints and splashes of the player's and its mount's steps |
-| `sfx_state_driver` | Landing and swimming sounds of the player |
 
 `AnimationController` (`include/rendering/animation_controller.hpp`) is the
 player's link between the camera controller and the renderer: it attaches the

@@ -199,8 +199,6 @@ public:
     int pendingMovementVolume = 100;
     int pendingFootstepVolume = 100;
     int pendingNpcVoiceVolume = 100;
-    int pendingMountVolume = 70;
-    int pendingActivityVolume = 100;
     bool pendingCharacterSpeech = true;
 
     // ---- Pending camera / controls ----

@@ -1192,7 +1192,7 @@ constexpr SettingGerman kGerman[] = {
      nullptr, "ENABLE_SOUNDFX", nullptr},
     {"effectsvolume",
      "Alle Effekte",
-     "Ein Regler über den sieben darunter. Dies ist der Regler, den das eigene Soundfenster des "
+     "Ein Regler über den fünf darunter. Dies ist der Regler, den das eigene Soundfenster des "
      "Spiels Soundeffekte nannte.",
      nullptr, nullptr, nullptr},
     {"uivolume",
@@ -1214,14 +1214,6 @@ constexpr SettingGerman kGerman[] = {
     {"footstepvolume",
      "Schritte",
      "Eure und fremde Schritte, nach dem Boden darunter.",
-     nullptr, nullptr, nullptr},
-    {"mountvolume",
-     "Reittiere",
-     "Hufschläge, Flügelschläge und Rufe der Reittiere.",
-     nullptr, nullptr, nullptr},
-    {"activityvolume",
-     "Tätigkeiten",
-     "Angeln, Bergbau, Schmieden und die übrige Welt bei der Arbeit.",
      nullptr, nullptr, nullptr},
     {"chatboxvisible",
      "Chateingabe stets zeigen",

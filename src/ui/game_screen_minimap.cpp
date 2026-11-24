@@ -39,8 +39,6 @@
 #include "audio/audio_engine.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/footstep_manager.hpp"
-#include "audio/activity_sound_manager.hpp"
-#include "audio/mount_sound_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/player_voice_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
@@ -1912,8 +1910,6 @@ void GameScreen::saveSettings() {
     out << "movement_volume=" << settingsPanel_.pendingMovementVolume << "\n";
     out << "footstep_volume=" << settingsPanel_.pendingFootstepVolume << "\n";
     out << "npc_voice_volume=" << settingsPanel_.pendingNpcVoiceVolume << "\n";
-    out << "mount_volume=" << settingsPanel_.pendingMountVolume << "\n";
-    out << "activity_volume=" << settingsPanel_.pendingActivityVolume << "\n";
     out << "character_speech=" << (settingsPanel_.pendingCharacterSpeech ? 1 : 0) << "\n";
 
     // Gameplay / display pacing
@@ -2263,8 +2259,6 @@ void GameScreen::loadSettings() {
             else if (key == "movement_volume") settingsPanel_.pendingMovementVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "footstep_volume") settingsPanel_.pendingFootstepVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "npc_voice_volume") settingsPanel_.pendingNpcVoiceVolume = std::clamp(std::stoi(val), 0, 100);
-            else if (key == "mount_volume") settingsPanel_.pendingMountVolume = std::clamp(std::stoi(val), 0, 100);
-            else if (key == "activity_volume") settingsPanel_.pendingActivityVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "character_speech") settingsPanel_.pendingCharacterSpeech = (std::stoi(val) != 0);
             // Gameplay / display pacing
             else if (key == "fullscreen") {

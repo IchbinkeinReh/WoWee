@@ -51,15 +51,15 @@ Reaction react(game::Opcode op, uint32_t flags, bool fallPlaying, bool seatHolds
         case Opcode::CMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK:
             return {(flags & kMoving) != 0 ? Play::Base : Play::Nothing, false};
         case Opcode::MSG_MOVE_JUMP:
-            return {seatHolds ? Play::Nothing : Play::JumpStart, true};
+            return {seatHolds ? Play::Nothing : Play::JumpStart, true, Sound::JumpStart};
         case Opcode::CMSG_MOVE_KNOCK_BACK_ACK:
             return {seatHolds ? Play::Nothing : Play::Fall, false};
         // Into flight JumpStart, unless it is falling; down from it
         // JumpLandRun.
         case Opcode::CMSG_MOVE_SET_FLY:
-            if ((flags & kFlying) == 0) return {seatHolds ? Play::Nothing : Play::JumpLandRun, false};
+            if ((flags & kFlying) == 0) return {seatHolds ? Play::Nothing : Play::JumpLandRun, false, Sound::JumpEnd};
             if (fallPlaying) return {Play::Base, false};
-            return {seatHolds ? Play::Nothing : Play::JumpStart, false};
+            return {seatHolds ? Play::Nothing : Play::JumpStart, false, Sound::JumpStart};
         default:
             return {};
     }

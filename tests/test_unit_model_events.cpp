@@ -251,6 +251,15 @@ TEST_CASE("a unit's loop sound plays while it lives and does not feign death (0x
     CHECK(ue::kLoopFadeOutSeconds == 0.5f);
 }
 
+TEST_CASE("a rider's slots are its mount's (0x0071a3f0)", "[unit_model_events]") {
+    using namespace wowee::rendering::unit_event;
+    CHECK(soundRowOf(true, 0, 0) == SoundRow::Mount);
+    CHECK(soundRowOf(true, 5, 12) == SoundRow::Mount);
+    CHECK(soundRowOf(false, 0, 12) == SoundRow::Own);
+    CHECK(soundRowOf(false, 5, 12) == SoundRow::Pet);
+    CHECK(soundRowOf(false, 5, 0) == SoundRow::Own);
+}
+
 TEST_CASE("a model's cast and bow release events let queued missiles go", "[unit_model_events]") {
     using namespace wowee::rendering::unit_event;
     CHECK(releasesQueuedMissiles(fourCC("$CSL")));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -11,6 +12,7 @@ namespace audio { enum class FootstepSurface : uint8_t; }
 namespace rendering {
 
 class Renderer;
+enum class FootprintFallback : uint8_t;
 
 // ============================================================================
 // FootstepDriver - extracted from AnimationController
@@ -28,6 +30,9 @@ public:
     void update(float deltaTime, Renderer* renderer,
                 bool mounted, uint32_t mountInstanceId, bool taxiFlight,
                 bool isFootstepState);
+
+    /// The mount's model, "" or any other for one without prints of its own.
+    void setMountModel(const std::string& modelPath);
 
     /// Detect if a footstep event should trigger based on animation phase crossing.
     /// When the model has authored $FSD footfall keyframes, pass them as
@@ -61,6 +66,11 @@ private:
     bool mountFootstepNormInitialized_ = false;
     bool nextPlayerFootLeft_ = true;
     bool nextMountFootLeft_ = true;
+    struct MountPrints {
+        FootprintFallback shape{};
+        bool biped = false;
+    };
+    MountPrints mountPrints_;
 };
 
 } // namespace rendering

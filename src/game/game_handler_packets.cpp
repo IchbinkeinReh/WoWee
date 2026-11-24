@@ -37,7 +37,6 @@
 #include "rendering/post_process_pipeline.hpp"
 #include "rendering/spell_visual_system.hpp"
 #include "audio/audio_coordinator.hpp"
-#include "audio/activity_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "pipeline/dbc_layout.hpp"

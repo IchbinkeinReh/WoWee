@@ -55,8 +55,6 @@
 #include "audio/footstep_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/player_voice_manager.hpp"
-#include "audio/mount_sound_manager.hpp"
-#include "audio/activity_sound_manager.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -1417,8 +1415,6 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "spellvolume",     .asInt  = &SettingsPanel::pendingSpellVolume},
     {.key = "movementvolume",  .asInt  = &SettingsPanel::pendingMovementVolume},
     {.key = "footstepvolume",  .asInt  = &SettingsPanel::pendingFootstepVolume},
-    {.key = "mountvolume",     .asInt  = &SettingsPanel::pendingMountVolume},
-    {.key = "activityvolume",  .asInt  = &SettingsPanel::pendingActivityVolume},
     {.key = "npcvoicevolume",  .asInt  = &SettingsPanel::pendingNpcVoiceVolume},
     {.key = "characterspeech", .asBool = &SettingsPanel::pendingCharacterSpeech},
 
@@ -1475,13 +1471,13 @@ const FieldBinding* findFieldBinding(const std::string& key) {
 ///
 /// Every one of them does, including the two that are not volumes: character
 /// speech switches the player voice manager on and off inside the same call,
-/// and the effects slider scales seven of the others.
+/// and the effects slider scales six of the others.
 bool isVolumeKey(const std::string& key) {
     return key == "mastervolume" || key == "mutesound" ||
            key == "effectsvolume" || key == "musicvolume" || key == "ambientvolume" ||
            key == "uivolume" || key == "combatvolume" ||
            key == "spellvolume" || key == "movementvolume" || key == "footstepvolume" ||
-           key == "mountvolume" || key == "activityvolume" || key == "npcvoicevolume" ||
+           key == "npcvoicevolume" ||
            key == "characterspeech";
 }
 
@@ -2067,10 +2063,6 @@ void SettingsPanel::applyAudioVolumes(audio::AudioCoordinator* ac) {
         // the character silent for good once that switch had been off.
         playerVoice->setVolumeScale(fx);
     }
-    if (auto* mount = ac->getMountSoundManager())
-        mount->setVolumeScale(fx * pendingMountVolume / 100.0f);
-    if (auto* activity = ac->getActivitySoundManager())
-        activity->setVolumeScale(fx * pendingActivityVolume / 100.0f);
 }
 
 

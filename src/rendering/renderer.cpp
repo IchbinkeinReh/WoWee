@@ -100,8 +100,6 @@
 #include "audio/audio_engine.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/footstep_manager.hpp"
-#include "audio/activity_sound_manager.hpp"
-#include "audio/mount_sound_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/player_voice_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
@@ -3842,7 +3840,6 @@ void Renderer::update(float deltaTime) {
     { WOWEE_PROFILE_SCOPE("footsteps", Cpu); if (animationController_) animationController_->updateFootsteps(deltaTime); }
 
     // Activity SFX + mount ambient sounds: delegated to AnimationController (§4.2)
-    { WOWEE_PROFILE_SCOPE("sfx state", Cpu); if (animationController_) animationController_->updateSfxState(deltaTime); }
 
     // Ambient environmental sounds + zone/music transitions (delegated to AudioCoordinator)
     if (audioCoordinator_) {
@@ -5990,12 +5987,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         audioCoordinator_->getMusicManager()->initialize(assetManager);
         if (audioCoordinator_->getFootstepManager()) {
             audioCoordinator_->getFootstepManager()->initialize(assetManager);
-        }
-        if (audioCoordinator_->getActivitySoundManager()) {
-            audioCoordinator_->getActivitySoundManager()->initialize(assetManager);
-        }
-        if (audioCoordinator_->getMountSoundManager()) {
-            audioCoordinator_->getMountSoundManager()->initialize(assetManager);
         }
         if (audioCoordinator_->getNpcVoiceManager()) {
             audioCoordinator_->getNpcVoiceManager()->initialize(assetManager);

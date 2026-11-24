@@ -7,12 +7,8 @@ namespace wowee {
 namespace rendering {
 
 void MountMotion::reset() {
-    idleSoundTimer_ = 0.0f;
     prevYaw_ = 0.0f;
     roll_ = 0.0f;
-    std::random_device rd;
-    rng_.seed(rd());
-    nextIdleSoundTime_ = std::uniform_real_distribution<float>(45.0f, 90.0f)(rng_);
 }
 
 MountMotion::Output MountMotion::update(const Input& in) {
@@ -55,19 +51,6 @@ MountMotion::Output MountMotion::update(const Input& in) {
     if (in.moving && in.haveAnimation && in.animationDuration > 1.0f) {
         const float norm = std::fmod(in.animationTime, in.animationDuration) / in.animationDuration;
         out.bob = std::sin(norm * core::coords::TWO_PI * (in.taxiFlight ? 2.0f : 1.0f)) * 0.12f;
-    }
-
-    // ── Idle ambient sounds ─────────────────────────────────────────────
-    if (in.taxiFlight) return out;
-    if (in.moving || in.swimming) {
-        idleSoundTimer_ = 0.0f;
-        return out;
-    }
-    idleSoundTimer_ += dt;
-    if (idleSoundTimer_ >= nextIdleSoundTime_) {
-        out.playIdleSound = true;
-        idleSoundTimer_ = 0.0f;
-        nextIdleSoundTime_ = std::uniform_real_distribution<float>(45.0f, 90.0f)(rng_);
     }
     return out;
 }

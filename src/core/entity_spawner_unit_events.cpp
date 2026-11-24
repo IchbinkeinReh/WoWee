@@ -114,28 +114,38 @@ bool petVoiceAllowed(const game::Unit& unit) {
 
 int32_t EntitySpawner::unitSoundRow(const game::Unit& unit, bool petRow) const {
     // The unit's display's CreatureSoundData row (+0x974), and - for the
-    // fidgets and the slots - its pet row in its place while the unit has a
-    // pet number (0x0071a3f0).
+    // fidgets, the slots, the footfalls and the loop - its mount's or its pet
+    // row in its place (0x0071a3f0).
     if (!assetManager_) return -1;
     auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
     auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
     auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
     if (!displays || !models || !sounds || sounds->getFieldCount() < ue::kColumnCount) return -1;
-    const int32_t display = displays->findRecordById(unit.getDisplayId());
-    if (display < 0 || displays->getFieldCount() <= kDisplaySoundColumn) return -1;
-    uint32_t soundId = displays->getUInt32(static_cast<uint32_t>(display), kDisplaySoundColumn);
-    if (soundId == 0 && models->getFieldCount() > kModelSoundColumn) {
+    // A display's: the row it names, else its model's (0x007195d0).
+    const auto rowOfDisplay = [&](uint32_t displayId) -> int32_t {
+        const int32_t display = displays->findRecordById(displayId);
+        if (display < 0 || displays->getFieldCount() <= kDisplaySoundColumn) return -1;
+        const uint32_t named = displays->getUInt32(static_cast<uint32_t>(display), kDisplaySoundColumn);
+        if (const int32_t row = named != 0 ? sounds->findRecordById(named) : -1; row >= 0) return row;
+        if (models->getFieldCount() <= kModelSoundColumn) return -1;
         const int32_t model =
             models->findRecordById(displays->getUInt32(static_cast<uint32_t>(display), kDisplayModelColumn));
-        if (model >= 0) soundId = models->getUInt32(static_cast<uint32_t>(model), kModelSoundColumn);
+        const uint32_t modelsRow = model >= 0 ? models->getUInt32(static_cast<uint32_t>(model), kModelSoundColumn) : 0u;
+        return modelsRow != 0 ? sounds->findRecordById(modelsRow) : -1;
+    };
+    const int32_t own = rowOfDisplay(unit.getDisplayId());
+    if (!petRow) return own;
+    const int32_t mount = unit.getMountDisplayId() != 0 ? rowOfDisplay(unit.getMountDisplayId()) : -1;
+    const uint16_t petField = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
+    const uint32_t petNumber = petField != 0xFFFF ? unit.getField(petField) : 0u;
+    const auto pet =
+        own >= 0 ? static_cast<int32_t>(sounds->getUInt32(static_cast<uint32_t>(own), ue::kColumnPetRow)) : 0;
+    switch (ue::soundRowOf(mount >= 0, petNumber, pet)) {
+    case ue::SoundRow::Mount: return mount;
+    case ue::SoundRow::Pet: return sounds->findRecordById(static_cast<uint32_t>(pet));
+    case ue::SoundRow::Own: break;
     }
-    int32_t row = soundId != 0 ? sounds->findRecordById(soundId) : -1;
-    if (row < 0 || !petRow) return row;
-    const uint16_t petNumber = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
-    if (petNumber == 0xFFFF || unit.getField(petNumber) == 0) return row;
-    const auto pet = static_cast<int32_t>(sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnPetRow));
-    if (pet > 0) row = sounds->findRecordById(static_cast<uint32_t>(pet));
-    return row;
+    return own;
 }
 
 void EntitySpawner::playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at) {

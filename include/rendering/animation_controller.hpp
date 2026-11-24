@@ -7,7 +7,6 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include "rendering/animation/footstep_driver.hpp"
-#include "rendering/animation/sfx_state_driver.hpp"
 #include "rendering/animation/weapon_type.hpp"
 #include "rendering/animation/body_yaw.hpp"
 #include "rendering/animation/mount_motion.hpp"
@@ -46,7 +45,6 @@ public:
     void updateFootsteps(float deltaTime);
     // Tracks state transitions for activity SFX (jump, landing, swim) and
     // mount ambient sounds.
-    void updateSfxState(float deltaTime);
     // Store per-frame delta time (used inside animation state machine).
     void setDeltaTime(float dt) { lastDeltaTime_ = dt; }
 
@@ -123,10 +121,6 @@ public:
     void setTaxiFlight(bool onTaxi) { taxiFlight_ = onTaxi; }
     void setMountPitchRoll(float pitch, float roll) { mountPitch_ = pitch; mountRoll_ = roll; }
     void clearMount();
-    /// The player's jump, and a jump's landing, on its mount: the mount's
-    /// sounds for them.
-    void mountJumped();
-    void mountLanded();
     [[nodiscard]] bool isMounted() const { return mountInstanceId_ != 0; }
     [[nodiscard]] uint32_t getMountInstanceId() const { return mountInstanceId_; }
 
@@ -145,7 +139,6 @@ private:
     FootstepDriver footstepDriver_;
 
     // ── SFX transition state (delegated to SfxStateDriver) ───────────────
-    SfxStateDriver sfxStateDriver_;
 
     // ── Melee combat (needs renderer for sequence queries) ───────────────
     uint32_t meleeAnimId_ = 0;

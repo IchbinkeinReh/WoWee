@@ -28,10 +28,15 @@ enum class Play : uint8_t {
     JumpLandRun,  // 0xbb, down from flight
 };
 
+/// The jump's slot asked outright with it, whether or not the seat keeps the
+/// animation from it (vtable +0x118, unit_event::kSlotJumpStart / kSlotJumpEnd).
+enum class Sound : uint8_t { None, JumpStart, JumpEnd };
+
 struct Reaction {
     Play play = Play::Nothing;
     /// 0x0072afe0: the bow pulled (+0xa38 0x4000) let go.
     bool releasesBow = false;
+    Sound sound = Sound::None;
 };
 
 /// 0x0073ed10 for an event of the active player's. `flags` are its movement

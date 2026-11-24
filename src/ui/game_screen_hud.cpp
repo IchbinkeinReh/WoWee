@@ -31,8 +31,6 @@
 #include "audio/music_manager.hpp"
 #include "game/zone_manager.hpp"
 #include "audio/footstep_manager.hpp"
-#include "audio/activity_sound_manager.hpp"
-#include "audio/mount_sound_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
