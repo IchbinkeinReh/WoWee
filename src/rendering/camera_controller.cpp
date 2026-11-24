@@ -2130,11 +2130,16 @@ void CameraController::update(float deltaTime) {
     // Up/Down move, Left/Right turn (strafe stays on Q/E).
     // MoveForwardStart() and the rest hold their control the way the key does.
     const auto held = [this](uint32_t bit) { return (bindingControls_ & bit) != 0; };
-    bool keyW = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_W) || input.isKeyPressed(SDL_SCANCODE_UP) || held(kControlForward));
-    bool keyS = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_S) || input.isKeyPressed(SDL_SCANCODE_DOWN) || held(kControlBackward));
+    //
+    // The arrows are the game's while a line is typed into the chat too, with
+    // Alt they are its box's (0x00967760).
+    const bool arrowsFree = !ImGui::GetIO().WantTextInput && !cinematicKeysHeld_ && ui::editBoxLeavesArrows();
+    const auto arrow = [&](SDL_Scancode key) { return (!uiWantsKeyboard || arrowsFree) && input.isKeyPressed(key); };
+    bool keyW = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_W) || held(kControlForward))) || arrow(SDL_SCANCODE_UP));
+    bool keyS = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_S) || held(kControlBackward))) || arrow(SDL_SCANCODE_DOWN));
     // TurnLeftStart()/TurnRightStart() hold a turn the way the key does.
-    bool keyA = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_A) || input.isKeyPressed(SDL_SCANCODE_LEFT) || bindingTurnLeft_);
-    bool keyD = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_D) || input.isKeyPressed(SDL_SCANCODE_RIGHT) || bindingTurnRight_);
+    bool keyA = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_A) || bindingTurnLeft_)) || arrow(SDL_SCANCODE_LEFT));
+    bool keyD = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_D) || bindingTurnRight_)) || arrow(SDL_SCANCODE_RIGHT));
     bool keyQ = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_Q) || held(kControlStrafeLeft));
     bool keyE = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_E) || held(kControlStrafeRight));
     bool shiftDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LSHIFT) || input.isKeyPressed(SDL_SCANCODE_RSHIFT));
@@ -2565,19 +2570,19 @@ void CameraController::update(float deltaTime) {
             input.isKeyPressed(SDL_SCANCODE_W) || input.isKeyPressed(SDL_SCANCODE_S) ||
             input.isKeyPressed(SDL_SCANCODE_A) || input.isKeyPressed(SDL_SCANCODE_D) ||
             input.isKeyPressed(SDL_SCANCODE_Q) || input.isKeyPressed(SDL_SCANCODE_E) ||
-            input.isKeyPressed(SDL_SCANCODE_UP) || input.isKeyPressed(SDL_SCANCODE_DOWN) ||
-            input.isKeyPressed(SDL_SCANCODE_LEFT) || input.isKeyPressed(SDL_SCANCODE_RIGHT) ||
             input.isKeyPressed(SDL_SCANCODE_SPACE) ||
             held(kControlForward | kControlBackward | kControlStrafeLeft |
                  kControlStrafeRight | kControlAscend) ||
             bindingTurnLeft_ || bindingTurnRight_);
+        const bool anyArrow = arrow(SDL_SCANCODE_UP) || arrow(SDL_SCANCODE_DOWN) || arrow(SDL_SCANCODE_LEFT) ||
+                              arrow(SDL_SCANCODE_RIGHT);
         // Not gated on uiWantsKeyboard, which is a different question, and not
         // on the interface wanting the mouse either: both flags are already
         // cleared at the press when it did.
         const bool mouseWalk = leftMouseDown && rightMouseDown;
         // A click-to-move stands the player as it starts (0x00727400 ->
         // 0x006dcb40(0)).
-        if (anyMoveKey || mouseWalk || clickToMoveActive_) sitting = false;
+        if (anyMoveKey || anyArrow || mouseWalk || clickToMoveActive_) sitting = false;
     }
 
     // Notify server when the player stands up via local input

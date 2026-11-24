@@ -108,10 +108,12 @@ bool readDimension(const XmlNode& node, float& x, float& y) {
 
 /// The argument names a handler's body expects to find in scope. Blizzard's
 /// inline scripts use them without declaring them, so they have to be the
-/// function's parameters - under the client's own names ("return
-/// function(self,x,y,w,h) %s end" and its like): an edit box in a scroll frame
-/// was told its caret's height under a name no script reads, and what the
-/// user typed (userInput) looked like what a script had put there.
+/// function's parameters.
+///
+/// The names are the client's own, written where each kind of frame looks its
+/// handler up - "return function(self,x,y,w,h) %s end" - and a body reads any
+/// other name as a global: 0x0048e680 the frames', 0x009628f0 the edit box's,
+/// 0x0061a280 the tooltip's. A handler that has none takes self alone.
 std::string scriptParameters(const std::string& script) {
     if (script == "OnUpdate")        return "self, elapsed";
     if (script == "OnEvent")         return "self, event, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9";
@@ -121,12 +123,11 @@ std::string scriptParameters(const std::string& script) {
     if (script == "OnDoubleClick")   return "self, button";
     if (script == "OnMouseDown" ||
         script == "OnMouseUp")       return "self, button";
-    if (script == "OnDragStart" ||
-        script == "OnDragStop" ||
-        script == "OnReceiveDrag")   return "self, button";
+    if (script == "OnDragStart")     return "self, button";
     if (script == "OnEnter" ||
         script == "OnLeave")         return "self, motion";
-    if (script == "OnChar")          return "self, text";
+    if (script == "OnChar" ||
+        script == "OnCharComposition") return "self, text";
     if (script == "OnKeyDown" ||
         script == "OnKeyUp")         return "self, key";
     if (script == "OnValueChanged")  return "self, value";
@@ -134,11 +135,9 @@ std::string scriptParameters(const std::string& script) {
     if (script == "OnMouseWheel")    return "self, delta";
     if (script == "OnSizeChanged")   return "self, w, h";
     if (script == "OnAttributeChanged") return "self, name, value";
-    if (script == "OnHyperlinkClick" ||
-        script == "OnHyperlinkEnter" ||
-        script == "OnHyperlinkLeave") return "self, link, text, button";
-    if (script == "OnTooltipSetItem" ||
-        script == "OnTooltipSetUnit") return "self";
+    if (script == "OnHyperlinkClick") return "self, link, text, button";
+    if (script == "OnHyperlinkEnter" ||
+        script == "OnHyperlinkLeave") return "self, link, text";
     // Scrolling. UIPanelScrollFrameTemplate's own OnVerticalScroll body opens
     // with scrollbar:SetValue(offset), and without the name that was nil on
     // every scroll frame in the interface.
@@ -151,7 +150,8 @@ std::string scriptParameters(const std::string& script) {
     if (script == "OnTooltipAddMoney") return "self, cost, maxcost";
     if (script == "OnMovieShowSubtitle")       return "self, text";
     if (script == "OnInputLanguageChanged")    return "self, language";
-    if (script == "OnFinished")        return "self, requested";
+    if (script == "OnFinished" ||
+        script == "OnStop")            return "self, requested";
     if (script == "OnLoop")            return "self, loopState";
     // OnLoad, OnShow, OnHide and the rest take only self.
     return "self";

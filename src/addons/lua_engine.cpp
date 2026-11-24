@@ -9530,7 +9530,19 @@ int lua_EditBox_SetText(lua_State* L) {
         callScriptOnTable(L, 1, "OnTextSet", 0);
         inSetText = false;
     }
-    queueTextChanged(L, 1);
+    queueTextChanged(L, 1, /*userInput=*/false);
+}
+
+/// An edit box keeps its own text, so SetText on one is not the font string's.
+/// FrameXML uses the same name for both and the widget decides which it means.
+int lua_EditBox_SetText(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetText(\"text\")", usageName(L, 1));   // 0x00975e80
+    // OnTextSet is the counterpart to OnTextChanged for a text set from code.
+    // The chat box declares it and runs ChatEdit_ParseText, which is what
+    // reads a leading /w or /g and switches the box's channel.
+    setEditText(L, *w, luaL_optstring(L, 2, ""));
     // Not fired here, deferred - the reasoning, and what it cost while nothing
     // fired at all:, and this is not because it
     // should not be - WoW fires it for a text set from code as well as for
@@ -9584,9 +9596,7 @@ int lua_EditBox_SetNumber(lua_State* L) {
     } else {
         snprintf(buf, sizeof(buf), "%g", value);
     }
-    w->editText = buf;
-    w->cursorPos = w->editText.size();
-    queueTextChanged(L, 1);
+    setEditText(L, *w, buf);
     // Deferred, not fired here, for the reason written out at SetText above: WoW fires
     // one and defers it, and firing it synchronously breaks the caller that
     // needs it most.
@@ -9599,16 +9609,10 @@ int lua_EditBox_SetNumber(lua_State* L) {
 /// the method fell to the no-op catch-all, so the history was always empty
 /// and the up arrow had nothing to recall.
 ///
-/// A repeat of the line already at the top is not stored again - sending the
-/// same thing twice should not need two presses to step past - and the list is
-/// capped the way WoW's is, oldest dropped first.
+/// A ring (ui/edit_history.hpp).
 int lua_EditBox_SetHistoryLines(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (!w) return 0;
-    w->editHistoryLines = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (static_cast<int>(w->editHistory.size()) > w->editHistoryLines) {
-        w->editHistory.resize(static_cast<size_t>(std::max(0, w->editHistoryLines)));
-    }
+    if (w) w->editHistory.keep(static_cast<int>(luaL_optnumber(L, 2, 0)));
     return 0;
 }
 /// SetHistoryLines(numLines) (0x00976770): a number that truncates above
@@ -9633,7 +9637,6 @@ int lua_EditBox_ClearHistory(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w || !w->isEditBox) return 0;
     w->editHistory.clear();
-    w->editHistoryPos = -1;
     return 0;
 }
 
@@ -9652,7 +9655,7 @@ int lua_EditBox_GetCountInvisibleLetters(lua_State* L) {
 
 int lua_EditBox_GetHistoryLines(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushnumber(L, w ? w->editHistoryLines : 0);
+    lua_pushnumber(L, w ? w->editHistory.kept() : 0);
     return 1;
 }
 /// SetAltArrowKeyMode / GetAltArrowKeyMode (0x00976890, 0x009768e0): the
@@ -9678,20 +9681,9 @@ int lua_EditBox_SetIgnoreArrows(lua_State* L) {
 int lua_EditBox_AddHistoryLine(lua_State* L) {
     // 0x00976110 counts the arguments: the box and one more, exactly.
     if (lua_gettop(L) != 2) return luaL_error(L, "Usage: %s:AddHistoryLine(\"text\")", usageName(L, 1));
-    auto* w = widgetOf(L, 1);
-    const char* text = luaL_optstring(L, 2, "");
-    if (!w || !text || !*text) return 0;
-    // What the box was declared to keep. Several ask for none outright - the
-    // money fields, the mail recipient - and a hardcoded number here kept
-    // history in boxes that said not to.
-    if (w->editHistoryLines <= 0) return 0;
-    if (w->editHistory.empty() || w->editHistory.back() != text) {
-        w->editHistory.emplace_back(text);
-        while (static_cast<int>(w->editHistory.size()) > w->editHistoryLines) {
-            w->editHistory.erase(w->editHistory.begin());
-        }
-    }
-    w->editHistoryPos = -1;
+    // What the box was declared to keep: several ask for none outright - the
+    // money fields, the mail recipient.
+    if (auto* w = widgetOf(L, 1)) w->editHistory.add(luaL_optstring(L, 2, ""));
     return 0;
 }
 
@@ -9751,8 +9743,10 @@ static bool insertEditText(wowee::ui::Widget& w, const std::string& add) {
 int lua_EditBox_Insert(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
-    const std::string add = luaL_optstring(L, 2, "");
-    insertEditText(*w, add);   // 0x00975e10
+    // 0x00975e10: nothing for anything but a string, and the box is told its
+    // text changed by the player.
+    if (!lua_isstring(L, 2)) return 0;
+    if (insertEditText(*w, lua_tostring(L, 2))) queueTextChanged(L, 1, /*userInput=*/true);
     return 0;
 }
 int lua_MessageFrame_SetPadding(lua_State* L) {
@@ -10955,6 +10949,8 @@ static int lua_CreateFrame(lua_State* L) {
                 w->mouseEnabled = true;
                 lua_pushboolean(L, 1);
                 lua_setfield(L, -2, "__isEditBox");
+                // A new one owes an OnTextChanged (0x00966b70).
+                if (auto* engine = engineFrom(L)) engine->noteTextChanged(id, /*userInput=*/false);
             }
             if (w->isSlider) w->mouseEnabled = true;
         }
@@ -13648,14 +13644,9 @@ void LuaEngine::registerCoreAPI() {
         // An edit box keeps its own text; a button shows its font string's.
         // FrameXML calls SetText on both and the widget decides which it means.
         "function mt:SetText(text, r, g, b)\n"
-        // OnTextSet belongs to the box, not to the typing: it fires when the
-        // text is *set* rather than entered, which is how the chat box learns
-        // that something put a channel prefix in it. Declared on the chat edit
-        // box and dispatched by nothing until now.
+        // With OnTextSet, which the setter fires: once.
         "    if self.__isEditBox then\n"
         "        __WoweeEditSetText(self, text)\n"
-        "        local h = self.__scripts and self.__scripts.OnTextSet\n"
-        "        if h then h(self) end\n"
         "        return\n"
         "    end\n"
         // A tooltip's SetText is its first line, not a font string's text.
@@ -14046,9 +14037,8 @@ void LuaEngine::registerCoreAPI() {
     lua_newtable(L_);
     lua_setglobal(L_, "__WoweeOnUpdateFrames");
 
-    // Edit boxes whose text was set from code and still owe an OnTextChanged.
-    lua_newtable(L_);
-    lua_setglobal(L_, "__WoweePendingTextChanged");
+    // Edit boxes that still owe an OnTextChanged.
+    textChanges_.clear();
 
     // Frames shown that owe an OnAnimFinished - see queueAnimFinished.
     lua_newtable(L_);
@@ -16677,6 +16667,14 @@ void LuaEngine::fireCursorChanged(uint32_t wid) {
                             -static_cast<double>(line) * lineH, 0.0, lineH);
 }
 
+void LuaEngine::fireTextChanged(uint32_t wid, bool userInput) {
+    fireCursorChanged(wid);
+    const int handlerIdx = beginFrameScript(wid, "OnTextChanged");
+    if (handlerIdx == 0) return;
+    lua_pushboolean(L_, userInput ? 1 : 0);
+    finishFrameScript(wid, "OnTextChanged", handlerIdx, 2);
+}
+
 void LuaEngine::callFrameScript4Numbers(uint32_t wid, const char* script,
                                         double a, double b, double c, double d) {
     const int handlerIdx = beginFrameScript(wid, script);
@@ -16686,15 +16684,6 @@ void LuaEngine::callFrameScript4Numbers(uint32_t wid, const char* script,
     lua_pushnumber(L_, c);
     lua_pushnumber(L_, d);
     finishFrameScript(wid, script, handlerIdx, 5);
-}
-
-void LuaEngine::callTextChanged(uint32_t wid, bool userInput) {
-    // 0x00965460: whether the user typed it (+0x2a4 0x8), which the name
-    // completion of the chat box and the letter asks.
-    const int handlerIdx = beginFrameScript(wid, "OnTextChanged");
-    if (handlerIdx == 0) return;
-    lua_pushboolean(L_, userInput ? 1 : 0);
-    finishFrameScript(wid, "OnTextChanged", handlerIdx, 2);
 }
 
 void LuaEngine::callFrameScriptNumber(uint32_t wid, const char* script, double arg) {
@@ -17254,13 +17243,12 @@ void LuaEngine::dispatchText(const char* utf8) {
     // and each handler it reaches is run under its own taint (pcallScript).
     taint::Quiet quiet;
     if (!L_ || focusedWid_ == 0 || !utf8) return;
+    settleTextChanged(focusedWid_);   // 0x00967760
     auto* w = widgets_.get(focusedWid_);
     if (!w || !w->isEditBox) return;
 
     std::string add(utf8);
     if (add.empty()) return;
-    // Typing leaves the history, for the same reason SetText does.
-    w->editHistoryPos = -1;
     // One character at a time, as the client takes them (0x00965ce0, and
     // a paste through it too, 0x00965ed0). A control character is dropped,
     // except a tab, which is four spaces, and a line break in a multi-line
@@ -17290,8 +17278,7 @@ void LuaEngine::dispatchText(const char* utf8) {
 
     // The handler that tells a search field to filter, and a chat box to look
     // for a channel prefix.
-    fireCursorChanged(focusedWid_);
-                callTextChanged(focusedWid_, true);
+    fireTextChanged(focusedWid_, /*userInput=*/true);
     // A space is its own handler, and the chat box is what wants it: typing
     // "/w Bob " is how a whisper gets its target, and ChatEdit_OnSpacePressed
     // is what reads the name out and turns the box into a whisper with a
@@ -17734,9 +17721,26 @@ bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
     return taken;
 }
 
+void LuaEngine::walkEditHistory(bool on) {
+    auto* w = widgets_.get(focusedWid_);
+    if (!w) return;
+    const std::string* line = on ? w->editHistory.next() : w->editHistory.previous();
+    if (!line) return;
+    // As SetText has it (0x00966580): nothing for the text that is there.
+    w->hasSelection = false;
+    if (*line == w->editText) return;
+    const std::string text = *line;
+    w->editText.clear();
+    w->cursorPos = 0;
+    insertEditText(*w, text);
+    noteTextChanged(focusedWid_, /*userInput=*/false);
+    callFrameScript(focusedWid_, "OnTextSet");
+}
+
 void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
     taint::Quiet quiet;   // as dispatchText
     if (!L_ || focusedWid_ == 0) return;
+    settleTextChanged(focusedWid_);   // 0x00967760
     auto* w = widgets_.get(focusedWid_);
     if (!w || !w->isEditBox) return;
 
@@ -17747,7 +17751,13 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
     // The clipboard comes in as one piece of text and a chat line is one line,
     // so the newlines a copied block brings are turned into spaces rather than
     // dropped: two lines pasted together should not become one word.
-    if (ctrlHeld && (sdlKeycode == 'v' || sdlKeycode == 'V')) {
+    //
+    // Shift+Insert pastes as Ctrl+V does, Ctrl+Insert copies and Shift+Delete
+    // cuts as Ctrl+C and Ctrl+X do (0x00967760's 0x208 and 0x209).
+    constexpr int kInsertKey = 0x40000049;  // SDLK_INSERT
+    constexpr int kDeleteKey = 0x4000004C;  // SDLK_DELETE
+    const int letter = sdlKeycode >= 'A' && sdlKeycode <= 'Z' ? sdlKeycode - 'A' + 'a' : sdlKeycode;
+    if ((ctrlHeld && letter == 'v') || (!ctrlHeld && shiftHeld && sdlKeycode == kInsertKey)) {
         char* clip = SDL_GetClipboardText();
         if (clip) {
             std::string text(clip);
@@ -17762,37 +17772,51 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         }
         return;
     }
-    if (ctrlHeld && (sdlKeycode == 'c' || sdlKeycode == 'C' ||
-                     sdlKeycode == 'x' || sdlKeycode == 'X')) {
-        // The highlighted run, or the whole line when nothing is highlighted -
-        // which is what a player copying a link out of chat wants.
-        // A password box copies nothing (0x009632d0 hands the clipboard "").
-        std::string text = w->editPassword ? std::string() : w->editText;
-        const bool selected = w->hasSelection && w->selEnd > w->selStart &&
-                              w->selEnd <= w->editText.size();
-        if (w->hasSelection) {
-            const size_t from = std::min(w->selStart, w->selEnd);
-            const size_t to   = std::min(std::max(w->selStart, w->selEnd), text.size());
-            text = (from < to) ? text.substr(from, to - from) : std::string();
-        }
-        if (!text.empty() || w->editPassword) SDL_SetClipboardText(text.c_str());
-        // Ctrl+X cuts, the highlighted run only - as the edit box's own key
-        // handler does (0x00967760): with nothing highlighted it copies and
-        // leaves the line alone.
-        if (selected && (sdlKeycode == 'x' || sdlKeycode == 'X')) {
-            w->cursorPos = ui::replaceSelection(w->editText, w->cursorPos,
-                                                {true, w->selStart, w->selEnd});
-            w->hasSelection = false;
-            fireCursorChanged(focusedWid_);
-            callTextChanged(focusedWid_, true);
+    const bool copies = ctrlHeld && (letter == 'c' || letter == 'x' || sdlKeycode == kInsertKey);
+    const bool cuts = (ctrlHeld && letter == 'x') || (shiftHeld && sdlKeycode == kDeleteKey);
+    if (copies || cuts) {
+        // The highlighted run, and nothing where there is none (+0x2e4 and
+        // +0x2e8 the same). A password box copies nothing (0x009632d0 hands
+        // the clipboard "").
+        if (w->hasSelection && w->selEnd > w->selStart && w->selEnd <= w->editText.size()) {
+            const std::string text =
+                w->editPassword ? std::string() : w->editText.substr(w->selStart, w->selEnd - w->selStart);
+            SDL_SetClipboardText(text.c_str());
+            if (cuts) {
+                w->cursorPos = ui::replaceSelection(w->editText, w->cursorPos, {true, w->selStart, w->selEnd});
+                w->hasSelection = false;
+                fireTextChanged(focusedWid_, /*userInput=*/true);
+            }
         }
         return;
+    }
+    // Ctrl+K and Ctrl+U delete to the end of the text and to its beginning
+    // (0x00963c90, 0x00963c60), Ctrl+N and Ctrl+P walk the history; Ctrl+B,
+    // Ctrl+F and Ctrl+D are the left and the right arrow and Delete.
+    if (ctrlHeld && (letter == 'k' || letter == 'u')) {
+        const size_t caret = std::min(w->cursorPos, w->editText.size());
+        const size_t from = letter == 'k' ? caret : 0;
+        const size_t count = letter == 'k' ? w->editText.size() - caret : caret;
+        if (count > 0) {
+            w->editText.erase(from, count);
+            w->cursorPos = from;
+            w->hasSelection = false;
+            fireTextChanged(focusedWid_, /*userInput=*/true);
+        }
+        return;
+    }
+    if (ctrlHeld && (letter == 'n' || letter == 'p')) {
+        walkEditHistory(letter == 'n');
+        return;
+    }
+    if (ctrlHeld && (letter == 'b' || letter == 'f' || letter == 'd')) {
+        ctrlHeld = false;
+        sdlKeycode = letter == 'b' ? 0x40000050 : letter == 'f' ? 0x4000004F : kDeleteKey;
     }
     // Ctrl+W, Ctrl+Backspace and Ctrl+Delete delete a word (0x00967760):
     // back to the start of the word before the caret (0x00963b60) or on to
     // the end of the one after it (0x00963a10), the whitespace between going
     // with it. A highlighted run is what goes instead, when there is one.
-    constexpr int kDeleteKey = 0x4000004C;  // SDLK_DELETE
     if (ctrlHeld && (sdlKeycode == 'w' || sdlKeycode == 'W' || sdlKeycode == '\b' ||
                      sdlKeycode == kDeleteKey)) {
         const size_t len = w->editText.size();
@@ -17810,8 +17834,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         if (to > from) {
             w->editText.erase(from, to - from);
             w->cursorPos = from;
-            fireCursorChanged(focusedWid_);
-            callTextChanged(focusedWid_, true);
+            fireTextChanged(focusedWid_, /*userInput=*/true);
         }
         return;
     }
@@ -17857,8 +17880,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                     {true, w->selStart, w->selEnd});
                 w->hasSelection = false;
                 if (w->cursorPos != was || w->selEnd > w->selStart) {
-                    fireCursorChanged(focusedWid_);
-                    callTextChanged(focusedWid_, true);
+                    fireTextChanged(focusedWid_, /*userInput=*/true);
                     break;
                 }
             }
@@ -17866,8 +17888,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 const size_t from = ui::caretStepLeft(w->editText, w->cursorPos);
                 w->editText.erase(from, w->cursorPos - from);
                 w->cursorPos = from;
-                fireCursorChanged(focusedWid_);
-                callTextChanged(focusedWid_, true);
+                fireTextChanged(focusedWid_, /*userInput=*/true);
             }
             break;
         case kDelete:
@@ -17876,21 +17897,17 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 w->cursorPos = ui::replaceSelection(w->editText, w->cursorPos,
                                                     {true, w->selStart, w->selEnd});
                 w->hasSelection = false;
-                fireCursorChanged(focusedWid_);
-                callTextChanged(focusedWid_, true);
+                fireTextChanged(focusedWid_, /*userInput=*/true);
                 break;
             }
             w->hasSelection = false;
             if (w->cursorPos < len) {
                 const size_t to = ui::caretStepRight(w->editText, w->cursorPos);
                 w->editText.erase(w->cursorPos, to - w->cursorPos);
-                fireCursorChanged(focusedWid_);
-                callTextChanged(focusedWid_, true);
+                fireTextChanged(focusedWid_, /*userInput=*/true);
             }
             break;
-        // Back and forward through what was typed here before. Stepping off
-        // the newest end empties the box rather than sticking on the last
-        // line, which is what leaving the history means.
+        // Back and forward through what was typed here before.
         case kUp:
         case kDown:
             // A multi-line box moves the caret a line instead (0x00964550),
@@ -17921,33 +17938,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 fireCursorChanged(focusedWid_);
                 break;
             }
-            if (sdlKeycode == kDown) {
-                if (w->editHistoryPos >= 0) {
-                    w->hasSelection = false;
-                    const int last = static_cast<int>(w->editHistory.size()) - 1;
-                    if (w->editHistoryPos >= last) {
-                        w->editHistoryPos = -1;
-                        w->editText.clear();
-                    } else {
-                        ++w->editHistoryPos;
-                        w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
-                    }
-                    w->cursorPos = w->editText.size();
-                    fireCursorChanged(focusedWid_);
-                    callTextChanged(focusedWid_, false);
-                }
-                break;
-            }
-            if (!w->editHistory.empty()) {
-                w->hasSelection = false;
-                const int last = static_cast<int>(w->editHistory.size()) - 1;
-                w->editHistoryPos = (w->editHistoryPos < 0)
-                    ? last : std::max(0, w->editHistoryPos - 1);
-                w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
-                w->cursorPos = w->editText.size();
-                fireCursorChanged(focusedWid_);
-                callTextChanged(focusedWid_, false);
-            }
+            walkEditHistory(sdlKeycode == kDown);
             break;
         // The caret keys. A step is one drawn character, not one byte: an
         // item link is fifty bytes and eighteen characters, and stepping
@@ -17956,11 +17947,8 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         // a highlighted run is let go - the caret first going to its near
         // edge, as in any text field.
         //
-        // The chat box declares ignoreArrows, which in the real client hands
-        // the plain arrows to the game so a player can turn while typing and
-        // keeps Alt+arrows for the caret. Here the game takes no keys at all
-        // while a box has focus, so the flag would leave the arrows doing
-        // nothing; they move the caret, with or without Alt.
+        // A box with ignoreArrows - the chat's - has the arrows with Alt only;
+        // without it they are the game's, and do not come here (keyIsTheGames).
         case kLeft:
         case kRight:
         case kHome:
@@ -18013,8 +18001,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 // it directly would let a full box grow by one every time
                 // return was pressed.
                 if (!insertEditText(*w, "\n")) break;
-                fireCursorChanged(focusedWid_);
-                callTextChanged(focusedWid_, true);
+                fireTextChanged(focusedWid_, /*userInput=*/true);
                 break;
             }
             // The handler decides what to do with it, including whether to let
@@ -18241,6 +18228,15 @@ void LuaEngine::updateVisibility() {
             }
         }
     }
+}
+
+bool LuaEngine::editBoxLeavesArrows(bool altHeld) const {
+    const auto* w = focusedWid_ != 0 ? widgets_.get(focusedWid_) : nullptr;
+    return w && w->isEditBox && ui::leavesArrows(w->editIgnoreArrows, altHeld);
+}
+
+bool LuaEngine::keyIsTheGames(int sdlKeycode, uint16_t mods) const {
+    return ui::isArrowKey(sdlKeycode) && editBoxLeavesArrows((mods & SDL_KMOD_ALT) != 0);
 }
 
 bool LuaEngine::editBoxHasFocus() const {
@@ -19410,15 +19406,24 @@ void LuaEngine::drainPendingTextChanged() {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     drainPendingAnimFinished();
-    lua_getglobal(L_, "__WoweePendingTextChanged");
-    if (!lua_istable(L_, -1)) { lua_pop(L_, 1); return; }
-    const int count = static_cast<int>(lua_objlen(L_, -1));
-    if (count == 0) { lua_pop(L_, 1); return; }
+    // The caret first. Setting text moves it to the end, which in WoW is a
+    // cursor change, and ScrollingEdit_OnCursorChanged is the only thing that
+    // ever sets self.cursorOffset - which ScrollingEdit_OnTextChanged then
+    // negates. Firing the text change without the cursor change reaches `-nil`
+    // on the first code-set text in every multi-line box: the mail body, the
+    // macro editor, the guild information pane.
+    //
+    // What a handler changes waits for the next frame.
+    for (const auto& owed : textChanges_.take([this](uint32_t id) {
+             const auto* w = widgets_.get(id);
+             return !w ? ui::TextChanges::Box::Gone
+                       : w->visible ? ui::TextChanges::Box::Shown : ui::TextChanges::Box::Hidden;
+         })) {
+        fireTextChanged(owed.box, owed.userInput);
+    }
+}
 
-    // Swap in a fresh table first: a handler that sets text lands in the new
-    // one and waits a frame.
-    lua_newtable(L_);
-    lua_setglobal(L_, "__WoweePendingTextChanged");
+void LuaEngine::noteTextChanged(uint32_t wid, bool userInput) { textChanges_.note(wid, userInput); }
 
     for (int i = 1; i <= count; ++i) {
         lua_rawgeti(L_, -1, i);

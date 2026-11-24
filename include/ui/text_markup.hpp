@@ -362,6 +362,17 @@ inline size_t caretLineEnd(const std::string& s, size_t at) {
     return p;
 }
 
+/// The four arrow keys (0x204 to 0x207), as SDL numbers them.
+inline bool isArrowKey(int sdlKeycode) {
+    return sdlKeycode >= 0x4000004F && sdlKeycode <= 0x40000052;
+}
+
+/// Whether an edit box leaves the arrows to the game (0x00967760): one with
+/// ignoreArrows does while Alt is not held.
+inline bool leavesArrows(bool ignoreArrows, bool altHeld) {
+    return ignoreArrows && !altHeld;
+}
+
 /// The caret one line up (dir < 0) or down (dir > 0) in a multi-line box,
 /// as 0x00964550 moves it: as many characters into the new line as it was
 /// into its own, and no further than that line's end. `moved` is false when

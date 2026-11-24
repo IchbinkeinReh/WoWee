@@ -2,6 +2,7 @@
 
 #include "addons/lua_services.hpp"
 #include "game/combat_log.hpp"
+#include "ui/text_changes.hpp"
 #include "ui/widget_tree.hpp"
 #include <map>
 #include <functional>
@@ -81,8 +82,13 @@ public:
 
     // Call OnUpdate scripts on all frames that have one.
     void dispatchOnUpdate(float elapsed);
-    /// Run the OnTextChanged handlers owed by text set from code.
+    /// Run the OnTextChanged handlers owed by the edit boxes shown
+    /// (ui/text_changes.hpp); one more owed; and one box's now.
     void drainPendingTextChanged();
+    void noteTextChanged(uint32_t wid, bool userInput);
+    void settleTextChanged(uint32_t wid);
+    /// The focused box's text one line on or back in its history.
+    void walkEditHistory(bool on);
     /// Run the OnAnimFinished handlers owed by frames shown to animate.
     void drainPendingAnimFinished();
     /// Age message-frame lines and drop the expired ones.
@@ -279,6 +285,10 @@ public:
     /// panel destroyed with focus inside it, or one that went invisible
     /// through a parent before the frame that would have noticed ran.
     [[nodiscard]] bool editBoxHasFocus() const;
+    /// Whether it leaves the arrow keys to the game (ignoreArrows, without
+    /// Alt), and whether a key is one of them (0x00967760).
+    [[nodiscard]] bool editBoxLeavesArrows(bool altHeld) const;
+    [[nodiscard]] bool keyIsTheGames(int sdlKeycode, uint16_t mods) const;
     void setEditFocus(uint32_t wid);
     /// The edit box taking keystrokes, or zero (GetCurrentKeyBoardFocus).
     [[nodiscard]] uint32_t editFocus() const { return focusedWid_; }
@@ -406,12 +416,15 @@ private:
     /// The same, with a number. A handler that compares its argument against
     /// zero cannot be handed a numeric string.
     void callFrameScriptNumber(uint32_t wid, const char* script, double arg);
-    void callTextChanged(uint32_t wid, bool userInput);
     void callFrameScript4Numbers(uint32_t wid, const char* script,
                                  double a, double b, double c, double d);
     /// Announce where the caret is, which is what sets cursorOffset on the
     /// interface's scrolling edit boxes.
     void fireCursorChanged(uint32_t wid);
+    /// An edit box's text changed: the caret first and then
+    /// OnTextChanged(userInput), as 0x00967020 tells both.
+    void fireTextChanged(uint32_t wid, bool userInput);
+    ui::TextChanges textChanges_;
     /// Three string arguments, which OnHyperlinkClick takes: the link, the
     /// text it drew, and the mouse button.
     void callFrameScript3(uint32_t wid, const char* script, const char* a,

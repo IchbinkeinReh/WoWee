@@ -31,6 +31,7 @@
 
 #include "core/platform.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "ui/edit_history.hpp"
 #include "ui/simple_html.hpp"
 
 namespace wowee {
@@ -475,18 +476,10 @@ struct Widget {
     bool   hasSelection = false;
     size_t selStart = 0;
     size_t selEnd = 0;
-    /// What has been typed into this box before, oldest first, and where the
-    /// arrow keys are in it.
-    ///
-    /// FrameXML hands each sent line to AddHistoryLine and then leaves the
-    /// walking of it to the client, which is why the chat box recalls what you
-    /// typed in the real game and did nothing here. -1 means "not in the
-    /// history", which is the state the box returns to at the end of it.
-    std::vector<std::string> editHistory;
-    int editHistoryPos = -1;
-    /// How many the box was declared to keep, from historyLines. Zero means
-    /// none, which several boxes ask for outright.
-    int editHistoryLines = 0;
+    /// The lines sent from it, which FrameXML hands to AddHistoryLine and the
+    /// arrows walk. How many are kept is historyLines': several boxes ask for
+    /// none.
+    EditHistory editHistory;
     /// Declared with ignoreArrows: left and right do not move the cursor, so
     /// they reach the game instead and a player can turn while typing.
     bool editIgnoreArrows = false;

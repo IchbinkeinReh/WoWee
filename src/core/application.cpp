@@ -1355,6 +1355,11 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
                 if (!addonManager_ || !addonsLoaded_) return false;
                 auto* engine = addonManager_->getLuaEngine();
                 return engine != nullptr && engine->editBoxHasFocus();
+            },
+            [this]() -> bool {
+                if (!addonManager_ || !addonsLoaded_) return false;
+                auto* engine = addonManager_->getLuaEngine();
+                return engine != nullptr && engine->editBoxLeavesArrows((SDL_GetModState() & SDL_KMOD_ALT) != 0);
             });
         addons::LuaServices luaSvc;
         luaSvc.window            = window.get();
@@ -2843,7 +2848,8 @@ void Application::run() {
                     // closes it, Space and Enter stop the movie), and with
                     // only presses reaching frames the movie could not be
                     // skipped.
-                    if (!engine->editBoxHasFocus() && engine->dispatchFrameKey(event.key.key, false)) continue;
+                    if ((!engine->editBoxHasFocus() || engine->keyIsTheGames(event.key.key, event.key.mod)) &&
+                        engine->dispatchFrameKey(event.key.key, false)) continue;
                     (void)engine->dispatchBindingKey(event.key.key, false, false, false,
                                                      false, false);
                 }
@@ -2854,7 +2860,8 @@ void Application::run() {
                 // walk the character, and backspace would trip a keybind.
                 if (addonManager_ && addonsLoaded_) {
                     if (auto* engine = addonManager_->getLuaEngine();
-                        engine && engine->editBoxHasFocus()) {
+                        engine && engine->editBoxHasFocus() &&
+                        !engine->keyIsTheGames(event.key.key, event.key.mod)) {
                         // Command counts as control here, because this is the
                         // copy-and-paste modifier and on a Mac that is the one
                         // every other program uses. Windows and Linux send

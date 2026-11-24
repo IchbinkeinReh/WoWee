@@ -4186,6 +4186,16 @@ wowee_add_test(test_glyph_socket
 wowee_add_test(test_equipment_sets
     SOURCES test_equipment_sets.cpp)
 
+# ── test_edit_history ────────────────────────────────────────
+# The lines an edit box remembers (0x00964690). Header-only.
+wowee_add_test(test_edit_history
+    SOURCES test_edit_history.cpp)
+
+# ── test_text_changes ────────────────────────────────────────
+# What an edit box owes of OnTextChanged (0x00967020). Header-only.
+wowee_add_test(test_text_changes
+    SOURCES test_text_changes.cpp)
+
 # ── test_macro_list ──────────────────────────────────────────
 # The macros as the interface numbers them (0x00566240). Header-only.
 wowee_add_test(test_macro_list
