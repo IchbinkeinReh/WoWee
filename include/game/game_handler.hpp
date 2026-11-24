@@ -6517,6 +6517,18 @@ private:
     void applyAccountDataText(uint32_t type, const std::string& text);
     std::string accountDataMacros(bool perCharacter) const;
     void applyAccountDataMacros(bool perCharacter, const std::string& text);
+    /// One half of the macros as a macros-cache.txt has them.
+    void putMacros(bool perCharacter, const std::string& cacheText);
+    /// The account's macros, every character's, out of a file of the account's
+    /// own, as the client keeps them (WTF\\Account\\<name>\\macros-cache.txt).
+    /// Read once an account; false where there is no such file yet.
+    bool loadAccountMacros();
+    /// Written where they have changed.
+    void saveAccountMacros();
+    std::string accountMacrosOf_;        // whose account's the macros are
+    std::string accountMacrosWritten_;   // what the file has of them
+    bool accountMacrosKept_ = false;     // there is a file
+    uint64_t characterConfigOf_ = 0;     // whose own file is read; none is written before
     void requestAccountData(uint32_t type);
     void uploadAccountData(uint32_t type);
     AccountDataBridge accountDataBridge_;

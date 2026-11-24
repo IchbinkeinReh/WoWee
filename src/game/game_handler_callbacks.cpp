@@ -585,6 +585,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     spellFlatMods_.clear();
     spellPctMods_.clear();
     actionBar = {};
+    characterConfigOf_ = 0;
     // The interface's own start (0x0052b550): no combo points, on nobody
     // (0xbd084d, 0xbd08a8) - the server says them again only when they
     // change, so the last character's stayed on the next one's frame.

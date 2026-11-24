@@ -4408,7 +4408,7 @@ void registerActionLuaAPI(lua_State* L) {
             if (!gh) return 0;
             const std::string name = lua_tostring(L, 1);
             if (name.empty()) return luaL_error(L, "CreateMacro() failed, no name specified");
-            const uint32_t id = game::macro_list::freeId(gh->macroList(), lua_toboolean(L, 4) != 0);
+            const uint32_t id = game::macro_list::newId(gh->macroList(), lua_toboolean(L, 4) != 0);
             if (id == 0) return luaL_error(L, "CreateMacro() failed, already have %d macros", 36);
             gh->setMacroText(id, lua_isstring(L, 3) ? lua_tostring(L, 3) : "");
             gh->setMacroMeta(id, name, macroIconArg(L, 2).value_or(std::string()));

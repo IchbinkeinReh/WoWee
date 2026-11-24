@@ -1,4 +1,5 @@
 #include "game/mirror_image.hpp"
+#include "game/macro_slots.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "core/env_flag.hpp"
 #include "core/app_clock.hpp"
@@ -1924,9 +1925,11 @@ void GameHandler::registerCoreOpcodes() {
     dispatchTable_[Opcode::SMSG_ACTION_BUTTONS] = [this](network::Packet& packet) {
         // Slot encoding differs by expansion:
         //   Classic/Turtle: uint16 actionId + uint8 type + uint8 misc
-        //     type: 0=spell, 1=item, 64=macro
+        //     type: 0=spell, 1=item, 64=macro, 65=character's macro
         //   TBC/WotLK: uint32 packed = actionId | (type << 24)
-        //     type: 0x00=spell, 0x80=item, 0x40=macro
+        //     type: 0x00=spell, 0x80=item, 0x40=macro, 0x41=character's
+        //     (the top four bits are the kind, 0x005a7a40, the rest a macro's
+        //     id, the character's over 0x1000000)
         // Format differences:
         //   Classic 1.12: no mode byte, 120 slots (480 bytes)
         //   TBC 2.4.3:    no mode byte, 132 slots (528 bytes)
@@ -1965,6 +1968,10 @@ void GameHandler::registerCoreOpcodes() {
                 type = static_cast<uint8_t>((packed >> 24) & 0xFF);
                 id = packed & 0x00FFFFFFu;
             }
+            if (type == 0x41) {
+                id |= macro_list::kCharacterBase;
+                type = 0x40;
+            }
             // An equipment set (0x20) may be set 0 (0x005a7950).
             if (id == 0 && !(type == 0x20 && !isClassicLikeExpansion())) continue;
             ActionBarSlot slot;
@@ -1981,6 +1988,7 @@ void GameHandler::registerCoreOpcodes() {
             actionBar[i] = slot;
         }
         LOG_INFO("SMSG_ACTION_BUTTONS: populated action bar from server");
+        settleMacroSlots(*this);
         // Zero means every slot, which is what the whole bar arriving at
         // once is. Sent with no argument the buttons compared nil against
         // zero and against their own action, matched neither, and the bar

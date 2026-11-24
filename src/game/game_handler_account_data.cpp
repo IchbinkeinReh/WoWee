@@ -10,6 +10,8 @@
 //   CMSG_UPDATE_ACCOUNT_DATA (0x006b9100)           - the local one sent up
 
 #include "game/game_handler.hpp"
+#include "game/macro_cache.hpp"
+#include "game/macro_slots.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "core/config_paths.hpp"
 #include "game/character.hpp"
@@ -21,6 +23,7 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -58,6 +61,15 @@ bool cvarOn(const char* name) {
 }
 
 std::string timesPath() { return core::getConfigRoot() + "/account_data_times.txt"; }
+
+std::string accountMacrosPath(const std::string& account) {
+    std::string name;
+    for (const char ch : account) {
+        const auto byte = static_cast<unsigned char>(ch);
+        name += std::isalnum(byte) ? static_cast<char>(std::toupper(byte)) : '_';
+    }
+    return core::getConfigRoot() + "/accounts/" + name + "/macros-cache.txt";
+}
 
 std::vector<uint8_t> deflateText(const std::string& text) {
     uLongf size = compressBound(static_cast<uLong>(text.size()));
@@ -151,52 +163,69 @@ void GameHandler::applyAccountDataText(uint32_t type, const std::string& text) {
 }
 
 std::string GameHandler::accountDataMacros(bool perCharacter) const {
-    // macros-cache.txt: each macro as MACRO id "name" icon, its body, END.
-    std::ostringstream out;
-    const uint32_t first = perCharacter ? 37u : 1u, last = perCharacter ? 54u : 36u;
-    for (const uint32_t id : getMacroIds()) {
-        if (id < first || id > last) continue;
+    std::vector<macro_cache::Macro> macros;
+    for (const uint32_t id : macro_list::order(macroList(), perCharacter)) {
         std::string icon = getMacroIcon(id);
         if (const size_t slash = icon.find_last_of("\\/"); slash != std::string::npos) icon = icon.substr(slash + 1);
-        out << "MACRO " << id << " \"" << getMacroName(id) << "\" " << (icon.empty() ? "INV_Misc_QuestionMark" : icon)
-            << "\n" << getMacroText(id) << "\nEND\n";
+        macros.push_back({id, getMacroName(id), icon, getMacroText(id)});
     }
-    return out.str();
+    return macro_cache::write(macros);
+}
+
+void GameHandler::putMacros(bool perCharacter, const std::string& cacheText) {
+    for (auto* kept : {&macros_, &macroNames_, &macroIcons_})
+        std::erase_if(*kept, [&](const auto& m) { return macro_list::perCharacter(m.first) == perCharacter; });
+    for (const auto& macro : macro_cache::read(cacheText, perCharacter)) {
+        if (!macro.body.empty()) macros_[macro.id] = macro.body;
+        macroNames_[macro.id] = macro.name;
+        if (!macro.icon.empty()) macroIcons_[macro.id] = "Interface\\Icons\\" + macro.icon;
+    }
 }
 
 void GameHandler::applyAccountDataMacros(bool perCharacter, const std::string& text) {
-    const uint32_t first = perCharacter ? 37u : 1u, last = perCharacter ? 54u : 36u;
-    for (const uint32_t id : getMacroIds())
-        if (id >= first && id <= last) {
-            setMacroText(id, "");
-            setMacroMeta(id, "", "");
-        }
-    std::istringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.rfind("MACRO ", 0) != 0) continue;
-        std::istringstream head(line.substr(6));
-        uint32_t id = 0;
-        head >> id;
-        std::string rest;
-        std::getline(head, rest);
-        const size_t q1 = rest.find('"'), q2 = rest.find('"', q1 == std::string::npos ? 0 : q1 + 1);
-        if (id < first || id > last || q1 == std::string::npos || q2 == std::string::npos) continue;
-        const std::string name = rest.substr(q1 + 1, q2 - q1 - 1);
-        std::string icon = rest.substr(q2 + 1);
-        icon.erase(0, icon.find_first_not_of(' '));
-        std::string body, l;
-        while (std::getline(in, l)) {
-            if (!l.empty() && l.back() == '\r') l.pop_back();
-            if (l == "END") break;
-            if (!body.empty()) body += "\n";
-            body += l;
-        }
-        setMacroText(id, body.empty() ? std::string(" ") : body);
-        setMacroMeta(id, name, icon.empty() ? std::string() : "Interface\\Icons\\" + icon);
+    putMacros(perCharacter, text);
+    if (!perCharacter) {
+        accountMacrosOf_ = accountName;
+        saveAccountMacros();
     }
+    saveCharacterConfig();
+    settleMacroSlots(*this);
     fireAddonEvent("UPDATE_MACROS", {});
+}
+
+bool GameHandler::loadAccountMacros() {
+    if (accountName.empty()) return false;
+    if (accountMacrosOf_ == accountName) return accountMacrosKept_;
+    // Another account's are not this one's.
+    putMacros(false, {});
+    accountMacrosOf_ = accountName;
+    accountMacrosKept_ = false;
+    accountMacrosWritten_.clear();
+    std::ifstream in(accountMacrosPath(accountName), std::ios::binary);
+    if (!in.is_open()) return false;
+    std::ostringstream text;
+    text << in.rdbuf();
+    putMacros(false, text.str());
+    accountMacrosWritten_ = accountDataMacros(false);
+    accountMacrosKept_ = true;
+    return true;
+}
+
+void GameHandler::saveAccountMacros() {
+    if (accountName.empty() || accountMacrosOf_ != accountName) return;
+    std::string text = accountDataMacros(false);
+    if (text == accountMacrosWritten_) return;
+    const std::filesystem::path path = accountMacrosPath(accountName);
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        LOG_WARNING("Could not save the account's macros to ", path.string());
+        return;
+    }
+    out << text;
+    accountMacrosWritten_ = std::move(text);
+    accountMacrosKept_ = true;
 }
 
 void GameHandler::sendReadyForAccountDataTimes() {
@@ -244,12 +273,17 @@ void GameHandler::handleAccountDataTimes(network::Packet& packet) {
     accountDataClock_ = data.serverTime;
     const Character* ch = getActiveCharacter();
     if (ch && (data.mask & ~kGlobalMask) != 0) accountDataCharacter_ = ch->name;
+    // What is compared here is this account's and this character's: the files
+    // are read before, as the client reads its own (0x005668f0). An account
+    // that has none yet takes the realm's macros.
+    const bool accountMacrosHere = loadAccountMacros();
+    if (ch && (data.mask & ~kGlobalMask) != 0 && characterConfigOf_ != playerGuid) loadCharacterConfig();
     for (uint32_t t = 0; t < kAccountDataTypes; ++t) {
         if ((data.mask & (1u << t)) == 0) continue;
         if (!kTypes[t].global && !getActiveCharacter()) continue;
         accountDataKnown_[t] = true;
         if (!accountDataSynced(t)) continue;
-        const uint32_t local = accountDataLocalTime(t);
+        const uint32_t local = t == 4 && !accountMacrosHere ? 0 : accountDataLocalTime(t);
         const uint32_t server = data.accountDataTimes[t];
         if (local < server) requestAccountData(t);
         else if (local > server) uploadAccountData(t);

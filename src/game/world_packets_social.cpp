@@ -796,9 +796,10 @@ network::Packet SetSheathedPacket::build(uint32_t sheathState) {
 
 network::Packet SetActionButtonPacket::build(uint8_t button, uint8_t type, uint32_t id, bool isClassic) {
     // Classic/Turtle (1.12): uint8 button + uint16 id + uint8 type + uint8 misc(0)
-    //   type encoding: 0=spell, 1=item, 64=macro
+    //   type encoding: 0=spell, 1=item, 64=macro, 65=character's macro
     // TBC/WotLK:       uint8 button + uint32 packed (type<<24 | id)
-    //   type encoding: 0x00=spell, 0x80=item, 0x40=macro
+    //   type encoding: 0x00=spell, 0x80=item, 0x40=macro, whose id has the
+    //   bit over the 24 for one of the character's
     //   packed=0 means clear the slot
     network::Packet packet(wireOpcode(Opcode::CMSG_SET_ACTION_BUTTON));
     packet.writeUInt8(button);
@@ -807,7 +808,7 @@ network::Packet SetActionButtonPacket::build(uint8_t button, uint8_t type, uint3
         // Map ActionBarSlot::Type (0=EMPTY,1=SPELL,2=ITEM,3=MACRO) → classic type byte
         uint8_t classicType = 0; // 0 = spell
         if (type == 2 /* ITEM */)  classicType = 1;
-        if (type == 3 /* MACRO */) classicType = 64;
+        if (type == 3 /* MACRO */) classicType = static_cast<uint8_t>(64 | ((id >> 24) & 1u));
         packet.writeUInt16(static_cast<uint16_t>(id));
         packet.writeUInt8(classicType);
         packet.writeUInt8(0); // misc
@@ -822,7 +823,8 @@ network::Packet SetActionButtonPacket::build(uint8_t button, uint8_t type, uint3
         // a set: the action is not zero for it.
         if (type == 4 /* EQUIPMENT_SET */) packedType = 0x20;
         const bool clears = type == 0 || (id == 0 && type != 4);
-        uint32_t packed = clears ? 0 : (static_cast<uint32_t>(packedType) << 24) | (id & 0x00FFFFFF);
+        const uint32_t kept = type == 3 ? 0x01FFFFFFu : 0x00FFFFFFu;
+        uint32_t packed = clears ? 0 : (static_cast<uint32_t>(packedType) << 24) | (id & kept);
         packet.writeUInt32(packed);
         LOG_DEBUG("Built CMSG_SET_ACTION_BUTTON (TBC/WotLK): button=", static_cast<int>(button),
                   " packed=0x", std::hex, packed, std::dec);
