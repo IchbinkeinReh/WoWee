@@ -1546,3 +1546,17 @@ TEST_CASE("A virtual AnimationGroup becomes a template a group can inherit", "[f
     REQUIRE(has(r.lua, "CreateAnimationGroup(\"PulserPulse\", (__WoweeAnimGroupTemplates and "
                        "__WoweeAnimGroupTemplates[\"PulseTemplate\"] and \"PulseTemplate\" or nil))"));
 }
+
+// The send mail box raised an error at every change: its caret's height came
+// under a name of our own.
+TEST_CASE("a handler's arguments have the client's names", "[framexml][emit]") {
+    const auto emitted = [](const std::string& script) {
+        XmlNode root = parseOrFail("<Ui><EditBox name=\"E\"><Scripts><" + script + ">f()</" + script +
+                                   "></Scripts></EditBox></Ui>");
+        return emitFrameXml(root).lua;
+    };
+    CHECK(has(emitted("OnCursorChanged"), "function(self, x, y, w, h, ...)"));
+    CHECK(has(emitted("OnTextChanged"), "function(self, userInput, ...)"));
+    CHECK(has(emitted("OnSizeChanged"), "function(self, w, h, ...)"));
+    CHECK(has(emitted("OnEnter"), "function(self, motion, ...)"));
+}

@@ -395,6 +395,7 @@ private:
     /// The same, with a number. A handler that compares its argument against
     /// zero cannot be handed a numeric string.
     void callFrameScriptNumber(uint32_t wid, const char* script, double arg);
+    void callTextChanged(uint32_t wid, bool userInput);
     void callFrameScript4Numbers(uint32_t wid, const char* script,
                                  double a, double b, double c, double d);
     /// Announce where the caret is, which is what sets cursorOffset on the

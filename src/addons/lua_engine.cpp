@@ -16678,6 +16678,15 @@ void LuaEngine::callFrameScript4Numbers(uint32_t wid, const char* script,
     finishFrameScript(wid, script, handlerIdx, 5);
 }
 
+void LuaEngine::callTextChanged(uint32_t wid, bool userInput) {
+    // 0x00965460: whether the user typed it (+0x2a4 0x8), which the name
+    // completion of the chat box and the letter asks.
+    const int handlerIdx = beginFrameScript(wid, "OnTextChanged");
+    if (handlerIdx == 0) return;
+    lua_pushboolean(L_, userInput ? 1 : 0);
+    finishFrameScript(wid, "OnTextChanged", handlerIdx, 2);
+}
+
 void LuaEngine::callFrameScriptNumber(uint32_t wid, const char* script, double arg) {
     const int handlerIdx = beginFrameScript(wid, script);
     if (handlerIdx == 0) return;
@@ -17272,7 +17281,7 @@ void LuaEngine::dispatchText(const char* utf8) {
     // The handler that tells a search field to filter, and a chat box to look
     // for a channel prefix.
     fireCursorChanged(focusedWid_);
-                callFrameScript(focusedWid_, "OnTextChanged");
+                callTextChanged(focusedWid_, true);
     // A space is its own handler, and the chat box is what wants it: typing
     // "/w Bob " is how a whisper gets its target, and ChatEdit_OnSpacePressed
     // is what reads the name out and turns the box into a whisper with a
@@ -17764,7 +17773,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                                                 {true, w->selStart, w->selEnd});
             w->hasSelection = false;
             fireCursorChanged(focusedWid_);
-            callFrameScript(focusedWid_, "OnTextChanged");
+            callTextChanged(focusedWid_, true);
         }
         return;
     }
@@ -17791,7 +17800,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
             w->editText.erase(from, to - from);
             w->cursorPos = from;
             fireCursorChanged(focusedWid_);
-            callFrameScript(focusedWid_, "OnTextChanged");
+            callTextChanged(focusedWid_, true);
         }
         return;
     }
@@ -17838,7 +17847,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 w->hasSelection = false;
                 if (w->cursorPos != was || w->selEnd > w->selStart) {
                     fireCursorChanged(focusedWid_);
-                    callFrameScript(focusedWid_, "OnTextChanged");
+                    callTextChanged(focusedWid_, true);
                     break;
                 }
             }
@@ -17847,7 +17856,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 w->editText.erase(from, w->cursorPos - from);
                 w->cursorPos = from;
                 fireCursorChanged(focusedWid_);
-                callFrameScript(focusedWid_, "OnTextChanged");
+                callTextChanged(focusedWid_, true);
             }
             break;
         case kDelete:
@@ -17857,7 +17866,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                                                     {true, w->selStart, w->selEnd});
                 w->hasSelection = false;
                 fireCursorChanged(focusedWid_);
-                callFrameScript(focusedWid_, "OnTextChanged");
+                callTextChanged(focusedWid_, true);
                 break;
             }
             w->hasSelection = false;
@@ -17865,7 +17874,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 const size_t to = ui::caretStepRight(w->editText, w->cursorPos);
                 w->editText.erase(w->cursorPos, to - w->cursorPos);
                 fireCursorChanged(focusedWid_);
-                callFrameScript(focusedWid_, "OnTextChanged");
+                callTextChanged(focusedWid_, true);
             }
             break;
         // Back and forward through what was typed here before. Stepping off
@@ -17914,7 +17923,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                     }
                     w->cursorPos = w->editText.size();
                     fireCursorChanged(focusedWid_);
-                    callFrameScript(focusedWid_, "OnTextChanged");
+                    callTextChanged(focusedWid_, false);
                 }
                 break;
             }
@@ -17926,7 +17935,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
                 w->cursorPos = w->editText.size();
                 fireCursorChanged(focusedWid_);
-                callFrameScript(focusedWid_, "OnTextChanged");
+                callTextChanged(focusedWid_, false);
             }
             break;
         // The caret keys. A step is one drawn character, not one byte: an
@@ -17994,7 +18003,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 // return was pressed.
                 if (!insertEditText(*w, "\n")) break;
                 fireCursorChanged(focusedWid_);
-                callFrameScript(focusedWid_, "OnTextChanged");
+                callTextChanged(focusedWid_, true);
                 break;
             }
             // The handler decides what to do with it, including whether to let
