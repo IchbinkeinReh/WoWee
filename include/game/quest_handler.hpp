@@ -268,8 +268,20 @@ public:
     /// value index (row 1 for a gain, row 2 for a loss), the same as
     /// AzerothCore's Player::RewardReputation display value.
     int32_t getQuestRewardReputation(int32_t valueId, int32_t override);
-    [[nodiscard]] int getSelectedQuestLogIndex() const { return selectedQuestLogIndex_; }
-    void setSelectedQuestLogIndex(int idx) { selectedQuestLogIndex_ = idx; }
+    /// SelectQuestLogEntry (0x005dffa0): the selection is the quest's id
+    /// (0x00c23ad8), that of the quest in the row - a header's leaves it as it
+    /// is, and a row off either end clears it. What happens to the list after
+    /// that (0x005e6940) does not touch it.
+    void selectQuestLogRow(int index);
+    [[nodiscard]] uint32_t selectedQuestId() const { return selectedQuestId_; }
+    /// The selected quest's place in the list as it is now, from one; 0 for
+    /// none and for one no longer in it (0x005debd0).
+    [[nodiscard]] int getSelectedQuestLogIndex() const {
+        return selectedQuestId_ != 0 ? questLogIndexOf(selectedQuestId_) : 0;
+    }
+    /// The selected quest: its entry in the log, or what the quest cache has
+    /// of it (0x0067de90). Null for none.
+    [[nodiscard]] const QuestLogEntry* selectedQuest() const;
     void abandonQuest(uint32_t questId);
     void shareQuestWithParty(uint32_t questId);
     bool requestQuestQuery(uint32_t questId, bool force = false);
@@ -356,6 +368,7 @@ public:
         questItemsAwaited_.clear();
         pendingQuestAddedNotices_.clear();
         questLog_.clear();
+        selectedQuestId_ = 0;  // 0x005e71a0
         pendingQuestQueryIds_.clear();
         npcQuestStatus_.clear();
     }
@@ -459,7 +472,7 @@ private:
 
     // Quest log
     std::vector<QuestLogEntry> questLog_;
-    int selectedQuestLogIndex_ = 0;
+    uint32_t selectedQuestId_ = 0;
     std::unordered_set<uint32_t> pendingQuestQueryIds_;
 
     // Quest giver status per NPC

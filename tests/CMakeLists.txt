@@ -896,6 +896,12 @@ wowee_add_test(test_tooltip_line_strings SOURCES
     ${CMAKE_SOURCE_DIR}/src/ui/widget_tree.cpp
 )
 
+# ── test_row_selection ──────────────────────────────────────
+# What a list's selection is of, rather than where it was.
+wowee_add_test(test_row_selection SOURCES
+    test_row_selection.cpp
+)
+
 # ── test_text_edit ──────────────────────────────────────────
 wowee_add_test(test_text_edit SOURCES
     test_text_edit.cpp

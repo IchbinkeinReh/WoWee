@@ -3440,14 +3440,11 @@ public:
     /// The quest cache's record for a quest whose query answered (0x0067de90),
     /// null otherwise.
     const QuestLogEntry* questCacheRecord(uint32_t questId) const;
+    /// The quest log's selection, which is a quest and not a row
+    /// (QuestHandler::selectQuestLogRow).
     int getSelectedQuestLogIndex() const;
-    // Writes through to the QuestHandler, which is where getSelectedQuestLogIndex
-    // reads it from. The two used to touch different variables - the setter this
-    // GameHandler's own copy, the getter the decomposed QuestHandler's - so
-    // SelectQuestLogEntry set a selection the quest log never saw: the index
-    // read back 0, GetQuestLogQuestText answered nil for both description and
-    // objectives, and every quest's detail pane drew blank.
-    void setSelectedQuestLogIndex(int idx);
+    const QuestLogEntry* getSelectedQuest() const;
+    void selectQuestLogRow(int index);
     void abandonQuest(uint32_t questId);
     void shareQuestWithParty(uint32_t questId);  // CMSG_PUSHQUESTTOPARTY
     bool requestQuestQuery(uint32_t questId, bool force = false);
@@ -7260,8 +7257,8 @@ private:
 
     // Quest log. The entries and the selection both live in QuestHandler now;
     // the GameHandler selection copy this comment used to describe was dead -
-    // written by setSelectedQuestLogIndex, read by nobody, while the getter went
-    // to the QuestHandler - and has been removed.
+    // written by its setter, read by nobody, while the getter went to the
+    // QuestHandler - and has been removed.
     std::unordered_set<uint32_t> pendingQuestQueryIds_;
     std::unordered_set<uint32_t> trackedQuestIds_;
     std::vector<uint32_t> questWatchOrder_;  ///< trackedQuestIds_ in watch order

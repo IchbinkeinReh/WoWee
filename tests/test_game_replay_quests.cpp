@@ -309,3 +309,52 @@ TEST_CASE("quests without a zone stand under the client's own header", "[replay]
     REQUIRE(rows.rows.size() == 2);
     CHECK(rows.rows[0].headerTitle == "Missing header! (quest designers)");
 }
+
+// The selection was a row: with a quest gone from above it, or a header folded
+// away, it was another quest's.
+TEST_CASE("the quest log's selection is a quest, wherever its row goes", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 9387},
+                                                             {slotField(1, 0, 5), 9340},
+                                                             {slotField(2, 0, 5), 9360}}));
+    auto& gh = s.handler();
+    auto* quests = gh.getQuestHandler();
+    for (auto& q : quests->questLogRef()) {
+        q.zoneOrSort = 3483;
+        q.level = q.questId == 9387 ? 60 : q.questId == 9340 ? 61 : 62;
+    }
+    CHECK(gh.getSelectedQuestLogIndex() == 0);
+    CHECK(gh.getSelectedQuest() == nullptr);
+    gh.selectQuestLogRow(3);
+    REQUIRE(gh.getSelectedQuest() != nullptr);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    CHECK(gh.getSelectedQuestLogIndex() == 3);
+    // The one above it goes (0x005e6940 leaves 0x00c23ad8 alone).
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 0}}));
+    CHECK(gh.getSelectedQuestLogIndex() == 2);
+    REQUIRE(gh.getSelectedQuest() != nullptr);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    // One comes in above it.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(3, 0, 5), 9399}}));
+    for (auto& q : quests->questLogRef()) {
+        if (q.questId != 9399) continue;
+        q.zoneOrSort = 3483;
+        q.level = 1;
+    }
+    CHECK(gh.getSelectedQuestLogIndex() == 3);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    // A header's row leaves it as it is (0x005dffe0), one off the end clears it.
+    gh.selectQuestLogRow(1);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    // Folded away it is still the quest, in the place it has there.
+    quests->collapsedQuestGroups().insert(3483);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    CHECK(gh.getSelectedQuestLogIndex() == quests->questLogIndexOf(9340));
+    quests->collapsedQuestGroups().clear();
+    // Gone itself, it has no row any more.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(1, 0, 5), 0}}));
+    CHECK(gh.getSelectedQuestLogIndex() == 0);
+    gh.selectQuestLogRow(99);
+    CHECK(gh.getSelectedQuest() == nullptr);
+}

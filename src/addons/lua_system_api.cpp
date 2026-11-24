@@ -4171,9 +4171,6 @@ static int lua_ReturnFalse(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 static int lua_ReturnNil(lua_State* L)   { lua_pushnil(L); return 1; }
 static int lua_ReturnZero(lua_State* L)  { lua_pushnumber(L, 0.0); return 1; }
 
-/// Which row the skill list has selected, which is UI state rather than
-/// anything the game knows. Same shape as selectedFriend and selectedIgnore.
-static int& selectedSkill() { static int v = 0; return v; }
 static int lua_ReturnNothing(lua_State*) { return 0; }
 
 /// Which channel the channel-list panel has highlighted. Panel state with no
@@ -10300,8 +10297,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 // the list is one-based: SkillFrame_SetStatusBar compares each
                 // row against this to decide which border to light, so nothing
                 // ever looked selected however many times it was clicked.
-                {"GetSelectedSkill", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedSkill()); return 1; }},
                 // Whether the floors being named sit under a surface level,
                 // which decides whether the level dropdown names its entries by
                 // the floor or by one below it (WorldMapLevelDropDown_Initialize
@@ -10748,11 +10743,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 // verbs for those (ShowWorldMapArrowFrame and
                 // PositionWorldMapArrowFrame, above) are both answered.
                 {"UpdateWorldMapArrowFrames",   lua_UpdateWorldMapArrowFrames},
-                {"SetSelectedSkill", [](lua_State* L) -> int {
-            // 0x005cd860
-            if (!lua_isnumber(L, 1))
-                return luaL_error(L, "Usage: SetSelectedSkill(index)");
-            selectedSkill() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
                 {"Sound_GameSystem_GetOutputDriverNameByIndex", lua_Sound_GetOutputDriverNameByIndex},
                 {"PlaySound",           lua_PlaySound},
                 {"PlaySoundFile",       lua_PlaySoundFile},

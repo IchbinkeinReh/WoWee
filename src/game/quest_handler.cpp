@@ -111,6 +111,23 @@ QuestLogRows<QuestHandler::QuestLogEntry> QuestHandler::questLogRows() const {
                                      static_cast<int32_t>(owner_.getPlayerLevel()));
 }
 
+void QuestHandler::selectQuestLogRow(int index) {
+    const auto rows = questLogRows();
+    if (index < 1 || static_cast<size_t>(index) > rows.rows.size()) {
+        selectedQuestId_ = 0;
+    } else if (const QuestLogEntry* q = rows.rows[static_cast<size_t>(index) - 1].quest) {
+        selectedQuestId_ = q->questId;
+    }
+}
+
+const QuestHandler::QuestLogEntry* QuestHandler::selectedQuest() const {
+    if (selectedQuestId_ == 0) return nullptr;
+    for (const QuestLogEntry& q : questLog_) {
+        if (q.questId == selectedQuestId_) return &q;
+    }
+    return questCacheRecord(selectedQuestId_);
+}
+
 void QuestHandler::reconcileItemObjectivesFromInventory(
     const std::unordered_map<uint32_t, uint32_t>& carriedCounts) {
     bool changedAny = false;

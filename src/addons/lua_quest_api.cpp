@@ -1,5 +1,6 @@
 // lua_quest_api.cpp - Quest log, skills, talents, glyphs, and achievements Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "addons/row_selection.hpp"
 #include "core/local_time.hpp"
 #include "game/item_text.hpp"
 #include "game/item_stat_text.hpp"
@@ -261,8 +262,7 @@ static int lua_GetNumQuestLogEntries(lua_State* L) {
 static int lua_GetQuestLogTimeLeft(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return luaReturnNil(L);
-    // The selection is a displayed row (0x005e4320).
-    const auto* q = questAtLogRow(gh, gh->getSelectedQuestLogIndex());
+    const auto* q = gh->getSelectedQuest();   // 0x005e4320
     if (!q) return luaReturnNil(L);
     const uint32_t questId = q->questId;
     for (const auto& t : gh->getQuestTimers()) {
@@ -328,8 +328,7 @@ static int lua_GetQuestRewardTitle(lua_State* L) {
     if (gh->isQuestOfferRewardOpen()) {
         titleId = gh->getQuestOfferReward().rewardTitleId;
     } else {
-        // The selection is a displayed row (0x005e4c10).
-        if (const auto* q = questAtLogRow(gh, gh->getSelectedQuestLogIndex())) titleId = q->rewardTitleId;
+        if (const auto* q = gh->getSelectedQuest()) titleId = q->rewardTitleId;   // 0x005e4c10
     }
     if (titleId == 0) { return luaReturnNil(L); }
     const std::string name = gh->getFormattedTitleById(titleId);
@@ -347,9 +346,17 @@ static int lua_GetQuestRewardTitle(lua_State* L) {
 /// twice in this file under two names, identically - one for the reward
 /// panels and one for everything else - which is one function.
 static const game::QuestHandler::QuestLogEntry* selectedQuest(game::GameHandler* gh) {
+    return gh ? gh->getSelectedQuest() : nullptr;
+}
+
+/// The quest a call is about: the row's whose number it was given, else the
+/// selected one. The client's bindings ask the same way - a number names a row,
+/// whose quest there may be none of, and anything else means 0x00c23ad8
+/// (0x005e4190, 0x005df700, 0x005e67c0 and the rest).
+static const game::QuestHandler::QuestLogEntry* questAtRowOrSelected(lua_State* L, game::GameHandler* gh, int arg) {
     if (!gh) return nullptr;
-    // The selection is a displayed row, headers included.
-    return questAtLogRow(gh, gh->getSelectedQuestLogIndex());
+    if (!lua_isnumber(L, arg)) return selectedQuest(gh);
+    return questAtRow(gh, static_cast<int>(std::lround(lua_tonumber(L, arg))));
 }
 // The reputation lines of the reward panel, as 0x0058d050 works them out for
 // ProcessQuestLogRewardFactions (0x005df8a0) and as GetNumQuestLogRewardFactions
@@ -883,21 +890,10 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     return 10;
 }
 
-// GetQuestLogQuestText(index) → description, objectives
-/// The quest log index an argument-less call means: the one the log has
-/// selected. WoW's quest log functions take the index only when asking about
-/// some other entry, and demanding it raised a Lua error on every bare call.
-static int questLogIndexOrSelected(lua_State* L, int arg) {
-    if (!lua_isnoneornil(L, arg)) return static_cast<int>(luaL_checknumber(L, arg));
-    auto* gh = getGameHandler(L);
-    return gh ? gh->getSelectedQuestLogIndex() : 0;
-}
-
+// GetQuestLogQuestText(index) → description, objectives (0x005df190)
 static int lua_GetQuestLogQuestText(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int index = questLogIndexOrSelected(L, 1);
-    if (!gh || index < 1) { return luaReturnNil(L); }
-    const auto* qp = questAtRow(gh, index);
+    const auto* qp = questAtRowOrSelected(L, gh, 1);
     if (!qp) { return luaReturnNil(L); }
     const auto& q = *qp;
     // The quest giver's own text. It is the third string in the query
@@ -918,7 +914,7 @@ static int lua_SelectQuestLogEntry(lua_State* L) {
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh) return 0;
-    gh->setSelectedQuestLogIndex(index);
+    gh->selectQuestLogRow(index);
     // Fetch the full text if this quest arrived without it.
     //
     // A quest accepted this session carries its description from the offer
@@ -943,7 +939,15 @@ static int lua_GetQuestLogSelection(lua_State* L) {
     return 1;
 }
 
-/// The quest the log has selected, or null if none is.
+/// The quest GetQuestLogPushable and QuestLogPushQuest are about (0x005df520,
+/// 0x005e4ed0): they read their argument as a number whatever it is, and 0 is
+/// the selected quest.
+static const game::QuestHandler::QuestLogEntry* sharedQuestArg(lua_State* L, game::GameHandler* gh) {
+    if (!gh) return nullptr;
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+    return index != 0 ? questAtRow(gh, index) : selectedQuest(gh);
+}
+
 // GetQuestLogPushable() → whether the selected quest may be offered to the party.
 //
 // Yes for any real selection. Which quests the server will actually share is a
@@ -952,12 +956,10 @@ static int lua_GetQuestLogSelection(lua_State* L) {
 // never offering it at all. The button is disabled without this, and sharing
 // works, so silence would be the more misleading answer of the two.
 static int lua_GetQuestLogPushable(lua_State* L) {
-    // 0x005df520: the row named, else the selected one; 1 for a sharable quest
-    // (flag 0x8), nothing otherwise.
+    // 0x005df520: the row named, else - 0 counts as none - the selected one;
+    // 1 for a sharable quest (flag 0x8), nothing otherwise.
     auto* gh = getGameHandler(L);
-    const auto* q = !gh ? nullptr
-                  : lua_isnumber(L, 1) ? questAtRow(gh, static_cast<int>(std::lround(lua_tonumber(L, 1))))
-                                       : selectedQuest(gh);
+    const auto* q = sharedQuestArg(L, gh);
     if (!q || !(q->questFlags & 0x8)) return 0;
     lua_pushnumber(L, 1);
     return 1;
@@ -1037,10 +1039,10 @@ static int lua_GetQuestLogRewardArenaPoints(lua_State* L) {
     return 1;
 }
 
-// QuestLogPushQuest() - offer the selected quest to the party.
+// QuestLogPushQuest([index]) - offer the row's or the selected quest to the party.
 static int lua_QuestLogPushQuest(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (const auto* quest = selectedQuest(gh)) {
+    if (const auto* quest = sharedQuestArg(L, gh)) {
         gh->shareQuestWithParty(quest->questId);
     }
     return 0;
@@ -1082,12 +1084,12 @@ static int lua_GetQuestIndexForWatch(lua_State* L) {
 // which watches the quest until that many seconds from now, or for as long as
 // it stays in the log when the call left it out.
 static int lua_AddQuestWatch(lua_State* L) {
+    // Without a number it is the selected quest.
     auto* gh = getGameHandler(L);
-    int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) return 0;
+    if (!gh) return 0;
     int duration = 0;
     if (lua_isnumber(L, 2)) duration = static_cast<int>(lua_tonumber(L, 2));
-    if (const auto* q = questAtRow(gh, index)) {
+    if (const auto* q = questAtRowOrSelected(L, gh, 1)) {
         const bool added = !gh->isQuestTracked(q->questId);
         gh->addQuestWatch(q->questId, duration);
         // 0x005e64d0 sorts after appending, and only then.
@@ -1102,9 +1104,7 @@ static int lua_RemoveQuestWatch(lua_State* L) {
     // (0x005df700).
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    const auto* q = lua_isnumber(L, 1) ? questAtRow(gh, static_cast<int>(std::lround(lua_tonumber(L, 1))))
-                                       : selectedLogEntry(gh);
-    if (q) gh->setQuestTracked(q->questId, false);
+    if (const auto* q = questAtRowOrSelected(L, gh, 1)) gh->setQuestTracked(q->questId, false);
     return 0;
 }
 
@@ -1142,9 +1142,7 @@ static int lua_GetQuestLink(lua_State* L) {
 // GetNumQuestLeaderBoards(questLogIndex) → count of objectives
 static int lua_GetNumQuestLeaderBoards(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int index = questLogIndexOrSelected(L, 1);
-    if (!gh || index < 1) { return luaReturnZero(L); }
-    const auto* qp = questAtRow(gh, index);
+    const auto* qp = questAtRowOrSelected(L, gh, 1);
     if (!qp) { return luaReturnZero(L); }
     lua_pushnumber(L, game::questObjectiveCount(*qp));
     return 1;
@@ -1720,12 +1718,10 @@ static int lua_GetQuestLogLeaderBoard(lua_State* L) {
         return luaL_error(L, "Usage: GetQuestLogLeaderBoard(index)");
     auto* gh = getGameHandler(L);
     int objIdx = static_cast<int>(luaL_checknumber(L, 1));
-    int questIdx = static_cast<int>(luaL_optnumber(L, 2,
-        gh ? gh->getSelectedQuestLogIndex() : 0));
     // Out of range: three nils; finished is 1 or nil (0x005e5f60).
     const auto none = [L]() { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; };
-    if (!gh || questIdx < 1 || objIdx < 1) { return none(); }
-    const auto* qp = questAtRow(gh, questIdx);
+    if (!gh || objIdx < 1) { return none(); }
+    const auto* qp = questAtRowOrSelected(L, gh, 2);
     if (!qp) { return none(); }
     const std::vector<game::QuestObjective> lines = game::questObjectives(*gh, *qp);
     if (objIdx > static_cast<int>(lines.size())) return none();
@@ -1773,10 +1769,7 @@ static int lua_GetQuestLogLeaderBoard(lua_State* L) {
 
 static int lua_GetNumQuestItemDrops(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int questIdx = static_cast<int>(luaL_optnumber(L, 1,
-        gh ? gh->getSelectedQuestLogIndex() : 0));
-    if (!gh || questIdx < 1) return luaReturnZero(L);
-    const auto* q = questAtRow(gh, questIdx);
+    const auto* q = questAtRowOrSelected(L, gh, 1);
     if (!q) return luaReturnZero(L);
     int count = 0;
     for (size_t i = 0; i < q->objectiveSourceItems.size(); ++i) {
@@ -1796,13 +1789,11 @@ static int lua_GetNumQuestItemDrops(lua_State* L) {
 static int lua_GetQuestLogItemDrop(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int dropIdx = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const int questIdx = static_cast<int>(luaL_optnumber(L, 2,
-        gh ? gh->getSelectedQuestLogIndex() : 0));
-    if (!gh || dropIdx < 1 || questIdx < 1) {
+    if (!gh || dropIdx < 1) {
         lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
         return 3;
     }
-    const auto* q = questAtRow(gh, questIdx);
+    const auto* q = questAtRowOrSelected(L, gh, 2);
     if (!q) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
     int seen = 0;
     for (size_t i = 0; i < q->objectiveSourceItems.size(); ++i) {
@@ -1961,6 +1952,16 @@ struct SkillRow {
     uint32_t categoryId = 0;
     bool isHeader = false;
 };
+
+/// The selected line of the skills tab, as its skill (0x005cd860). A heading
+/// has a key of its own; which one the client gives it is not known.
+static RowSelection<int64_t>& selectedSkill() {
+    static RowSelection<int64_t> selected;
+    return selected;
+}
+static int64_t skillRowKey(const SkillRow& row) {
+    return row.isHeader ? -1 - static_cast<int64_t>(row.categoryId) : static_cast<int64_t>(row.skillId);
+}
 
 static std::vector<SkillRow> skillRows(game::GameHandler* gh) {
     std::vector<SkillRow> rows;
@@ -3115,8 +3116,10 @@ static int lua_GetTalentInfo(lua_State* L) {
 /// The trainer panel's own selection and filters. The client has no opinion
 /// about either - they are what the player last clicked - so they live here
 /// rather than being invented on every read.
-static int& tradeSkillSelection() {
-    static int selected = 0;
+/// The selected recipe, as its spell (0x005da900), of the profession whose
+/// window is open: another one's opening clears it (0x005dde90's 0x00c235f0).
+static RowSelection<uint32_t>& tradeSkillSelection() {
+    static RowSelection<uint32_t> selected;
     return selected;
 }
 
@@ -3537,6 +3540,9 @@ static const std::vector<TradeSkillRow>& tradeSkillRows(game::GameHandler* gh) {
 }
 
 void invalidateTradeSkillRows() { ++tradeSkillRowsGeneration(); }
+
+/// What a row of the list is of: its recipe's spell, 0 for a heading.
+static uint32_t tradeSkillRowSpell(const TradeSkillRow& row) { return row.isHeader ? 0u : row.recipe.spellId; }
 
 /// The recipe at a drawn-row index, or null for a heading or no such row.
 /// Every binding taking a trade skill index goes through this, because an
@@ -4479,13 +4485,7 @@ int countRewards(const Container* v) {
 
 /// The quest log entry the panel is showing, or null.
 static const game::GameHandler::QuestLogEntry* selectedLogEntry(game::GameHandler* gh) {
-    if (!gh) return nullptr;
-    // The selected index is a display index - the log is grouped under zone
-    // headers and those are rows too - so it is resolved through the row list
-    // rather than subscripting getQuestLog(). Every reward binding reads the
-    // selected quest through here, so getting it wrong shows one quest's
-    // rewards beside another's text.
-    return questAtRow(gh, gh->getSelectedQuestLogIndex());
+    return gh ? gh->getSelectedQuest() : nullptr;
 }
 
 // GetQuestLogRewardSpell() → texture, name, isTradeskillSpell, isSpellLearned
@@ -5332,6 +5332,15 @@ void registerQuestLuaAPI(lua_State* L) {
                 // the skill on that row of the skills window - the row
                 // index UNLEARN_SKILL's popup carries, as GetSkillLineInfo
                 // numbers it.
+                {"GetSelectedSkill", [](lua_State* L) -> int {
+            lua_pushnumber(L, selectedSkill().index(skillRows(getGameHandler(L)), skillRowKey));
+            return 1;
+        }},
+                {"SetSelectedSkill", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedSkill(index)");
+            selectedSkill().select(skillRows(getGameHandler(L)), luaToClientInt(L, 1), skillRowKey);
+            return 0;
+        }},
                 {"AbandonSkill", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: AbandonSkill(index)");
             auto* gh = getGameHandler(L);
@@ -5502,7 +5511,7 @@ void registerQuestLuaAPI(lua_State* L) {
                 lua_pushnumber(L, countRewards(v));
                 return 1;
             }
-            const auto* q = questAtLogRow(gh, gh->getSelectedQuestLogIndex());
+            const auto* q = gh->getSelectedQuest();
             if (!q) { return luaReturnZero(L); }
             lua_pushnumber(L, countRewards(&q->rewardItems));
             return 1;
@@ -5514,7 +5523,7 @@ void registerQuestLuaAPI(lua_State* L) {
                 lua_pushnumber(L, countRewards(v));
                 return 1;
             }
-            const auto* q = questAtLogRow(gh, gh->getSelectedQuestLogIndex());
+            const auto* q = gh->getSelectedQuest();
             if (!q) { return luaReturnZero(L); }
             lua_pushnumber(L, countRewards(&q->rewardChoiceItems));
             return 1;
@@ -6044,11 +6053,14 @@ void registerQuestLuaAPI(lua_State* L) {
             // 0x005da900
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: SelectTradeSkill(index)");
-            tradeSkillSelection() = static_cast<int>(luaL_optnumber(L, 1, 0));
+            // A heading's selects nothing.
+            if (auto* gh = getGameHandler(L))
+                tradeSkillSelection().select(tradeSkillRows(gh), luaToClientInt(L, 1), tradeSkillRowSpell);
             return 0;
         }},
                 {"GetTradeSkillSelectionIndex", [](lua_State* L) -> int {
-            lua_pushnumber(L, tradeSkillSelection());
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? tradeSkillSelection().index(tradeSkillRows(gh), tradeSkillRowSpell) : 0);
             return 1;
         }},
                 {"GetFirstTradeSkill", [](lua_State* L) -> int {
