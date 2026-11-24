@@ -11179,6 +11179,7 @@ bool LuaEngine::initialize() {
 
     if (!game::isPreWotlk()) {
         dropForeignGlobals(L_);
+        answerNothing(L_, nothingAnswers());
         guardArguments(L_, argGuards());
     }
 

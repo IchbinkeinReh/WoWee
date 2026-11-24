@@ -24,4 +24,21 @@ std::span<const ArgGuard> argGuards();
 /// Puts the checks before the functions; one that is not there is left out.
 void guardArguments(lua_State* L, std::span<const ArgGuard> guards);
 
+/// What the client's getters answer for what is not there: nothing at all, or
+/// as many values as ever.
+struct NothingAnswer {
+    const char* name;
+    /// One letter each: n nil, 0 and 1 the numbers, e an empty string, f false,
+    /// U the string of UNKNOWN; S for GetSpellLink, whose spell asked for by a
+    /// number alone has two nils and any other none.
+    const char* values;
+};
+
+/// The functions and their answers, as 12340 has them.
+std::span<const NothingAnswer> nothingAnswers();
+
+/// Has the functions answer so where their own code answers nothing, nil or
+/// false alone.
+void answerNothing(lua_State* L, std::span<const NothingAnswer> answers);
+
 }  // namespace wowee::addons

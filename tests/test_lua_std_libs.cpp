@@ -223,3 +223,32 @@ TEST_CASE("time() takes a date table", "[lua]") {
     CHECK(s.run("return time() > 1200000000, time(nil) > 1200000000") == "true true");
     CHECK(s.run("return time({year = 1800, month = 1, day = 1})") == "nil");
 }
+
+TEST_CASE("the getters answer for what is not there as the client's", "[lua]") {
+    State s;
+    s.run("UNKNOWN = 'Unbekannt' "
+          "GetItemInfo = function(x) if x == 25 then return 'Schwert', 1 end return nil end "
+          "GetFriendInfo = function() return nil end "
+          "GetPetitionInfo = function() end "
+          "GetLFGQueueStats = function() return false end "
+          "GetSpellLink = function() return nil end "
+          "GetMerchantItemInfo = function(i) if i == 2 then return nil, 'x' end return nil end "
+          "GetCurrencyListInfo = function() return 'x' end "
+          "GetSavedInstanceInfo = function() return nil end");
+    wowee::addons::answerNothing(s.L, wowee::addons::nothingAnswers());
+    CHECK(s.run("return select('#', GetItemInfo(1))") == "0");
+    CHECK(s.run("return GetItemInfo(25)") == "Schwert 1");
+    CHECK(s.run("return GetFriendInfo(1)") == "nil 0 Unbekannt Unbekannt nil  nil nil");
+    CHECK(s.run("return select('#', GetFriendInfo(1))") == "8");
+    CHECK(s.run("return GetPetitionInfo()") == "nil nil nil 0 nil nil 0");
+    CHECK(s.run("return select('#', GetLFGQueueStats())") == "0");
+    CHECK(s.run("return select('#', GetSpellLink(1))") == "2");
+    CHECK(s.run("return select('#', GetSpellLink(1, 'spell'))") == "0");
+    CHECK(s.run("return select('#', GetSpellLink('x'))") == "0");
+    // A nil among others is an answer.
+    CHECK(s.run("return GetMerchantItemInfo(2)") == "nil x");
+    CHECK(s.run("return GetMerchantItemInfo(1)") == "nil nil 0 1 0 1 nil");
+    CHECK(s.run("return GetSavedInstanceInfo(1)") == "nil 0 nil 0 false false 0 false 0 ");
+    CHECK(s.run("return GetCurrencyListInfo(1)") == "x");
+    CHECK(s.run("return type(GetRaidRosterInfo)") == "nil");
+}

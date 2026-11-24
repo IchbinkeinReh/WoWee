@@ -29,6 +29,69 @@ int guarded(lua_State* L) {
     return lua_gettop(L);
 }
 
+int answering(lua_State* L) {
+    const auto* answer = static_cast<const NothingAnswer*>(lua_touserdata(L, lua_upvalueindex(2)));
+    const bool bySpellId = lua_gettop(L) == 1 && lua_isnumber(L, 1);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_insert(L, 1);
+    lua_call(L, lua_gettop(L) - 1, LUA_MULTRET);
+    const int n = lua_gettop(L);
+    if (n > 1 || (n == 1 && lua_toboolean(L, 1))) return n;
+    lua_settop(L, 0);
+    for (const char* v = answer->values; *v != 0; ++v) {
+        switch (*v) {
+            case '0': lua_pushnumber(L, 0); break;
+            case '1': lua_pushnumber(L, 1); break;
+            case 'e': lua_pushstring(L, ""); break;
+            case 'f': lua_pushboolean(L, 0); break;
+            case 'U': lua_getglobal(L, "UNKNOWN"); break;
+            case 'S':
+                if (bySpellId) {
+                    lua_pushnil(L);
+                    lua_pushnil(L);
+                }
+                break;
+            default: lua_pushnil(L); break;
+        }
+    }
+    return lua_gettop(L);
+}
+
+constexpr NothingAnswer kNothings[] = {
+    {"GetAchievementComparisonInfo", ""},
+    {"GetAchievementInfo", ""},
+    {"GetAchievementInfoFromCriteria", ""},
+    {"GetBattlefieldScore", "n000000nnn00"},
+    {"GetBattlefieldStatInfo", "nnn"},
+    {"GetBattlefieldVehicleInfo", ""},
+    {"GetBattlegroundInfo", ""},
+    {"GetChannelRosterInfo", ""},
+    {"GetContainerItemInfo", ""},
+    {"GetCurrencyListInfo", "nnnnnnnnn"},
+    {"GetFriendInfo", "n0UUnenn"},
+    {"GetGuildRosterInfo", "nn00nnnnnen"},
+    {"GetItemInfo", ""},
+    {"GetLFGQueueStats", ""},
+    {"GetLootRollItemInfo", ""},
+    {"GetMapLandmarkInfo", "nn000nn"},
+    {"GetMerchantItemCostItem", "n0"},
+    {"GetMerchantItemInfo", "nn0101n"},
+    {"GetPetitionInfo", "nnn0nn0"},
+    {"GetQuestLogChoiceInfo", "nn10n"},
+    {"GetQuestLogQuestText", "nn"},
+    {"GetQuestLogRewardInfo", "nn10n"},
+    {"GetRaidRosterInfo", "n011nnnnnnnnnn"},
+    {"GetRewardSpell", "nnnn"},
+    {"GetSavedInstanceInfo", "n0n0ff0f0e"},
+    {"GetShapeshiftFormInfo", ""},
+    {"GetSpellInfo", ""},
+    {"GetSpellLink", "S"},
+    {"GetStationeryInfo", "nnn"},
+    {"GetTradeSkillInfo", "nn0nn"},
+    {"GetTradeSkillReagentInfo", "nnnn"},
+    {"HasPetSpells", "nn"},
+};
+
 constexpr ArgGuard kGuards[] = {
     {"BNGetConversationInfo", "n", "Usage: BNGetConversationInfo(channel)"},
     {"BNGetConversationMemberInfo", "nn", "Usage: BNGetConversationMemberInfo(channel,index)"},
@@ -148,6 +211,21 @@ constexpr ArgGuard kGuards[] = {
 }  // namespace
 
 std::span<const ArgGuard> argGuards() { return kGuards; }
+
+std::span<const NothingAnswer> nothingAnswers() { return kNothings; }
+
+void answerNothing(lua_State* L, std::span<const NothingAnswer> answers) {
+    for (const NothingAnswer& answer : answers) {
+        lua_getglobal(L, answer.name);
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 1);
+            continue;
+        }
+        lua_pushlightuserdata(L, const_cast<NothingAnswer*>(&answer));
+        lua_pushcclosure(L, answering, 2);
+        lua_setglobal(L, answer.name);
+    }
+}
 
 void guardArguments(lua_State* L, std::span<const ArgGuard> guards) {
     for (const ArgGuard& guard : guards) {
