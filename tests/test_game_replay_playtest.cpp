@@ -1025,3 +1025,40 @@ TEST_CASE("a forced movement change is answered by a unit that is there", "[repl
     s.receive(packet());
     CHECK(s.sent().of(forced.ack).size() == 1);
 }
+
+// P49: a creature with a path of over 256 points took the rest of the packet
+// with it.
+TEST_CASE("a long walk in a create block loses nothing after it", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    const auto guid = [](uint32_t i) { return 0xF130004B00000000ull + i; };
+    const glm::vec3 at(-1834.0f, 5299.0f, -12.4f);
+    UpdateObject packet;
+    uint32_t count = 0;
+    const auto stands = [&] {
+        ++count;
+        packet.create(guid(count), wowee::game::ObjectType::UNIT,
+                      {{UF::UNIT_FIELD_HEALTH, 10 + count}, {UF::UNIT_FIELD_MAXHEALTH, 500}});
+    };
+    const auto walks = [&](const std::vector<glm::vec3>& way, uint32_t flags, const glm::vec3& end) {
+        ++count;
+        packet.walking(guid(count), {{UF::UNIT_FIELD_HEALTH, 10 + count}, {UF::UNIT_FIELD_MAXHEALTH, 500}}, at, way,
+                       flags, 1, end);
+    };
+    for (const uint32_t flags : {0x0u, 0x8000u, 0x10000u, 0x20000u}) {
+        std::vector<glm::vec3> way;
+        for (int i = 0; i < 300; ++i) way.push_back(at + glm::vec3(static_cast<float>(i), 0.0f, 0.0f));
+        for (int i = 0; i < 20; ++i) stands();
+        walks(way, flags, way.back());
+    }
+    // A cyclic one's end point is the origin.
+    walks({at, at + glm::vec3(1.0f)}, 0x180000u, glm::vec3(0.0f));
+    for (int i = 0; i < 20; ++i) stands();
+    s.receive(packet);
+    uint32_t there = 0;
+    for (uint32_t i = 1; i <= count; ++i) {
+        const auto unit = std::dynamic_pointer_cast<wowee::game::Unit>(s.handler().getEntityManager().getEntity(guid(i)));
+        if (unit && unit->getHealth() == 10 + i) ++there;
+    }
+    CHECK(there == count);
+}

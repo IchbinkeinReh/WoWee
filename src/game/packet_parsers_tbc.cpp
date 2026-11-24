@@ -160,11 +160,9 @@ bool TbcPacketParsers::parseMovementBlock(network::Packet& packet, UpdateBlock& 
             /*uint32_t splineId =*/ packet.readUInt32();
 
             uint32_t pointCount = packet.readUInt32();
-            // Cap waypoints to prevent DoS from malformed packets allocating huge arrays
-            if (pointCount > 256) return false;
 
             // points + endPoint (no splineMode in TBC)
-            if (rem() < static_cast<size_t>(pointCount) * 12 + 12) return false;
+            if (rem() < 12 || pointCount > (rem() - 12) / 12) return false;
             for (uint32_t i = 0; i < pointCount; i++) {
                 /*float px =*/ packet.readFloat();
                 /*float py =*/ packet.readFloat();

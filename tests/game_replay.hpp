@@ -93,6 +93,38 @@ public:
         return *this;
     }
 
+    // A unit of the WotLK realm's walking its path (UPDATEFLAG_LIVING, with
+    // MOVEMENTFLAG_SPLINE_ENABLED), as Unit::BuildMovementUpdate and
+    // PacketBuilder::WriteCreate write it.
+    UpdateObject& walking(uint64_t guid, const Fields& fields, const glm::vec3& at,
+                          const std::vector<glm::vec3>& points, uint32_t splineFlags = 0, uint8_t mode = 0,
+                          const glm::vec3& end = glm::vec3(0.0f)) {
+        ++blocks_;
+        body_.writeUInt8(static_cast<uint8_t>(wowee::game::UpdateType::CREATE_OBJECT));
+        body_.writePackedGuid(guid);
+        body_.writeUInt8(static_cast<uint8_t>(wowee::game::ObjectType::UNIT));
+        body_.writeUInt16(0x0060);
+        body_.writeUInt32(0x08000001);
+        body_.writeUInt16(0);
+        body_.writeUInt32(1000);
+        for (float f : {at.x, at.y, at.z, 0.5f}) body_.writeFloat(f);
+        body_.writeUInt32(0);
+        for (int i = 0; i < 9; ++i) body_.writeFloat(7.0f);
+        body_.writeUInt32(splineFlags);
+        if (splineFlags & 0x20000u) body_.writeFloat(1.0f);
+        else if (splineFlags & 0x10000u) body_.writeUInt64(guid);
+        else if (splineFlags & 0x8000u) for (int i = 0; i < 3; ++i) body_.writeFloat(1.0f);
+        for (uint32_t v : {500u, 600000u, 77u}) body_.writeUInt32(v);
+        for (float f : {1.0f, 1.0f, 0.0f}) body_.writeFloat(f);
+        body_.writeUInt32(0);
+        body_.writeUInt32(static_cast<uint32_t>(points.size()));
+        for (const auto& p : points) for (float f : {p.x, p.y, p.z}) body_.writeFloat(f);
+        body_.writeUInt8(mode);
+        for (float f : {end.x, end.y, end.z}) body_.writeFloat(f);
+        writeFields(fields);
+        return *this;
+    }
+
     // Fields changing on something already there.
     UpdateObject& values(uint64_t guid, const Fields& fields) {
         ++blocks_;

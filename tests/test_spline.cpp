@@ -85,54 +85,74 @@ TEST_CASE("WotLK animated flying create spline has no animation fields", "[splin
     packet.writeUInt32(0x0BADF00D);  // next block sentinel
 
     wowee::game::SplineBlockData data;
-    REQUIRE(wowee::game::parseWotlkMoveUpdateSpline(packet, data, glm::vec3(1905.0f, -4805.0f, 220.0f)));
+    REQUIRE(wowee::game::parseWotlkMoveUpdateSpline(packet, data));
     REQUIRE(packet.getRemainingSize() == 4);
     REQUIRE(packet.readUInt32() == 0x0BADF00Du);
     REQUIRE(data.endPoint.x == Catch::Approx(1919.0f));
     REQUIRE_FALSE(data.hasAnimation);
 }
 
-TEST_CASE("WotLK compressed create spline remains supported as fallback", "[spline][packet]") {
-    wowee::network::Packet packet;
-    writeWotlkCreateSplineHeader(packet, 2);
-    packet.writeFloat(10.0f); packet.writeFloat(20.0f); packet.writeFloat(30.0f);
-    packet.writeUInt32(0); // one packed intermediate delta
-    packet.writeUInt8(1);  // spline mode
-    packet.writeFloat(12.0f); packet.writeFloat(22.0f); packet.writeFloat(32.0f);
-    packet.writeUInt32(0x55667788); // next block sentinel
-
+// The one layout there is (0x004f4a50). Two others were tried when it failed,
+// and what they took for a path was whatever lay there.
+TEST_CASE("WotLK create spline with packed nodes or without its effect start is refused", "[spline][packet]") {
+    wowee::network::Packet packed;
+    writeWotlkCreateSplineHeader(packed, 20);
+    packed.writeFloat(10.0f); packed.writeFloat(20.0f); packed.writeFloat(30.0f);
+    for (int i = 0; i < 19; ++i) packed.writeUInt32(0);
+    packed.writeUInt8(1);
+    packed.writeFloat(12.0f); packed.writeFloat(22.0f); packed.writeFloat(32.0f);
     wowee::game::SplineBlockData data;
-    REQUIRE(wowee::game::parseWotlkMoveUpdateSpline(packet, data));
-    REQUIRE(packet.getRemainingSize() == 4);
-    REQUIRE(packet.readUInt32() == 0x55667788);
+    CHECK_FALSE(wowee::game::parseWotlkMoveUpdateSpline(packed, data));
 }
 
-TEST_CASE("WotLK taxi spline accepts vertical acceleration without effect start", "[spline][packet][taxi]") {
-    wowee::network::Packet packet;
-    packet.writeUInt32(wowee::game::SplineFlag::FINAL_POINT);
-    packet.writeFloat(-9215.0f); packet.writeFloat(43.0f); packet.writeFloat(85.0f);
-    packet.writeUInt32(0);       // time passed
-    packet.writeUInt32(12000);   // duration
-    packet.writeUInt32(9);       // spline id
-    packet.writeFloat(1.0f);     // duration mod
-    packet.writeFloat(0.0f);     // duration mod next
-    packet.writeFloat(0.0f);     // vertical acceleration
-    packet.writeUInt32(4);       // point count; this layout has no effect start time
-    for (int i = 0; i < 4; ++i) {
-        packet.writeFloat(-9200.0f + static_cast<float>(i) * 10.0f);
-        packet.writeFloat(50.0f + static_cast<float>(i));
-        packet.writeFloat(90.0f + static_cast<float>(i));
+// A count of 0 read two fields early (the vertical acceleration) swallowed
+// creature 19270's walk round Shattrath and the 400 blocks after it.
+TEST_CASE("WotLK create spline has no limit but its bytes", "[spline][packet]") {
+    for (const uint32_t nodes : {256u, 257u, 300u, 1200u, 20000u}) {
+        INFO(nodes << " nodes");
+        wowee::network::Packet packet;
+        writeWotlkCreateSplineHeader(packet, nodes);
+        for (uint32_t i = 0; i < nodes; ++i) {
+            packet.writeFloat(-1834.0f + static_cast<float>(i)); packet.writeFloat(5299.0f); packet.writeFloat(-12.4f);
+        }
+        packet.writeUInt8(7);  // no mode is refused
+        packet.writeFloat(90000.0f); packet.writeFloat(0.0f); packet.writeFloat(0.0f);  // nor any end point
+        packet.writeUInt32(0xAABBCCDD);
+        wowee::game::SplineBlockData data;
+        REQUIRE(wowee::game::parseWotlkMoveUpdateSpline(packet, data));
+        CHECK(data.endPoint.x == Catch::Approx(90000.0f));
+        REQUIRE(packet.getRemainingSize() == 4);
+        CHECK(packet.readUInt32() == 0xAABBCCDD);
     }
-    packet.writeUInt8(1);        // spline mode
-    packet.writeFloat(-9160.0f); packet.writeFloat(54.0f); packet.writeFloat(94.0f);
-    packet.writeUInt32(0xCAFEBABE);
+    // More than there are bytes for fails, however many it says.
+    for (const uint32_t nodes : {3u, 1000u, 0x15555556u, 0x80000000u, 0xFFFFFFFFu}) {
+        INFO(nodes << " nodes");
+        wowee::network::Packet packet;
+        writeWotlkCreateSplineHeader(packet, nodes);
+        for (int i = 0; i < 2 * 3; ++i) packet.writeFloat(1.0f);
+        packet.writeUInt8(0);
+        for (int i = 0; i < 3; ++i) packet.writeFloat(1.0f);
+        packet.writeUInt32(0);
+        wowee::game::SplineBlockData data;
+        CHECK_FALSE(wowee::game::parseWotlkMoveUpdateSpline(packet, data));
+    }
+}
 
-    wowee::game::SplineBlockData data;
-    REQUIRE(wowee::game::parseWotlkMoveUpdateSpline(packet, data));
-    REQUIRE(packet.getRemainingSize() == 4);
-    REQUIRE(packet.readUInt32() == 0xCAFEBABE);
-    REQUIRE(data.hasEndPoint);
-    REQUIRE(data.endPoint.x == Catch::Approx(-9160.0f));
+TEST_CASE("pre-WotLK create spline has no limit but its bytes either", "[spline][packet]") {
+    const auto classic = [](uint32_t says, uint32_t nodes) {
+        wowee::network::Packet packet;
+        for (uint32_t v : {0u, 25u, 1000u, 7u, says}) packet.writeUInt32(v);
+        for (uint32_t i = 0; i < nodes; ++i)
+            for (float f : {1.0f, 2.0f, 3.0f}) packet.writeFloat(f);
+        for (float f : {4.0f, 5.0f, 6.0f}) packet.writeFloat(f);
+        wowee::game::SplineBlockData data;
+        return wowee::game::parseClassicMoveUpdateSpline(packet, data) && data.waypoints.size() == nodes &&
+               packet.getRemainingSize() == 0;
+    };
+    CHECK(classic(300, 300));
+    CHECK(classic(0, 0));
+    CHECK_FALSE(classic(300, 299));
+    CHECK_FALSE(classic(0xFFFFFFFFu, 3));
 }
 
 // ── Helper: build a simple 4-point linear path ─────────────────────

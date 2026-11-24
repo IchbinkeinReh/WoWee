@@ -1165,8 +1165,7 @@ bool UpdateObjectParser::parseMovementBlock(network::Packet& packet, UpdateBlock
         // Spline data
         if (moveFlags & 0x08000000) { // MOVEMENTFLAG_SPLINE_ENABLED
             SplineBlockData splineData;
-            glm::vec3 entityPos(block.x, block.y, block.z);
-            if (!parseWotlkMoveUpdateSpline(packet, splineData, entityPos)) {
+            if (!parseWotlkMoveUpdateSpline(packet, splineData)) {
                 LOG_WARNING("WotLK spline parse failed for guid=0x", std::hex, block.guid, std::dec);
                 return false;
             }
@@ -1457,14 +1456,11 @@ bool UpdateObjectParser::parseUpdateBlock(network::Packet& packet, UpdateBlock& 
 }
 
 bool UpdateObjectParser::parse(network::Packet& packet, UpdateObjectData& data) {
-    // Keep worst-case packet parsing bounded. Extremely large counts are typically
-    // malformed/desynced and can stall a frame long enough to trigger disconnects.
-    constexpr uint32_t kMaxReasonableUpdateBlocks = 1024;
-    constexpr uint32_t kMaxReasonableOutOfRangeGuids = 4096;
-
-    // Read block count
+    // Read block count. The client has no limit on it (0x004d7050, 0x004d7100);
+    // here it is the bytes there are: a block is three at the least, its type,
+    // an empty guid's mask and an empty field mask.
     data.blockCount = packet.readUInt32();
-    if (data.blockCount > kMaxReasonableUpdateBlocks) {
+    if (data.blockCount > packet.getRemainingSize() / 3 + 1) {
         LOG_ERROR("SMSG_UPDATE_OBJECT rejected: unreasonable blockCount=", data.blockCount,
                   " packetSize=", packet.getSize());
         return false;
@@ -1488,7 +1484,7 @@ bool UpdateObjectParser::parse(network::Packet& packet, UpdateObjectData& data) 
             --remainingBlockCount;
             // Read out-of-range GUID count
             uint32_t count = packet.readUInt32();
-            if (count > kMaxReasonableOutOfRangeGuids) {
+            if (count > packet.getRemainingSize()) {  // a byte a guid at the least
                 LOG_ERROR("SMSG_UPDATE_OBJECT rejected: unreasonable outOfRange count=", count,
                           " packetSize=", packet.getSize());
                 return false;

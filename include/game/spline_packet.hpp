@@ -172,11 +172,10 @@ enum class SplineFlagSet { PreWotlk, Wotlk };
 
 /// Parse a WotLK movement update spline block.
 /// Format: splineFlags, FINAL_POINT/TARGET/ANGLE, timePassed, duration, splineId,
-/// then WotLK header (durationMod, durationModNext, [Animation], [Parabolic],
-/// pointCount, splineMode, endPoint) with multi-strategy fallback.
+/// durationMod, durationModNext, vertical acceleration and its start, pointCount,
+/// the points (12 bytes each), splineMode, endPoint (0x004f4a50, 0x004f4b50).
 [[nodiscard]] bool parseWotlkMoveUpdateSpline(
     network::Packet& packet,
-    SplineBlockData& out,
-    const glm::vec3& entityPos = glm::vec3(0));
+    SplineBlockData& out);
 
 } // namespace wowee::game

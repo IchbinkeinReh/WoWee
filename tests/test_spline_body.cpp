@@ -218,6 +218,34 @@ TEST_CASE("an implausible point count is refused", "[splinebody]") {
     CHECK_FALSE(parseMonsterMoveSplineBodyVanilla(packet, out, 0, glm::vec3(0.0f)));
 }
 
+// 0x0073c8e0 has no limit on it.
+TEST_CASE("a path of any number of points is read", "[splinebody]") {
+    for (const uint32_t flags : {0x2000u, 0x0u}) {
+        INFO("flags " << std::hex << flags);
+        Writer w;
+        w.u32(60000);
+        w.u32(1500);
+        if (flags != 0) {
+            for (int i = 0; i < 1500; ++i) w.vec3(static_cast<float>(i), 0.0f, 0.0f);
+        } else {
+            w.vec3(10.0f, 0.0f, 0.0f);
+            for (int i = 0; i < 1499; ++i) w.u32(0);
+        }
+        wowee::network::Packet packet(0, w.bytes);
+        SplineBlockData out;
+        REQUIRE(parseMonsterMoveSplineBody(packet, out, flags, glm::vec3(0.0f), false, SplineFlagSet::Wotlk));
+        CHECK(out.waypoints.size() == 1499);
+        CHECK(packet.getRemainingSize() == 0);
+    }
+    Writer w;
+    w.u32(60000);
+    w.u32(0xFFFFFFFFu);
+    for (int i = 0; i < 50; ++i) w.vec3(0.0f, 0.0f, 0.0f);
+    wowee::network::Packet packet(0, w.bytes);
+    SplineBlockData out;
+    CHECK_FALSE(parseMonsterMoveSplineBody(packet, out, 0x2000u, glm::vec3(0.0f), false, SplineFlagSet::Wotlk));
+}
+
 // Which splines have whole points is FLYING or CATMULLROM, 0x42000, and no
 // other flag (0x0073cbcb). A server's flights and flying creatures are 0x2000.
 TEST_CASE("a flying WotLK spline's points are whole", "[splinebody]") {
