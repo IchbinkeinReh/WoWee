@@ -1215,7 +1215,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             }
 
             // Drain network and process deferred spawn/composite queues while hidden.
-            if (gameHandler_) gameHandler_->update(1.0f / 60.0f);
+            // By the clock: a pass takes far longer than a sixtieth, and the
+            // frame after the load is given the rest of it, not all.
+            if (gameHandler_) {
+                gameHandler_->setUnitClock(std::chrono::steady_clock::now());
+                gameHandler_->update(1.0f / 60.0f);
+            }
             endStage(kStageNet);
 
             // If a new world entry was deferred during packet processing,

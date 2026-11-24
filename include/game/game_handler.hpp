@@ -5589,13 +5589,17 @@ public:
     void updateNetworking();
     void updateTimers(float deltaTime);
     void updateEntityInterpolation(float deltaTime);
-    /// The frame's real length, uncapped, for the next update - its timers,
-    /// the taxi, the units on their moves. The client runs a unit's spline by
-    /// the clock - its elapsed time is now less the time it started
-    /// (FUN_0098ca00: spline +0x28 = now - +0x24, +0x24 set to the world time
-    /// by FUN_0098c770) - so a long frame moves it as far as the time that
-    /// passed. Without it, the update's own delta is used.
-    void setUnitClockSeconds(float seconds) { unitClockSeconds_ = seconds; }
+    /// The time now, for the next update: it goes by the clock's time since
+    /// the last one - its timers, the taxi, the units on their moves. The
+    /// client runs a unit's spline by the clock - its elapsed time is now less
+    /// the time it started (FUN_0098ca00: spline +0x28 = now - +0x24, +0x24
+    /// set to the world time by FUN_0098c770) - so a long frame moves it as
+    /// far as the time that passed. Without it, the update's own delta is used.
+    void setUnitClock(std::chrono::steady_clock::time_point now) { unitClockNow_ = now; }
+    /// How long ago by the clock the units' moves stand where they do: since
+    /// the time they were last moved on to (updateEntityInterpolation). 0
+    /// where nothing gives the updates a clock.
+    [[nodiscard]] float sinceUnitsAdvanced() const;
     void updateTaxiAndMountState(float deltaTime);
     void updateAutoAttack();
 
@@ -6471,8 +6475,12 @@ public:
     }
 
 private:
-    /// setUnitClockSeconds: the frame's real length, until an update takes it.
-    std::optional<float> unitClockSeconds_;
+    /// setUnitClock, until an update takes it, and the last one taken.
+    std::optional<std::chrono::steady_clock::time_point> unitClockNow_;
+    std::optional<std::chrono::steady_clock::time_point> unitClockTaken_;
+    /// The time of it the units' moves were last run to.
+    std::optional<std::chrono::steady_clock::time_point> unitsAdvancedTo_;
+    float takeUnitClock(float deltaTime);
     /// unitsCooperate, with unitMayAttack(a, b) asked only when not given.
     [[nodiscard]] bool unitsCooperateGiven(uint64_t a, uint64_t b, std::optional<bool> aMayAttackB) const;
     bool autoRepeating_ = false;

@@ -1905,6 +1905,7 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         entity->startMoveTo(canonical.x, canonical.y, canonical.z, canYaw, entityDuration);
         if (measuredSpeed >= 0.0f) entity->setMoveSpeed(measuredSpeed);
     }
+    entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
 
     if (owner_.creatureMoveCallbackRef()) {
         const uint32_t notifyDuration = isStopOpcode && !underWay ? 0u : durationMs;
@@ -2343,6 +2344,8 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
         }
+        // From now on (0x0098c770), not from the frame before.
+        entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
         // The spline takes what the client's own does, at its capped speed
         // (0x0073c8e0 hands 0x006eb680 that time, not the packet's); one too
         // short to start is over at once (0x006f11b0).
@@ -2626,6 +2629,7 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         const float pathLength =
             glm::length(destWorld - glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
         entity->startMoveTo(destWorld.x, destWorld.y, destWorld.z, facingAngle, duration / 1000.0f);
+        entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
         // Run on the transport, from where the mover is on it now.
         if (entity->isActivelyMoving()) {
             if (const auto from = owner_.getTransportManager()->worldToTransportLocal(

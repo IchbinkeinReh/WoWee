@@ -47,6 +47,7 @@
 #include "rendering/animation/animation_ids.hpp"
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
+#include <utility>
 #include <cmath>
 #include <cctype>
 #include <ctime>
@@ -627,6 +628,25 @@ float GameHandler::facingChaseRate(const Entity& entity) {
     return 0.0f;
 }
 
+// The clock's time since the last update that was given one. By this clock
+// and not by the frames' lengths: a map's load runs updates of its own behind
+// the loading screen, and the frame after it is as long as all of them - they
+// were counted twice, and the load's whole length, with the part of it before
+// the world's units came, was given to their moves. A flight over a map's
+// border was four seconds ahead of the server from there to its end.
+float GameHandler::takeUnitClock(float deltaTime) {
+    const auto now = std::exchange(unitClockNow_, std::nullopt);
+    if (!now) return deltaTime;
+    const auto since = std::exchange(unitClockTaken_, now);
+    if (!since) return deltaTime;
+    return std::clamp(std::chrono::duration<float>(*now - *since).count(), 0.0f, 3600.0f);
+}
+
+float GameHandler::sinceUnitsAdvanced() const {
+    if (!unitsAdvancedTo_) return 0.0f;
+    return std::max(std::chrono::duration<float>(std::chrono::steady_clock::now() - *unitsAdvancedTo_).count(), 0.0f);
+}
+
 void GameHandler::updateEntityInterpolation(float deltaTime) {
 // Advance every server-tracked unit once per frame. This is intentionally not
 // selected-target or distance gated: the spatial query is indexed by each
@@ -638,7 +658,13 @@ void GameHandler::updateEntityInterpolation(float deltaTime) {
 // By the frame's real length (update), not the capped delta: a stall of a few
 // seconds left every moving unit that far behind where the server had it, and
 // its next move's start - the server's position - put it right in one frame,
-// 13 to 35 yards at a run.
+// 13 to 35 yards at a run. By the clock itself where there is one, since a move
+// that began after the last of it is told how long after (sinceUnitsAdvanced).
+if (unitClockTaken_) {
+    if (unitsAdvancedTo_ && *unitClockTaken_ >= *unitsAdvancedTo_)
+        deltaTime = std::min(std::chrono::duration<float>(*unitClockTaken_ - *unitsAdvancedTo_).count(), 3600.0f);
+    unitsAdvancedTo_ = unitClockTaken_;
+}
 for (const auto& [guid, entity] : entityController_->getEntityManager().getEntities()) {
     (void)guid;
     if (entity && entity->isUnit()) {
@@ -840,15 +866,15 @@ void GameHandler::update(float deltaTime) {
     // had set the flag this waited on for long enough that the three members
     // behind it were never written at all. A block that cannot run, guarding a
     // deferral that no longer happens, reads as though both still do.
+    // Everything here goes by the clock (setUnitClock), not the capped frame:
+    // the server's clock ran on through a slow frame. A taxi flew a third
+    // slower than its 32 yards a second at ten frames, and the server set the
+    // player down 1100 yards behind it. Taken before anything returns: a time
+    // without a connection is nobody's.
+    deltaTime = takeUnitClock(deltaTime);
     if (!socket) {
         return;
     }
-    // Everything here goes by the frame's real length (setUnitClockSeconds), not
-    // the capped one: the server's clock ran on through a slow frame. A taxi
-    // flew a third slower than its 32 yards a second at ten frames, and the
-    // server set the player down 1100 yards behind it.
-    deltaTime = unitClockSeconds_.value_or(deltaTime);
-    unitClockSeconds_.reset();
 
     updateNetworking();
     if (!socket) return;  // disconnect() may have been called

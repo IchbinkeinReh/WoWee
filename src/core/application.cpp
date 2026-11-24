@@ -2483,9 +2483,8 @@ void Application::run() {
         // integrates over it.
         const float deltaTime = FramePacer::toSeconds(deltaNs);
         // But the units on their moves go by the clock, as the client's
-        // splines do (GameHandler::setUnitClockSeconds); capped only where
-        // a float of seconds stays exact enough.
-        if (gameHandler) gameHandler->setUnitClockSeconds(FramePacer::toSeconds(deltaNs, 3600.0f));
+        // splines do (GameHandler::setUnitClock).
+        if (gameHandler) gameHandler->setUnitClock(std::chrono::steady_clock::now());
         // And the player's own steps, up to a second of them.
         if (auto* cc = renderer ? renderer->getCameraController() : nullptr)
             cc->setFrameSeconds(FramePacer::toSeconds(deltaNs, 1.0f));
@@ -6125,11 +6124,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 if (canonDistSq > syncRadiusSq && !activeCombatTarget) continue;
             }
 
-            // Use the destination position once the entity has reached its
-            // target.  During the dead-reckoning overrun window getX/Y/Z
-            // drifts past the destination at the last known velocity;
-            // using getLatest (== moveEnd while isMoving_) avoids the
-            // visible forward-drift followed by a backward snap.
+            // The destination once it has reached its target, which a
+            // transport may be carrying on (Entity::setMoveEnds).
             const bool inOverrun = entity->isEntityMoving() && !entity->isActivelyMoving();
             glm::vec3 canonical(
                 inOverrun ? entity->getLatestX() : entity->getX(),
@@ -6189,11 +6185,9 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 const bool deadOrCorpse = unitPtr->getHealth() == 0;
                 const bool largeCorrection = (planarDistSq > 36.0f) || (dz > 3.0f);
                 // Use isActivelyMoving() so Run/Walk animation stops when the
-                // creature reaches its destination. Don't use position-change
-                // (planarDistSq) as a movement indicator when the entity is in
-                // the dead-reckoning overrun window - the residual velocity
-                // drift would keep the walk/run animation playing long after
-                // the creature has actually arrived. Only fall back to position-
+                // creature reaches its destination, and not the change of
+                // position (planarDistSq) while it has a move of its own. Only
+                // fall back to position-
                 // change detection for entities with no active movement tracking
                 // (e.g. teleports or position-only updates from the server).
                 const bool entityIsMoving = entity->isActivelyMoving();
@@ -6385,8 +6379,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 if (glm::dot(d, d) > pSyncRadiusSq && !activeCombatTarget) continue;
             }
 
-            // Position sync - clamp to destination during dead-reckoning
-            // overrun to avoid drift + backward snap (same as creature loop).
+            // Position sync: at its destination once there (as above).
             const bool inOverrun = entity->isEntityMoving() && !entity->isActivelyMoving();
             glm::vec3 canonical(
                 inOverrun ? entity->getLatestX() : entity->getX(),

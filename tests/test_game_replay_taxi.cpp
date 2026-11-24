@@ -437,3 +437,68 @@ TEST_CASE("while a spline carries the player nothing of its own movement goes ou
     mh->sendMovement(Opcode::MSG_MOVE_START_SWIM);
     CHECK(s.sent().of(Opcode::MSG_MOVE_START_SWIM).size() == 1);
 }
+
+// P45. The client's spline goes by the clock from the moment it is started
+// (0x0098ca00: now less +0x24). A map's load was counted into the spline that
+// came in it: the flight was four seconds ahead of the server from the border
+// on, and went on past its end for as long.
+TEST_CASE("a spline that comes after a load begins at its beginning", "[replay][taxi]") {
+    using namespace std::chrono_literals;
+    Session s;
+    s.setConnected(true);
+    spawn(s, kTaxiFlag, 1149, kBorder530);
+    auto& gh = s.handler();
+    const auto self = gh.getEntityManager().getEntity(Session::kPlayerGuid);
+    REQUIRE(self);
+    // The last update before the load, five seconds ago.
+    gh.setUnitClock(std::chrono::steady_clock::now() - 5s);
+    gh.update(0.016f);
+    std::vector<glm::vec3> way;
+    for (int i = 1; i <= 100; ++i) way.push_back(kBorder530 + glm::vec3(10.0f * static_cast<float>(i), 0.0f, 0.0f));
+    s.receive(flight(81, kBorder530, way, 40000));
+    const auto started = std::chrono::steady_clock::now();
+    // The frame after it, as long as the load.
+    gh.setUnitClock(started);
+    gh.update(0.016f);
+    CHECK(glm::length(placeOf(*self) - kBorder530) < 1.0f);
+    // And from there by the clock, whatever the update is told of its length.
+    gh.setUnitClock(started + 1s);
+    gh.update(1.0f / 60.0f);
+    CHECK(glm::length(placeOf(*self) - kBorder530) == Catch::Approx(25.0f).margin(2.0f));
+    gh.setUnitClock(started + 2s);
+    gh.update(1.0f / 60.0f);
+    CHECK(glm::length(placeOf(*self) - kBorder530) == Catch::Approx(50.0f).margin(2.0f));
+
+    // A creature's the same, and one by its movement flags.
+    constexpr uint64_t kDrake = 0xF130005490000042ull;
+    s.receive(UpdateObject().create(kDrake, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    const auto drake = gh.getEntityManager().getEntity(kDrake);
+    REQUIRE(drake);
+    const glm::vec3 c = wowee::core::coords::serverToCanonical(kBorder530);
+    drake->setPosition(c.x, c.y, c.z, 0.0f);
+    s.receive(flight(82, kBorder530, {kBorder530 + glm::vec3(100.0f, 0.0f, 0.0f)}, 10000, 0x0, kDrake));
+    // The units stand as they were three seconds before (the clock is put back).
+    gh.setUnitClock(std::chrono::steady_clock::now() + 2s);
+    gh.update(0.016f);
+    CHECK(glm::length(placeOf(*drake) - kBorder530) < 22.0f);
+}
+
+TEST_CASE("a flight stays where its spline ends until the server takes the flag", "[replay][taxi]") {
+    Session s;
+    spawn(s, kTaxiFlag, 1149, kBorder0);
+    frames(s, 10);
+    const glm::vec3 landing = kBorder0 + glm::vec3(40.0f, 0.0f, 0.0f);
+    s.receive(flight(91, kBorder0, {landing}, 1000));
+    const auto self = s.handler().getEntityManager().getEntity(Session::kPlayerGuid);
+    REQUIRE(self);
+    auto* mh = s.handler().getMovementHandler();
+    float farthest = 0.0f;
+    for (int i = 0; i < 30; ++i) {
+        self->updateMovement(0.1f);
+        mh->updateClientTaxi(0.1f);
+        farthest = std::max(farthest, glm::length(standsAt(s) - kBorder0));
+    }
+    CHECK(farthest < 40.1f);
+    CHECK(closeTo(standsAt(s), landing));
+    CHECK(s.handler().isOnTaxiFlight());
+}

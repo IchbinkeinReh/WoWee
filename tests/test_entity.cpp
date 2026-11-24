@@ -945,3 +945,33 @@ TEST_CASE("Entity starts a straight client spline at the packet's start", "[enti
         REQUIRE(e.getX() == Catch::Approx(5.0f + 1.25f * i).margin(0.01f));
     }
 }
+
+TEST_CASE("A move flown out stays on its last point and starts when it began", "[entity][movement]") {
+    // 0x0098ca00's 0x100 and 0x006eae70's 0x400: no running on past it.
+    for (const bool smooth : {false, true}) {
+        Entity e;
+        e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+        e.startMoveAlongPath({{{0.0f, 0.0f, 0.0f}}, {{10.0f, 0.0f, 0.0f}}, {{20.0f, 0.0f, 5.0f}}}, 0.0f, 2.0f, smooth,
+                             /*clientCurve=*/true);
+        for (int i = 0; i < 60; ++i) {
+            e.updateMovement(0.1f);
+            CHECK(e.getX() < 20.01f);
+        }
+        CHECK(e.getX() == Catch::Approx(20.0f));
+        CHECK(e.getZ() == Catch::Approx(5.0f));
+    }
+    Entity f;
+    f.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    f.startMoveTo(10.0f, 0.0f, 0.0f, 0.0f, 2.0f);
+    f.updateMovement(2.5f);
+    CHECK(f.getX() == Catch::Approx(10.0f));
+    // 0x0098ca00: now less the time it began.
+    Entity g;
+    g.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    g.startMoveTo(10.0f, 0.0f, 0.0f, 0.0f, 2.0f);
+    g.moveBeganAfter(5.0f);
+    g.updateMovement(4.0f);
+    CHECK(g.getX() == Catch::Approx(0.0f));
+    g.updateMovement(2.0f);
+    CHECK(g.getX() == Catch::Approx(5.0f));
+}
