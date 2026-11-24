@@ -15,6 +15,7 @@
 #include "game/mover_keys.hpp"
 #include "game/game_utils.hpp"
 #include "game/mover_mode.hpp"
+#include "game/player_display_flags.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
@@ -7525,21 +7526,14 @@ void Application::render() {
                             // is never updated, so a dressing room built from it
                             // showed the gear worn at the select screen under
                             // whatever was being tried on.
-                            std::vector<game::EquipmentItem> worn;
-                            {
-                                std::array<uint32_t, 19> displayIds{};
-                                std::array<uint8_t, 19> invTypes{};
-                                if (gameHandler->getOtherPlayerEquipment(
-                                        self->guid, displayIds, invTypes)) {
-                                    for (size_t slot = 0; slot < displayIds.size(); ++slot) {
-                                        if (displayIds[slot] == 0) continue;
-                                        worn.push_back({.displayModel = displayIds[slot],
-                                                        .inventoryType = invTypes[slot],
-                                                        .enchantment = 0u});
-                                    }
-                                }
-                                if (worn.empty()) worn = self->equipment;
-                            }
+                            std::array<uint32_t, 19> displayIds{};
+                            std::array<uint8_t, 19> invTypes{};
+                            const bool known =
+                                gameHandler->getOtherPlayerEquipment(self->guid, displayIds, invTypes);
+                            std::vector<game::EquipmentItem> worn = game::player_display::wornByPlayer(
+                                known, displayIds, invTypes, self->equipment,
+                                game::player_display::hideBits(gameHandler->isHelmVisible(),
+                                                               gameHandler->isCloakVisible()));
                             // Undress empties the figure; what is tried on
                             // after goes onto it bare.
                             if (dressUp->undressed) worn.clear();

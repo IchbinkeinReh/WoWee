@@ -1062,3 +1062,37 @@ TEST_CASE("a long walk in a create block loses nothing after it", "[replay][play
     }
     CHECK(there == count);
 }
+
+// P47: the character window, the portraits and the dressing room dress their
+// model from here, and 0x005975e0 duplicates the one in the world.
+TEST_CASE("a helm or cloak not shown is not on the player's model anywhere", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FLAGS, 0}});
+    const auto wear = [&](wowee::game::EquipSlot slot, uint32_t display, uint8_t type) {
+        wowee::game::ItemDef item;
+        item.itemId = display;
+        item.displayInfoId = display;
+        item.inventoryType = type;
+        s.handler().getInventory().setEquipSlot(slot, item);
+    };
+    wear(wowee::game::EquipSlot::HEAD, 501, 1);
+    wear(wowee::game::EquipSlot::BACK, 502, 16);
+    wear(wowee::game::EquipSlot::CHEST, 503, 5);
+    const auto shown = [&](int slot) {
+        std::array<uint32_t, 19> ids{};
+        std::array<uint8_t, 19> types{};
+        REQUIRE(s.handler().getOtherPlayerEquipment(Session::kPlayerGuid, ids, types));
+        return ids[static_cast<size_t>(slot)];
+    };
+    CHECK(shown(0) == 501u);
+    CHECK(shown(14) == 502u);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0x400}}));
+    CHECK(shown(0) == 0u);
+    CHECK(shown(14) == 502u);
+    CHECK(shown(4) == 503u);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0xc00}}));
+    CHECK(shown(14) == 0u);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0}}));
+    CHECK(shown(0) == 501u);
+    CHECK(shown(14) == 502u);
+}

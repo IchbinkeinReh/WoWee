@@ -7938,6 +7938,9 @@ bool InventoryHandler::resolvePlayerEquipment(
         invTypes[static_cast<size_t>(slot)] = invType;
         ++resolved;
     }
+    // Drawn as the unit in the world is: without a helm or a cloak not shown.
+    player_display::applyHidden(player_display::hideBits(owner_.isHelmVisible(), owner_.isCloakVisible()), displayIds,
+                                invTypes);
     return resolved > 0;
 }
 

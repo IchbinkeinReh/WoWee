@@ -31,3 +31,21 @@ TEST_CASE("other flags dress everything", "[player_display]") {
     CHECK(pd::hideBits(0xffffffffu) == 0xc00u);
     CHECK(pd::hideBits(0x20u) == 0u);
 }
+
+// The character list's equipment, shown until the items are known, is by slot.
+TEST_CASE("the player's own model hides them before its items are known too", "[player_display]") {
+    CHECK(pd::hideBits(true, true) == 0u);
+    CHECK(pd::hideBits(false, true) == 0x400u);
+    CHECK(pd::hideBits(true, false) == 0x800u);
+    std::vector<wowee::game::EquipmentItem> listed;
+    for (uint32_t s = 0; s < 23; ++s)
+        listed.push_back({.displayModel = 100 + s, .inventoryType = static_cast<uint8_t>(s + 1), .enchantment = 0u});
+    const auto worn = pd::wornByPlayer(false, {}, {}, listed, pd::hideBits(false, false));
+    REQUIRE(worn.size() == 23);
+    CHECK(worn[0].displayModel == 0u);
+    CHECK(worn[14].displayModel == 0u);
+    CHECK(worn[1].displayModel == 101u);
+    CHECK(pd::wornByPlayer(false, {}, {}, listed, 0u)[0].displayModel == 100u);
+    // Known, and nothing left once hidden: nothing, and not the list again.
+    CHECK(pd::wornByPlayer(true, {}, {}, listed, pd::hideBits(false, false)).empty());
+}

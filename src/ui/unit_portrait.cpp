@@ -3,6 +3,7 @@
 
 #include "core/logger.hpp"
 #include "game/game_handler.hpp"
+#include "game/player_display_flags.hpp"
 #include "rendering/character_preview.hpp"
 #include "rendering/portrait_camera.hpp"
 #include "rendering/renderer.hpp"
@@ -66,20 +67,12 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
     // gets when this character is the target - the two portraits are of the
     // same person and must not disagree. The login list stands in until the
     // item queries have come back, which is a moment at most.
-    std::vector<game::EquipmentItem> worn;
-    {
-        std::array<uint32_t, 19> displayIds{};
-        std::array<uint8_t, 19> invTypes{};
-        if (gameHandler.getOtherPlayerEquipment(self->guid, displayIds, invTypes)) {
-            for (size_t slot = 0; slot < displayIds.size(); ++slot) {
-                if (displayIds[slot] == 0) continue;
-                worn.push_back({.displayModel = displayIds[slot],
-                                .inventoryType = invTypes[slot],
-                                .enchantment = 0u});
-            }
-        }
-        if (worn.empty()) worn = self->equipment;
-    }
+    std::array<uint32_t, 19> displayIds{};
+    std::array<uint8_t, 19> invTypes{};
+    const bool known = gameHandler.getOtherPlayerEquipment(self->guid, displayIds, invTypes);
+    const std::vector<game::EquipmentItem> worn = game::player_display::wornByPlayer(
+        known, displayIds, invTypes, self->equipment,
+        game::player_display::hideBits(gameHandler.isHelmVisible(), gameHandler.isCloakVisible()));
 
     // The guild tabard's design (0x006db510): the guild's, once known, or
     // the tabard designer's while it is open (0x004ec1c0).
