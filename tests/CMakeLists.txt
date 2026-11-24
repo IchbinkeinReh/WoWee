@@ -3825,6 +3825,7 @@ if(NOT ANDROID)
     add_test(NAME game_replay COMMAND test_game_replay)
     target_sources(test_game_replay PRIVATE test_game_replay_energize.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_playtest.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_quests.cpp)
     register_test_target(test_game_replay)
 endif()
 

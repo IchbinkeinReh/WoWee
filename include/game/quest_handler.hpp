@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/quest_progress.hpp"
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
 #include "game/handler_types.hpp"
@@ -340,6 +341,7 @@ public:
         slotQuestIds_.fill(0);
         slotQuestStates_.fill(0);
         slotsSeen_ = false;
+        questSlotWatch_.clear();
         pendingQuestAddedNotices_.clear();
         questLog_.clear();
         pendingQuestQueryIds_.clear();
@@ -420,6 +422,7 @@ private:
     /// noted, as the client's watchers are not called for it.
     std::array<uint32_t, 25> slotQuestStates_{};
     bool slotsSeen_ = false;
+    QuestSlotWatch questSlotWatch_;
     /// What SMSG_QUEST_QUERY_RESPONSE told of a quest: its QuestInfo type
     /// (+0x14) and title.
     struct QueriedQuest {

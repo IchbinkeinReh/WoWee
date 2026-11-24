@@ -1116,7 +1116,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             // that just landed - without it a queried quest keeps its empty
             // description until the log is closed and reopened, which is the
             // "only after a relog" shape reported for the description panel.
-            owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
             break;
         }
 
@@ -1911,17 +1911,24 @@ void QuestHandler::applyQuestStateFromFields(const FlatFieldMap& fields) {
         // on the way to complete (see resyncQuestLogFromServerSlots).
         const bool serverComplete = isQuestSlotComplete(qStride, stateIt->second);
         for (auto& quest : questLog_) {
-            if (quest.questId == questId && quest.complete != serverComplete) {
+            if (quest.questId != questId) continue;
+            quest.failed = isQuestSlotFailed(qStride, stateIt->second);
+            if (quest.complete != serverComplete) {
                 quest.complete = serverComplete;
                 LOG_INFO("Quest ", questId, " complete=", serverComplete,
                          " from VALUES update field state");
-                break;
             }
+            break;
         }
     }
     // After the slots' own pass, which takes a quest it was waiting to
     // accept into the log itself, and asks its giver again.
     syncQuestLogMembershipFromSlots(fields, ufQuestStart, qStride);
+    // Last: what the interface asks for on it is the log as it is now.
+    if (questSlotWatch_.update(fields, ufQuestStart, qStride) && owner_.addonEventCallbackRef()) {
+        owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
+        owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
+    }
 }
 
 void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, uint16_t ufQuestStart,
@@ -1969,15 +1976,8 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
                 // Its title and objectives, for one the log has not had.
                 if (before.count(q.questId) == 0) requestQuestQuery(q.questId, false);
             }
-            bool changed = after != before;
             for (uint32_t id : after) {
                 if (before.count(id) == 0) announceQuestLogChanged(id);
-            }
-            if (changed && owner_.addonEventCallbackRef()) {
-                // A quest gone has no index left to name; the log and
-                // the tracker redraw from the list as it is now.
-                owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
-                owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
             }
         }
     }

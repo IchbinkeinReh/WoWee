@@ -102,6 +102,15 @@ public:
         return *this;
     }
 
+    // The same by index, for the fields of an array past its first.
+    UpdateObject& valuesAt(uint64_t guid, const std::map<uint16_t, uint32_t>& byIndex) {
+        ++blocks_;
+        body_.writeUInt8(static_cast<uint8_t>(wowee::game::UpdateType::VALUES));
+        body_.writePackedGuid(guid);
+        writeIndexed(byIndex);
+        return *this;
+    }
+
     [[nodiscard]] wowee::network::Packet packet() const {
         wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_UPDATE_OBJECT));
         p.writeUInt32(blocks_);
@@ -121,6 +130,10 @@ private:
             REQUIRE(index != 0xFFFF);
             byIndex[index] = value;
         }
+        writeIndexed(byIndex);
+    }
+
+    void writeIndexed(const std::map<uint16_t, uint32_t>& byIndex) {
         const uint8_t maskBlocks =
             byIndex.empty() ? 0 : static_cast<uint8_t>(byIndex.rbegin()->first / 32 + 1);
         body_.writeUInt8(maskBlocks);

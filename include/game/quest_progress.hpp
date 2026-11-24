@@ -68,6 +68,34 @@ inline bool isQuestSlotFailed(uint8_t questLogStride, uint32_t stateField) {
     return (questSlotState(questLogStride, stateField) & 0x2u) != 0;
 }
 
+/// The player's 25 quest slots, whole. The client watches each slot's twenty
+/// bytes (0x006df370, registered from +0x28 by 0x14): whichever of a slot's
+/// words changed - quest, state, counters or timer - the log is built again and
+/// QUEST_LOG_UPDATE raised (0x005e6940 -> 0x00615020(0x125)).
+class QuestSlotWatch {
+public:
+    static constexpr size_t kSlots = 25;
+
+    /// Takes the slots as the fields have them and says whether any word is new.
+    /// Absent is zero: the server sends no zero fields.
+    template <class Fields>
+    bool update(const Fields& fields, uint16_t firstField, uint8_t questLogStride) {
+        const size_t words = kSlots * questLogStride;
+        bool changed = false;
+        for (size_t i = 0; i < words && i < words_.size(); ++i) {
+            const auto it = fields.find(static_cast<uint16_t>(firstField + i));
+            const uint32_t value = it != fields.end() ? it->second : 0u;
+            changed |= words_[i] != value;
+            words_[i] = value;
+        }
+        return changed;
+    }
+    void clear() { words_.fill(0); }
+
+private:
+    std::array<uint32_t, kSlots * 5> words_{};
+};
+
 /// Where an objective line's wording comes from: a GlobalStrings key and its
 /// enUS text, answered with the interface's (localized) string. The game's
 /// is game::interfaceString; tests pass their own.
