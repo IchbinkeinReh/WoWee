@@ -6294,6 +6294,31 @@ const std::string& GameHandler::getSkillLineName(uint32_t skillLineId) const {
 }
 
 
+const std::vector<CalendarHoliday>& GameHandler::holidayTable() {
+    auto* am = services_.assetManager;
+    if (holidayTableRead_ || !am || !am->isInitialized()) return holidayTable_;
+    holidayTableRead_ = true;
+    const auto rows = am->loadDBCOptional("Holidays.dbc");
+    const auto names = am->loadDBCOptional("HolidayNames.dbc");
+    if (!rows || !names || rows->getFieldCount() < 54 || names->getFieldCount() < 2) return holidayTable_;
+    for (uint32_t i = 0; i < rows->getRecordCount(); ++i) {
+        const int32_t name = names->findRecordById(rows->getUInt32(i, 49));
+        if (name < 0 || names->getString(static_cast<uint32_t>(name), 1).empty()) continue;
+        CalendarHoliday h;
+        h.id = rows->getUInt32(i, 0);
+        for (uint32_t k = 0; k < 10; ++k) h.durations[k] = rows->getUInt32(i, 1 + k);
+        for (uint32_t k = 0; k < 26; ++k) h.dates[k] = rows->getUInt32(i, 11 + k);
+        h.region = rows->getUInt32(i, 37);
+        h.looping = rows->getUInt32(i, 38);
+        for (uint32_t k = 0; k < 10; ++k) h.calendarFlags[k] = rows->getUInt32(i, 39 + k);
+        h.textureFilename = rows->getString(i, 51);
+        h.priority = rows->getUInt32(i, 52);
+        h.calendarFilterType = rows->getUInt32(i, 53);
+        holidayTable_.push_back(std::move(h));
+    }
+    return holidayTable_;
+}
+
 void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& packet) {
     CalendarContext ctx{calendarData_, calendarEventDetail_};
     ctx.player = playerGuid;
@@ -6309,6 +6334,9 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
         packet.skipAll();
         return;
     }
+    // The server sends the holidays it has changed; the rest are the table's.
+    if (which == CalendarPacket::SendCalendar)
+        calendarData_.holidays = calendarMergedHolidays(holidayTable(), calendarData_.holidays);
     packet.skipAll();
     // An event sent in full is the open one now, in place of a new one
     // (0x005bed20).

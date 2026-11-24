@@ -7971,6 +7971,10 @@ private:
                              const std::vector<std::string>& args = {});
     /// The whole calendar, as of the server's last answer to a request for it.
     CalendarData calendarData_;
+    /// Holidays.dbc's rows that have a name (0x005c23c0), read once.
+    const std::vector<CalendarHoliday>& holidayTable();
+    std::vector<CalendarHoliday> holidayTable_;
+    bool holidayTableRead_ = false;
     /// The reminders armed against that calendar, re-armed by every calendar
     /// packet that lands. The client keeps one scheduled callback per event
     /// record (its handle at `+0xc0`, armed by 0x005b79b0); these are the same

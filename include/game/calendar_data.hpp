@@ -104,9 +104,36 @@ struct CalendarHoliday {
     uint32_t calendarFilterType = 0;
     uint32_t dates[kNumDates] = {};
     uint32_t durations[kNumDurations] = {};
+    /// Per stage, who sees it on the calendar: 1 the Alliance, 2 the Horde.
     uint32_t calendarFlags[kNumFlags] = {};
     std::string textureFilename;
 };
+
+/// A month as the calendar shows it and who looks (0x005c23c0).
+struct CalendarView {
+    int month = 0;  ///< 1-12; 0 for the month of the day asked about
+    int year = 0;
+    uint32_t teamMask = 3;  ///< CalendarHoliday::calendarFlags' bits (0x006d6e90)
+    WowDate now;            ///< what a date leaves open is taken from
+    uint64_t player = 0;
+};
+
+/// One showing of a holiday: a stage of it, from its start to its end, in
+/// minutes since 1970 (0x005bfab0).
+struct CalendarHolidayRun {
+    int64_t start = 0;
+    int64_t end = 0;
+    /// The days its record covers (0x005c2030, +0xc8).
+    uint32_t days = 1;
+};
+
+/// The showings of a holiday in the six weeks a month is shown with, which are
+/// those from six days before its first: each stage whose flags name the
+/// viewer's side, after the stages before it, once - by the first of the dates
+/// that reaches into the weeks - or every week for a date that is a weekday
+/// alone, or every turn of the stages for a looping one.
+std::vector<CalendarHolidayRun> calendarHolidayRuns(const CalendarHoliday& holiday, int month, int year,
+                                                    const CalendarView& view);
 
 /// Everything the packet carried.
 struct CalendarData {
@@ -560,7 +587,15 @@ struct CalendarShowFilter {
 std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
                                                     int month, int day,
                                                     int year,
-                                                    const CalendarShowFilter& filter = {});
+                                                    const CalendarShowFilter& filter = {},
+                                                    const CalendarView& view = {});
+
+/// The holidays the calendar shows: Holidays.dbc's rows, the server's record in
+/// the place of the row with its id (0x005c04f0 walks the table and asks for
+/// the record by id). `region` 0 is every one's, and the client's own is not
+/// known here.
+std::vector<CalendarHoliday> calendarMergedHolidays(const std::vector<CalendarHoliday>& table,
+                                                    const std::vector<CalendarHoliday>& server);
 
 }  // namespace game
 }  // namespace wowee

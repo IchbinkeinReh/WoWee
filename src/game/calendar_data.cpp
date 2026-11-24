@@ -206,37 +206,134 @@ WowDate addMinutes(const WowDate& date, int64_t minutes) {
     return out;
 }
 
+std::vector<CalendarHoliday> calendarMergedHolidays(const std::vector<CalendarHoliday>& table,
+                                                    const std::vector<CalendarHoliday>& server) {
+    if (table.empty()) return server;
+    std::vector<CalendarHoliday> out;
+    for (const CalendarHoliday& row : table) {
+        const auto it = std::find_if(server.begin(), server.end(),
+                                     [&](const CalendarHoliday& h) { return h.id == row.id; });
+        const CalendarHoliday& holiday = it != server.end() ? *it : row;
+        if (holiday.region == 0) out.push_back(holiday);
+    }
+    return out;
+}
+
+std::vector<CalendarHolidayRun> calendarHolidayRuns(const CalendarHoliday& h, int month, int year,
+                                                    const CalendarView& view) {
+    std::vector<CalendarHolidayRun> runs;
+    const int64_t windowStart = (dayNumber(year, month, 1) - 6) * 1440;
+    const int64_t windowEnd = windowStart + static_cast<int64_t>(42 + 6) * 1440;
+    const auto hours = [&](int stage) { return static_cast<int64_t>(h.durations[stage] ? h.durations[stage] : 24); };
+    for (int stage = 0; stage < CalendarHoliday::kNumDurations; ++stage) {
+        if ((h.calendarFlags[stage] & view.teamMask) == 0) continue;
+        if (stage > 0 && h.durations[stage] == 0) continue;
+        // A looping one comes round after all of its stages; a first stage of
+        // no length counts a day more (0x005c04f0).
+        int64_t period = 0;
+        if (h.looping != 0) {
+            period = hours(stage) + (h.durations[0] == 0 ? 24 : 0);
+            for (int k = 0; k < CalendarHoliday::kNumDurations; ++k) {
+                if (k != stage) period += h.durations[k];
+            }
+            period *= 60;
+        }
+        bool found = false;
+        int64_t start = 0, end = 0;
+        for (const uint32_t packed : h.dates) {
+            if (packed == 0) continue;
+            // 0x0076c970: a field of all ones is open.
+            const auto open = [](uint32_t v, uint32_t ones) { return v == ones ? -1 : static_cast<int>(v); };
+            int minute = open(packed & 0x3F, 0x3F);
+            int hour = open((packed >> 6) & 0x1F, 0x1F);
+            const int weekday = open((packed >> 11) & 0x7, 0x7);
+            int day = open((packed >> 14) & 0x3F, 0x3F);
+            int mon = open((packed >> 20) & 0xF, 0xF);
+            int yr = open((packed >> 24) & 0x1F, 0x1F);
+            // A weekday alone: every week, from the one the weeks shown begin
+            // with. What else is open is the game's date, the year the one
+            // shown - the one before for a December seen from January.
+            const bool weekly = weekday >= 0 && day < 0 && mon < 0 && yr < 0;
+            int64_t moreDays = 0;
+            int wy = view.now.fullYear(), wm = view.now.month, wd = view.now.day;
+            if (weekly) {
+                civilFromDays(windowStart / 1440, wy, wm, wd);
+                const int64_t windowWeekday = ((windowStart / 1440) % 7 + 7 + 4) % 7;
+                moreDays = weekday - windowWeekday;
+                if (moreDays < 0) moreDays += 7;
+            }
+            if (minute < 0) minute = weekly ? 0 : view.now.minute;
+            if (hour < 0) hour = weekly ? 0 : view.now.hour;
+            if (day < 0) day = wd - 1;
+            if (mon < 0) mon = wm - 1;
+            int fullYear = yr < 0 ? year : 2000 + yr;
+            if (yr < 0 && month == 1 && mon == 11) --fullYear;
+            start = (dayNumber(fullYear, mon + 1, day + 1) + moreDays) * 1440 + hour * 60 + minute;
+            for (int k = 0; k < stage; ++k) start += hours(k) * 60;
+            const int64_t length = hours(stage) * 60;
+            if (weekly) period = 7 * 1440;
+            if (h.looping != 0) {
+                // The first turn that reaches into the weeks; only the first
+                // date is asked.
+                if (windowEnd < start) break;
+                while (windowStart >= start + length) start += period;
+                if (windowEnd < start) break;
+                end = start + length;
+                found = true;
+                break;
+            }
+            if (windowEnd < start) continue;
+            end = start + length;
+            if (end < windowStart) continue;
+            found = true;
+            break;
+        }
+        if (!found) continue;
+        // From midnight on is a minute past, to midnight a minute before: the
+        // last day is the one that ends there.
+        if (start % 1440 == 0) start += 1;
+        if (end % 1440 == 0) end -= 1;
+        do {
+            CalendarHolidayRun run{start, end, 0};
+            for (int64_t d = start; d <= end; d += 1440) ++run.days;
+            runs.push_back(run);
+            start += period;
+            end += period;
+        } while (period > 0 && start < windowEnd);
+    }
+    return runs;
+}
+
 std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
                                                     int month, int day,
                                                     int year,
-                                                    const CalendarShowFilter& filter) {
+                                                    const CalendarShowFilter& filter,
+                                                    const CalendarView& view) {
     std::vector<CalendarDayEntry> out;
     const int64_t wanted = dayNumber(year, month, day);
+    const int viewMonth = view.month > 0 ? view.month : month;
+    const int viewYear = view.month > 0 ? view.year : year;
 
     for (size_t h = 0; h < data.holidays.size(); ++h) {
         const CalendarHoliday& holiday = data.holidays[h];
         // 0x005c0240 / 0x005c04f0: a holiday's list is skipped while the
         // calendarShow* CVar for its filter type reads 0.
         if (!filter.showsHoliday(holiday.calendarFilterType)) continue;
-        for (int i = 0; i < CalendarHoliday::kNumDates; ++i) {
-            if (holiday.dates[i] == 0) continue;
-            const WowDate start = unpackWowPackedTime(holiday.dates[i]);
-            const int64_t first = dayNumber(start.fullYear(), start.month, start.day);
-            if (wanted < first) continue;
-            // Hours, rounded up to whole days and never less than one: a
-            // holiday sent with a duration of zero still happens on its day.
-            const uint32_t hours = (i < CalendarHoliday::kNumDurations)
-                                       ? holiday.durations[i] : 0;
-            const int64_t days = hours > 0 ? static_cast<int64_t>((hours + 23) / 24) : 1;
-            if (wanted >= first + days) continue;
+        for (const CalendarHolidayRun& run : calendarHolidayRuns(holiday, viewMonth, viewYear, view)) {
+            const int64_t first = run.start / 1440, last = run.end / 1440;
+            if (wanted < first || wanted > last) continue;
             CalendarDayEntry entry;
             entry.kind = CalendarEntryKind::Holiday;
             entry.index = h;
             entry.ongoing = wanted > first;
             entry.sequenceIndex = static_cast<uint32_t>(wanted - first);
-            entry.numSequenceDays = static_cast<uint32_t>(days);
+            entry.numSequenceDays = run.days;
+            // The record's time, which on the last of several days is the
+            // end's (0x005c2030).
+            const int64_t at = run.days > 1 && wanted == last ? run.end : run.start;
+            entry.hour = static_cast<int>(at % 1440 / 60);
+            entry.minute = static_cast<int>(at % 60);
             out.push_back(entry);
-            break;  // one row per holiday per day, whichever run covers it
         }
     }
 
@@ -266,21 +363,40 @@ std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
         out.push_back(entry);
     }
 
-    // Events by time of day, holidays left where they are at the front.
-    std::stable_sort(out.begin(), out.end(),
-                     [&data](const CalendarDayEntry& a, const CalendarDayEntry& b) {
-                         if (a.kind != b.kind) {
-                             // The enum is in drawing order: holidays head the
-                             // day, then raid lockouts, then the player's own
-                             // events.
-                             return a.kind < b.kind;
-                         }
-                         if (a.kind != CalendarEntryKind::Event) return false;
-                         const WowDate& ta = data.events[a.index].eventTime;
-                         const WowDate& tb = data.events[b.index].eventTime;
-                         if (ta.hour != tb.hour) return ta.hour < tb.hour;
-                         return ta.minute < tb.minute;
-                     });
+    // 0x005bfd20: an event with an answer pending first, then the player's
+    // events, then the holidays, the greater priority before the less and a
+    // run's first day before its last and those between, then what is left;
+    // by the start among equals, then by title.
+    const WowDate* now = view.now.yearSince2000 > 0 ? &view.now : nullptr;
+    const auto pending = [&](const CalendarDayEntry& e) {
+        return view.player != 0 && e.kind == CalendarEntryKind::Event &&
+               (calendarInviteState(data, data.events[e.index], view.player, now).flags & 1u) != 0;
+    };
+    const auto rank = [&](const CalendarDayEntry& e) {
+        return pending(e) ? 0 : e.kind == CalendarEntryKind::Event ? 1 : e.kind == CalendarEntryKind::Holiday ? 2 : 3;
+    };
+    const auto sequence = [](const CalendarDayEntry& e) {
+        if (e.numSequenceDays < 2) return 4;
+        return e.sequenceIndex == 0 ? 1 : e.sequenceIndex == e.numSequenceDays - 1 ? 2 : 3;
+    };
+    const auto minutes = [&](const CalendarDayEntry& e) {
+        if (e.kind != CalendarEntryKind::Event) return e.hour * 60 + e.minute;
+        const WowDate& t = data.events[e.index].eventTime;
+        return t.hour * 60 + t.minute;
+    };
+    std::stable_sort(out.begin(), out.end(), [&](const CalendarDayEntry& a, const CalendarDayEntry& b) {
+        if (const int ra = rank(a), rb = rank(b); ra != rb) return ra < rb;
+        if (a.kind == CalendarEntryKind::Holiday && b.kind == CalendarEntryKind::Holiday) {
+            const auto pa = static_cast<int32_t>(data.holidays[a.index].priority);
+            const auto pb = static_cast<int32_t>(data.holidays[b.index].priority);
+            if (pa != pb) return pa > pb;
+        }
+        if (const int sa = sequence(a), sb = sequence(b); sa != sb) return sa < sb;
+        if (const int ma = minutes(a), mb = minutes(b); ma != mb) return ma < mb;
+        if (a.kind == CalendarEntryKind::Event && b.kind == CalendarEntryKind::Event)
+            return data.events[a.index].title < data.events[b.index].title;
+        return false;
+    });
     return out;
 }
 

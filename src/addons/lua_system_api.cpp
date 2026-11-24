@@ -173,6 +173,20 @@ static wowee::game::CalendarShowFilter calendarShowFilter() {
 /// same list, so resolving it lives here once - three getters computing "which
 /// month is offset -1 of the viewed one" separately is how they would drift
 /// apart on the first month that ends on a Sunday.
+/// What the month shown is looked at as: its date, the player's side
+/// (0x006d6e90: 1 the Alliance, 2 the Horde), the game's date.
+static wowee::game::CalendarView calendarView(const wowee::game::GameHandler& gh) {
+    const auto viewed = calendarViewedMonth();
+    wowee::game::CalendarView view;
+    view.month = viewed.first;
+    view.year = viewed.second;
+    const int team = wowee::game::bg_flag::raceTeam(gh.getPlayerRace());
+    view.teamMask = team == 1 ? 1u : team == 0 ? 2u : 0u;
+    if (const auto now = gh.getGameDate()) view.now = *now;
+    view.player = gh.getPlayerGuid();
+    return view;
+}
+
 static std::vector<wowee::game::CalendarDayEntry> calendarDayRows(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return {};
@@ -184,7 +198,7 @@ static std::vector<wowee::game::CalendarDayEntry> calendarDayRows(lua_State* L) 
                                                    monthOffset);
     if (day > info.numDays) return {};
     return wowee::game::calendarEntriesForDay(gh->getCalendarData(), info.month,
-                                              day, info.year, calendarShowFilter());
+                                              day, info.year, calendarShowFilter(), calendarView(*gh));
 }
 
 /// The event being built up before it is sent.
@@ -232,7 +246,7 @@ static std::vector<wowee::game::CalendarDayEntry> calendarRowsFor(
                                                    monthOffset);
     if (day > info.numDays) return {};
     return wowee::game::calendarEntriesForDay(gh.getCalendarData(), info.month,
-                                              day, info.year, calendarShowFilter());
+                                              day, info.year, calendarShowFilter(), calendarView(gh));
 }
 
 /// Which of the six kinds of row this event is, as the string the interface
@@ -11853,8 +11867,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // Its HolidayNames name (0x005b9430).
                 const HolidayText* text = holidayText(gh, holiday.id);
                 lua_pushstring(L, text ? text->name.c_str() : "");
-                lua_pushnumber(L, 0);              // hour
-                lua_pushnumber(L, 0);              // minute
+                lua_pushnumber(L, row.hour);
+                lua_pushnumber(L, row.minute);
                 lua_pushstring(L, "HOLIDAY");
                 // Its day of the run (0x005b8040): the interface draws the
                 // name on its first day and skips the "ONGOING" ones. A
