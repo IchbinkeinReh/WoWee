@@ -158,7 +158,8 @@ constexpr uint32_t kArcaneShot = 3044;
 // A hunter in the world with a mob to shoot (upstream's helper, from a
 // replay commit not taken here).
 void huntMob(Session& s) {
-    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_LEVEL, 9}});
+    // UNIT_FLAG_PLAYER_CONTROLLED, as every player has it.
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_LEVEL, 9}, {UF::UNIT_FIELD_FLAGS, 0x8}});
     s.receive(UpdateObject().create(kMob, wowee::game::ObjectType::UNIT,
                                     {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 8}}));
 }
@@ -279,7 +280,14 @@ TEST_CASE("Attack is the current spell while the player swings", "[replay][actio
     CHECK_FALSE(s.handler().isCurrentSpell(6603));
     s.handler().startAutoAttack(kMob);
     CHECK(s.handler().isCurrentSpell(6603));
+    // Until the server has stopped it (0x00756770).
     s.handler().stopAutoAttack();
+    CHECK(s.handler().isCurrentSpell(6603));
+    wowee::network::Packet stop(wowee::game::wireOpcode(wowee::game::Opcode::SMSG_ATTACKSTOP));
+    stop.writePackedGuid(Session::kPlayerGuid);
+    stop.writePackedGuid(kMob);
+    stop.writeUInt32(0);
+    s.receive(stop);
     CHECK_FALSE(s.handler().isCurrentSpell(6603));
     // A spell the client has no record of is never current.
     CHECK_FALSE(s.handler().isCurrentSpell(999999));
