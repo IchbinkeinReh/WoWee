@@ -78,7 +78,6 @@
 #include "core/coordinates.hpp"
 #include "rendering/minimap_zoom.hpp"
 #include "rendering/minimap_blips.hpp"
-#include "rendering/world_map/coordinate_projection.hpp"
 #include "core/local_time.hpp"
 
 namespace wowee::addons {
@@ -8530,90 +8529,10 @@ static int lua_IsXPUserDisabled(lua_State* L) {
     return 1;
 }
 
-/// The taxi nodes the flight map is showing, in a fixed order.
-///
-/// Every taxi function is asked about a node by position in this list, and the
-/// answers only line up if each of them walks the same order. They used to walk
-/// `getTaxiNodes()` directly, which is an unordered_map: its order is arbitrary,
-/// and rehashing it - which learning a flight path while the window is open
-/// does - reorders it under a list already drawn. Clicking a destination would
-/// then fly somewhere else. Sorting by node id costs a copy of a few hundred
-/// integers and makes the order the same every time it is asked.
-///
-/// Only the nodes on the map the player is standing on are listed. That is what
-/// the flight map shows, and it is what this client's own window already lists.
-static std::vector<uint32_t> taxiNodeOrder(game::GameHandler* gh) {
-    std::vector<uint32_t> ids;
-    if (!gh) return ids;
-
-    const auto& nodes = gh->getTaxiNodes();
-    const auto current = nodes.find(gh->getTaxiCurrentNode());
-    if (current == nodes.end()) return ids;
-
-    const uint32_t mapId = current->second.mapId;
-    ids.reserve(nodes.size());
-    for (const auto& [id, node] : nodes) {
-        if (node.mapId == mapId) ids.push_back(id);
-    }
-    std::sort(ids.begin(), ids.end());
-    return ids;
-}
-
-/// The node at a one-based position on the flight map, or 0 for no such node.
+/// The node at a one-based place in the flight map's list, or 0 for no such node.
 static uint32_t taxiNodeAt(game::GameHandler* gh, int index) {
-    const auto ids = taxiNodeOrder(gh);
-    if (index < 1 || index > static_cast<int>(ids.size())) return 0;
-    return ids[static_cast<size_t>(index - 1)];
-}
-
-/// Where a taxi node sits on the flight map, as a fraction of its width and
-/// height.
-///
-/// The flight map is the continent's map, so this is the same projection the
-/// world map does - the one place it lives, in rendering/world_map, reached
-/// through the continent rectangle the game handler now reads.
-///
-/// The order of the two conversions is the whole difficulty. TaxiNodes.dbc
-/// holds positions in server order, and feeding those straight to
-/// canonicalToRender transposes every marker, which is exactly how the flight
-/// map's node markers came out mirrored once before. Server to canonical
-/// first, then canonical to render, then project.
-static bool taxiNodeMapPos(game::GameHandler* gh, uint32_t nodeId,
-                           float& outU, float& outV) {
-    if (!gh) return false;
-    const auto& nodes = gh->getTaxiNodes();
-    const auto it = nodes.find(nodeId);
-    if (it == nodes.end()) return false;
-
-    const auto& bounds = gh->getContinentBounds(it->second.mapId);
-    if (!bounds.valid) return false;
-
-    const glm::vec3 canonical = core::coords::serverToCanonical(
-        glm::vec3(it->second.x, it->second.y, it->second.z));
-    const glm::vec3 render = core::coords::canonicalToRender(canonical);
-
-    rendering::world_map::ZoneBounds zb;
-    zb.locLeft = bounds.left;   zb.locRight  = bounds.right;
-    zb.locTop  = bounds.top;    zb.locBottom = bounds.bottom;
-    const glm::vec2 uv =
-        rendering::world_map::renderPosToMapUV(render, zb, /*isContinent=*/true);
-    outU = uv.x;
-    // Measured up from the bottom, which is not the convention the rest of the
-    // interface uses and is the whole of why the flight map was wrong.
-    //
-    // The world map anchors what it places to TOPLEFT and negates the y it was
-    // given - worldmapframe.lua:789 - so GetPlayerMapPosition counts down from
-    // the top. The flight map anchors to BOTTOMLEFT and adds it, for the nodes
-    // (taxiframe.lua:80) and for both ends of every route leg (140-142,
-    // 179-181), so TaxiNodePosition counts up from the bottom.
-    //
-    // renderPosToMapUV answers the world map's way, so handing it over
-    // unchanged mirrored the map vertically: Rut'theran sits 0.17 down from the
-    // top of Kalimdor and was drawn 0.17 up from the bottom, which is Tanaris.
-    // Every node was over somewhere it did not belong, which is what made them
-    // read as the wrong places rather than as merely misplaced.
-    outV = 1.0f - uv.y;
-    return true;
+    const game::TaxiMapNode* node = gh ? gh->getTaxiMap().at(index) : nullptr;
+    return node ? node->id : 0;
 }
 
 /// One end of one leg of a flight, as a fraction of the map.
@@ -8631,11 +8550,7 @@ static int lua_TaxiLegCoord(lua_State* L) {
     // Hop N runs from route[N-1] to route[N], so the last hop is size-1.
     if (hop >= static_cast<int>(route.size())) { lua_pushnumber(L, 0); return 1; }
 
-    float u = 0, v = 0;
-    if (!taxiNodeMapPos(gh, route[static_cast<size_t>(hop - 1 + End)], u, v)) {
-        lua_pushnumber(L, 0);
-        return 1;
-    }
+    const auto [u, v] = gh->taxiLegPosition(route[static_cast<size_t>(hop - 1 + End)]);
     lua_pushnumber(L, Horizontal ? u : v);
     return 1;
 }
@@ -11380,14 +11295,15 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"NumTaxiNodes", [](lua_State* L) -> int {
-            lua_pushnumber(L, static_cast<double>(taxiNodeOrder(getGameHandler(L)).size()));
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? static_cast<double>(gh->getTaxiMap().nodes.size()) : 0.0);
             return 1;
         }},
                 {"TaxiNodeName", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeName(slot)");   // 0x00590d60
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-            if (id == 0) { lua_pushstring(L, ""); return 1; }
+            if (id == 0) { lua_pushstring(L, "INVALID"); return 1; }
             const auto& nodes = gh->getTaxiNodes();
             const auto it = nodes.find(id);
             lua_pushstring(L, it != nodes.end() ? it->second.name.c_str() : "");
@@ -11406,11 +11322,9 @@ void registerSystemLuaAPI(lua_State* L) {
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (id == 0) { lua_pushstring(L, "NONE"); return 1; }
             if (id == gh->getTaxiCurrentNode())  { lua_pushstring(L, "CURRENT"); return 1; }
-            if (!gh->isKnownTaxiNode(id))        { lua_pushstring(L, "NONE"); return 1; }
-            // Known, but nothing flies there from where the player is standing:
-            // shown in yellow rather than hidden, so it reads as somewhere they
-            // have been rather than somewhere that does not exist.
-            lua_pushstring(L, gh->hasTaxiRouteTo(id) ? "REACHABLE" : "DISTANT");
+            // 0x00590c70: "DISTANT" is a flight to a node outside the mask, and
+            // the list holds the mask's only; one no flight reaches is "NONE".
+            lua_pushstring(L, gh->hasTaxiRouteTo(id) ? "REACHABLE" : "NONE");
             return 1;
         }},
                 {"TakeTaxiNode", [](lua_State* L) -> int {
@@ -11423,11 +11337,11 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"TaxiNodePosition", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodePosition(slot)");   // 0x00590e00
             auto* gh = getGameHandler(L);
-            const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-            float u = 0, v = 0;
-            if (id == 0 || !taxiNodeMapPos(gh, id, u, v)) { return luaReturnNil(L); }
-            lua_pushnumber(L, u);
-            lua_pushnumber(L, v);
+            const int index = static_cast<int>(lua_tonumber(L, 1));
+            const game::TaxiMapNode* node = gh ? gh->getTaxiMap().at(index) : nullptr;
+            if (!node) return luaL_error(L, "Invalid taxi node slot");
+            lua_pushnumber(L, node->u);
+            lua_pushnumber(L, node->v);
             return 2;
         }},
                 // TaxiNodeSetCurrent(index) - the node the map is drawing a
@@ -11485,6 +11399,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // whole of the lookup and no table of continent names is
                 // needed, which is as well, because a name table would be a
                 // second place for the same fact to be written down.
+                //
+                // The map is the one the current node is shown on
+                // (0x005924b0), which in Silvermoon is not the one it is on.
                 {"SetTaxiMap", [](lua_State* L) -> int {
             auto* tree = getWidgetTree(L);
             if (!tree || !lua_istable(L, 1)) return 0;
@@ -11504,7 +11421,7 @@ void registerSystemLuaAPI(lua_State* L) {
             // outside a session.
             auto* gh = getGameHandler(L);
             w->texturePath = "Interface\\TaxiFrame\\TaxiMap" +
-                             std::to_string(gh ? gh->getCurrentMapId() : 0u);
+                             std::to_string(gh ? gh->getTaxiMap().mapId : 0u);
             // A texture is sized from its file; see WidgetTree::markMeasureDirty.
             tree->markMeasureDirty(id);
             return 0;
@@ -11518,7 +11435,8 @@ void registerSystemLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeCost(slot)");   // 0x005915e0
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-            lua_pushnumber(L, id != 0 ? static_cast<double>(gh->getTaxiCostTo(id)) : 0.0);
+            if (id == 0) return luaL_error(L, "Invalid taxi node slot");
+            lua_pushnumber(L, static_cast<double>(gh->getTaxiCostTo(id)));
             return 1;
         }},
                 {"GetNetStats", [](lua_State* L) -> int {

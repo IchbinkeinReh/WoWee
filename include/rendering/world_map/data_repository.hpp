@@ -3,6 +3,7 @@
 // (Phase 5 of refactoring plan). SRP - all DBC parsing lives here.
 #pragma once
 
+#include "game/world_map_transforms.hpp"
 #include "rendering/world_map/continent_list.hpp"
 #include "rendering/world_map/world_map_types.hpp"
 #include <unordered_map>
@@ -61,10 +62,7 @@ public:
     }
     /// Where a place is shown (0x00543920, WorldMapTransforms): its own map
     /// and place, or another continent's. In the wire's axes.
-    struct Place {
-        uint32_t mapId = 0;
-        float x = 0.0f, y = 0.0f;
-    };
+    using Place = game::ShownPlace;
     [[nodiscard]] Place shownPlace(uint32_t mapId, float wireX, float wireY) const;
     /// WorldMapContinent's ContinentOffset and Scale for a map, and whether it
     /// is on the Azeroth map at all (Outland's is not).
@@ -114,15 +112,8 @@ public:
     [[nodiscard]] int dungeonMapForChunk(uint32_t mapId, uint32_t wmoId, float z) const;
 
 private:
-    struct MapTransform {
-        uint32_t sourceMapId = 0;
-        uint32_t targetMapId = 0;
-        float minX = 0.0f, minY = 0.0f, maxX = 0.0f, maxY = 0.0f;
-        float offsetX = 0.0f, offsetY = 0.0f;
-    };
-
     std::vector<Zone> zones_;
-    std::vector<MapTransform> mapTransforms_;
+    std::vector<game::WorldMapTransform> mapTransforms_;
     struct DungeonChunk { uint32_t mapId = 0, wmoId = 0; int32_t dungeonMap = 0; float minZ = 0.0f; };
     std::vector<DungeonChunk> dungeonChunks_;
     std::vector<POI> poiMarkers_;

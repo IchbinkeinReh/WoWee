@@ -6,6 +6,7 @@
 #include "core/coordinates.hpp"
 #include "game/opcode_table.hpp"
 #include "game/vehicle_mover.hpp"
+#include "game/taxi_map.hpp"
 #include "game/teleport_ack_gate.hpp"
 #include "network/packet.hpp"
 #include <glm/glm.hpp>
@@ -225,6 +226,11 @@ public:
         taxiNodes_.clear();
         taxiPathEdges_.clear();
         taxiPathNodes_.clear();
+        taxiBounds_.clear();
+        taxiMapExpansion_.clear();
+        worldMapTransforms_.clear();
+        taxiMap_ = {};
+        taxiRoutes_.clear();
         taxiDbcLoaded_ = false;
     }
     // WotLK 3.3.5a TaxiNodes.dbc has 384 entries; the known-taxi bitmask
@@ -236,7 +242,11 @@ public:
         return (knownTaxiMask_[idx / 32] & (1u << (idx % 32))) != 0;
     }
     [[nodiscard]] uint32_t getTaxiCostTo(uint32_t destNodeId) const;
-    /// True when the taxi cost map has a route from the current node to dest.
+    /// The flight map's nodes (0x005932e0), in the order the bindings count them.
+    [[nodiscard]] const TaxiMap& getTaxiMap() const { return taxiMap_; }
+    /// Where a node is on the flight map as the end of a leg.
+    [[nodiscard]] std::pair<float, float> taxiLegPosition(uint32_t nodeId) const;
+    /// True when there is a flight from the current node to dest.
     [[nodiscard]] bool hasTaxiRouteTo(uint32_t destNodeId) const;
     /// Node-id hop chain current → dest (inclusive); empty if unreachable.
     [[nodiscard]] std::vector<uint32_t> getTaxiRouteTo(uint32_t destNodeId) const;
@@ -419,7 +429,7 @@ private:
     void loadTaxiDbc();
 
     // --- Private helpers ---
-    void buildTaxiCostMap();
+    void buildTaxiMap();
     void startClientTaxiPath(const std::vector<uint32_t>& pathNodes);
     // Evaluates the same uniform Catmull-Rom curve used to render/pace taxi
     // flight motion, shared between the per-segment arc-length precomputation
@@ -554,10 +564,11 @@ private:
     glm::vec3 taxiRecoverPos_{0.0f};
     uint32_t knownTaxiMask_[12] = {};
     bool taxiMaskInitialized_ = false;
-    std::unordered_map<uint32_t, uint32_t> taxiCostMap_;
-    // BFS predecessor per node from buildTaxiCostMap; getTaxiRouteTo walks it.
-    std::unordered_map<uint32_t, uint32_t> taxiPrevMap_;
-
+    TaxiMap taxiMap_;          ///< what the open flight map lists
+    TaxiRoutes taxiRoutes_;    ///< and the flights over it
+    std::unordered_map<uint32_t, TaxiMapBounds> taxiBounds_;       ///< WorldMapContinent, by map
+    std::unordered_map<uint32_t, uint32_t> taxiMapExpansion_;      ///< Map.dbc's ExpansionID
+    std::vector<WorldMapTransform> worldMapTransforms_;
 
     // --- The active mover ---
     std::optional<uint64_t> activeMover_;  ///< DAT_00ca1238; none set: the player

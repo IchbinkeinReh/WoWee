@@ -3186,6 +3186,20 @@ void MovementHandler::loadTaxiDbc() {
     } else {
         LOG_WARNING("Could not load TaxiPathNode.dbc");
     }
+
+    worldMapTransforms_ = readWorldMapTransforms(am->loadDBCOptional("WorldMapTransforms.dbc").get());
+    if (auto dbc = am->loadDBC("WorldMapContinent.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 13) {
+        // The first row for a map (0x005932e0).
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            taxiBounds_.emplace(dbc->getUInt32(i, 1),
+                                TaxiMapBounds{dbc->getFloat(i, 9), dbc->getFloat(i, 10),
+                                              dbc->getFloat(i, 11), dbc->getFloat(i, 12)});
+        }
+    }
+    if (auto dbc = am->loadDBC("Map.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 66) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+            taxiMapExpansion_[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, 63);
+    }
 }
 
 void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
@@ -3231,11 +3245,16 @@ void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
 
     currentTaxiData_ = data;
     taxiNpcGuid_ = data.npcGuid;
+    buildTaxiMap();
+    // With nothing on it the map does not open (0x005932e0).
+    if (taxiMap_.nodes.empty()) {
+        LOG_WARNING("Taxi map of node ", data.nearestNode, " lists nothing");
+        return;
+    }
     taxiWindowOpen_ = true;
     // TAXIMAP_OPENED opens with the flight master (0x005932e0 -> 0x0051fce0).
     owner_.setInteractionObject(taxiNpcGuid_, go_interaction::Window::Taxi);
     if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
-    buildTaxiCostMap();
     auto it = taxiNodes_.find(data.nearestNode);
     if (it != taxiNodes_.end()) {
         LOG_INFO("Taxi node ", data.nearestNode, " mounts: A=", it->second.mountDisplayIdAlliance,
@@ -3814,66 +3833,61 @@ void MovementHandler::closeTaxi() {
     taxiLandingCooldown_ = 2.0f;
 }
 
-void MovementHandler::buildTaxiCostMap() {
-    taxiCostMap_.clear();
-    taxiPrevMap_.clear();
-    uint32_t startNode = currentTaxiData_.nearestNode;
-    if (startNode == 0) return;
+void MovementHandler::buildTaxiMap() {
+    const uint32_t start = currentTaxiData_.nearestNode;
+    const auto& account = owner_.accountState();
+    taxiMap_ = wowee::game::buildTaxiMap(
+        taxiNodes_, start, worldMapTransforms_,
+        [this](uint32_t mapId) {
+            const auto it = taxiBounds_.find(mapId);
+            return it != taxiBounds_.end() ? it->second : TaxiMapBounds{};
+        },
+        [this](uint32_t nodeId) { return currentTaxiData_.isNodeKnown(nodeId); },
+        [&](uint32_t mapId) {
+            const auto it = taxiMapExpansion_.find(mapId);
+            return !account.present || it == taxiMapExpansion_.end() || it->second <= account.accountExpansion;
+        });
 
-    struct AdjEntry { uint32_t node; uint32_t cost; };
-    std::unordered_map<uint32_t, std::vector<AdjEntry>> adj;
+    std::vector<TaxiLeg> legs;
+    std::set<std::pair<uint32_t, uint32_t>> seen;
     for (const auto& edge : taxiPathEdges_) {
-        adj[edge.fromNode].push_back({.node = edge.toNode, .cost = edge.cost});
-    }
-
-    std::deque<uint32_t> queue;
-    queue.push_back(startNode);
-    taxiCostMap_[startNode] = 0;
-
-    while (!queue.empty()) {
-        uint32_t cur = queue.front();
-        queue.pop_front();
-        for (const auto& next : adj[cur]) {
-            // Flights only route through nodes the player has discovered -
-            // the server rejects paths crossing unknown nodes, so a cost map
-            // built over them would show routes/prices the server won't honor.
-            if (!currentTaxiData_.isNodeKnown(next.node)) continue;
-            if (taxiCostMap_.find(next.node) == taxiCostMap_.end()) {
-                taxiCostMap_[next.node] = taxiCostMap_[cur] + next.cost;
-                taxiPrevMap_[next.node] = cur;
-                queue.push_back(next.node);
+        // The first row joining two nodes is theirs (0x005938d0).
+        if (!seen.insert({edge.fromNode, edge.toNode}).second) continue;
+        if (!taxiMap_.lists(edge.fromNode) || !taxiMap_.lists(edge.toNode)) continue;
+        // 0x00592580: along the waypoints, where they are shown.
+        float length = 1e11f;
+        if (const auto path = taxiPathNodes_.find(edge.pathId); path != taxiPathNodes_.end()) {
+            length = 0.0f;
+            for (size_t i = 1; i < path->second.size(); ++i) {
+                const auto& a = path->second[i - 1];
+                const auto& b = path->second[i];
+                const ShownPlace pa = shownPlace(worldMapTransforms_, a.mapId, a.x, a.y);
+                const ShownPlace pb = shownPlace(worldMapTransforms_, b.mapId, b.x, b.y);
+                length += glm::length(glm::vec3(pb.x - pa.x, pb.y - pa.y, b.z - a.z));
             }
         }
+        legs.push_back({edge.fromNode, edge.toNode, edge.cost, length});
     }
+    const bool alliance = owner_.isPlayerAlliance();
+    taxiRoutes_.build(taxiMap_, legs, start, [&](uint32_t nodeId) {
+        const auto it = taxiNodes_.find(nodeId);
+        return it != taxiNodes_.end() &&
+               taxiNodeRefused(alliance, it->second.mountDisplayIdAlliance, it->second.mountDisplayIdHorde);
+    });
 }
 
-uint32_t MovementHandler::getTaxiCostTo(uint32_t destNodeId) const {
-    auto it = taxiCostMap_.find(destNodeId);
-    return (it != taxiCostMap_.end()) ? it->second : 0;
+std::pair<float, float> MovementHandler::taxiLegPosition(uint32_t nodeId) const {
+    const auto it = taxiNodes_.find(nodeId);
+    if (it == taxiNodes_.end()) return {0.0f, 0.0f};
+    return taxiLegPos(taxiMap_, worldMapTransforms_, it->second.mapId, it->second.x, it->second.y);
 }
 
-bool MovementHandler::hasTaxiRouteTo(uint32_t destNodeId) const {
-    return destNodeId != currentTaxiData_.nearestNode &&
-           taxiCostMap_.find(destNodeId) != taxiCostMap_.end();
-}
+uint32_t MovementHandler::getTaxiCostTo(uint32_t destNodeId) const { return taxiRoutes_.cost(destNodeId); }
+
+bool MovementHandler::hasTaxiRouteTo(uint32_t destNodeId) const { return taxiRoutes_.reaches(destNodeId); }
 
 std::vector<uint32_t> MovementHandler::getTaxiRouteTo(uint32_t destNodeId) const {
-    std::vector<uint32_t> route;
-    if (!hasTaxiRouteTo(destNodeId)) return route;
-
-    uint32_t startNode = currentTaxiData_.nearestNode;
-    uint32_t cur = destNodeId;
-    while (cur != startNode) {
-        route.push_back(cur);
-        auto it = taxiPrevMap_.find(cur);
-        if (it == taxiPrevMap_.end() || route.size() > taxiPrevMap_.size()) {
-            return {};  // broken chain - should not happen with a consistent BFS
-        }
-        cur = it->second;
-    }
-    route.push_back(startNode);
-    std::reverse(route.begin(), route.end());
-    return route;
+    return taxiRoutes_.to(destNodeId);
 }
 
 void MovementHandler::activateTaxi(uint32_t destNodeId) {
@@ -3913,7 +3927,7 @@ void MovementHandler::activateTaxi(uint32_t destNodeId) {
     // player has never been to. The server refuses a flight the moment one
     // appears in the list - ERR_TAXINOTVISITED, checked node by node - so a
     // route through an undiscovered stop is turned down outright rather than
-    // flown badly. buildTaxiCostMap already skips those, which is why the price
+    // flown badly. buildTaxiMap already skips those, which is why the price
     // quoted came from a route this then declined to use.
     std::vector<uint32_t> path = getTaxiRouteTo(destNodeId);
 

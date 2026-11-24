@@ -4131,20 +4131,6 @@ public:
     /// GetMerchantItemCostItem and cannot reach into this client's UI.
     const ExtendedCostEntry* getExtendedCost(uint32_t extendedCostId) const;
 
-    /// The rectangle a whole continent's map covers, in server coordinates.
-    ///
-    /// WorldMapArea.dbc's row for the continent itself - the one whose AreaID is
-    /// zero - which is what anything placing a marker on a continent-wide map
-    /// projects against. The world map has read this for a long time, inside
-    /// `rendering/world_map`; the flight map needs the same rectangle and
-    /// cannot reach in there, so it is read here on first ask like every other
-    /// DBC-backed cache.
-    struct ContinentBounds {
-        float left = 0, right = 0, top = 0, bottom = 0;
-        bool valid = false;
-    };
-    const ContinentBounds& getContinentBounds(uint32_t mapId) const;
-
     const std::string& getAchievementName(uint32_t id) const {
         auto it = achievementNameCache_.find(id);
         if (it != achievementNameCache_.end()) return it->second;
@@ -4714,6 +4700,8 @@ public:
     using TaxiPathNode = MovementHandler::TaxiPathNode;
     const std::unordered_map<uint32_t, TaxiNode>& getTaxiNodes() const;
     bool isKnownTaxiNode(uint32_t nodeId) const;
+    const TaxiMap& getTaxiMap() const;
+    std::pair<float, float> taxiLegPosition(uint32_t nodeId) const;
     uint32_t getTaxiCostTo(uint32_t destNodeId) const;
     bool hasTaxiRouteTo(uint32_t destNodeId) const;
     std::vector<uint32_t> getTaxiRouteTo(uint32_t destNodeId) const;
@@ -7424,7 +7412,6 @@ private:
     /// Read once on the first ask, like the other DBC-backed caches here.
     mutable std::unordered_map<uint32_t, ExtendedCostEntry> extendedCostCache_;
     mutable bool extendedCostCacheLoaded_ = false;
-    mutable std::unordered_map<uint32_t, ContinentBounds> continentBoundsCache_;
     mutable std::vector<ReputationEntry> reputationList_;
     mutable bool reputationListBuilt_ = false;
     /// factionId → the faction it is grouped under, from Faction.dbc field 18.

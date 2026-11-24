@@ -150,22 +150,8 @@ void DataRepository::loadZones(const std::string& mapName,
     // Physical-map regions that the UI presents on another continent. In
     // particular, Azuremyst/Bloodmyst use map 530 terrain but are projected
     // onto Kalimdor (map 1) with a +10133.333/+17600 coordinate offset.
-    auto transformsDbc = assetManager.loadDBC("WorldMapTransforms.dbc");
-    if (transformsDbc && transformsDbc->isLoaded() &&
-        transformsDbc->getFieldCount() >= 9) {
-        for (uint32_t i = 0; i < transformsDbc->getRecordCount(); ++i) {
-            MapTransform tr;
-            tr.sourceMapId = transformsDbc->getUInt32(i, 1);
-            tr.minX = transformsDbc->getFloat(i, 2);
-            tr.minY = transformsDbc->getFloat(i, 3);
-            tr.maxX = transformsDbc->getFloat(i, 4);
-            tr.maxY = transformsDbc->getFloat(i, 5);
-            tr.targetMapId = transformsDbc->getUInt32(i, 6);
-            tr.offsetX = transformsDbc->getFloat(i, 7);
-            tr.offsetY = transformsDbc->getFloat(i, 8);
-            mapTransforms_.push_back(tr);
-        }
-    }
+    const auto transformsDbc = assetManager.loadDBC("WorldMapTransforms.dbc");
+    mapTransforms_ = game::readWorldMapTransforms(transformsDbc.get());
 
     // Use expansion-aware DBC layout when available; fall back to WotLK stock field
     // indices (ID=0, ParentAreaNum=2, ExploreFlag=3) when layout metadata is missing.
@@ -251,18 +237,14 @@ void DataRepository::loadZones(const std::string& mapName,
         if (recMapID != static_cast<uint32_t>(mapID) && displayMapID == static_cast<uint32_t>(mapID)) {
             // 0x00543920 as the highlight asks it (0x00545110): the zone's top
             // left corner - LocTop is world X, LocLeft world Y - inside the
-            // region (minX < x <= maxX, minY <= y < maxY), and the region's
-            // offset moves X onto top and bottom, Y onto left and right. This
+            // region (both ends included), and the region's offset moves X onto top and bottom, Y onto left and right. This
             // tested the left and right against the X range and the top and
             // bottom against the Y range, which no zone passes: Azuremyst,
             // Bloodmyst and the Exodar were never moved onto Kalimdor.
             const float x = zone.bounds.locTop;
             const float y = zone.bounds.locLeft;
-            for (const MapTransform& tr : mapTransforms_) {
-                if (tr.sourceMapId != recMapID || tr.targetMapId != displayMapID ||
-                    !(tr.minX < x && x <= tr.maxX && tr.minY <= y && y < tr.maxY)) {
-                    continue;
-                }
+            for (const game::WorldMapTransform& tr : mapTransforms_) {
+                if (tr.shownMapId != displayMapID || !tr.holds(recMapID, x, y)) continue;
                 // In canonical axes (x is the wire Y): what a canonical
                 // position on the zone is moved by.
                 zone.virtualOffsetWowX = tr.offsetY;
@@ -507,11 +489,7 @@ int DataRepository::dungeonMapForChunk(uint32_t mapId, uint32_t wmoId, float z) 
 }
 
 DataRepository::Place DataRepository::shownPlace(uint32_t mapId, float wireX, float wireY) const {
-    for (const MapTransform& tr : mapTransforms_) {
-        if (tr.sourceMapId == mapId && tr.minX < wireX && wireX <= tr.maxX && tr.minY <= wireY && wireY < tr.maxY)
-            return {tr.targetMapId, wireX + tr.offsetX, wireY + tr.offsetY};
-    }
-    return {mapId, wireX, wireY};
+    return game::shownPlace(mapTransforms_, mapId, wireX, wireY);
 }
 
 glm::vec3 DataRepository::transformRenderPosition(
@@ -525,10 +503,8 @@ glm::vec3 DataRepository::transformRenderPosition(
     // matched and nothing on Azuremyst or Bloodmyst reached Kalimdor's map.
     const float wireX = renderPos.x;
     const float wireY = renderPos.y;
-    for (const MapTransform& tr : mapTransforms_) {
-        if (tr.sourceMapId == sourceMapId &&
-            tr.targetMapId == static_cast<uint32_t>(currentMapId_) &&
-            tr.minX < wireX && wireX <= tr.maxX && tr.minY <= wireY && wireY < tr.maxY) {
+    for (const game::WorldMapTransform& tr : mapTransforms_) {
+        if (tr.shownMapId == static_cast<uint32_t>(currentMapId_) && tr.holds(sourceMapId, wireX, wireY)) {
             return glm::vec3(wireX + tr.offsetX, wireY + tr.offsetY, renderPos.z);
         }
     }

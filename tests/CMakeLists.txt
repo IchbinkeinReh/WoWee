@@ -664,12 +664,9 @@ add_test(NAME addon_xml_compiles COMMAND framexml_compile_check
          ${CMAKE_SOURCE_DIR}/Data/interface/addons)
 set_tests_properties(addon_xml_compiles PROPERTIES SKIP_RETURN_CODE 77)
 
-# ── test_taxi_map_projection ────────────────────────────────
-# The order of the coordinate conversions behind a flight map marker. Silent
-# when wrong - every marker still lands somewhere, just not where it belongs.
-wowee_add_test(test_taxi_map_projection
-    SOURCES test_taxi_map_projection.cpp
-            ${CMAKE_SOURCE_DIR}/src/rendering/world_map/coordinate_projection.cpp)
+# ── test_taxi_map ───────────────────────────────────────────
+# The flight map's nodes, their places and the routes over them. Header-only.
+wowee_add_test(test_taxi_map SOURCES test_taxi_map.cpp)
 
 # ── test_inventory_slots ─────────────────────────────────────────
 # Where the bank, its bags and the keyring sit. A wrong slot here moves an
