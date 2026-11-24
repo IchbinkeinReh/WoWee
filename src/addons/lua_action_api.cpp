@@ -22,6 +22,7 @@
 #include "game/inventory_slots.hpp"
 // For the row complaint ClickSendMailItemButton ends with.
 #include "game/server_notices.hpp"
+#include "ui/binding_chords.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/keybinding_manager.hpp"
 #include "ui/gamepad_controls.hpp"
@@ -3782,6 +3783,30 @@ static int lua_GetBindingAction(lua_State* L) {
     }
     lua_pushstring(L, "");
     return 1;
+}
+
+// GetBindingByKey(key[, mode]) (0x005625f0): the command a key runs, its own
+// or the one it has with fewer of its modifiers. StaticPopup_OnKeyDown asks it
+// of every key pressed while a popup is up (GetBindingFromClick). This client
+// has one set of bindings and the overrides over it, which the mode would pick
+// from.
+static int lua_GetBindingByKey(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetBindingByKey(\"action\"[, mode])");
+    seedBindingDefaults();
+    std::string key = lua_tostring(L, 1);
+    for (char& c : key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (const std::string& chord : ui::bindingChords(key)) {
+        std::string command;
+        if (const auto over = overrideBindings().lookup(chord)) command = *over;
+        for (const auto& [name, keys] : bindingKeys()) {
+            if (!command.empty()) break;
+            if (keys[0] == chord || keys[1] == chord) command = name;
+        }
+        if (command.empty() || (!ui::bindsDirectly(command) && bindingKeys().count(command) == 0)) continue;
+        lua_pushstring(L, command.c_str());
+        return 1;
+    }
+    return 0;
 }
 
 // GetNumBindings() → how many rows the list has, headers included
