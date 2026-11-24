@@ -625,6 +625,19 @@ target_link_libraries(test_addon_lua_snippets PRIVATE catch2_main lua51)
 add_test(NAME addon_lua_snippets COMMAND test_addon_lua_snippets)
 register_test_target(test_addon_lua_snippets)
 
+# ── test_lua_std_libs ────────────────────────────────────────
+# The Lua libraries the interface has, against the client's own tables.
+add_executable(test_lua_std_libs
+    test_lua_std_libs.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_std_libs.cpp
+)
+target_include_directories(test_lua_std_libs PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_lua_std_libs SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_lua_std_libs PRIVATE catch2_main lua51)
+add_test(NAME lua_std_libs COMMAND test_lua_std_libs)
+register_test_target(test_lua_std_libs)
+
 # ── test_unit_aura_call ─────────────────────────────────────
 # The UnitAura call GameTooltip:SetUnitAura makes. With no filter its missing
 # slot read as UnitAura itself, so SetUnitAura("player", 1) built nothing.

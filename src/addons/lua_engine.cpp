@@ -1,4 +1,5 @@
 #include "addons/lua_engine.hpp"
+#include "addons/lua_std_libs.hpp"
 #include "addons/binding_lookup.hpp"
 #include "addons/modifier_keys.hpp"
 #include "core/test_frame_shot.hpp"
@@ -11149,26 +11150,7 @@ bool LuaEngine::initialize() {
         fireEvent(event, eventArgs);
     });
 
-    // Open safe standard libraries (no io, os, debug, package)
-    luaopen_base(L_);
-    luaopen_table(L_);
-    luaopen_string(L_);
-    luaopen_math(L_);
-
-    // Remove unsafe globals from base library.
-    //
-    // newproxy is not among them, despite the name. It returns a userdata with
-    // a fresh metatable and reaches nothing else; what it buys is __index and
-    // __newindex on a value that cannot be tampered with, which is exactly how
-    // Blizzard's own RestrictedFrames builds secure frame handles. Removing it
-    // cost us SecureHandlerTemplates and everything inheriting from it.
-    const char* unsafeGlobals[] = {
-        "dofile", "loadfile", "load", "collectgarbage", nullptr
-    };
-    for (const char** g = unsafeGlobals; *g; ++g) {
-        lua_pushnil(L_);
-        lua_setglobal(L_, *g);
-    }
+    openInterfaceLibs(L_);
 
     // Publish the widget tree before any API is registered, so a script that
     // runs during registration still finds it.
@@ -15866,8 +15848,7 @@ void LuaEngine::registerCoreAPI() {
         "gsub = string.gsub\n"
         "gmatch = string.gmatch\n"
     );
-    // Bit operations (WoW provides these; Lua 5.1 doesn't): kBitLibLua.
-    executeString(kBitLibLua);
+    setInterfaceLibAliases(L_);
 }
 
 // ---- Event System ----
