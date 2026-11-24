@@ -7562,8 +7562,11 @@ void Application::render() {
                         *cm.widgetId = frame ? frame->id : 0;
                     }
                     bool shown = false;
-                    if (frame && frame->visible && frame->modelDisplayId != 0 &&
-                        entitySpawner_) {
+                    // The creature may not have been known as it was named.
+                    if (frame && frame->visible && entitySpawner_ &&
+                        frame->shownDisplay([this](uint32_t entry) {
+                            return gameHandler->getCreatureDisplayIdForEntry(entry);
+                        }) != 0) {
                         const std::string modelPath =
                             entitySpawner_->getModelPathForDisplayId(frame->modelDisplayId);
                         if (!modelPath.empty()) {

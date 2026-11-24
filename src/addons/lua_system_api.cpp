@@ -9282,23 +9282,9 @@ void registerSystemLuaAPI(lua_State* L) {
             const auto& list = gh->getCompanions(mounts);
             if (index > static_cast<int>(list.size())) return luaReturnNil(L);
             const auto& c = list[static_cast<size_t>(index) - 1];
-            // A display id, and both kinds have to be asked for one. What is
-            // held is a creature *template entry* either way: the summon's
-            // misc value for a critter, and the mounted aura's for a mount -
-            // AzerothCore reads that one with GetCreatureTemplate and picks
-            // the model with ChooseDisplayId, so it is an entry there too.
-            //
-            // A mount's was handed to CompanionModelFrame:SetCreature
-            // unresolved, on the reading that it was already a display id. An
-            // entry used as a display id names a real CreatureDisplayInfo row
-            // belonging to something else, so the mount tab previewed whatever
-            // creature happened to sit at that row.
-            //
-            // Zero until the answer arrives, which draws nothing for a round
-            // trip rather than drawing the wrong thing; COMPANION_UPDATE brings
-            // the tab back when it lands.
-            const uint32_t displayId = gh->getCreatureDisplayIdForEntry(c.creatureId);
-            lua_pushnumber(L, displayId);
+            // The creature's entry, for either kind (0x0053e2c0): what
+            // SetCreature takes, and what the companion tab finds it by.
+            lua_pushnumber(L, c.creatureId);
             lua_pushstring(L, c.name.c_str());
             lua_pushnumber(L, c.spellId);
             lua_pushstring(L, gh->getSpellIconPath(c.spellId).c_str());

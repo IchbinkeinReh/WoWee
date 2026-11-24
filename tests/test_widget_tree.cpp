@@ -3742,3 +3742,26 @@ TEST_CASE("a frame made in view is shown as it is made", "[widgets]") {
     tree.noteMade(art);
     CHECK_FALSE(tree.get(art)->toldShown);
 }
+
+TEST_CASE("a model frame shows its creature once it is known", "[widgets]") {
+    Widget w;
+    int asked = 0;
+    uint32_t known = 0;
+    const auto displayOf = [&](uint32_t entry) {
+        ++asked;
+        return entry == 24369 ? known : 0u;
+    };
+    CHECK(w.shownDisplay(displayOf) == 0);
+    CHECK(asked == 0);
+    w.setModelCreature(24369);
+    CHECK(w.shownDisplay(displayOf) == 0);
+    known = 21974;
+    CHECK(w.shownDisplay(displayOf) == 21974);
+    CHECK(w.shownDisplay(displayOf) == 21974);
+    CHECK(asked == 2);
+    w.setModelCreature(1);
+    CHECK(w.shownDisplay(displayOf) == 0);
+    w.setModelCreature(0);
+    CHECK(w.shownDisplay(displayOf) == 0);
+    CHECK(asked == 3);
+}

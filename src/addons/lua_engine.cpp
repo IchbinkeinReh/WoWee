@@ -12564,7 +12564,7 @@ void LuaEngine::registerCoreAPI() {
         // frame is driven by name from the render loop - the paperdoll, the
         // inspect window and the dressing room each have their own - so what
         // these have to do is answer rather than raise.
-        // Model:SetCreature(displayId) - what a companion, a stabled pet or
+        // Model:SetCreature(entry) - what a companion, a stabled pet or
         // any other creature preview is told to show. Written onto the frame
         // and built by the render loop, which is where the offscreen views
         // are; zero clears it.

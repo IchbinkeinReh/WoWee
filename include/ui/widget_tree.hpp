@@ -824,6 +824,19 @@ struct Widget {
     /// and resolves it - and read by the render loop, which is where the
     /// model is actually built. Zero is "nothing chosen".
     uint32_t modelDisplayId = 0;
+    /// The creature a model frame was told to show (0x00597960), by its entry:
+    /// what it looks like is known once the creature is.
+    uint32_t modelCreature = 0;
+    void setModelCreature(uint32_t entry) {
+        modelCreature = entry;
+        modelDisplayId = 0;
+    }
+    /// The display shown, asked for of `displayOf(entry)` until it is known.
+    template <typename DisplayOf>
+    uint32_t shownDisplay(DisplayOf&& displayOf) {
+        if (modelDisplayId == 0 && modelCreature != 0) modelDisplayId = displayOf(modelCreature);
+        return modelDisplayId;
+    }
 
     /// A model frame's model file (Model:SetModel, <Model file="">,
     /// 0x0095f990) and the client's pose for it (0x0095fba0): SetPosition

@@ -4555,21 +4555,6 @@ const std::vector<Companion>& GameHandler::getCompanions(bool mounts) const {
     rebuildCompanions();
     return mounts ? mountSpells_ : critterSpells_;
 }
-std::string GameHandler::companionKindForCreature(uint32_t entry) const {
-    if (entry == 0) return {};
-    // Both lists, not critters alone. A mount's creature id was taken for a
-    // display id already, and it is not one: AzerothCore reads the mounted
-    // aura's misc value with GetCreatureTemplate and picks the model with
-    // ChooseDisplayId, so it is a template entry exactly as a critter's is.
-    // Leaving mounts out meant a mount's model waited on a query that nothing
-    // reported the answer to, and appeared on the next login instead.
-    for (const Companion& c : getCompanions(/*mounts=*/false))
-        if (c.creatureId == entry) return "CRITTER";
-    for (const Companion& c : getCompanions(/*mounts=*/true))
-        if (c.creatureId == entry) return "MOUNT";
-    return {};
-}
-
 std::string GameHandler::getLfgDungeonName(uint32_t dungeonId) const {
     if (dungeonId == 0) return {};
     loadLfgDungeonDbc();

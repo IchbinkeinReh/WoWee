@@ -6093,11 +6093,6 @@ public:
     /// summons with SummonProperties 41. Rebuilt when the spellbook changes,
     /// because that is the only thing that can change the answer.
     const std::vector<Companion>& getCompanions(bool mounts) const;
-    /// "MOUNT", "CRITTER", or empty for a creature that is neither. Both kinds
-    /// hold a creature template entry and both need a display id looked up, so
-    /// both wait on a query coming back - and the tab is told which list to
-    /// re-read, because COMPANION_UPDATE carries the kind.
-    std::string companionKindForCreature(uint32_t entry) const;
     /// Fire COMPANION_UPDATE if a mount or critter has come out or gone away.
     ///
     /// Called from every place the player's auras change, and it has to filter:
