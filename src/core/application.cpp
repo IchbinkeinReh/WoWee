@@ -11,6 +11,7 @@
 #include "core/world_settle.hpp"
 #include "core/cinematic_player.hpp"
 #include "game/mount_special.hpp"
+#include "game/mover_keys.hpp"
 #include "game/mover_mode.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
@@ -4781,7 +4782,15 @@ void Application::applyServerMovementState(float deltaTime) {
         renderer->getCameraController()->setFlightBackSpeedOverride(speeds.flightBack);
         renderer->getCameraController()->setRunBackSpeedOverride(speeds.runBack);
         renderer->getCameraController()->setTurnRateOverride(speeds.turnRate);
+        // Nor does a dead one move by its keys: the server's root goes at a
+        // teleport to another map, and the dead character walked.
+        const auto moverEntity = gameHandler->getEntityManager().getEntity(gameHandler->activeMover());
+        const auto* moverUnit =
+            moverEntity && moverEntity->isUnit() ? static_cast<const game::Unit*>(moverEntity.get()) : nullptr;
+        const bool keysMove = !moverUnit || game::keysMayMove(static_cast<int32_t>(moverUnit->getHealth()),
+                                                              moverUnit->getStandState());
         renderer->getCameraController()->setMovementRooted(gameHandler->isPlayerRooted());
+        renderer->getCameraController()->setMoverKeysMove(keysMove);
         // The mover's flags2 hold its strafe and jump keys.
         const auto held = game::vehicle::moverKeyRestrictions(gameHandler->getMovementInfo().flags2);
         renderer->getCameraController()->setMoverKeyRestrictions(held.noStrafe, held.noJump);

@@ -3,6 +3,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "game/mount_special.hpp"
+#include "game/mover_keys.hpp"
 
 using namespace wowee::game;
 
@@ -52,4 +53,13 @@ TEST_CASE("without gravity, going is no leave to jump", "[mount_special]") {
     auto in = riding(0x1);
     in.floating = true;
     CHECK(jumpKey(in) == JumpKey::MountSpecial);
+}
+
+// A dead character walked on another map, where the server's root had gone.
+TEST_CASE("the dead are not moved by their keys", "[mover_keys]") {
+    using wowee::game::keysMayMove;
+    CHECK(keysMayMove(1, 0));
+    CHECK(keysMayMove(100, 1));
+    CHECK_FALSE(keysMayMove(0, 0));
+    CHECK_FALSE(keysMayMove(100, 7));
 }

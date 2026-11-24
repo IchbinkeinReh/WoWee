@@ -2285,9 +2285,8 @@ void CameraController::update(float deltaTime) {
 
     // A mover that may not move (0x005fbbc0 with 0x005fac90 false) stops its
     // autorun, and its keys start nothing.
-    if (moverHeld_) autoRunning = false;
-    // When the server has rooted the player, suppress all horizontal movement input.
-    const bool movBlocked = movementRooted_ || moverHeld_;
+    const bool movBlocked = movementRooted_ || moverHeld_ || !moverKeysMove_;
+    if (movBlocked) autoRunning = false;
     // A mover stopped by a cast (0x0071ae10) stays stopped while its keys
     // are held as they were (0x005fae70), counted as it counts them.
     const bool forwardKeys = keyW || mouseAutorun || autoRunning || clickToMoveForward_;
@@ -2321,6 +2320,7 @@ void CameraController::update(float deltaTime) {
     // Nor a turn or a jump for a held mover (0x005fa0d0, 0x005fbf80 ->
     // 0x0074ba40).
     if (moverHeld_) nowTurnLeft = nowTurnRight = nowJump = false;
+    if (!moverKeysMove_) nowJump = false;
     if (nowJump && thirdPerson && followTarget && moverState_.jumpPressed) {
         const auto liquid = portLiquidLevelAt(*followTarget);
         nowJump = moverState_.jumpPressed(liquid ? *liquid - followTarget->z : 0.0f);
