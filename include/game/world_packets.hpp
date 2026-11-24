@@ -3126,8 +3126,9 @@ public:
 /** CMSG_SPLIT_ITEM packet builder */
 class SplitItemPacket {
 public:
+    /// The count four bytes wide (0x006db9d0), one before 3.x.
     static network::Packet build(uint8_t srcBag, uint8_t srcSlot,
-                                 uint8_t dstBag, uint8_t dstSlot, uint8_t count);
+                                 uint8_t dstBag, uint8_t dstSlot, uint32_t count, bool wideCount);
 };
 
 /** CMSG_SWAP_INV_ITEM packet builder */

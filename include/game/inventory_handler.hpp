@@ -459,7 +459,7 @@ public:
     void readItemBySlot(int backpackIndex);
     void readItemInBag(int bagIndex, int slotIndex);
     void destroyItem(uint8_t bag, uint8_t slot, uint8_t count = 1);
-    void splitItem(uint8_t srcBag, uint8_t srcSlot, uint8_t count);
+    void splitItem(uint8_t srcBag, uint8_t srcSlot, uint32_t count);
     /// Split `count` off a stack into a named slot.
     ///
     /// The interface's SplitContainerItem does not choose a destination: it puts
@@ -467,7 +467,7 @@ public:
     /// is right only for this client's own bag window, which has no cursor to
     /// put it on.
     void splitItemTo(uint8_t srcBag, uint8_t srcSlot,
-                     uint8_t dstBag, uint8_t dstSlot, uint8_t count);
+                     uint8_t dstBag, uint8_t dstSlot, uint32_t count);
     /// applyLocally=false sends the move without touching the model, for a
     /// caller that has already put the items where this would move them -
     /// see GameHandler::sortBags.

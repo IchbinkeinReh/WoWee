@@ -646,3 +646,18 @@ TEST_CASE("a trigger's box is turned by its yaw", "[replay][playtest]") {
     CHECK(wowee::game::insideAreaTrigger(at, 4.0f, 0.0f, 0.0f));
     CHECK_FALSE(wowee::game::insideAreaTrigger(at, 0.0f, 4.0f, 0.0f));
 }
+
+// A stack split was never split: its count went as one byte of the four.
+TEST_CASE("a split's count is four bytes", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    s.handler().splitItemTo(0xFF, 27, 0xFF, 23, 300);
+    const auto sent = s.sent().of(Opcode::CMSG_SPLIT_ITEM);
+    REQUIRE(sent.size() == 1);
+    const auto& data = sent[0].getData();
+    REQUIRE(data.size() == 8);
+    CHECK(data[0] == 0xFF);
+    CHECK(data[1] == 27);
+    CHECK(data[3] == 23);
+    CHECK((data[4] | data[5] << 8 | data[6] << 16 | data[7] << 24) == 300);
+}

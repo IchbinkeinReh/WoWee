@@ -3303,16 +3303,16 @@ void InventoryHandler::destroyItem(uint8_t bag, uint8_t slot, uint8_t count) {
 }
 
 void InventoryHandler::splitItemTo(uint8_t srcBag, uint8_t srcSlot,
-                                   uint8_t dstBag, uint8_t dstSlot, uint8_t count) {
+                                   uint8_t dstBag, uint8_t dstSlot, uint32_t count) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     if (count == 0) return;
     LOG_INFO("splitItem: src(bag=", (int)srcBag, " slot=", (int)srcSlot,
-             ") count=", (int)count, " -> dst(bag=", (int)dstBag,
+             ") count=", count, " -> dst(bag=", (int)dstBag,
              " slot=", (int)dstSlot, ")");
-    owner_.getSocket()->send(SplitItemPacket::build(srcBag, srcSlot, dstBag, dstSlot, count));
+    owner_.getSocket()->send(SplitItemPacket::build(srcBag, srcSlot, dstBag, dstSlot, count, !isPreWotlk()));
 }
 
-void InventoryHandler::splitItem(uint8_t srcBag, uint8_t srcSlot, uint8_t count) {
+void InventoryHandler::splitItem(uint8_t srcBag, uint8_t srcSlot, uint32_t count) {
     // No destination given: the first free slot, which is what this client's
     // own bag window means by a split. The interface means something else and
     // says where it wants it - see splitItemTo.

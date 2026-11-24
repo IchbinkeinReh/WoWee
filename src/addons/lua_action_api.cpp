@@ -2314,7 +2314,7 @@ static int lua_PickupContainerItem(lua_State* L) {
         // send the whole thing, which is not what was picked up.
         if (s_cursorSplit > 0) {
             gh->splitItemTo(srcBag, srcSlot, dstBag, dstSlot,
-                            static_cast<uint8_t>(s_cursorSplit));
+                            s_cursorSplit);
         } else {
             gh->swapContainerItems(srcBag, srcSlot, dstBag, dstSlot);
         }

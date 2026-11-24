@@ -5000,11 +5000,11 @@ void GameHandler::destroyItem(uint8_t bag, uint8_t slot, uint8_t count) {
     if (inventoryHandler_) inventoryHandler_->destroyItem(bag, slot, count);
 }
 
-void GameHandler::splitItem(uint8_t srcBag, uint8_t srcSlot, uint8_t count) {
+void GameHandler::splitItem(uint8_t srcBag, uint8_t srcSlot, uint32_t count) {
     if (inventoryHandler_) inventoryHandler_->splitItem(srcBag, srcSlot, count);
 }
 void GameHandler::splitItemTo(uint8_t srcBag, uint8_t srcSlot,
-                              uint8_t dstBag, uint8_t dstSlot, uint8_t count) {
+                              uint8_t dstBag, uint8_t dstSlot, uint32_t count) {
     if (inventoryHandler_) inventoryHandler_->splitItemTo(srcBag, srcSlot, dstBag, dstSlot, count);
 }
 
