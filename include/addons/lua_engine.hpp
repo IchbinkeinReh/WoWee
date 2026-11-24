@@ -426,6 +426,9 @@ private:
     /// click already.
 public:
     void clickButton(uint32_t wid, const char* button, bool down);
+    /// A CLICK binding's key on a button, down and up (0x00563150), and
+    /// whether the button is registered for that.
+    void pressByBinding(uint32_t wid, const char* button, bool down, bool takes);
     /// A frame made, and one that has handlers about to be built and built,
     /// its OnLoad run (0x00490410): what is made in view is shown, and its
     /// OnShow runs once it is built. The frames the interface is loaded with
@@ -444,6 +447,10 @@ private:
     /// Whether a button is registered for the press, or the release, of a
     /// mouse button: the left one's release where nothing is.
     bool frameTakesClick(uint32_t wid, const char* button, bool down);
+    /// A button let go: its click while it is pushed, where it takes that, or
+    /// its double click in place of one, and it is not pushed any more
+    /// (0x0096fb60).
+    void releaseButton(uint32_t wid, const char* button, bool takes);
     void tellVisibility(uint32_t id, bool up, bool shown = true);
     /// The same, with a number. A handler that compares its argument against
     /// zero cannot be handed a numeric string.

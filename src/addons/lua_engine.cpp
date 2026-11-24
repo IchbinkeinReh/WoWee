@@ -17084,6 +17084,38 @@ bool LuaEngine::frameTakesClick(uint32_t wid, const char* button, bool down) {
     return accepts;
 }
 
+void LuaEngine::releaseButton(uint32_t wid, const char* button, bool takes) {
+    auto* w = widgets_.get(wid);
+    if (!w) return;
+    if (takes && w->buttonState() == ui::Widget::ButtonState::Pushed) {
+        if (w->releaseIsDouble(frameHasScript(wid, "OnDoubleClick"), core::appTimeSeconds(), doubleClickSeconds_)) {
+            if (w->beginClick()) {
+                const std::string was = lastClickButton();
+                lastClickButton() = button;
+                callFrameScript(wid, "OnDoubleClick", button);
+                lastClickButton() = was;
+                if (auto* still = widgets_.get(wid)) still->inClick = false;
+            }
+        } else {
+            clickButton(wid, button, false);
+        }
+    }
+    if (auto* still = widgets_.get(wid)) still->mouseButtonState(false);
+}
+
+void LuaEngine::pressByBinding(uint32_t wid, const char* button, bool down, bool takes) {
+    const auto* w = widgets_.get(wid);
+    if (!L_ || !w || !objectTypeMatches(w->objectType, "Button")) return;
+    taint::Quiet quiet;   // as dispatchText
+    callFrameScript(wid, down ? "OnMouseDown" : "OnMouseUp", button);
+    if (!down) {
+        releaseButton(wid, button, takes);
+        return;
+    }
+    if (takes) clickButton(wid, button, true);
+    if (auto* still = widgets_.get(wid)) still->mouseButtonState(true);
+}
+
 void LuaEngine::clickButton(uint32_t wid, const char* button, bool down) {
     auto* w = widgets_.get(wid);
     if (!L_ || !w) return;
@@ -17442,20 +17474,23 @@ void callBindingGlobal(lua_State* L, const char* name, int nargs) {
     }
 }
 
-/// Whether the button takes this edge of a click: registered for it, for
-/// either edge of any button, or - registered for nothing - the release of the
-/// left button, which is what a button takes until it says otherwise.
-bool buttonTakesEdge(lua_State* L, int frame, const std::string& mouse, bool down) {
+/// Whether the button takes this edge of a click by a binding: registered for
+/// that of any mouse button, whichever the binding names (0x0096fa80 and
+/// 0x0096fb60 given a name) - the release where it is registered for nothing.
+bool buttonTakesEdge(lua_State* L, int frame, bool down) {
     lua_getfield(L, frame, "__clicks");
-    bool takes;
+    bool takes = !down;
     if (lua_istable(L, -1)) {
         const std::string edge = down ? "Down" : "Up";
-        lua_getfield(L, -1, (mouse + edge).c_str());
-        lua_getfield(L, -2, ("Any" + edge).c_str());
-        takes = lua_toboolean(L, -1) != 0 || lua_toboolean(L, -2) != 0;
-        lua_pop(L, 2);
-    } else {
-        takes = !down && mouse == "LeftButton";
+        takes = false;
+        lua_pushnil(L);
+        while (lua_next(L, -2) != 0) {
+            if (lua_toboolean(L, -1) && lua_type(L, -2) == LUA_TSTRING) {
+                const std::string name = lua_tostring(L, -2);
+                takes = takes || (name.size() >= edge.size() && name.compare(name.size() - edge.size(), edge.size(), edge) == 0);
+            }
+            lua_pop(L, 1);
+        }
     }
     lua_pop(L, 1);
     return takes;
@@ -17464,8 +17499,9 @@ bool buttonTakesEdge(lua_State* L, int frame, const std::string& mouse, bool dow
 /// SPELL, ITEM, MACRO and CLICK (0x00563150): carried out here, not by a
 /// script. The first three act as the key comes up, as the client's do - a
 /// spell bound this way is cast on the release, like an action button's key.
-/// CLICK presses the named button with the key and lets go with it, the button
-/// answering whichever edge it registered for.
+/// CLICK presses the named button with the key and lets go with it as the mouse
+/// does (its own down and up, 0x0096fa80 and 0x0096fb60): the button is pushed,
+/// and answers whichever edge it registered for.
 void runDirectBinding(lua_State* L, const DirectBinding& binding, bool down) {
     switch (binding.kind) {
     case DirectBinding::Kind::Spell:
@@ -17488,21 +17524,10 @@ void runDirectBinding(lua_State* L, const DirectBinding& binding, bool down) {
         lua_getglobal(L, binding.name.c_str());
         if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
         const int frame = lua_gettop(L);
-        if (buttonTakesEdge(L, frame, binding.mouseButton, down)) {
-            lua_getfield(L, frame, "Click");
-            if (lua_isfunction(L, -1)) {
-                RunningButtonScope button(binding.mouseButton);
-                lua_pushvalue(L, frame);
-                lua_pushstring(L, binding.mouseButton.c_str());
-                lua_pushboolean(L, down ? 1 : 0);
-                if (lua_pcall(L, 3, 0, 0) != 0) {
-                    LOG_WARNING("Binding CLICK ", binding.name, " failed: ",
-                                luaL_optstring(L, -1, "?"));
-                    lua_pop(L, 1);
-                }
-            } else {
-                lua_pop(L, 1);
-            }
+        if (auto* e = engineFrom(L)) {
+            const bool takes = buttonTakesEdge(L, frame, down);
+            RunningButtonScope button(binding.mouseButton);
+            e->pressByBinding(widgetIdOf(L, frame), binding.mouseButton.c_str(), down, takes);
         }
         lua_pop(L, 1);
         return;
@@ -19048,23 +19073,8 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     // A hardware event for the length of the click and no
                     // longer (0x0096fa80): the only time a protected action
                     // of that sort may be taken by insecure code.
-                    if (onIt && w->buttonState() == ui::Widget::ButtonState::Pushed &&
-                        frameTakesClick(pressedWid_[i], b.name, false)) {
-                        taint::HardwareEvent hardware;
-                        if (w->releaseIsDouble(frameHasScript(pressedWid_[i], "OnDoubleClick"), core::appTimeSeconds(),
-                                               doubleClickSeconds_)) {
-                            if (w->beginClick()) {
-                                const std::string was = lastClickButton();
-                                lastClickButton() = b.name;
-                                callFrameScript(pressedWid_[i], "OnDoubleClick", b.name);
-                                lastClickButton() = was;
-                                if (auto* still = widgets_.get(pressedWid_[i])) still->inClick = false;
-                            }
-                        } else {
-                            clickButton(pressedWid_[i], b.name, false);
-                        }
-                    }
-                    if (auto* still = widgets_.get(pressedWid_[i])) still->mouseButtonState(false);
+                    taint::HardwareEvent hardware;
+                    releaseButton(pressedWid_[i], b.name, onIt && frameTakesClick(pressedWid_[i], b.name, false));
                 } else if (onIt && (!pressed || pressed->enabled) && takesIt) {
                     taint::HardwareEvent hardware;
                     clickButton(pressedWid_[i], b.name, false);
