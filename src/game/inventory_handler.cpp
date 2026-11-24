@@ -6372,6 +6372,8 @@ void InventoryHandler::deleteEquipmentSet(uint64_t setGuid) {
         std::remove_if(equipmentSetInfo_.begin(), equipmentSetInfo_.end(),
                         [setGuid](const EquipmentSetInfo& info) { return info.setGuid == setGuid; }),
         equipmentSetInfo_.end());
+    // 0x005ae260, at once: the server says nothing.
+    owner_.fireAddonEvent("EQUIPMENT_SETS_CHANGED", {});
 }
 
 void InventoryHandler::handleEquipmentSetList(network::Packet& packet) {
