@@ -6190,11 +6190,9 @@ void CharacterRenderer::stepInstanceEvents(uint32_t instanceId, const CharacterI
         // reads the first sequence's times, on the playing sequence's clock
         // as any other (0x00830fb0: its track index is 0 where the track has
         // a global sequence).
-        // So are the cast and bow release events that let the unit's queued
-        // missiles go (0x00732650).
-        if (unit_event::classify(event.id).kind == unit_event::Kind::None &&
-            !unit_event::releasesQueuedMissiles(event.id))
-            continue;
+        // A melee swing's were not among them, so no blow landed: the next
+        // swing settled it, without its target's part.
+        if (!unit_event::handedOn(event.id)) continue;
         const size_t timeline = event.globalSequence >= 0 ? 0u : static_cast<size_t>(sequence);
         if (timeline >= event.times.size()) continue;
         const auto fire = [&](uint32_t) { steppedEvents_.push_back({instanceId, e}); };

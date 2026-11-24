@@ -28,6 +28,7 @@
 // FootstepTerrainSounds.
 
 #include "audio/play_limit.hpp"
+#include "rendering/melee_sound.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -171,6 +172,13 @@ constexpr Action classify(uint32_t eventId) {
     if (eventId == fourCC("$FSD")) return {Kind::Footstep, kColumnFootstep};
     if (eventId == fourCC("$DTH")) return {Kind::DeathThud, 0};
     return {};
+}
+
+/// The events a unit's model hands on: those with sounds of their own, those
+/// that let its missiles go, and a melee swing's (0x00756240).
+constexpr bool handedOn(uint32_t eventId) {
+    return classify(eventId).kind != Kind::None || releasesQueuedMissiles(eventId) ||
+           melee_sound::isMeleeEvent(eventId);
 }
 
 /// The CreatureSoundData column a slot plays (0x007461e0), 0 for none.

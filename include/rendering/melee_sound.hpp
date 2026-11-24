@@ -90,6 +90,7 @@ constexpr uint32_t kEventHit = 0x48414324;    ///< $CAH
 constexpr bool isLandEvent(uint32_t id) {
     return id == kEventHit || id == 0x30484124 || id == 0x31484124 || id == 0x32484124 || id == 0x33484124;
 }
+constexpr bool isMeleeEvent(uint32_t id) { return id == kEventSwing || isLandEvent(id); }
 
 /// A creature's custom attack sound as its attack lands (0x00756240): for
 /// $AH0..$AH3, a kept hit that did damage plays the attacker's

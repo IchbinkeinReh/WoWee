@@ -269,3 +269,17 @@ TEST_CASE("a model's cast and bow release events let queued missiles go", "[unit
     CHECK_FALSE(releasesQueuedMissiles(fourCC("$FSD")));
     CHECK(classify(fourCC("$CSL")).kind == Kind::None);  // no sound of its own
 }
+
+// Nobody was heard wounded: a swing's events were not handed on, and a blow was
+// settled a swing late, without its target's part.
+TEST_CASE("a unit's model hands on its swing's events", "[unit_model_events]") {
+    using ue::fourCC;
+    using ue::handedOn;
+    for (const char (*name)[5] : {&"$CSS", &"$CAH", &"$AH0", &"$AH1", &"$AH2", &"$AH3"}) CHECK(handedOn(fourCC(*name)));
+    CHECK(handedOn(fourCC("$FSD")));
+    CHECK(handedOn(fourCC("$FD1")));
+    CHECK(handedOn(fourCC("$CSL")));
+    CHECK(handedOn(fourCC("$BWR")));
+    CHECK_FALSE(handedOn(fourCC("$HIT")));
+    CHECK_FALSE(handedOn(fourCC("$CHD")));
+}
