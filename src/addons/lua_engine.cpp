@@ -7559,12 +7559,13 @@ int lua_Texture_SetTexture(lua_State* L) {
     w->emblemMask = false;  // a texture of its own replaces a TabardModel's emblem
     w->portraitDisc = false;  // and an ordinary one replaces a round portrait
     if (lua_isnumber(L, 2)) {
+        // The image alone (0x004b9550): the vertex colour stays as it is.
         w->solidColor = true;
         w->texturePath.clear();
-        w->color[0] = static_cast<float>(lua_tonumber(L, 2));
-        w->color[1] = static_cast<float>(luaL_optnumber(L, 3, 0.0));
-        w->color[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
-        w->color[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+        w->solid[0] = static_cast<float>(lua_tonumber(L, 2));
+        w->solid[1] = static_cast<float>(luaL_optnumber(L, 3, 0.0));
+        w->solid[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+        w->solid[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
     } else {
         w->solidColor = false;
         w->texturePath = luaL_optstring(L, 2, "");

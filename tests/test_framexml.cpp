@@ -427,9 +427,27 @@ TEST_CASE("A colour element reads as the client's colour reader reads it", "[fra
         "<Texture name=\"$parentB\"><Color r=\"2\" g=\"-1\" b=\"0.25\" a=\"-3\"/></Texture>"
         "</Layer></Layers></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
-    CHECK(has(r.lua, ":SetVertexColor(0.000000, 0.500000, 0.000000, 1.000000)"));
-    CHECK(has(r.lua, ":SetVertexColor(1.000000, 0.000000, 0.250000, 0.000000)"));
-    CHECK_FALSE(has(r.lua, ":SetVertexColor(1.000000, 0.500000"));
+    CHECK(has(r.lua, ":SetTexture(0.000000, 0.500000, 0.000000, 1.000000)"));
+    CHECK(has(r.lua, ":SetTexture(1.000000, 0.000000, 0.250000, 0.000000)"));
+    CHECK_FALSE(has(r.lua, ":SetTexture(1.000000, 0.500000"));
+}
+
+TEST_CASE("a texture's colour is its image, or the tint of its file", "[framexml][emit]") {
+    // 0x00485f40. The world map's blackout has a colour and no file; tinted
+    // only, it had nothing to draw.
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"ColFrame\"><Layers><Layer level=\"BACKGROUND\">"
+        "<Texture name=\"$parentA\"><Color r=\"0\" g=\"0\" b=\"0\"/></Texture>"
+        "<Texture name=\"$parentB\" file=\"Interface\\Foo\"><Color r=\"1\" g=\"0\" b=\"0\"/></Texture>"
+        "<Texture name=\"$parentC\" file=\"Interface\\Bar\"><Color a=\"0\"/></Texture>"
+        "<FontString name=\"$parentD\" inherits=\"GameFontNormal\"><Color r=\"0\" g=\"1\" b=\"0\"/></FontString>"
+        "</Layer></Layers></Frame></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    CHECK(has(r.lua, ":SetTexture(0.000000, 0.000000, 0.000000, 1.000000)"));
+    CHECK(has(r.lua, ":SetTexture(\"Interface\\\\Foo\")"));
+    CHECK(has(r.lua, ":SetVertexColor(1.000000, 0.000000, 0.000000, 1.000000)"));
+    CHECK_FALSE(has(r.lua, ":SetVertexColor(0.000000, 0.000000, 0.000000"));
+    CHECK(has(r.lua, ":SetTextColor(0.000000, 1.000000, 0.000000, 1.000000)"));
 }
 
 TEST_CASE("alphaMode reaches the texture as a blend mode", "[framexml][emit]") {

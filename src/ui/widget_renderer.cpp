@@ -3161,15 +3161,16 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // The colour as the texture, times each corner's gradient.
                     auto corner = [&](int c) {
                         float rgba[4];
-                        for (int i = 0; i < 4; ++i) rgba[i] = w->color[i] * w->gradientColor[c][i];
+                        for (int i = 0; i < 4; ++i) rgba[i] = w->solid[i] * w->gradientColor[c][i];
                         return packColor(rgba, w->alpha);
                     };
                     dl->AddRectFilledMultiColor(ImVec2(x0, y0), ImVec2(x1, y1), corner(0), corner(2), corner(3),
                                                 corner(1));
                     continue;
                 }
-                dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1),
-                                  packColor(w->color, w->alpha));
+                float rgba[4];
+                for (int i = 0; i < 4; ++i) rgba[i] = w->solid[i] * w->color[i];
+                dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), packColor(rgba, w->alpha));
                 continue;
             }
             // A texture the client renders into has no file and does not need

@@ -372,6 +372,7 @@ struct Widget {
     float gradientColor[4][4] = {};
     float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     bool solidColor = false;    ///< SetTexture(r,g,b[,a]) rather than a file.
+    float solid[4] = {1.0f, 1.0f, 1.0f, 1.0f};  ///< the image of one, which the colour tints
     /// A unit's face, claimed by SetPortraitTexture.
     ///
     /// The interface's own portraits are circular images with transparent

@@ -416,7 +416,17 @@ struct Emitter {
         }
         if (const XmlNode* col = node.child("Color")) {
             const std::string args = xmlColorArgs(*col);   // 0x00815c30
-            line(var + (isTexture ? ":SetVertexColor(" : ":SetTextColor(") + args + ")");
+            // 0x00485f40: a texture's colour is its image, a solid one - unless
+            // the same element names a file, which it then tints, black at no
+            // strength apart.
+            const std::string* file = isTexture ? node.attr("file") : nullptr;
+            if (!isTexture) {
+                line(var + ":SetTextColor(" + args + ")");
+            } else if (!file || file->empty()) {
+                line(var + ":SetTexture(" + args + ")");
+            } else if (args != "0.000000, 0.000000, 0.000000, 0.000000") {
+                line(var + ":SetVertexColor(" + args + ")");
+            }
         }
         if (const XmlNode* anchors = node.child("Anchors"))
             emitAnchors(*anchors, var, parentVar, parentName);
