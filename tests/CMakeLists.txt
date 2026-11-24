@@ -4128,10 +4128,16 @@ wowee_add_test(test_doodad_model_plan
     SOURCES test_doodad_model_plan.cpp)
 
 # ── test_m2_drawable_content ─────────────────────────────────
-# Emitter-only doodad models (smoke, steam, bubbles) are kept, not dropped as
-# meshless.
+# Emitter-only models (smoke, steam, bubbles; a creature's gas cloud, a
+# weapon's glow) are kept, not dropped as meshless. Reads the sources for what
+# draws a unit and its items.
 wowee_add_test(test_m2_drawable_content
-    SOURCES test_m2_drawable_content.cpp)
+    SOURCES test_m2_drawable_content.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/m2_asset_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
+            ${TEST_COMMON_SOURCES})
+target_compile_definitions(test_m2_drawable_content PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_binding_command ─────────────────────────────────────
 # The SPELL, ITEM, MACRO and CLICK binding commands the key dispatch carries

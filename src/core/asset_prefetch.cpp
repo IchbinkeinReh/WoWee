@@ -124,7 +124,7 @@ void AssetPrefetch::workerLoop() {
         done.path = job.path;
         if (job.isModel) {
             auto model = std::make_shared<pipeline::M2Model>();
-            if (pipeline::loadM2WithSkin(assets_, job.path, *model) && model->isValid()) {
+            if (pipeline::loadM2WithSkin(assets_, job.path, *model)) {
                 done.model = std::move(model);
             }
         } else {

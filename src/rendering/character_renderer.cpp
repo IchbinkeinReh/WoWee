@@ -2062,7 +2062,9 @@ void CharacterRenderer::setModelTexture(uint32_t modelId, uint32_t textureSlot, 
     core::Logger::getInstance().debug("Replaced model ", modelId, " texture slot ", textureSlot, " with composited texture");
 }
 bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
-    if (!model.isValid()) {
+    // Emitters alone are taken: nothing of it is drawn here (no vertex buffer),
+    // and its particle twin is posed from its bones.
+    if (!model.hasDrawableContent()) {
         core::Logger::getInstance().error("Cannot load invalid M2 model");
         return false;
     }

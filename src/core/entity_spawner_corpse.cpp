@@ -114,7 +114,7 @@ void EntitySpawner::spawnCorpseBones(uint64_t guid, const std::string& modelPath
             if (!skin.empty()) pipeline::M2Loader::loadSkin(skin, model);
         }
         modelId = nextGameObjectModelId_++;
-        if (model.vertices.empty() || !m2Renderer->loadModel(model, modelId)) {
+        if (!m2Renderer->loadModel(model, modelId)) {
             LOG_WARNING("Corpse bones model failed to load: ", modelPath);
             return;
         }

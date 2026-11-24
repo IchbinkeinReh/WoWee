@@ -387,7 +387,7 @@ void AppearanceComposer::loadEquippedHelm(game::Inventory& inventory) {
         helmPath = helm.racialModelPath;
         if (!loadWeaponM2(helmPath, helmModel)) helmModel = {};
     }
-    if (!helmModel.isValid()) {
+    if (!helmModel.hasDrawableContent()) {
         helmPath = helm.baseModelPath;
         if (!loadWeaponM2(helmPath, helmModel)) return;
     }

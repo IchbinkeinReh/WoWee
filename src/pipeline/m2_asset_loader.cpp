@@ -26,7 +26,7 @@ bool readM2AndSkin(AssetManager& assets, const std::string& m2Path, M2Model& out
         auto skinData = assets.readFile(skinPathForM2(m2Path));
         if (!skinData.empty()) M2Loader::loadSkin(skinData, outModel);
     }
-    return outModel.isValid();
+    return outModel.hasDrawableContent();
 }
 
 }  // namespace

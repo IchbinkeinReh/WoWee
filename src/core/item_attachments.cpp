@@ -23,10 +23,10 @@ bool itemModel(pipeline::AssetManager& assets, const AssetPrefetch* prefetch, co
     if (prefetch) {
         if (auto prepared = prefetch->model(path)) {
             out = *prepared;
-            return out.isValid();
+            return out.hasDrawableContent();
         }
     }
-    return pipeline::loadM2WithSkin(assets, path, out) && out.isValid();
+    return pipeline::loadM2WithSkin(assets, path, out);
 }
 
 struct ShoulderPiece {

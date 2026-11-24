@@ -545,7 +545,9 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
 
                     auto model = std::make_shared<pipeline::M2Model>(pipeline::M2Loader::load(m2Data));
                     if (model->name.empty()) model->name = m2Path;
-                    if (model->vertices.empty()) {
+                    // Emitters alone are a model (hasDrawableContent): the
+                    // marshes' gas clouds have no vertex.
+                    if (model->vertices.empty() && !model->hasDrawableContent()) {
                         LOG_WARNING("Creature model parsed to nothing: displayId=",
                                     s.displayId, " ", m2Path, " (", m2Data.size(), " bytes)");
                         result.permanent_failure = true;
@@ -1688,7 +1690,7 @@ void EntitySpawner::processPendingMount() {
 
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = m2Path;
-        if (model.vertices.empty()) {
+        if (model.vertices.empty() && !model.hasDrawableContent()) {
             LOG_WARNING("Failed to parse mount M2: ", m2Path);
             return;
         }
@@ -2039,12 +2041,12 @@ uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec
         if (m2Data.empty()) return 0;
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = modelPath;
-        if (model.vertices.empty()) return 0;
+        if (model.vertices.empty() && !model.hasDrawableContent()) return 0;
         if (model.version >= 264) {
             auto skinData = assetManager_->readFile(pipeline::skinPathForM2(modelPath));
             if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
         }
-        if (!model.isValid()) return 0;
+        if (!model.hasDrawableContent()) return 0;
         pipeline::loadExternalAnimations(*assetManager_, modelPath, m2Data, model);
         modelId = nextCreatureModelId_++;
         if (!cr->loadModel(model, modelId)) return 0;
@@ -2155,14 +2157,14 @@ bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
         if (m2Data.empty()) return false;
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = modelPath;
-        if (model.vertices.empty()) return false;
+        if (model.vertices.empty() && !model.hasDrawableContent()) return false;
 
         if (model.version >= 264 && modelPath.size() >= 3) {
             std::string skinPath = pipeline::skinPathForM2(modelPath);
             auto skinData = assetManager_->readFile(skinPath);
             if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
         }
-        if (!model.isValid()) return false;
+        if (!model.hasDrawableContent()) return false;
 
         // Every external .anim, as above: the display cache is shared with
         // creatures, and a mount does more than stand, run and fly.

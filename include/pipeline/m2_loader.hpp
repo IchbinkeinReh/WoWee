@@ -553,11 +553,17 @@ struct M2Model {
     [[nodiscard]] bool isValid() const {
         return !vertices.empty() && !indices.empty();
     }
-    /// Something a placed doodad draws: geometry, or emitters alone. The
-    /// client keeps a doodad whose model has no vertices at all - the
-    /// smoke and steam columns (BLACKSMITH_SMOKE, STEAM02-04,
-    /// BUBBLESB_BIGEMITTER) are nothing but emitters - and draws its
-    /// particles; isValid() asks for a mesh.
+    /// Something a placed model draws: geometry, or emitters alone. The
+    /// client keeps a model with no vertices at all - the smoke and steam
+    /// columns (BLACKSMITH_SMOKE, STEAM02-04, BUBBLESB_BIGEMITTER), a
+    /// creature's gas cloud (CloudSwampGas), a weapon's glow (MongooseGlow)
+    /// are nothing but emitters - and draws its particles; isValid() asks for
+    /// a mesh. One model code for all of them (0x0081f8f0 makes a doodad's, a
+    /// unit's 0x0073e410 and an item's alike): its file is taken with no
+    /// vertex (0x0083cf00, 0x00835ae0), the model goes on the scene's list of
+    /// those with emitters as soon as one lives (0x0082d2f0's 0x400,
+    /// 0x00828a00) and that list is drawn by itself (0x00821a20), past the one
+    /// of batches.
     [[nodiscard]] bool hasDrawableContent() const {
         return isValid() || !particleEmitters.empty() || !ribbonEmitters.empty();
     }

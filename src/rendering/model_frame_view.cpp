@@ -84,7 +84,7 @@ bool ModelFrameView::setModel(const std::string& path, const std::string& iconTe
     sequenceDurations_.clear();
     if (m2Path.empty()) return true;
     pipeline::M2Model model;
-    if (!pipeline::loadM2WithAllAnimations(*assets_, m2Path, model) || !model.isValid()) {
+    if (!pipeline::loadM2WithAllAnimations(*assets_, m2Path, model)) {
         LOG_WARNING("ModelFrameView: cannot load ", m2Path);
         return false;
     }

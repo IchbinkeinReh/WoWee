@@ -413,12 +413,12 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
                 helmPath = helm.racialModelPath;
                 if (!loadWeaponM2(helmPath, helmModel)) helmModel = {};
             }
-            if (!helmModel.isValid()) {
+            if (!helmModel.hasDrawableContent()) {
                 helmPath = helm.baseModelPath;
                 loadWeaponM2(helmPath, helmModel);
             }
 
-            if (helmModel.isValid()) {
+            if (helmModel.hasDrawableContent()) {
                 const uint32_t helmModelId = nextWeaponModelId_++;
                 // Attachment point 0 (head bone), fallback to 11 (explicit head).
                 const bool attached = charRenderer->attachWeapon(
