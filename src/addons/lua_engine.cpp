@@ -7,6 +7,7 @@
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
+#include "game/glyph_tooltip.hpp"
 #include "game/expansion_profile.hpp"
 #include "ui/keyboard_frame.hpp"
 #include "ui/widget_tree.hpp"
@@ -4345,28 +4346,51 @@ static void appendEnchantLineById(wowee::ui::Widget* w, game::GameHandler* gh,
     w->tooltipLines.push_back(std::move(line));
 }
 
-/// A glyph named by a link, filled the way the reference client fills one.
-///
-/// Its glyph branch - the last of SetHyperlink's ten prefixes - parses both of
-/// the link's numbers and calls the very builder the glyph panel's own
-/// GameTooltip:SetGlyph calls (0x00625d00 → 0x00622ba0); only the arguments
-/// differ, and the link carries both numbers because GetGlyphLink wrote them
-/// (see there): the socket's GlyphSlot id first, then the glyph's
-/// GlyphProperties id. That builder answers, in order, the glyph's spell name
-/// in the header colour, then "MAJOR_GLYPH" or "MINOR_GLYPH" off the GlyphSlot
-/// row's Type (+0x04: anything nonzero is a minor glyph, and a socket whose row
-/// is missing counts as major), then the spell's description - all of it off
-/// the two numbers, with no player and no socket consulted, which is the point
-/// of a link: the glyph describes itself to whoever hovers it, in someone
-/// else's chat. The "right click to remove it" hint the builder also knows is
-/// gated on an argument the panel passes as zero and the link path as one, so
-/// it belongs to the panel; and its GLYPH_LOCKED, GLYPH_INACTIVE and
-/// GLYPH_EMPTY_DESC lines are what a socket with nothing in it answers, which a
-/// link never is.
-///
-/// The name and description here are the whole spell tooltip, because that is
-/// what SetGlyph already settles for (lua_Tooltip_SetGlyph): one builder for
-/// both paths rather than a second that can drift away from the first.
+/// A glyph's tooltip, its socket's or a link's (0x00622ba0), which announces no
+/// spell: the glyph's GlyphProperties row and the socket's GlyphSlot row.
+static bool fillGlyphTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh, uint32_t slotId,
+                             uint32_t propertiesId, bool enabled, bool link) {
+    namespace gt = game::glyph_tooltip;
+    gt::Socket socket;
+    gh->ensureGlyphPropertiesLoaded();
+    if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+        if (auto rows = am->loadDBC("GlyphSlot.dbc"); rows && rows->isLoaded() && rows->getFieldCount() >= 3) {
+            if (const int32_t row = rows->findRecordById(slotId); row >= 0) {
+                socket.slotKnown = true;
+                socket.slotType = rows->getUInt32(static_cast<uint32_t>(row), 1);
+                socket.slotTooltip = rows->getUInt32(static_cast<uint32_t>(row), 2);
+            }
+        }
+    }
+    socket.enabled = enabled;
+    socket.link = link;
+    if (const uint32_t spell = propertiesId != 0 ? gh->getGlyphSpellId(propertiesId) : 0; spell != 0) {
+        socket.filled = true;
+        if (const std::string& name = gh->getSpellName(spell); !name.empty()) socket.spellName = name;
+        socket.description = gh->formatSpellDescription(spell, gh->getSpellDescription(spell));
+    }
+    static constexpr float kColors[5][3] = {{1.0f, 0.0f, 0.0f},
+                                            {128.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f},
+                                            {1.0f, 1.0f, 1.0f},
+                                            {0x66 / 255.0f, 0xbb / 255.0f, 1.0f},
+                                            {1.0f, 0xd2 / 255.0f, 0.0f}};
+    w->isTooltip = true;
+    clearTooltipLines(L, w);
+    for (const auto& said : gt::lines(socket, [L](const std::string& key) { return globalOr(L, key.c_str(), ""); })) {
+        wowee::ui::Widget::TooltipLine line;
+        line.left = said.text;
+        line.wrap = said.wraps;
+        const float* color = kColors[static_cast<size_t>(said.color)];
+        for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = i < 3 ? color[i] : 1.0f;
+        w->tooltipLines.push_back(std::move(line));
+    }
+    w->shown = true;
+    return !w->tooltipLines.empty();
+}
+
+/// A glyph named by a link: both of its numbers, the socket's GlyphSlot id and
+/// the glyph's GlyphProperties id, which GetGlyphLink wrote - no player and no
+/// socket are asked, so it describes itself in anybody's chat.
 static bool fillGlyphLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                                  const std::string& link, size_t colon) {
     auto number = [&link](size_t& at) {
@@ -4381,20 +4405,8 @@ static bool fillGlyphLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameH
     if (at < link.size() && link[at] == ':') propertiesId = number(++at);
     if (propertiesId == 0) return false;
     gh->ensureGlyphPropertiesLoaded();
-    const uint32_t spellId = gh->getGlyphSpellId(propertiesId);
-    if (spellId == 0 || !fillSpellTooltip(L, w, gh, spellId, false, false, nullptr, false, false)) return false;
-    uint32_t type = 0;
-    const bool minor = gh->getGlyphSlotType(slotId, type) && type != 0;
-    wowee::ui::Widget::TooltipLine line;
-    line.left = globalOr(L, minor ? "MINOR_GLYPH" : "MAJOR_GLYPH",
-                         minor ? "Minor Glyph" : "Major Glyph");
-    // The client's own colour for the line, 0xffbb66ff. The client puts this
-    // line between the name and the description; here the spell tooltip is
-    // filled whole first, so it lands after both.
-    line.lc[0] = 1.0f; line.lc[1] = 0.733f; line.lc[2] = 0.4f; line.lc[3] = 1.0f;
-    line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
-    w->tooltipLines.push_back(std::move(line));
-    return true;
+    if (gh->getGlyphSpellId(propertiesId) == 0) return false;
+    return fillGlyphTooltip(L, w, gh, slotId, propertiesId, true, /*link=*/true);
 }
 
 /// One of the interface's global strings, filled through Lua's own
@@ -4920,29 +4932,25 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
     return 0;
 }
 
-/// A glyph in its socket, hovered on the glyph panel.
-///
-/// SetGlyph(socketID, talentGroup) - the same one-based socket and spec
-/// GetGlyphSocketInfo takes. A glyph *is* a spell once its properties id is
-/// resolved, so this is the spell tooltip; the resolution is the one that
-/// binding now does, off GlyphProperties.dbc.
+/// SetGlyph(glyphSlot [, groupIndex]) (0x00625d00): the socket hovered on the
+/// glyph panel, with what the talent group holds there - or that it holds
+/// nothing, or is not open yet. Answers nothing.
 int lua_Tooltip_SetGlyph(lua_State* L) {
+    if (!lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: %s:SetGlyph(glyphSlot[, groupIndex])", usageName(L, 1));
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int socket = static_cast<int>(std::lround(lua_tonumber(L, 2)));
     const int spec = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || socket < 1 || socket > game::GameHandler::MAX_GLYPH_SLOTS) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
+    if (!w || !gh || socket < 1 || socket > game::GameHandler::MAX_GLYPH_SLOTS) return 0;
+    std::array<uint32_t, 6> slotIds{}, inFields{};
+    uint32_t enabled = 0;
+    if (!gh->getGlyphSocketFields(slotIds, inFields, enabled)) return 0;
     const auto& glyphs = (spec >= 1 && spec <= 2)
         ? gh->getGlyphs(static_cast<uint8_t>(spec - 1)) : gh->getGlyphs();
-    const uint16_t glyphId = glyphs[static_cast<size_t>(socket) - 1];
-    if (glyphId == 0) { lua_pushboolean(L, 0); return 1; }
-    gh->ensureGlyphPropertiesLoaded();
-    const uint32_t spellId = gh->getGlyphSpellId(glyphId);
-    lua_pushboolean(L, spellId && fillSpellTooltip(L, w, gh, spellId, false, false, nullptr, false, false) ? 1 : 0);
-    return 1;
+    const size_t i = static_cast<size_t>(socket) - 1;
+    (void)fillGlyphTooltip(L, w, gh, slotIds[i], glyphs[i], (enabled & (1u << i)) != 0, /*link=*/false);
+    return 0;
 }
 
 /// One item from a finished dungeon's reward list, hovered on the alert.

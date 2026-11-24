@@ -4224,6 +4224,11 @@ wowee_add_test(test_text_changes
 wowee_add_test(test_macro_list
     SOURCES test_macro_list.cpp)
 
+# ── test_glyph_tooltip ───────────────────────────────────────
+# A glyph socket's tooltip (0x00622ba0). Header-only.
+wowee_add_test(test_glyph_tooltip
+    SOURCES test_glyph_tooltip.cpp)
+
 # ── test_cursor_info ─────────────────────────────────────────
 # What GetCursorInfo says of a spell (0x00515200). Header-only.
 wowee_add_test(test_cursor_info
