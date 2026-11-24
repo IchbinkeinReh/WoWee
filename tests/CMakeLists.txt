@@ -4301,6 +4301,10 @@ wowee_add_test(test_interface_file
 wowee_add_test(test_edit_lines
     SOURCES test_edit_lines.cpp)
 
+# ── test_texture_variant ─────────────────────────────────────
+wowee_add_test(test_texture_variant
+    SOURCES test_texture_variant.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

@@ -88,16 +88,6 @@ private:
     /// Already-uploaded texture for a path, without triggering an upload.
     [[nodiscard]] VkDescriptorSet resident(const std::string& path, uint8_t variant = 0) const;
 
-    /// Additive art: alpha from its brightness (see texture()).
-    static constexpr uint8_t kVariantAdd = 1;
-    /// Texture:SetDesaturated: the art's luminance (0.299, 0.587, 0.114) in
-    /// all three channels, as the interface's Desaturate.bls draws it
-    /// (CSimpleTop, 0x00483060).
-    static constexpr uint8_t kVariantDesaturate = 2;
-    /// A tabard designer's emblem: white by the art's alpha (prepareAlphaMask).
-    static constexpr uint8_t kVariantAlphaMask = 4;
-    static uint8_t textureVariant(const Widget& w);
-
     /// scale is pixels per interface unit. The rect arrives in pixels, but a
     /// backdrop's insets and edge size are authored in units like everything
     /// else, so they have to make the same trip or a border comes out the
@@ -191,7 +181,7 @@ private:
     /// The cached set for a path, or null when nothing is cached for it -
     /// which is different from a cached kMissing, and both callers care.
     ///
-    /// Here rather than through cacheKey because cacheKey returns a string by
+    /// Here rather than through textureKey because textureKey returns a string by
     /// value, so the ordinary case copied the path onto the heap purely to
     /// look it up. The draw pass does that twice for every texture on screen,
     /// every frame.

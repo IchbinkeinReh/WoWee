@@ -408,7 +408,13 @@ struct Emitter {
         }
 
         if (const std::string* file = node.attr("file")) {
-            line(var + ":SetTexture(" + quote(*file) + ", nil, nil, \"xml\")");
+            // Given at all, whatever it says (0x00485f40).
+            const auto given = [&node](const char* name) {
+                const std::string* v = node.attr(name);
+                return v && !v->empty() ? "true" : "nil";
+            };
+            line(var + ":SetTexture(" + quote(*file) + ", " + given("horizTile") + ", " + given("vertTile") +
+                 ", \"xml\")");
         }
         if (const std::string* mode = node.attr("alphaMode")) {
             if (isTexture) line(var + ":SetBlendMode(" + quote(*mode) + ")");

@@ -7549,8 +7549,9 @@ static bool textureFileThere(lua_State* L, const std::string& name) {
 
 // SetTexture (0x0048c6f0) takes either a path or a colour, and addons use both
 // freely: 1, or nil for a file that cannot be had, and then the texture is as it
-// was (0x004859e0). `tile` repeats the image both ways. What the XML names and
-// cannot have is plain green (0x00485f40): the emitter says so by "xml".
+// was (0x004859e0). Its third argument repeats the image both ways. What the XML
+// names and cannot have is plain green (0x00485f40), and it repeats each way by
+// its horizTile and vertTile: the emitter says so by "xml" and two flags.
 int lua_Texture_SetTexture(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
     if (!w) return 0;
@@ -7582,7 +7583,11 @@ int lua_Texture_SetTexture(lua_State* L) {
     } else {
         // The file it has is left as it is (0x004b53a0), tiled or not.
         const std::string path = luaL_optstring(L, 2, "");
-        if (path != w->texturePath) w->horizTile = w->vertTile = lua_toboolean(L, 3) != 0;
+        if (path != w->texturePath) {
+            const bool xml = lua_gettop(L) >= 5 && lua_isstring(L, 5);
+            w->repeatAcross = lua_toboolean(L, 3) != 0;
+            w->repeatDown = xml ? lua_toboolean(L, 4) != 0 : w->repeatAcross;
+        }
         w->solidColor = false;
         w->texturePath = path;
     }

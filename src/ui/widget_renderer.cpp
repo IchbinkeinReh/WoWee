@@ -1,4 +1,5 @@
 #include <cstring>
+#include "ui/texture_variant.hpp"
 #include "ui/interface_file.hpp"
 #include "ui/widget_renderer.hpp"
 #include "ui/texture_variants.hpp"
@@ -106,30 +107,13 @@ void WidgetRenderer::initialize(pipeline::AssetManager* assets,
     vkCtx_ = vkCtx;
 }
 
-// Additive and desaturated art are uploaded as images of their own, because
-// the same file can be asked for either way and they differ in their texels.
-static std::string cacheKey(const std::string& path, uint8_t variant) {
-    if (variant == 0) return path;
-    std::string key = path;
-    if (variant & 1u) key += "|add";             // kVariantAdd
-    if (variant & 2u) key += "|desat";           // kVariantDesaturate
-    if (variant & 4u) key += "|mask";            // kVariantAlphaMask
-    return key;
-}
-
 const VkDescriptorSet* WidgetRenderer::cachedTexture(const std::string& path,
                                                      uint8_t variant) const {
     // The suffixed key is only built for additive or desaturated art, which
     // is a handful of frames rather than the whole screen. Everything else
     // looks the path up as it stands and allocates nothing.
-    auto it = variant != 0 ? textures_.find(cacheKey(path, variant)) : textures_.find(path);
+    auto it = variant != 0 ? textures_.find(textureKey(path, variant)) : textures_.find(path);
     return (it == textures_.end()) ? nullptr : &it->second;
-}
-
-uint8_t WidgetRenderer::textureVariant(const Widget& w) {
-    return static_cast<uint8_t>((w.blendAdd ? kVariantAdd : 0) |
-                                (w.desaturated ? kVariantDesaturate : 0) |
-                                (w.emblemMask ? kVariantAlphaMask : 0));
 }
 
 VkDescriptorSet WidgetRenderer::resident(const std::string& path, uint8_t variant) const {
@@ -171,7 +155,7 @@ std::vector<uint8_t> WidgetRenderer::readTextureFile(const std::string& path,
 }
 
 VkDescriptorSet WidgetRenderer::texture(const std::string& path, uint8_t variant) {
-    const std::string key = cacheKey(path, variant);
+    const std::string key = textureKey(path, variant);
     auto it = textures_.find(key);
     if (it != textures_.end()) return it->second;
     if (!assets_ || !vkCtx_ || path.empty()) return kMissing;
@@ -202,8 +186,9 @@ VkDescriptorSet WidgetRenderer::texture(const std::string& path, uint8_t variant
     // alpha, so the draw passes white for the rest (textureColor).
     if (variant & kVariantDesaturate) prepareDesaturated(image.data);
     if (variant & kVariantAlphaMask) prepareAlphaMask(image.data);
-    VkDescriptorSet set = vkCtx_->uploadImGuiTexture(image.data.data(),
-                                                     image.width, image.height);
+    VkDescriptorSet set = vkCtx_->uploadImGuiTexture(image.data.data(), image.width, image.height,
+                                                     (variant & kVariantRepeatAcross) != 0,
+                                                     (variant & kVariantRepeatDown) != 0);
     textures_[key] = set;
     return set;
 }
@@ -964,19 +949,16 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
     const float bx1 = x1 - w.insetRight * scale;
     const float by1 = y1 - w.insetBottom * scale;
     if (bx1 > bx0 && by1 > by0) {
-        VkDescriptorSet bg = resident(w.bgFile);
+        VkDescriptorSet bg = resident(w.bgFile, backdropVariantOf(w));
         const uint32_t col = packColor(w.backdropColor, w.alpha);
         if (bg != kMissing) {
             // Tiling repeats the art at its own size instead of stretching it,
             // which is the difference between a stone wall and a smear.
-            float u1 = 1.0f, v1 = 1.0f;
-            if (w.tileBackground && w.edgeSize > 0.0f) {
-                // In units on both sides of the division, so the art repeats
-                // at its authored size rather than at a rate that changes with
-                // the window.
-                u1 = (bx1 - bx0) / (w.edgeSize * scale);
-                v1 = (by1 - by0) / (w.edgeSize * scale);
-            }
+            // In units on both sides of the division, so the art repeats at
+            // its authored size rather than at a rate that changes with the
+            // window.
+            const float u1 = backdropRepeats(w, (bx1 - bx0) / scale);
+            const float v1 = backdropRepeats(w, (by1 - by0) / scale);
             dl->AddImage(reinterpret_cast<ImTextureID>(bg), ImVec2(bx0, by0), ImVec2(bx1, by1),
                          ImVec2(0.0f, 0.0f), ImVec2(u1, v1), col);
         }
@@ -2178,7 +2160,7 @@ void WidgetRenderer::reportWidgetDiagnostics(WidgetTree& tree,
                     w->rectW <= 0.0f || w->rectH <= 0.0f || offscreen ||
                     (w->visible && w->kind == WidgetKind::Texture &&
                      w->externalTexture == 0 && !w->texturePath.empty() &&
-                     resident(w->texturePath, textureVariant(*w)) == kMissing);
+                     resident(w->texturePath, textureVariantOf(*w)) == kMissing);
                 if (!askedFor && !troubled) { ++quiet; continue; }
                 report("  ", name,
                             (w->visible ? " shown" : " HIDDEN"), mouse, kindName, anchors,
@@ -2200,7 +2182,7 @@ void WidgetRenderer::reportWidgetDiagnostics(WidgetTree& tree,
                             // a .blp that was on disk all along.
                             (w->visible && w->kind == WidgetKind::Texture &&
                              w->externalTexture == 0 && !w->texturePath.empty() &&
-                             resident(w->texturePath, textureVariant(*w)) == kMissing
+                             resident(w->texturePath, textureVariantOf(*w)) == kMissing
                                  ? " NOTRESIDENT" : ""),
                             (w->texturePath.empty() ? "" : " tex="), w->texturePath);
             }
@@ -2230,7 +2212,7 @@ void WidgetRenderer::reportWidgetDiagnostics(WidgetTree& tree,
                         // draws nothing at all, and looks identical in a list
                         // of what was "drawn" to one that worked.
                         (w->kind == WidgetKind::Texture && !w->solidColor
-                             ? (resident(w->texturePath, textureVariant(*w)) == kMissing
+                             ? (resident(w->texturePath, textureVariantOf(*w)) == kMissing
                                     ? " NOTRESIDENT" : "")
                              : ""),
                         // The vertex colour multiplies the image, so a zero
@@ -2466,7 +2448,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     for (const Widget* w : order) {
         if (static_cast<int>(wanted.size()) >= kUploadsPerFrame) break;
         if (w->kind == WidgetKind::Texture && !w->solidColor)
-            want(w->texturePath, textureVariant(*w));
+            want(w->texturePath, textureVariantOf(*w));
         if (!w->text.empty()) wantMarkup(w->text);
         for (const auto& line : w->tooltipLines) {
             wantMarkup(line.left);
@@ -2485,7 +2467,10 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             }
         }
         if (w->kind == WidgetKind::Frame) {
-            if (w->hasBackdrop) { want(w->bgFile); want(w->edgeFile); }
+            if (w->hasBackdrop) {
+                want(w->bgFile, backdropVariantOf(*w));
+                want(w->edgeFile);
+            }
             if (w->isStatusBar) want(w->barTexture);
             if (w->isSlider) want(w->thumbTexture);
             if (w->isCooldown) {
@@ -3241,7 +3226,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // Only what is already resident. Anything still queued draws on
                 // a later frame rather than forcing an upload here.
                 const VkDescriptorSet* set =
-                    cachedTexture(w->texturePath, textureVariant(*w));
+                    cachedTexture(w->texturePath, textureVariantOf(*w));
                 if (!set || *set == kMissing) continue;
                 tex = *set;
             }

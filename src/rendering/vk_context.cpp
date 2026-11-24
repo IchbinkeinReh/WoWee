@@ -2690,6 +2690,7 @@ void VkContext::destroyImGuiResources() {
     }
     uiTextures_.clear();
     uiTextureSampler_ = VK_NULL_HANDLE; // Owned by sampler cache
+    for (auto& sampler : uiTileSamplers_) sampler = VK_NULL_HANDLE;
 
     // Said here rather than by whoever decided to destroy them, so that the
     // generation cannot disagree with what actually happened to the sets.
@@ -2765,23 +2766,26 @@ bool VkContext::ensureUiTextureDescriptorPool() {
     return true;
 }
 
-VkDescriptorSet VkContext::uploadImGuiTexture(const uint8_t* rgba, int width, int height) {
+VkDescriptorSet VkContext::uploadImGuiTexture(const uint8_t* rgba, int width, int height, bool repeatU,
+                                              bool repeatV) {
     if (!device || !physicalDevice || width <= 0 || height <= 0 || !rgba)
         return VK_NULL_HANDLE;
 
     VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * 4;
 
     // Create shared sampler on first call (via sampler cache)
-    if (!uiTextureSampler_) {
+    VkSampler& sampler =
+        repeatU || repeatV ? uiTileSamplers_[(repeatU ? 1 : 0) + (repeatV ? 2 : 0) - 1] : uiTextureSampler_;
+    if (!sampler) {
         VkSamplerCreateInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         si.magFilter = VK_FILTER_LINEAR;
         si.minFilter = VK_FILTER_LINEAR;
-        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeU = repeatU ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = repeatV ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        uiTextureSampler_ = getOrCreateSampler(si);
-        if (!uiTextureSampler_) {
+        sampler = getOrCreateSampler(si);
+        if (!sampler) {
             LOG_ERROR("Failed to create UI texture sampler");
             return VK_NULL_HANDLE;
         }
@@ -2937,7 +2941,7 @@ VkDescriptorSet VkContext::uploadImGuiTexture(const uint8_t* rgba, int width, in
             ds = VK_NULL_HANDLE;
         } else {
             VkDescriptorImageInfo info{};
-            info.sampler = uiTextureSampler_;
+            info.sampler = sampler;
             info.imageView = imageView;
             info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             VkWriteDescriptorSet write{};

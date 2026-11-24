@@ -198,6 +198,9 @@ struct Widget {
     /// start -1 for none.
     int alphaGradientStart = -1;
     int alphaGradientLength = 0;
+    /// The image goes on past its edges (SetTexture's third argument, the XML's
+    /// horizTile and vertTile).
+    bool repeatAcross = false, repeatDown = false;
     /// SetHorizTile / SetVertTile / horizTile="" vertTile="" (texture +0x160
     /// flags 4 and 8, 0x0048cb60/0x0048cc30): the image repeats at its own size.
     bool horizTile = false;

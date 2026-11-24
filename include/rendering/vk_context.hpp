@@ -521,7 +521,10 @@ public:
     // a VkDescriptorSet suitable for use as ImTextureID.
     // The caller does NOT need to free the result - resources are tracked and
     // cleaned up when the VkContext is destroyed.
-    VkDescriptorSet uploadImGuiTexture(const uint8_t* rgba, int width, int height);
+    /// `repeatU`, `repeatV`: past its edges across and down the image goes on
+    /// from its other side, rather than its last pixel.
+    VkDescriptorSet uploadImGuiTexture(const uint8_t* rgba, int width, int height, bool repeatU = false,
+                                       bool repeatV = false);
 
 private:
     bool createInstance(SDL_Window* window);
@@ -813,6 +816,7 @@ private:
 
     // Shared sampler for UI textures (created on first uploadImGuiTexture call)
     VkSampler uiTextureSampler_ = VK_NULL_HANDLE;
+    VkSampler uiTileSamplers_[3] = {};  ///< repeated across, down, both
     /// Bumped whenever the UI textures and the pool their descriptor sets came
     /// from are destroyed.
     ///
