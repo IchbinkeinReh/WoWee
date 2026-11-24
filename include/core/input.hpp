@@ -40,6 +40,9 @@ public:
     /// the left button SDL made of it - read as held, it would turn the right
     /// click into both buttons, which is walking forward.
     void setMouseButtonMasked(int button, bool masked);
+    /// Reads a button as up, wherever it is held from, until it is let go of:
+    /// its press has been spent on something that nothing else may hear.
+    void setMouseButtonSpent(int button, bool spent);
     /// Where a scripted test run puts the pointer (__WoweeTestMouse, only
     /// with WOWEE_AUTO_LUA), or the MCP server's mouse does, read in place of
     /// the device's; cleared to give the device's back.
@@ -76,6 +79,7 @@ private:
     std::array<bool, NUM_MOUSE_BUTTONS> currentMouseState = {};
     std::array<bool, NUM_MOUSE_BUTTONS> virtualMouseState = {};
     std::array<bool, NUM_MOUSE_BUTTONS> maskedMouseState = {};
+    std::array<bool, NUM_MOUSE_BUTTONS> spentMouseState = {};
     std::array<bool, NUM_MOUSE_BUTTONS> previousMouseState = {};
 
     glm::vec2 mousePosition = glm::vec2(0.0f);

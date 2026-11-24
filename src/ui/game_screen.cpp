@@ -2196,6 +2196,13 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     return;
                 }
 
+                // What the cursor holds is let go of - or asked about - by a
+                // click on no unit and no object, and the target stays
+                // (0x005278c0).
+                if (auto* engine = services_.addonManager ? services_.addonManager->getLuaEngine() : nullptr;
+                    engine && engine->worldLeftClickTakenByCursor(closestGuid != 0))
+                    return;
+
                 // Dropping what the cursor is carrying onto another player
                 // opens a trade with them, which is how a trade begins in WoW
                 // and was reachable here only by typing /trade.
@@ -2223,14 +2230,6 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                             return;
                         }
                     }
-                }
-
-                // Over the ground the cursor lets go of what it carries, but an
-                // item out of the bags or off the paperdoll (0x005278c0), which
-                // is asked about (DELETE_ITEM_CONFIRM) and takes the click.
-                if (closestGuid == 0 && !frameXmlCursorItem().empty()) {
-                    if (addons::cursorItemCameFromInventory()) return;
-                    frameXmlPutCursorDown();
                 }
 
                 // An item waiting for a unit takes this click instead of it
@@ -2291,14 +2290,8 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     }
     if (!io.WantCaptureMouse && !frameXmlOwnsMouse() &&
         input.isMouseButtonJustPressed(SDL_BUTTON_RIGHT) && !input.isMouseButtonPressed(SDL_BUTTON_LEFT)) {
-        // The cursor lets go of whatever it carries, and that is the press
-        // (0x0051fa50).
-        if (!frameXmlCursorItem().empty()) {
-            frameXmlPutCursorDown();
-        } else {
-            rightClickPressPos_ = input.getMousePosition();
-            rightClickWasPress_ = true;
-        }
+        rightClickPressPos_ = input.getMousePosition();
+        rightClickWasPress_ = true;
     }
 
     // On right mouse-up, act only if it was a click (not a drag / camera rotate).

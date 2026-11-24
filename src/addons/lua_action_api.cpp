@@ -99,13 +99,6 @@ static bool droppedItemFromNowhere(lua_State* L);
 /// Sell what the cursor is holding. Defined below, beside the buy it mirrors.
 static void soldHeldItem(lua_State* L);
 
-/// Whether the cursor carries what an action button takes.
-static bool cursorCarriesAction() {
-    return (s_cursorId != 0 && (s_cursorType == CursorType::SPELL || s_cursorType == CursorType::ITEM ||
-                                s_cursorType == CursorType::MACRO)) ||
-           s_cursorType == CursorType::EQUIPMENT_SET;
-}
-
 uint64_t cursorMoney() {
     return s_cursorType == CursorType::MONEY ? s_cursorMoney : 0;
 }
@@ -175,6 +168,34 @@ bool cursorItemCameFromInventory() {
     // can be destroyed.
     return s_cursorType == CursorType::ITEM &&
            game::slots::cursorSourceIsInventory(s_cursorBag);
+}
+
+game::action_drop::Held cursorHeld() {
+    game::action_drop::Held held;
+    held.any = s_cursorType != CursorType::NONE;
+    held.ownItem = cursorItemCameFromInventory();
+    held.byEntry = s_cursorType == CursorType::MERCHANT || s_cursorType == CursorType::GUILDBANK ||
+                   s_cursorType == CursorType::AMMO || (s_cursorType == CursorType::ITEM && !held.ownItem);
+    held.equipmentSet = s_cursorType == CursorType::EQUIPMENT_SET;
+    return held;
+}
+
+void askToDeleteCursorItem(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    uint8_t bag = 0, slot = 0;
+    if (!gh || !cursorWireSlot(bag, slot)) return;
+    if (auto* inv = gh->getInventoryHandler()) {
+        const uint64_t guid = inv->itemGuidAtWire(bag, slot);
+        if (guid != 0 && (gh->getItemFieldFlags(guid) & 0x20u) != 0) {
+            gh->addUIError(game::interfaceString("ERR_ITEM_CANT_BE_DESTROYED", "That item cannot be destroyed."));
+            return;
+        }
+    }
+    // The name and the quality, by which uiparent.lua picks the sterner of
+    // its two prompts.
+    const auto* info = gh->getItemInfo(s_cursorId);
+    if (!info) return;
+    gh->fireAddonEvent("DELETE_ITEM_CONFIRM", {info->name, std::to_string(info->quality)});
 }
 
 /// Change what the cursor is holding, and say so.
@@ -1398,11 +1419,20 @@ static int lua_GetActionCooldown(lua_State* L) {
 // every action went at the current target, so self-cast did nothing, and a
 // unit-frame button carrying its own unit acted on whoever was targeted
 // instead.
-static int lua_PlaceAction(lua_State* L);
+static game::action_drop::Action heldAction();
+static void dropOnAction(lua_State* L, game::GameHandler* gh, int slot);
+
 static int lua_UseAction(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: UseAction(slot, [, target] [, button])");
+    int slot = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    // What the cursor holds goes into the slot instead (0x005abbc0): a click
+    // on a button is a drop, while the button's key is still its use.
+    if (game::action_drop::useActionPlaces(slot, heldAction(), bindingRunning())) {
+        dropOnAction(L, gh, slot);
+        return 0;
+    }
     if (const auto ref = petActionRef(gh, slot)) {
         // 0x005abbc0 -> 0x005d4210: the pet bar's slot, used at the target
         // (the unit argument is not passed on), and GAMEABILITYACTIVATE.
@@ -1412,8 +1442,6 @@ static int lua_UseAction(lua_State* L) {
         }
         return 0;
     }
-    // What the cursor carries is put there instead (0x005abbc0 -> 0x005ab120).
-    if (cursorCarriesAction()) return lua_PlaceAction(L);
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) return 0;
     const auto& action = bar[slot];
@@ -1549,6 +1577,7 @@ static int lua_ClearCursor(lua_State* L) {
 }
 
 static int lua_GetCursorInfo(lua_State* L) {
+    auto* gh = getGameHandler(L);
     switch (s_cursorType) {
         case CursorType::SPELL:
             lua_pushstring(L, "spell");
@@ -1557,17 +1586,17 @@ static int lua_GetCursorInfo(lua_State* L) {
             lua_pushnumber(L, s_cursorId); // spellId
             return 4;
         case CursorType::ITEM:
-        // An item out of the guild bank is an item. Where it came from is this
-        // file's business - PickupContainerItem reads the cursor type to know a
-        // drop is a withdrawal - and saying so here would only give the
-        // interface a kind it has no branch for.
+        // An item out of the guild bank is an item, and the ammunition off the
+        // ammo slot (cases 7, 9 and 0xb).
         case CursorType::GUILDBANK:
         // And the ammunition off the ammo slot: "item" and its entry
         // (0x00515200 cases 7, 9 and 0xb).
         case CursorType::AMMO:
             lua_pushstring(L, "item");
             lua_pushnumber(L, s_cursorId);
-            return 2;
+            lua_pushstring(L, link.c_str());
+            return 3;
+        }
         case CursorType::MACRO:
             lua_pushstring(L, "macro");
             lua_pushnumber(L, s_cursorId);
@@ -1650,32 +1679,9 @@ static int lua_PickupAction(lua_State* L) {
     // CGActionBar::PickupAction asks the taint check (0x005abe70, kind 0xe):
     // the bar is not rearranged by insecure code in combat lockdown.
     if (!taint::allowed(L, 0xe)) return 0;
-    const auto& bar = gh->getActionBar();
-    if (slot < 1 || slot > static_cast<int>(bar.size())) return 0;
-
-    // Read before anything is written: setActionBarSlot rewrites the entry
-    // this would otherwise still be pointing at.
-    const auto existing = bar[slot - 1];
-    const bool hadAction = !existing.isEmpty();
-    const CursorType held = s_cursorType;
-    const uint32_t heldId = s_cursorId;
-
-    const auto typeForCursor = [](CursorType c) {
-        return c == CursorType::SPELL ? game::ActionBarSlot::SPELL
-             : c == CursorType::ITEM  ? game::ActionBarSlot::ITEM
-             : c == CursorType::EQUIPMENT_SET ? game::ActionBarSlot::EQUIPMENT_SET
-                                      : game::ActionBarSlot::MACRO;
-    };
-    const bool holding = (heldId != 0 &&
-                          (held == CursorType::SPELL || held == CursorType::ITEM ||
-                           held == CursorType::MACRO)) ||
-                         held == CursorType::EQUIPMENT_SET;
-
-    // The set already in the slot: the cursor lets it go, the slot keeps it
-    // (0x005ab120).
-    if (held == CursorType::EQUIPMENT_SET && existing.type == game::ActionBarSlot::EQUIPMENT_SET &&
-        existing.id == heldId) {
-        clearCursorItem(L);
+    if (!game::action_drop::slotTakesDrops(slot - 1)) return 0;
+    if (heldAction().kind != game::action_drop::Kind::None) {
+        dropOnAction(L, gh, slot - 1);
         return 0;
     }
     // A passive spell does not go on a bar (0x005ab120, Attributes 0x40):
@@ -1741,23 +1747,18 @@ static int lua_PickupAction(lua_State* L) {
     return 0;
 }
 
-// PlaceAction(slot) - places cursor content into an action bar slot
-//
-// A swap, as the real one is: whatever the slot held goes onto the cursor, so
-// a bar can be rearranged by dropping one action on another and then placing
-// the one that came off. This wrote the new action over the old and cleared
-// the cursor, so the action underneath was simply gone - and it is PlaceAction
-// an action button's OnReceiveDrag calls, so every drop onto an occupied
-// button lost what was there.
-//
-// PickupAction while holding something is exactly that swap, so this is it.
-// With nothing placeable held it does nothing, and leaves the cursor alone.
+// PlaceAction(slot) (0x005ab840): what is held into the slot, with nothing a
+// bar takes held nothing - and not into the bonus bar's slots. It is what an
+// action button's OnReceiveDrag calls.
 static int lua_PlaceAction(lua_State* L) {
-    // 0x005ab840
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: PlaceAction(slot)");
-    if (!cursorCarriesAction()) return 0;
-    return lua_PickupAction(L);
+    auto* gh = getGameHandler(L);
+    const int slot = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    if (!gh || !game::action_drop::slotTakesDrops(slot)) return 0;
+    if (heldAction().kind == game::action_drop::Kind::None) return 0;
+    dropOnAction(L, gh, slot);
+    return 0;
 }
 
 // PickupSpell(bookSlot, bookType) - picks up a spell from the spellbook

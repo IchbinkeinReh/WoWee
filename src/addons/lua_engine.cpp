@@ -17592,6 +17592,7 @@ void runDirectBinding(lua_State* L, const DirectBinding& binding, bool down) {
 
 bool LuaEngine::runBindingScript(const std::string& command, bool down) {
     if (!L_) return false;
+    const BindingRunScope running;
     if (const DirectBinding direct = parseDirectBinding(command);
         direct.kind != DirectBinding::Kind::None) {
         taint::HardwareEvent hardware;
@@ -18537,6 +18538,34 @@ void LuaEngine::releaseMouseHover() {
     haveCursor_ = false;
 }
 
+bool LuaEngine::rightPressPutsCursorDown() {
+    if (!L_ || holdsMousePress()) return false;
+    auto* gh = getGameHandler(L_);
+    if (!game::action_drop::rightPressPutsDown(cursorHeld(), gh && gh->wrappingItem())) return false;
+    taint::Quiet quiet;
+    clearCursor(L_);
+    return true;
+}
+
+bool LuaEngine::worldLeftClickTakenByCursor(bool onObject) {
+    if (!L_) return false;
+    taint::Quiet quiet;
+    switch (game::action_drop::leftClick(cursorHeld(), onObject)) {
+        case game::action_drop::WorldClick::Through:
+            return false;
+        case game::action_drop::WorldClick::PutDownFirst:
+            clearCursor(L_);
+            return false;
+        case game::action_drop::WorldClick::PutDown:
+            clearCursor(L_);
+            return true;
+        case game::action_drop::WorldClick::ConfirmDelete:
+            askToDeleteCursorItem(L_);
+            return true;
+    }
+    return false;
+}
+
 void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons buttons) {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
@@ -19066,37 +19095,12 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     // world removed it for good - the "I knocked it off and
                     // cannot put it back" report. A bag slot is the same: its
                     // OnReceiveDrag puts the item back where it was.
-                    if (dropOn != 0) {
-                        callFrameScript(dropOn, "OnReceiveDrag", b.name);
-                    } else if (dropOn == 0 && L_) {
-                        // Let go over the world, which is how an action is
-                        // taken off a bar: the slot emptied when it was picked
-                        // up, so clearing the cursor is what removes it. A drop
-                        // on a frame that does not accept drags keeps it, as
-                        // the real client does, so only the world counts.
-                        const auto* under = hit ? widgets_.get(hit) : nullptr;
-                        const bool onWorld = !under || under->name == "UIParent" ||
-                                             under->name == "WorldFrame";
-                        // An item out of a bag or off the paperdoll is not put
-                        // down here. Letting one of those go over the world is
-                        // how it is destroyed, and the delete confirmation is
-                        // raised for it once this dispatch returns - by reading
-                        // the cursor. Clearing it first is the whole of
-                        // "dragging a quest item onto the ground does nothing":
-                        // the prompt looked, found an empty cursor, and asked
-                        // about nothing, and the next bag update put the item
-                        // back. An item off an action bar has no such prompt -
-                        // the bar held a reference, not the item - so it still
-                        // clears here, which is what takes it off the bar.
-                        if (onWorld && !cursorItemCameFromInventory()) {
-                            lua_getglobal(L_, "ClearCursor");
-                            if (lua_isfunction(L_, -1)) {
-                                if (lua_pcall(L_, 0, 0, 0) != 0) lua_pop(L_, 1);
-                            } else {
-                                lua_pop(L_, 1);
-                            }
-                        }
-                    }
+                    //
+                    // Over the world nothing hears it (0x0048fce0 tells the
+                    // frame under the mouse, and the world frame has no
+                    // OnReceiveDrag): what is held stays on the cursor until a
+                    // click puts it somewhere - worldLeftClickTakenByCursor.
+                    if (dropOn != 0) callFrameScript(dropOn, "OnReceiveDrag", b.name);
                     const auto* target = dropOn ? widgets_.get(dropOn)
                                                 : (hit ? widgets_.get(hit) : nullptr);
                     // Which frame took it, and - when none did - which one was

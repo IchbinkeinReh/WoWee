@@ -2612,6 +2612,20 @@ void Application::run() {
             // interface nor the camera may act on it.
             if (mapWindow_ && mapWindow_->handleEvent(event)) continue;
 
+            // The right button lets go of what the cursor holds before
+            // anything else hears of it, and that is all it does: no frame,
+            // no camera and no world gets the press (0x0051fa50, which
+            // 0x00495470 asks first). Not over this client's own windows.
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT &&
+                state == AppState::IN_GAME && addonManager_ && addonsLoaded_ &&
+                !ImGui::GetIO().WantCaptureMouse && addonManager_->getLuaEngine() &&
+                addonManager_->getLuaEngine()->rightPressPutsCursorDown()) {
+                Input::getInstance().setMouseButtonSpent(SDL_BUTTON_RIGHT, true);
+                continue;
+            }
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT)
+                Input::getInstance().setMouseButtonSpent(SDL_BUTTON_RIGHT, false);
+
             // Connected and disconnected, which is all the pad needs from the
             // queue - its sticks and buttons are sampled once a frame rather
             // than accumulated out of events.
@@ -8012,27 +8026,6 @@ void Application::render() {
                 buttons.button5 = ImGui::IsMouseDown(4);
                 engine->dispatchMouse(io.MousePos.x, io.MousePos.y,
                                       io.DisplaySize.y, buttons);
-
-                // Letting a carried item go over the world is how an item is
-                // destroyed. The C client raises DELETE_ITEM_CONFIRM for it and
-                // uiparent.lua answers with the delete prompt, choosing the
-                // sterner wording by quality; nothing fired it, so dragging an
-                // item out of a bag and dropping it did nothing at all.
-                //
-                // Only when the release landed on no widget: over a frame the
-                // drop belongs to that frame, which has already had its say
-                // above.
-                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
-                    !engine->mouseOverFrameXml()) {
-                    const uint32_t carried = addons::cursorItemId();
-                    if (carried != 0 && gameHandler) {
-                        const auto* info = gameHandler->getItemInfo(carried);
-                        const std::string name = info ? info->name : std::string();
-                        const uint32_t quality = info ? info->quality : 0u;
-                        gameHandler->fireAddonEvent(
-                            "DELETE_ITEM_CONFIRM", {name, std::to_string(quality)});
-                    }
-                }
             }
         });
     }
@@ -8111,7 +8104,12 @@ void Application::render() {
     if (auto click = vrRuntime.takeWorldClick(); click && gameHandler && uiManager && state == AppState::IN_GAME) {
         const rendering::Ray ray{.origin = click->origin, .direction = click->direction};
         const ui::ScenePick pick = ui::pickScene(*gameHandler, ray, ui::ScenePickParams{});
-        if (const uint64_t guid = pick.resolve(); guid != 0) {
+        const uint64_t guid = pick.resolve();
+        auto* engine = addonManager_ ? addonManager_->getLuaEngine() : nullptr;
+        // What is held goes first, as on the desktop.
+        const bool taken = engine && (click->interact ? engine->rightPressPutsCursorDown()
+                                                      : engine->worldLeftClickTakenByCursor(guid != 0));
+        if (!taken && guid != 0) {
             gameHandler->setTarget(guid);
             if (click->interact) uiManager->getGameScreen().interactWithTarget(*gameHandler);
         }

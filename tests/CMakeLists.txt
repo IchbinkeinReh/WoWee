@@ -4181,6 +4181,12 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# ── test_action_drop ─────────────────────────────────────────
+# What the cursor holds against an action slot (0x005abbc0, 0x005ab120) and a
+# click into the world (0x005278c0, 0x0051fa50). Header-only.
+wowee_add_test(test_action_drop
+    SOURCES test_action_drop.cpp)
+
 # ── test_latest_criteria ─────────────────────────────────────
 # The statistics most recently updated (0x005b2520, 0x005b2cb0) that
 # GetLatestUpdatedStats and GetLatestUpdatedComparisonStats read. Header-only.

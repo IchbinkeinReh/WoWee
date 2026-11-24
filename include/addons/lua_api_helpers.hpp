@@ -16,6 +16,7 @@
 #include <cmath>
 #include <algorithm>
 
+#include "game/action_drop.hpp"
 #include "game/item_text.hpp"
 #include "addons/lua_services.hpp"
 #include "game/game_handler.hpp"
@@ -356,6 +357,25 @@ public:
 
 private:
     RunningMacro saved_;
+};
+
+/// The id of the macro a Lua argument names, by index or by name (0x00566df0);
+/// 0 for none.
+uint32_t macroIdArg(lua_State* L, int idx);
+
+/// A key binding is being carried out (0x00beadd8 + 0x12c, which 0x00563150
+/// sets around every binding of a key and clears after it).
+inline int& bindingRunDepth() {
+    static int depth = 0;
+    return depth;
+}
+inline bool bindingRunning() { return bindingRunDepth() > 0; }
+class BindingRunScope {
+public:
+    BindingRunScope() { ++bindingRunDepth(); }
+    ~BindingRunScope() { --bindingRunDepth(); }
+    BindingRunScope(const BindingRunScope&) = delete;
+    BindingRunScope& operator=(const BindingRunScope&) = delete;
 };
 
 /// The button a CLICK binding presses, for as long as the press lasts
@@ -1483,6 +1503,13 @@ int cursorEquipSlot();
 /// and the prompt reads the cursor - so the drag has to end with the item still
 /// on it.
 bool cursorItemCameFromInventory();
+
+/// What the cursor holds, as a click into the world asks it.
+game::action_drop::Held cursorHeld();
+
+/// 0x00524650, a click into the world with an own item held: one that cannot
+/// be destroyed is refused, any other is asked about (DELETE_ITEM_CONFIRM).
+void askToDeleteCursorItem(lua_State* L);
 
 /// Put a vendor's list entry on the cursor, which is what a left-click in
 /// FrameXML's merchant window does. Buying happens when it is dropped.

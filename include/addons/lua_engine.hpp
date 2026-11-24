@@ -114,6 +114,17 @@ public:
     /// tree's coordinate space has one entrance.
     void dispatchMouse(float x, float y, float screenH, MouseButtons buttons);
 
+    /// The right button went down with no frame holding the mouse: whether
+    /// the cursor let something go for it, in which case the press is spent
+    /// and nothing else hears it (0x0051fa50, ahead of every frame and of the
+    /// world).
+    [[nodiscard]] bool rightPressPutsCursorDown();
+
+    /// A left click into the world with something on the cursor (0x004f7880):
+    /// true when that was all the click did. `onObject`: it is on a unit or
+    /// an object.
+    [[nodiscard]] bool worldLeftClickTakenByCursor(bool onObject);
+
     /// Whether the interface is holding a press: a button went down on a frame
     /// and has not come up, or a frame is being dragged or moved.
     ///
