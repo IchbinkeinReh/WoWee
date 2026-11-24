@@ -11,6 +11,16 @@ namespace wowee::rendering {
 
 enum class EffectModelState : unsigned char { Loading, Ready, Failed };
 
+/// What becomes of an effect that flies, with its model in that state: it goes
+/// without one while that is loaded - its flight, its sound and what it does on
+/// landing are there all the same - and not at all where there is none.
+enum class FlightStart : unsigned char { Shown, Unseen, None };
+[[nodiscard]] constexpr FlightStart flightStart(EffectModelState state) {
+    return state == EffectModelState::Ready     ? FlightStart::Shown
+           : state == EffectModelState::Loading ? FlightStart::Unseen
+                                                : FlightStart::None;
+}
+
 template <typename Effect>
 class EffectWait {
 public:

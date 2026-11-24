@@ -417,3 +417,13 @@ TEST_CASE("an effect waits for its model and starts with it", "[spell_kit]") {
     wait.step([](int) { return EffectModelState::Ready; }, play);
     CHECK(played.size() == wait.kMost);
 }
+
+// A missile's model may still be loading as it is fired: it goes all the same.
+TEST_CASE("a missile flies while its model is loaded", "[spell][missile]") {
+    using wowee::rendering::EffectModelState;
+    using wowee::rendering::FlightStart;
+    using wowee::rendering::flightStart;
+    CHECK(flightStart(EffectModelState::Ready) == FlightStart::Shown);
+    CHECK(flightStart(EffectModelState::Loading) == FlightStart::Unseen);
+    CHECK(flightStart(EffectModelState::Failed) == FlightStart::None);
+}

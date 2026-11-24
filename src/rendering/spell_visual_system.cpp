@@ -1313,7 +1313,11 @@ bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const Miss
     const MissileVisual* visual = findMissileVisual(visualId);
     if (!visual) return false;
     const uint32_t modelId = acquireEffectModel(visual->modelPath);
-    if (modelId == 0) return false;
+    // One whose model is still to come flies without it until then, as the
+    // client's missile does.
+    const FlightStart start =
+        flightStart(modelId != 0 ? EffectModelState::Ready : effectModelState(visual->modelPath));
+    if (start == FlightStart::None) return false;
 
     ActiveMissile missile;
     missile.visualId = visualId;
@@ -1375,10 +1379,14 @@ bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const Miss
         copy.missileIndex = index;
         // Rolled again for each copy as it is launched (0x007022d0).
         for (float& r : copy.rands) r = unit(missileRng_);
-        copy.instanceId = m2Renderer_->createInstance(
-            modelId, copy.position, spell_missile::facingEuler(target - copy.position), copy.scale);
-        if (copy.instanceId == 0) break;
-        m2Renderer_->restartInstanceAnimation(copy.instanceId);
+        if (start == FlightStart::Unseen) {
+            copy.waitingModel = visual->modelPath;
+        } else {
+            copy.instanceId = m2Renderer_->createInstance(
+                modelId, copy.position, spell_missile::facingEuler(target - copy.position), copy.scale);
+            if (copy.instanceId == 0) break;
+            m2Renderer_->restartInstanceAnimation(copy.instanceId);
+        }
         // 0x007022d0: 0x6e where the caster or the target is the mover.
         const uint64_t mover = activeUnitsQuery_ ? activeUnitsQuery_().mover : 0;
         const bool moverPart =
@@ -1392,6 +1400,18 @@ bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const Miss
     LOG_DEBUG("SpellVisual: missile visualId=", visualId, " speed=", speed, " flight=", flight,
               "s model=", visual->modelPath, " target attach=", missile.targetAttachment, " copies=", copies);
     return launched;
+}
+
+void SpellVisualSystem::showWaitingMissile(ActiveMissile& missile, const glm::vec3& target) {
+    const uint32_t modelId = acquireEffectModel(missile.waitingModel);
+    if (modelId == 0) {
+        if (effectModelState(missile.waitingModel) == EffectModelState::Failed) missile.waitingModel.clear();
+        return;
+    }
+    missile.waitingModel.clear();
+    missile.instanceId = m2Renderer_->createInstance(
+        modelId, missile.position, spell_missile::facingEuler(target - missile.position), missile.scale);
+    if (missile.instanceId != 0) m2Renderer_->restartInstanceAnimation(missile.instanceId);
 }
 
 // SpellMissileMotion.dbc (0x00ad4950): ID, Name, ScriptBody, Flags,
@@ -1602,6 +1622,7 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
         it->elapsed += deltaTime;
         const glm::vec3 target = missileTargetPoint(*it);
         const glm::vec3 travel = target - it->position;
+        if (!it->waitingModel.empty()) showWaitingMissile(*it, target);
         spell_missile::Step step;
         if (it->adjusted && it->arc.onArc) {
             // On its arc it lands when its time is up, wherever the target
@@ -1681,7 +1702,7 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
             // (0x007015d0 ors 0x8000 into its +0x10).
             it->lastTransform = placementModelMatrix(drawn, spell_missile::facingEuler(facing), it->scale) * turn;
             it->placed = true;
-            m2Renderer_->setInstanceTransform(it->instanceId, it->lastTransform);
+            if (it->instanceId != 0) m2Renderer_->setInstanceTransform(it->instanceId, it->lastTransform);
             audio::AudioEngine::instance().setSoundPosition(it->soundHandle, it->position);
             ++it;
             continue;
@@ -1743,7 +1764,7 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
         } else {
             // 0x00700700: a placed model stays and plays IMPACT; any other
             // is freed.
-            if (!keepLandedMissile(*it)) m2Renderer_->removeInstance(it->instanceId);
+            if (it->instanceId != 0 && !keepLandedMissile(*it)) m2Renderer_->removeInstance(it->instanceId);
             audio::AudioEngine::instance().stopSoundWithFade(it->soundHandle,
                                                              spell_missile::kMissileSoundFadeSeconds);
             it = activeMissiles_.erase(it);

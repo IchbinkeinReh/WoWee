@@ -1113,7 +1113,8 @@ private:
 
     // A missile in flight (CMissile).
     struct ActiveMissile {
-        uint32_t instanceId = 0;
+        uint32_t instanceId = 0;        // 0 while its model is loaded
+        std::string waitingModel;       // that model
         uint32_t visualId = 0;
         glm::vec3 position{0.0f};
         float speed = 0.0f;
@@ -1252,6 +1253,8 @@ private:
     };
     EffectWait<EffectWaiting> effectsWaiting_;
     [[nodiscard]] EffectModelState effectModelState(const std::string& modelPath);
+    /// A missile under way without its model, as that is there.
+    void showWaitingMissile(ActiveMissile& missile, const glm::vec3& target);
     /// Upload a prepared model (a PreparedEffectModel, private to the .cpp);
     /// false, and the model remembered as failed, when it cannot be.
     bool uploadEffectModel(uint32_t modelId, const std::string& modelPath, void* preparedModel);
