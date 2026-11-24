@@ -40,6 +40,7 @@
 ///
 /// Main thread only. Removing a mesh that instances still use is a caller bug.
 
+#include <chrono>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -413,6 +414,11 @@ private:
     uint64_t liveTriangles_ = 0;
 
     GpuPool triPool_;
+    // Bumped when the triangles are packed into another pool: a range released
+    // late was of the one before.
+    uint64_t triEpoch_ = 0;
+    std::chrono::steady_clock::time_point triPackLooked_{};
+    void packTriangles(VkCommandBuffer cmd);
     GpuPool nodePool_;
     GpuPool extraPool_;
     // Alpha masks, 64 uint64 each, and how many of them the GPU has.

@@ -178,3 +178,18 @@ TEST_CASE("RT range allocator reuses and coalesces freed ranges", "[rt_bvh]") {
     a.release(z, 90);
     CHECK(a.allocate(0) == RtRangeAllocator::kFailed);
 }
+
+// The pool kept the size of the largest place seen.
+TEST_CASE("a pool mostly empty is packed into a smaller one") {
+    using wowee::rendering::packedPoolCapacity;
+    using wowee::rendering::poolWorthPacking;
+    constexpr uint32_t kInitial = 1u << 18;
+    CHECK_FALSE(poolWorthPacking(0, kInitial, kInitial));
+    CHECK(poolWorthPacking(0, kInitial * 2, kInitial));
+    CHECK(poolWorthPacking(3'000'000, 10'000'000, kInitial));
+    CHECK_FALSE(poolWorthPacking(4'000'000, 10'000'000, kInitial));
+    CHECK(packedPoolCapacity(0, kInitial) == kInitial);
+    CHECK(packedPoolCapacity(3'000'000, kInitial) == 4'500'000);
+    // Packed once, not again.
+    CHECK_FALSE(poolWorthPacking(3'000'000, packedPoolCapacity(3'000'000, kInitial), kInitial));
+}

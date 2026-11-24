@@ -73,4 +73,17 @@ private:
     uint32_t used_ = 0;
 };
 
+/// Whether a pool is worth packing into a smaller one: less than a third of it
+/// is used, and it is larger than it starts with.
+[[nodiscard]] constexpr bool poolWorthPacking(uint64_t used, uint32_t capacity, uint32_t initial) {
+    return capacity > initial && used * 3 < capacity;
+}
+
+/// The capacity it is packed into: what is used and half of that again, so it
+/// neither grows at the next mesh nor is worth packing once more.
+[[nodiscard]] constexpr uint32_t packedPoolCapacity(uint64_t used, uint32_t initial) {
+    const uint64_t wanted = used + used / 2;
+    return wanted > initial ? static_cast<uint32_t>(wanted) : initial;
+}
+
 }  // namespace wowee::rendering

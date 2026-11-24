@@ -491,10 +491,10 @@ void RtScene::uploadAllPending() {
             const Mesh& m = meshes_[id];
             if (m.live && m.queued) total += m.triCount;
         }
-        if (total > 0 && !triPool_.buffer.buffer) {
+        if (total > 0 && triPool_.alloc.used() + total > triPool_.alloc.capacity()) {
             VkCommandBuffer cmd = ctx_->beginSingleTimeCommands();
             if (cmd != VK_NULL_HANDLE) {
-                const uint64_t want = uint64_t(triPool_.buffer.buffer ? triPool_.alloc.capacity() : 0) + total;
+                const uint64_t want = uint64_t(triPool_.alloc.used()) + total;
                 ensurePoolCapacity(cmd, triPool_, static_cast<uint32_t>(std::min<uint64_t>(want, 0xFFFFFFF0u)),
                                    /*exact=*/true);
                 ctx_->endSingleTimeCommands(cmd);
@@ -644,10 +644,11 @@ void RtScene::removeMesh(MeshId id) {
     // the pool ranges and the slot only matter to a scene that is.
     std::weak_ptr<bool> alive = alive_;
     const uint64_t epoch = gpuEpoch_;
+    const uint64_t triEpoch = triEpoch_;
     VkDevice dev = ctx_->getDevice();
     VmaAllocator alloc = ctx_->getAllocator();
     auto destroyAs = pfnDestroyAs_;
-    ctx_->deferAfterAllFrameFences([this, alive, epoch, dev, alloc, destroyAs, id, triOffset,
+    ctx_->deferAfterAllFrameFences([this, alive, epoch, triEpoch, dev, alloc, destroyAs, id, triOffset,
                                     triCount, nodeOffset, nodeCount, extraOffset, extraCount, blas,
                                     blasBuffer, detailRefs, terrainSlot]() mutable {
         if (blas) destroyAs(dev, blas, nullptr);
@@ -657,7 +658,8 @@ void RtScene::removeMesh(MeshId id) {
         // here is taken by the next texture added.
         for (uint32_t d : detailRefs) details_.release(d);
         if (terrainSlot != kInvalid) terrainRecords_.release(terrainSlot);
-        if (epoch == gpuEpoch_ && triOffset != RtRangeAllocator::kFailed) triPool_.alloc.release(triOffset, triCount);
+        if (epoch == gpuEpoch_ && triEpoch == triEpoch_ && triOffset != RtRangeAllocator::kFailed)
+            triPool_.alloc.release(triOffset, triCount);
         if (epoch == gpuEpoch_ && nodeOffset != RtRangeAllocator::kFailed)
             nodePool_.alloc.release(nodeOffset, nodeCount);
         if (epoch == gpuEpoch_ && extraOffset != RtRangeAllocator::kFailed && extraCount > 0)
@@ -826,6 +828,68 @@ uint32_t RtScene::poolAllocate(VkCommandBuffer cmd, GpuPool& pool, uint32_t coun
     if (off != RtRangeAllocator::kFailed) return off;
     ensurePoolCapacity(cmd, pool, pool.alloc.capacity() + count);
     return pool.alloc.allocate(count);
+}
+
+// The triangles of the largest place seen kept their memory for the rest of the
+// session. Every few seconds, with less than a third of the pool in use, what is
+// in use is copied close together into a smaller one.
+void RtScene::packTriangles(VkCommandBuffer cmd) {
+    constexpr auto kLookEvery = std::chrono::seconds(5);
+    const auto now = std::chrono::steady_clock::now();
+    if (immediate_ || !triPool_.buffer.buffer || now - triPackLooked_ < kLookEvery) return;
+    triPackLooked_ = now;
+    uint64_t used = 0;
+    for (const Mesh& m : meshes_)
+        if (m.live && m.triOffset != RtRangeAllocator::kFailed) used += m.triCount;
+    const uint32_t before = triPool_.alloc.capacity();
+    if (!poolWorthPacking(used, before, kInitialTriangles)) return;
+    const uint32_t capacity = packedPoolCapacity(used, kInitialTriangles);
+    AllocatedBuffer packed = createBuffer(ctx_->getAllocator(), VkDeviceSize(capacity) * triPool_.elementSize,
+                                          triPool_.usage, VMA_MEMORY_USAGE_GPU_ONLY);
+    if (!packed.buffer) return;
+
+    RtRangeAllocator ranges(capacity);
+    std::vector<VkBufferCopy> moves;
+    for (Mesh& m : meshes_) {
+        if (!m.live || m.triOffset == RtRangeAllocator::kFailed) continue;
+        const uint32_t to = ranges.allocate(m.triCount);
+        moves.push_back({VkDeviceSize(m.triOffset) * triPool_.elementSize, VkDeviceSize(to) * triPool_.elementSize,
+                         VkDeviceSize(m.triCount) * triPool_.elementSize});
+        m.triOffset = to;
+    }
+    // After everything the frames before read and wrote - the pool, and the
+    // table of where each mesh is in it, which this frame sends anew.
+    VkMemoryBarrier2 mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    VkDependencyInfo dep{};
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    cmdPipelineBarrier2(cmd, dep);
+    constexpr size_t kRegions = 1024;
+    for (size_t i = 0; i < moves.size(); i += kRegions)
+        vkCmdCopyBuffer(cmd, triPool_.buffer.buffer, packed.buffer,
+                        static_cast<uint32_t>(std::min(kRegions, moves.size() - i)), &moves[i]);
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    cmdPipelineBarrier2(cmd, dep);
+
+    VmaAllocator alloc = ctx_->getAllocator();
+    AllocatedBuffer old = triPool_.buffer;
+    ctx_->deferAfterAllFrameFences([alloc, old]() mutable { destroyBuffer(alloc, old); });
+    triPool_.buffer = packed;
+    triPool_.alloc = std::move(ranges);
+    ++triEpoch_;
+    ++descriptorGeneration_;
+    meshTableDirty_ = true;
+    meshRowsAll_ = true;
+    LOG_INFO("RtScene: triangle pool packed, ", before, " -> ", capacity, " triangles (", used, " in use)");
 }
 
 void RtScene::uploadPending(VkCommandBuffer cmd) {
@@ -1410,6 +1474,7 @@ void RtScene::update(VkCommandBuffer cmd) {
                      " KB); textures' own copies ", VkTexture::rtDetailBytes() >> 10, " KB");
         }
     }
+    packTriangles(cmd);
     uploadPending(cmd);
 
     if (meshTableDirty_) {
