@@ -1595,3 +1595,18 @@ TEST_CASE("a handler's arguments have the client's names", "[framexml][emit]") {
     CHECK(has(emitted("OnSizeChanged"), "function(self, w, h, ...)"));
     CHECK(has(emitted("OnEnter"), "function(self, motion, ...)"));
 }
+
+TEST_CASE("scale= is a model's and no frame's", "[framexml][emit]") {
+    // 0x0095f800 (CSimpleModel) is the only reader of the attribute, into the
+    // model's scale; CSimpleFrame's does not know it. dressupframe.xml 185 and
+    // worldmapframe.xml 796 are the two that write it.
+    const EmitResult model = emitFrameXml(
+        parseOrFail("<Ui><DressUpModel name=\"DressUpModel\" scale=\"2.0\"/></Ui>"));
+    CHECK(has(model.lua, ":SetModelScale(2.0)"));
+    CHECK_FALSE(has(model.lua, ":SetScale("));
+    const EmitResult frame = emitFrameXml(parseOrFail("<Ui><Frame name=\"A\" scale=\"2.0\"/></Ui>"));
+    CHECK_FALSE(has(frame.lua, "Scale("));
+    // "Invalid model scale", and it is left.
+    const EmitResult none = emitFrameXml(parseOrFail("<Ui><Model name=\"B\" scale=\"0\"/></Ui>"));
+    CHECK_FALSE(has(none.lua, "Scale("));
+}

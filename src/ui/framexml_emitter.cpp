@@ -1359,16 +1359,17 @@ struct Emitter {
             }
             break;
         }
-        if (const std::string* sc = node.attr("scale")) {
-            line(var + ":SetScale(" + *sc + ")");
-        }
         // A model frame's model and its model scale (CSimpleModel's XML,
-        // 0x0095f800: file, and scale into +0x32c when above 0).
+        // 0x0095f800: file, and scale into +0x32c when above 0). No other
+        // frame reads scale="" - 0x0095f875 is the only place the client asks
+        // an XML node for it - and here it is not the frame's own scale: the
+        // dressing room's model, at 2, stood above its window with its rotate
+        // buttons twice their size.
         if (node.name == "Model" || node.name == "PlayerModel" || node.name == "DressUpModel" ||
             node.name == "TabardModel" || node.name == "CinematicModel") {
             if (const std::string* file = node.attr("file"); file && !file->empty())
                 line(var + ":SetModel(" + quote(*file) + ")");
-            if (const std::string* sc = node.attr("scale"))
+            if (const std::string* sc = node.attr("scale"); sc && std::strtof(sc->c_str(), nullptr) > 0.0f)
                 line(var + ":SetModelScale(" + *sc + ")");
             // fogNear and fogFar, at least 0, and a FogColor child that turns
             // the fog on (0x0095f800).
