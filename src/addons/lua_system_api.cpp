@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include <array>
 #include "rendering/m2_renderer.hpp"
+#include "game/battleground_rules.hpp"
 #include "game/spell_visual_choice.hpp"
 #include <chrono>
 #include <algorithm>
@@ -7070,13 +7071,26 @@ static int lua_GetBattlefieldInstanceInfo(lua_State* L) {
     return 1;
 }
 
+/// The battleground the last list was of (0x00bea53c): what the interface's
+/// battleground calls are all about. Not the last of the lists kept - they
+/// are kept by battleground, and one asked for again stays where it was.
+static uint32_t currentBattlefieldType(game::GameHandler* gh) {
+    if (!gh) return 0;
+    if (const auto* list = gh->lastBattlefieldList(); list && list->bgTypeId != 0) return list->bgTypeId;
+    const auto& bgs = gh->getAvailableBgs();
+    return bgs.empty() ? 0 : bgs.back().bgTypeId;
+}
+
 // GetNumBattlefields() - how many instances of it there are to choose between.
 static int lua_GetNumBattlefields(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushnumber(L, 0); return 1; }
-    const auto& bgs = gh->getAvailableBgs();
-    lua_pushnumber(L, bgs.empty()
-        ? 0 : static_cast<lua_Number>(bgs.back().instanceIds.size()));
+    // Of the battleground the last list was of.
+    const uint32_t type = currentBattlefieldType(gh);
+    size_t count = 0;
+    for (const auto& bg : gh->getAvailableBgs())
+        if (bg.bgTypeId == type) count = bg.instanceIds.size();
+    lua_pushnumber(L, static_cast<lua_Number>(count));
     return 1;
 }
 
@@ -7521,15 +7535,23 @@ static int lua_PlayerIsPVPInactive(lua_State* L) {
 
 // ---- The battlemaster's battleground list ----
 //
-// GetBattlefieldInfo() → mapName, mapDescription, maxGroup, canEnter,
-//                        isHoliday, isRandom
-//
-// About the battleground the battlemaster being spoken to offers, which is
-// what the last SMSG_BATTLEFIELD_LIST described. The frame returns early on a
-// nil name, so before this the list drew nothing at all.
-//
-// The description is nil: BattlemasterList.dbc carries no blurb, and the panel
-// treats a missing one as "no description" rather than raising on it.
+/// Whether the player's level may enter a battleground (0x0054ba00).
+static bool battlegroundCanEnter(game::GameHandler* gh, const game::GameHandler::BattlemasterEntry& bg) {
+    namespace rules = game::battleground_rules;
+    static std::vector<rules::Bracket> brackets;
+    static bool bracketsLoaded = false;
+    if (!bracketsLoaded) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            bracketsLoaded = true;
+            if (auto dbc = am->loadDBC("PvpDifficulty.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 5)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    brackets.push_back({dbc->getUInt32(i, 1), dbc->getUInt32(i, 3), dbc->getUInt32(i, 4)});
+        }
+    }
+    if (bg.mapIds.empty() && bg.id != rules::kRandomBattleground) return false;
+    return rules::canEnter(bg.id, bg.mapIds.empty() ? 0 : bg.mapIds.front(), gh->getPlayerLevel(), brackets);
+}
+
 /// The player's side by its race's faction (0x006d6e90): 0 the Horde's, 1 the
 /// Alliance's, -1 neither.
 static int playerFactionSide(game::GameHandler* gh) {
@@ -7543,16 +7565,20 @@ static int playerFactionSide(game::GameHandler* gh) {
     return (group & 4u) != 0 ? 0 : (group & 2u) != 0 ? 1 : -1;
 }
 
+// GetBattlefieldInfo() (0x0054d770) → mapName, mapDescription, maxGroup,
+//                        canEnter, isHoliday, isRandom
+//
+// About the battleground the last list was of (0x00bea53c): its name and the
+// size of a group it takes, its first map's description for the player's side
+// - the panel's text - whether the player's level may enter, whether its
+// holiday's world state is set, and whether it is the random one.
 static int lua_GetBattlefieldInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) return luaReturnNil(L);
-    const auto& bgs = gh->getAvailableBgs();
-    if (bgs.empty()) return luaReturnNil(L);
-    const auto* info = gh->getBattlemasterInfo(bgs.back().bgTypeId);
-    if (!info || info->name.empty()) return luaReturnNil(L);
-    const auto& bg = bgs.back();
-    lua_pushstring(L, info->name.c_str());   // 1: mapName
-    // 2: what Map.dbc says of its first map to the player's side (0x0054d770).
+    const uint32_t type = currentBattlefieldType(gh);
+    const auto* info = type != 0 ? gh->getBattlemasterInfo(type) : nullptr;
+    if (!info || info->name.empty()) return 0;
+    lua_pushstring(L, info->name.c_str());
+    // What Map.dbc says of its first map to the player's side.
     auto maps = loadedDBC(gh, "Map.dbc");
     const int32_t map = maps && !info->mapIds.empty() ? maps->findRecordById(info->mapIds.front()) : -1;
     const int side = playerFactionSide(gh);
@@ -7561,18 +7587,11 @@ static int lua_GetBattlefieldInfo(lua_State* L) {
         lua_pushstring(L, maps->getString(static_cast<uint32_t>(map), kMapDescription[side]).c_str());
     else
         lua_pushnil(L);
-    lua_pushnumber(L, info->maxGroupSize);   // 3: maxGroup
-    // Three more, all of which the panel reads. Whether the player is inside
-    // the level bracket the server sent, whether this is the week's call to
-    // arms, and whether it is the random battleground rather than a named one
-    // - type 32, which is what BattlefieldFrame keys the rewards block on.
-    const uint32_t level = gh->getPlayerLevel();
-    const bool inBracket = (bg.minLevel == 0 || level >= bg.minLevel) &&
-                           (bg.maxLevel == 0 || level <= bg.maxLevel);
-    constexpr uint32_t kRandomBattleground = game::GameHandler::kRandomBattleground;
-    luaPushOneOrNil(L, inBracket ? 1 : 0);                        // 4: canEnter
-    luaPushOneOrNil(L, bg.isHoliday ? 1 : 0);                     // 5: isHoliday
-    luaPushOneOrNil(L, bg.bgTypeId == kRandomBattleground ? 1 : 0); // 6: isRandom
+    lua_pushnumber(L, info->maxGroupSize);
+    luaPushOneOrNil(L, battlegroundCanEnter(gh, *info) ? 1 : 0);
+    const bool holiday = info->holidayWorldState != 0 && gh->getWorldState(info->holidayWorldState).value_or(0) != 0;
+    luaPushOneOrNil(L, holiday ? 1 : 0);
+    luaPushOneOrNil(L, type == game::GameHandler::kRandomBattleground ? 1 : 0);
     return 6;
 }
 
@@ -7606,42 +7625,9 @@ static int lua_GetBattlegroundInfo(lua_State* L) {
     if (index < 1 || index > static_cast<int>(list.size())) return luaReturnNil(L);
     const auto& bg = list[static_cast<size_t>(index - 1)];
 
-    // 0x0054ba00: the random battleground (32) at level 80 only; any other
-    // where a PvpDifficulty.dbc bracket of its first map holds the player's
-    // level - the rows of one map lie together, and the walk stops after them.
     constexpr uint32_t kRandomBattleground = game::GameHandler::kRandomBattleground;
-    const uint32_t level = gh->getPlayerLevel();
-    struct Bracket { uint32_t map, minLevel, maxLevel; };
-    static std::vector<Bracket> brackets;
-    static bool bracketsLoaded = false;
-    if (!bracketsLoaded) {
-        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
-            bracketsLoaded = true;
-            if (auto dbc = am->loadDBC("PvpDifficulty.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 5)
-                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
-                    brackets.push_back({dbc->getUInt32(i, 1), dbc->getUInt32(i, 3), dbc->getUInt32(i, 4)});
-        }
-    }
-    bool canEnter = false;
-    if (bg.id == kRandomBattleground) {
-        canEnter = level == 80;
-    } else if (!bg.mapIds.empty()) {
-        bool inMap = false;
-        for (const auto& b : brackets) {
-            if (b.map != bg.mapIds.front()) {
-                if (inMap) break;
-                continue;
-            }
-            inMap = true;
-            if (b.minLevel <= level && level <= b.maxLevel) {
-                canEnter = true;
-                break;
-            }
-        }
-    }
-
     lua_pushstring(L, bg.name.c_str());
-    luaPushOneOrNil(L, canEnter ? 1 : 0);
+    luaPushOneOrNil(L, battlegroundCanEnter(gh, bg) ? 1 : 0);
     // isHoliday: the value of the world state the row names (0x00548d10).
     const bool holiday = bg.holidayWorldState != 0 && gh->getWorldState(bg.holidayWorldState).value_or(0) != 0;
     luaPushOneOrNil(L, holiday ? 1 : 0);
@@ -7649,20 +7635,6 @@ static int lua_GetBattlegroundInfo(lua_State* L) {
     lua_pushnumber(L, bg.id);
     return 5;
 }
-
-/// The battleground the interface has selected, as a type id.
-///
-/// The panel knows its selection as a row number and tells this client about it
-/// in one place only - RequestBattlegroundInstanceInfo, which it calls whenever
-/// the selection moves and again when it opens - so that call is where the
-/// choice is remembered.
-///
-/// JoinBattlefield used to queue for the last entry of the list of every
-/// battleground instance info had ever been asked for. That list is keyed by
-/// type and updated in place, so its last entry is whichever battleground was
-/// looked at *first*: clicking Warsong Gulch, then Arathi Basin, then back to
-/// Warsong Gulch and pressing Join queued for Arathi Basin.
-static uint32_t& selectedBattlegroundTypeId() { static uint32_t typeId = 0; return typeId; }
 
 // RequestBattlegroundInstanceInfo(index) - ask which instances are running.
 //
@@ -7676,8 +7648,7 @@ static int lua_RequestBattlegroundInstanceInfo(lua_State* L) {
     if (!gh) return 0;
     const auto& list = gh->getBattlegroundTypes();
     if (index < 1 || index > static_cast<int>(list.size())) return 0;
-    selectedBattlegroundTypeId() = list[static_cast<size_t>(index - 1)].id;
-    gh->requestBattlefieldList(selectedBattlegroundTypeId());
+    gh->requestBattlefieldList(list[static_cast<size_t>(index - 1)].id);
     return 0;
 }
 
@@ -7765,15 +7736,10 @@ static int lua_JoinBattlefield(lua_State* L) {
     const bool asGroup = lua_toboolean(L, 2) != 0;
 
     const auto& bgs = gh->getAvailableBgs();
-    uint32_t bgTypeId = selectedBattlegroundTypeId();
-    // Nothing selected can still happen - a queue asked for before the panel
-    // has told anyone what it is showing - and one battleground on offer is
-    // then not a guess.
-    if (bgTypeId == 0 && bgs.size() == 1) bgTypeId = bgs.front().bgTypeId;
+    const uint32_t bgTypeId = currentBattlefieldType(gh);   // 0x00bea53c
     if (bgTypeId == 0) {
-        LOG_WARNING("JoinBattlefield: no battleground is selected, so there is "
-                    "nothing to queue for - the panel names its choice through "
-                    "RequestBattlegroundInstanceInfo and has not");
+        LOG_WARNING("JoinBattlefield: no battleground has been listed, so there is "
+                    "nothing to queue for");
         return 0;
     }
 
@@ -7786,12 +7752,9 @@ static int lua_JoinBattlefield(lua_State* L) {
         break;
     }
 
-    // The battlemaster, when there is one to name. Queueing from the panel is
-    // done standing anywhere, and the guid then belongs to whoever was last
-    // spoken to - a vendor, a flight master - which is not a battlemaster and
-    // is not what the real client sends. Nought is.
-    const uint64_t battlemaster =
-        gh->isGossipWindowOpen() ? gh->getCurrentGossip().npcGuid : 0;
+    // The battlemaster the list came from (0x00bea568), none for the panel's.
+    const auto* list = gh->lastBattlefieldList();
+    const uint64_t battlemaster = list ? list->battlemasterGuid : 0;
     LOG_WARNING("CMSG_BATTLEMASTER_JOIN: bgTypeId=", bgTypeId, " instance=", instanceId,
              " asGroup=", asGroup, " battlemaster=0x", std::hex, battlemaster, std::dec);
     if (battlefieldJoinAllowed(gh, bgTypeId, asGroup))

@@ -4196,6 +4196,11 @@ wowee_add_test(test_portrait_claims
 wowee_add_test(test_equipment_sets
     SOURCES test_equipment_sets.cpp)
 
+# ── test_battleground_rules ──────────────────────────────────
+# Who may enter a battleground (0x0054ba00). Header-only.
+wowee_add_test(test_battleground_rules
+    SOURCES test_battleground_rules.cpp)
+
 # ── test_edit_history ────────────────────────────────────────
 # The lines an edit box remembers (0x00964690). Header-only.
 wowee_add_test(test_edit_history
