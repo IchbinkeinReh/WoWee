@@ -1096,3 +1096,20 @@ TEST_CASE("a helm or cloak not shown is not on the player's model anywhere", "[r
     CHECK(shown(0) == 501u);
     CHECK(shown(14) == 502u);
 }
+
+// P57: the character window asked the flag, the model in the world was not
+// told: ShowCloak's 0x006e0ef0 and 0x006dd1b0 dress and undress it at once.
+TEST_CASE("showing or hiding the helm or the cloak dresses the model anew", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FLAGS, 0}});
+    auto& gh = s.handler();
+    for (int i = 0; i < 2; ++i) {
+        (void)gh.consumeOnlineEquipmentDirty();
+        gh.toggleCloak();
+        CHECK(gh.consumeOnlineEquipmentDirty());
+        gh.toggleHelm();
+        CHECK(gh.consumeOnlineEquipmentDirty());
+    }
+    CHECK(s.sent().of(Opcode::CMSG_SHOWING_CLOAK).size() == 2);
+    CHECK(s.sent().of(Opcode::CMSG_SHOWING_HELM).size() == 2);
+}

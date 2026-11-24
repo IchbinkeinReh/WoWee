@@ -7317,7 +7317,10 @@ void SocialHandler::toggleCloak() {
     auto packet = ShowingCloakPacket::build(owner_.cloakVisibleRef());
     owner_.getSocket()->send(packet);
     // ShowCloak (0x0051c100) likewise; this printed "Cloak is now
-    // visible/hidden."
+    // visible/hidden." And as the helm's, the model at once (0x006e0ef0 ->
+    // 0x004f2880, 0x006dd1b0 -> 0x004ee6d0), before the packet: when the
+    // flag comes back it says nothing new.
+    owner_.markOnlineEquipmentDirty();
     LOG_INFO("Cloak visibility toggled: ", owner_.cloakVisibleRef());
 }
 
