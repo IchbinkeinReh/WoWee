@@ -1,5 +1,6 @@
 // lua_action_api.cpp - Action bar, cursor/pickup, keyboard input, key bindings, and pet actions Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "game/grey_triviality.hpp"
 #include "game/item_text.hpp"
 #include "game/equip_slot_fit.hpp"
 // For the cursor's own sounds: the coordinator reaches the manager that asks a
@@ -4494,53 +4495,12 @@ void registerActionLuaAPI(lua_State* L) {
                 {"SetBindingItem",      lua_SetBindingItem},
                 {"SetBindingMacro",     lua_SetBindingMacro},
                 {"SetBindingClick",     lua_SetBindingClick},
-                // GetBindingByKey(key) - the binding a key runs, or nil.
-                //
-                // Reached from GetBindingFromClick, which StaticPopup_OnKeyDown
-                // calls on *every* keypress while a popup is up - so with
-                // dialogs handed over, pressing any key with one on screen hit
-                // an unbound global and raised. Escape is how a popup is
-                // dismissed, so it was the keypress most likely to hit it.
-                //
-                // Two names are all FrameXML compares against here, and both
-                // are fixed in this client: escape opens the game menu and
-                // print screen takes a screenshot, neither rebindable. Anything
-                // else answers nil, which is what WoW answers for an unbound
-                // key and which lets the dialog's own key handling run.
-                {"GetBindingByKey", [](lua_State* L) -> int {
-            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetBindingByKey(\"action\"[, mode])");   // 0x005625f0
-            std::string key(luaL_optstring(L, 1, ""));
-            for (char& c : key) c = static_cast<char>(std::toupper(
-                static_cast<unsigned char>(c)));
-            if (key == "ESCAPE")           lua_pushstring(L, "TOGGLEGAMEMENU");
-            else if (key == "PRINTSCREEN") lua_pushstring(L, "SCREENSHOT");
-            else                           lua_pushnil(L);
-            return 1;
-        }},
-                // GetQuestGreenRange() - how many levels below the player a
-                // thing can be before it turns grey.
-                //
-                // This was left unbound on the grounds that a guessed constant
-                // would mis-colour every quest and that nothing live called it.
-                // The second half was wrong: TargetFrame_CheckLevel reaches it
-                // through GetQuestDifficultyColor for any target the player can
-                // attack, so it raised before levelText:Show() and an enemy's
-                // level never appeared. A friendly target took the other branch
-                // and showed its level, which is why it looked like enemies
-                // specifically.
-                //
-                // No guess needed either. AzerothCore's Formulas.h gives the
-                // grey level exactly, and the green range is the distance from
-                // the player's level down to it.
+                {"GetBindingByKey",     lua_GetBindingByKey},
+                // GetQuestGreenRange() (0x005e51a0): how many levels below the
+                // player a thing can be before it turns grey.
                 {"GetQuestGreenRange", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int lvl = gh ? static_cast<int>(gh->getPlayerLevel()) : 1;
-            int gray;
-            if (lvl <= 5)       gray = 0;
-            else if (lvl <= 39) gray = lvl - 5 - lvl / 10;
-            else if (lvl <= 59) gray = lvl - 1 - lvl / 5;
-            else                gray = lvl - 9;
-            lua_pushnumber(L, lvl - gray);
+            lua_pushnumber(L, gh ? game::triviality::greyGap(gh->getPlayerLevel()) : 0);
             return 1;
         }},
                 // SetUIVisibility(shown) (0x00517c20): what the world draws

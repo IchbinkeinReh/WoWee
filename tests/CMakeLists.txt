@@ -641,6 +641,16 @@ endif()
 add_test(NAME stream_time COMMAND test_stream_time)
 register_test_target(test_stream_time)
 
+# ── test_green_range ─────────────────────────────────────────
+add_executable(test_green_range
+    test_green_range.cpp
+)
+target_include_directories(test_green_range PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_green_range SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_green_range PRIVATE catch2_main)
+add_test(NAME green_range COMMAND test_green_range)
+register_test_target(test_green_range)
+
 # ── test_lua_std_libs ────────────────────────────────────────
 # The Lua libraries the interface has, against the client's own tables.
 add_executable(test_lua_std_libs

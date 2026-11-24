@@ -1488,10 +1488,7 @@ const game::GossipQuestItem* gossipQuestAt(lua_State* L, bool available, int ind
 /// player's level / 5 below it - 8 from level 100 - is grey. A row that is not
 /// there counts as level 0.
 static bool greetingQuestIsTrivial(game::GameHandler* gh, int questLevel) {
-    if (!gh || questLevel == -1) return false;
-    const int playerLevel = static_cast<int>(gh->getPlayerLevel());
-    return game::triviality::greyGap(static_cast<uint32_t>(playerLevel)) + questLevel <
-           playerLevel;
+    return gh && game::triviality::questIsGrey(static_cast<int>(gh->getPlayerLevel()), questLevel);
 }
 
 /// IsActiveQuestTrivial / IsAvailableQuestTrivial (0x0058d420, 0x0058d370):
