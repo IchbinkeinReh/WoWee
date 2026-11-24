@@ -6556,20 +6556,22 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetItemCount",      lua_GetItemCount},
                 {"GetItemFamily",     lua_GetItemFamily},
                 {"UseContainerItem",  lua_UseContainerItem},
-                // SortBags() - merge partial stacks, then order every bag slot.
+                // WoweeSortBags() - merge partial stacks, then order every bag
+                // slot.
                 //
-                // Not a 3.3.5 function: sorting arrived years later, so nothing
-                // in FrameXML calls this. It is here for the bundled all-bags
-                // addon, and it is the same sort this client's own bag window
-                // has always had rather than a second implementation of it.
-                {"SortBags", [](lua_State* L) -> int {
+                // Not a 3.3.5 function, and under a name of its own: a later
+                // client's SortBags would tell an addon it is in that one. It
+                // is here for the bundled all-bags addon, and it is the same
+                // sort this client's own bag window has always had rather than
+                // a second implementation of it.
+                {"WoweeSortBags", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) gh->sortBags();
             return 0;
         }},
                 // Whether that sort is still sending its moves, so a button can
                 // say so rather than looking dead while dozens of swaps go out
                 // a tick at a time.
-                {"IsSortingBags", [](lua_State* L) -> int {
+                {"WoweeIsSortingBags", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushboolean(L, (gh && gh->isSortingItems()) ? 1 : 0);
             return 1;

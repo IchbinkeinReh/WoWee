@@ -156,4 +156,21 @@ void setInterfaceLibAliases(lua_State* L) {
     alias(L, "strreplace", "string", "replace");
 }
 
+void dropForeignGlobals(lua_State* L) {
+    static constexpr const char* kForeign[] = {
+        // 1.12's and 2.4's: buffs by slot, and a name spelled its own way.
+        "GetPlayerBuff", "GetPlayerBuffApplications", "GetPlayerBuffDispelType", "GetPlayerBuffTexture",
+        "GetPlayerBuffTimeLeft", "CancelPlayerBuff", "GetNumLaguages", "GetInspectPVPRankProgress",
+        // FrameXML names these where it never comes by (moneyframe.lua,
+        // blizzard_macroui.lua); the client has none of them.
+        "AddSendMailMoney", "AddSendMailCOD", "PickupSendMailMoney", "PickupSendMailCOD", "SaveMacros",
+        // Later clients'.
+        "GetSpellBookItemInfo", "GetSpellBookItemName", "PickupSpellBookItem", "IsSpellPassive", "GetNumBagSlots",
+    };
+    for (const char* name : kForeign) {
+        lua_pushnil(L);
+        lua_setglobal(L, name);
+    }
+}
+
 }  // namespace wowee::addons

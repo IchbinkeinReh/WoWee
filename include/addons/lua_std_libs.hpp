@@ -18,4 +18,9 @@ void openInterfaceLibs(lua_State* L);
 /// ("a b"):trim() is how an addon calls them.
 void setInterfaceLibAliases(lua_State* L);
 
+/// Takes out the functions 3.3.5 has not got, which are here for the older
+/// interfaces or came in later: an addon written for several clients asks by
+/// them which one it is in.
+void dropForeignGlobals(lua_State* L);
+
 }  // namespace wowee::addons

@@ -1463,7 +1463,7 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
     // The matching is the client's, not this script's: the panel identifies a
     // service by its position in the list, and every one of the bindings that
     // takes a service index has to agree about which service index 3 is. So the
-    // box hands the text to SetTrainerServiceSearch and the list it filters is
+    // box hands the text to WoweeSetTrainerSearch and the list it filters is
     // the one GetNumTrainerServices already counts - see shownTrainerServices,
     // where the search and the type filters meet.
     //
@@ -1481,7 +1481,7 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         "    if not ClassTrainerFrame or not ClassTrainerFrameFilterDropDown then return end\n"
         // Without the binding there is nothing to search with, and a box that
         // filters nothing is worse than no box.
-        "    if not SetTrainerServiceSearch then return end\n"
+        "    if not WoweeSetTrainerSearch then return end\n"
         "    local box = CreateFrame('EditBox', 'ClassTrainerFrameSearchBox',\n"
         "                            ClassTrainerFrame, 'InputBoxTemplate')\n"
         "    box:SetWidth(104)\n"
@@ -1502,7 +1502,7 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         "      end\n"
         "    end\n"
         "    local function apply(self)\n"
-        "      SetTrainerServiceSearch(self:GetText() or '')\n"
+        "      WoweeSetTrainerSearch(self:GetText() or '')\n"
         "      hinting()\n"
         "    end\n"
         // Both, because they are not the same event here: typing raises
@@ -1524,7 +1524,7 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         // hid would look like rows he does not teach.
         "    hooksecurefunc('ClassTrainerFrame_Show', function()\n"
         "      if (box:GetText() or '') ~= '' then box:SetText('') end\n"
-        "      SetTrainerServiceSearch('')\n"
+        "      WoweeSetTrainerSearch('')\n"
         "      hinting()\n"
         "    end)\n"
         "    hinting()\n"

@@ -143,3 +143,16 @@ TEST_CASE("a global nobody set is nil in the 3.3.5 interface", "[lua]") {
     CHECK_FALSE(missingApiStandsIn("", "0", true));
     CHECK_FALSE(missingApiStandsIn("0", "", true));
 }
+
+TEST_CASE("the functions of other clients are taken out", "[lua]") {
+    State s;
+    s.run("for _, n in ipairs({'GetPlayerBuff', 'CancelPlayerBuff', 'GetSpellBookItemInfo', 'SaveMacros', 'GetNumLaguages', "
+          "'AddSendMailCOD', 'IsSpellPassive', 'GetSpellInfo', 'IsPassiveSpell'}) do _G[n] = function() end end");
+    wowee::addons::dropForeignGlobals(s.L);
+    for (const char* gone : {"GetPlayerBuff", "CancelPlayerBuff", "GetSpellBookItemInfo", "SaveMacros", "GetNumLaguages",
+                             "AddSendMailCOD", "IsSpellPassive"})
+        CHECK(s.run(std::string("return type(") + gone + ")") == "nil");
+    // The client's own stay.
+    for (const char* kept : {"GetSpellInfo", "IsPassiveSpell"})
+        CHECK(s.run(std::string("return type(") + kept + ")") == "function");
+}

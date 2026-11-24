@@ -21,7 +21,7 @@
 --
 -- Nothing here is special-cased. GetContainerNumSlots, GetContainerItemInfo,
 -- PickupContainerItem, GetItemQualityColor and GameTooltip:SetBagItem are the
--- interface's own, and SortBags is this client's, which runs the sort the bag
+-- interface's own, and WoweeSortBags is this client's, which runs the sort the bag
 -- window already used.
 
 local COLS_MIN   = 6
@@ -117,7 +117,7 @@ end
 -- slots, a search box, the two buttons that make it narrower or wider, and a
 -- line saying how full it is. What differs is which bags they draw, where they
 -- remember being, and whether they carry the money line and the Sort button -
--- SortBags sorts what the player is carrying, so on the bank it would have
+-- WoweeSortBags sorts what the player is carrying, so on the bank it would have
 -- been a button that quietly sorted a different window's contents.
 --
 -- Written as one builder rather than two files because every fix to a slot -
@@ -181,7 +181,7 @@ local function newWindow(spec)
         sort:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE, -12)
         sort:SetText("Sort")
         sort:SetScript("OnClick", function()
-            if SortBags then SortBags() end
+            if WoweeSortBags then WoweeSortBags() end
         end)
     end
 
@@ -503,7 +503,7 @@ local function newWindow(spec)
             MoneyFrame_Update(spec.moneyName, GetMoney())
         end
         if sort and sort.SetEnabled then
-            sort:SetEnabled(not (IsSortingBags and IsSortingBags()))
+            sort:SetEnabled(not (WoweeIsSortingBags and WoweeIsSortingBags()))
         end
     end
 

@@ -11146,6 +11146,8 @@ bool LuaEngine::initialize() {
     registerCoreAPI();
     registerEventAPI();
 
+    if (!game::isPreWotlk()) dropForeignGlobals(L_);
+
     // Last, so every bootstrap block above reads a _G that answers honestly.
     installMissingApiFallback();
 
@@ -12209,6 +12211,8 @@ void LuaEngine::registerCoreAPI() {
         {"SetShadowColor",        lua_FontString_SetShadowColor},
         {"SetJustifyH",           lua_FontString_SetJustifyH},
         {"SetJustifyV",           lua_FontString_SetJustifyV},
+        {"GetJustifyH",           lua_FontString_GetJustifyH},
+        {"GetJustifyV",           lua_FontString_GetJustifyV},
         {"SetTextFontObject",     lua_Frame_SetNormalFontObject},
         {"SetHighlightFontObject", lua_Frame_SetHighlightFontObject},
         {"SetDisabledFontObject",  lua_Frame_SetDisabledFontObject},
@@ -15284,10 +15288,11 @@ void LuaEngine::registerCoreAPI() {
         // pet's own spells and GetSpellBookItemInfo walks the player's tabs, so
         // answering from it would name the wrong spell; false sends the caller
         // down the branch it takes when there is nothing to show.
+        "local bookItem = GetSpellBookItemInfo\n"
         "function __WoweeFrameMT:SetSpell(slot, bookType)\n"
         "    self:ClearLines()\n"
         "    if bookType == BOOKTYPE_PET then return false end\n"
-        "    local _, spellId = GetSpellBookItemInfo(slot)\n"
+        "    local _, spellId = bookItem(slot)\n"
         "    if not spellId or spellId == 0 then return false end\n"
         "    self:SetSpellByID(spellId)\n"
         "    return true\n"
@@ -15406,8 +15411,6 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         // FadeOut (0x0061d940), a tooltip's; nothing on any other frame.
         "function __WoweeFrameMT:FadeOut() __WoweeTooltipFadeOut(self) end\n"
-        // Iterating a table the secure way, which for our purposes is next.
-        "SecureNext = next\n"
         // GetCVarBool wraps C-side GetCVar (registered in table) for boolean queries
         // Misc compatibility stubs
         // GetScreenWidth, GetScreenHeight, GetNumLootItems are now C functions
