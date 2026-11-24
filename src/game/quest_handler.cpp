@@ -1975,6 +1975,14 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
     for (uint32_t questId : added) noteQuestAdded(questId);
 }
 
+int QuestHandler::questLogIndexOf(uint32_t questId) const {
+    if (const auto& row = owner_.questLogRowLookup()) return row(questId);
+    for (size_t i = 0; i < questLog_.size(); ++i) {
+        if (questLog_[i].questId == questId) return static_cast<int>(i) + 1;
+    }
+    return 0;
+}
+
 void QuestHandler::noteQuestAdded(uint32_t questId) {
     // 0x0067de90 with 0x006df2b0 to call back: at once for a quest already
     // known, else once its query answers.

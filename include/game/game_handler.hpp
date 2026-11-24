@@ -507,6 +507,12 @@ public:
     using AddonEventCallback = std::function<void(const std::string&, const std::vector<std::string>&)>;
     void setAddonEventCallback(AddonEventCallback cb) { addonEventCallback_ = std::move(cb); }
 
+    /// Where a quest stands in the interface's list of the log, headers counted
+    /// with it, from one; 0 for one that is not in it (0x005deeb0).
+    using QuestLogRowLookup = std::function<int(uint32_t questId)>;
+    void setQuestLogRowLookup(QuestLogRowLookup lookup) { questLogRowLookup_ = std::move(lookup); }
+    [[nodiscard]] const QuestLogRowLookup& questLogRowLookup() const { return questLogRowLookup_; }
+
     /// One combat log entry announced (0x0074f910): its arguments, and
     /// whether a filter took it - COMBAT_LOG_EVENT then, and
     /// COMBAT_LOG_EVENT_UNFILTERED always.
@@ -6732,6 +6738,7 @@ private:
     // Chat (state lives in ChatHandler; callbacks remain here for cross-domain access)
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
+    QuestLogRowLookup questLogRowLookup_;
     /// A server's movie is playing (DAT_00bd0800).
     bool moviePlaying_ = false;
     AddonEventValuesCallback addonEventValuesCallback_;

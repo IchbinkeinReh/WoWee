@@ -131,3 +131,29 @@ TEST_CASE("any word of a quest's slot is news to the interface", "[replay][quest
     }
     s.handler().setAddonEventCallback(nullptr);
 }
+
+// questlogframe.lua:260 watches the entry QUEST_ACCEPTED names; the list has
+// the headers in it (0x005deeb0).
+TEST_CASE("the events name a quest by its place in the interface's list", "[replay][quest]") {
+    std::vector<std::pair<std::string, std::string>> events;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.handler().setQuestLogRowLookup([](uint32_t questId) { return questId == 9387 ? 5 : 0; });
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>& args) {
+        if (name == "QUEST_ACCEPTED" || name == "QUEST_WATCH_UPDATE")
+            events.emplace_back(name, args.empty() ? std::string() : args[0]);
+    });
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 9387}}));
+    s.receive(questAnswer(9387, "wotlk"));
+    const auto said = [&](const char* name) {
+        return std::find_if(events.begin(), events.end(), [&](const auto& e) { return e.first == name; });
+    };
+    REQUIRE(said("QUEST_ACCEPTED") != events.end());
+    CHECK(said("QUEST_ACCEPTED")->second == "5");
+    CHECK(s.handler().getQuestHandler()->questLogIndexOf(9387) == 5);
+    CHECK(s.handler().getQuestHandler()->questLogIndexOf(1) == 0);
+    for (const auto& e : events) CHECK(e.second == "5");
+    s.handler().setQuestLogRowLookup(nullptr);
+    CHECK(s.handler().getQuestHandler()->questLogIndexOf(9387) == 1);
+    s.handler().setAddonEventCallback(nullptr);
+}

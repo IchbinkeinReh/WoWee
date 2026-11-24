@@ -214,16 +214,12 @@ public:
     /// drawn without a running realm. Not used on the live path.
     std::vector<QuestLogEntry>& questLogRef() { return questLog_; }
 
-    /// Where a quest sits in the log, counting from one, or zero if it is not
-    /// in it. This is what the interface means by a quest index - every quest
-    /// log API takes it, and QUEST_WATCH_UPDATE carries it - and it is not the
-    /// quest id, which is what was being sent in its place.
-    [[nodiscard]] int questLogIndexOf(uint32_t questId) const {
-        for (size_t i = 0; i < questLog_.size(); ++i) {
-            if (questLog_[i].questId == questId) return static_cast<int>(i) + 1;
-        }
-        return 0;
-    }
+    /// Where a quest sits in the log as the interface counts, or zero if it is
+    /// not in it. This is what the interface means by a quest index - every
+    /// quest log API takes it, and QUEST_ACCEPTED and QUEST_WATCH_UPDATE carry
+    /// it - and it is not the quest id, nor the place among the quests alone:
+    /// the headers are entries of the list too.
+    [[nodiscard]] int questLogIndexOf(uint32_t questId) const;
     // Seconds left on every timed quest, paired with its quest id, in quest log
     // order. The last field of each PLAYER_QUEST_LOG slot is when the quest
     // fails, as a Unix timestamp; zero means the quest is not timed.

@@ -1872,6 +1872,9 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             //
             // What it did better, the channel's index, moved into the handler's
             // own firing.
+            gameHandler->setQuestLogRowLookup([handler = gameHandler.get()](uint32_t questId) {
+                return addons::questLogRowForQuest(handler, questId);
+            });
             // Wire generic game events to addon dispatch
             gameHandler->setAddonEventCallback([this](const std::string& event, const std::vector<std::string>& args) {
                 if (addonManager_ && addonsLoaded_) {
