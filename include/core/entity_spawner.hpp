@@ -164,6 +164,8 @@ public:
     bool isCreaturePending(uint64_t guid) const { return pendingCreatureSpawnGuids_.count(guid) > 0; }
     bool isPlayerSpawned(uint64_t guid) const { return playerInstances_.count(guid) > 0; }
     bool isPlayerPending(uint64_t guid) const { return pendingPlayerSpawnGuids_.count(guid) > 0; }
+    /// Whether a player that is shown or waiting to be is of this race and sex.
+    bool isPlayerOfBody(uint64_t guid, uint8_t raceId, uint8_t genderId) const;
     bool isGameObjectSpawned(uint64_t guid) const { return gameObjectInstances_.count(guid) > 0; }
 
     /// What the server says a game object is doing: open, closed, destroyed.

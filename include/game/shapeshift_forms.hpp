@@ -113,6 +113,20 @@ struct MountShownInput {
     return (in.modelFlags & kModelFlagMountable) != 0 || (in.raceFlags & kRaceFlagMountable) != 0;
 }
 
+/// CreatureModelData Flags 0x4: a character model.
+inline constexpr uint32_t kModelFlagCharacter = 0x4;
+/// CreatureDisplayInfoExtra Flags 0x1 (+0x4c).
+inline constexpr uint32_t kExtraFlagOwnEquipment = 0x1;
+
+/// 0x0071a430, for a player shown as another display: whether it is dressed as
+/// itself - a character model whose CreatureDisplayInfoExtra row has the flag.
+/// It is then the row's race and sex with the player's own skin, face and hair
+/// (0x0071d010) and its own items (0x006e09e0, 0x007202c0): the illusions of
+/// the Caverns of Time. The rows name no items of their own.
+[[nodiscard]] constexpr bool wearsOwnEquipment(uint32_t modelFlags, bool hasExtra, uint32_t extraFlags) {
+    return hasExtra && (modelFlags & kModelFlagCharacter) != 0 && (extraFlags & kExtraFlagOwnEquipment) != 0;
+}
+
 /// SPELL_AURA_MOD_SHAPESHIFT, the aura a form's spell applies (0x24).
 inline constexpr uint32_t kAuraModShapeshift = 36;
 

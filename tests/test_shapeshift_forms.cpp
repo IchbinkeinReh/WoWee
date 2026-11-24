@@ -393,3 +393,15 @@ TEST_CASE("the player may mount only as itself or a mountable character display 
     in.hasExtra = false;
     CHECK_FALSE(mayMountAsShown(in));
 }
+
+// The human illusion of Old Hillsbrad (display 19724): a character model whose
+// extra row has Flags 1 and names no items (0x0071a430).
+TEST_CASE("a display a player wears its own things in", "[shapeshift][display]") {
+    using wowee::game::wearsOwnEquipment;
+    CHECK(wearsOwnEquipment(0x4, true, 1));
+    CHECK(wearsOwnEquipment(0x4 | 0x80, true, 1 | 2));
+    // A dressed NPC's, a creature's, one with no extra row.
+    CHECK_FALSE(wearsOwnEquipment(0x4, true, 0));
+    CHECK_FALSE(wearsOwnEquipment(0x80, true, 1));
+    CHECK_FALSE(wearsOwnEquipment(0x4, false, 1));
+}

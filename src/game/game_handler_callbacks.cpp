@@ -6428,6 +6428,52 @@ std::optional<uint32_t> GameHandler::displayModelFlags(uint32_t displayId) const
     return models->getUInt32(static_cast<uint32_t>(mrow), 1);
 }
 
+std::optional<GameHandler::ShownBody> GameHandler::ownEquipmentDisplay(uint32_t displayId) const {
+    auto* am = services_.assetManager;
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CreatureDisplayInfoExtra")
+                                                        : nullptr;
+    if (displayId == 0 || !am || !am->isInitialized() || !layout) return std::nullopt;
+    const uint32_t flagsField = layout->tryField("Flags");
+    const auto displays = am->loadDBCOptional("CreatureDisplayInfo.dbc");
+    const auto extras = am->loadDBCOptional("CreatureDisplayInfoExtra.dbc");
+    if (flagsField == 0xFFFFFFFFu || !displays || !extras || displays->getFieldCount() <= 3 ||
+        extras->getFieldCount() <= flagsField)
+        return std::nullopt;
+    const int32_t drow = displays->findRecordById(displayId);
+    if (drow < 0) return std::nullopt;
+    const int32_t erow = extras->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 3));
+    if (erow < 0) return std::nullopt;
+    const auto row = static_cast<uint32_t>(erow);
+    if (!wearsOwnEquipment(displayModelFlags(displayId).value_or(0), true, extras->getUInt32(row, flagsField)))
+        return std::nullopt;
+    return ShownBody{.displayId = displayId,
+                     .race = static_cast<uint8_t>(extras->getUInt32(row, (*layout)["RaceID"])),
+                     .sex = static_cast<uint8_t>(extras->getUInt32(row, (*layout)["SexID"]))};
+}
+
+std::optional<GameHandler::ShownBody> GameHandler::getShownBody(uint64_t guid) const {
+    const auto unit = getEntityManager().getEntity(guid);
+    if (!unit || unit->getType() != ObjectType::PLAYER) return std::nullopt;
+    const auto field = [&](UF f) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? unit->getField(i) : 0u;
+    };
+    const uint32_t display = field(UF::UNIT_FIELD_DISPLAYID);
+    const uint32_t native = field(UF::UNIT_FIELD_NATIVEDISPLAYID);
+    if (display == 0 || native == 0 || display == native) return std::nullopt;
+    return ownEquipmentDisplay(display);
+}
+
+Character GameHandler::getShownCharacter(const Character& character) const {
+    Character shown = character;
+    if (const auto body = getShownBody(playerGuid)) {
+        shown.race = static_cast<Race>(body->race);
+        shown.gender = body->sex == 1 ? Gender::FEMALE : Gender::MALE;
+        shown.useFemaleModel = body->sex == 1;
+    }
+    return shown;
+}
+
 bool GameHandler::mayMountAsShown() const {
     MountShownInput in;
     const uint8_t form = getShapeshiftFormId();

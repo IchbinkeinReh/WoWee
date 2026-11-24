@@ -98,7 +98,7 @@ void GameScreen::updateCharacterGeosets(game::Inventory& inventory) {
     // The client's character component (0x004ed900): the hair and facial
     // rows, the helmet's masks, and each worn item's geoset columns. A helm or
     // cloak the player has chosen not to show is not on the character at all.
-    core::CharacterLook look = appearanceComposer_->playerLook(*ch);
+    core::CharacterLook look = appearanceComposer_->playerLook(gh->getShownCharacter(*ch));
     look.worn.head = gh->isHelmVisible() ? worn(game::EquipSlot::HEAD) : 0;
     look.worn.shirt = worn(game::EquipSlot::SHIRT);
     look.worn.chest = worn(game::EquipSlot::CHEST);
@@ -150,8 +150,9 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
     bool tabardDesigner = false;
     if (auto* gh = app.getGameHandler()) {
         if (auto* ch = gh->getActiveCharacter()) {
-            isFemale = (ch->gender == game::Gender::FEMALE) ||
-                       (ch->gender == game::Gender::NONBINARY && ch->useFemaleModel);
+            const game::Character shown = gh->getShownCharacter(*ch);
+            isFemale = (shown.gender == game::Gender::FEMALE) ||
+                       (shown.gender == game::Gender::NONBINARY && shown.useFemaleModel);
         }
         playerTabardGuildId_ = gh->getPlayerGuildId();
         emblem = gh->getPlayerTabardEmblem();
@@ -196,8 +197,9 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
                     bool isFemale = false;
                     if (auto* gh = app.getGameHandler()) {
                         if (auto* ch = gh->getActiveCharacter()) {
-                            isFemale = (ch->gender == game::Gender::FEMALE) ||
-                                       (ch->gender == game::Gender::NONBINARY && ch->useFemaleModel);
+                            const game::Character shown = gh->getShownCharacter(*ch);
+                            isFemale = (shown.gender == game::Gender::FEMALE) ||
+                                       (shown.gender == game::Gender::NONBINARY && shown.useFemaleModel);
                         }
                     }
                     const rendering::VkTexture* whiteTex = charRenderer->loadTexture("");

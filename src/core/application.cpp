@@ -5865,9 +5865,9 @@ void Application::syncPlayerDisplayModel(const game::Unit& self) {
     const uint32_t want = display != 0 && native != 0 && display != native ? display : 0;
     if (want == shownPlayerDisplay_) return;
     const glm::vec3 pos = renderer->getCharacterPosition();
-    if (want == 0) {
-        // Back to the character: built again from the look, with its gear.
-        shownPlayerDisplay_ = 0;
+    // The character, or one of another race's body that wears the player's own
+    // things (0x0071a430): built again from the look, with its gear.
+    if (want == 0 || gameHandler->ownEquipmentDisplay(want)) {
         if (const uint32_t old = renderer->getCharacterInstanceId(); old != 0) {
             renderer->setCharacterFollow(0);
             cr->removeInstance(old);
@@ -7513,10 +7513,13 @@ void Application::render() {
                                                     .enchantment = 0u});
                                 }
                             }
+                            // In the body it is shown in: SetUnit duplicates
+                            // the unit's model (0x005975e0).
+                            const game::Character asShown = gameHandler->getShownCharacter(*self);
                             const uint8_t gender =
-                                (self->gender == game::Gender::FEMALE ||
-                                 (self->gender == game::Gender::NONBINARY &&
-                                  self->useFemaleModel)) ? 1 : 0;
+                                (asShown.gender == game::Gender::FEMALE ||
+                                 (asShown.gender == game::Gender::NONBINARY &&
+                                  asShown.useFemaleModel)) ? 1 : 0;
                             sizeFor(*room.model, dressUp);
                             room.model->setFraming(ui::UnitPortrait::Framing::FullBody);
                             // Turned by SetRotation as the paperdoll is.
@@ -7530,7 +7533,7 @@ void Application::render() {
                             room.model->setTabardDesigner(gameHandler->getTabardVendorGuid() != 0);
                             room.model->setUnitClass(static_cast<uint8_t>(self->characterClass));
                             shown = room.model->updatePlayer(
-                                static_cast<uint8_t>(self->race), gender,
+                                static_cast<uint8_t>(asShown.race), gender,
                                 self->appearanceBytes, self->facialFeatures, worn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);
                         }
@@ -7639,8 +7642,8 @@ void Application::render() {
                         uint8_t race = 0, gender = 0, facial = 0;
                         uint32_t appearance = 0;
                         if (result && result->guid != 0 &&
-                            gameHandler->getPlayerAppearance(result->guid, race, gender,
-                                                             appearance, facial)) {
+                            gameHandler->getShownPlayerAppearance(result->guid, race, gender,
+                                                                  appearance, facial)) {
                             std::vector<game::EquipmentItem> worn;
                             std::array<uint32_t, 19> displayIds{};
                             std::array<uint8_t, 19> invTypes{};
@@ -7759,8 +7762,8 @@ void Application::render() {
                         uint8_t race = 0, gender = 0, facial = 0;
                         uint32_t appearance = 0;
                         if (face.guid != 0 &&
-                            gameHandler->getPlayerAppearance(face.guid, race, gender,
-                                                             appearance, facial)) {
+                            gameHandler->getShownPlayerAppearance(face.guid, race, gender,
+                                                                  appearance, facial)) {
                             // What they are visibly wearing, where it is known.
                             // Empty means the item queries have not come back, and
                             // the portrait leaves the model dressed as it was
@@ -8475,9 +8478,13 @@ void Application::setupUICallbacks() {
 void Application::spawnPlayerCharacter() {
     if (playerCharacterSpawned) return;
     // The character, whatever the display: a form or a morph is put back on
-    // it by syncPlayerDisplayModel the next frame.
+    // it by syncPlayerDisplayModel the next frame. In the body of a display it
+    // wears its own things in, it is that one's character (0x0071d010).
     if (renderer) renderer->setCharacterShownAsDisplay(false);
-    shownPlayerDisplay_ = 0;
+    const auto body = gameHandler ? gameHandler->getShownBody(gameHandler->getPlayerGuid()) : std::nullopt;
+    shownPlayerDisplay_ = body ? body->displayId : 0;
+    const game::Race race = body ? static_cast<game::Race>(body->race) : playerRace_;
+    const game::Gender gender = !body ? playerGender_ : body->sex == 1 ? game::Gender::FEMALE : game::Gender::MALE;
     if (!renderer || !renderer->getCharacterRenderer() || !renderer->getCamera()) return;
 
     auto* charRenderer = renderer->getCharacterRenderer();
@@ -8489,13 +8496,13 @@ void Application::spawnPlayerCharacter() {
     // character screen showed the body the player picked and the world showed
     // the other one. The voice below already resolves it this way.
     bool useFemaleModel = false;
-    if (playerGender_ == game::Gender::NONBINARY && gameHandler) {
+    if (gender == game::Gender::NONBINARY && gameHandler) {
         if (const game::Character* ch = gameHandler->getActiveCharacter()) {
             useFemaleModel = ch->useFemaleModel;
         }
     }
     std::string m2Path =
-        game::getPlayerModelPath(playerRace_, playerGender_, useFemaleModel);
+        game::getPlayerModelPath(race, gender, useFemaleModel);
 
     // Try loading selected character model from MPQ
     if (assetManager && assetManager->isInitialized()) {
@@ -8532,7 +8539,7 @@ void Application::spawnPlayerCharacter() {
                         }
                     }
                     texInfo = appearanceComposer_->resolvePlayerTextures(
-                        model, playerRace_, playerGender_, appearanceBytes, useFemaleModel, facialHairId);
+                        model, race, gender, appearanceBytes, useFemaleModel, facialHairId);
                 }
 
                 // Load external .anim files for sequences with external data.
@@ -8629,8 +8636,8 @@ void Application::spawnPlayerCharacter() {
 	        if (appearanceComposer_ && gameHandler) {
 	            if (const game::Character* ch = gameHandler->getActiveCharacter()) {
 	                charRenderer->setActiveGeosets(
-	                    instanceId, appearanceComposer_->playerGeosets(appearanceComposer_->playerLook(*ch),
-	                                                                   instanceId));
+	                    instanceId, appearanceComposer_->playerGeosets(
+	                                    appearanceComposer_->playerLook(gameHandler->getShownCharacter(*ch)), instanceId));
 	            }
 	        }
 	        // The player's type 8 slot is filled from CharSections by

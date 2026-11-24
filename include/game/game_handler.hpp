@@ -410,6 +410,18 @@ public:
         return entityController_->getPlayerAppearance(guid, race, gender,
                                                       appearanceBytes, facial);
     }
+    /// The same as it is shown: the race and sex of a display it wears its own
+    /// things in, which is what a portrait or a model view of it is made from
+    /// (0x005975e0 duplicates the unit's model).
+    bool getShownPlayerAppearance(uint64_t guid, uint8_t& race, uint8_t& gender,
+                                  uint32_t& appearanceBytes, uint8_t& facial) const {
+        if (!getPlayerAppearance(guid, race, gender, appearanceBytes, facial)) return false;
+        if (const auto body = getShownBody(guid)) {
+            race = body->race;
+            gender = body->sex;
+        }
+        return true;
+    }
     EntityManager& getEntityManager() override { return entityController_->getEntityManager(); }
     const EntityManager& getEntityManager() const override { return entityController_->getEntityManager(); }
 
@@ -3682,6 +3694,20 @@ public:
     /// CreatureModelData Flags of a display's model, none where a table or
     /// row is missing.
     std::optional<uint32_t> displayModelFlags(uint32_t displayId) const;
+    /// The body a player is shown in under a display other than its own.
+    struct ShownBody {
+        uint32_t displayId = 0;
+        uint8_t race = 0;
+        uint8_t sex = 0;
+    };
+    /// What a display makes of a player that is dressed as itself in it
+    /// (wearsOwnEquipment), none for a display that is not such a one.
+    std::optional<ShownBody> ownEquipmentDisplay(uint32_t displayId) const;
+    /// The same for the player's display as it is now; none while that is its
+    /// own (UNIT_FIELD_NATIVEDISPLAYID) or one that is worn as it is.
+    std::optional<ShownBody> getShownBody(uint64_t guid) const;
+    /// The player's character in the body it is shown in.
+    Character getShownCharacter(const Character& character) const;
     /// The player's UNIT_FIELD_BYTES_2 byte 3 changed (0x006da130): the
     /// form, its preset spells, and the events to fire, in order.
     std::vector<const char*> setPlayerShapeshiftForm(uint8_t form);

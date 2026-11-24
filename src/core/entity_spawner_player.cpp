@@ -541,6 +541,15 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
     // updateUnitWeapons (0x0072dbc0).
 }
 
+bool EntitySpawner::isPlayerOfBody(uint64_t guid, uint8_t raceId, uint8_t genderId) const {
+    if (const auto it = onlinePlayerAppearance_.find(guid); it != onlinePlayerAppearance_.end())
+        return it->second.raceId == raceId && it->second.genderId == genderId;
+    for (const PendingPlayerSpawn& p : pendingPlayerSpawns_) {
+        if (p.guid == guid) return p.raceId == raceId && p.genderId == genderId;
+    }
+    return false;
+}
+
 void EntitySpawner::despawnPlayer(uint64_t guid) {
     serverEquipment_.erase(guid);
     playerItemOverrides_.erase(guid);

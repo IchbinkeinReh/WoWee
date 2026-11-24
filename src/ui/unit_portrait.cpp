@@ -32,6 +32,16 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         if (c.guid == gameHandler.getPlayerGuid()) { self = &c; break; }
     }
     if (!self) return;
+    // In the body it is shown in: the model view duplicates the unit's own
+    // (0x005975e0).
+    game::Race race = self->race;
+    game::Gender gender = self->gender;
+    bool useFemaleModel = self->useFemaleModel;
+    if (const auto body = gameHandler.getShownBody(self->guid)) {
+        race = static_cast<game::Race>(body->race);
+        gender = body->sex == 1 ? game::Gender::FEMALE : game::Gender::MALE;
+        useFemaleModel = body->sex == 1;
+    }
 
     if (!preview_) {
         preview_ = std::make_unique<rendering::CharacterPreview>();
@@ -78,6 +88,8 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
 
     const uint64_t equipHash = game::hashEquipmentAppearance(worn);
     const bool changed = (loadedGuid_ != self->guid) ||
+                         (loadedRace_ != static_cast<uint8_t>(race)) ||
+                         (loadedGender_ != static_cast<uint8_t>(gender)) ||
                          (loadedAppearance_ != self->appearanceBytes) ||
                          (loadedFacialFeatures_ != self->facialFeatures) ||
                          (loadedEquipHash_ != equipHash) ||
@@ -95,9 +107,9 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         preview_->setTransparentBackground(true, framing_ == Framing::Face);
         preview_->setCharacterClass(static_cast<uint8_t>(self->characterClass));
         preview_->setTabardDesigner(pendingDesigner_);
-        if (preview_->loadCharacter(self->race, self->gender, skin, face,
+        if (preview_->loadCharacter(race, gender, skin, face,
                                     hairStyle, hairColor, self->facialFeatures,
-                                    self->useFemaleModel)) {
+                                    useFemaleModel)) {
             preview_->setGuildEmblem(pendingEmblem_);
             preview_->applyEquipment(worn);
             // After the model, because its bounds are what the framing is
@@ -116,6 +128,8 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
                  " appearance ", self->appearanceBytes);
         loadedCreaturePath_.clear();
         loadedGuid_ = self->guid;
+        loadedRace_ = static_cast<uint8_t>(race);
+        loadedGender_ = static_cast<uint8_t>(gender);
         loadedAppearance_ = self->appearanceBytes;
         loadedFacialFeatures_ = self->facialFeatures;
         loadedEquipHash_ = equipHash;
