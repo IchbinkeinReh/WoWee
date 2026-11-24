@@ -4309,6 +4309,15 @@ wowee_add_test(test_texture_variant
 wowee_add_test(test_tooltip_layout
     SOURCES test_tooltip_layout.cpp)
 
+# ── test_lua_numbers ─────────────────────────────────────────
+add_executable(test_lua_numbers test_lua_numbers.cpp)
+target_include_directories(test_lua_numbers PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_lua_numbers SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_lua_numbers PRIVATE catch2_main lua51)
+add_test(NAME lua_numbers COMMAND test_lua_numbers)
+register_test_target(test_lua_numbers)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

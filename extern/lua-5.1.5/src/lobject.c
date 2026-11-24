@@ -5,6 +5,7 @@
 */
 
 #include <ctype.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,16 +88,113 @@ int luaO_rawequalObj (const TValue *t1, const TValue *t2) {
 }
 
 
+/* WoWee: the client's strtod reads neither "inf" and "nan" nor a hexadecimal
+** number, which the language reads itself, as 32 bits. */
 int luaO_str2d (const char *s, lua_Number *result) {
   char *endptr;
-  *result = lua_str2number(s, &endptr);
-  if (endptr == s) return 0;  /* conversion failed */
-  if (*endptr == 'x' || *endptr == 'X')  /* maybe an hexadecimal constant? */
-    *result = cast_num(strtoul(s, &endptr, 16));
+  const char *p = s;
+  while (isspace(cast(unsigned char, *p))) p++;
+  if (*p == '-' || *p == '+') p++;
+  if (*p == '0' && (p[1] == 'x' || p[1] == 'X')) {
+    unsigned long long h = 0;
+    const char *q = p + 2;
+    for (; isxdigit(cast(unsigned char, *q)); q++)
+      if (h <= 0xFFFFFFFFull)
+        h = h * 16 + cast(unsigned, isdigit(cast(unsigned char, *q)) ? *q - '0' : tolower(*q) - 'a' + 10);
+    if (q == p + 2) return 0;
+    if (h > 0xFFFFFFFFull) h = 0xFFFFFFFFull;
+    else if (s != p && p[-1] == '-') h = (0x100000000ull - h) & 0xFFFFFFFFull;
+    *result = cast_num(h);
+    endptr = cast(char *, q);
+  }
+  else {
+    if (!isdigit(cast(unsigned char, *p)) && *p != '.') return 0;
+    *result = lua_str2number(s, &endptr);
+    if (endptr == s) return 0;  /* conversion failed */
+  }
   if (*endptr == '\0') return 1;  /* most common case */
   while (isspace(cast(unsigned char, *endptr))) endptr++;
   if (*endptr != '\0') return 0;  /* invalid trailing characters? */
   return 1;
+}
+
+
+/* WoWee: the digits of what is no number, "1#INF" and so on, put through a
+** format of `digits` digits as any others: what follows the last of them counts
+** as five or more. */
+static void nonfinite (char *s, const char *man, char conv, int prec, int alt) {
+  int digits = (conv == 'g' || conv == 'G') ? (prec > 0 ? prec : 1) : prec + 1;
+  int i, k = cast_int(strlen(man)), g = (conv == 'g' || conv == 'G');
+  char *d = s;
+  for (i = 0; i < digits; i++) {
+    if (i == 1) *d++ = '.';
+    *d++ = i < k ? man[i] : '0';
+  }
+  if (digits < k && man[digits] >= '5') d[-1]++;
+  if (digits == 1 && alt) *d++ = '.';
+  *d = '\0';
+  if (g && !alt && digits > 1) {
+    while (d[-1] == '0') *--d = '\0';
+    if (d[-1] == '.') *--d = '\0';
+  }
+  if (conv == 'e' || conv == 'E') sprintf(d, "%c+000", conv);
+}
+
+
+/* WoWee: a number as the client's runtime (MSVC 8) writes it by a format of
+** e, E, f, g or G: three digits to an exponent at least, 1.#INF, -1.#IND (what
+** 0/0 gives) and 1.#QNAN. Addons compare with them. */
+void luaO_crtnumber (char *s, const char *form, lua_Number n) {
+  char num[480], f[8], *e;
+  int left = 0, plus = 0, space = 0, alt = 0, zero = 0, width = 0, prec = 6, len, pad, neg = signbit(n) != 0;
+  char conv, sign;
+  const char *p = form + 1;
+  for (;; p++) {
+    if (*p == '-') left = 1;
+    else if (*p == '+') plus = 1;
+    else if (*p == ' ') space = 1;
+    else if (*p == '#') alt = 1;
+    else if (*p == '0') zero = 1;
+    else break;
+  }
+  while (isdigit(cast(unsigned char, *p))) width = width * 10 + (*p++ - '0');
+  if (*p == '.') {
+    prec = 0;
+    for (p++; isdigit(cast(unsigned char, *p)); p++) prec = prec * 10 + (*p - '0');
+  }
+  if (prec > 99) prec = 99;
+  conv = *p;
+  if (n - n != 0) {
+    volatile double none = 0.0;
+    const double ind = none / none;
+    const char *man = "1#INF";
+    if (n != n) {
+      if (neg == (signbit(ind) != 0)) { man = "1#IND"; neg = 1; }
+      else { man = "1#QNAN"; neg = 0; }
+    }
+    nonfinite(num, man, conv, prec, alt);
+  }
+  else {
+    sprintf(f, "%%%s.*%c", alt ? "#" : "", conv);
+    sprintf(num, f, prec, fabs(n));
+    if (conv != 'f' && (e = strpbrk(num, "eE")) != NULL) {
+      int digits = cast_int(strlen(e + 2));
+      if (digits < 3) {
+        memmove(e + 2 + (3 - digits), e + 2, digits + 1);
+        memset(e + 2, '0', 3 - digits);
+      }
+    }
+  }
+  sign = neg ? '-' : plus ? '+' : space ? ' ' : '\0';
+  len = cast_int(strlen(num)) + (sign != '\0');
+  pad = width > len ? width - len : 0;
+  if (!left && !zero) { memset(s, ' ', pad); s += pad; }
+  if (sign != '\0') *s++ = sign;
+  if (!left && zero) { memset(s, '0', pad); s += pad; }
+  strcpy(s, num);
+  s += strlen(num);
+  if (left) { memset(s, ' ', pad); s += pad; }
+  *s = '\0';
 }
 
 

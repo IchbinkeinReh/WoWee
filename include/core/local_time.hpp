@@ -33,5 +33,16 @@ inline std::tm localTime(std::time_t when) {
     return out;
 }
 
+/// The same in Greenwich.
+inline std::tm utcTime(std::time_t when) {
+    std::tm out{};
+#ifdef _WIN32
+    gmtime_s(&out, &when);
+#else
+    gmtime_r(&when, &out);
+#endif
+    return out;
+}
+
 }  // namespace core
 }  // namespace wowee

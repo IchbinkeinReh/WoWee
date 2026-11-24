@@ -1,6 +1,7 @@
 // lua_system_api.cpp - System, time, sound, locale, map, addons, instances, and utilities Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include <array>
+#include "addons/lua_text_functions.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "game/battleground_rules.hpp"
 #include "game/spell_visual_choice.hpp"
@@ -81,6 +82,8 @@
 #include "rendering/minimap_zoom.hpp"
 #include "rendering/minimap_blips.hpp"
 #include "core/local_time.hpp"
+
+extern "C" int luaStr_decimalcomma;   // lstrlib.c (0x00d413b8)
 
 namespace wowee::addons {
 
@@ -3930,27 +3933,6 @@ static int lua_strsplit(lua_State* L) {
     return n + 1;
 }
 
-// strjoin(delimiter, ...) (0x00816b60): the pieces joined by lua_concat, so a
-// piece that is not a string or a number raises; none is "".
-static int lua_strjoin(lua_State* L) {
-    size_t len = 0;
-    const char* delim = luaL_checklstring(L, 1, &len);
-    const int top = lua_gettop(L);
-    const int pieces = top - 1;
-    if (len == 0) {
-        lua_concat(L, top);
-        return 1;
-    }
-    if (pieces == 0) { lua_pushstring(L, ""); return 1; }
-    if (!lua_checkstack(L, pieces * 2)) return luaL_error(L, "strjoin(): Stack overflow");
-    for (int k = 1; k < pieces; ++k) {
-        lua_pushlstring(L, delim, len);
-        lua_insert(L, 2 + k * 2);
-    }
-    lua_concat(L, pieces * 2 - 1);
-    return 1;
-}
-
 // setglobal(name, value) (0x008168d0): the name must be a string (a number
 // is stored under its text).
 static int lua_wowSetglobal(lua_State* L) {
@@ -4100,46 +4082,6 @@ static int lua_wipe(lua_State* L) {
     return 1;
 }
 
-// date(format) - safe date function (os.date was removed)
-/// date(format, time) - the clock, as WoW exposes it.
-///
-/// Both shapes FrameXML uses: "*t" for a table of parts, a strftime string
-/// otherwise, and an optional timestamp. Formatting "*t" as a strftime string
-/// yields the literal "*t", which is what BetterDate then indexed for an hour.
-static int lua_wow_date(lua_State* L) {
-    const char* fmt = luaL_optstring(L, 1, "%c");
-    const std::time_t when = lua_isnumber(L, 2)
-        ? static_cast<std::time_t>(lua_tonumber(L, 2))
-        : std::time(nullptr);
-
-    std::tm parts{};
-    parts = core::localTime(when);
-
-    if (std::strcmp(fmt, "*t") == 0 || std::strcmp(fmt, "!*t") == 0) {
-        lua_newtable(L);
-        auto set = [&](const char* key, int value) {
-            lua_pushinteger(L, value);
-            lua_setfield(L, -2, key);
-        };
-        set("year", parts.tm_year + 1900);
-        set("month", parts.tm_mon + 1);
-        set("day", parts.tm_mday);
-        set("hour", parts.tm_hour);
-        set("min", parts.tm_min);
-        set("sec", parts.tm_sec);
-        set("wday", parts.tm_wday + 1);
-        set("yday", parts.tm_yday + 1);
-        lua_pushboolean(L, parts.tm_isdst > 0);
-        lua_setfield(L, -2, "isdst");
-        return 1;
-    }
-
-    char out[256];
-    const size_t n = std::strftime(out, sizeof(out), fmt, &parts);
-    lua_pushlstring(L, out, n);
-    return 1;
-}
-
 // time() - current unix timestamp
 // time([table]) (0x00817650): now, or the time a date table gives, as os.time.
 static int lua_wow_time(lua_State* L) { return luaTimeOf(L); }
@@ -4282,12 +4224,6 @@ static const game::chat_channels::Slot* displayChannelSlot(game::GameHandler* gh
 static std::array<bool, 4>& actionBarToggles() {
     static std::array<bool, 4> shown{};
     return shown;
-}
-
-/// SetEuropeanNumbers' switch (0x00d413b8), which the client's formatting reads.
-static bool& europeanNumbers() {
-    static bool on = false;
-    return on;
 }
 
 /// SetLayoutMode's value (frame manager +0xd08).
@@ -8901,12 +8837,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 // SetEuropeanNumbers([on]) (0x00510de0 -> 0x0084f010): on by
-                // default; the client's format and SetFormattedText then swap
-                // '.' and ',' inside numbers (0x0084f030). Kept as the client
-                // keeps it; this client's string.format is Lua's own, so the
-                // swap is not made.
+                // default; "%F" then writes a comma (lstrlib.c).
                 {"SetEuropeanNumbers", [](lua_State* L) -> int {
-            europeanNumbers() = luaClientSwitchArg(L, 1, true);
+            luaStr_decimalcomma = luaClientSwitchArg(L, 1, true) ? 1 : 0;
             return 0;
         }},
                 // SetLayoutMode([mode]) (0x0050f8f0): the frame manager's layout
@@ -11070,14 +11003,14 @@ void registerSystemLuaAPI(lua_State* L) {
                 // guards never shows.
                 {"CanShowResetInstances", lua_ReturnNil},
                 {"strsplit",          lua_strsplit},
-                {"strjoin",           lua_strjoin},
+                {"strjoin",           luaStrJoin},
                 {"setglobal",         lua_wowSetglobal},
                 {"strtrim",           lua_strtrim},
                 {"strlenutf8",        lua_strlenutf8},
                 {"wipe",              lua_wipe},
                 {"strconcat",         lua_strconcat},
                 {"strreplace",        lua_strreplace},
-                {"date",              lua_wow_date},
+                {"date",              luaDate},
                 {"time",              lua_wow_time},
                 {"difftime",          lua_wow_difftime},
                 {"debugprofilestart", lua_debugprofilestart},

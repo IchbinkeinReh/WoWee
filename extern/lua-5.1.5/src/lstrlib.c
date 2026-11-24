@@ -753,8 +753,18 @@ static void addintlen (char *form) {
 }
 
 
+/* WoWee: 0x00853c50, the client's format. "%2$s" is argument two, whatever its
+** place ("%12$s" too), and what follows goes on from there; whole numbers are
+** the low 32 bits of theirs; "%F" is "%f" with the comma of SetEuropeanNumbers
+** (0x0084f030). */
+extern void luaO_crtnumber (char *s, const char *form, double n);
+int luaStr_decimalcomma = 0;
+
+static int lowint (double n) {
+  return (n > -9.2e18 && n < 9.2e18) ? (int)(unsigned)(unsigned long long)(long long)n : 0;
+}
+
 static int str_format (lua_State *L) {
-  int top = lua_gettop(L);
   int arg = 1;
   size_t sfl;
   const char *strfrmt = luaL_checklstring(L, arg, &sfl);
@@ -769,8 +779,19 @@ static int str_format (lua_State *L) {
     else { /* format item */
       char form[MAX_FORMAT];  /* to store the format (`%...') */
       char buff[MAX_ITEM];  /* to store the formatted item */
-      if (++arg > top)
-        luaL_argerror(L, arg, "no value");
+      if (isdigit(uchar(strfrmt[0]))) {
+        if (strfrmt[1] == '$') {
+          arg = strfrmt[0] - '0';
+          strfrmt += 2;
+        }
+        else if (isdigit(uchar(strfrmt[1])) && strfrmt[2] == '$') {
+          arg = (strfrmt[0] - '0') * 10 + (strfrmt[1] - '0');
+          strfrmt += 3;
+        }
+        else arg++;
+        if (strfrmt[-1] == '$') arg++;
+      }
+      else arg++;
       strfrmt = scanformat(L, strfrmt, form);
       switch (*strfrmt++) {
         case 'c': {
@@ -779,17 +800,25 @@ static int str_format (lua_State *L) {
         }
         case 'd':  case 'i': {
           addintlen(form);
-          sprintf(buff, form, (LUA_INTFRM_T)luaL_checknumber(L, arg));
+          sprintf(buff, form, (LUA_INTFRM_T)lowint(luaL_checknumber(L, arg)));
           break;
         }
         case 'o':  case 'u':  case 'x':  case 'X': {
           addintlen(form);
-          sprintf(buff, form, (unsigned LUA_INTFRM_T)luaL_checknumber(L, arg));
+          sprintf(buff, form, (unsigned LUA_INTFRM_T)(unsigned)lowint(luaL_checknumber(L, arg)));
           break;
         }
         case 'e':  case 'E': case 'f':
         case 'g': case 'G': {
-          sprintf(buff, form, (double)luaL_checknumber(L, arg));
+          luaO_crtnumber(buff, form, (double)luaL_checknumber(L, arg));
+          break;
+        }
+        case 'F': {
+          char *point;
+          form[strlen(form) - 1] = 'f';
+          luaO_crtnumber(buff, form, (double)luaL_checknumber(L, arg));
+          point = luaStr_decimalcomma ? strchr(buff, '.') : NULL;
+          if (point != NULL && isdigit(uchar(point[1]))) *point = ',';
           break;
         }
         case 'q': {
