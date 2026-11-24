@@ -1504,6 +1504,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                        owner_.otherPlayerMountCallbackRef()) {
                 owner_.otherPlayerMountCallbackRef()(block.guid, val);
             }
+            // 0x00740450: a puff of smoke as it gets onto a mount or another.
+            if (val != 0 && val != unit->getMountDisplayId())
+                owner_.playUnitEffect(block.guid, GameHandler::UnitEffect::MountPoof);
             unit->setMountDisplayId(val);
         } else if (ufi.attackPower != 0xFFFF && key >= ufi.attackPower &&
                    key < ufi.attackPower + 3 && block.guid == owner_.petGuidRef()) {

@@ -1258,3 +1258,30 @@ TEST_CASE("threat events come once a frame, for every token a unit has", "[repla
     CHECK(gh.threatStatus(Session::kPlayerGuid) == 0);
     gh.setAddonEventCallback({});
 }
+
+// 0x00740450: none was shown.
+TEST_CASE("getting onto a mount puffs, as one in sight already does not", "[replay][playtest]") {
+    using Effect = wowee::game::GameHandler::UnitEffect;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    std::vector<uint64_t> puffed;
+    gh.setUnitEffectCallback([&](uint64_t guid, Effect effect) {
+        if (effect == Effect::MountPoof) puffed.push_back(guid);
+    });
+    s.receive(UpdateObject().create(kGiver, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MOUNTDISPLAYID, 229}}));
+    CHECK(puffed.empty());
+    const auto rides = [&](uint64_t guid, uint32_t display) {
+        s.receive(UpdateObject().values(guid, {{UF::UNIT_FIELD_MOUNTDISPLAYID, display}}));
+    };
+    rides(kGiver, 229);
+    CHECK(puffed.empty());
+    rides(kGiver, 0);
+    CHECK(puffed.empty());
+    rides(kGiver, 230);
+    rides(kGiver, 231);
+    rides(Session::kPlayerGuid, 229);
+    CHECK(puffed == std::vector<uint64_t>{kGiver, kGiver, Session::kPlayerGuid});
+    gh.setUnitEffectCallback({});
+}

@@ -90,6 +90,7 @@ void AudioCallbackHandler::setupCallbacks() {
         if (!svs || instance == 0) return;
         const char* name = effect == game::GameHandler::UnitEffect::Achievement ? "HARDCODED Achievement Base"
                            : effect == game::GameHandler::UnitEffect::Reputation ? "HARDCODED Reputation"
+                           : effect == game::GameHandler::UnitEffect::MountPoof ? "HARDCODED Mount Poof"
                                                                                  : "HARDCODED Unit Level Up";
         svs->playNamedEffectOnUnit(name, instance);
     });

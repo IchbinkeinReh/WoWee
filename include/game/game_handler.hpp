@@ -2188,7 +2188,7 @@ public:
     auto& bloodSpurtCallbackRef() { return bloodSpurtCallback_; }
 
     /// The models the client puts on a unit of itself (0x006f9260's table at 0x00ada764).
-    enum class UnitEffect : uint8_t { LevelUp, Reputation, Achievement };
+    enum class UnitEffect : uint8_t { LevelUp, Reputation, Achievement, MountPoof };
     using UnitEffectCallback = std::function<void(uint64_t guid, UnitEffect effect)>;
     void setUnitEffectCallback(UnitEffectCallback cb) { unitEffectCallback_ = std::move(cb); }
     void playUnitEffect(uint64_t guid, UnitEffect effect) {
