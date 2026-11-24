@@ -1570,22 +1570,6 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // checkbox for it had never been touched. This client's low-health pulse is
     // a separate setting and stays as it was; the game's flash is not it.
     else if (n == "screenedgeflash") lua_pushstring(L, "1");
-    // Which stat category each column of the character sheet shows. These are
-    // not preferences with a sensible fallback - UpdatePaperdollStats compares
-    // the value against five names and fills the column from whichever matches,
-    // so an unrecognised one matches nothing and every row is left blank. That
-    // is what "0" gave it, and it is why the character sheet showed two empty
-    // panels below the model with no error anywhere to say why: the code ran to
-    // completion and simply had nothing to write.
-    //
-    // The pair registered as the empty string (0x00510000), which paperdollframe
-    // notices on load and replaces - `if ( GetCVar("playerStatLeftDropdown") ==
-    // "" ... )` then SetCVar to base stats and melee combat. Answering the two
-    // names here skips that write and lands on the same sheet the original ends
-    // up with; the original's Defaults button would put "" back and FrameXML
-    // would write the names again.
-    else if (n == "playerstatleftdropdown")  lua_pushstring(L, "PLAYERSTAT_BASE_STATS");
-    else if (n == "playerstatrightdropdown") lua_pushstring(L, "PLAYERSTAT_MELEE_COMBAT");
     // Whether a conversation opens in its own window or in the chat frame -
     // registered "popout" (0x00510000 gives the string straight to the
     // registrar, with "popout" and "inline" named in its help text). "0"
