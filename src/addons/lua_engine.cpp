@@ -5988,7 +5988,7 @@ void hideFrameByWid(lua_State* L, uint32_t wid) {
     if (!lua_isfunction(L, -1)) { lua_pop(L, 3); return; }
     lua_pushvalue(L, -2);
     if (lua_pcall(L, 1, 0, 0) != 0) {
-        LOG_WARNING("tooltip fade: ", luaL_optstring(L, -1, "?"));
+        LOG_WARNING("Hide: ", luaL_optstring(L, -1, "?"));
         lua_pop(L, 1);
     }
     lua_pop(L, 2);
@@ -6032,6 +6032,21 @@ void tickTooltipFades(lua_State* L, float elapsed) {
             w->alpha = 1.0f;
             hideFrameByWid(L, wid);
         }
+    }
+}
+
+/// Each frame: the visible Cooldown frames' own update (0x005ec8f0), which
+/// runs where an OnUpdate would. One whose star is over hides itself.
+void tickCooldowns(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (!tree) return;
+    const uint32_t now = wowee::ui::cooldown_sweep::msOf(core::appTimeSeconds());
+    // By index: an OnHide is free to make frames.
+    for (size_t i = 0; i < tree->cooldownFrames().size(); ++i) {
+        const uint32_t wid = tree->cooldownFrames()[i];
+        auto* w = tree->get(wid);
+        if (!w || !w->visibleChain) continue;
+        if (wowee::ui::cooldown_sweep::update(w->cooldown, w->cooldownReverse, now)) hideFrameByWid(L, wid);
     }
 }
 }  // namespace
@@ -9993,20 +10008,22 @@ int lua_Cooldown_SetCooldown(lua_State* L) {
     // 0x005ece80
     if (!requireNumbers(L, 2, 2, "Usage: %s:SetCooldown(start, duration)")) return 0;
     if (auto* w = widgetOf(L, 1)) {
-        w->cooldownStart = luaL_optnumber(L, 2, 0.0);
-        w->cooldownDuration = luaL_optnumber(L, 3, 0.0);
+        wowee::ui::cooldown_sweep::set(w->cooldown, luaL_optnumber(L, 2, 0.0), luaL_optnumber(L, 3, 0.0));
+        // And it shows the frame (0x005ecd70 ends in 0x0048f660).
+        lua_settop(L, 1);
+        lua_Region_Show(L);
     }
     return 0;
 }
 int lua_Cooldown_GetCooldownTimes(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     // Milliseconds, which is what this one answers in.
-    lua_pushnumber(L, w ? w->cooldownStart * 1000.0 : 0.0);
-    lua_pushnumber(L, w ? w->cooldownDuration * 1000.0 : 0.0);
+    lua_pushnumber(L, w ? static_cast<lua_Number>(w->cooldown.startMs) : 0.0);
+    lua_pushnumber(L, w ? static_cast<lua_Number>(w->cooldown.durationMs) : 0.0);
     return 2;
 }
 int lua_Cooldown_Clear(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) { w->cooldownStart = 0.0; w->cooldownDuration = 0.0; }
+    if (auto* w = widgetOf(L, 1)) w->cooldown = {};
     return 0;
 }
 
@@ -10929,7 +10946,7 @@ static int lua_CreateFrame(lua_State* L) {
             // explicit SetOrientation from the XML still overrides this, since
             // the emitter writes it after the frame is created.
             if (w->isSlider) w->barVertical = true;
-            w->isCooldown = (ft == "Cooldown");
+            if (ft == "Cooldown") tree->markCooldownFrame(id);
             w->isMovieFrame = (ft == "MovieFrame");
             // Marked at creation rather than only when a child is set, so a
             // scroll frame clips what is under it even while it is empty.
@@ -19408,6 +19425,7 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     drainPendingTextChanged();
     advanceWheelGlide(elapsed);
     tickTooltipFades(L_, elapsed);
+    tickCooldowns(L_);
     tickDestructibleBar(L_);
 
     // The action bars' usability, rewritten and announced on a change

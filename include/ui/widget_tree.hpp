@@ -31,6 +31,7 @@
 
 #include "core/platform.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "ui/cooldown_sweep.hpp"
 #include "ui/edit_history.hpp"
 #include "ui/simple_html.hpp"
 
@@ -552,12 +553,12 @@ struct Widget {
     bool  isCooldown = false;
     /// A MovieFrame: draws its movie (WidgetRenderer::drawMovie).
     bool  isMovieFrame = false;
-    double cooldownStart = 0.0;
-    double cooldownDuration = 0.0;
-    /// The shaded wedge grows instead of shrinking. An ability's cooldown
-    /// shrinks as it becomes usable again; an aura's timer on a unit frame
-    /// grows as the aura runs out, and the target frame and the totem bar both
-    /// ask for that.
+    /// Its time and its star's (ui/cooldown_sweep.hpp).
+    cooldown_sweep::State cooldown;
+    /// The shade grows instead of shrinking. An ability's cooldown shrinks as
+    /// it becomes usable again; an aura's timer on a unit frame grows as the
+    /// aura runs out, and the target frame and the totem bar both ask for
+    /// that.
     bool  cooldownReverse = false;
     /// A bright line along the sweeping edge, which the target frame and the
     /// rune bar ask for.
@@ -1454,6 +1455,10 @@ public:
     /// same omission and new ones would arrive with the same bug.
     void hideOrphanedTooltips();
     [[nodiscard]] const std::vector<uint32_t>& scrollFrames() const { return scrollFrames_; }
+    /// Makes a frame a Cooldown. The client's own update runs on every one
+    /// that is visible (tickCooldowns in lua_engine.cpp).
+    void markCooldownFrame(uint32_t id);
+    [[nodiscard]] const std::vector<uint32_t>& cooldownFrames() const { return cooldownFrames_; }
     [[nodiscard]] const std::vector<uint32_t>& playerPortraits() const { return portraitsFor("player"); }
 
     /// The widget published under this name, or null. Names are unique in
@@ -1609,6 +1614,7 @@ private:
     bool floatingChatUpdateDue_ = false;
     float safeLeft_ = 0.0f, safeRight_ = 0.0f, safeTop_ = 0.0f, safeBottom_ = 0.0f;
     std::vector<uint32_t> scrollFrames_;
+    std::vector<uint32_t> cooldownFrames_;
     /// Which unit each portrait texture is showing, and the reverse. Two maps
     /// rather than one because both questions are asked every frame: the draw
     /// loop wants every texture for a unit, and a claim wants the unit a

@@ -749,6 +749,7 @@ int main(int argc, char** argv) {
             // just started drawing again.
             else if (w->kind == wowee::ui::WidgetKind::Frame && !w->hasBackdrop &&
                      !w->isStatusBar && !w->isEditBox && w->externalTexture == 0 &&
+                     !(w->isCooldown && w->cooldown.drawn) &&
                      !(w->isMessageFrame && !w->messages.empty()) &&
                      !(w->isTooltip && !w->tooltipLines.empty()))
                 why = "a frame with nothing of its own to paint (no backdrop, no "

@@ -3486,3 +3486,118 @@ TEST_CASE("a string without a width reaches as far as its text", "[widgets][font
     CHECK(fontStringReach({a}, 120.0f).left == 60.0f);
     CHECK(fontStringReach({}, 120.0f).right == 60.0f);
 }
+
+TEST_CASE("A running cooldown is drawn over its button's own art", "[widget][draworder][cooldown]") {
+    WidgetTree tree;
+    const uint32_t button = tree.create(WidgetKind::Frame, 0, "B");
+    tree.get(button)->width = tree.get(button)->height = 36.0f;
+    tree.addPoint(button, Anchor{});
+    const uint32_t cooldown = tree.create(WidgetKind::Frame, button, "BCooldown");
+    tree.setAllPoints(cooldown, button);
+    tree.markCooldownFrame(cooldown);
+    // Made after it, as a NormalTexture is, and in the layer over the icon's.
+    const uint32_t icon = tree.create(WidgetKind::Texture, button, "BIcon");
+    tree.setAllPoints(icon, button);
+    tree.get(icon)->solidColor = true;
+    const uint32_t border = tree.create(WidgetKind::Texture, button, "BBorder");
+    tree.setAllPoints(border, button);
+    tree.get(border)->solidColor = true;
+    tree.get(border)->layer = DrawLayer::Overlay;
+
+    // Until SetCooldown there is nothing to draw.
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().size() == 2);
+
+    cooldown_sweep::set(tree.get(cooldown)->cooldown, 1.0, 1.5);
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().size() == 3);
+    REQUIRE(tree.drawOrder().back()->id == cooldown);
+    REQUIRE(tree.cooldownFrames() == std::vector<uint32_t>{cooldown});
+}
+
+TEST_CASE("A slider's grip given as a file is drawn", "[widget][draworder]") {
+    WidgetTree tree;
+    const uint32_t slider = tree.create(WidgetKind::Frame, 0, "S");
+    tree.get(slider)->width = 16.0f;
+    tree.get(slider)->height = 100.0f;
+    tree.addPoint(slider, Anchor{});
+    tree.get(slider)->isSlider = true;
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().empty());
+    tree.get(slider)->thumbTexture = "Interface/Buttons/UI-ScrollBar-Knob";
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().size() == 1);
+    // With a grip of its own, that one is what is drawn.
+    tree.get(slider)->thumbRegion = tree.create(WidgetKind::Texture, slider, "SThumb");
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().empty());
+}
+
+TEST_CASE("A cooldown runs, shines for a second and hides", "[cooldown]") {
+    using namespace cooldown_sweep;
+    State s;
+    set(s, 10.0, 1.5);
+    REQUIRE_FALSE(update(s, false, 10000));
+    REQUIRE(progress(s, false, 10750) == Catch::Approx(0.5f));
+    REQUIRE_FALSE(update(s, false, 11499));
+    REQUIRE_FALSE(s.flashing);
+    REQUIRE(progress(s, false, 11500) < 0.0f);
+    REQUIRE_FALSE(update(s, false, 11500));
+    REQUIRE(s.flashing);
+    REQUIRE_FALSE(update(s, false, 12499));
+    REQUIRE(update(s, false, 12500));
+    REQUIRE_FALSE(s.flashing);
+
+    // A reversed one stays full and stays shown.
+    set(s, 10.0, 1.5);
+    REQUIRE_FALSE(update(s, true, 99999));
+    REQUIRE_FALSE(s.flashing);
+    REQUIRE(progress(s, true, 99999) == Catch::Approx(1499.0f / 1500.0f));
+
+    // Set again while it shines, it is a cooldown again.
+    set(s, 10.0, 1.0);
+    update(s, false, 11000);
+    REQUIRE(s.flashing);
+    set(s, 11.2, 5.0);
+    REQUIRE_FALSE(s.flashing);
+    REQUIRE(s.durationMs == 5000);
+}
+
+TEST_CASE("The shade uncovers clockwise from the top", "[cooldown]") {
+    using namespace cooldown_sweep;
+    std::array<Point, 10> p;
+    // Whole: from the top middle all the way round.
+    REQUIRE(rim(0.0f, false, p) == 9);
+    REQUIRE(p[0].u == Catch::Approx(0.5f));
+    REQUIRE(p[1].u == Catch::Approx(1.0f));
+    // A quarter gone: the edge is at the right middle, what is left is below
+    // and to the left of it.
+    const int n = rim(0.25f, false, p);
+    REQUIRE(n == 7);
+    REQUIRE(p[0].u == Catch::Approx(1.0f));
+    REQUIRE(p[0].v == Catch::Approx(0.5f));
+    REQUIRE(p[n - 1].u == Catch::Approx(0.5f));
+    REQUIRE(p[n - 1].v == Catch::Approx(0.0f));
+    // Reversed it is the quarter that has passed.
+    const int r = rim(0.25f, true, p);
+    REQUIRE(p[0].v == Catch::Approx(0.0f));
+    REQUIRE(p[1].u == Catch::Approx(1.0f));
+    REQUIRE(p[r - 1].u == Catch::Approx(1.0f));
+    REQUIRE(p[r - 1].v == Catch::Approx(0.5f));
+    // Along a side it goes evenly: a sixteenth is half of the top's right half.
+    rim(1.0f / 16.0f, false, p);
+    REQUIRE(p[0].u == Catch::Approx(0.75f));
+    REQUIRE(p[0].v == Catch::Approx(0.0f));
+    // The edge's line points where the edge is: at a quarter the right side
+    // looks up the picture's top.
+    const auto uv = turned(edgeAngle(0.25f), 1.0f);
+    REQUIRE(uv[1].u == Catch::Approx(0.0f).margin(1e-5));
+    REQUIRE(uv[1].v == Catch::Approx(0.0f).margin(1e-5));
+    REQUIRE(uv[3].u == Catch::Approx(1.0f));
+    REQUIRE(uv[3].v == Catch::Approx(0.0f).margin(1e-5));
+    // The star's second.
+    REQUIRE(flash(0).alpha == Catch::Approx(0.0f));
+    REQUIRE(flash(333).alpha == Catch::Approx(1.0f).margin(0.01));
+    REQUIRE(flash(1000).alpha == Catch::Approx(0.0f).margin(0.01));
+    REQUIRE(flash(1000).angle == Catch::Approx(-0.7853982f));
+}

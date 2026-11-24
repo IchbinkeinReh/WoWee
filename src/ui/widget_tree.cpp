@@ -141,6 +141,7 @@ void WidgetTree::reset() {
     drawOrder_.clear();
     linkRects_.clear();
     scrollFrames_.clear();
+    cooldownFrames_.clear();
     ownedTooltips_.clear();
     portraitsByUnit_.clear();
     portraitUnitOf_.clear();
@@ -247,6 +248,13 @@ void WidgetTree::markScrollFrame(uint32_t id) {
     if (!w || w->isScrollFrame) return;
     w->isScrollFrame = true;
     scrollFrames_.push_back(id);
+}
+
+void WidgetTree::markCooldownFrame(uint32_t id) {
+    Widget* w = get(id);
+    if (!w || w->isCooldown) return;
+    w->isCooldown = true;
+    cooldownFrames_.push_back(id);
 }
 
 void WidgetTree::setTooltipOwner(uint32_t tooltipId, uint32_t ownerId) {
@@ -1469,6 +1477,12 @@ bool WidgetTree::buttonArtVisible(const Widget& w) const {
     }
 }
 
+/// A slider whose grip was given as a file (0x0096bfe0): it paints the grip
+/// itself, where one with a region has that drawn like any other.
+static bool paintsThumb(const Widget& w) {
+    return w.isSlider && w.thumbRegion == 0 && !w.thumbTexture.empty();
+}
+
 void WidgetTree::collectDrawOrder() {
     drawOrder_.clear();
     // Only what has been visible since the last look, in id order - the order
@@ -1503,6 +1517,12 @@ void WidgetTree::collectDrawOrder() {
         // listening, and an empty box still has to show it.
         if (w.kind == WidgetKind::Frame && !w.hasBackdrop && !w.isStatusBar &&
             !w.isEditBox && w.externalTexture == 0 && !w.isMovieFrame &&
+            // A cooldown paints its shade and its star (0x005ebd20). It was
+            // missing here, so no sweep was ever drawn: the frames were shown,
+            // sized and timed, and never reached the renderer.
+            !(w.isCooldown && w.cooldown.drawn) &&
+            // And a slider whose grip is a file rather than a region.
+            !paintsThumb(w) &&
             !(w.isSimpleHtml && !w.text.empty()) &&
             !(w.isMessageFrame && !w.messages.empty()) &&
             !(w.isTooltip && !w.tooltipLines.empty())) continue;
@@ -1552,13 +1572,18 @@ void WidgetTree::collectDrawOrder() {
     // ARTWORK, so it lands above the box's background and border art and
     // alongside the header rather than over it - the two never overlap, the
     // insets see to that.
+    //
+    // A cooldown's shade is in ARTWORK of its own frame (0x005ebd20, layer 2),
+    // which is over everything the button under it owns; a slider's grip is a
+    // region in OVERLAY.
     auto sortLevel = [](const Widget* w) {
-        return ((w->isStatusBar && !w->barTexture.empty()) || w->isEditBox)
+        return ((w->isStatusBar && !w->barTexture.empty()) || w->isEditBox || w->isCooldown || paintsThumb(*w))
                    ? w->effLevel + 1
                    : w->effLevel;
     };
     auto sortLayer = [](const Widget* w) {
-        if (w->isEditBox) return layerRank(DrawLayer::Artwork);
+        if (w->isEditBox || w->isCooldown) return layerRank(DrawLayer::Artwork);
+        if (paintsThumb(*w)) return layerRank(DrawLayer::Overlay);
         return layerRank((w->isStatusBar && !w->barTexture.empty()) ? w->barLayer : w->layer);
     };
     std::sort(drawOrder_.begin(), drawOrder_.end(),

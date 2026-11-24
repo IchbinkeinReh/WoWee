@@ -1319,47 +1319,61 @@ void WidgetRenderer::drawMovie(ImDrawList* dl, const Widget& w, float x0, float 
     dl->AddImage(reinterpret_cast<ImTextureID>(movieTexture_->descriptorSet), ImVec2(dx, dy), ImVec2(dx + dw, dy + dh));
 }
 
+// The pictures of a cooldown (0x00ad139c, 0x00ad13a0).
+static const std::string kCooldownStar = "Interface\\Cooldown\\star4.blp";
+static const std::string kCooldownEdge = "Interface\\Cooldown\\edge.blp";
+
 void WidgetRenderer::drawCooldown(ImDrawList* dl, const Widget& w,
                                   float x0, float y0, float x1, float y1) {
-    if (w.cooldownDuration <= 0.0) return;
-    const double elapsed = core::appTimeSeconds() - w.cooldownStart;
-    if (elapsed < 0.0 || elapsed >= w.cooldownDuration) return;
-    const float done = static_cast<float>(elapsed / w.cooldownDuration);
-    // Reversed, the wedge covers what has passed rather than what is left.
-    const float remaining = w.cooldownReverse ? done : (1.0f - done);
-
-    // A wedge from twelve o'clock, shrinking clockwise as the time runs out.
-    // Drawn to the corners rather than to an inscribed circle - the thing being
-    // covered is a square icon, and a circle would leave its corners lit - and
-    // clipped to the frame so the overrun does not spill onto its neighbours.
-    const ImVec2 centre((x0 + x1) * 0.5f, (y0 + y1) * 0.5f);
-    const float radius = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
-    constexpr float kTwoPi = 6.2831853f;
-    constexpr int kSegments = 48;
-    const int used = std::max(1, static_cast<int>(kSegments * remaining));
-
-    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
-    dl->PathClear();
-    dl->PathLineTo(centre);
-    for (int i = 0; i <= used; ++i) {
-        // -pi/2 starts at the top; positive sweep runs clockwise on a screen
-        // whose y grows downward.
-        const float a = -kTwoPi * 0.25f +
-                        kTwoPi * remaining * (static_cast<float>(i) / used);
-        dl->PathLineTo(ImVec2(centre.x + std::cos(a) * radius,
-                              centre.y + std::sin(a) * radius));
+    if (!w.cooldown.drawn) return;
+    const uint32_t now = cooldown_sweep::msOf(core::appTimeSeconds());
+    const auto at = [&](const cooldown_sweep::Point& p) {
+        return ImVec2(x0 + (x1 - x0) * p.u, y0 + (y1 - y0) * p.v);
+    };
+    const auto quad = [&](VkDescriptorSet tex, const std::array<cooldown_sweep::Point, 4>& uv, uint32_t col) {
+        dl->AddImageQuad(reinterpret_cast<ImTextureID>(tex), ImVec2(x0, y0), ImVec2(x1, y0), ImVec2(x1, y1),
+                         ImVec2(x0, y1), ImVec2(uv[0].u, uv[0].v), ImVec2(uv[1].u, uv[1].v),
+                         ImVec2(uv[3].u, uv[3].v), ImVec2(uv[2].u, uv[2].v), col);
+    };
+    if (w.cooldown.flashing) {
+        // The star, added on in light blue (0x0050a0ff), for its second.
+        const uint32_t elapsed = now - w.cooldown.startMs;
+        if (elapsed >= w.cooldown.durationMs) return;
+        const VkDescriptorSet star = resident(kCooldownStar, kVariantAdd);
+        if (star == kMissing) return;
+        const auto f = cooldown_sweep::flash(elapsed);
+        const float tint[4] = {80.0f / 255.0f, 160.0f / 255.0f, 1.0f, f.alpha};
+        quad(star, cooldown_sweep::turned(f.angle, f.scale), packColor(tint, w.alpha));
+        return;
     }
-    dl->PathFillConvex(IM_COL32(0, 0, 0, 160));
+    const float progress = cooldown_sweep::progress(w.cooldown, w.cooldownReverse, now);
+    if (progress < 0.0f) return;
+
+    // The shade, a fan round the middle: straight to the rect's own sides, so
+    // there is nothing to clip, and no softened edges to show where its
+    // triangles meet. Black at 0xa0 of the frame's alpha (0x005ec790).
+    std::array<cooldown_sweep::Point, 10> rim;
+    const int n = cooldown_sweep::rim(progress, w.cooldownReverse, rim);
+    const float shade[4] = {0.0f, 0.0f, 0.0f, 160.0f / 255.0f};
+    const uint32_t col = packColor(shade, w.alpha);
+    const ImVec2 white = ImGui::GetFontTexUvWhitePixel();
+    dl->PrimReserve((n - 1) * 3, n + 1);
+    const unsigned int first = dl->_VtxCurrentIdx;
+    dl->PrimWriteVtx(at({0.5f, 0.5f}), white, col);
+    for (int i = 0; i < n; ++i) dl->PrimWriteVtx(at(rim[i]), white, col);
+    for (int i = 1; i < n; ++i) {
+        dl->PrimWriteIdx(static_cast<ImDrawIdx>(first));
+        dl->PrimWriteIdx(static_cast<ImDrawIdx>(first + i));
+        dl->PrimWriteIdx(static_cast<ImDrawIdx>(first + i + 1));
+    }
+
     if (w.cooldownDrawEdge) {
-        // One bright spoke along the leading edge, which is what makes a slow
-        // sweep readable at a glance.
-        const float edge = -kTwoPi * 0.25f + kTwoPi * remaining;
-        dl->AddLine(centre,
-                    ImVec2(centre.x + std::cos(edge) * radius,
-                           centre.y + std::sin(edge) * radius),
-                    IM_COL32(255, 255, 255, 180), 1.5f);
+        if (const VkDescriptorSet edge = resident(kCooldownEdge); edge != kMissing) {
+            const float full[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            quad(edge, cooldown_sweep::turned(cooldown_sweep::edgeAngle(progress), w.effScale > 0.0f ? w.effScale : 1.0f),
+                 packColor(full, w.alpha));
+        }
     }
-    dl->PopClipRect();
 }
 
 void WidgetRenderer::render(WidgetTree& tree, float screenW, float screenH) {
@@ -2459,6 +2473,10 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             if (w->hasBackdrop) { want(w->bgFile); want(w->edgeFile); }
             if (w->isStatusBar) want(w->barTexture);
             if (w->isSlider) want(w->thumbTexture);
+            if (w->isCooldown) {
+                want(kCooldownStar, kVariantAdd);
+                if (w->cooldownDrawEdge) want(kCooldownEdge);
+            }
         }
     }
 
