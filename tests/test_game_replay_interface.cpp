@@ -39,6 +39,7 @@ struct Interface {
 
 // P51: the wheel goes down the frames that take the wheel (0x00494890), to
 // one with the script (0x0048fdb0): a button over the list covers nothing.
+// P52: and a scroll bar that is not shown is the handler's to leave alone.
 TEST_CASE("the wheel reaches the list under its rows", "[replay][interface]") {
     Session s;
     Interface ui(s);
@@ -66,4 +67,15 @@ TEST_CASE("the wheel reaches the list under its rows", "[replay][interface]") {
     CHECK(wheel(-1.0f));
     CHECK(ui.is("turned == 1"));
     CHECK_FALSE(ui.engine.dispatchMouseWheel(600.0f * scale, 600.0f * scale, -1.0f));
+    // The bar has been seen moving, and glides from now on, while it shows.
+    CHECK(wheel(-1.0f));
+    CHECK(ui.is("turned == 1"));
+    for (int i = 0; i < 200; ++i) ui.engine.dispatchOnUpdate(0.05f);
+    ui.run("at = bar:GetValue() bar:Hide()");
+    ui.layout();
+    CHECK(wheel(-1.0f));
+    for (int i = 0; i < 200; ++i) ui.engine.dispatchOnUpdate(0.05f);
+    CHECK(ui.is("bar:GetValue() == at"));
+    CHECK(ui.is("turned == 2"));
 }
+

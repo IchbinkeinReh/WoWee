@@ -18414,6 +18414,10 @@ bool LuaEngine::glideWheel(uint32_t wheelFrame, float notches) {
         wheelBindings_.erase(it);
         return false;
     }
+    // A bar that is not shown is the handler's business: one that scrolls by a
+    // shown bar leaves alone a list without one (hybridscrollframe.lua 46), and
+    // gliding the bar behind its back scrolled a short list into the empty.
+    if (!bar->visible) return false;
     const float from = wheelGlide_.slider == binding.slider ? wheelGlide_.target : bar->barValue;
     const float lo = std::min(bar->barMin, bar->barMax);
     const float hi = std::max(bar->barMin, bar->barMax);
