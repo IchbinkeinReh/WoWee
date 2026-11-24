@@ -619,11 +619,17 @@ public:
     /// rather than turning the camera on foot.
     void releaseVehicleCameraOffsets();
     void suppressMovementFor(float seconds) { movementSuppressTimer_ = jumpSuppressTimer_ = seconds; }
-    /// The held keys only: a jump pressed in the time is a jump. After a
-    /// teleport on the same map the client holds no input back - 0x006ecf80
-    /// -> 0x0098ba90 sets the place and clears the movement flags - and a
-    /// press is a press, where a key still held from before is not.
-    void suppressHeldMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
+    /// The mover put somewhere on the same map and its movement flags gone
+    /// with it (0x006ecf80 -> 0x0098ba90): as the acknowledgement goes
+    /// (0x007413f0, 0xC7) the client lets its moves, strafes, turns and
+    /// pitches go (0x005f95e0) and has the keys still held start them again
+    /// (0x005fbbc0): MSG_MOVE_START_FORWARD after the acknowledgement.
+    void restartHeldMoves() {
+        wasMovingForward = wasMovingBackward = false;
+        wasStrafingLeft = wasStrafingRight = false;
+        wasTurningLeft = wasTurningRight = false;
+        wasPitchKeys_ = 0;
+    }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
 
     /// A knockback's fall (0x006e9ff0): begun at the packet's vertical speed

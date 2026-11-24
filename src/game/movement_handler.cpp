@@ -2773,6 +2773,7 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         owner_.worldEntryCallbackRef()(owner_.currentMapIdRef(), serverX, serverY, serverZ, false);
     }
     if (const auto ack = teleportAck_.settle()) sendTeleportAck(*ack);
+    if (originMisfire) sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
 }
 
 bool MovementHandler::releaseTeleportAck() {
@@ -2795,12 +2796,10 @@ void MovementHandler::sendTeleportAck(const TeleportAckGate::Ack& pending) {
     ack.writeUInt32(pending.counter);
     ack.writeUInt32(pending.moveTime);
     owner_.getSocket()->send(ack);
+    // Nothing follows it but what the keys still held start again
+    // (0x007413f0, 0xC7: 0x005f95e0, 0x005fbbc0): a stop and a heartbeat sent
+    // here told of a mover that was running on.
     LOG_WARNING("Sent MSG_MOVE_TELEPORT_ACK counter=", pending.counter);
-
-    // Immediately tell the server our position so it doesn't keep using
-    // stale pre-teleport coordinates for area-trigger / anti-cheat checks.
-    sendMovement(Opcode::MSG_MOVE_STOP);
-    sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
 }
 
 // SMSG_TRANSFER_PENDING: the client's handler is 0x00401480.
@@ -3005,9 +3004,6 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
             network::Packet ack(wireOpcode(Opcode::MSG_MOVE_WORLDPORT_ACK));
             owner_.getSocket()->send(ack);
             LOG_INFO("Sent MSG_MOVE_WORLDPORT_ACK (resurrection)");
-
-            sendMovement(Opcode::MSG_MOVE_STOP);
-            sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
         }
         return;
     }

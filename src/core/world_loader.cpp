@@ -197,8 +197,10 @@ void WorldLoader::processPendingEntry() {
     if (entry.relocate && entry.mapId == loadedMapId_) {
         relocateOnLoadedMap(entry.mapId, entry.x, entry.y, entry.z);
         // The area is in: the teleport is answered now (0x006ed0f0 sends
-        // MSG_MOVE_TELEPORT_ACK after 0x006ecf80 -> 0x0074b620 returns).
+        // MSG_MOVE_TELEPORT_ACK after 0x006ecf80 -> 0x0074b620 returns), and
+        // the keys held by now move the player again after it.
         releaseTeleportAck();
+        if (auto* cc = renderer_ ? renderer_->getCameraController() : nullptr) cc->restartHeldMoves();
         return;
     }
     // Whatever held it, the world this load brings is the place.

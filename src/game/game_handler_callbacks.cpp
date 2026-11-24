@@ -798,14 +798,6 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         announceVehicleAim();
     }
 
-    // Immediately sync our position so the server doesn't keep stale coordinates
-    // from a previous session or character. Without this, the server can think
-    // the player is elsewhere and issue a corrective teleport.
-    if (socket) {
-        sendMovement(game::Opcode::MSG_MOVE_STOP);
-        sendMovement(game::Opcode::MSG_MOVE_HEARTBEAT);
-    }
-
     // Kick the first keepalive immediately on world entry. Classic-like realms
     // can close the session before our default 30s ping cadence fires.
     timeSinceLastPing = 0.0f;

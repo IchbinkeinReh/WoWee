@@ -238,15 +238,15 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             // (50.16) from its hall put the player back on the hall (55.99).
             if (renderer_.getCameraController()) {
                 renderer_.getCameraController()->teleportTo(renderPos);
+                // What the mover did is over with its flags; a key still held
+                // and autorun start it again at once. They were held back for
+                // half a second and autorun was dropped: a Blink on the run
+                // stood still.
+                renderer_.getCameraController()->restartHeldMoves();
             }
-            worldEntryMovementGraceTimer_ = 2.0f;
+            worldEntryMovementGraceTimer_ = 0.0f;
             taxiLandingClampTimer_ = 0.0f;
             lastTaxiFlight_ = false;
-            // Stop any movement that was active before the teleport
-            if (renderer_.getCameraController()) {
-                renderer_.getCameraController()->clearMovementInputs();
-                renderer_.getCameraController()->suppressHeldMovementFor(0.5f);
-            }
             // Kick off async upload for any tiles that finished background
             // parsing. Bounded on purpose: finalizing every ready tile here
             // stalls the main thread for seconds when many are ready, and the

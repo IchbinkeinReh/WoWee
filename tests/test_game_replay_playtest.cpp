@@ -459,3 +459,31 @@ TEST_CASE("a channel is ended by its update", "[replay][playtest]") {
     CHECK(events.take() == Heard{"CHANNEL_STOP Rain 0"});
     CHECK_FALSE(s.handler().isChanneling());
 }
+
+// A stop and a heartbeat went out after the acknowledgement, for a mover whose
+// key was still down: the server had it stand while it ran on.
+TEST_CASE("a teleport is answered with its acknowledgement alone", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_FORWARD);
+    REQUIRE(has(s, MovementFlags::FORWARD));
+    const auto count = [&](Opcode op) { return s.sent().of(op).size(); };
+    const size_t stops = count(Opcode::MSG_MOVE_STOP), beats = count(Opcode::MSG_MOVE_HEARTBEAT);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::MSG_MOVE_TELEPORT_ACK));
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt32(7);   // counter
+    p.writeUInt32(0);   // flags
+    p.writeUInt16(0);
+    p.writeUInt32(1000);
+    p.writeFloat(-300.0f);
+    p.writeFloat(-2300.0f);
+    p.writeFloat(10.0f);
+    p.writeFloat(1.0f);
+    p.writeUInt32(0);   // fall time
+    s.receive(p);
+    CHECK(count(Opcode::MSG_MOVE_TELEPORT_ACK) == 1);
+    CHECK(count(Opcode::MSG_MOVE_STOP) == stops);
+    CHECK(count(Opcode::MSG_MOVE_HEARTBEAT) == beats);
+    // What it did is over (0x0098ba90); the key starts it again.
+    CHECK_FALSE(has(s, MovementFlags::FORWARD));
+}
