@@ -796,9 +796,12 @@ CHECKS = [
     # 0x004f9930 / 0x004f7650) and the cursor-off pick of the object ahead
     # (softInteractTarget, npcServiceOffered, 0x00519e80 / 0x00729620). The
     # client answers these in WorldFrame's input handler, which FrameXML does
-    # not reach either. The forty-first is the one to look at.
+    # not reach either. Forty-two since 2026-11-24: gossipPoint and
+    # dropGossipPoint, the place a guard's gossip marks, which the minimap
+    # draws and lets go of where it is reached (0x0058a550, client code).
+    # The forty-third is the one to look at.
     ("framexml_unreachable_verbs.py",
-     r"^(\d+) verbs this client's own windows can reach", 40,
+     r"^(\d+) verbs this client's own windows can reach", 42,
      "verbs only this client's own windows could reach"),
     # Emote tokens FrameXML can hand DoEmote that it cannot answer. One,
     # named "unused", which is a placeholder in FrameXML's own list. It was
