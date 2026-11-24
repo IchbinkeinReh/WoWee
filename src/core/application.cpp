@@ -3762,7 +3762,7 @@ std::vector<rendering::SpellVisualSystem::CollisionUnit> missileCollisionUnits(
             c.shape.position = renderer->getCharacterPosition();
         else
             c.shape.position =
-                core::coords::canonicalToRender(glm::vec3(e.getLatestX(), e.getLatestY(), e.getLatestZ()));
+                core::coords::canonicalToRender(glm::vec3(e.getX(), e.getY(), e.getZ()));
         // Its scale (vtable +0x7c) and CreatureModelData row (0x00717a20).
         c.shape.scale = entitySpawner ? entitySpawner->unitModelScale(guid) : 1.0f;
         const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
@@ -4103,7 +4103,7 @@ void Application::connectSpellVisualHooks() {
             auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
             if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
             const glm::vec3 at = core::coords::canonicalToRender(
-                glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+                glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
             frame = glm::rotate(glm::translate(glm::mat4(1.0f), at),
                                 entity->getOrientation() + glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
             return true;
@@ -4125,7 +4125,7 @@ void Application::connectSpellVisualHooks() {
                 auto entity = gameHandler->getEntityManager().getEntity(guid);
                 if (!entity || !entity->isUnit()) return false;
                 end.position = core::coords::canonicalToRender(
-                    glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+                    glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
             }
             end.renderInstanceId = gameHandler->resolveUnitRenderInstance(guid);
             return true;
@@ -6128,28 +6128,18 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             // A unit, or a player drawn as its display (a form or a morph).
             if (!entity || !entity->isUnit()) continue;
 
-            // Distance check uses getLatestX/Y/Z (server-authoritative destination) to
-            // avoid false-culling entities that moved while getX/Y/Z was stale.
-            // Position sync still uses getX/Y/Z to preserve smooth interpolation for
-            // nearby entities; distant entities (> 150u) have planarDist≈0 anyway
-            // so the renderer remains driven correctly by creatureMoveCallback_.
-            glm::vec3 latestCanonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
+            // By where it is, not by where its path ends: the end of one that
+            // goes round a city is out of the radius while the unit walks by.
+            const glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             float canonDistSq = 0.0f;
             if (havePlayerPos) {
-                glm::vec3 d = latestCanonical - playerPos;
+                glm::vec3 d = canonical - playerPos;
                 canonDistSq = glm::dot(d, d);
                 const bool activeCombatTarget =
                     guid == currentTargetGuid || guid == autoAttackGuid;
                 if (canonDistSq > syncRadiusSq && !activeCombatTarget) continue;
             }
 
-            // The destination once it has reached its target, which a
-            // transport may be carrying on (Entity::setMoveEnds).
-            const bool inOverrun = entity->isEntityMoving() && !entity->isActivelyMoving();
-            glm::vec3 canonical(
-                inOverrun ? entity->getLatestX() : entity->getX(),
-                inOverrun ? entity->getLatestY() : entity->getY(),
-                inOverrun ? entity->getLatestZ() : entity->getZ());
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             auto posIt = _creatureRenderPosCache.find(guid);
             const std::optional<glm::vec3> previousRenderPos =
@@ -6389,21 +6379,15 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             auto entity = gameHandler->getEntityManager().getEntity(guid);
             if (!entity || entity->getType() != game::ObjectType::PLAYER) continue;
 
-            // Distance cull
+            // Distance cull, by where it is (as above).
+            const glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             if (havePPos) {
-                glm::vec3 latestCanonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
-                glm::vec3 d = latestCanonical - pPos;
+                glm::vec3 d = canonical - pPos;
                 const bool activeCombatTarget =
                     guid == playerTargetGuid || guid == playerAutoAttackGuid;
                 if (glm::dot(d, d) > pSyncRadiusSq && !activeCombatTarget) continue;
             }
 
-            // Position sync: at its destination once there (as above).
-            const bool inOverrun = entity->isEntityMoving() && !entity->isActivelyMoving();
-            glm::vec3 canonical(
-                inOverrun ? entity->getLatestX() : entity->getX(),
-                inOverrun ? entity->getLatestY() : entity->getY(),
-                inOverrun ? entity->getLatestZ() : entity->getZ());
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             auto posIt = _pCreatureRenderPosCache.find(guid);
             const std::optional<glm::vec3> previousRenderPos =

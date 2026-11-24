@@ -4046,8 +4046,15 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     // 3a: Create entity from block type
     std::shared_ptr<Entity> entity = createEntityFromBlock(block);
 
+    // The player's own, made again while a spline carries it: its movement
+    // block is not taken (0x004d63b0 hands 0x0073c260 that it is the player)
+    // and it goes on as it was.
+    const auto before = block.guid == owner_.getPlayerGuid() ? entityManager.getEntity(block.guid) : nullptr;
+    const bool keepsMoving = before && before->isUnit() && owner_.onMoveSpline(block.guid);
+    if (keepsMoving) *entity = *before;
+
     // Set position from movement block (server → canonical)
-    if (block.hasMovement) {
+    if (block.hasMovement && !keepsMoving) {
         glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
         float oCanonical = blockCanonicalFacing(block);
         entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
@@ -4082,12 +4089,21 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     auto* handler = getTypeHandler(block.objectType);
     if (handler) handler->onCreate(block, entity, newItemCreated);
 
+    if (!keepsMoving) takeBlockSpline(block, entity);
+
     // A control update that waited for the unit (0x007402b0 -> 0x0072cca0).
     if (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) {
         if (auto* movement = owner_.getMovementHandler()) movement->onUnitCreated(block.guid);
     }
 
     flushPendingEvents();
+}
+
+void EntityController::takeBlockSpline(const UpdateBlock& block, const std::shared_ptr<Entity>& entity) {
+    auto* movement = owner_.getMovementHandler();
+    if (!movement) return;
+    const int64_t queued = TransportManager::nowSteadyMs() - currentUpdateSampleSteadyMs();
+    movement->takeBlockSpline(block, entity, static_cast<uint32_t>(std::max<int64_t>(queued, 0)));
 }
 
 void EntityController::handleValuesUpdate(const UpdateBlock& block) {
@@ -4284,6 +4300,8 @@ void EntityController::handleMovementUpdate(const UpdateBlock& block) {
                     owner_.creatureMoveCallbackRef()) {
                     owner_.creatureMoveCallbackRef()(block.guid, pos.x, pos.y, pos.z, 0);
                 }
+                // Not the player's own block (0x004d6da0).
+                if (block.guid != owner_.getPlayerGuid()) takeBlockSpline(block, entity);
             } else {
                 LOG_WARNING("MOVEMENT update for unknown entity: 0x", std::hex, block.guid, std::dec);
             }

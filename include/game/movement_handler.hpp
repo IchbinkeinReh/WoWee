@@ -85,6 +85,10 @@ public:
     [[nodiscard]] bool farSightAnnounced() const { return farSightAnnounced_; }
     /// Whether a unit's move spline from its monster move still runs (+0xbc).
     [[nodiscard]] bool onMoveSpline(uint64_t guid);
+    /// The spline in a unit's create or movement block, or none: the one it
+    /// was on goes either way (0x006f1520). `queuedMs`: how long ago the
+    /// block was read.
+    void takeBlockSpline(const UpdateBlock& block, const std::shared_ptr<Entity>& entity, uint32_t queuedMs);
     /// The flags of a unit's move spline while it still runs.
     [[nodiscard]] std::optional<uint32_t> moveSplineFlags(uint64_t guid);
     /// The flags of the unit's move spline as the client keeps it (+0xbc),
@@ -430,6 +434,9 @@ private:
     [[nodiscard]] uint64_t playerFarsight() const;
     /// A unit's move spline from its monster move (+0xbc, 0x0098c770), and
     /// whether it still runs: not let go (+0x20 0x400) nor run out.
+    /// How a transport's axes - the wire's - lie in the world now; none where
+    /// it is not there.
+    [[nodiscard]] std::optional<glm::mat4> transportFrame(uint64_t transportGuid) const;
     void noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs,
                         uint32_t splineId = 0);
     /// The movement of `guid` as the client keeps it: movementInfo for the

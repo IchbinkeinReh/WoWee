@@ -3214,7 +3214,7 @@ void GameHandler::registerRemainingOpcodes() {
         } else {
             auto entity = entityController_->getEntityManager().getEntity(impTargetGuid);
             if (!entity) return;
-            glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
+            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             spawnPos = core::coords::canonicalToRender(canonical);
         }
         if (auto* sv = renderer->getSpellVisualSystem())

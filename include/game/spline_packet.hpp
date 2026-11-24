@@ -36,8 +36,14 @@ struct SplineBlockData {
     // Timing (movement update only)
     uint32_t timePassed = 0;
     uint32_t splineId = 0;
+    // WotLK's create block: what its duration is multiplied by, and what a
+    // cyclic one's next round's is (+0x204, +0x208; 0x0098ca00).
+    float durationFactor = 1.0f;
+    float nextDurationFactor = 1.0f;
 
-    // Waypoints (server coordinates, decoded from packed-delta if compressed)
+    // Waypoints (server coordinates, decoded from packed-delta if compressed).
+    // A WotLK create block's are the spline's points as the client keeps them
+    // (0x004c3830), its first and last among them.
     std::vector<glm::vec3> waypoints;
     glm::vec3 destination{0};
     bool hasDest = false;

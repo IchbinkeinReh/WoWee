@@ -43,9 +43,9 @@ int64_t steadyMs() {
 }
 
 float distanceSqTo(const MovementInfo& from, const Entity& to) {
-    const float dx = from.x - to.getLatestX();
-    const float dy = from.y - to.getLatestY();
-    const float dz = from.z - to.getLatestZ();
+    const float dx = from.x - to.getX();
+    const float dy = from.y - to.getY();
+    const float dz = from.z - to.getZ();
     return dx * dx + dy * dy + dz * dz;
 }
 
@@ -590,8 +590,8 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     auto target = owner_.isAutoFaceTarget() ? owner_.getEntityManager().getEntity(targetGuid)
                                             : nullptr;
     if (target) {
-        const float toTargetX = target->getLatestX() - owner_.movementInfoRef().x;
-        const float toTargetY = target->getLatestY() - owner_.movementInfoRef().y;
+        const float toTargetX = target->getX() - owner_.movementInfoRef().x;
+        const float toTargetY = target->getY() - owner_.movementInfoRef().y;
         if (std::abs(toTargetX) > 0.01f || std::abs(toTargetY) > 0.01f) {
             owner_.movementInfoRef().orientation = std::atan2(-toTargetY, toTargetX);
             if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {

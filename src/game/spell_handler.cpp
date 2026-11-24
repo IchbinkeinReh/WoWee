@@ -388,7 +388,7 @@ bool SpellHandler::resolveUnitPosition(uint64_t guid, glm::vec3& outPos) {
     }
     auto entity = owner_.getEntityManager().getEntity(guid);
     if (!entity) return false;
-    glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
+    glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
     outPos = core::coords::canonicalToRender(canonical);
     return true;
 }
@@ -8573,7 +8573,7 @@ void SpellHandler::handlePlaySpellVisual(network::Packet& packet) {
     } else {
         auto entity = owner_.getEntityManager().getEntity(casterGuid);
         if (!entity) return;
-        glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
+        glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
         spawnPos = core::coords::canonicalToRender(canonical);
     }
     // The packet names a SpellVisualKit, played on the unit as type 0

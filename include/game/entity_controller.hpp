@@ -209,6 +209,8 @@ private:
 
     void handleCreateObject(const UpdateBlock& block, bool& newItemCreated);
     void handleValuesUpdate(const UpdateBlock& block);
+    /// The spline of a unit's create or movement block (MovementHandler::takeBlockSpline).
+    void takeBlockSpline(const UpdateBlock& block, const std::shared_ptr<Entity>& entity);
     void handleMovementUpdate(const UpdateBlock& block);
     /// Seed a transport's route phase from the server's own path clock, so the
     /// client stops animating on a period it invented for itself; and again,

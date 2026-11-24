@@ -1,0 +1,479 @@
+// K4: a spline a create or movement block brings is flown on from where its
+// time has it (0x004f4b50, 0x006f1520, 0x0098ca00). See game_replay.hpp.
+#include <catch_amalgamated.hpp>
+
+#include "core/coordinates.hpp"
+#include "game/movement_handler.hpp"
+#include "game/transport_local.hpp"
+#include "game/transport_manager.hpp"
+#include "game_replay.hpp"
+
+#include <cmath>
+#include <thread>
+#include <vector>
+
+using replay::Session;
+using replay::UpdateObject;
+using wowee::game::Opcode;
+using wowee::game::ObjectType;
+using wowee::game::UF;
+using wowee::game::UpdateType;
+
+namespace {
+
+constexpr uint64_t kWalker = 0xF130004B460009D8ull;
+const glm::vec3 kAt(-1834.0f, 5299.0f, -12.4f);
+const UpdateObject::Fields kFields{{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}};
+
+glm::vec3 placeOf(const wowee::game::Entity& e) {
+    return wowee::core::coords::canonicalToServer(glm::vec3(e.getX(), e.getY(), e.getZ()));
+}
+float wireFacing(const wowee::game::Entity& e) {
+    return wowee::core::coords::canonicalToServerYaw(e.getOrientation());
+}
+
+// The points as MoveSplineInit has them for a straight path: the path and its
+// last point again (SplineBase::InitLinear).
+std::vector<glm::vec3> straight(std::vector<glm::vec3> way) {
+    way.push_back(way.back());
+    return way;
+}
+// And for a curve: a point ahead of it and its last again (InitCatmullRom).
+std::vector<glm::vec3> curve(std::vector<glm::vec3> way) {
+    way.insert(way.begin(), way[0] - (way[1] - way[0]));
+    way.push_back(way.back());
+    return way;
+}
+
+UpdateObject::Spline spline(const std::vector<glm::vec3>& points, const glm::vec3& end, uint32_t flags, uint8_t mode) {
+    UpdateObject::Spline s;
+    s.at = kAt;
+    s.points = points;
+    s.flags = flags;
+    s.mode = mode;
+    s.end = end;
+    s.passed = 1000;
+    s.duration = 4000;
+    return s;
+}
+
+std::shared_ptr<wowee::game::Entity> make(Session& s, const UpdateObject::Spline& sp, uint64_t guid = kWalker) {
+    s.receive(UpdateObject().onSpline(guid, kFields, sp));
+    auto e = s.handler().getEntityManager().getEntity(guid);
+    REQUIRE(e);
+    e->updateMovement(0.0f);
+    return e;
+}
+
+wowee::network::Packet monsterMove(uint64_t guid, uint32_t id, const glm::vec3& from, const glm::vec3& to, uint32_t ms,
+                                   uint32_t flags = 0, float acceleration = 0.0f) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_MONSTER_MOVE));
+    p.writePackedGuid(guid);
+    p.writeUInt8(0);
+    for (float f : {from.x, from.y, from.z}) p.writeFloat(f);
+    p.writeUInt32(id);
+    p.writeUInt8(0);
+    p.writeUInt32(flags);
+    p.writeUInt32(ms);
+    if (flags & 0x800u) {
+        p.writeFloat(acceleration);
+        p.writeUInt32(0);
+    }
+    p.writeUInt32(1);
+    for (float f : {to.x, to.y, to.z}) p.writeFloat(f);
+    return p;
+}
+
+bool closeTo(const glm::vec3& a, const glm::vec3& b, float within = 0.15f) { return glm::length(a - b) < within; }
+
+}  // namespace
+
+TEST_CASE("a unit that comes into view on a curve goes on from where its time has it", "[replay][blockspline]") {
+    const uint32_t flags = GENERATE(0x2000u, 0x42000u);
+    Session s;
+    const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(10, 0, 0), kAt + glm::vec3(20, 0, 0), kAt + glm::vec3(30, 0, 0),
+                                        kAt + glm::vec3(40, 0, 0)};
+    const auto e = make(s, spline(curve(way), way.back(), flags, 1));
+    CHECK(closeTo(placeOf(*e), kAt + glm::vec3(10, 0, 0)));
+    CHECK(e->isActivelyMoving());
+    CHECK(e->getMoveSpeed() == Catch::Approx(10.0f).margin(0.1f));
+    CHECK(std::cos(wireFacing(*e)) == Catch::Approx(1.0f).margin(0.01f));
+    CHECK(s.handler().onMoveSpline(kWalker));
+    e->updateMovement(1.5f);
+    CHECK(closeTo(placeOf(*e), kAt + glm::vec3(25, 0, 0)));
+    e->updateMovement(1.6f);
+    CHECK(closeTo(placeOf(*e), way.back()));
+    CHECK_FALSE(e->isActivelyMoving());
+    CHECK((e->getReportedMoveFlags() & 0x3u) == 0);
+    e->updateMovement(10.0f);
+    CHECK(closeTo(placeOf(*e), way.back()));
+}
+
+// 0x004c3fd0: from point i + 1 to i + 2, the straight one too.
+TEST_CASE("a straight spline is run between its first and its last point, both left out", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(5, 0, 0), kAt + glm::vec3(25, 0, 0), kAt + glm::vec3(25, 20, 0)};
+    const auto e = make(s, spline(straight(way), way.back(), 0, 0));
+    // A quarter of the forty yards after its second point.
+    CHECK(closeTo(placeOf(*e), kAt + glm::vec3(15, 0, 0)));
+    CHECK(e->getMoveSpeed() == Catch::Approx(10.0f).margin(0.1f));
+    e->updateMovement(2.0f);
+    CHECK(closeTo(placeOf(*e), kAt + glm::vec3(25, 10, 0)));
+    CHECK(std::sin(wireFacing(*e)) == Catch::Approx(1.0f).margin(0.01f));
+    e->updateMovement(1.1f);
+    CHECK(closeTo(placeOf(*e), way.back()));
+
+    // Of one stretch the realm writes three points: it stands at its end.
+    const std::vector<glm::vec3> one = {kAt, kAt + glm::vec3(8, 0, 0)};
+    const auto f = make(s, spline(straight(one), one.back(), 0, 0), kWalker + 1);
+    CHECK(closeTo(placeOf(*f), one.back()));
+}
+
+TEST_CASE("a spline over as its block comes leaves the unit at its end", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(10, 0, 0), kAt + glm::vec3(20, 0, 0)};
+    auto sp = spline(curve(way), way.back(), 0x22000, 1);
+    sp.passed = 9000;
+    sp.finalAngle = 2.0f;
+    auto e = make(s, sp);
+    CHECK(closeTo(placeOf(*e), way.back()));
+    CHECK(wireFacing(*e) == Catch::Approx(2.0f).margin(0.01f));
+    CHECK_FALSE(e->isActivelyMoving());
+    CHECK_FALSE(s.handler().onMoveSpline(kWalker));
+    CHECK((e->getReportedMoveFlags() & 0x3u) == 0);
+
+    // The end point where the last is three yards off and more (0x006e9470).
+    sp.end = way.back() + glm::vec3(0, 5, 0);
+    e = make(s, sp, kWalker + 1);
+    CHECK(closeTo(placeOf(*e), sp.end));
+    sp.end = way.back() + glm::vec3(0, 2, 0);
+    e = make(s, sp, kWalker + 2);
+    CHECK(closeTo(placeOf(*e), way.back()));
+    // Marked let go (0x400), or no flag to move by (0x0098ca00).
+    sp = spline(curve(way), way.back(), 0x2400, 1);
+    e = make(s, sp, kWalker + 3);
+    CHECK(closeTo(placeOf(*e), kAt));
+    sp = spline(curve(way), way.back(), 0x2000, 1);
+    sp.moveFlags = 0x08000000;
+    e = make(s, sp, kWalker + 4);
+    e->updateMovement(1.0f);
+    CHECK(closeTo(placeOf(*e), kAt));
+    CHECK_FALSE(s.handler().onMoveSpline(kWalker + 4));
+    // Frozen: kept, and nowhere to go.
+    sp = spline(curve(way), way.back(), 0x402000, 1);
+    e = make(s, sp, kWalker + 5);
+    e->updateMovement(9.0f);
+    CHECK(closeTo(placeOf(*e), kAt));
+    CHECK(s.handler().onMoveSpline(kWalker + 5));
+}
+
+TEST_CASE("a block's spline takes its duration's factor", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(10, 0, 0), kAt + glm::vec3(20, 0, 0), kAt + glm::vec3(40, 0, 0)};
+    auto sp = spline(curve(way), way.back(), 0x2000, 1);
+    sp.factor = 2.0f;
+    const auto e = make(s, sp);
+    CHECK(placeOf(*e).x - kAt.x == Catch::Approx(5.0f).margin(0.8f));
+    e->updateMovement(3.0f);
+    CHECK(placeOf(*e).x - kAt.x == Catch::Approx(20.0f).margin(1.0f));
+    CHECK(e->isActivelyMoving());
+    e->updateMovement(4.1f);
+    CHECK(closeTo(placeOf(*e), way.back()));
+}
+
+// Round and round: the realm's array is the last point, the points and the
+// first two again, and its end point the origin.
+TEST_CASE("a cyclic spline is run round and round", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> ring = {kAt, kAt + glm::vec3(20, 0, 0), kAt + glm::vec3(20, 20, 0), kAt + glm::vec3(0, 20, 0)};
+    std::vector<glm::vec3> points = {ring[3], ring[0], ring[1], ring[2], ring[3], ring[0], ring[1]};
+    auto sp = spline(points, glm::vec3(0.0f), 0x82000, 1);
+    sp.passed = 3000;
+    const auto e = make(s, sp);
+    CHECK(closeTo(placeOf(*e), ring[3], 0.3f));
+    e->updateMovement(2.0f);
+    CHECK(closeTo(placeOf(*e), ring[1], 0.3f));
+    e->updateMovement(40.0f);
+    CHECK(closeTo(placeOf(*e), ring[1], 0.4f));
+    CHECK(e->isActivelyMoving());
+    CHECK((e->getReportedMoveFlags() & 0x1u) == 0x1u);
+    CHECK(s.handler().onMoveSpline(kWalker));
+    // A stop ends it.
+    wowee::network::Packet stop(wowee::game::wireOpcode(Opcode::SMSG_MONSTER_MOVE));
+    stop.writePackedGuid(kWalker);
+    stop.writeUInt8(0);
+    for (float f : {kAt.x, kAt.y, kAt.z}) stop.writeFloat(f);
+    stop.writeUInt32(9);
+    stop.writeUInt8(1);
+    s.receive(stop);
+    e->updateMovement(1.0f);
+    CHECK(closeTo(placeOf(*e), kAt));
+    CHECK_FALSE(s.handler().onMoveSpline(kWalker));
+
+    // Entering its cycle: the first point once and no more (0x0098c940).
+    points = {kAt + glm::vec3(-20, 0, 0), kAt + glm::vec3(-40, 0, 0), ring[0], ring[1], ring[2], ring[3], ring[0], ring[1]};
+    sp = spline(points, glm::vec3(0.0f), 0x182000, 1);
+    sp.passed = 0;
+    sp.duration = 1000;
+    const auto f = make(s, sp, kWalker + 1);
+    CHECK(closeTo(placeOf(*f), kAt + glm::vec3(-40, 0, 0), 0.2f));
+    for (int i = 0; i < 100; ++i) {
+        f->updateMovement(0.05f);
+        if (i >= 20) CHECK(placeOf(*f).x - kAt.x > -6.0f);
+    }
+}
+
+TEST_CASE("a parabolic spline arcs over its path", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(10, 0, 0), kAt + glm::vec3(20, 0, 0), kAt + glm::vec3(30, 0, 0)};
+    auto sp = spline(curve(way), way.back(), 0x2800, 1);
+    sp.duration = 2000;
+    sp.passed = 1000;
+    sp.acceleration = 19.29f;
+    const auto e = make(s, sp);
+    // 0.5 * a * (2 - 1) * 1 over it (0x00987d20).
+    CHECK(placeOf(*e).z - kAt.z == Catch::Approx(9.645f).margin(0.05f));
+    e->updateMovement(0.5f);
+    CHECK(placeOf(*e).z - kAt.z == Catch::Approx(0.5f * 19.29f * 0.5f * 1.5f).margin(0.1f));
+    e->updateMovement(0.6f);
+    CHECK(closeTo(placeOf(*e), way.back()));
+    // A monster move's the same (0x006e96c0).
+    const auto leaper = make(s, sp, kWalker + 1);
+    const glm::vec3 from = placeOf(*leaper);
+    s.receive(monsterMove(kWalker + 1, 4, from, from + glm::vec3(10, 0, 0), 2000, 0x800, 10.0f));
+    leaper->updateMovement(1.0f);
+    CHECK(placeOf(*leaper).z - from.z == Catch::Approx(5.0f).margin(0.1f));
+    leaper->updateMovement(1.1f);
+    CHECK(closeTo(placeOf(*leaper), from + glm::vec3(10, 0, 0)));
+}
+
+// Whom it faces at the end is looked up there: not in view before, or moved.
+TEST_CASE("a block's spline ends facing its target as it stands then", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(10, 0, 0), kAt + glm::vec3(20, 0, 0)};
+    auto sp = spline(curve(way), way.back(), 0x12000, 1);
+    sp.finalTarget = kWalker + 9;
+    const auto e = make(s, sp);
+    auto target = spline({}, kAt, 0, 0);
+    target.moveFlags = 0;
+    target.at = way.back() + glm::vec3(0, 7, 0);
+    make(s, target, kWalker + 9);
+    e->updateMovement(3.1f);
+    CHECK(std::sin(wireFacing(*e)) == Catch::Approx(1.0f).margin(0.01f));
+    // Kept on the way where the spline says so (0x4000).
+    const auto f = make(s, spline(curve(way), way.back(), 0x6000, 1), kWalker + 1);
+    CHECK(wireFacing(*f) == Catch::Approx(0.5f).margin(0.01f));
+    f->updateMovement(5.0f);
+    CHECK(wireFacing(*f) == Catch::Approx(0.5f).margin(0.01f));
+}
+
+TEST_CASE("the next monster move takes a unit off its block's spline", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(10, 0, 0), kAt + glm::vec3(20, 0, 0), kAt + glm::vec3(400, 0, 0)};
+    const auto e = make(s, spline(curve(way), way.back(), 0x2000, 1));
+    const glm::vec3 from = placeOf(*e);
+    s.receive(monsterMove(kWalker, 78, from, from + glm::vec3(0, 10, 0), 2000));
+    e->updateMovement(1.0f);
+    CHECK(closeTo(placeOf(*e), from + glm::vec3(0, 5, 0), 0.3f));
+    e->updateMovement(1.1f);
+    CHECK(closeTo(placeOf(*e), from + glm::vec3(0, 10, 0)));
+
+    // Made again, or moved by a movement block: what that says, with a spline
+    // of its own or with none (0x004d63b0, 0x004d6da0).
+    const auto type = GENERATE(UpdateType::CREATE_OBJECT, UpdateType::MOVEMENT);
+    auto again = spline(curve(way), way.back(), 0x2000, 1);
+    again.type = type;
+    s.receive(UpdateObject().onSpline(kWalker, kFields, again));
+    auto now = s.handler().getEntityManager().getEntity(kWalker);
+    now->updateMovement(0.0f);
+    CHECK(now->isActivelyMoving());
+    CHECK(s.handler().onMoveSpline(kWalker));
+    again.moveFlags = 0;
+    again.at = kAt + glm::vec3(3, 3, 0);
+    s.receive(UpdateObject().onSpline(kWalker, kFields, again));
+    now = s.handler().getEntityManager().getEntity(kWalker);
+    now->updateMovement(1.0f);
+    CHECK(closeTo(placeOf(*now), again.at));
+    CHECK_FALSE(now->isActivelyMoving());
+    CHECK_FALSE(s.handler().onMoveSpline(kWalker));
+}
+
+// P45's clock: it began as long before the packet came as the block says.
+TEST_CASE("a block's spline goes by the clock from before its packet came", "[replay][blockspline]") {
+    using namespace std::chrono_literals;
+    Session s;
+    s.setConnected(true);
+    auto& gh = s.handler();
+    gh.setUnitClock(std::chrono::steady_clock::now() - 5s);
+    gh.update(0.016f);
+    std::vector<glm::vec3> way;
+    for (int i = 0; i <= 100; ++i) way.push_back(kAt + glm::vec3(10.0f * static_cast<float>(i), 0, 0));
+    auto sp = spline(curve(way), way.back(), 0x2000, 1);
+    sp.passed = 10000;
+    sp.duration = 100000;
+    s.receive(UpdateObject().onSpline(kWalker, kFields, sp));
+    const auto started = std::chrono::steady_clock::now();
+    const auto e = gh.getEntityManager().getEntity(kWalker);
+    REQUIRE(e);
+    gh.setUnitClock(started);
+    gh.update(0.016f);
+    CHECK(closeTo(placeOf(*e), kAt + glm::vec3(100, 0, 0), 2.0f));
+    gh.setUnitClock(started + 2s);
+    gh.update(0.016f);
+    CHECK(closeTo(placeOf(*e), kAt + glm::vec3(120, 0, 0), 2.0f));
+    // Its packet read four seconds before it is handled.
+    auto packet = UpdateObject().onSpline(kWalker + 1, kFields, sp).packet();
+    packet.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - 4000);
+    s.receive(packet);
+    const auto late = gh.getEntityManager().getEntity(kWalker + 1);
+    REQUIRE(late);
+    late->updateMovement(0.0f);
+    CHECK(closeTo(placeOf(*late), kAt + glm::vec3(140, 0, 0), 2.0f));
+}
+
+// A login in flight: the player's own block has the spline, which carries it,
+// ends with its id reported, and holds the player's own movement back.
+TEST_CASE("the player made on a spline is carried by it to its end", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(1, 0, 0), kAt + glm::vec3(2, 0, 0), kAt + glm::vec3(3, 0, 0)};
+    auto sp = spline(curve(way), way.back(), 0x2000, 1);
+    sp.objectType = ObjectType::PLAYER;
+    sp.passed = 100;
+    sp.duration = 200;
+    sp.id = 4711;
+    auto fields = kFields;
+    fields[UF::UNIT_FIELD_FLAGS] = 0x00100000;
+    s.receive(UpdateObject().onSpline(Session::kPlayerGuid, fields, sp));
+    auto* mh = s.handler().getMovementHandler();
+    auto self = s.handler().getEntityManager().getEntity(Session::kPlayerGuid);
+    REQUIRE(self);
+    self->updateMovement(0.0f);
+    mh->updateClientTaxi(0.01f);
+    CHECK(mh->onMoveSpline(Session::kPlayerGuid));
+    CHECK(s.handler().isOnTaxiFlight());
+    CHECK(closeTo(placeOf(*self), kAt + glm::vec3(1.5f, 0, 0), 0.2f));
+    // Its block once more, as it flies: passed over (0x004d63b0).
+    auto again = sp;
+    again.at = kAt + glm::vec3(0, 300, 0);
+    again.passed = 0;
+    again.id = 4712;
+    s.receive(UpdateObject().onSpline(Session::kPlayerGuid, fields, again));
+    self = s.handler().getEntityManager().getEntity(Session::kPlayerGuid);
+    self->updateMovement(0.0f);
+    CHECK(closeTo(placeOf(*self), kAt + glm::vec3(1.5f, 0, 0), 0.3f));
+    s.handler().sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+    CHECK(s.sent().of(Opcode::MSG_MOVE_HEARTBEAT).empty());
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    self->updateMovement(0.15f);
+    mh->updateMoverSplineDone();
+    REQUIRE(s.sent().of(Opcode::CMSG_MOVE_SPLINE_DONE).size() == 1);
+    const auto& done = s.sent().of(Opcode::CMSG_MOVE_SPLINE_DONE).front().getData();
+    REQUIRE(done.size() > 4);
+    uint32_t id = 0;
+    for (int i = 0; i < 4; ++i) id |= static_cast<uint32_t>(done[done.size() - 4 + i]) << (8 * i);
+    CHECK(id == 4711);
+    CHECK(closeTo(placeOf(*self), way.back()));
+}
+
+// On a transport the points are on it, and the place is put through it as it
+// lies each frame (0x004f4460).
+TEST_CASE("a spline on a transport is run on it", "[replay][blockspline]") {
+    wowee::game::Entity e;
+    e.setPosition(1.0f, 2.0f, 3.0f, 0.0f);
+    wowee::game::Entity::BlockSpline sp;
+    sp.points = {glm::vec3(-1, 0, 0), glm::vec3(0, 0, 0), glm::vec3(10, 0, 0), glm::vec3(10, 0, 0)};
+    sp.endPoint = glm::vec3(10, 0, 0);
+    sp.framed = true;
+    sp.durationMs = 2000;
+    e.startBlockSpline(sp);
+    e.updateMovement(1.0f);
+    // Not there yet: it stays.
+    CHECK(e.getX() == 1.0f);
+    CHECK(e.onFramedPath());
+    glm::mat4 frame(1.0f);
+    frame[3] = glm::vec4(100.0f, 50.0f, 5.0f, 1.0f);
+    e.setMoveFrame(frame);
+    CHECK(e.getX() == Catch::Approx(105.0f).margin(0.05f));
+    // A quarter turn, and on.
+    frame[0] = glm::vec4(0, 1, 0, 0);
+    frame[1] = glm::vec4(-1, 0, 0, 0);
+    e.setMoveFrame(frame);
+    CHECK(e.getX() == Catch::Approx(100.0f).margin(0.05f));
+    CHECK(e.getY() == Catch::Approx(55.0f).margin(0.05f));
+    e.updateMovement(1.1f);
+    CHECK(e.getY() == Catch::Approx(60.0f).margin(0.05f));
+    CHECK_FALSE(e.isActivelyMoving());
+}
+
+// The same by its packet, with the transport there and come only after it.
+TEST_CASE("a passenger that comes into view walking walks on its transport", "[replay][blockspline]") {
+    constexpr uint64_t kShip = 0x1FC0000000000007ull;
+    const bool shipFirst = GENERATE(true, false);
+    const uint32_t flags = GENERATE(0x2000u, 0x22000u);
+    Session s;
+    auto* transports = s.handler().getTransportManager();
+    REQUIRE(transports);
+    transports->loadPathFromNodes(9001, {glm::vec3(0.0f)}, false, 10.0f);
+    const glm::vec3 deck = wowee::core::coords::serverToCanonical(kAt);
+    const auto ship = [&] { transports->registerTransport(kShip, 0, 9001, deck, 9001); };
+    if (shipFirst) ship();
+    const std::vector<glm::vec3> way = {glm::vec3(0), glm::vec3(10, 0, 2), glm::vec3(20, 0, 2), glm::vec3(30, 0, 2)};
+    auto sp = spline(curve(way), way.back(), flags, 1);
+    sp.moveFlags = 0x08000201;
+    sp.transport = kShip;
+    sp.duration = 3000;
+    sp.at = kAt + glm::vec3(10, 0, 2);
+    sp.onTransport = glm::vec3(10, 0, 2);
+    const auto e = make(s, sp);
+    if (!shipFirst) {
+        e->updateMovement(0.5f);
+        CHECK(closeTo(placeOf(*e), sp.at));
+        ship();
+    }
+    const auto local = [&](const glm::vec3& wire) {
+        const glm::vec3 c = transports->getPlayerWorldPosition(kShip, transports->serverToTransportLocal(kShip, wire));
+        return wowee::core::coords::canonicalToServer(c);
+    };
+    s.handler().getMovementHandler()->updateAttachedTransportChildren(0.0f);
+    CHECK(closeTo(placeOf(*e), local(glm::vec3(shipFirst ? 10.0f : 15.0f, 0, 2)), 0.6f));
+    CHECK(e->isActivelyMoving());
+    e->updateMovement(shipFirst ? 1.0f : 0.5f);
+    s.handler().getMovementHandler()->updateAttachedTransportChildren(0.0f);
+    CHECK(closeTo(placeOf(*e), local(glm::vec3(20, 0, 2)), 0.6f));
+    // Moved under it, and at its end it stays on it.
+    auto* active = transports->getTransport(kShip);
+    REQUIRE(active);
+    active->transform[3] += glm::vec4(50.0f, 0.0f, 0.0f, 0.0f);
+    e->updateMovement(1.5f);
+    s.handler().getMovementHandler()->updateAttachedTransportChildren(0.0f);
+    CHECK(closeTo(placeOf(*e), local(way.back())));
+    if (flags == 0x22000u) {
+        const float facing = wowee::game::transport_local::worldYaw(*transports->transportFacing(kShip), 1.0f);
+        CHECK(std::cos(e->getOrientation() - facing) == Catch::Approx(1.0f).margin(0.01f));
+    }
+}
+
+// A vehicle's passenger is in its seat.
+TEST_CASE("a passenger of a vehicle is not flown by its block", "[replay][blockspline]") {
+    Session s;
+    const std::vector<glm::vec3> way = {glm::vec3(0), glm::vec3(10, 0, 2), glm::vec3(20, 0, 2), glm::vec3(30, 0, 2)};
+    auto sp = spline(curve(way), way.back(), 0x2000, 1);
+    sp.moveFlags = 0x08000201;
+    sp.transport = 0xF150006D50000003ull;
+    const auto e = make(s, sp);
+    e->updateMovement(1.0f);
+    CHECK(closeTo(placeOf(*e), kAt));
+    CHECK_FALSE(e->isActivelyMoving());
+}
+
+// A unit is where it is, not where its path ends.
+TEST_CASE("a unit on a long path is found where it is", "[replay][blockspline]") {
+    Session s;
+    std::vector<glm::vec3> way;
+    for (int i = 0; i <= 100; ++i) way.push_back(kAt + glm::vec3(10.0f * static_cast<float>(i), 0, 0));
+    const auto e = make(s, spline(curve(way), way.back(), 0x2000, 1));
+    const glm::vec3 c = wowee::core::coords::serverToCanonical(kAt + glm::vec3(250, 0, 0));
+    std::vector<std::shared_ptr<wowee::game::Entity>> found;
+    s.handler().getEntityManager().getEntitiesNear(c.x, c.y, 30.0f, found);
+    CHECK(found.size() == 1);
+}

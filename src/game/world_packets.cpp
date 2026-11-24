@@ -1131,12 +1131,12 @@ bool UpdateObjectParser::parseMovementBlock(network::Packet& packet, UpdateBlock
 
         // Fall time
         if (rem() < 4) return false;
-        /*uint32_t fallTime =*/ packet.readUInt32();
+        block.fallTime = packet.readUInt32();
 
         // Jumping
         if (moveFlags & 0x00001000) { // MOVEMENTFLAG_FALLING
             if (rem() < 16) return false;
-            /*float jumpVelocity =*/ packet.readFloat();
+            block.fallVerticalSpeed = packet.readFloat();
             /*float jumpSinAngle =*/ packet.readFloat();
             /*float jumpCosAngle =*/ packet.readFloat();
             /*float jumpXYSpeed =*/ packet.readFloat();
@@ -1164,11 +1164,12 @@ bool UpdateObjectParser::parseMovementBlock(network::Packet& packet, UpdateBlock
 
         // Spline data
         if (moveFlags & 0x08000000) { // MOVEMENTFLAG_SPLINE_ENABLED
-            SplineBlockData splineData;
-            if (!parseWotlkMoveUpdateSpline(packet, splineData)) {
+            auto splineData = std::make_shared<SplineBlockData>();
+            if (!parseWotlkMoveUpdateSpline(packet, *splineData)) {
                 LOG_WARNING("WotLK spline parse failed for guid=0x", std::hex, block.guid, std::dec);
                 return false;
             }
+            block.spline = std::move(splineData);
         }
     }
     else if (updateFlags & UPDATEFLAG_POSITION) {

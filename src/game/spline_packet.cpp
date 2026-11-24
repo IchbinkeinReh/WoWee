@@ -311,10 +311,11 @@ bool parseWotlkMoveUpdateSpline(
     out.timePassed = packet.readUInt32();
     out.duration = packet.readUInt32();
     out.splineId = packet.readUInt32();
-    packet.readFloat();   // duration factor
-    packet.readFloat();   // the next one's
+    out.durationFactor = packet.readFloat();
+    out.nextDurationFactor = packet.readFloat();
     out.verticalAcceleration = packet.readFloat();
     out.parabolicStartTime = packet.readUInt32();
+    out.hasParabolic = (out.splineFlags & SplineFlagWotlk::PARABOLIC) != 0;
 
     const uint32_t pointCount = packet.readUInt32();
     constexpr size_t kAfterPoints = 1 + 12;  // the mode and the end point
@@ -323,7 +324,13 @@ bool parseWotlkMoveUpdateSpline(
         LOG_WARNING("WotLK spline: ", pointCount, " nodes in ", packet.getRemainingSize(), " bytes");
         return refuse("more nodes than there are bytes for");
     }
-    packet.setReadPos(packet.getReadPos() + static_cast<size_t>(pointCount) * 12);
+    out.waypoints.reserve(pointCount);
+    for (uint32_t i = 0; i < pointCount; ++i) {
+        const float px = packet.readFloat();
+        const float py = packet.readFloat();
+        const float pz = packet.readFloat();
+        out.waypoints.emplace_back(px, py, pz);
+    }
     out.splineMode = packet.readUInt8();
     out.endPoint.x = packet.readFloat();
     out.endPoint.y = packet.readFloat();

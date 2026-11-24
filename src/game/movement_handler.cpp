@@ -2339,7 +2339,14 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             }
             path.push_back({destCanonical.x, destCanonical.y, destCanonical.z});
             entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth,
-                                       /*clientCurve=*/wotlkSplineFlags);
+                                       /*clientCurve=*/wotlkSplineFlags,
+                                       (moveSplineFlags & SplineFlagWotlk::CYCLIC) != 0,
+                                       (moveSplineFlags & SplineFlagWotlk::ENTER_CYCLE) != 0);
+            // 0x006e96c0: its arc, over the time the spline takes here.
+            if ((moveSplineFlags & SplineFlagWotlk::PARABOLIC) != 0) {
+                if (const auto ms = entity->pathDurationMs())
+                    entity->setSplineArc(data.verticalAcceleration, data.parabolicStartTime, *ms);
+            }
         } else {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
@@ -2358,6 +2365,17 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
         entity->faceAlongMove(finalFacing,
                               keepsFacing ? std::optional<float>(facingBefore) : std::nullopt,
                               inverted);
+        // The target as it stands where the move ends (0x006eb0b0).
+        if (data.moveType == 3 && wotlkSplineFlags) {
+            entity->faceOnArrival([this, guid = data.facingTarget](const glm::vec3& at) -> std::optional<float> {
+                const auto target = owner_.getEntityManager().getEntity(guid);
+                if (!target) return std::nullopt;
+                const float dx = target->getX() - at.x;
+                const float dy = target->getY() - at.y;
+                if (std::abs(dx) <= 0.01f && std::abs(dy) <= 0.01f) return std::nullopt;
+                return std::atan2(-dy, dx);
+            });
+        }
         // Forward along it - backward on an inverted one - until it ends,
         // unless it is cyclic (0x006eb680, 0x006eb0b0).
         entity->setMonsterMoveFlags(
@@ -4387,7 +4405,9 @@ void MovementHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
         // (0x004f4460). So its ends go where the transport is now, and a
         // move on a moving deck stays on it.
         if (entity->isActivelyMoving() && onMoveSpline(childGuid)) {
-            if (attachment.moveFromLocal) {
+            if (entity->onFramedPath()) {
+                if (const auto frame = transportFrame(attachment.transportGuid)) entity->setMoveFrame(*frame);
+            } else if (attachment.moveFromLocal) {
                 auto* transports = owner_.getTransportManager();
                 entity->setMoveEnds(
                     transports->getPlayerWorldPosition(attachment.transportGuid, *attachment.moveFromLocal),
@@ -4576,6 +4596,141 @@ void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splin
     // Those that ran out are of no more use.
     if (moveSplines_.size() > 256)
         std::erase_if(moveSplines_, [now](const auto& kv) { return !vehicle::moveSplineRunning(kv.second, now); });
+}
+
+std::optional<glm::mat4> MovementHandler::transportFrame(uint64_t transportGuid) const {
+    auto* transports = owner_.getTransportManager();
+    if (!transports || !transports->getTransport(transportGuid)) return std::nullopt;
+    const auto at = [&](const glm::vec3& wire) {
+        return transports->getPlayerWorldPosition(transportGuid, transports->serverToTransportLocal(transportGuid, wire));
+    };
+    const glm::vec3 origin = at(glm::vec3(0.0f));
+    glm::mat4 frame(1.0f);
+    frame[0] = glm::vec4(at(glm::vec3(1.0f, 0.0f, 0.0f)) - origin, 0.0f);
+    frame[1] = glm::vec4(at(glm::vec3(0.0f, 1.0f, 0.0f)) - origin, 0.0f);
+    frame[2] = glm::vec4(at(glm::vec3(0.0f, 0.0f, 1.0f)) - origin, 0.0f);
+    frame[3] = glm::vec4(origin, 1.0f);
+    return frame;
+}
+
+void MovementHandler::takeBlockSpline(const UpdateBlock& block, const std::shared_ptr<Entity>& entity,
+                                      uint32_t queuedMs) {
+    if (isPreWotlk() || !entity || !entity->isUnit() || !block.hasMovement) return;
+    // Whatever it was on is gone (0x006f1520: 0x0098b730, or overwritten).
+    moveSplines_.erase(block.guid);
+    if (!block.spline) return;
+    const SplineBlockData& spline = *block.spline;
+    const bool self = block.guid == owner_.getPlayerGuid();
+    // Only a unit whose flags say forward or back is moved along it
+    // (0x0098ca00); without any way of moving it is not stepped at all
+    // (0x006f1520 -> 0x006eaf50(1)).
+    if ((block.moveFlags & 0x3u) == 0) return;
+    // On a transport the points are on it. A vehicle's passenger is drawn in
+    // its seat, and the player's own riding is its own.
+    const bool onTransport = block.onTransport && block.transportGuid != 0;
+    if (onTransport) {
+        const auto carrier = owner_.getEntityManager().getEntity(block.transportGuid);
+        if (self || (carrier && carrier->isUnit()) || vehicle::isVehicleGuid(block.transportGuid) ||
+            vehicle::isPlayerGuid(block.transportGuid)) {
+            return;
+        }
+    }
+
+    const auto place = [onTransport](const glm::vec3& wire) {
+        return onTransport ? wire : core::coords::serverToCanonical(wire);
+    };
+    Entity::BlockSpline run;
+    run.points.reserve(spline.waypoints.size());
+    for (const glm::vec3& point : spline.waypoints) run.points.push_back(place(point));
+    run.endPoint = place(spline.endPoint);
+    run.curved = (spline.splineFlags & SplineFlagWotlk::UNCOMPRESSED_MASK) != 0;
+    run.curvedLengths = spline.splineMode != 0;
+    run.cyclic = (spline.splineFlags & SplineFlagWotlk::CYCLIC) != 0;
+    run.enterCycle = run.cyclic && (spline.splineFlags & SplineFlagWotlk::ENTER_CYCLE) != 0;
+    run.framed = onTransport;
+    run.durationMs = spline.duration;
+    run.durationFactor = spline.durationFactor;
+    run.nextDurationFactor = spline.nextDurationFactor;
+    // It began as long before the block was read as the block says
+    // (0x004f4b50: +0x24 = now - passed).
+    run.passedMs = spline.timePassed + queuedMs;
+    run.arcs = spline.hasParabolic;
+    run.arcAcceleration = spline.verticalAcceleration;
+    run.arcStartMs = spline.parabolicStartTime;
+    if ((spline.splineFlags & (SplineFlagWotlk::FALLING | SplineFlagWotlk::PARABOLIC)) == SplineFlagWotlk::FALLING) {
+        // From where its fall began (+0x84), which only a block with FALLING
+        // says (0x00988990); without it the unit is at the end at once.
+        if (block.moveFlags & static_cast<uint32_t>(MovementFlags::FALLING)) {
+            run.fallTop = (onTransport ? block.transportZ : block.z) +
+                          fallDistance(static_cast<float>(block.fallTime) * 0.001f, block.fallVerticalSpeed, false);
+        } else {
+            run.over = true;
+        }
+    }
+    const uint32_t durationMs = Entity::scaledDuration(run.durationMs, run.durationFactor);
+    if (run.over) run.passedMs = std::max(run.passedMs, durationMs);
+
+    noteMoveSpline(block.guid, true, spline.splineFlags, durationMs, spline.splineId);
+    const auto kept = moveSplines_.find(block.guid);
+    if (kept == moveSplines_.end()) return;  // let go already (0x400)
+    kept->second.startMs -= run.passedMs;
+    // A frozen one is kept and goes nowhere (0x0098ca00).
+    if ((spline.splineFlags & SplineFlagWotlk::FROZEN) != 0) {
+        kept->second.cyclic = true;
+        return;
+    }
+
+    const float facingBefore = entity->getOrientation();
+    entity->startBlockSpline(run);
+    entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
+    const bool keepsFacing =
+        (spline.splineFlags & (SplineFlagWotlk::FALLING | SplineFlagWotlk::ORIENT_FIXED)) != 0;
+    const auto frame = onTransport ? transportFrame(block.transportGuid) : std::nullopt;
+    if (frame) entity->setMoveFrame(*frame);
+    entity->faceAlongMove(std::nullopt,
+                          keepsFacing || spline.waypoints.size() < 3 ? std::optional<float>(facingBefore) : std::nullopt,
+                          (spline.splineFlags & SplineFlagWotlk::ORIENT_INVERSED) != 0);
+    // Along the path once the transport it lies on is there.
+    if (onTransport && !frame) entity->setOrientation(facingBefore);
+    if (onTransport) {
+        auto* transports = owner_.getTransportManager();
+        const bool there = transports && transports->getTransport(block.transportGuid);
+        const glm::vec3 end = entity->framedEnd();
+        owner_.setTransportAttachment(block.guid, entity->getType(), block.transportGuid,
+                                      there ? transports->serverToTransportLocal(block.transportGuid, end) : end,
+                                      spline.hasFinalAngle, spline.finalAngle, !there);
+    }
+    // What it faces at the end (0x006eb0b0), the target as it is then.
+    const auto facingTo = [](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+        const float dx = to.x - from.x;
+        const float dy = to.y - from.y;
+        if (std::abs(dx) <= 0.01f && std::abs(dy) <= 0.01f) return std::nullopt;
+        return std::atan2(-dy, dx);
+    };
+    const uint64_t transportGuid = onTransport ? block.transportGuid : 0;
+    if (spline.hasFinalAngle) {
+        entity->faceOnArrival([this, transportGuid, angle = spline.finalAngle](const glm::vec3&) -> std::optional<float> {
+            if (transportGuid == 0) return core::coords::serverToCanonicalYaw(angle);
+            auto* transports = owner_.getTransportManager();
+            return transport_local::worldYaw(
+                transports ? transports->transportFacing(transportGuid).value_or(0.0f) : 0.0f, angle);
+        });
+    } else if (spline.hasFinalTarget) {
+        entity->faceOnArrival([this, facingTo, guid = spline.finalTarget](const glm::vec3& at) -> std::optional<float> {
+            const auto target = owner_.getEntityManager().getEntity(guid);
+            if (!target) return std::nullopt;
+            return facingTo(at, glm::vec3(target->getX(), target->getY(), target->getZ()));
+        });
+    } else if (spline.hasFinalPoint) {
+        entity->faceOnArrival([this, facingTo, transportGuid, spot = spline.finalPoint](const glm::vec3& at) -> std::optional<float> {
+            if (transportGuid == 0) return facingTo(at, core::coords::serverToCanonical(spot));
+            const auto frame = transportFrame(transportGuid);
+            if (!frame) return std::nullopt;
+            return facingTo(at, glm::vec3(*frame * glm::vec4(spot, 1.0f)));
+        });
+    }
+    // Its flags are the block's, and arriving takes forward and back off.
+    entity->setMonsterMoveFlags(block.moveFlags, !run.cyclic);
 }
 
 bool MovementHandler::onMoveSpline(uint64_t guid) {
