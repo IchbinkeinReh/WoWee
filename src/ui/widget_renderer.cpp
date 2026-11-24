@@ -3515,17 +3515,12 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // button, and this is the label, so it comes from the parent - and
             // only while that parent is the frame being held.
             float pushX = 0.0f, pushY = 0.0f;
-            if (const uint32_t held = tree.pressedWidget(); held != 0) {
-                if (const Widget* owner = tree.get(w->parent)) {
-                    if (owner->id == held &&
-                        (owner->pushedTextOffsetX != 0.0f ||
-                         owner->pushedTextOffsetY != 0.0f)) {
-                        pushX = owner->pushedTextOffsetX * s;
-                        // Down the screen for a negative y, as with the shadow:
-                        // the interface counts y upward and this draws downward.
-                        pushY = -owner->pushedTextOffsetY * s;
-                    }
-                }
+            // Pushed by the mouse or by SetButtonState (0x0096f4a0).
+            if (const Widget* owner = tree.get(w->parent); owner && owner->enabled && owner->pushed) {
+                pushX = owner->pushedTextOffsetX * s;
+                // Down the screen for a negative y, as with the shadow:
+                // the interface counts y upward and this draws downward.
+                pushY = -owner->pushedTextOffsetY * s;
             }
             const float boxW = x1 - x0, boxH = y1 - y0;
             // Too long, on one line, for the box it was given: cut at the end

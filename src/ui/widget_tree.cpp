@@ -123,7 +123,6 @@ void WidgetTree::reset() {
     // something else. A drag or a focus held across the reset would be held on
     // whatever frame the new load happens to give that number to.
     hoveredId_ = 0;
-    pressedId_ = 0;
     movingWid_ = 0;
     sizingWid_ = 0;
     sizingPoint_.clear();
@@ -1440,23 +1439,8 @@ bool WidgetTree::buttonArtVisible(const Widget& w) const {
         if (!a) break;
         at = a->parent;
     }
-    bool pressed = false;
-    for (uint32_t at = pressedId_; at != 0; ) {
-        if (at == owner->id) { pressed = true; break; }
-        const Widget* a = get(at);
-        if (!a) break;
-        at = a->parent;
-    }
-
-    // A state asked for outright wins over what the cursor is doing.
-    switch (owner->forcedState) {
-        case Widget::Forced::Pushed:   pressed = true;  break;
-        case Widget::Forced::Normal:   pressed = false; break;
-        case Widget::Forced::Disabled: break;
-        case Widget::Forced::None:     break;
-    }
-    const bool usable = owner->enabled &&
-                        owner->forcedState != Widget::Forced::Disabled;
+    const bool pressed = owner->pushed;
+    const bool usable = owner->enabled;
 
     switch (w.buttonArt) {
         case ButtonArt::Highlight:       return (hovered || owner->highlightLocked) && usable;

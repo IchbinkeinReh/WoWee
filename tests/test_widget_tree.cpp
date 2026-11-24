@@ -802,7 +802,7 @@ TEST_CASE("A button shows one state texture, not all of them",
     };
 
     // Idle: normal only.
-    tree.setInteraction(0, 0);
+    tree.setInteraction(0);
     tree.layout(1024.0f, 768.0f);
     REQUIRE(drawn(normal));
     REQUIRE_FALSE(drawn(pushed));
@@ -811,20 +811,21 @@ TEST_CASE("A button shows one state texture, not all of them",
 
     // Hovered: the highlight joins it. The cursor lands on the button's own
     // art rather than the button, so hovering a child must count.
-    tree.setInteraction(normal, 0);
+    tree.setInteraction(normal);
     tree.layout(1024.0f, 768.0f);
     REQUIRE(drawn(highlight));
     REQUIRE(drawn(normal));
 
     // Held: pushed replaces normal.
-    tree.setInteraction(button, button);
+    tree.setInteraction(button);
+    tree.get(button)->mouseButtonState(true);
     tree.layout(1024.0f, 768.0f);
     REQUIRE(drawn(pushed));
     REQUIRE_FALSE(drawn(normal));
 
     // Disabled: only the disabled art, and no highlight however hovered.
     tree.get(button)->enabled = false;
-    tree.setInteraction(button, 0);
+    tree.setInteraction(button);
     tree.layout(1024.0f, 768.0f);
     REQUIRE(drawn(disabled));
     REQUIRE_FALSE(drawn(normal));
@@ -859,14 +860,14 @@ TEST_CASE("A state the interface asked for outlasts the cursor",
     };
 
     // Held down by the interface, with the cursor nowhere near it.
-    tree.get(button)->forcedState = Widget::Forced::Pushed;
-    tree.setInteraction(0, 0);
+    tree.get(button)->setButtonState(Widget::ButtonState::Pushed, true);
+    tree.setInteraction(0);
     tree.layout(1024.0f, 768.0f);
     REQUIRE(drawn(pushed));
     REQUIRE_FALSE(drawn(normal));
 
     // Released again, and the cursor still elsewhere.
-    tree.get(button)->forcedState = Widget::Forced::Normal;
+    tree.get(button)->setButtonState(Widget::ButtonState::Normal, false);
     tree.layout(1024.0f, 768.0f);
     REQUIRE(drawn(normal));
     REQUIRE_FALSE(drawn(pushed));
@@ -876,7 +877,7 @@ TEST_CASE("A state the interface asked for outlasts the cursor",
     tree.get(button)->highlightLocked = true;
     tree.layout(1024.0f, 768.0f);
     REQUIRE(drawn(highlight));
-    tree.get(button)->forcedState = Widget::Forced::Disabled;
+    tree.get(button)->setButtonState(Widget::ButtonState::Disabled, false);
     tree.layout(1024.0f, 768.0f);
     REQUIRE_FALSE(drawn(highlight));
 }
@@ -3610,4 +3611,68 @@ TEST_CASE("a label between two sides breaks its lines there", "[widgets]") {
     CHECK(textWrapWidth(*tree.get(label)) == 70.0f);
     tree.get(label)->autoSized = true;
     CHECK(textWrapWidth(*tree.get(label)) == 0.0f);
+}
+
+TEST_CASE("a button's states are the mouse's and SetButtonState's", "[widgets]") {
+    using S = Widget::ButtonState;
+    Widget b;
+    CHECK(b.buttonState() == S::Normal);
+    b.mouseButtonState(true);
+    CHECK(b.buttonState() == S::Pushed);
+    b.mouseButtonState(false);
+    CHECK(b.buttonState() == S::Normal);
+    // What was asked for gives way to the mouse, unless it is locked.
+    b.setButtonState(S::Pushed, false);
+    b.mouseButtonState(false);
+    CHECK(b.buttonState() == S::Normal);
+    b.setButtonState(S::Pushed, true);
+    b.mouseButtonState(false);
+    CHECK(b.buttonState() == S::Pushed);
+    b.setButtonState(S::Normal, true);
+    b.mouseButtonState(true);
+    CHECK(b.buttonState() == S::Normal);
+    b.setButtonState(S::Normal, false);
+    b.mouseButtonState(true);
+    CHECK(b.buttonState() == S::Pushed);
+    // Disabled: not by the mouse, and the state given enables it.
+    CHECK(b.setEnabled(false));
+    CHECK_FALSE(b.setEnabled(false));
+    CHECK(b.buttonState() == S::Disabled);
+    b.mouseButtonState(true);
+    CHECK(b.setEnabled(true));
+    CHECK(b.buttonState() == S::Normal);
+    b.setButtonState(S::Disabled, false);
+    CHECK_FALSE(b.enabled);
+    b.setButtonState(S::Normal, false);
+    CHECK(b.enabled);
+    // A lock ends with the next state, and with Enable and Disable.
+    b.setButtonState(S::Pushed, true);
+    CHECK(b.setEnabled(false));
+    CHECK(b.setEnabled(true));
+    b.mouseButtonState(true);
+    CHECK(b.buttonState() == S::Pushed);
+}
+
+TEST_CASE("a button's click does not nest, nor come of a disabled one", "[widgets]") {
+    Widget b;
+    CHECK(b.beginClick());
+    CHECK_FALSE(b.beginClick());
+    b.inClick = false;
+    CHECK(b.beginClick());
+    b.inClick = false;
+    b.setEnabled(false);
+    CHECK_FALSE(b.beginClick());
+}
+
+TEST_CASE("a double click is a release soon after a click, with a handler for one", "[widgets]") {
+    Widget b;
+    CHECK_FALSE(b.releaseIsDouble(true, 10.0));
+    CHECK(b.releaseIsDouble(true, 10.25));
+    // Not the third of three.
+    CHECK_FALSE(b.releaseIsDouble(true, 10.28));
+    CHECK(b.releaseIsDouble(true, 10.5));
+    CHECK_FALSE(b.releaseIsDouble(true, 11.0));
+    CHECK_FALSE(b.releaseIsDouble(true, 11.4));   // too late
+    CHECK_FALSE(b.releaseIsDouble(false, 11.5));  // without a handler two clicks
+    CHECK(b.releaseIsDouble(true, 11.9, 0.5));
 }

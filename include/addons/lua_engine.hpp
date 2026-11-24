@@ -420,6 +420,16 @@ private:
     bool runBindingScript(const std::string& command, bool down);
 
     void callFrameScript(uint32_t wid, const char* script, const char* arg = nullptr);
+    /// A click of a button (0x0096fd70; a check button's 0x009623c0 turns it
+    /// over first): PreClick, OnClick and PostClick, with the mouse button and
+    /// whether it is the press - none where the button is disabled or in a
+    /// click already.
+public:
+    void clickButton(uint32_t wid, const char* button, bool down);
+private:
+    /// Whether a button is registered for the press, or the release, of a
+    /// mouse button: the left one's release where nothing is.
+    bool frameTakesClick(uint32_t wid, const char* button, bool down);
     void tellVisibility(uint32_t id, bool up);
     /// The same, with a number. A handler that compares its argument against
     /// zero cannot be handed a numeric string.
@@ -479,7 +489,7 @@ public:
     [[nodiscard]] bool mouseOverFrameXml() const { return lastMouseHit_ != 0; }
     /// A pointer less steady than a mouse - a headset's controller - wants a
     /// press to travel further before it is a drag, and a second click more
-    /// time to be a double. The defaults are WoW's (4 units, 0.4 s).
+    /// time to be a double. The defaults are WoW's (4 units, 0.3 s).
     void setPointerTolerance(float dragThreshold, double doubleClickSeconds) {
         dragThreshold_ = dragThreshold;
         doubleClickSeconds_ = doubleClickSeconds;
@@ -506,12 +516,9 @@ public:
 private:
 
     uint32_t hoverWid_ = 0;
-    /// The last frame clicked and when, so a second click on it can be told
-    /// from the first. WoW's threshold, near enough.
-    uint32_t lastClickWid_ = 0;
-    double   lastClickTime_ = 0.0;
-    /// WoW's 0.4 s, unless setPointerTolerance says otherwise.
-    double   doubleClickSeconds_ = 0.4;
+    /// How long after a click a second one is a double click: 300 ms
+    /// (0x0096fb60), unless setPointerTolerance says otherwise.
+    double   doubleClickSeconds_ = 0.3;
     /// How far a press travels before it is a drag, in interface units: 4,
     /// as WoW draws the line, unless setPointerTolerance says otherwise.
     float    dragThreshold_ = 4.0f;

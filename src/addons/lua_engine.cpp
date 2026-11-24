@@ -992,33 +992,13 @@ static int lua_Frame_SetID(lua_State* L) {
 // an addon's is not tainted by it.
 //
 // A scripted click flips a check button exactly as a real one does, so the
-// two paths cannot disagree about what the button now says. The scripts are
-// read first because a frame with none is not clicked at all - and then
-// neither is it toggled.
+// two paths cannot disagree about what the button now says.
 static int lua_Frame_Click(lua_State* L) {
+    // 0x00978260: "LeftButton" and the release where not given.
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* button = luaL_optstring(L, 2, "LeftButton");
-    const bool hasDown = !lua_isnoneornil(L, 3);
-    const bool down = lua_toboolean(L, 3) != 0;
-    taint::Quiet quiet;
-    lua_getfield(L, 1, "__scripts");
-    const bool hasScripts = lua_istable(L, -1);
-    lua_pop(L, 1);
-    if (!hasScripts) return 0;
-    if (auto* w = widgetOf(L, 1); w && w->enabled && w->objectType == "CheckButton")
-        w->checked = !w->checked;
-    lastClickButton() = button;
-    for (const char* script : {"PreClick", "OnClick", "PostClick"}) {
-        lua_getfield(L, 1, "__scripts");
-        lua_getfield(L, -1, script);
-        if (!lua_isfunction(L, -1)) { lua_pop(L, 2); continue; }
-        lua_pushvalue(L, 1);
-        lua_pushstring(L, button);
-        if (hasDown) lua_pushboolean(L, down);
-        else lua_pushnil(L);
-        if (pcallScript(L, script, 3, 0) != 0) recordScriptError(L, script);
-        lua_pop(L, 1);   // __scripts
-    }
+    const std::string button = lua_isstring(L, 2) ? lua_tostring(L, 2) : "LeftButton";
+    const bool down = luaClientSwitchArg(L, 3, false);
+    if (auto* e = engineFrom(L)) e->clickButton(widgetIdOf(L, 1), button.c_str(), down);
     return 0;
 }
 
@@ -2687,19 +2667,20 @@ int lua_Button_SetButtonState(lua_State* L) {
     // 0x00977280: one of DISABLED, NORMAL or PUSHED in any case (0x00976fd0),
     // and anything else - no argument among it - the usage line.
     const char* state = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
-    using F = wowee::ui::Widget::Forced;
-    if      (state && sameWord(state, "PUSHED"))   w->forcedState = F::Pushed;
-    else if (state && sameWord(state, "DISABLED")) w->forcedState = F::Disabled;
-    else if (state && sameWord(state, "NORMAL"))   w->forcedState = F::Normal;
+    using S = wowee::ui::Widget::ButtonState;
+    const bool lock = luaClientSwitchArg(L, 3, false);
+    if      (state && sameWord(state, "PUSHED"))   w->setButtonState(S::Pushed, lock);
+    else if (state && sameWord(state, "DISABLED")) w->setButtonState(S::Disabled, lock);
+    else if (state && sameWord(state, "NORMAL"))   w->setButtonState(S::Normal, lock);
     else return luaL_error(L, "Usage: %s:SetButtonState(\"state\", lock)", usageName(L, 1));
     return 0;
 }
 int lua_Button_GetButtonState(lua_State* L) {
+    // 0x009771d0, the mouse's doing as well.
     const auto* w = widgetOf(L, 1);
-    using F = wowee::ui::Widget::Forced;
-    const F f = w ? w->forcedState : F::None;
-    lua_pushstring(L, f == F::Pushed ? "PUSHED"
-                    : f == F::Disabled ? "DISABLED" : "NORMAL");
+    using S = wowee::ui::Widget::ButtonState;
+    const S state = w ? w->buttonState() : S::Normal;
+    lua_pushstring(L, state == S::Pushed ? "PUSHED" : state == S::Disabled ? "DISABLED" : "NORMAL");
     return 1;
 }
 int lua_Button_LockHighlight(lua_State* L) {
@@ -7277,8 +7258,7 @@ int lua_Minimap_GetPingPosition(lua_State* L) {
 int lua_Button_Enable(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
-    if (!w || w->enabled) return 0;
-    w->enabled = true;
+    if (!w || !w->setEnabled(true)) return 0;
     taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
@@ -7296,8 +7276,7 @@ int lua_Button_Enable(lua_State* L) {
 int lua_Button_Disable(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
-    if (!w || !w->enabled) return 0;
-    w->enabled = false;
+    if (!w || !w->setEnabled(false)) return 0;
     taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
@@ -11209,8 +11188,6 @@ void LuaEngine::shutdown() {
         // path loads the interface again on a state it thought was empty.
         widgets_.reset();
         hoverWid_ = 0;
-        lastClickWid_ = 0;
-        lastClickTime_ = 0.0;
         focusedWid_ = 0;
         draggingWid_ = 0;
         widgets_.setDraggedWidget(draggingWid_);
@@ -17030,6 +17007,10 @@ void LuaEngine::writeLuaErrorReport() const {
 /// the check every frame would answer a right-click, which is a menu opening
 /// under a cursor that never asked for one.
 bool LuaEngine::frameAcceptsClick(uint32_t wid, const char* button) {
+    return frameTakesClick(wid, button, false) || frameTakesClick(wid, button, true);
+}
+
+bool LuaEngine::frameTakesClick(uint32_t wid, const char* button, bool down) {
     lua_getglobal(L_, "__WoweeFramesByWid");
     if (!lua_istable(L_, -1)) { lua_pop(L_, 1); return false; }
     lua_pushinteger(L_, static_cast<lua_Integer>(wid));
@@ -17037,29 +17018,39 @@ bool LuaEngine::frameAcceptsClick(uint32_t wid, const char* button) {
     if (!lua_istable(L_, -1)) { lua_pop(L_, 2); return false; }
 
     lua_getfield(L_, -1, "__clicks");
-    bool accepts;
+    bool accepts = !down && std::strcmp(button, "LeftButton") == 0;
     if (lua_istable(L_, -1)) {
-        // Registered explicitly: either edge counts, since this only models
-        // the release. "Any" means any button, which is what every action
-        // button in the interface registers - ActionButton_OnLoad calls
-        // RegisterForClicks("AnyUp"), and matching only LeftButtonUp meant no
-        // action button on the bar ever received a click.
-        const std::string names[] = {
-            std::string(button) + "Up", std::string(button) + "Down",
-            "AnyUp", "AnyDown"
-        };
+        // "Any" means any button, which is what every action button in the
+        // interface registers - ActionButton_OnLoad calls
+        // RegisterForClicks("AnyUp").
         accepts = false;
-        for (const std::string& n : names) {
+        for (const std::string& n : {std::string(button) + (down ? "Down" : "Up"), std::string(down ? "AnyDown" : "AnyUp")}) {
             lua_getfield(L_, -1, n.c_str());
-            accepts = lua_toboolean(L_, -1) != 0;
+            accepts = accepts || lua_toboolean(L_, -1) != 0;
             lua_pop(L_, 1);
-            if (accepts) break;
         }
-    } else {
-        accepts = (std::strcmp(button, "LeftButton") == 0);
     }
     lua_pop(L_, 3);
     return accepts;
+}
+
+void LuaEngine::clickButton(uint32_t wid, const char* button, bool down) {
+    auto* w = widgets_.get(wid);
+    if (!L_ || !w) return;
+    taint::Quiet quiet;   // as dispatchText
+    if (w->objectType == "CheckButton") w->checked = !w->checked;
+    if (!w->beginClick()) return;
+    const std::string name = button, was = lastClickButton();
+    lastClickButton() = name;
+    for (const char* script : {"PreClick", "OnClick", "PostClick"}) {
+        const int handler = beginFrameScript(wid, script);
+        if (handler == 0) continue;
+        lua_pushstring(L_, name.c_str());
+        lua_pushboolean(L_, down);
+        finishFrameScript(wid, script, handler, 3);
+    }
+    lastClickButton() = was;
+    if ((w = widgets_.get(wid)) != nullptr) w->inClick = false;
 }
 
 namespace {
@@ -18014,6 +18005,7 @@ void LuaEngine::frameHidden(uint32_t id) {
 }
 
 void LuaEngine::tellVisibility(uint32_t id, bool up) {
+    if (auto* button = widgets_.get(id); button && !up) button->mouseButtonState(false);   // 0x0096f410
     callFrameScript(id, up ? "OnShow" : "OnHide");
     const auto* w = widgets_.get(id);
     if (!w || !w->isEditBox) return;
@@ -18347,7 +18339,7 @@ void LuaEngine::releaseMouseHover() {
         callFrameScript(hoverWid_, "OnLeave");
         hoverWid_ = 0;
     }
-    widgets_.setInteraction(0, 0);
+    widgets_.setInteraction(0);
     // Nothing is under the cursor and nothing is holding it, which is the
     // camera's cue that it may turn again.
     ui::frameXmlNoteMouseOwned(false);
@@ -18462,7 +18454,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     // depends on both, and the draw order is collected during layout, which has
     // already happened by the time this runs - so this frame's press shows on
     // the next, which at sixty frames a second is not a wait anyone sees.
-    widgets_.setInteraction(hit, buttonDown_[0] ? pressedWid_[0] : 0);
+    widgets_.setInteraction(hit);
 
     // Tell the rest of the client the interface has the cursor, so the camera
     // does not turn while a bag item is being clicked or dragged. A press keeps
@@ -18599,6 +18591,9 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             draggingWid_ = owner;
             widgets_.setDraggedWidget(draggingWid_);
             draggingButton_ = i;
+            // No longer pushed, and not clicked as it is let go (0x0096f440).
+            for (uint32_t id : {owner, pressedWid_[i]})
+                if (auto* w = widgets_.get(id)) w->mouseButtonState(false);
             callFrameScript(draggingWid_, "OnDragStart",
                             kMouseButtonNames[i]);
             const auto* dw = widgets_.get(draggingWid_);
@@ -18782,8 +18777,20 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     heldByTitle = true;
                 }
             }
-            if (!heldByTitle && pressedWid_[i] != 0)
+            if (!heldByTitle && pressedWid_[i] != 0) {
                 callFrameScript(pressedWid_[i], "OnMouseDown", b.name);
+                // A button (0x0096fa80): clicked as it goes down where it is
+                // registered for that, and pushed.
+                if (const auto* w = widgets_.get(pressedWid_[i]); w && objectTypeMatches(w->objectType, "Button")) {
+                    if (w->enabled && frameTakesClick(pressedWid_[i], b.name, true)) {
+                        taint::HardwareEvent hardware;
+                        wowee::addons::currentClickButton() = b.name;
+                        clickButton(pressedWid_[i], b.name, true);
+                        wowee::addons::currentClickButton().clear();
+                    }
+                    if (auto* still = widgets_.get(pressedWid_[i])) still->mouseButtonState(true);
+                }
+            }
         } else if (!b.down && buttonDown_[i]) {
             buttonDown_[i] = false;
             // Before anything asks which frame was pressed, because a link is
@@ -18958,59 +18965,36 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                 // a release on the same bar would compare an ancestor against a
                 // child and never match.
                 const uint32_t releasedOn = clickOwnerOf(hit, b.name);
+                const bool onIt = !tookLink && !wasDragged && pressedWid_[i] == releasedOn;
 
-                if (!tookLink && !wasDragged && pressedWid_[i] == releasedOn &&
-                    (!pressed || pressed->enabled) && takesIt) {
-                    // PreClick and PostClick bracket the click. Secure buttons
-                    // use them to set up and tear down around an action, and
-                    // an addon that only has PostClick would otherwise never
-                    // hear that its button was used.
-                    // A check button flips itself before its handler runs,
-                    // and nothing here did it - checked moved only when
-                    // Lua called SetChecked. Handlers that read their own
-                    // state to decide what a click meant therefore saw the
-                    // same answer every time.
+                if (auto* w = widgets_.get(pressedWid_[i]); w && objectTypeMatches(w->objectType, "Button")) {
+                    // 0x0096fb60: while it is pushed, its click - or its double
+                    // click in place of one - where it is registered for the
+                    // release; and then it is not pushed any more.
                     //
-                    // The mail inbox is the clearest of them:
-                    // InboxFrame_OnClick opens the letter when
-                    // self:GetChecked() and hides OpenMailFrame when not,
-                    // so every click on a message took the closing branch
-                    // and no mail could be read. Every options checkbox
-                    // reading GetChecked in its OnClick had the same fault.
-                    //
-                    // Before PreClick, which is where WoW does it, so a
-                    // handler calling SetChecked itself still has the last
-                    // word.
-                    if (auto* cb = widgets_.get(pressedWid_[i]);
-                        cb && cb->enabled && cb->objectType == "CheckButton") {
-                        cb->checked = !cb->checked;
-                    }
                     // A hardware event for the length of the click and no
                     // longer (0x0096fa80): the only time a protected action
                     // of that sort may be taken by insecure code.
-                    {
+                    if (onIt && w->buttonState() == ui::Widget::ButtonState::Pushed &&
+                        frameTakesClick(pressedWid_[i], b.name, false)) {
                         taint::HardwareEvent hardware;
-                        lastClickButton() = b.name;
-                        callFrameScript(pressedWid_[i], "PreClick", b.name);
-                        callFrameScript(pressedWid_[i], "OnClick", b.name);
-                        callFrameScript(pressedWid_[i], "PostClick", b.name);
+                        if (w->releaseIsDouble(frameHasScript(pressedWid_[i], "OnDoubleClick"), core::appTimeSeconds(),
+                                               doubleClickSeconds_)) {
+                            if (w->beginClick()) {
+                                const std::string was = lastClickButton();
+                                lastClickButton() = b.name;
+                                callFrameScript(pressedWid_[i], "OnDoubleClick", b.name);
+                                lastClickButton() = was;
+                                if (auto* still = widgets_.get(pressedWid_[i])) still->inClick = false;
+                            }
+                        } else {
+                            clickButton(pressedWid_[i], b.name, false);
+                        }
                     }
-
-                    // A second click on the same frame, soon enough after the
-                    // first, is also a double click - WoW sends both, and the
-                    // frames that care about one usually care about the other.
-                    const double now = core::appTimeSeconds();
-                    if (pressedWid_[i] == lastClickWid_ &&
-                        (now - lastClickTime_) <= doubleClickSeconds_) {
-                        taint::HardwareEvent hardware;   // 0x0096fb60
-                        callFrameScript(pressedWid_[i], "OnDoubleClick", b.name);
-                        // Cleared, or a third click reads as a second double.
-                        lastClickWid_ = 0;
-                        lastClickTime_ = 0.0;
-                    } else {
-                        lastClickWid_ = pressedWid_[i];
-                        lastClickTime_ = now;
-                    }
+                    if (auto* still = widgets_.get(pressedWid_[i])) still->mouseButtonState(false);
+                } else if (onIt && (!pressed || pressed->enabled) && takesIt) {
+                    taint::HardwareEvent hardware;
+                    clickButton(pressedWid_[i], b.name, false);
                 }
                 // The other half of the press report: a click that lands and a
                 // click that is handled are different things, and the gap

@@ -438,11 +438,53 @@ struct Widget {
     /// Whether a check button is checked, which decides between its checked
     /// art and none.
     bool  checked = false;
-    /// A state the interface asked for outright, overriding what the mouse is
-    /// doing. ActionButton_UpdateState holds a toggled ability's button down
-    /// this way, and nothing about the cursor should undo that.
-    enum class Forced : uint8_t { None, Normal, Pushed, Disabled };
-    Forced forcedState = Forced::None;
+    /// A button's state (+0x2a8): disabled, normal or pushed - by the mouse
+    /// or by SetButtonState, whose lock keeps it as it is whatever the mouse
+    /// does -, and whether a click of it is under way, which does not nest.
+    enum class ButtonState : uint8_t { Disabled, Normal, Pushed };
+    bool pushed = false;
+    bool stateLocked = false;
+    bool inClick = false;
+    /// When it was last clicked, for a double click; 0 after one.
+    double lastClickAt = 0.0;
+    [[nodiscard]] ButtonState buttonState() const {
+        return !enabled ? ButtonState::Disabled : pushed ? ButtonState::Pushed : ButtonState::Normal;
+    }
+    /// 0x0096fe30, the state given and the lock with it.
+    void setButtonState(ButtonState state, bool lock) {
+        stateLocked = lock;
+        enabled = state != ButtonState::Disabled;
+        pushed = state == ButtonState::Pushed;
+    }
+    /// The mouse down on it (0x0096fa80), and up, dragging or the button
+    /// hidden (0x0096fb60, 0x0096f440, 0x0096f410).
+    void mouseButtonState(bool down) {
+        if (enabled && !stateLocked) pushed = down;
+    }
+    /// 0x00970440: whether that is a change, for OnEnable or OnDisable.
+    bool setEnabled(bool on) {
+        if (on == enabled) return false;
+        setButtonState(on ? ButtonState::Normal : ButtonState::Disabled, false);
+        return true;
+    }
+    /// Whether a click begins (0x0096fd70): not of a button that is disabled,
+    /// nor within a click of it. inClick goes as it ends.
+    bool beginClick() {
+        if (!enabled || inClick) return false;
+        inClick = true;
+        return true;
+    }
+    /// A release on it at `now`, which clicks it: whether that is a double
+    /// click instead (0x0096fb60) - with a handler for one, within 300 ms of
+    /// the click before it.
+    bool releaseIsDouble(bool handlesDouble, double now, double limit = 0.3) {
+        if (handlesDouble && lastClickAt > 0.0 && now - lastClickAt <= limit) {
+            lastClickAt = 0.0;
+            return true;
+        }
+        lastClickAt = now;
+        return false;
+    }
     /// Highlight held on regardless of the cursor, which is how a selected tab
     /// stays lit once it has been clicked.
     bool  highlightLocked = false;
@@ -1447,14 +1489,7 @@ public:
     /// this - it is the only thing that knows what is under the cursor and
     /// what is being held - and the tree needs it to decide which of a
     /// button's textures to draw.
-    void setInteraction(uint32_t hovered, uint32_t pressed) {
-        hoveredId_ = hovered;
-        pressedId_ = pressed;
-    }
-    /// Which frame is being held, for anything that draws differently while a
-    /// button is down. The tree already chooses the pushed texture from this;
-    /// the label moves with it.
-    [[nodiscard]] uint32_t pressedWidget() const { return pressedId_; }
+    void setInteraction(uint32_t hovered) { hoveredId_ = hovered; }
     /// Which frame the cursor is over, for anything that draws differently
     /// under it - a button's label lightens in WoW, and that is a font object
     /// the template names rather than a colour the renderer invents.
@@ -1645,7 +1680,6 @@ private:
     /// Tooltips that have been given an owner, so the check is over a handful
     /// of frames rather than every widget in the tree.
     std::vector<uint32_t> ownedTooltips_;
-    uint32_t pressedId_ = 0;
 
     /// Whether a state texture should be drawn given what the mouse is doing.
     [[nodiscard]] bool buttonArtVisible(const Widget& w) const;
