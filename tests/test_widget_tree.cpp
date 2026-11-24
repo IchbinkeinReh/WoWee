@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <functional>
 #include <vector>
 
 using namespace wowee::ui;
@@ -3429,4 +3430,109 @@ TEST_CASE("A key goes to the topmost frame that has a script for it", "[widget][
     CHECK(topKeyboardFrame(tree, anyOf({under, popup})) == under);
     tree.get(under)->keyboardEnabled = false;
     CHECK(topKeyboardFrame(tree, anyOf({under, popup})) == 0);
+}
+
+namespace {
+
+// Show() and Hide() as the interface calls them, with what is told noted.
+struct Told {
+    WidgetTree& tree;
+    std::vector<std::string> log;
+    std::function<void(uint32_t, bool)> handler;
+
+    void tell(uint32_t id, bool up) {
+        log.push_back((up ? "+" : "-") + tree.get(id)->name);
+        if (handler) handler(id, up);
+    }
+    void show(uint32_t id) {
+        if (tree.get(id)->shown) return;
+        tree.get(id)->shown = true;
+        tree.showNow(id, [this](uint32_t f) { tell(f, true); });
+    }
+    void hide(uint32_t id) {
+        if (!tree.get(id)->shown) return;
+        tree.get(id)->shown = false;
+        tree.hideNow(id, [this](uint32_t f) { tell(f, false); });
+    }
+    std::string take() {
+        std::string out;
+        for (const auto& l : log) out += (out.empty() ? "" : " ") + l;
+        log.clear();
+        return out;
+    }
+};
+
+}  // namespace
+
+// 0x004918f0 and 0x00491830: everything that comes up or goes with a frame,
+// inside Show() and Hide(), those in a frame before it.
+TEST_CASE("A frame shown or hidden is told at once, after the frames in it", "[widget][visibility]") {
+    WidgetTree tree;
+    Told told{tree, {}, {}};
+    const uint32_t panel = tree.create(WidgetKind::Frame, tree.uiParentId(), "Panel");
+    const uint32_t first = tree.create(WidgetKind::Frame, panel, "First");
+    const uint32_t inner = tree.create(WidgetKind::Frame, first, "Inner");
+    const uint32_t second = tree.create(WidgetKind::Frame, panel, "Second");
+    const uint32_t art = tree.create(WidgetKind::Texture, panel, "Art");
+    tree.get(panel)->shown = false;
+    tree.get(second)->shown = false;
+
+    // In a hidden one, nothing: what is in it is told once it comes up.
+    told.show(second);
+    CHECK(told.take().empty());
+    told.show(panel);
+    CHECK(told.take() == "+Inner +First +Second +Panel");
+    told.show(panel);
+    CHECK(told.take().empty());
+
+    // Regions have no handlers.
+    told.hide(art);
+    told.show(art);
+    CHECK(told.take().empty());
+
+    told.hide(first);
+    CHECK(told.take() == "-Inner -First");
+    told.hide(panel);
+    CHECK(told.take() == "-Second -Panel");
+    told.show(first);
+    CHECK(told.take().empty());
+
+    // "Rebuild yourself": both, in the order they happened.
+    told.show(panel);
+    told.take();
+    told.hide(panel);
+    told.show(panel);
+    CHECK(told.take() == "-Inner -First -Second -Panel +Inner +First +Second +Panel");
+
+    // The screen's pass has none of it left to tell.
+    tree.layout(kScreenW, kScreenH);
+    for (const uint32_t id : {panel, first, inner, second}) CHECK(tree.get(id)->toldShown);
+}
+
+TEST_CASE("A handler that hides what it is in stops the rest coming up", "[widget][visibility]") {
+    WidgetTree tree;
+    Told told{tree, {}, {}};
+    const uint32_t panel = tree.create(WidgetKind::Frame, tree.uiParentId(), "Panel");
+    const uint32_t first = tree.create(WidgetKind::Frame, panel, "First");
+    const uint32_t second = tree.create(WidgetKind::Frame, panel, "Second");
+    tree.get(panel)->shown = false;
+    told.handler = [&](uint32_t id, bool up) {
+        if (id == first && up) told.hide(panel);
+    };
+    told.show(panel);
+    // The panel's own is run still, as the client runs it.
+    CHECK(told.take() == "+First -First -Panel +Panel");
+    CHECK_FALSE(tree.get(panel)->shown);
+    CHECK_FALSE(tree.get(panel)->toldShown);
+    CHECK_FALSE(tree.get(second)->toldShown);
+}
+
+TEST_CASE("A frame goes with one that was never told it is up", "[widget][visibility]") {
+    WidgetTree tree;
+    Told told{tree, {}, {}};
+    const uint32_t driver = tree.create(WidgetKind::Frame, tree.uiParentId(), "Driver");
+    const uint32_t panel = tree.create(WidgetKind::Frame, driver, "Panel");
+    tree.get(panel)->toldShown = true;
+    told.hide(driver);
+    CHECK(told.take() == "-Panel");
 }

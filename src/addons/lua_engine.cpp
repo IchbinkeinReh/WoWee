@@ -2060,7 +2060,18 @@ static int lua_Region_SetParent(lua_State* L) {
     if (tree) {
         const uint32_t id = widgetIdOf(L, 1);
         const uint32_t np = lua_istable(L, 2) ? widgetIdOf(L, 2) : 0;
-        if (id != 0) tree->setParent(id, np);
+        if (id != 0) {
+            // Hidden where it was and shown where it comes to (0x004911b0).
+            const auto* w = tree->get(id);
+            auto* engine = engineFrom(L);
+            const uint32_t to = np != 0 ? np : tree->rootId();
+            const bool moves = w && engine && w->kind == wowee::ui::WidgetKind::Frame && w->parent != to;
+            const bool wasUp = moves && tree->shownNow(id), wasTold = moves && w->toldShown;
+            if (wasTold) engine->frameHidden(id);
+            tree->setParent(id, np);
+            w = tree->get(id);
+            if (moves && w && w->shown && (wasTold || !wasUp)) engine->frameShown(id);
+        }
     }
     return 0;
 }
@@ -7355,83 +7366,13 @@ static void queueAnimFinished(lua_State* L, int frameIndex) {
     lua_pop(L, 1);
 }
 
-/// Whether every ancestor is shown, read off the flags rather than the layout.
-///
-/// Show and Hide both ask this, and they have to ask it the same way: a frame
-/// whose parent is hidden is not on screen either way round, and answering the
-/// two differently would fire one handler of a pair and not the other.
-static bool ancestorsShown(lua_State* L, const wowee::ui::Widget* w) {
-    auto* tree = wowee::addons::getWidgetTree(L);
-    if (!tree) return true;
-    for (uint32_t at = w->parent; at != 0;) {
-        const auto* p = tree->get(at);
-        if (!p) break;
-        if (!p->shown) return false;
-        at = p->parent;
-    }
-    return true;
-}
-
-/// Whether a script of this name is hooked to the frame at `frameIndex`.
-///
-/// The frame table is to hand here, so this reads it directly rather than
-/// going round by widget id the way LuaEngine::frameHasScript has to.
-static bool frameScriptSet(lua_State* L, int frameIndex, const char* name) {
-    const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
-    taint::Quiet quiet;   // see callScriptOnTable
-    lua_getfield(L, abs, "__scripts");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    lua_getfield(L, -1, name);
-    const bool has = lua_isfunction(L, -1);
-    lua_pop(L, 2);
-    return has;
-}
-
-/// Run a frame's OnShow now, from inside Show().
-///
-/// The visibility pass that normally fires it runs once a frame, and that is
-/// too late for anything whose next step depends on what the handler did.
-/// ContainerFrame_GenerateFrame is the case that showed it: it writes
-/// `bags[bagsShown + 1] = frame:GetName()`, anchors the list, and only then
-/// calls Show - and `bagsShown` is incremented by ContainerFrame_OnShow. With
-/// the handler deferred, every bag opened in the same breath wrote itself to
-/// index 1 over the last one, so the list never held more than one name and
-/// only that one was ever anchored. Opening the bags at a vendor put all of
-/// them in the same place, one on top of another.
-///
-/// The real client runs OnShow as part of Show, so this is the faithful
-/// order rather than a workaround for that one function.
-static void fireOnShowNow(lua_State* L, int frameIndex, wowee::ui::Widget* w) {
-    const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
-    taint::Quiet quiet;   // see callScriptOnTable
-    lua_getfield(L, abs, "__scripts");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
-    lua_getfield(L, -1, "OnShow");
-    if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return; }
-    lua_pushvalue(L, abs);                       // self
-    // Errors are reported the same way every other script call reports them
-    // rather than unwinding through Show.
-    if (pcallScript(L, "OnShow", 1, 0) != 0) {
-        LOG_WARNING("[Lua] OnShow error: ", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);                               // __scripts
-    w->onShowFired = true;
-}
-
 int lua_Region_Show(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
-    bool becameShown = false;
+    const bool becameShown = w && !w->shown;
     if (w) {
-        // Counted, not just set. A hide and a show in the same breath leave the
-        // flag where it started, and the pass that fires OnShow works by
-        // comparing against the last state it reported - so the rebuild the
-        // interface asked for is invisible to it. See Widget::shownToggles.
-        if (!w->shown && w->shownToggles < 200) ++w->shownToggles;
         // Owed a look from updateVisibility, which reads only marked frames.
         if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markVisibilityPending(w->id);
-        becameShown = !w->shown;
         w->shown = true;
         tooltipLineStringWritten(L, w);
     }
@@ -7450,53 +7391,18 @@ int lua_Region_Show(lua_State* L) {
     // the interface does not expect.
     queueAnimFinished(L, 1);
 
-    // Only when this call is what made it shown, and only when every ancestor
-    // is shown too - the same condition the deferred pass uses, read off the
-    // flags Show and Hide set rather than off the layout, which has not run.
-    // A clean show only. `panel:Hide(); panel:Show()` is the interface asking
-    // for a rebuild, and the deferred pass answers that pair together, in
-    // order, on purpose - Hide fires no handler of its own, so running OnShow
-    // here would put it before the OnHide that is owed. One toggle means this
-    // Show is the only thing that happened since the last pass.
-    if (w && becameShown && w->shownToggles <= 1 && ancestorsShown(L, w)) {
-        fireOnShowNow(L, 1, w);
-    }
+    // The OnShow of everything that comes up with it, now: the next line of
+    // the caller reads what they did (ContainerFrame_GenerateFrame's bagsShown).
+    if (becameShown)
+        if (auto* engine = engineFrom(L)) engine->frameShown(w->id);
     return 0;
 }
 int lua_Region_Hide(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
-    // No OnHide from here, and it is not the asymmetry with Show it looks
-    // like. Running it here is what the real client does and it fixes a real
-    // fault - ContainerFrame_GenerateFrame indexes its bag list by a counter
-    // ContainerFrame_OnHide maintains, so OpenAllBags, which hides every open
-    // bag and reopens it in one breath, rebuilds that list from a stale count
-    // and the bags come back stacked.
-    //
-    // It also stops ShowUIPanel from leaving QuestFrame shown, and the four
-    // NPC dialogs then fill themselves in from nothing. Measured, not
-    // guessed: with OnHide deferred ShowUIPanel(QuestFrame) returns with the
-    // frame shown, and with it immediate the same call returns with the frame
-    // hidden, so something in UIParent's panel management is ordering-
-    // sensitive in a way this client does not reproduce. check_npc_dialogs_fill
-    // catches it.
-    //
-    // The vendor and guild bank no longer take the reopen path - see
-    // openBagsForTrading - so what is left exposed is the bag keybind.
-    if (auto* w = widgetOf(L, 1)) {
-        // Counted only where a handler is owed. A frame hidden before anything
-        // was hooked to it owes nothing, and the real client runs nothing
-        // there either. Turtle's transmog timer is CreateFrame, Hide, and only
-        // then SetScript for OnShow, OnHide and OnUpdate: counting that Hide
-        // made the Show which follows the second toggle, Show defers OnShow to
-        // updateVisibility on a second toggle, and updateVisibility fires none
-        // for a frame with no anchors. So the timer ran its OnUpdate against
-        // the startTime its OnShow was going to set. Reported in #132.
-        if (w->shown && frameScriptSet(L, 1, "OnHide") && w->shownToggles < 200) {
-            ++w->shownToggles;
-            if (auto* tree = wowee::addons::getWidgetTree(L)) {
-                tree->markVisibilityPending(w->id);
-            }
-        }
+    auto* w = widgetOf(L, 1);
+    const bool wasShown = w && w->shown;
+    if (w) {
+        if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markVisibilityPending(w->id);
         // A hidden tooltip belongs to nobody.
         //
         // The owner is what FrameXML tests to decide whether a tooltip on
@@ -7528,6 +7434,8 @@ int lua_Region_Hide(lua_State* L) {
         tooltipLineStringWritten(L, w);
     }
     lua_pushboolean(L, 0); lua_setfield(L, 1, "__visible");
+    if (wasShown)
+        if (auto* engine = engineFrom(L)) engine->frameHidden(w->id);
     return 0;
 }
 int lua_Region_IsShown(lua_State* L) {
@@ -18113,107 +18021,54 @@ void LuaEngine::updateSizeChanges() {
     }
 }
 
+void LuaEngine::frameShown(uint32_t id) {
+    if (!L_) return;
+    taint::Quiet quiet;   // as dispatchText
+    widgets_.showNow(id, [this](uint32_t up) { tellVisibility(up, true); });
+}
+
+void LuaEngine::frameHidden(uint32_t id) {
+    if (!L_) return;
+    taint::Quiet quiet;   // as dispatchText
+    widgets_.hideNow(id, [this](uint32_t gone) { tellVisibility(gone, false); });
+}
+
+void LuaEngine::tellVisibility(uint32_t id, bool up) {
+    callFrameScript(id, up ? "OnShow" : "OnHide");
+    const auto* w = widgets_.get(id);
+    if (!w || !w->isEditBox) return;
+    // A box that asks for the keyboard takes it as it appears, where none has
+    // it (0x009655c0); every box gives it up as it goes (0x009655f0).
+    if (up) {
+        if (w->editAutoFocus && focusedWid_ == 0 && widgets_.shownNow(id)) setEditFocus(id);
+    } else if (focusedWid_ == id) {
+        setEditFocus(0);
+    }
+}
+
+// What was shown or hidden otherwise than by Show() and Hide(): the interface
+// as it was loaded, and what the client shows and hides itself. The frames in
+// a frame that is hidden go with it, and come up with it.
+//
+// `visible` - placed somewhere - as well as shown, where nothing has been told
+// yet. The client tells every frame that is shown, placed or not, as it loads
+// (0x00490410), and a frame that has no place is none of what is drawn here:
+// waking those has not been looked at. What Show() has told stays told.
 void LuaEngine::updateVisibility() {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
-    // By index and re-fetched each time: a handler is free to create frames,
-    // and OnShow very often does.
-    // `visible` here and `visibleChain` in the OnUpdate pump, which is a
-    // deliberate difference rather than an oversight.
-    //
-    // WoW fires OnShow on becoming shown-with-ancestors-shown, with no regard
-    // for anchors, so visibleChain is the faithful answer. Using it would mean
-    // frames that are never drawn start running their OnShow and OnHide, and
-    // those handlers do real work - LootFrame_OnHide calls CloseLoot, which
-    // releases the loot on the server, and UIParent's OnShow calls
-    // CloseAllWindows.
-    //
-    // What that faithfulness would buy was measured rather than guessed: six
-    // frames in the whole interface declare an OnShow with no anchors and no
-    // setAllPoints - KnowledgeBaseFrameCancel, ChannelListDropDown,
-    // HelpFrameOpenTicketEditBox, the two calendar context menus and
-    // GMSurveyFrameComment - and not one of them is anchored from Lua either,
-    // anywhere. None can ever be drawn or used, so none of their OnShow
-    // handlers is worth the risk of waking the rest.
-    //
-    // (UIParent looks like a seventh and is not: it carries setAllPoints.)
-    //
-    // Only the frames marked as owing a look - `visible` changed, or Lua
-    // toggled `shown` (WidgetTree::markVisibilityPending). Any other frame
-    // has nothing to report and no toggles to clear, which is the first
-    // `continue` below; walking all 28,000 to arrive there was the cost of
-    // this pass. Ascending, and re-reading the set as it goes, so scripts run
-    // in the order the full walk ran them and a frame a handler changes
-    // further on is still reached this pass.
+    // Only the frames marked as owing a look (WidgetTree::markVisibilityPending):
+    // walking all 28,000 was the cost of this pass. By index, ascending, and
+    // re-read as it goes: a handler is free to create frames, and one it
+    // changes further on is still reached this pass.
     for (uint32_t id = widgets_.takeVisibilityPending(1); id != 0;
          id = widgets_.takeVisibilityPending(id + 1)) {
         auto* w = widgets_.get(id);
         if (!w || w->id == 0) continue;
-        const uint8_t toggles = w->shownToggles;
-        w->shownToggles = 0;
-        if (w->visible == w->reportedVisible) {
-            // Nothing changed overall - but if Lua hid this and showed it again
-            // before anything looked, something *did* happen and both handlers
-            // are owed. `panel:Hide(); panel:Show()` is the interface asking a
-            // panel to rebuild itself, and it is the entirety of QuestFrame's
-            // handler for QUEST_DETAIL, QUEST_PROGRESS, QUEST_COMPLETE and
-            // QUEST_GREETING - the four NPC dialogs, and the reason the vendor
-            // was the only one that still filled in. Everything those panels
-            // show is positioned by QuestInfo_Display, which runs from OnShow
-            // and from nowhere else, so with no OnShow the text kept the place
-            // its XML gave it: outside the scroll frame that clips it, drawn
-            // and clipped away. A blank parchment with working buttons.
-            //
-            // Only for a frame that is running at the end of it - the chain,
-            // and not `visible` as the rest of this pass reads. `visible`
-            // additionally wants somewhere to be drawn, and a driver frame has
-            // nowhere: no anchors, nothing on screen, an OnUpdate and a pair of
-            // handlers to arm it. The OnUpdate pump runs those off the chain
-            // already, so reading their OnShow off `visible` left the two
-            // passes disagreeing about whether the same frame was running, and
-            // the handler that sets up what the OnUpdate reads never fired.
-            //
-            // The risk this guard was written for is unaffected: a frame Lua
-            // never touched cannot reach two toggles, so nothing wakes here
-            // that the interface did not explicitly hide and show again.
-            if (toggles < 2 || !w->visibleChain) continue;
-            callFrameScript(id, "OnHide");
-            callFrameScript(id, "OnShow");
-            // Deliberately both, and in the order they happened. OnHide is
-            // where a panel drops what it was holding, and skipping it would
-            // leave the second OnShow building on top of the first one's state.
-            continue;
-        }
-        w->reportedVisible = w->visible;
-        // Show() runs OnShow itself when the frame became shown under shown
-        // ancestors, so the change is recorded here without being announced
-        // twice. The flag is cleared either way: a frame that was shown and
-        // then anchored later arrives here once, and only once.
-        const bool already = w->onShowFired;
-        w->onShowFired = false;
-        if (!(already && w->visible)) {
-            callFrameScript(id, w->visible ? "OnShow" : "OnHide");
-        }
-        // A box that asked for the keyboard takes it as it appears, and gives
-        // it up when it goes. Only the two that ask: the rest say autoFocus
-        // ="false" precisely so that opening a panel does not swallow the
-        // player's next keystroke.
-        //
-        // Taking it is the autoFocus box's privilege; giving it up on the way
-        // out is every box's duty. Only the two that ask took it and only the
-        // two that ask released it, so a box focused by name - which is how
-        // the chat box and every dialog's box get it - kept the keyboard after
-        // it was hidden. Nothing on screen had focus and focusedWid_ was not
-        // zero, and that flag is what the client asks before it looks at a key
-        // at all: escape stopped opening the menu and every character typed
-        // went into a box that was not there.
-        if (w->isEditBox) {
-            if (w->visible) {
-                if (w->editAutoFocus) setEditFocus(id);
-            } else if (focusedWid_ == id) {
-                setEditFocus(0);
-            }
-        }
+        const bool up = (w->visible || w->toldShown) && widgets_.shownNow(id);
+        if (up == w->toldShown) continue;
+        w->toldShown = up;
+        tellVisibility(id, up);
     }
 }
 

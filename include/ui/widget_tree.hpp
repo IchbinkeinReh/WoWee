@@ -932,28 +932,9 @@ struct Widget {
     /// since, so every descendant is still marked hidden and the walk can be
     /// skipped.
     uint64_t hiddenMarkedAt = 0;
-    /// Whether the interface has been told this is on screen. Visibility is
-    /// not a property a frame sets - it is shown, and every ancestor shown too
-    /// - so becoming visible has to be noticed rather than announced at the
-    /// point something was hidden three levels up.
-    bool  reportedVisible = false;
-    /// Set when Show() already ran this frame's OnShow itself, so the deferred
-    /// visibility pass records the change without firing it a second time.
-    bool  onShowFired = false;
-    /// How many times Lua has flipped `shown` since the last visibility pass.
-    ///
-    /// Noticing a change by comparing to the last reported state cannot see a
-    /// change that undoes itself first. `panel:Hide(); panel:Show()` is how
-    /// FrameXML says "rebuild yourself" - it is the whole of QuestFrame's
-    /// QUEST_DETAIL handler - and between the two calls nothing looks. The
-    /// frame ends the frame exactly as it started, so a comparison finds
-    /// nothing and OnShow, which is where the panel is actually filled in,
-    /// never runs.
-    ///
-    /// Counted only from the Show and Hide bindings, so that the renderer
-    /// forcing a suppressed window hidden cannot be mistaken for the interface
-    /// asking for a rebuild.
-    uint8_t shownToggles = 0;
+    /// The interface has been told the frame is up (CSimpleFrame +0xe0): its
+    /// OnShow has run and its OnHide not since. See WidgetTree::showNow.
+    bool  toldShown = false;
     /// The nearest scroll frame above this one, or zero. Everything under a
     /// scroll frame is drawn clipped to it, which is what makes a window onto
     /// a taller child a window rather than a spill.
@@ -1183,8 +1164,7 @@ public:
     uint32_t takeMeasureDirty(uint32_t from) { return measureDirty_.takeFrom(from); }
 
     /// A widget whose `visible` may differ from what the interface was last
-    /// told, or whose `shownToggles` is not zero. Set wherever either changes;
-    /// read by LuaEngine::updateVisibility.
+    /// told, set wherever either changes; read by LuaEngine::updateVisibility.
     /// Whether the frame is shown now, and every ancestor with it - by the
     /// flags Show and Hide set, not by the last layout's visibleChain, which
     /// knows nothing of a Hide() since.
@@ -1198,6 +1178,44 @@ public:
         const Widget* w = get(id);
         return w && w->visibleChain && shownNow(id);
     }
+    /// What comes up with a frame just shown (0x004918f0): the shown frames in
+    /// it, in their order, and then the frame - `tell` runs the OnShow of each
+    /// once it and those over it are marked up, and nothing is told twice.
+    template <typename Tell>
+    void showNow(uint32_t id, const Tell& tell) {
+        if (const Widget* w = get(id); w && w->kind == WidgetKind::Frame && shownNow(id)) comeUp(id, tell);
+    }
+    /// What goes with a frame just hidden (0x00491830): those in it that were
+    /// up, in their order, and then the frame, its OnHide after theirs.
+    template <typename Tell>
+    void hideNow(uint32_t id, const Tell& tell) {
+        Widget* w = get(id);
+        if (!w || w->kind != WidgetKind::Frame) return;
+        const bool was = w->toldShown;
+        w->toldShown = false;
+        markVisibilityPending(id);
+        for (size_t i = 0; (w = get(id)) != nullptr && i < w->children.size(); ++i) {
+            const uint32_t child = w->children[i];
+            if (const Widget* in = get(child); in && in->shown) hideNow(child, tell);
+        }
+        if (was) tell(id);
+    }
+
+private:
+    template <typename Tell>
+    void comeUp(uint32_t id, const Tell& tell) {
+        Widget* w = get(id);
+        if (!w || w->kind != WidgetKind::Frame || !w->shown || w->toldShown) return;
+        w->toldShown = true;
+        markVisibilityPending(id);
+        // A handler may hide what it is in: what has not come up by then does
+        // not. Those it makes are shown, and told, as they are made.
+        for (size_t i = 0; (w = get(id)) != nullptr && w->toldShown && i < w->children.size(); ++i)
+            comeUp(w->children[i], tell);
+        tell(id);
+    }
+
+public:
     void markVisibilityPending(uint32_t id) { if (isWidgetId(id)) visibilityPending_.set(id); }
     uint32_t takeVisibilityPending(uint32_t from) { return visibilityPending_.takeFrom(from); }
 
