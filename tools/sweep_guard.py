@@ -762,6 +762,11 @@ CHECKS = [
     # answered while it stays nil. GetText was that for months, raising every
     # time the reputation list opened. Zero is the only acceptable number and
     # the tool carries three canaries so a zero means something.
+    # A texture the shadow passes' sets are written with once, let go of at a
+    # map change (T9, 2026-11-24).
+    ("fallback_texture_check.py",
+     r"^(\d+) of them let go of while the set is kept", 0,
+     "textures a descriptor set outlives"),
     # This client's own slash commands, and whether FrameXML's chat can reach
     # them. Zero with the bridge in addon_manager, seventy-one without - so
     # the number answers the real question rather than standing in for it, and

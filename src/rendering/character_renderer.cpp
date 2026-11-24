@@ -890,11 +890,11 @@ void CharacterRenderer::clear() {
     compositeCache_.clear();
     failedTextureCache_.clear();
 
-    // Recreate default textures (needed by loadModel/loadTexture fallbacks)
-    whiteTexture_.reset();
-    transparentTexture_.reset();
-    flatNormalTexture_.reset();
-    createFallbackTextures(device);
+    // The fallback textures stay. The shadow pass's set for what casts solid is
+    // written with the white one once (initializeShadow): made anew here, it
+    // was left with the view of one that was gone, and where the memory behind
+    // it had been given to something less than opaque, every opaque part of
+    // every character cast nothing until the next map.
 
     models.clear();
     sharedItemModels_.clear();
