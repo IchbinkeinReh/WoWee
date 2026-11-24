@@ -891,6 +891,13 @@ public:
     uint32_t getShadowMapSize() const { return SHADOW_MAP_SIZE; }
     void setViewDistance(float distance);
     float getViewDistance() const { return viewDistance_; }
+    /// A map entered (0x00781430): the far clip it allows, before its ground
+    /// is streamed in. Taken by the first frame drawn in it alone, the load
+    /// asked the last map's: Northrend came in to Kalimdor's 791 yards and
+    /// the rest after the loading screen, and Kalimdor to Northrend's.
+    void enterMap(uint32_t mapId) {
+        if (mapId != farClipMapId_) applyFarClip(mapId);
+    }
     /// What the world is actually drawn to on this map: the view distance
     /// held to 791 yards before map 530 and 1583 from it (0x00780770).
     float getFarClip() const { return farClip_; }

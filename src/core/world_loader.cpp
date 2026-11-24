@@ -564,6 +564,7 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
             // What the far clip reaches about the spawn, whichever way the
             // camera will look (terrain_stream_set.hpp) - the rest streams
             // in-game as the player moves.
+            renderer_->enterMap(mapId);
             terrainMgr->setLoadReach(renderer_->getTerrainLoadReach());
             terrainMgr->setUnloadReach(renderer_->getTerrainUnloadReach());
 
