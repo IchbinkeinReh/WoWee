@@ -5,6 +5,7 @@
 #include "game/target_direction.hpp"
 #include "core/coordinates.hpp"
 #include "rendering/camera.hpp"
+#include "addons/optional_unit_arg.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/tooltip_setter_rules.hpp"
 #include "addons/unit_aura_call.hpp"
@@ -1309,14 +1310,15 @@ static int lua_ClearTarget(lua_State* L) {
 static int lua_FocusUnit(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    const char* uid = luaL_optstring(L, 1, nullptr);
-    if (!uid || !*uid) return 0;
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    // 0x0051ff20: a change of focus is refused to insecure code.
-    if (guid != 0 && (guid == gh->getFocusGuid() || taint::allowedSecureOnly(L)))
-        gh->setFocus(guid);
+    // 0x00522480: without a unit - "/focus" alone - the target.
+    const auto guid = optionalUnitArg(L, 1, gh->getTargetGuid(),
+                                      [gh](const std::string& token) { return resolveUnitGuid(gh, token); });
+    // 0x0051ff20: a change of focus is refused to insecure code; nobody lets
+    // it go.
+    if (guid && (*guid == gh->getFocusGuid() || taint::allowedSecureOnly(L))) {
+        if (*guid != 0) gh->setFocus(*guid);
+        else if (gh->getFocusGuid() != 0) gh->clearFocus();
+    }
     return 0;
 }
 

@@ -16,6 +16,7 @@ extern "C" {
 #include <string>
 #include <vector>
 
+#include "addons/optional_unit_arg.hpp"
 #include "addons/unit_aura_call.hpp"
 
 namespace {
@@ -102,4 +103,21 @@ TEST_CASE("no UnitAura at all is no aura", "[tooltip][aura]") {
     CHECK_FALSE(wowee::addons::callUnitAuraForSetter(L));
     CHECK(lua_gettop(L) == 5);
     lua_close(L);
+}
+
+TEST_CASE("FocusUnit without a unit means the target", "[unit]") {
+    // 0x00522480: SecureCmdList["FOCUS"] calls FocusUnit() for "/focus" alone.
+    State s;
+    const auto resolve = [](const std::string& token) { return token == "pet" ? uint64_t{7} : uint64_t{0}; };
+    using wowee::addons::optionalUnitArg;
+    CHECK(optionalUnitArg(s.L, 1, 42, resolve) == uint64_t{42});
+    CHECK(optionalUnitArg(s.L, 1, 0, resolve) == uint64_t{0});
+    lua_pushstring(s.L, "");
+    CHECK(optionalUnitArg(s.L, 1, 42, resolve) == uint64_t{42});
+    lua_pushnil(s.L);
+    CHECK(optionalUnitArg(s.L, 2, 42, resolve) == uint64_t{42});
+    lua_pushstring(s.L, "Pet");
+    CHECK(optionalUnitArg(s.L, 3, 42, resolve) == uint64_t{7});
+    lua_pushstring(s.L, "nobody");
+    CHECK_FALSE(optionalUnitArg(s.L, 4, 42, resolve).has_value());
 }
