@@ -10,6 +10,7 @@
 #include "game/spell_handler.hpp"
 
 #include <array>
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -1369,4 +1370,46 @@ TEST_CASE("a unit's tooltip hears of its name and of its skin", "[replay][toolti
     s.receive(p);
     CHECK(told == std::vector<uint64_t>{kWolf, kWolf});
     s.handler().setUnitTooltipCallback(nullptr);
+}
+
+// The creature cache's row: +0x34, +0x38.
+TEST_CASE("a creature's template says what it makes of health and power", "[replay][creature]") {
+    Session s;
+    spawnPlayer(s);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CREATURE_QUERY_RESPONSE));
+    p.writeUInt32(416);
+    p.writeString("Wichtel");
+    for (int i = 0; i < 5; ++i) p.writeString("");
+    for (uint32_t v : {0u, 3u, 23u, 0u}) p.writeUInt32(v);   // flags, type, family, rank
+    for (uint32_t v : {0u, 0u, 4449u, 0u, 0u, 0u}) p.writeUInt32(v);
+    p.writeFloat(0.85f);
+    p.writeFloat(1.25f);
+    p.writeUInt8(0);
+    for (int i = 0; i < 6; ++i) p.writeUInt32(0);
+    p.writeUInt32(121);
+    s.receive(p);
+    const auto& creatures = s.handler().getCreatureInfoCache();
+    REQUIRE(creatures.count(416) == 1);
+    CHECK(creatures.at(416).healthModifier == 0.85f);
+    CHECK(creatures.at(416).powerModifier == 1.25f);
+    CHECK(creatures.at(416).movementId == 121);
+}
+
+TEST_CASE("a unit's stats are its own fields", "[replay][stats]") {
+    constexpr uint64_t kImp = 0xF1400001A0000001ull;
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kImp, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_BYTES_0, 0x00000800}, {UF::UNIT_FIELD_LEVEL, 80},
+                                     {UF::UNIT_FIELD_STAT0, 1}, {UF::UNIT_FIELD_STAT1, 79},
+                                     {UF::UNIT_FIELD_STAT2, 2}, {UF::UNIT_FIELD_STAT3, 479},
+                                     {UF::UNIT_FIELD_STAT4, 367}}));
+    const auto* imp = s.handler().getUnitByGuid(kImp);
+    REQUIRE(imp);
+    const auto stats = wowee::game::GameHandler::statsOf(*imp);
+    CHECK(stats.classId == 8);
+    CHECK(stats.level == 80);
+    CHECK(stats.agility == 79);
+    CHECK(stats.intellect == 479);
+    CHECK(stats.spirit == 367);
 }

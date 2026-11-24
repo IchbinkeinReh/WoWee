@@ -2520,22 +2520,59 @@ static int lua_GetManaRegen(lua_State* L) {
     return 2;
 }
 
-// GetCritChanceFromAgility([unit]) → the melee crit percent the player's Agility
-// gives, from the combat game tables. Was a flat zero, so the crit stat's
-// flyout read "0.00% from Agility" for every character.
+/// Whether this expansion's field table can answer the pet question at all.
+///
+/// Every table here names UNIT_FIELD_PETNUMBER but cataclysm's, and a layout
+/// that does not cannot say whether a unit is anybody's pet. The two gates below
+/// ask this first and keep the answer these bindings gave before, rather than a
+/// "no" nothing in that layout supports - which matters most for the hunter leg,
+/// since hunterPetOf reads that same field and answers false when it has nowhere
+/// to read it from.
+static bool petFieldsNamed() {
+    return game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER) != 0xFFFF;
+}
+
+/// The gate the three modifier bindings share: the unit is the local player, or
+/// it carries UNIT_FIELD_PETNUMBER. Anything else answers **zero**, not the
+/// neutral one.
+///
+/// The client tests this identically in all three - 0x00612870, 0x006127f0 and
+/// 0x00612900 each read `FUN_004cee50(unit) || blob+0x114 != 0` before they
+/// consult anything. The first half is a guid compare: the eight bytes at the
+/// head of the object record against the current-player slot in thread-local
+/// storage. The second is petnumber, which is also why a warlock's voidwalker
+/// and a death knight's ghoul - neither numbered as a pet - get zero, and the
+/// pet paperdoll's stat tooltip for them says the stat changes nothing.
+static bool modifierTarget(game::GameHandler* gh, const game::Unit* unit) {
+    if (!unit) return false;
+    if (gh && unit->getGuid() == gh->getPlayerGuid()) return true;
+    if (!petFieldsNamed()) return true;
+    return unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER)) != 0;
+}
+
+/// What the stats of the unit asked about give, where it is the player or a pet
+/// with a number (the gate above), else 0: the character sheet's stat tooltips,
+/// and the pet's (0x0060e130, 0x0060e1b0, 0x00612980, 0x00612a00).
+template <typename Of>
+static float ofUnitStats(lua_State* L, Of&& of) {
+    auto* gh = getGameHandler(L);
+    const auto* unit = gh ? resolveUnit(L, lua_tostring(L, 1)) : nullptr;
+    if (!modifierTarget(gh, unit)) return 0.0f;
+    return of(*gh, unit->getGuid() == gh->getPlayerGuid() ? gh->playerStats() : game::GameHandler::statsOf(*unit));
+}
+
+// GetCritChanceFromAgility(unit) → the melee crit percent its agility gives.
 static int lua_GetCritChanceFromAgility(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetCritChanceFromAgility(\"unit\")");   // 0x0060e130
-    auto* gh = getGameHandler(L);
-    lua_pushnumber(L, gh ? gh->getMeleeCritFromAgility() : 0.0);
+    lua_pushnumber(L, ofUnitStats(L, [](const auto& gh, const auto& s) { return gh.getMeleeCritFromAgility(s); }));
     return 1;
 }
 
-// GetSpellCritChanceFromIntellect([unit]) → the spell crit percent Intellect
-// gives, from the spell-crit game tables. Was a flat zero.
+// GetSpellCritChanceFromIntellect(unit) → the spell crit percent its intellect
+// gives.
 static int lua_GetSpellCritChanceFromIntellect(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetSpellCritChanceFromIntellect(\"unit\")");   // 0x0060e1b0
-    auto* gh = getGameHandler(L);
-    lua_pushnumber(L, gh ? gh->getSpellCritFromIntellect() : 0.0);
+    lua_pushnumber(L, ofUnitStats(L, [](const auto& gh, const auto& s) { return gh.getSpellCritFromIntellect(s); }));
     return 1;
 }
 
@@ -2568,64 +2605,30 @@ static int lua_GetArmorPenetration(lua_State* L) {
 }
 
 // Health / mana regenerated per second from Spirit - the pair the Spirit stat
-// flyout shows. Were flat zeros. Only the player's Spirit and class are tracked,
-// so any other unit answers zero rather than the player's value under its name.
+// flyout shows, the mana with 0.001 to it where there is any unit to ask.
 static int lua_GetUnitHealthRegenRateFromSpirit(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetUnitHealthRegenRateFromSpirit(\"unit\")");   // 0x00612980
-    auto* gh = getGameHandler(L);
-    std::string unit(luaL_optstring(L, 1, "player"));
-    toLowerInPlace(unit);
-    lua_pushnumber(L, (gh && unit == "player") ? gh->getHealthRegenFromSpirit() : 0.0);
+    lua_pushnumber(L, ofUnitStats(L, [](const auto& gh, const auto& s) { return gh.getHealthRegenFromSpirit(s); }));
     return 1;
 }
 static int lua_GetUnitManaRegenRateFromSpirit(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetUnitManaRegenRateFromSpirit(\"unit\")");   // 0x00612a00
-    auto* gh = getGameHandler(L);
-    std::string unit(luaL_optstring(L, 1, "player"));
-    toLowerInPlace(unit);
-    // Plus 0.001 (0x00612a00).
-    lua_pushnumber(L, (gh && unit == "player") ? gh->getManaRegenFromSpirit() + 0.001 : 0.0);
+    lua_pushnumber(L, ofUnitStats(L, [](const auto& gh, const auto& s) { return gh.getManaRegenFromSpirit(s) + 0.001f; }));
     return 1;
 }
 
-/// Whether this expansion's field table can answer the pet question at all.
-///
-/// Every table here names UNIT_FIELD_PETNUMBER but cataclysm's, and a layout
-/// that does not cannot say whether a unit is anybody's pet. The two gates below
-/// ask this first and keep the answer these bindings gave before, rather than a
-/// "no" nothing in that layout supports - which matters most for the hunter leg,
-/// since hunterPetOf reads that same field and answers false when it has nowhere
-/// to read it from.
-static bool petFieldsNamed() {
-    return game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER) != 0xFFFF;
-}
-
-/// The gate the three modifier bindings share: the unit is the local player, or
-/// it carries UNIT_FIELD_PETNUMBER. Anything else answers **zero**, not the
-/// neutral one.
-///
-/// The client tests this identically in all three - 0x00612870, 0x006127f0 and
-/// 0x00612900 each read `FUN_004cee50(unit) || blob+0x114 != 0` before they
-/// consult anything. The first half is a guid compare: the eight bytes at the
-/// head of the object record against the current-player slot in thread-local
-/// storage. The second is petnumber, which is also why a warlock's voidwalker
-/// and a death knight's ghoul - neither numbered as a pet - get zero, and the
-/// pet paperdoll's stat tooltip for them says the stat changes nothing.
-static bool modifierTarget(game::GameHandler* gh, const game::Unit* unit) {
-    if (!unit) return false;
-    if (gh && unit->getGuid() == gh->getPlayerGuid()) return true;
-    if (!petFieldsNamed()) return true;
-    return unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER)) != 0;
-}
-
-/// GetUnitHealthModifier and GetUnitPowerModifier: one for a hunter's pet, zero
-/// for every other unit the gate admits, because those two are this client's
-/// whole answer - see the note by their registrations below. Asked of the local
-/// player it is zero as well, which is what the client answers: it goes on to a
-/// creature-template row keyed by the unit's entry, and a player has no entry.
-static double petStatModifier(game::GameHandler* gh, const game::Unit* unit) {
+/// GetUnitHealthModifier and GetUnitPowerModifier (0x006127f0, 0x00612900):
+/// one for a hunter's pet, else what the template of its creature makes of it,
+/// zero for every unit the gate does not admit. The local player has no
+/// creature: zero.
+static double petStatModifier(game::GameHandler* gh, const game::Unit* unit, bool power) {
     if (!petFieldsNamed()) return 1.0;
-    return modifierTarget(gh, unit) && hunterPetOf(gh, unit) ? 1.0 : 0.0;
+    if (!gh || !modifierTarget(gh, unit)) return 0.0;
+    const auto& creatures = gh->getCreatureInfoCache();
+    const auto it = creatures.find(unit->getEntry());
+    const bool known = it != creatures.end();
+    return game::templateModifier(hunterPetOf(gh, unit), known,
+                                  !known ? 0.0f : power ? it->second.powerModifier : it->second.healthModifier);
 }
 
 /// GetUnitMaxHealthModifier(unit) → the multiplier on maximum health.
@@ -4629,50 +4632,14 @@ void registerUnitLuaAPI(lua_State* L) {
                 // PetPaperDollFrame_SetStats and PetExpBar_Update run whenever
                 // it is shown, so with a pet out these raised on opening it.
                 //
-                // 0x006127f0 (health) and 0x00612900 (power) are the same
-                // function eleven lines apart, and each answers 1.0 once the pet
-                // has a UNIT_FIELD_PETNUMBER and its UNIT_FIELD_CREATEDBY pair
-                // casts to a player reading class 3 in byte 1 of
-                // UNIT_FIELD_BYTES_0 - hunterPetOf again, the predicate HasPetUI
-                // and GetPetHappiness ask.
-                //
-                // Everything past that which is not a hunter's pet goes to the
-                // per-entry creature record the client keeps for the unit - the
-                // one SMSG_CREATURE_QUERY_RESPONSE fills, which is what
-                // getCreatureInfoCache holds here - taking the float at
-                // record+0x34 for health and +0x38 for power, and zero when
-                // there is no record. The key is the entry id (the cache callee
-                // 0x0067b6a0 opens with `if (key == 0) return 0`, so a player -
-                // entry zero - is answered out of the gate), and the record
-                // matches the query field for field: +0xc is the flags dword a
-                // whole family of getters reads one bit at a time - the same
-                // dword ForceGossip answers bit 27 of - and +0x10, +0x14 and
-                // +0x18 are read as plain dwords, which are the creatureType,
-                // family and rank that follow typeFlags on the wire.
-                //
-                // And a 3.3.5 creature query carries no float at all, so those
-                // two reads reinterpret an id - a rank, a display id - and a
-                // small integer read as IEEE 754 is a denormal, ~1e-38. That is
-                // what the zero is. It is not a gap either: every table of this
-                // install was scanned for the record's shape (a bit field at
-                // dword 3 plus modifier-sized floats at dwords 13 and 14) and
-                // the nine hits are tables keyed by a sound id, a vehicle seat,
-                // an overlay - none keyed by a creature entry - so there is no
-                // template table this client is short of.
-                //
-                // Which is visible, and correctly so: the only FrameXML use is the
-                // stamina and intellect lines of the pet paperdoll's stat tooltip
-                // (petpaperdollframe.lua:588-594), so a warlock pet or a death
-                // knight's ghoul says its stamina changes nothing, exactly as the
-                // original does, while a hunter's pet - the pet that frame is
-                // built for - keeps answering one.
+                // 0x006127f0 (health) and 0x00612900 (power): petStatModifier.
                 {"GetUnitHealthModifier",   [](lua_State* L) -> int {
             lua_pushnumber(L, petStatModifier(getGameHandler(L),
-                            resolveUnit(L, luaL_optstring(L, 1, "player"))));
+                            resolveUnit(L, luaL_optstring(L, 1, "player")), false));
             return 1; }},
                 {"GetUnitPowerModifier",    [](lua_State* L) -> int {
             lua_pushnumber(L, petStatModifier(getGameHandler(L),
-                            resolveUnit(L, luaL_optstring(L, 1, "player"))));
+                            resolveUnit(L, luaL_optstring(L, 1, "player")), true));
             return 1; }},
                 {"GetPetExperience", [](lua_State* L) -> int {
             // currXP, nextXP - off the pet unit's own fields, not the player's.

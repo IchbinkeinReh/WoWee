@@ -2000,6 +2000,9 @@ struct CreatureQueryResponseData {
     /// PVP_RANK_LEADER (0x0071b680).
     uint32_t killCredit[2] = {};
     bool racialLeader = false;
+    /// What it makes of a unit's health and power (+0x34, +0x38).
+    float healthModifier = 0.0f;
+    float powerModifier = 0.0f;
     uint32_t questItems[6] = {};
     uint32_t movementId = 0;  // CreatureMovementInfo row: how fast its model turns
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/stat_tables.hpp"
 #include "game/macro_list.hpp"
 #include "game/pet_action.hpp"
 #include "game/achievement_tracking.hpp"
@@ -714,27 +715,26 @@ public:
         return playerStats_[idx];
     }
 
-    /// Melee critical-strike chance the player's Agility grants, as a percent,
-    /// the way the character sheet's stat flyout reads it: the class base plus
-    /// Agility times the per-class-per-level ratio, both from the combat game
-    /// tables. Zero until the tables and the player's stats are available.
-    float getMeleeCritFromAgility() const;
-    /// Spell critical-strike chance the player's Intellect grants, as a percent -
-    /// the spell-side twin of getMeleeCritFromAgility, read the same way from the
-    /// spell-crit game tables. Zero for a class with no spell crit (a warrior).
-    float getSpellCritFromIntellect() const;
+    /// What a unit's stats give it by the game tables (stat_tables.hpp): the
+    /// crit percent of its agility and of its intellect, and the health and the
+    /// mana its spirit regenerates a second. Without a unit, the player's.
+    float getMeleeCritFromAgility() const { return getMeleeCritFromAgility(playerStats()); }
+    float getSpellCritFromIntellect() const { return getSpellCritFromIntellect(playerStats()); }
+    float getHealthRegenFromSpirit() const { return getHealthRegenFromSpirit(playerStats()); }
+    float getManaRegenFromSpirit() const { return getManaRegenFromSpirit(playerStats()); }
+    float getMeleeCritFromAgility(const UnitStats& unit) const;
+    float getSpellCritFromIntellect(const UnitStats& unit) const;
+    float getHealthRegenFromSpirit(const UnitStats& unit) const;
+    float getManaRegenFromSpirit(const UnitStats& unit) const;
+    [[nodiscard]] UnitStats playerStats() const;
+    /// A unit's own, off its fields.
+    [[nodiscard]] static UnitStats statsOf(const Unit& unit);
     /// The percent a combat rating grants - dodge, parry, haste, defense and the
     /// rest of the rating-based stats the flyout shows. rating × (class scalar ÷
     /// the level's coefficient), from gtCombatRatings and the class scalar table,
     /// exactly as AzerothCore's GetRatingBonusValue reads it. Zero for an
     /// out-of-range index or a rating the player has none of.
     float getCombatRatingBonus(int cr) const;
-    /// Health and mana regenerated per second from Spirit, as the stat flyout
-    /// shows them. Health splits Spirit at 50 across two tables (gtOCTRegenHP,
-    /// gtRegenHPPerSpt) then doubles; mana is Spirit × gtRegenMPPerSpt - the
-    /// same as AzerothCore's OCTRegen*PerSpirit. Zero for a class with no mana.
-    float getHealthRegenFromSpirit() const;
-    float getManaRegenFromSpirit() const;
 
     // Server-authoritative attack power (WotLK: UNIT_FIELD_ATTACK_POWER / RANGED).
     // Returns -1 if not yet received.
@@ -7460,11 +7460,9 @@ private:
     mutable bool gtCombatRatingsLoaded_ = false;
     mutable std::vector<float> gtOctRegenHp_, gtRegenHpPerSpt_, gtRegenMpPerSpt_;
     mutable bool gtRegenLoaded_ = false;
-    // Shared: class base + stat × per-class-per-level ratio, ×100 for a percent.
-    float critPercentFromGameTable(std::vector<float>& baseCache,
-                                   std::vector<float>& ratioCache, bool& loaded,
-                                   const char* baseDbc, const char* ratioDbc,
-                                   int statIdx) const;
+    /// Loads a pair of crit tables on first use.
+    void loadCritTables(std::vector<float>& base, std::vector<float>& ratio, bool& loaded, const char* baseDbc,
+                        const char* ratioDbc) const;
     // Substitutes the player's name into a title's "%s" slot; shared by the
     // by-bit (worn) and by-id (quest reward) title lookups.
     std::string formatTitleString(const std::string& fmt) const;

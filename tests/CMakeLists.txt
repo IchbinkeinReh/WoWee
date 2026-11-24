@@ -4283,6 +4283,10 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# ── test_stat_tables ─────────────────────────────────────────
+wowee_add_test(test_stat_tables
+    SOURCES test_stat_tables.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

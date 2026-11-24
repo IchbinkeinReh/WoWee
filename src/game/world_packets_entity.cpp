@@ -198,8 +198,8 @@ bool CreatureQueryResponseParser::parse(network::Packet& packet, CreatureQueryRe
     // then movementId (the cache record's +0x58), the CreatureMovementInfo
     // row the model turns by (0x00735f60).
     if (packet.hasRemaining(4 + 4 + 1 + 6 * 4)) {
-        packet.readFloat();
-        packet.readFloat();
+        data.healthModifier = packet.readFloat();
+        data.powerModifier = packet.readFloat();
         data.racialLeader = packet.readUInt8() != 0;
         for (uint32_t& q : data.questItems) q = packet.readUInt32();
         if (packet.hasRemaining(4)) data.movementId = packet.readUInt32();

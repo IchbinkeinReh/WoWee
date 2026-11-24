@@ -2287,50 +2287,6 @@ std::string GameHandler::getFormattedTitleById(uint32_t id) const {
     return formatTitleString(fmt);
 }
 
-float GameHandler::critPercentFromGameTable(std::vector<float>& baseCache,
-                                            std::vector<float>& ratioCache, bool& loaded,
-                                            const char* baseDbc, const char* ratioDbc,
-                                            int statIdx) const {
-    const uint8_t pclass = getPlayerClass();
-    uint32_t level = getPlayerLevel();
-    if (pclass == 0 || pclass > 11 || level == 0) return 0.0f;
-    constexpr uint32_t kGtMaxLevel = 100;
-    if (level > kGtMaxLevel) level = kGtMaxLevel;
-    if (!loaded) {
-        loaded = true;
-        auto* am = services_.assetManager;
-        if (am && am->isInitialized()) {
-            // Single-column float game tables; getFloat reads that one column.
-            if (auto base = am->loadDBC(baseDbc); base && base->isLoaded())
-                for (uint32_t i = 0; i < base->getRecordCount(); ++i)
-                    baseCache.push_back(base->getFloat(i, 0));
-            if (auto ratio = am->loadDBC(ratioDbc); ratio && ratio->isLoaded())
-                for (uint32_t i = 0; i < ratio->getRecordCount(); ++i)
-                    ratioCache.push_back(ratio->getFloat(i, 0));
-        }
-    }
-    const size_t baseIdx  = static_cast<size_t>(pclass - 1);
-    const size_t ratioIdx = static_cast<size_t>(pclass - 1) * kGtMaxLevel + (level - 1);
-    if (baseIdx >= baseCache.size() || ratioIdx >= ratioCache.size()) return 0.0f;
-    // A zero ratio is no crit from the stat at all, the base included
-    // (0x0071bae0, 0x0071bb70).
-    if (ratioCache[ratioIdx] == 0.0f) return 0.0f;
-    const float stat = static_cast<float>(std::max(0, getPlayerStat(statIdx)));
-    return (ratioCache[ratioIdx] * stat + baseCache[baseIdx]) * 100.0f;  // the sheet reads a percent
-}
-
-float GameHandler::getMeleeCritFromAgility() const {
-    return critPercentFromGameTable(gtMeleeCritBase_, gtMeleeCrit_, gtMeleeCritLoaded_,
-                                    "gtChanceToMeleeCritBase.dbc", "gtChanceToMeleeCrit.dbc",
-                                    1 /* STAT_AGILITY */);
-}
-
-float GameHandler::getSpellCritFromIntellect() const {
-    return critPercentFromGameTable(gtSpellCritBase_, gtSpellCrit_, gtSpellCritLoaded_,
-                                    "gtChanceToSpellCritBase.dbc", "gtChanceToSpellCrit.dbc",
-                                    3 /* STAT_INTELLECT */);
-}
-
 namespace {
 // A single-column float game table into a flat vector.
 void loadFloatColumn(pipeline::AssetManager* am, const char* dbc, std::vector<float>& out) {
@@ -2339,12 +2295,53 @@ void loadFloatColumn(pipeline::AssetManager* am, const char* dbc, std::vector<fl
 }
 }  // namespace
 
-float GameHandler::getHealthRegenFromSpirit() const {
-    const uint8_t pclass = getPlayerClass();
-    uint32_t level = getPlayerLevel();
-    if (pclass == 0 || pclass > 11 || level == 0) return 0.0f;
-    constexpr uint32_t kGtMaxLevel = 100;
-    if (level > kGtMaxLevel) level = kGtMaxLevel;
+void GameHandler::loadCritTables(std::vector<float>& base, std::vector<float>& ratio, bool& loaded,
+                                 const char* baseDbc, const char* ratioDbc) const {
+    if (loaded) return;
+    loaded = true;
+    if (auto* am = services_.assetManager; am && am->isInitialized()) {
+        loadFloatColumn(am, baseDbc, base);
+        loadFloatColumn(am, ratioDbc, ratio);
+    }
+}
+
+UnitStats GameHandler::playerStats() const {
+    UnitStats out;
+    out.classId = getPlayerClass();
+    out.level = getPlayerLevel();
+    out.agility = getPlayerStat(1);
+    out.intellect = getPlayerStat(3);
+    out.spirit = getPlayerStat(4);
+    return out;
+}
+
+UnitStats GameHandler::statsOf(const Unit& unit) {
+    const auto field = [&unit](UF f) {
+        const uint16_t i = fieldIndex(f);
+        return i == 0xFFFF ? 0u : unit.getField(i);
+    };
+    UnitStats out;
+    out.classId = static_cast<uint8_t>((field(UF::UNIT_FIELD_BYTES_0) >> 8) & 0xFFu);
+    out.level = field(UF::UNIT_FIELD_LEVEL);
+    out.agility = static_cast<int32_t>(field(UF::UNIT_FIELD_STAT1));
+    out.intellect = static_cast<int32_t>(field(UF::UNIT_FIELD_STAT3));
+    out.spirit = static_cast<int32_t>(field(UF::UNIT_FIELD_STAT4));
+    return out;
+}
+
+float GameHandler::getMeleeCritFromAgility(const UnitStats& unit) const {
+    loadCritTables(gtMeleeCritBase_, gtMeleeCrit_, gtMeleeCritLoaded_, "gtChanceToMeleeCritBase.dbc",
+                   "gtChanceToMeleeCrit.dbc");
+    return stat_tables::critPercent(gtMeleeCritBase_, gtMeleeCrit_, unit, unit.agility);
+}
+
+float GameHandler::getSpellCritFromIntellect(const UnitStats& unit) const {
+    loadCritTables(gtSpellCritBase_, gtSpellCrit_, gtSpellCritLoaded_, "gtChanceToSpellCritBase.dbc",
+                   "gtChanceToSpellCrit.dbc");
+    return stat_tables::critPercent(gtSpellCritBase_, gtSpellCrit_, unit, unit.intellect);
+}
+
+float GameHandler::getHealthRegenFromSpirit(const UnitStats& unit) const {
     if (!gtRegenLoaded_) {
         gtRegenLoaded_ = true;
         if (auto* am = services_.assetManager; am && am->isInitialized()) {
@@ -2353,28 +2350,12 @@ float GameHandler::getHealthRegenFromSpirit() const {
             loadFloatColumn(am, "gtRegenMPPerSpt.dbc", gtRegenMpPerSpt_);
         }
     }
-    const size_t idx = static_cast<size_t>(pclass - 1) * kGtMaxLevel + (level - 1);
-    if (idx >= gtOctRegenHp_.size() || idx >= gtRegenHpPerSpt_.size()) return 0.0f;
-    const float spirit = static_cast<float>(std::max(0, getPlayerStat(4 /* SPIRIT */)));
-    const float baseSpirit = std::min(spirit, 50.0f);
-    const float moreSpirit = spirit - baseSpirit;
-    // 0x0071ba60: the first 50 by gtOCTRegenHP, the rest by gtRegenHPPerSpt.
-    return baseSpirit * gtOctRegenHp_[idx] + moreSpirit * gtRegenHpPerSpt_[idx];
+    return stat_tables::healthRegen(gtOctRegenHp_, gtRegenHpPerSpt_, unit);
 }
 
-float GameHandler::getManaRegenFromSpirit() const {
-    const uint8_t pclass = getPlayerClass();
-    uint32_t level = getPlayerLevel();
-    if (pclass == 0 || pclass > 11 || level == 0) return 0.0f;
-    constexpr uint32_t kGtMaxLevel = 100;
-    if (level > kGtMaxLevel) level = kGtMaxLevel;
-    if (!gtRegenLoaded_) { getHealthRegenFromSpirit(); }  // shares the same lazy load
-    const size_t idx = static_cast<size_t>(pclass - 1) * kGtMaxLevel + (level - 1);
-    if (idx >= gtRegenMpPerSpt_.size()) return 0.0f;
-    // 0x0071b9f0: sqrt(intellect) x spirit x gtRegenMPPerSpt.
-    const float spirit = static_cast<float>(std::max(0, getPlayerStat(4 /* SPIRIT */)));
-    const float intellect = static_cast<float>(std::max(0, getPlayerStat(3 /* INTELLECT */)));
-    return std::sqrt(intellect) * spirit * gtRegenMpPerSpt_[idx];
+float GameHandler::getManaRegenFromSpirit(const UnitStats& unit) const {
+    if (!gtRegenLoaded_) getHealthRegenFromSpirit(unit);  // shares the same lazy load
+    return stat_tables::manaRegen(gtRegenMpPerSpt_, unit);
 }
 
 float GameHandler::getCombatRatingBonus(int cr) const {
