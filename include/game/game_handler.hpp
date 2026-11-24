@@ -7918,6 +7918,8 @@ private:
     /// One calendar packet, read and applied as 0x005c3fe0 does, and the
     /// events it raises fired.
     void handleCalendarPacket(CalendarPacket which, network::Packet& packet);
+    /// The holidays of Holidays.dbc the server has not sent its own of.
+    void addHolidayRows();
     /// Whether a calendar request may go out now: in the world, and none
     /// already pending. Every sender asks first and, having sent, marks it
     /// pending (0x005b9310, 0x005b9860 and the rest).

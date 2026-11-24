@@ -1359,3 +1359,114 @@ TEST_CASE("Only an event the player said yes to gets a reminder", "[calendar]") 
     // No clock to arm against - no realm date yet - and nothing is armed.
     CHECK(calendarArmAlarms(cal, kMe, nullptr).empty());
 }
+
+namespace {
+uint32_t packed(int year, int month, int day, int hour, int minute) {
+    WowDate d;
+    d.yearSince2000 = year - 2000;
+    d.month = month;
+    d.day = day;
+    d.hour = hour;
+    d.minute = minute;
+    return packWowPackedTime(d);
+}
+}  // namespace
+
+TEST_CASE("a holiday's durations are its stages, for each of its dates", "[calendar]") {
+    CalendarData cal;
+    CalendarHoliday feast;   // Pilgrim's Bounty: a date for each year, one stage of 167 hours
+    feast.id = 404;
+    feast.dates[0] = packed(2025, 11, 23, 1, 0);
+    feast.dates[1] = packed(2026, 11, 22, 1, 0);
+    feast.durations[0] = 167;
+    feast.calendarFlags[0] = 3;
+    cal.holidays = {feast};
+    CHECK(calendarEntriesForDay(cal, 11, 21, 2026).empty());
+    const auto first = calendarEntriesForDay(cal, 11, 22, 2026);
+    REQUIRE(first.size() == 1);
+    CHECK(first[0].sequenceIndex == 0);
+    CHECK(first[0].numSequenceDays == 7);   // to the 29th at midnight, which is the 28th
+    CHECK(first[0].hour == 1);
+    const auto third = calendarEntriesForDay(cal, 11, 24, 2026);
+    REQUIRE(third.size() == 1);
+    CHECK(third[0].ongoing);
+    CHECK(third[0].sequenceIndex == 2);
+    CHECK(third[0].hour == 1);
+    const auto last = calendarEntriesForDay(cal, 11, 28, 2026);
+    REQUIRE(last.size() == 1);
+    CHECK(last[0].sequenceIndex == 6);
+    CHECK(last[0].hour == 23);
+    CHECK(last[0].minute == 59);
+    CHECK(calendarEntriesForDay(cal, 11, 29, 2026).empty());
+    CHECK(calendarEntriesForDay(cal, 11, 23, 2025).size() == 1);
+}
+
+TEST_CASE("a holiday's stages follow one another, each for its sides", "[calendar]") {
+    CalendarHoliday faire;
+    faire.dates[0] = packed(2026, 8, 3, 0, 1);
+    faire.durations[0] = 72;    // set up
+    faire.durations[1] = 168;   // open
+    faire.calendarFlags[0] = 0;
+    faire.calendarFlags[1] = 2;
+    CalendarData cal;
+    cal.holidays = {faire};
+    CalendarShowFilter horde;
+    horde.side = 2;
+    CHECK(calendarEntriesForDay(cal, 8, 4, 2026, horde).empty());
+    const auto open = calendarEntriesForDay(cal, 8, 6, 2026, horde);
+    REQUIRE(open.size() == 1);
+    CHECK(open[0].sequenceIndex == 0);
+    CHECK(open[0].numSequenceDays == 8);   // the 6th 00:01 to the 13th 00:01
+    CHECK(calendarEntriesForDay(cal, 8, 13, 2026, horde).size() == 1);
+    CHECK(calendarEntriesForDay(cal, 8, 14, 2026, horde).empty());
+    CalendarShowFilter alliance;
+    alliance.side = 1;
+    CHECK(calendarEntriesForDay(cal, 8, 6, 2026, alliance).empty());
+    // A stage of none after the first is not there.
+    CalendarHolidaySpan span;
+    CHECK_FALSE(holidayRunOnDay(faire, 2, 2026, 8, 13, span));
+}
+
+TEST_CASE("holidays that come again", "[calendar]") {
+    CalendarHolidaySpan span;
+    // Every Sunday from 14:00, two hours.
+    CalendarHoliday derby;
+    derby.dates[0] = (31u << 24) | (15u << 20) | (63u << 14) | (0u << 11) | (14u << 6);
+    derby.durations[0] = 2;
+    CHECK(holidayRunOnDay(derby, 0, 2026, 11, 22, span));   // a Sunday
+    CHECK(span.first % 1440 == 14 * 60);
+    CHECK(span.last - span.first == 120);
+    CHECK_FALSE(holidayRunOnDay(derby, 0, 2026, 11, 23, span));
+    CHECK(holidayRunOnDay(derby, 0, 2026, 11, 29, span));
+    // Every week from Friday for four days.
+    CalendarHoliday weekend;
+    weekend.dates[0] = (31u << 24) | (15u << 20) | (63u << 14) | (5u << 11);
+    weekend.durations[0] = 96;
+    CHECK(holidayRunOnDay(weekend, 0, 2026, 11, 20, span));
+    CHECK(holidayRunOnDay(weekend, 0, 2026, 11, 23, span));   // the Monday after
+    CHECK_FALSE(holidayRunOnDay(weekend, 0, 2026, 11, 24, span));
+    // A stage of it that begins days after the weekday.
+    weekend.durations[0] = 120;
+    weekend.durations[1] = 72;
+    CHECK(holidayRunOnDay(weekend, 1, 2026, 11, 27, span));   // Wednesday to Friday
+    CHECK_FALSE(holidayRunOnDay(weekend, 1, 2026, 11, 28, span));
+    // Every year on 31 December, two days.
+    CalendarHoliday eve;
+    eve.dates[0] = (31u << 24) | (11u << 20) | (30u << 14) | (7u << 11);
+    eve.durations[0] = 48;
+    CHECK(holidayRunOnDay(eve, 0, 2026, 12, 31, span));
+    CHECK(holidayRunOnDay(eve, 0, 2027, 1, 1, span));
+    CHECK_FALSE(holidayRunOnDay(eve, 0, 2027, 1, 2, span));
+    // Looping: four days, then three weeks and three days until the next.
+    CalendarHoliday call;
+    call.looping = 1;
+    call.dates[0] = packed(2010, 5, 7, 0, 1);
+    call.durations[0] = 96;
+    call.durations[1] = 576;
+    CHECK(holidayRunOnDay(call, 0, 2010, 5, 7, span));
+    CHECK_FALSE(holidayRunOnDay(call, 0, 2010, 5, 12, span));
+    CHECK(holidayRunOnDay(call, 0, 2010, 6, 4, span));   // 28 days on
+    CHECK_FALSE(holidayRunOnDay(call, 0, 2010, 6, 3, span));
+    CHECK(holidayRunOnDay(call, 0, 2010, 6, 8, span));
+    CHECK_FALSE(holidayRunOnDay(call, 0, 2010, 4, 9, span));   // not before it begins
+}

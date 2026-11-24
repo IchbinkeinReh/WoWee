@@ -108,6 +108,23 @@ struct CalendarHoliday {
     std::string textureFilename;
 };
 
+/// A holiday's days round one of them: the first minute of its run and the
+/// last, counted as dayNumber() * 1440.
+struct CalendarHolidaySpan {
+    int64_t first = 0;
+    int64_t last = 0;
+};
+
+/// The run of a holiday's stage that a day lies in (0x005c04f0, 0x005bfab0).
+///
+/// Its durations are stages one after the other from each of its dates, in
+/// hours, a first of none being a day; a later one of none is not there. A date
+/// with a weekday and no day, month or year is every week's, one without a year
+/// every year's; a looping holiday starts again when all of its stages are
+/// over. A run that ends at midnight ends on the day before.
+bool holidayRunOnDay(const CalendarHoliday& holiday, int stage, int year, int month, int day,
+                     CalendarHolidaySpan& out);
+
 /// Everything the packet carried.
 struct CalendarData {
     std::vector<CalendarInvite> invites;
@@ -528,9 +545,8 @@ struct CalendarDayEntry {
  * Holidays lead because that is the order WoW draws them in - a world event
  * heads the day and the player's own events follow underneath.
  *
- * A holiday covers `durations[i]` hours from `dates[i]`, and both arrays are
- * walked together: a holiday with several date/duration pairs is several
- * separate runs in the same row, which is how a recurring one is sent.
+ * A holiday's stage is there for a side whose bit its calendarFlags have
+ * (0x005c04f0); its runs are holidayRunOnDay's.
  */
 /// Which kinds of row the calendarShow* CVars let into a day (0x005c0240).
 ///
@@ -545,6 +561,9 @@ struct CalendarShowFilter {
     bool battlegrounds = true;
     bool lockouts = true;
     bool resets = true;
+    /// The player's side among calendarFlags: 1 the Alliance, 2 the Horde; 0
+    /// takes every stage.
+    uint32_t side = 0;
 
     /// Whether a holiday with that calendar filter type is shown.
     bool showsHoliday(uint32_t calendarFilterType) const {

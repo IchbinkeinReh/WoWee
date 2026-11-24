@@ -206,6 +206,74 @@ WowDate addMinutes(const WowDate& date, int64_t minutes) {
     return out;
 }
 
+namespace {
+
+constexpr int64_t kDayMinutes = 1440;
+int64_t floorDiv(int64_t a, int64_t b) { return a / b - (a % b != 0 && (a < 0) != (b < 0) ? 1 : 0); }
+int64_t floorMod(int64_t a, int64_t b) { return a - floorDiv(a, b) * b; }
+
+/// A stage's length (0x005bfab0): hours, a day where it says none.
+int64_t stageMinutes(const CalendarHoliday& h, int stage) {
+    return (h.durations[stage] != 0 ? static_cast<int64_t>(h.durations[stage]) : 24) * 60;
+}
+
+}  // namespace
+
+bool holidayRunOnDay(const CalendarHoliday& holiday, int stage, int year, int month, int day,
+                     CalendarHolidaySpan& out) {
+    if (stage > 0 && holiday.durations[stage] == 0) return false;
+    const int64_t wanted = dayNumber(year, month, day);
+    const int64_t length = stageMinutes(holiday, stage);
+    int64_t before = 0;   // the stages before it
+    for (int i = 0; i < stage; ++i) before += stageMinutes(holiday, i);
+    int64_t loop = stageMinutes(holiday, 0);
+    for (int i = 1; i < CalendarHoliday::kNumDurations; ++i)
+        loop += static_cast<int64_t>(holiday.durations[i]) * 60;
+
+    const auto covers = [&](int64_t start) {
+        int64_t end = start + length;
+        if (floorMod(end, kDayMinutes) == 0) --end;
+        if (floorDiv(start, kDayMinutes) > wanted || floorDiv(end, kDayMinutes) < wanted) return false;
+        out = {start, end};
+        return true;
+    };
+    for (const uint32_t packed : holiday.dates) {
+        if (packed == 0) continue;
+        // The fields as they are packed, all of their bits for "any".
+        const int minute = (packed & 0x3F) == 0x3F ? 0 : static_cast<int>(packed & 0x3F);
+        const int hour = ((packed >> 6) & 0x1F) == 0x1F ? 0 : static_cast<int>((packed >> 6) & 0x1F);
+        const int weekday = static_cast<int>((packed >> 11) & 7);
+        const bool anyDay = ((packed >> 14) & 0x3F) == 0x3F;
+        const bool anyMonth = ((packed >> 20) & 0xF) == 0xF;
+        const bool anyYear = ((packed >> 24) & 0x1F) == 0x1F;
+        const int64_t time = hour * 60 + minute + before;
+        if (weekday != 7 && anyDay && anyMonth && anyYear) {
+            // Every week, from that weekday (1970-01-01 was a Thursday).
+            const int64_t today = floorMod(wanted + 4, 7);
+            int64_t from = wanted - floorMod(today - weekday, 7);
+            for (int week = 0; week < 6; ++week, from -= 7)
+                if (covers(from * kDayMinutes + time)) return true;
+            continue;
+        }
+        const int d = anyDay ? day : static_cast<int>((packed >> 14) & 0x3F) + 1;
+        const int m = anyMonth ? month : static_cast<int>((packed >> 20) & 0xF) + 1;
+        const int y = anyYear ? year : 2000 + static_cast<int>((packed >> 24) & 0x1F);
+        int64_t start = dayNumber(y, m, d) * kDayMinutes + time;
+        if (anyYear) {
+            if (covers(start) || covers(dayNumber(y - 1, m, d) * kDayMinutes + time)) return true;
+            continue;
+        }
+        if (holiday.looping != 0 && loop > 0) {
+            const int64_t over = (wanted + 1) * kDayMinutes - 1 - start;
+            if (over > 0) start += floorDiv(over, loop) * loop;
+            if (covers(start) || (over > loop && covers(start - loop))) return true;
+            continue;
+        }
+        if (covers(start)) return true;
+    }
+    return false;
+}
+
 std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
                                                     int month, int day,
                                                     int year,
@@ -218,25 +286,24 @@ std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
         // 0x005c0240 / 0x005c04f0: a holiday's list is skipped while the
         // calendarShow* CVar for its filter type reads 0.
         if (!filter.showsHoliday(holiday.calendarFilterType)) continue;
-        for (int i = 0; i < CalendarHoliday::kNumDates; ++i) {
-            if (holiday.dates[i] == 0) continue;
-            const WowDate start = unpackWowPackedTime(holiday.dates[i]);
-            const int64_t first = dayNumber(start.fullYear(), start.month, start.day);
-            if (wanted < first) continue;
-            // Hours, rounded up to whole days and never less than one: a
-            // holiday sent with a duration of zero still happens on its day.
-            const uint32_t hours = (i < CalendarHoliday::kNumDurations)
-                                       ? holiday.durations[i] : 0;
-            const int64_t days = hours > 0 ? static_cast<int64_t>((hours + 23) / 24) : 1;
-            if (wanted >= first + days) continue;
+        for (int stage = 0; stage < CalendarHoliday::kNumDurations; ++stage) {
+            if (filter.side != 0 && (holiday.calendarFlags[stage] & filter.side) == 0) continue;
+            CalendarHolidaySpan run;
+            if (!holidayRunOnDay(holiday, stage, year, month, day, run)) continue;
+            const int64_t first = floorDiv(run.first, kDayMinutes);
+            const int64_t last = floorDiv(run.last, kDayMinutes);
             CalendarDayEntry entry;
             entry.kind = CalendarEntryKind::Holiday;
             entry.index = h;
             entry.ongoing = wanted > first;
             entry.sequenceIndex = static_cast<uint32_t>(wanted - first);
-            entry.numSequenceDays = static_cast<uint32_t>(days);
+            entry.numSequenceDays = static_cast<uint32_t>(last - first + 1);
+            // The time it begins at, and on its last day the one it ends at
+            // (0x005c2030).
+            const int64_t at = last > first && wanted == last ? run.last : run.first;
+            entry.hour = static_cast<int>(floorMod(at, kDayMinutes) / 60);
+            entry.minute = static_cast<int>(floorMod(at, kDayMinutes) % 60);
             out.push_back(entry);
-            break;  // one row per holiday per day, whichever run covers it
         }
     }
 

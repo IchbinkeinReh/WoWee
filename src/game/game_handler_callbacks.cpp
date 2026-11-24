@@ -6346,6 +6346,33 @@ const std::string& GameHandler::getSkillLineName(uint32_t skillLineId) const {
 }
 
 
+void GameHandler::addHolidayRows() {
+    // 0x005c04f0: every Holidays.dbc row is on the calendar; what the server
+    // sends takes the place of one (0x006f6020).
+    auto* am = services_.assetManager;
+    const auto dbc = am && am->isInitialized() ? am->loadDBCOptional("Holidays.dbc") : nullptr;
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 55) return;
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        CalendarHoliday h;
+        h.id = dbc->getUInt32(i, 0);
+        const auto sent = std::any_of(calendarData_.holidays.begin(), calendarData_.holidays.end(),
+                                      [&h](const CalendarHoliday& other) { return other.id == h.id; });
+        if (sent) continue;
+        for (int k = 0; k < CalendarHoliday::kNumDurations; ++k)
+            h.durations[k] = dbc->getUInt32(i, static_cast<uint32_t>(1 + k));
+        for (int k = 0; k < CalendarHoliday::kNumDates; ++k)
+            h.dates[k] = dbc->getUInt32(i, static_cast<uint32_t>(11 + k));
+        h.region = dbc->getUInt32(i, 37);
+        h.looping = dbc->getUInt32(i, 38);
+        for (int k = 0; k < CalendarHoliday::kNumFlags; ++k)
+            h.calendarFlags[k] = dbc->getUInt32(i, static_cast<uint32_t>(39 + k));
+        h.textureFilename = dbc->getString(i, 51);
+        h.priority = dbc->getUInt32(i, 52);
+        h.calendarFilterType = dbc->getUInt32(i, 53);
+        calendarData_.holidays.push_back(std::move(h));
+    }
+}
+
 void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& packet) {
     CalendarContext ctx{calendarData_, calendarEventDetail_};
     ctx.player = playerGuid;
@@ -6365,6 +6392,7 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
     // An event sent in full is the open one now, in place of a new one
     // (0x005bed20).
     if (which == CalendarPacket::SendEvent) calendarDraftOpen_ = false;
+    if (which == CalendarPacket::SendCalendar) addHolidayRows();
     // Every path that stores an event record re-arms that record's
     // fifteen-minutes-before reminder (0x005b79b0, called by the calendar list,
     // by an event added and by an event updated - and by the last two with the
