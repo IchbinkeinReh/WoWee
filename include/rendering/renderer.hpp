@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/liquid_query.hpp"
 #include "rendering/swim_wave.hpp"
 #include "rendering/wave_surface.hpp"
 #include "audio/sound_listener.hpp"
@@ -269,6 +270,11 @@ public:
     /// reason: the nameplates and the chat bubbles ask through walls every
     /// frame, and the shadow pass writes nothing a collision query reads.
     const WMORenderer* queryWMORenderer() const { return wmoRenderer.get(); }
+    /// What liquid_query asks, for reading only and past the workers the same
+    /// way.
+    [[nodiscard]] liquid_query::World liquidWorld() const {
+        return {waterRenderer.get(), wmoRenderer.get(), terrainManager.get()};
+    }
     Minimap* getMinimap() const { return minimap.get(); }
     WorldMap* getWorldMap() const { return worldMap.get(); }
     /// The world map set to the player's zone now, open or not

@@ -4,6 +4,7 @@
 
 #include "audio/zone_ambience.hpp"
 #include "rendering/frustum.hpp"
+#include "rendering/liquid_place.hpp"
 #include "rendering/minimap_indoor.hpp"
 #include "rendering/wmo_portal_walk.hpp"
 #include "rendering/collision_geometry.hpp"
@@ -562,6 +563,16 @@ public:
     /// shown building whose box holds the point, the groups not flagged
     /// 0x2000 whose own box holds it, in the building's order.
     void exteriorGroupsHolding(const glm::vec3& world, std::vector<GroupRef>& out) const;
+    /// The group the camera is in (0x00795d40's 0x00cd87a4 and the first of
+    /// 0x00cdb0dc): the building's, else the transport's; none outside and
+    /// none in an exterior group. `ground`: the terrain's height there.
+    [[nodiscard]] std::optional<GroupRef> cameraGroupAt(const glm::vec3& cameraPos,
+                                                        const std::optional<float>& ground) const;
+    /// The LiquidType of a group that is liquid throughout
+    /// (liquid_place::groupFilled), 0 of any other.
+    [[nodiscard]] uint32_t filledLiquidType(const GroupRef& ref) const;
+    /// Whether any model loaded so far has such a group.
+    [[nodiscard]] bool filledGroupsLoaded() const { return filledGroupsLoaded_; }
     /// For the collision port's floor debug line: every building face
     /// straight from `start` down to `endZ`, nearest first, as
     /// "wmoId/group/MOGPflags/MOPY@z" (no face filter, no group skipped).
@@ -943,6 +954,9 @@ private:
         std::vector<std::vector<glm::vec3>> minimapPortals;
         /// Every group as the liquid's portal walk reads it (0x0079bbf0).
         std::vector<audio::zone_ambience::WalkGroup> liquidWalk;
+        /// Per group (its own number): the LiquidType of one that is liquid
+        /// throughout, else 0.
+        std::vector<uint32_t> filledLiquid;
         /// MOHD's WMOAreaTable WMOID.
         uint32_t wmoId = 0;
         // MFOG, and each group's four indices into it (0 = none)
@@ -1082,6 +1096,15 @@ private:
     /// kind the one the first face below the camera is of, where that face
     /// comes before the ground and is a room's.
     std::vector<CameraRoom> cameraRooms(const glm::vec3& cameraPos, const glm::mat4& viewProj) const;
+    /// The first face a mile below the camera, or to the ground if that comes
+    /// first, of a building and of a transport (0x00795d40, 0x007d59b0).
+    struct FaceBelow {
+        const WMOInstance* instance = nullptr;
+        const ModelData* model = nullptr;
+        uint32_t group = 0;
+        float distance = 0.0f;
+    };
+    std::array<FaceBelow, 2> facesBelowCamera(const glm::vec3& cameraPos, const std::optional<float>& ground) const;
 
     /**
      * Test if a portal polygon is visible from a position through a frustum
@@ -1309,6 +1332,8 @@ private:
     std::unordered_set<uint32_t> portalVisibleGroupSet_; // reused per frame (portal culling scratch)
     /// The camera's interior pass (updateInteriorPass): per instance id, a
     /// flag per group, and the world bounds of the groups flagged.
+    /// filledGroupsLoaded().
+    bool filledGroupsLoaded_ = false;
     std::unordered_map<uint32_t, std::vector<uint8_t>> interiorPass_;
     std::vector<std::pair<glm::vec3, glm::vec3>> interiorPassBounds_;
     /// The box around all of them: most of what is asked - every doodad in a

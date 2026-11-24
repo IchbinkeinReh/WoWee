@@ -31,6 +31,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
+#include "rendering/liquid_query.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/character_renderer.hpp"
 #include "game/opcodes.hpp"
@@ -354,34 +355,8 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
 }
 
 std::optional<float> CameraController::portLiquidLevelAt(const glm::vec3& feet) const {
-    if (!waterRenderer) return std::nullopt;
-    namespace wl = pipeline::wmo_doodad_light;
-    std::optional<float> ground;
-    if (terrainManager && !terrainManager->isHoleAt(feet.x, feet.y)) {
-        ground = terrainManager->getHeightAt(feet.x, feet.y);
-    }
-    if (wmoRenderer) {
-        // In a building's group when the world object's floor search finds
-        // one under the feet and the ground is not nearer (0x007c2f80 from a
-        // tenth above them, 0x007c28f0): that group's liquid and no other
-        // (0x007a1a30).
-        const float startZ = feet.z + wl::kUnitFloorAbove;
-        const auto links = wmoRenderer->linksAlong(glm::vec3(feet.x, feet.y, startZ), startZ - wl::kFloorReach);
-        if (links.collides && !wl::terrainNearer(startZ, ground, startZ - links.collides->dist)) {
-            const auto& ref = links.collides->ref;
-            return waterRenderer->buildingLiquidLevelAt(ref.instanceId, ref.group, feet);
-        }
-        // Out of any: a building's exterior group's liquid first (0x007a09d0).
-        std::vector<WMORenderer::GroupRef> groups;
-        wmoRenderer->exteriorGroupsHolding(feet, groups);
-        for (const auto& ref : groups) {
-            if (auto level = waterRenderer->buildingLiquidLevelAt(ref.instanceId, ref.group, feet)) return level;
-        }
-    }
-    // Then the ground's, wherever the ground is (0x007c23f0 asks 0x007a0820
-    // without it): one put on the bed, a hand under what the height is read
-    // as there, was in no water and walked it.
-    return waterRenderer->groundLiquidLevelAt(feet, std::nullopt);
+    const auto liquid = liquid_query::atUnit({waterRenderer, wmoRenderer, terrainManager}, feet);
+    return liquid ? std::optional<float>(liquid->level) : std::nullopt;
 }
 
 namespace {
@@ -1285,8 +1260,11 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
     if (waterRenderer && actualDist >= MIN_DISTANCE + 0.1f) {
         const float band = std::max(0.05f, camera->getNearPlane()
                                            * std::tan(glm::radians(camera->getFovDegrees()) * 0.5f));
-        auto surfaceZ = waterRenderer->getNearestWaterHeightAt(
-            actualCam.x, actualCam.y, actualCam.z, 30.0f);
+        std::optional<float> surfaceZ;
+        if (const auto liquid = liquid_query::atCamera({waterRenderer, wmoRenderer, terrainManager}, actualCam, band);
+            liquid && !liquid->filled()) {
+            surfaceZ = liquid->level;
+        }
         // Clear of the band, not resting on its edge.
         //
         // Parking exactly at the edge puts the camera on the same threshold the
@@ -2243,10 +2221,7 @@ void CameraController::update(float deltaTime) {
         if (clickToMoveSteer_ && thirdPerson && followTarget && !keysStart && !introActive) {
             ClickToMoveMoverIn mover;
             mover.pitchRad = glm::radians(swimming ? swimPitchDeg_ : isFlightAirborne() ? flightPitchDeg_ : 0.0f);
-            if (waterRenderer) {
-                if (const auto waterH = waterRenderer->getWaterHeightAt(followTarget->x, followTarget->y))
-                    mover.liquidAbove = *waterH - followTarget->z;
-            }
+            if (const auto liquid = portLiquidLevelAt(*followTarget)) mover.liquidAbove = *liquid - followTarget->z;
             mover.swimDepth = swimFloatDepth();
             const ClickToMoveSteer st = clickToMoveSteer_(facingYaw, deltaTime, rightMouseDown, mover);
             // The pitch it set (0x0072ead0): where a swimmer or a flyer goes.

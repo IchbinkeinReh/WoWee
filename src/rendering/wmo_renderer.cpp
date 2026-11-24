@@ -947,6 +947,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         modelData.minimapGroups.assign(count, {});
         modelData.minimapLinks.assign(count, {});
         modelData.liquidWalk.assign(count, {});
+        modelData.filledLiquid.assign(count, 0);
         modelData.wmoId = model.wmoId;
         modelData.convexVolumePlanes = model.convexVolumePlanes;
         for (size_t gi = 0; gi < count; ++gi) {
@@ -967,6 +968,12 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             info.areaGroupId = model.groups[gi].areaGroupId;
             walk.flags = model.groups[gi].flags;
             walk.loaded = true;
+            const auto& g = model.groups[gi];
+            const uint32_t liquid = pipeline::wmoGroupLiquidType(g.liquidType, g.flags, model.flags);
+            if (!g.vertices.empty() && liquid_place::groupFilled(liquid, g.liquid.xTiles, g.liquid.yTiles)) {
+                modelData.filledLiquid[gi] = liquid;
+                filledGroupsLoaded_ = true;
+            }
             const uint32_t first = model.groups[gi].portalStart;
             const uint32_t end = first + model.groups[gi].portalCount;
             for (uint32_t r = first; r < end && r < model.portalRefs.size(); ++r) {
@@ -3105,26 +3112,45 @@ static bool trianglesAlongRay(const Group& group, const glm::vec3& localOrigin,
     return true;
 }
 
-std::vector<WMORenderer::CameraRoom> WMORenderer::cameraRooms(const glm::vec3& cameraPos,
-                                                             const glm::mat4& viewProj) const {
+std::array<WMORenderer::FaceBelow, 2>
+WMORenderer::facesBelowCamera(const glm::vec3& cameraPos, const std::optional<float>& ground) const {
     // A mile down (0x00795d40), or to the ground if that comes first.
     float reach = 1760.0f;
-    if (cameraGround_ && *cameraGround_ < cameraPos.z) reach = std::min(reach, cameraPos.z - *cameraGround_);
-    struct Below {
-        const WMOInstance* instance = nullptr;
-        const ModelData* model = nullptr;
-        uint32_t group = 0;
-        float distance = 0.0f;
-    };
-    std::array<Below, 2> below;  // the building, the transport
+    if (ground && *ground < cameraPos.z) reach = std::min(reach, cameraPos.z - *ground);
+    std::array<FaceBelow, 2> below;  // the building, the transport
     walkTrianglesAlong(cameraPos, cameraPos.z - reach, kFloorGroupSkip, [](uint8_t) { return true; },
                        [&](const WMOInstance& instance, const ModelData& model, const GroupResources& group, uint32_t,
                            uint8_t, float dist, const glm::vec3&) {
-                           Below& b = below[instance.isTransport ? 1 : 0];
+                           if (instance.hidden) return;
+                           FaceBelow& b = below[instance.isTransport ? 1 : 0];
                            if (!b.instance || dist < b.distance) b = {&instance, &model, group.groupIndex, dist};
                        });
+    return below;
+}
+
+std::optional<WMORenderer::GroupRef> WMORenderer::cameraGroupAt(const glm::vec3& cameraPos,
+                                                                const std::optional<float>& ground) const {
+    for (const FaceBelow& b : facesBelowCamera(cameraPos, ground)) {
+        if (!b.instance) continue;
+        const glm::vec3 eye(b.instance->invModelMatrix * glm::vec4(cameraPos, 1.0f));
+        const auto groups = wmo_portal_walk::cameraGroups(b.model->portalWalk(), eye, b.group, b.distance);
+        if (!groups.empty()) return GroupRef{b.instance->id, groups.front()};
+    }
+    return std::nullopt;
+}
+
+uint32_t WMORenderer::filledLiquidType(const GroupRef& ref) const {
+    const auto at = instanceIndexById.find(ref.instanceId);
+    if (at == instanceIndexById.end() || at->second >= instances.size()) return 0;
+    const auto it = loadedModels.find(instances[at->second].modelId);
+    if (it == loadedModels.end() || ref.group >= it->second.filledLiquid.size()) return 0;
+    return it->second.filledLiquid[ref.group];
+}
+
+std::vector<WMORenderer::CameraRoom> WMORenderer::cameraRooms(const glm::vec3& cameraPos,
+                                                             const glm::mat4& viewProj) const {
     std::vector<CameraRoom> out;
-    for (const Below& b : below) {
+    for (const FaceBelow& b : facesBelowCamera(cameraPos, cameraGround_)) {
         if (!b.instance || b.model->portalRefs.empty()) continue;
         const wmo_portal_walk::Building building = b.model->portalWalk();
         const glm::vec3 eye(b.instance->invModelMatrix * glm::vec4(cameraPos, 1.0f));

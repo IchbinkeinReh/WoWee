@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include "rendering/vk_texture.hpp"
 #include "rendering/water_ripple.hpp"
+#include "rendering/liquid_query.hpp"
 #include <array>
 #include <optional>
 #include <vulkan/vulkan.h>
@@ -62,7 +63,7 @@ public:
         targetSamples_ = samples;
     }
     void update(const Camera& camera, const CameraController& cc,
-                const WaterRenderer& water, float deltaTime);
+                const WaterRenderer& water, const liquid_query::World& world, float deltaTime);
     /// What the camera was moved by to ride the waves (Renderer::
     /// updateWaveRide): whether it is under water, for the bubbles, is
     /// decided without it, on the flat surface.

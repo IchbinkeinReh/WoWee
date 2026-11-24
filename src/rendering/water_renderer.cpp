@@ -2081,11 +2081,10 @@ std::optional<uint16_t> WaterRenderer::getWaterTypeAt(float glX, float glY) cons
     return bestType;
 }
 
-client_liquid::MaterialKind WaterRenderer::getLiquidKindAt(float glX, float glY) const {
-    const auto row = getWaterTypeAt(glX, glY);
-    if (!row) return client_liquid::MaterialKind::None;
-    const auto it = clientTypeRecords_.find(*row);
-    return client_liquid::liquidKindOfRow(*row, it != clientTypeRecords_.end() ? &it->second : nullptr);
+client_liquid::MaterialKind WaterRenderer::liquidKindOf(uint32_t row) const {
+    if (row == 0) return client_liquid::MaterialKind::None;
+    const auto it = clientTypeRecords_.find(row);
+    return client_liquid::liquidKindOfRow(row, it != clientTypeRecords_.end() ? &it->second : nullptr);
 }
 
 std::vector<audio::zone_ambience::LiquidCell>
@@ -2151,8 +2150,8 @@ WaterRenderer::liquidCellsNear(const glm::vec3& at, float radius, bool ground,
     return cells;
 }
 
-std::optional<float> WaterRenderer::buildingLiquidLevelAt(uint32_t instanceId, uint32_t group,
-                                                          const glm::vec3& world) const {
+std::optional<liquid_place::Liquid> WaterRenderer::buildingLiquidAt(uint32_t instanceId, uint32_t group,
+                                                                    const glm::vec3& world) const {
     for (const auto& surface : surfaces) {
         if (surface.wmoId != instanceId || surface.wmoGroup != group || surface.wmoLocalHeights.empty()) continue;
         const glm::vec3 local(surface.wmoWorldToLocal * glm::vec4(world, 1.0f));
@@ -2162,20 +2161,24 @@ std::optional<float> WaterRenderer::buildingLiquidLevelAt(uint32_t instanceId, u
         if (!level) continue;
         // Back to the world (0x004c21b0 with the instance's matrix).
         const glm::vec3 top(glm::inverse(surface.wmoWorldToLocal) * glm::vec4(local.x, local.y, *level, 1.0f));
-        return top.z;
+        // A building's liquidType is its row already (wmoGroupLiquidType).
+        return liquid_place::Liquid{top.z, surface.liquidType, true};
     }
     return std::nullopt;
 }
 
-std::optional<float> WaterRenderer::groundLiquidLevelAt(const glm::vec3& world,
-                                                        const std::optional<float>& groundZ) const {
+std::optional<liquid_place::Liquid> WaterRenderer::groundLiquidAt(const glm::vec3& world,
+                                                                  const std::optional<float>& groundZ) const {
     for (const auto& surface : surfaces) {
         if (surface.wmoId != 0) continue;
         const auto grid = wateredGridPosition(surface, world.x, world.y);
         if (!grid) continue;
         const auto level = sampleGridHeight(surface.heights, surface.width, surface.height, grid->x, grid->y);
         if (!level) continue;
-        if (collision::groundLiquidHolds(world.z, *level, groundZ)) return *level;
+        if (!collision::groundLiquidHolds(world.z, *level, groundZ)) continue;
+        // The LiquidType row (getWaterTypeAt).
+        const uint32_t row = surface.clientLiquidType != 0 ? surface.clientLiquidType : surface.liquidType;
+        return liquid_place::Liquid{*level, row, false};
     }
     return std::nullopt;
 }
@@ -2213,17 +2216,6 @@ void WaterRenderer::gatherLiquidFacets(const glm::vec3& boxMin, const glm::vec3&
             }
         }
     }
-}
-
-bool WaterRenderer::isWmoWaterAt(float glX, float glY) const {
-    for (const auto& surface : surfaces) {
-        if (surface.wmoId == 0) continue;
-        if (surfaceGridPosition(surface.origin, surface.stepX, surface.stepY,
-                                surface.width, surface.height, glX, glY)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 glm::vec4 WaterRenderer::getLiquidColor(uint16_t liquidType) const {

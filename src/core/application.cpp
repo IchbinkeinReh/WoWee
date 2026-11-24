@@ -458,7 +458,7 @@ void feedUnitRipple(rendering::Renderer& renderer, EntitySpawner& spawner, uint6
     const glm::vec3 away = feet - renderer.getCharacterPosition();
     constexpr float kRange = rendering::SwimEffects::kUnitRippleRange;
     if (glm::dot(away, away) > kRange * kRange) return;
-    const auto waterZ = water->getWaterHeightAt(feet.x, feet.y);
+    const auto waterZ = rendering::liquid_query::surfaceOverUnit(renderer.liquidWorld(), feet);
     if (!waterZ || *waterZ <= feet.z) return;
     if (!swim->surfaceRipplesShown()) {
         constexpr uint32_t kSwimming = static_cast<uint32_t>(game::MovementFlags::SWIMMING);

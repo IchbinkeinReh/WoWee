@@ -3097,11 +3097,10 @@ void Renderer::update(float deltaTime) {
             // Where the camera would be without riding the waves: whether it
             // is under is the flat surface's to say, as ever.
             const glm::vec3 eye = camera->getPosition() - cameraRideOffset_;
-            const auto surface = waterRenderer->getNearestWaterHeightAt(eye.x, eye.y, eye.z);
-            if (surface && eye.z < *surface) {
+            if (const auto liquid = liquid_query::atCamera(liquidWorld(), eye)) {
                 cameraLiquid.submerged = true;
-                cameraLiquid.depth = *surface - eye.z;
-                if (auto lt = waterRenderer->getWaterTypeAt(eye.x, eye.y)) cameraLiquid.liquidType = *lt;
+                cameraLiquid.depth = liquid->level - eye.z;
+                cameraLiquid.liquidType = liquid->liquidType;
             }
         }
         // ScreenEffect's row: its light slot (0x004f7020 -> 0x007ecec0) - the
@@ -3477,7 +3476,7 @@ void Renderer::update(float deltaTime) {
         WOWEE_PROFILE_SCOPE("swim effects", Cpu);
         swimEffects->setSurfaceRipplesShown(!waterRenderer->rtWaterDrawn());
         swimEffects->setCameraRideOffset(cameraRideOffset_);
-        swimEffects->update(*camera, *cameraController, *waterRenderer, deltaTime);
+        swimEffects->update(*camera, *cameraController, *waterRenderer, liquidWorld(), deltaTime);
     }
 
     // Surface disturbance the character leaves in the water. The droplet spray
@@ -3498,8 +3497,9 @@ void Renderer::update(float deltaTime) {
         // wades and floats that much deeper.
         const float bodies = cameraController->collisionHeight() / (73.0f / 36.0f);
 
+        const auto waterH = liquid_query::surfaceOverUnit(liquidWorld(), charPos);
         if (cameraController->isMoving()) {
-            if (auto waterH = waterRenderer->getWaterHeightAt(charPos.x, charPos.y)) {
+            if (waterH) {
                 if (swimming) {
                     // A wake only exists where the swimmer meets the surface -
                     // diving deep leaves the surface undisturbed.
@@ -3571,7 +3571,7 @@ void Renderer::update(float deltaTime) {
         // The swimmer's small waves, from its hands and body at the surface.
         namespace sw = swim_wave;
         sw::age(swimWaves_, deltaTime);
-        const auto waterZ = rtSwimWaves_ ? waterRenderer->getWaterHeightAt(charPos.x, charPos.y) : std::nullopt;
+        const auto waterZ = rtSwimWaves_ ? waterH : std::nullopt;
         if (waterZ && characterRenderer && characterInstanceId != 0) {
             for (uint32_t hand : {1u, 2u}) {
                 glm::mat4 at(1.0f);
@@ -5580,15 +5580,6 @@ if (overlaySystem_ && waterRenderer && camera) {
         // Without the camera's ride on the waves (updateWaveRide): under the
         // flat surface or not, as the lighting decides it.
         glm::vec3 camPos = camera->getPosition() - cameraRideOffset_;
-        // The default vertical reach of this query is 15 units, meant to
-        // stop water on a cliff above being mistaken for water the camera
-        // is in. For the underwater tint that cap is the wrong end of the
-        // problem: past 15 units down the query found nothing, the
-        // overlay stopped, and the scene snapped bright at a fixed depth.
-        // Deep ocean is far deeper than that, so reach much further here.
-        constexpr float kUnderwaterReach = 400.0f;
-        auto waterH = waterRenderer->getNearestWaterHeightAt(
-            camPos.x, camPos.y, camPos.z, kUnderwaterReach);
         // How far the eye is under the surface. The tint used to wait
         // until 1.5 units down and then apply to the whole screen at
         // once, so crossing the surface was a step: no tint, no tint,
@@ -5603,6 +5594,16 @@ if (overlaySystem_ && waterRenderer && camera) {
         const float fovY = glm::radians(camera->getFovDegrees());
         const float kCrossingBand =
             std::max(0.05f, camera->getNearPlane() * std::tan(fovY * 0.5f));
+        // The liquid of the place the camera is in, as the light's is: a lake
+        // over a dry room is not it. None of a building's, whose view the
+        // light's fog alone colours.
+        std::optional<float> waterH;
+        bool canal = false;
+        if (const auto liquid = liquid_query::atCamera(liquidWorld(), camPos, kCrossingBand);
+            liquid && !liquid->building) {
+            waterH = liquid->level;
+            canal = liquid->liquidType == 5 || liquid->liquidType == 13 || liquid->liquidType == 17;
+        }
         const float eyeDepth = waterH ? (*waterH - camPos.z) : -1.0f;
 
         // Says what it decided, so a screenshot of this can be read rather than
@@ -5614,7 +5615,6 @@ if (overlaySystem_ && waterRenderer && camera) {
                 lastLog = globalTime;
                 LOG_INFO("underwater: camZ=", camPos.z, " waterZ=", *waterH,
                          " eyeDepth=", eyeDepth, " band=", kCrossingBand,
-                         " wmoWater=", waterRenderer->isWmoWaterAt(camPos.x, camPos.y) ? 1 : 0,
                          " drawing=", (eyeDepth > 0.0f) ? 1 : 0);
             }
         }
@@ -5633,11 +5633,7 @@ if (overlaySystem_ && waterRenderer && camera) {
         // tinted the lower half of the view. The per-pixel test can - a pixel
         // whose ray enters the world above the surface comes out untouched -
         // so the band above the surface costs nothing where there is no water.
-        if (waterH && eyeDepth > -kCrossingBand
-                   && !waterRenderer->isWmoWaterAt(camPos.x, camPos.y)) {
-            bool canal = false;
-            if (auto lt = waterRenderer->getWaterTypeAt(camPos.x, camPos.y))
-                canal = (*lt == 5 || *lt == 13 || *lt == 17);
+        if (waterH && eyeDepth > -kCrossingBand) {
             // Until the eye passes the surface the view is darkened by
             // looking through the water plane itself, which is strong -
             // its alpha runs up towards 0.9 with depth. Once the eye is

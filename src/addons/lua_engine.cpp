@@ -11628,9 +11628,8 @@ void LuaEngine::registerCoreAPI() {
                     glm::vec3 at(0.0f);
                     cr->getInstancePosition(m.instanceId, at);
                     float depth = 0.0f;
-                    if (auto* water = renderer->getWaterRenderer()) {
-                        if (const auto h = water->getWaterHeightAt(at.x, at.y)) depth = *h - at.z;
-                    }
+                    if (const auto h = rendering::liquid_query::surfaceOverUnit(renderer->liquidWorld(), at))
+                        depth = *h - at.z;
                     char line[256];
                     std::snprintf(line, sizeof(line),
                                   "%llx display=%u mount anim=%u(%d) t=%.0f/%.0f flags=0x%x speed=%.2f "
@@ -11682,11 +11681,9 @@ void LuaEngine::registerCoreAPI() {
                 const glm::vec3 feet = renderer->getCharacterPosition();
                 std::snprintf(buf, sizeof(buf), "flags=0x%x fall=%u z=%.2f ", mi.flags, mi.fallTime, feet.z);
                 s += buf;
-                if (auto* water = renderer->getWaterRenderer()) {
-                    if (const auto h = water->getWaterHeightAt(feet.x, feet.y)) {
-                        std::snprintf(buf, sizeof(buf), "water=%.2f depth=%.2f ", *h, *h - feet.z);
-                        s += buf;
-                    }
+                if (const auto h = rendering::liquid_query::surfaceOverUnit(renderer->liquidWorld(), feet)) {
+                    std::snprintf(buf, sizeof(buf), "water=%.2f depth=%.2f ", *h, *h - feet.z);
+                    s += buf;
                 }
                 if (auto* cc = renderer->getCameraController()) {
                     std::snprintf(buf, sizeof(buf), "grounded=%d swim=%d fly=%d air=%.2f speed=%.2f colh=%.2f",

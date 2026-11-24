@@ -117,13 +117,9 @@ audio::FootstepSurface FootstepDriver::resolveFootstepSurface(Renderer* renderer
         return audio::FootstepSurface::WATER;
     }
 
-    auto* waterRenderer = renderer->getWaterRenderer();
-    if (waterRenderer) {
-        auto waterH = waterRenderer->getWaterHeightAt(p.x, p.y);
-        if (waterH && p.z < (*waterH + 0.25f)) {
-            cachedFootstepSurface_ = audio::FootstepSurface::WATER;
-            return audio::FootstepSurface::WATER;
-        }
+    if (liquid_query::atUnit(renderer->liquidWorld(), p, 0.25f)) {
+        cachedFootstepSurface_ = audio::FootstepSurface::WATER;
+        return audio::FootstepSurface::WATER;
     }
 
     auto* wmoRenderer = renderer->getWMORenderer();
@@ -161,10 +157,9 @@ audio::FootstepSurface FootstepDriver::resolveFootstepSurface(Renderer* renderer
 
 void FootstepDriver::playWaterStepExtras(Renderer* renderer) const {
     auto* swimEffects = renderer->getSwimEffects();
-    auto* waterRenderer = renderer->getWaterRenderer();
-    if (swimEffects && waterRenderer) {
+    if (swimEffects) {
         const glm::vec3& characterPosition = renderer->getCharacterPosition();
-        auto wh = waterRenderer->getWaterHeightAt(characterPosition.x, characterPosition.y);
+        const auto wh = liquid_query::surfaceOverUnit(renderer->liquidWorld(), characterPosition, 0.25f);
         if (wh) {
             swimEffects->spawnFootSplash(characterPosition, *wh);
         }

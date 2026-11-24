@@ -3471,6 +3471,15 @@ wowee_add_test(test_collision_liquid
     SOURCES test_collision_liquid.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_liquid_place ────────────────────────────────────────
+# Which liquid a point is in, by the place it is in: a room under a lake is
+# dry. Reads the sources for what still asks by x and y alone.
+wowee_add_test(test_liquid_place
+    SOURCES test_liquid_place.cpp
+            ${TEST_COMMON_SOURCES})
+target_compile_definitions(test_liquid_place PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # ── test_polygon_triangulate ─────────────────────────────────
 # Ear clipping for quest blob outlines, which are regularly concave. The
 # check is that the triangles cover the ring's own area and no more.

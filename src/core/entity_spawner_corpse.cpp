@@ -65,9 +65,9 @@ void EntitySpawner::spawnCorpse(uint64_t guid, const game::CorpseLook& look, flo
     site.position = glm::vec3(x, y, z);
     site.guildId = look.guildId;
     std::optional<float> liquid;
-    if (auto* water = renderer_ ? renderer_->getWaterRenderer() : nullptr) {
+    if (renderer_) {
         const glm::vec3 renderPos = core::coords::canonicalToRender(site.position);
-        liquid = water->getNearestWaterHeightAt(renderPos.x, renderPos.y, renderPos.z);
+        if (const auto in = rendering::liquid_query::atUnit(renderer_->liquidWorld(), renderPos)) liquid = in->level;
     }
     site.pose = game::corpsePoseAnimation(liquid, z);
     if (look.lootable()) setCorpseLootable(guid, true);
@@ -142,9 +142,10 @@ uint32_t EntitySpawner::dyingAnimation(uint64_t guid, uint32_t renderInstanceId)
     std::optional<float> liquid;
     const float z = entity->getZ();
     if (splineFlags) {
-        if (auto* water = renderer_ ? renderer_->getWaterRenderer() : nullptr) {
+        if (renderer_) {
             const glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(entity->getX(), entity->getY(), z));
-            liquid = water->getNearestWaterHeightAt(renderPos.x, renderPos.y, renderPos.z);
+            if (const auto in = rendering::liquid_query::atUnit(renderer_->liquidWorld(), renderPos))
+                liquid = in->level;
         }
     }
     float height = unitGeoBoxHeight(renderInstanceId);

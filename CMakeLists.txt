@@ -1127,6 +1127,7 @@ set(WOWEE_SOURCES
     src/rendering/amd_fsr3_runtime.cpp
     src/rendering/camera.cpp
     src/rendering/camera_controller.cpp
+    src/rendering/liquid_query.cpp
     src/rendering/material.cpp
     src/rendering/terrain_renderer.cpp
     src/rendering/shadow_params.cpp

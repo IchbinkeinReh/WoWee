@@ -180,8 +180,10 @@ json stateOf(ToolContext& context, const json& args) {
     std::snprintf(go, sizeof(go), ".go xyz %.3f %.3f %.3f %u %.4f", me.x, me.y, me.z, gh->getCurrentMapId(),
                   playerFacing(context));
     place["go"] = go;
-    if (auto* water = renderer ? renderer->getWaterRenderer() : nullptr) {
-        if (const auto h = water->getWaterHeightAt(me.x, me.y)) place["water_over_feet"] = rounded(*h - me.z, 2);
+    // The liquid the character is in, not whatever lies over its room.
+    if (renderer) {
+        if (const auto h = rendering::liquid_query::surfaceOverUnit(renderer->liquidWorld(), me))
+            place["water_over_feet"] = rounded(*h - me.z, 2);
     }
     out["place"] = std::move(place);
 

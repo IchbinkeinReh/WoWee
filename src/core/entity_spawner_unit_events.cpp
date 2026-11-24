@@ -626,7 +626,8 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             // The foot in water, where the unit is and not swimming
             // (0x0071a030).
             std::optional<float> liquid;
-            if (auto* water = renderer_->getWaterRenderer()) liquid = water->getWaterHeightAt(unitPosition.x, unitPosition.y);
+            if (const auto in = rendering::liquid_query::atUnit(renderer_->liquidWorld(), unitPosition, 0.01f))
+                liquid = in->level;
             const bool inWater = ue::footInWater(liquid, event.position.z, moveFlags);
             const uint32_t sound = footstepSounds_->sound(footstepId, groundTerrainType(unitPosition), inWater);
             if (sound == 0) break;
@@ -681,7 +682,8 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             }
             // In liquid: the water sound, and none at all deeper than two yards.
             std::optional<float> liquid;
-            if (auto* water = renderer_->getWaterRenderer()) liquid = water->getWaterHeightAt(unitPosition.x, unitPosition.y);
+            if (const auto in = rendering::liquid_query::atUnit(renderer_->liquidWorld(), unitPosition))
+                liquid = in->level;
             const bool inWater = liquid && *liquid > unitPosition.z;
             if (inWater && *liquid - unitPosition.z > ue::kDeathThudMaxDepth) break;
             const uint32_t sound = deathThudSounds_->sound(size, terrainSound, inWater);
@@ -947,8 +949,7 @@ float EntitySpawner::modelCollisionHeight(const game::Unit& unit) const {
 
 bool EntitySpawner::deepInLiquid(const game::Unit& unit) const {
     auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
-    auto* water = renderer_ ? renderer_->getWaterRenderer() : nullptr;
-    if (!cr || !water) return false;
+    if (!cr) return false;
     const uint64_t guid = unit.getGuid();
     uint32_t drawn = getPlayerInstanceId(guid);
     if (drawn == 0) drawn = getCreatureInstanceId(guid);
@@ -956,8 +957,8 @@ bool EntitySpawner::deepInLiquid(const game::Unit& unit) const {
         drawn = mount->instanceId;
     glm::vec3 at;
     if (drawn == 0 || !cr->getInstancePosition(drawn, at)) return false;
-    const auto level = water->getWaterHeightAt(at.x, at.y);
-    return level && game::deepInLiquid(*level - at.z, modelCollisionHeight(unit));
+    const auto liquid = rendering::liquid_query::atUnit(renderer_->liquidWorld(), at);
+    return liquid && game::deepInLiquid(liquid->level - at.z, modelCollisionHeight(unit));
 }
 
 void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
@@ -966,7 +967,6 @@ void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
     if (!cr || !gameHandler_ || !assetManager_) return;
     auto races = assetManager_->loadDBCOptional("ChrRaces.dbc");
     if (!races || races->getFieldCount() <= us::kChrRacesSplashSoundColumn) return;
-    rendering::WaterRenderer* water = renderer_->getWaterRenderer();
     const auto& entities = gameHandler_->getEntityManager();
     const auto& creatureInfo = gameHandler_->getCreatureInfoCache();
     const uint64_t self = gameHandler_->getPlayerGuid();
@@ -998,9 +998,8 @@ void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
             if (!cr->getInstancePosition(drawn, at)) return;
         }
         float depth = 0.0f;
-        if (water) {
-            if (const auto level = water->getWaterHeightAt(at.x, at.y)) depth = *level - at.z;
-        }
+        if (const auto liquid = rendering::liquid_query::atUnit(renderer_->liquidWorld(), at))
+            depth = liquid->level - at.z;
         const auto last = splashDepth_.find(guid);
         const float lastDepth = last != splashDepth_.end() ? last->second : 0.0f;
         const uint32_t moveFlags = guid == self ? gameHandler_->getMovementInfo().flags : unit.getReportedMoveFlags();

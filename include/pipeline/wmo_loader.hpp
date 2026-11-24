@@ -219,7 +219,8 @@ struct WMOGroup {
     /// these unlit in a group with vertex colours.
     uint16_t intBatchCount = 0;
     uint32_t fogIndices[4] = {};  // Fog references
-    uint32_t liquidType = 0;
+    /// MOGP's liquid (+0x34): 15 for none, as a group built in code has it.
+    uint32_t liquidType = 15;
     uint32_t groupId = 0;
     /// MOGP's WMOAreaTable group id (+0x38).
     int32_t areaGroupId = 0;

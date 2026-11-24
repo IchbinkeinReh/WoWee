@@ -407,7 +407,7 @@ void SwimEffects::spawnInsect(const glm::vec3& vegPos) {
 }
 
 void SwimEffects::update(const Camera& camera, const CameraController& cc,
-                         const WaterRenderer& water, float deltaTime) {
+                         const WaterRenderer& water, const liquid_query::World& world, float deltaTime) {
     glm::vec3 camPos = camera.getPosition();
     // Where the camera would be without riding the waves (Renderer::
     // updateWaveRide): the bubbles start under the flat surface, as ever.
@@ -426,14 +426,17 @@ void SwimEffects::update(const Camera& camera, const CameraController& cc,
     // bubbles read as swimming in water. Decided as each is made, not reset
     // after: GCC 16 loses track of a reset optional and warns it may be read
     // uninitialised.
-    const bool charInMagma =
-        water.getLiquidKindAt(charPos.x, charPos.y) == client_liquid::MaterialKind::Magma;
-    const bool camInMagma =
-        water.getLiquidKindAt(camPos.x, camPos.y) == client_liquid::MaterialKind::Magma;
+    const auto isMagma = [&](const std::optional<liquid_place::Liquid>& liquid) {
+        return liquid && water.liquidKindOf(liquid->liquidType) == client_liquid::MaterialKind::Magma;
+    };
+    // Of the place each is in (liquid_query): nothing of a lake over a room.
+    const auto charLiquid = liquid_query::atUnit(world, charPos);
+    const auto camLiquid = liquid_query::atCamera(world, camAt);
     const std::optional<float> charWaterH =
-        charInMagma ? std::nullopt : water.getWaterHeightAt(charPos.x, charPos.y);
+        charLiquid && !charLiquid->filled() && !isMagma(charLiquid) ? std::optional<float>(charLiquid->level)
+                                                                    : std::nullopt;
     const std::optional<float> camWaterH =
-        camInMagma ? std::nullopt : water.getWaterHeightAt(camAt.x, camAt.y);
+        camLiquid && !isMagma(camLiquid) ? std::optional<float>(camLiquid->level) : std::nullopt;
 
     bool swimming = cc.isSwimming();
     bool moving = cc.isMoving();

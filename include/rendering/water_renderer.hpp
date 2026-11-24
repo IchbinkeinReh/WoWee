@@ -23,6 +23,7 @@
 #include "audio/zone_ambience.hpp"
 #include "rendering/client_liquid.hpp"
 #include "rendering/client_proc_water.hpp"
+#include "rendering/liquid_place.hpp"
 #include "rendering/minimap_indoor.hpp"
 #include "rendering/cube_texture.hpp"
 #include "rendering/vk_texture.hpp"
@@ -231,10 +232,10 @@ public:
     /// magma surface's glowing patches (rt_lights::liquidGlowPatches) whose
     /// light reaches within `range`, nearest first, at most kMaxLavaLights.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
-    /// What the liquid at (x, y) is made of (client_liquid::liquidKindOfRow):
-    /// lava and slime are Magma, and take no water's swim effects. None with
-    /// no liquid there.
-    client_liquid::MaterialKind getLiquidKindAt(float glX, float glY) const;
+    /// What a LiquidType row's liquid is made of (client_liquid::
+    /// liquidKindOfRow): lava and slime are Magma, and take no water's swim
+    /// effects. None for row 0.
+    [[nodiscard]] client_liquid::MaterialKind liquidKindOf(uint32_t row) const;
     static constexpr size_t kMaxLavaLights = 32;
 
     void recreatePipelines();
@@ -373,8 +374,9 @@ public:
     /// pixel and tessellated vertex.
     void fillWaveSpectra();
     /// Like getWaterHeightAt but only returns water surfaces whose height is
-    /// close to the query Z (within maxAbove units above). Avoids false
-    /// underwater detection from elevated WMO water far above the camera.
+    /// close to the query Z (within maxAbove units above): what falls from
+    /// above lands on. Not what the point is in, which the place decides
+    /// (liquid_query).
     std::optional<float> getNearestWaterHeightAt(float glX, float glY, float queryZ, float maxAbove = 15.0f) const;
     std::optional<uint16_t> getWaterTypeAt(float glX, float glY) const;
     /// Every liquid cell whose middle - its centre, half way up between the
@@ -386,15 +388,15 @@ public:
     std::vector<audio::zone_ambience::LiquidCell>
     liquidCellsNear(const glm::vec3& at, float radius, bool ground,
                     const std::vector<minimap_indoor::GroupRef>& groups) const;
-    bool isWmoWaterAt(float glX, float glY) const;
-    /// The movement's liquid lookups (collision_liquid.hpp). A building
-    /// group's level over a point under it (0x007c8360), in the world.
-    [[nodiscard]] std::optional<float> buildingLiquidLevelAt(uint32_t instanceId, uint32_t group,
-                                                             const glm::vec3& world) const;
+    /// The lookups of the liquid a point is in (collision_liquid.hpp; which
+    /// of them counts is liquid_query's to say). A building group's over a
+    /// point under its surface (0x007c8360).
+    [[nodiscard]] std::optional<liquid_place::Liquid> buildingLiquidAt(uint32_t instanceId, uint32_t group,
+                                                                       const glm::vec3& world) const;
     /// The ground's: the first chunk liquid with a tile at the point that
     /// the point is under, and the ground under the point (0x007a0820).
-    [[nodiscard]] std::optional<float> groundLiquidLevelAt(const glm::vec3& world,
-                                                           const std::optional<float>& groundZ) const;
+    [[nodiscard]] std::optional<liquid_place::Liquid> groundLiquidAt(const glm::vec3& world,
+                                                                     const std::optional<float>& groundZ) const;
     /// The liquid surfaces in a box as facets facing up, two a tile with
     /// liquid: the ground's and the buildings' alike (0x00783910 with the
     /// mask 0x20000; 0x007a5a60 -> 0x007ce5d0 for a chunk, 0x007ca110 for a
