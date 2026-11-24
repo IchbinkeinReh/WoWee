@@ -519,7 +519,8 @@ public:
 
     // Auras
     [[nodiscard]] const std::vector<AuraSlot>& getPlayerAuras() const { return playerAuras_; }
-    [[nodiscard]] const std::vector<AuraSlot>& getTargetAuras() const { return targetAuras_; }
+    /// The target's; the player's own where the player is the target.
+    [[nodiscard]] const std::vector<AuraSlot>& getTargetAuras() const;
     /// 0x00727e70's bit for `auraType`: an aura of the unit's with an effect
     /// of the type on.
     [[nodiscard]] bool unitHasAuraType(uint64_t guid, uint32_t auraType) const;
@@ -603,10 +604,12 @@ public:
     /// The item the running cast was cast from (SMSG_SPELL_START's caster
     /// where it is not the unit), 0 for none (0x00805fc0).
     [[nodiscard]] uint64_t currentCastItemGuid() const { return casting_ ? castItemGuid_ : 0; }
-    [[nodiscard]] const std::vector<AuraSlot>* getUnitAuras(uint64_t guid) const {
-        auto it = unitAurasCache_.find(guid);
-        return (it != unitAurasCache_.end()) ? &it->second : nullptr;
-    }
+    /// A unit's, the player's own among them: every token that names the
+    /// player is the player (0x0060abf0).
+    [[nodiscard]] const std::vector<AuraSlot>* getUnitAuras(uint64_t guid) const;
+    /// UNIT_AURA for every token the unit has (0x006143f0(guid, 0x8e), from
+    /// 0x0072f5d0), and what else goes with the player's.
+    void announceAuras(uint64_t guid, bool companions);
 
     // Spell book tabs
     const std::vector<SpellBookTab>& getSpellBookTabs();

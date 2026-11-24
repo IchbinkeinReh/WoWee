@@ -276,3 +276,26 @@ TEST_CASE("before WotLK the stance bar is the class's list", "[replay][stancebar
     Session s("tbc");
     CHECK(s.handler().stanceBarSpells().empty());
 }
+
+// The player as its own target or focus showed no auras (playtest P37).
+TEST_CASE("the player's auras are the target's where the player is the target", "[replay][auras]") {
+    Book book(2);
+    std::vector<std::string> units;
+    book.s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event == "UNIT_AURA" && !args.empty()) units.push_back(args[0]);
+    });
+    book.s.handler().setTarget(Session::kPlayerGuid);
+    book.s.handler().setFocus(Session::kPlayerGuid);
+    units.clear();
+    book.aura(0, kDevotion10);
+    REQUIRE(book.s.handler().getTargetAuras().size() == 1);
+    CHECK(book.s.handler().getTargetAuras()[0].spellId == kDevotion10);
+    // By guid too: focus, mouseover, targettarget.
+    const auto* byGuid = book.s.handler().getUnitAuras(Session::kPlayerGuid);
+    REQUIRE(byGuid != nullptr);
+    CHECK((*byGuid)[0].spellId == kDevotion10);
+    // UNIT_AURA for every token of the unit (0x006143f0).
+    CHECK(units == std::vector<std::string>{"player", "target", "focus"});
+    book.s.handler().clearTarget();
+    CHECK(book.s.handler().getTargetAuras().empty());
+}

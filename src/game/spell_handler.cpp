@@ -5631,6 +5631,30 @@ void SpellHandler::handleCooldownEvent(network::Packet& packet) {
 /// soon as they clicked on them, and a buff cast on them while they were
 /// targeted never appeared there at all - which reads exactly like the buff
 /// being cancelled, or never landing.
+const std::vector<AuraSlot>& SpellHandler::getTargetAuras() const {
+    const uint64_t player = owner_.getPlayerGuid();
+    return player != 0 && owner_.getTargetGuid() == player ? playerAuras_ : targetAuras_;
+}
+
+const std::vector<AuraSlot>* SpellHandler::getUnitAuras(uint64_t guid) const {
+    if (guid != 0 && guid == owner_.getPlayerGuid()) return &playerAuras_;
+    auto it = unitAurasCache_.find(guid);
+    return (it != unitAurasCache_.end()) ? &it->second : nullptr;
+}
+
+void SpellHandler::announceAuras(uint64_t guid, bool companions) {
+    if (!owner_.addonEventCallbackRef()) return;
+    for (const std::string& unit : owner_.unitTokensForGuid(guid)) owner_.addonEventCallbackRef()("UNIT_AURA", {unit});
+    if (guid != owner_.getPlayerGuid()) return;
+    // A 1.12 interface listens for this rather than for UNIT_AURA, and it
+    // carries no unit: buffframe.lua re-reads the player's whole list when it
+    // arrives.
+    owner_.addonEventCallbackRef()("PLAYER_AURAS_CHANGED", {});
+    // Whether a companion is out is an aura on the player, so the tab's
+    // "active" mark moves with one.
+    if (companions) owner_.announceCompanionChange();
+}
+
 void SpellHandler::mirrorAurasByGuid(uint64_t guid, const std::vector<AuraSlot>& auras) {
     if (guid == 0 || guid == owner_.getPlayerGuid()) return;
     auto& cached = unitAurasCache_[guid];
@@ -5973,27 +5997,7 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
             }
         }
 
-        if (owner_.addonEventCallbackRef()) {
-            std::string unitId;
-            if (data.guid == owner_.getPlayerGuid()) unitId = "player";
-            else if (data.guid == owner_.getTargetGuid()) unitId = "target";
-            else if (data.guid == owner_.focusGuidRef()) unitId = "focus";
-            else if (data.guid == owner_.petGuidRef()) unitId = "pet";
-            if (!unitId.empty()) {
-                owner_.addonEventCallbackRef()("UNIT_AURA", {unitId});
-                // A 1.12 interface listens for this rather than for
-                // UNIT_AURA, and it carries no unit: buffframe.lua
-                // re-reads the player's whole list when it arrives.
-                if (unitId == "player") {
-                    owner_.addonEventCallbackRef()("PLAYER_AURAS_CHANGED", {});
-                }
-            }
-            // Outside that, and indented to say so. It reads the same name and
-            // tests it again, so the behaviour is unchanged - but it was
-            // written as though the check above guarded it, which is the shape
-            // that hid a call to a null callback elsewhere in this file.
-            if (unitId == "player") owner_.announceCompanionChange();
-        }
+        announceAuras(data.guid, /*companions=*/true);
 
         // Mount aura detection
         if (data.guid == owner_.getPlayerGuid() && owner_.currentMountDisplayIdRef() != 0 && owner_.mountAuraSpellIdRef() == 0) {
@@ -9092,20 +9096,7 @@ void SpellHandler::handleExtraAuraInfo(network::Packet& packet, bool isInit) {
         }
     }
     if (auraList) mirrorAurasByGuid(auraTargetGuid, *auraList);
-    if (auraList && owner_.addonEventCallbackRef()) {
-        std::string unitId;
-        if (auraTargetGuid == owner_.getPlayerGuid()) unitId = "player";
-        else if (auraTargetGuid == owner_.getTargetGuid()) unitId = "target";
-        else if (auraTargetGuid == owner_.focusGuidRef()) unitId = "focus";
-        else if (auraTargetGuid == owner_.petGuidRef()) unitId = "pet";
-        if (!unitId.empty()) owner_.addonEventCallbackRef()("UNIT_AURA", {unitId});
-        // The 1.12 name, which carries no unit. See the note at the
-        // site that fires it with a comment in full.
-        if (unitId == "player") owner_.addonEventCallbackRef()("PLAYER_AURAS_CHANGED", {});
-        // Whether a companion is out is an aura on the player, so the tab's
-        // "active" mark moves with one.
-        if (unitId == "player") owner_.announceCompanionChange();
-    }
+    if (auraList) announceAuras(auraTargetGuid, /*companions=*/true);
     if (auraTargetGuid == owner_.getPlayerGuid()) {
         refreshRestorationFromPlayerAuras();
     }
@@ -9624,17 +9615,7 @@ void SpellHandler::handleClearExtraAuraInfo(network::Packet& packet) {
             (*auraList)[slot] = AuraSlot{};
         }
         if (auraList) mirrorAurasByGuid(clearGuid, *auraList);
-        if (auraList && owner_.addonEventCallbackRef()) {
-            std::string unitId;
-            if (clearGuid == owner_.getPlayerGuid()) unitId = "player";
-            else if (clearGuid == owner_.getTargetGuid()) unitId = "target";
-            else if (clearGuid == owner_.focusGuidRef()) unitId = "focus";
-            else if (clearGuid == owner_.petGuidRef()) unitId = "pet";
-            if (!unitId.empty()) owner_.addonEventCallbackRef()("UNIT_AURA", {unitId});
-            // The 1.12 name, which carries no unit. See the note at the
-            // site that fires it with a comment in full.
-            if (unitId == "player") owner_.addonEventCallbackRef()("PLAYER_AURAS_CHANGED", {});
-        }
+        if (auraList) announceAuras(clearGuid, /*companions=*/false);
         if (clearGuid == owner_.getPlayerGuid()) {
             refreshRestorationFromPlayerAuras();
         }
