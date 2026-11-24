@@ -3338,9 +3338,10 @@ void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
             return;
         }
         // 0x00805d70: its global cooldown into the pet's history.
+        if (unit_target::askedNoUnit(targetGuid)) return;
         if (spellHandler_) spellHandler_->notePetActionCast(spell, petGuid_);
     }
-    sendPetAction(packed, targetGuid != 0 ? targetGuid : petGuid_);
+    sendPetAction(packed, targetGuid != 0 && !unit_target::askedNoUnit(targetGuid) ? targetGuid : petGuid_);
 }
 
 void GameHandler::dismissCritter() {

@@ -443,11 +443,7 @@ static const char* petTokenTexture(uint32_t packed) {
 /// answers false for a token that names nobody, and then nothing is sent and
 /// nothing is heard. No argument at all is not such a token.
 static bool petUnitArgResolves(lua_State* L, game::GameHandler* gh, int unitArg) {
-    const char* uid = unitArg > 0 ? luaL_optstring(L, unitArg, nullptr) : nullptr;
-    if (!uid || !gh) return true;
-    std::string u(uid);
-    toLowerInPlace(u);
-    return resolveUnitGuid(gh, u) != 0;
+    return !gh || unitAskedOrTarget(L, gh, unitArg).has_value();
 }
 
 static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, int unitArg) {
@@ -458,14 +454,7 @@ static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, in
     // CGPetInfo::SendPetAction asks the taint check first (0x005d4210, kind
     // 2): a pet's action is refused outright to insecure code.
     if (!taint::allowed(L, 2)) return;
-    uint64_t target = 0;
-    if (const char* uid = unitArg > 0 ? luaL_optstring(L, unitArg, nullptr) : nullptr) {
-        std::string u(uid);
-        toLowerInPlace(u);
-        target = resolveUnitGuid(gh, u);
-    }
-    if (target == 0 && gh->hasTarget()) target = gh->getTargetGuid();
-    gh->usePetSlot(packed, target);
+    if (const auto target = unitAskedOrTarget(L, gh, unitArg)) gh->usePetSlot(packed, *target);
 }
 
 static int lua_HasAction(lua_State* L) {
@@ -1446,17 +1435,10 @@ static int lua_UseAction(lua_State* L) {
     // this was a warning on every one of them.
     LOG_DEBUG("UseAction: slot ", slot + 1, " type=", static_cast<int>(action.type), " id=", action.id);
     if (action.type == game::ActionBarSlot::SPELL) {
-        // A unit that resolves wins; anything else falls back to the target,
-        // which is what an ordinary click has always done. An unresolvable
-        // unit is not treated as "cast on nobody" - a raid frame naming a
-        // member who has gone out of range should still cast at the target
-        // rather than silently at nothing.
-        uint64_t target = gh->hasTarget() ? gh->getTargetGuid() : 0;
-        if (const char* unit = lua_tostring(L, 2); unit && *unit) {
-            std::string uid(unit);
-            toLowerInPlace(uid);
-            if (const uint64_t named = resolveUnitGuid(gh, uid)) target = named;
-        }
+        // None is the target, and never another unit's stand-in (0x0060abf0):
+        // a unit named that is not there is refused, what is no unit at all
+        // does nothing.
+        const auto target = unitAskedOrTarget(L, gh, 2);
         // A spell that belongs to an item - a Hearthstone is spell 8690 - has
         // to go as CMSG_USE_ITEM rather than a cast, or the server drops it.
         // This client's own action bar did that and was the only place that
@@ -1464,15 +1446,16 @@ static int lua_UseAction(lua_State* L) {
         //
         // Either way through 0x0080cce0, and its taint check (0x005abbc0 ->
         // 0x0053bc40, or UseItem -> 0x0080da40).
-        if (!spellCastAllowed(L, gh, action.id)) {
+        if (!target || !spellCastAllowed(L, gh, action.id)) {
             // Refused, and the interface told (ADDON_ACTION_FORBIDDEN).
         } else if (const uint32_t itemForSpell = gh->getItemIdForSpell(action.id)) {
-            gh->useItemById(itemForSpell, target);
+            gh->useItemById(itemForSpell, *target);
         } else {
-            gh->castSpell(action.id, target);
+            gh->castSpell(action.id, *target);
         }
     } else if (action.type == game::ActionBarSlot::ITEM && action.id != 0) {
-        if (itemUseAllowed(L, gh, action.id, false)) gh->useItemById(action.id);
+        const auto unit = unitUsedOn(L, gh, 2);
+        if (unit && itemUseAllowed(L, gh, action.id, false)) gh->useItemById(action.id, *unit);
     } else if (action.type == game::ActionBarSlot::EQUIPMENT_SET) {
         // WEAR_EQUIPMENT_SET with the set's name, for the interface to equip
         // it (0x005abbc0 -> 0x005ae660).

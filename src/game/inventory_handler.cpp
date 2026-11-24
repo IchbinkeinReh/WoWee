@@ -2611,6 +2611,21 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
         const bool wantsUnit =
             (useSpellId != 0 && spellNeedsAUnit(owner_.getSpellImplicitTargetA(useSpellId))) ||
             (useSpellId != 0 && !owner_.isSpellKnownToClient(useSpellId));
+        // A unit named that is not there, and "none": as a spell's
+        // (0x0080cce0).
+        if (unit_target::askedNoUnit(unitTarget)) {
+            if (wantsUnit && unitTarget == unit_target::kAskedNobody) {
+                if (auto* spells = owner_.getSpellHandler())
+                    spells->reportLocalCastFailure(useSpellId, unit_target::kFailedNoTarget);
+                return;
+            }
+            if (wantsUnit) {
+                pendingUnitTarget_ = PendingItemTarget{.bag = wowBag, .slot = wowSlot, .itemGuid = itemGuid, .spellId = useSpellId,
+                                                       .itemId = item.itemId, .itemName = item.name, .fromSpell = false};
+                return;
+            }
+            unitTarget = 0;
+        }
         const uint64_t chosen = unitTarget != 0
             ? unitTarget : targetGuidForUseItem(owner_, itemInfo, useSpellId);
         // Bandages and scrolls. Using either with nothing selected puts it on

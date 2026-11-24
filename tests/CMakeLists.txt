@@ -656,6 +656,16 @@ target_link_libraries(test_frame_handle PRIVATE catch2_main lua51)
 add_test(NAME frame_handle COMMAND test_frame_handle)
 register_test_target(test_frame_handle)
 
+# ── test_unit_token ──────────────────────────────────────────
+add_executable(test_unit_token
+    test_unit_token.cpp
+)
+target_include_directories(test_unit_token PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_unit_token SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_unit_token PRIVATE catch2_main)
+add_test(NAME unit_token COMMAND test_unit_token)
+register_test_target(test_unit_token)
+
 # ── test_green_range ─────────────────────────────────────────
 add_executable(test_green_range
     test_green_range.cpp

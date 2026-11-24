@@ -899,15 +899,12 @@ static int lua_CastSpellByName(lua_State* L) {
         // The same second argument, and the same branch of SECURE_ACTIONS.spell
         // reaches here: a spell named rather than numbered is cast by name, and
         // the unit clicked still says who it lands on.
-        uint64_t target = 0;
-        if (const char* unit = luaL_optstring(L, 2, nullptr)) {
-            std::string u(unit);
-            toLowerInPlace(u);
-            target = resolveUnitGuid(gh, u);
-        }
-        if (target == 0 && gh->hasTarget()) target = gh->getTargetGuid();
+        // None is the target; a unit named that is not there is not (it fails,
+        // or the cursor holds the spell for "none"), and what is no unit at
+        // all casts nothing.
+        const auto target = unitAskedOrTarget(L, gh, 2);
         // 0x00540310 -> 0x0080da40 -> 0x0080cce0, which asks the taint check.
-        if (spellCastAllowed(L, gh, bestId)) gh->castSpell(bestId, target);
+        if (target && spellCastAllowed(L, gh, bestId)) gh->castSpell(bestId, *target);
     }
     return 0;
 }
@@ -1302,14 +1299,15 @@ static int lua_ClearTarget(lua_State* L) {
 static int lua_FocusUnit(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    const char* uid = luaL_optstring(L, 1, nullptr);
-    if (!uid || !*uid) return 0;
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    // 0x0051ff20: a change of focus is refused to insecure code.
-    if (guid != 0 && (guid == gh->getFocusGuid() || taint::allowedSecureOnly(L)))
-        gh->setFocus(guid);
+    // 0x00522480: no unit is the target, and with none, or a unit named that
+    // is not there, the focus goes. 0x0051ff20: a change of focus is refused
+    // to insecure code.
+    const auto asked = unitAskedOrTarget(L, gh, 1);
+    if (!asked) return 0;
+    const uint64_t guid = game::unit_target::askedNoUnit(*asked) ? 0 : *asked;
+    if (guid == gh->getFocusGuid() || !taint::allowedSecureOnly(L)) return 0;
+    if (guid != 0) gh->setFocus(guid);
+    else gh->clearFocus();
     return 0;
 }
 
@@ -1805,15 +1803,9 @@ static int lua_CastSpellByID(lua_State* L) {
     // unit off the button that was clicked. Ignoring it cast on whatever was
     // targeted instead, so healing a party member through their frame hit the
     // current target.
-    uint64_t target = 0;
-    if (const char* unit = luaL_optstring(L, 2, nullptr)) {
-        std::string u(unit);
-        toLowerInPlace(u);
-        target = resolveUnitGuid(gh, u);
-    }
-    if (target == 0 && gh->hasTarget()) target = gh->getTargetGuid();
+    const auto target = unitAskedOrTarget(L, gh, 2);   // as CastSpellByName
     // 0x0053e060 -> 0x0080da40 -> 0x0080cce0, which asks the taint check.
-    if (spellCastAllowed(L, gh, spellId)) gh->castSpell(spellId, target);
+    if (target && spellCastAllowed(L, gh, spellId)) gh->castSpell(spellId, *target);
     return 0;
 }
 

@@ -288,9 +288,7 @@ int pushReach(lua_State* L, game::GameHandler* gh, uint32_t spellId, uint64_t ca
 std::optional<uint64_t> unitArg(lua_State* L, game::GameHandler* gh, int idx) {
     const char* s = lua_tostring(L, idx);
     if (!s) return std::nullopt;
-    std::string u(s);
-    toLowerInPlace(u);
-    return resolveUnitGuid(gh, u);
+    return resolveUnitGuid(gh, s);
 }
 
 /// IsItemInRange(item, unit) (0x0051c9c0): the use spell's reach to the
@@ -298,8 +296,8 @@ std::optional<uint64_t> unitArg(lua_State* L, game::GameHandler* gh, int idx) {
 int isItemInRange(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint32_t itemId = itemArg(L, gh, 1);
-    const auto unit = gh ? unitArg(L, gh, 2) : std::nullopt;
-    if (!unit) return luaReturnNil(L);
+    const auto unit = unitAskedOrTarget(L, gh, 2);   // none is the target
+    if (!unit || game::unit_target::askedNoUnit(*unit)) return luaReturnNil(L);
     return pushReach(L, gh, itemUseSpell(gh, itemId), gh->getPlayerGuid(), *unit);
 }
 
@@ -310,11 +308,8 @@ int isQuestLogSpecialItemInRange(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: IsQuestLogSpecialItemInRange(index [,target])");
     auto* gh = getGameHandler(L);
     const auto item = questSpecialItemAt(gh, static_cast<int>(lua_tonumber(L, 1)));
-    const char* named = gh ? lua_tostring(L, 2) : nullptr;
-    std::optional<uint64_t> unit;
-    if (named && *named) unit = unitArg(L, gh, 2);
-    else if (gh) unit = gh->getTargetGuid();
-    if (!unit) return luaReturnNil(L);
+    const auto unit = unitAskedOrTarget(L, gh, 2);
+    if (!unit || game::unit_target::askedNoUnit(*unit)) return luaReturnNil(L);
     return pushReach(L, gh, itemUseSpell(gh, item.itemId), gh->getPlayerGuid(), *unit);
 }
 

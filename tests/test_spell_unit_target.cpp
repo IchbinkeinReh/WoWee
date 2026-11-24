@@ -479,3 +479,22 @@ TEST_CASE("a ranged spell reaches as far as the ranged weapon lets it (0x007ff48
     in.attr = 0;
     REQUIRE(unitRange(in, none).max == Catch::Approx(35.0f));
 }
+
+TEST_CASE("a cast asked at a token of nobody, and at none", "[spell]") {
+    const auto never = takes({});
+    // It needs no unit: it goes.
+    CHECK(chooseUnit(0, false, kAskedNobody, false, true, false, kPlayer, kPlayer, never).what == Choice::AtNone);
+    // It needs one: not the player by autoSelfCast, not as one out of view.
+    CHECK(chooseUnit(kUnitAlly, false, kAskedNobody, true, true, true, kPlayer, kPlayer, takes({kPlayer})).what ==
+          Choice::NoUnit);
+    CHECK(chooseUnit(kUnitAlly, false, kAskedNone, true, true, true, kPlayer, kPlayer, takes({kPlayer})).what ==
+          Choice::NoUnit);
+    // Refused, and held by the cursor.
+    CHECK(noUnitFailure(0, 0, kUnitAlly, true, true, false, kAskedNobody) == kFailedNoTarget);
+    CHECK(noUnitFailure(0, 0, kUnitEnemy, true, true, true, kAskedNobody) == kFailedNoTarget);
+    CHECK(noUnitFailure(0, 0, kUnitEnemy, true, true, true, kAskedNone) == 0);
+    CHECK(noUnitFailure(0x200u, 0, kUnitEnemy, true, false, true, kAskedNone) == kFailedMainhand);
+    CHECK(noUnitFailure(0, 0, kUnitEnemy, true, true, true) == kFailedBadTargets);
+    CHECK(askedNoUnit(kAskedNone));
+    CHECK_FALSE(askedNoUnit(0));
+}

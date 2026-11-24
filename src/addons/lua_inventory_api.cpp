@@ -3013,31 +3013,15 @@ static int lua_GetInventoryItemDurability(lua_State* L) {
 }
 
 // UseItemByName(item) - what /use does
-/// The unit a /use was aimed at, or zero for "as the item would go anyway".
-///
-/// chatframe passes one to all three of the use bindings -
-/// UseContainerItem(bag, slot, target), UseInventoryItem(slot, target) and
-/// UseItemByName(name, target) - and none of them read it, so
-/// `/use [target=Bob] <bandage>` bandaged whoever asked. An unresolvable name
-/// answers zero rather than refusing: the item then goes where it always did,
-/// which is better than a click that does nothing.
-uint64_t usedOnUnit(lua_State* L, int index) {
-    auto* gh = getGameHandler(L);
-    const char* unit = gh ? lua_tostring(L, index) : nullptr;
-    if (!unit || !*unit) return 0;
-    std::string uid(unit);
-    toLowerInPlace(uid);
-    return resolveUnitGuid(gh, uid);
-}
-
 static int lua_UseItemByName(lua_State* L) {
     auto* gh = getGameHandler(L);
     const CarriedItem found = carriedItemMatching(gh, L, 1);
-    if (gh && found.itemId != 0 && itemUseAllowed(L, gh, found.itemId, false)) {
+    const auto unit = unitUsedOn(L, gh, 2);
+    if (gh && unit && found.itemId != 0 && itemUseAllowed(L, gh, found.itemId, false)) {
         // The item found, not merely the first of its entry: a link may name
         // one of several by its enchant or gems.
-        if (found.bag < 0) gh->useItemBySlot(found.slot, false, usedOnUnit(L, 2));
-        else gh->useItemInBag(found.bag, found.slot, false, usedOnUnit(L, 2));
+        if (found.bag < 0) gh->useItemBySlot(found.slot, false, *unit);
+        else gh->useItemInBag(found.bag, found.slot, false, *unit);
     }
     return 0;
 }
@@ -3134,8 +3118,8 @@ static int lua_UseInventoryItem(lua_State* L) {
     // paperdoll's right-click arrives here.
     if (completedItemTarget(L, gh->getEquipSlotGuid(slotId - 1))) return 0;
     const auto& slot = *inventorySlotItem(gh->getInventory(), slotId);
-    if (!slot.empty() && itemUseAllowed(L, gh, slot.item.itemId, true))
-        gh->useItemById(slot.item.itemId, usedOnUnit(L, 2));
+    if (const auto unit = unitUsedOn(L, gh, 2); unit && !slot.empty() && itemUseAllowed(L, gh, slot.item.itemId, true))
+        gh->useItemById(slot.item.itemId, *unit);
     return 0;
 }
 
@@ -3282,6 +3266,7 @@ static int lua_UseContainerItem(lua_State* L) {
     // (0x005d8650: AutoEquipItem 0x006dfee0, UseItem 0x00708c20).
     if (!readable && !openable && !itemUseAllowed(L, gh, itemSlot->item.itemId, false))
         return 0;
+    const auto unit = unitUsedOn(L, gh, 3);
 
     // By slot rather than by item id: the id searches the bags for a match and
     // can find a different stack of the same thing than the one clicked.
@@ -3290,13 +3275,12 @@ static int lua_UseContainerItem(lua_State* L) {
         if (readable)         gh->readItemBySlot(idx);
         else if (equippable)  gh->autoEquipItemBySlot(idx);
         else if (openable)    gh->openItemBySlot(idx);
-        else                  gh->useItemBySlot(idx, false, usedOnUnit(L, 3));
+        else if (unit)        gh->useItemBySlot(idx, false, *unit);
     } else {
         if (readable)         gh->readItemInBag(bag - 1, slot - 1);
         else if (equippable)  gh->autoEquipItemInBag(bag - 1, slot - 1);
         else if (openable)    gh->openItemInBag(bag - 1, slot - 1);
-        else                  gh->useItemInBag(bag - 1, slot - 1, false,
-                                             usedOnUnit(L, 3));
+        else if (unit)        gh->useItemInBag(bag - 1, slot - 1, false, *unit);
     }
     return 0;
 }

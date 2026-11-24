@@ -2393,6 +2393,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
 
     // Attack routes to auto-attack instead of cast
     if (spellId == SPELL_ID_ATTACK) {
+        if (unit_target::askedNoUnit(targetGuid)) return;
         uint64_t target = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
         if (target != 0) {
             if (owner_.isAutoAttacking()) {
@@ -2568,6 +2569,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // autoSelfCast - or the cursor holds it for one (0x0080cce0). Without
     // Spell.dbc, at what is selected.
     if (owner_.spellNameCacheRef().count(spellId) == 0) {
+        if (unit_target::askedNoUnit(targetGuid)) return;
         sendPlayerCast(spellId, targetGuid != 0 ? targetGuid : owner_.getTargetGuid());
         return;
     }
@@ -2855,7 +2857,7 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
     const uint64_t asked = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
     const auto kinds = unit_target::reachKinds(e.targetFlags, e.implicitTargetsA);
     const uint64_t unit = kinds.pet ? owner_.getPetGuid() : asked;
-    if (kinds.mask != 0 && unit != 0 && takeUnit(spellId, owner_.getPlayerGuid(), unit, kinds.mask, true).outOfReach)
+    if (kinds.mask != 0 && unit != 0 && !unit_target::askedNoUnit(unit) && takeUnit(spellId, owner_.getPlayerGuid(), unit, kinds.mask, true).outOfReach)
         return false;
     // 0x00739650.
     const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
@@ -3782,7 +3784,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     // One out of view goes as it is, for a spell reaching past 100 yards
     // (0x00802c30 with no unit).
     bool farReach = false;
-    if (required != 0 && asked != 0 && !unit) {
+    if (required != 0 && asked != 0 && !unit && !unit_target::askedNoUnit(asked)) {
         const auto casterEntity = em.getEntity(caster);
         unit_target::RangeInput in;
         in.attr = spell.attr;
@@ -3822,7 +3824,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     const bool byPlayer = caster == player;
     const bool mainhand = byPlayer && owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0;
     if (const uint8_t fail = unit_target::noUnitFailure(spell.attr, spell.attrEx5, required, byPlayer, mainhand,
-                                                        owner_.getTargetGuid() != 0)) {
+                                                        owner_.getTargetGuid() != 0, asked)) {
         const std::string text = castFailureMessage(owner_, spellId, fail, -1, 0, 0);
         if (byPlayer) showPlayerCastFailure(spellId, fail, text);
         else owner_.addUIError(text);
