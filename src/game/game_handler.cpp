@@ -919,7 +919,6 @@ void GameHandler::update(float deltaTime) {
     // Send periodic heartbeat if in world
     if (state == WorldState::IN_WORLD) {
         timeSinceLastPing += deltaTime;
-        if (movementHandler_) movementHandler_->timeSinceLastMoveHeartbeatRef() += deltaTime;
         // The mover's pitch over time and a full-speed pitcher's held start.
         if (movementHandler_) movementHandler_->updateMoverPitch(deltaTime);
         // The mover's server-driven spline run out (0x006eae70).
@@ -938,24 +937,7 @@ void GameHandler::update(float deltaTime) {
             timeSinceLastPing = 0.0f;
         }
 
-        const bool classicLikeCombatSync =
-            (combatHandler_ && combatHandler_->hasAutoAttackIntent()) && (isPreWotlk());
-        const bool onRealTaxiFlight = movementHandler_ && movementHandler_->isOnTaxiFlight();
-        const bool classicLikeStationaryCombatSync =
-            classicLikeCombatSync &&
-            !onRealTaxiFlight &&
-            !taxiActivatePending_ &&
-            !taxiClientActive_ &&
-            (movementInfo.flags & kLocomotionFlags) == 0;
-        float heartbeatInterval = (onRealTaxiFlight || taxiActivatePending_ || taxiClientActive_)
-                                      ? game::HEARTBEAT_INTERVAL_TAXI
-                                      : (classicLikeStationaryCombatSync ? game::HEARTBEAT_INTERVAL_STATIONARY_COMBAT
-                                                                         : (classicLikeCombatSync ? game::HEARTBEAT_INTERVAL_MOVING_COMBAT
-                                                                                                  : moveHeartbeatInterval_));
-        if (movementHandler_ && movementHandler_->timeSinceLastMoveHeartbeatRef() >= heartbeatInterval) {
-            sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
-            movementHandler_->timeSinceLastMoveHeartbeatRef() = 0.0f;
-        }
+        if (movementHandler_) movementHandler_->updateHeartbeat();
 
         // Check area triggers (instance portals, tavern rests, etc.)
         if (areaTriggerCooldown_ > 0.0f) areaTriggerCooldown_ -= deltaTime;

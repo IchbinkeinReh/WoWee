@@ -1,5 +1,6 @@
 #include "game/movement_handler.hpp"
 #include "game/mover_mode.hpp"
+#include "game/move_heartbeat.hpp"
 #include "game/transport_route_clock.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -892,9 +893,6 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             // 0x00987410). It went out as 0.
             endFall(movementInfo, endFallTimer());
             break;
-        case Opcode::MSG_MOVE_HEARTBEAT:
-            timeSinceLastMoveHeartbeat_ = 0.0f;
-            break;
         case Opcode::MSG_MOVE_START_ASCEND:
             movementInfo.flags |= static_cast<uint32_t>(MovementFlags::ASCENDING);
             movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::DESCENDING);
@@ -1132,38 +1130,6 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         }
     }
 
-    if (opcode == Opcode::MSG_MOVE_HEARTBEAT && isClassicLikeExpansion()) {
-        const bool stationaryIdle =
-            !onTaxiFlight_ &&
-            !taxiMountActive_ &&
-            !taxiActivatePending_ &&
-            !taxiClientActive_ &&
-            !includeTransportInWire &&
-            (movementInfo.flags & kLocomotionFlags) == 0;
-        const uint32_t sinceLastHeartbeatMs =
-            lastHeartbeatSendTimeMs_ != 0 && wrapMsDiff(movementTime, lastHeartbeatSendTimeMs_) >= 0
-                ? static_cast<uint32_t>(wrapMsDiff(movementTime, lastHeartbeatSendTimeMs_))
-                : std::numeric_limits<uint32_t>::max();
-        const bool unchangedState =
-            std::abs(movementInfo.x - lastHeartbeatX_) < 0.01f &&
-            std::abs(movementInfo.y - lastHeartbeatY_) < 0.01f &&
-            std::abs(movementInfo.z - lastHeartbeatZ_) < 0.01f &&
-            movementInfo.flags == lastHeartbeatFlags_ &&
-            movementInfo.transportGuid == lastHeartbeatTransportGuid_;
-        if (stationaryIdle && unchangedState && sinceLastHeartbeatMs < 1500U) {
-            timeSinceLastMoveHeartbeat_ = 0.0f;
-            return;
-        }
-        const uint32_t sinceLastNonHeartbeatMoveMs =
-            lastNonHeartbeatMoveSendTimeMs_ != 0 && wrapMsDiff(movementTime, lastNonHeartbeatMoveSendTimeMs_) >= 0
-                ? static_cast<uint32_t>(wrapMsDiff(movementTime, lastNonHeartbeatMoveSendTimeMs_))
-                : std::numeric_limits<uint32_t>::max();
-        if (sinceLastNonHeartbeatMoveMs < 350U) {
-            timeSinceLastMoveHeartbeat_ = 0.0f;
-            return;
-        }
-    }
-
     LOG_DEBUG("Sending movement packet: opcode=0x", std::hex,
               wireOpcode(opcode), std::dec,
               (includeTransportInWire ? " ONTRANSPORT" : ""));
@@ -1238,16 +1204,7 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         movementHeldReason_ = nullptr;
     }
 
-    if (opcode == Opcode::MSG_MOVE_HEARTBEAT) {
-        lastHeartbeatSendTimeMs_ = movementInfo.time;
-        lastHeartbeatX_ = movementInfo.x;
-        lastHeartbeatY_ = movementInfo.y;
-        lastHeartbeatZ_ = movementInfo.z;
-        lastHeartbeatFlags_ = movementInfo.flags;
-        lastHeartbeatTransportGuid_ = movementInfo.transportGuid;
-    } else {
-        lastNonHeartbeatMoveSendTimeMs_ = movementInfo.time;
-    }
+    lastMoveSendMs_ = movementInfo.time;
     // Any other packet takes a held START_TURN, then a held START_PITCH,
     // out after it (0x00721c20).
     if (!heldRoute && !flushingPitchStart_) flushHeldStarts();
@@ -4703,6 +4660,13 @@ bool MovementHandler::onMoveSpline(uint64_t guid) {
     // The active mover's is kept for updateMoverSplineDone to report.
     if (guid != activeMover()) moveSplines_.erase(it);
     return false;
+}
+
+void MovementHandler::updateHeartbeat() {
+    if (!owner_.isInWorld()) return;
+    const uint32_t now = movementClockMs();
+    const bool onServerSpline = owner_.isOnTaxiFlight() || onMoveSpline(activeMover());
+    if (heartbeatDue(movementInfo.flags, onServerSpline, now, lastMoveSendMs_)) sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
 }
 
 void MovementHandler::updateMoverSplineDone() {

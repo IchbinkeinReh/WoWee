@@ -284,9 +284,8 @@ public:
     void endFallUnsaid();
     void sanitizeMovementForTaxi();
 
-    // Heartbeat / movement timing (for GameHandler::update())
-    float& timeSinceLastMoveHeartbeatRef() { return timeSinceLastMoveHeartbeat_; }
-    [[nodiscard]] float getMoveHeartbeatInterval() const { return moveHeartbeatInterval_; }
+    /// The mover's heartbeat where one is due (0x006f09f0).
+    void updateHeartbeat();
     [[nodiscard]] bool isServerMovementAllowed() const { return serverMovementAllowed_; }
     /// Whether the player is in the air on a flying mount, as the movement
     /// code worked it out - which sets and clears FLYING, the flag the server
@@ -481,19 +480,11 @@ private:
     uint32_t worldTransferFallbackTriggerId_ = 0;
     glm::vec3 worldTransferFallbackCanonicalPos_{0.0f};
     float worldTransferFallbackCanonicalO_ = 0.0f;
-    float timeSinceLastMoveHeartbeat_ = 0.0f;
     // Seconds left in which a stale non-zero mount field is not to be believed.
     // Bounded so a dismount the server refuses recovers on its own rather than
     // leaving the player permanently unable to look mounted.
     float dismountGraceRemaining_ = 0.0f;
-    float moveHeartbeatInterval_ = 0.5f;
-    uint32_t lastHeartbeatSendTimeMs_ = 0;
-    float lastHeartbeatX_ = 0.0f;
-    float lastHeartbeatY_ = 0.0f;
-    float lastHeartbeatZ_ = 0.0f;
-    uint32_t lastHeartbeatFlags_ = 0;
-    uint64_t lastHeartbeatTransportGuid_ = 0;
-    uint32_t lastNonHeartbeatMoveSendTimeMs_ = 0;
+    uint32_t lastMoveSendMs_ = 0;  ///< the last movement packet of any kind (0x006e9b70)
     glm::vec3 lastSentPos_{0.0f};
     bool hasSentMovement_ = false;
     /// Why movement is being held back from the server, said once per stretch

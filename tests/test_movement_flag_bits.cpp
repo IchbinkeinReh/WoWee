@@ -20,10 +20,11 @@
 #include <map>
 #include <string>
 
+#include "game/move_heartbeat.hpp"
 #include "game/world_packets.hpp"
 
 using wowee::game::MovementFlags;
-using wowee::game::kLocomotionFlags;
+using wowee::game::heartbeatDue;
 
 namespace {
 
@@ -118,52 +119,35 @@ TEST_CASE("no two flags share a bit", "[movement-flags]") {
     }
 }
 
-// ── What counts as being under way ──────────────────────────────────────────
-//
-// Two sites asked "is the player moving": the heartbeat throttle in
-// movement_handler and the send cadence in game_handler. Each wrote out its
-// own list of flags, above a comment saying the two had to match. They had
-// drifted - ASCENDING was in both and DESCENDING in only one - so a player
-// swimming or flying downwards was moving to one site and standing still to
-// the other, and the heartbeats they owed were throttled away as if they were
-// idle. Nothing raises when that happens; the server simply stops hearing
-// where a descending player is.
+// ── When the mover says where it is ─────────────────────────────────────────
 
-TEST_CASE("vertical motion counts in both directions", "[movement-flags]") {
-    // The property that broke. Up and down are the same kind of thing, so a
-    // mask with one and not the other is wrong whichever way round it is.
-    CHECK((kLocomotionFlags & bits(MovementFlags::ASCENDING)) != 0);
-    CHECK((kLocomotionFlags & bits(MovementFlags::DESCENDING)) != 0);
-}
-
-TEST_CASE("every way of moving counts as moving", "[movement-flags]") {
-    for (const MovementFlags f : {MovementFlags::FORWARD, MovementFlags::BACKWARD,
-                                  MovementFlags::STRAFE_LEFT, MovementFlags::STRAFE_RIGHT,
-                                  MovementFlags::TURN_LEFT, MovementFlags::TURN_RIGHT,
-                                  MovementFlags::ASCENDING, MovementFlags::DESCENDING,
-                                  MovementFlags::SWIMMING, MovementFlags::FALLING,
-                                  MovementFlags::FALLINGFAR}) {
+TEST_CASE("a heartbeat is due half a second after the last packet while moving", "[movement-flags]") {
+    // 0x006f09f0's mask, 0xc0100f: every way of getting elsewhere, up and down
+    // alike.
+    for (const MovementFlags f : {MovementFlags::FORWARD, MovementFlags::BACKWARD, MovementFlags::STRAFE_LEFT,
+                                  MovementFlags::STRAFE_RIGHT, MovementFlags::ASCENDING,
+                                  MovementFlags::DESCENDING, MovementFlags::FALLING}) {
         INFO("flag " << bits(f));
-        CHECK((kLocomotionFlags & bits(f)) != 0);
+        CHECK(heartbeatDue(bits(f), false, 1500, 1000));
+        CHECK_FALSE(heartbeatDue(bits(f), false, 1499, 1000));
+        CHECK_FALSE(heartbeatDue(bits(f), true, 1500, 1000));
     }
 }
 
-TEST_CASE("a state the player is in is not a way of moving", "[movement-flags]") {
-    // WALKING says how they move rather than that they do, ONTRANSPORT moves
-    // the floor rather than the player, and the rest are states a standing
-    // character can hold. Any of these in the mask would make a stationary
-    // player look permanently under way and defeat the throttle entirely.
-    for (const MovementFlags f : {MovementFlags::WALKING, MovementFlags::ONTRANSPORT,
-                                  MovementFlags::LEVITATING, MovementFlags::ROOT,
-                                  MovementFlags::CAN_FLY, MovementFlags::FLYING,
-                                  MovementFlags::WATER_WALK, MovementFlags::FEATHER_FALL,
-                                  MovementFlags::HOVER}) {
+TEST_CASE("one that stands sends none, whatever state it stands in", "[movement-flags]") {
+    // Sent every half second to a standing character too, and by a swimmer or
+    // one turning on the spot.
+    for (const MovementFlags f : {MovementFlags::NONE, MovementFlags::TURN_LEFT, MovementFlags::TURN_RIGHT,
+                                  MovementFlags::WALKING, MovementFlags::ONTRANSPORT, MovementFlags::LEVITATING,
+                                  MovementFlags::ROOT, MovementFlags::SWIMMING, MovementFlags::FALLINGFAR,
+                                  MovementFlags::CAN_FLY, MovementFlags::FLYING, MovementFlags::WATER_WALK,
+                                  MovementFlags::FEATHER_FALL, MovementFlags::HOVER}) {
         INFO("flag " << bits(f));
-        CHECK((kLocomotionFlags & bits(f)) == 0);
+        CHECK_FALSE(heartbeatDue(bits(f), false, 60000, 1000));
     }
 }
 
-TEST_CASE("standing still is not moving", "[movement-flags]") {
-    CHECK((kLocomotionFlags & bits(MovementFlags::NONE)) == 0);
-    CHECK(kLocomotionFlags != 0);
+TEST_CASE("the heartbeat's clock may run over", "[movement-flags]") {
+    CHECK(heartbeatDue(1, false, 200, 0xffffffffu - 300));
+    CHECK_FALSE(heartbeatDue(1, false, 100, 0xffffffffu - 300));
 }

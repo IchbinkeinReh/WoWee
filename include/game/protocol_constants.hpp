@@ -150,11 +150,8 @@ constexpr float    WARDEN_GATE_LOG_INTERVAL_SEC = 30.0f;
 constexpr float    CLASSIC_PING_INTERVAL_SEC    = 10.0f;
 
 // ---------------------------------------------------------------------------
-// Heartbeat / area-trigger intervals (seconds)
+// Area-trigger interval (seconds)
 // ---------------------------------------------------------------------------
-constexpr float HEARTBEAT_INTERVAL_TAXI             = 0.25f;
-constexpr float HEARTBEAT_INTERVAL_STATIONARY_COMBAT = 0.75f;
-constexpr float HEARTBEAT_INTERVAL_MOVING_COMBAT    = 0.20f;
 constexpr float AREA_TRIGGER_CHECK_INTERVAL         = 0.25f;
 
 // ---------------------------------------------------------------------------

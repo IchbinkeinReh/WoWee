@@ -6723,7 +6723,6 @@ private:
     uint32_t pingSequence = 0;               // Ping sequence number (increments)
     float timeSinceLastPing = 0.0f;          // Time since last ping sent (seconds)
     float pingInterval = 30.0f;              // Ping interval (30 seconds)
-    float moveHeartbeatInterval_ = 0.5f;
     uint32_t lastLatency = 0;                // Last measured latency (milliseconds)
     std::chrono::steady_clock::time_point pingTimestamp_;  // Time CMSG_PING was sent
     /// When the instance boot timer runs out. Unset while none is running.
