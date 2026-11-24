@@ -1,6 +1,7 @@
 // tests/test_transport_components.cpp
 // Unit tests for TransportClockSync and TransportAnimator (Phase 3 extractions).
 #include <catch_amalgamated.hpp>
+#include "game/transport_path_time.hpp"
 #include "game/transport_clock_sync.hpp"
 #include "game/transport_animator.hpp"
 #include "game/transport_manager.hpp"
@@ -873,4 +874,21 @@ TEST_CASE("ClockSync: a route clock forty days into the steady clock maps onto t
     const uint32_t expected = static_cast<uint32_t>(
         static_cast<double>(progress % 400000u) / 400000.0 * 4000.0);
     CHECK(out == expected);
+}
+
+// The tram ran on the wall clock, elsewhere than the server had it.
+TEST_CASE("every TransportAnimation path runs on the server's time", "[transport_clock_sync]") {
+    const auto path = [](bool zOnly, bool fromDbc, bool worldCoords) {
+        PathEntry p = makeCirclePath();
+        p.zOnly = zOnly;
+        p.fromDBC = fromDbc;
+        p.worldCoords = worldCoords;
+        return p;
+    };
+    CHECK(runsOnServerTime(path(true, true, false), false));   // a lift
+    CHECK(runsOnServerTime(path(false, true, false), false));  // the Deeprun Tram
+    CHECK_FALSE(runsOnServerTime(path(false, true, true), false));
+    CHECK_FALSE(runsOnServerTime(path(false, false, false), false));
+    CHECK(runsOnServerTime(path(true, true, false), true));
+    CHECK_FALSE(runsOnServerTime(path(false, true, false), true));
 }

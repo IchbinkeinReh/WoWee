@@ -328,6 +328,23 @@ TEST_CASE("no command is given with another player selected", "[mcp][gm]") {
     CHECK(gives(".die", c));
 }
 
+// The realm answers "player not found" to these with a creature selected.
+TEST_CASE("the commands that want a player are about the character", "[mcp][gm]") {
+    for (const char* command : {".learn 6603", ".LEARN all", ".unlearn 6603", ".levelup", ".maxskill", ".cooldown",
+                                ".revive", ".additem 6948", ".quest add 783", ".save", ".combatstop",
+                                ".modify money 100", ".mod honor 5", "!learn 1"}) {
+        INFO(command);
+        CHECK(gmCommandWantsPlayer(command));
+        CHECK(gives(command));
+    }
+    // And these are about whatever is selected.
+    for (const char* command : {".die", ".aura 12345", ".unaura all", ".morph 1", ".modify hp 100", ".modify speed 5",
+                                ".npc info", ".gps", ".respawn", ".go xyz 1 2 3", ".", ". "}) {
+        INFO(command);
+        CHECK_FALSE(gmCommandWantsPlayer(command));
+    }
+}
+
 TEST_CASE("what is typed into the chat box", "[mcp][guard]") {
     CHECK(judgeChatText("/sit", false).allowed());
     CHECK(judgeChatText("/cast Frostbolt", false).allowed());

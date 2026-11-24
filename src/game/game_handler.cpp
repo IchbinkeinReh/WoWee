@@ -190,9 +190,30 @@ void GameHandler::disconnect() {
         socket->disconnect();
         socket.reset();
     }
+    leaveWorldState(wasInWorld, "disconnect");
+    // Warden state is WardenHandler's; this used to clear a second copy of it
+    // that nothing ever filled.
+    if (wardenHandler_) wardenHandler_->reset();
+    pendingIncomingPackets_.clear();
+    setState(WorldState::DISCONNECTED);
+    LOG_INFO("Disconnected from world server");
+}
+
+bool GameHandler::leaveWorldForCharacterList() {
+    if (!socket || !socket->isConnected() || state != WorldState::IN_WORLD) return false;
+    leaveWorldState(/*wasInWorld=*/true, "logout");
+    setState(WorldState::READY);
+    // What the character selection asks for as it shows (CharacterSelect_OnShow:
+    // ReadyForAccountDataTimes 0x004de390, GetCharacterListUpdate).
+    sendReadyForAccountDataTimes();
+    requestCharacterList();
+    return true;
+}
+
+void GameHandler::leaveWorldState(bool wasInWorld, const char* why) {
     // Leaving the world (0x00406510 -> 0x00529160 -> 0x00528f00): the trade
     // skill window closes (0x005da5a0), and the rest of what goes with the
-    // world on any way out of it (0x00528c30). Nothing is sent: the
+    // world on any way out of it (0x00528c30). Nothing is sent where the
     // connection is already gone.
     // The combat and chat log files closed and their logging off (0x005072b0).
     if (combatLogFeed_) combatLogFeed_->closeLogFile();
@@ -215,11 +236,7 @@ void GameHandler::disconnect() {
     contacts_.clear();
     transportAttachments_.clear();
     // The session's transports go with it.
-    if (transportManager_) transportManager_->clearTransports("disconnect");
-    // Warden state is WardenHandler's; this used to clear a second copy of it
-    // that nothing ever filled.
-    if (wardenHandler_) wardenHandler_->reset();
-    pendingIncomingPackets_.clear();
+    if (transportManager_) transportManager_->clearTransports(why);
     // Fire despawn callbacks so the renderer releases M2/character model resources.
     for (const auto& [guid, entity] : entityController_->getEntityManager().getEntities()) {
         if (guid == playerGuid) continue;
@@ -246,8 +263,6 @@ void GameHandler::disconnect() {
     petActionsOnBonusBar_ = false;
     overrideBarActive_ = false;
     overrideSpellsId_ = 0;
-    setState(WorldState::DISCONNECTED);
-    LOG_INFO("Disconnected from world server");
 }
 
 void GameHandler::resetDbcCaches() {
@@ -888,12 +903,7 @@ void GameHandler::update(float deltaTime) {
         if (charDeleteCallback_) charDeleteCallback_(deleted, msg);
     }
 
-    // The interaction object is let go once its window has closed
-    // (0x00518d50 from each window's close, which a creature says farewell
-    // to).
-    if (interactionObject_ != 0 && !interactionWindowOpen(interactionObject_)) {
-        releaseInteractionObject(/*farewell=*/true);
-    }
+    settleInteractionObject();
 
     // No check here that the target is still in view: a unit leaving lets
     // itself go (0x00524350, CombatHandler::unitLeavesView), and one of the
@@ -1342,11 +1352,31 @@ std::vector<uint32_t> GameHandler::getMacroIds() const {
     std::vector<uint32_t> ids;
     ids.reserve(macros_.size());
     for (const auto& [id, text] : macros_) { (void)text; ids.push_back(id); }
-    // Ascending, because the interface indexes macros by position in this list
-    // and an unordered_map hands them back in whatever order it likes - the
-    // same macro would answer to a different index each session.
+    for (const auto& [id, name] : macroNames_)
+        if (!name.empty() && !macros_.count(id)) ids.push_back(id);
     std::sort(ids.begin(), ids.end());
     return ids;
+}
+
+bool GameHandler::macroExists(uint32_t macroId) const {
+    return macroId != 0 && (!getMacroText(macroId).empty() || !getMacroName(macroId).empty());
+}
+
+std::vector<macro_list::Entry> GameHandler::macroList() const {
+    std::vector<macro_list::Entry> list;
+    for (const uint32_t id : getMacroIds()) list.push_back({id, getMacroName(id)});
+    return list;
+}
+
+void GameHandler::deleteMacro(uint32_t macroId) {
+    if (!macroExists(macroId)) return;
+    setMacroText(macroId, std::string());
+    setMacroMeta(macroId, std::string(), std::string());
+    for (int slot = 0; slot < ACTION_BAR_SLOTS; ++slot) {
+        const auto& action = actionBar[static_cast<size_t>(slot)];
+        if (action.type == ActionBarSlot::MACRO && action.id == macroId)
+            setActionBarSlot(slot, ActionBarSlot::EMPTY, 0);
+    }
 }
 
 void GameHandler::setMacroText(uint32_t macroId, const std::string& text) {
@@ -4123,6 +4153,15 @@ std::array<uint64_t, go_interaction::kWindowCount> GameHandler::interactionWindo
     return with;
 }
 
+void GameHandler::settleInteractionObject() {
+    // The interaction object is let go once its window has closed
+    // (0x00518d50 from each window's close, which a creature says farewell
+    // to).
+    if (interactionObject_ != 0 && !interactionWindowOpen(interactionObject_)) {
+        releaseInteractionObject(/*farewell=*/true);
+    }
+}
+
 bool GameHandler::interactionWindowOpen(uint64_t guid) {
     // Each lets it go as it closes (0x00518d50); gossip not while a quest
     // window is still open with it, nor that the other way round
@@ -4276,12 +4315,41 @@ void GameHandler::tickCapturePointWarning() {
     }
 }
 
+void GameHandler::sayTransportInMovement() {
+    // The unit the keys move in the player's stead has a movement of its own.
+    if (const uint64_t mover = activeMover(); mover != playerGuid && mover != 0) return;
+    constexpr uint32_t kOnTransport = static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
+    if (playerTransportGuid_ == 0) {
+        movementInfo.flags &= ~kOnTransport;
+        return;
+    }
+    movementInfo.flags |= kOnTransport;
+    movementInfo.transportX = playerTransportOffset_.x;
+    movementInfo.transportY = playerTransportOffset_.y;
+    movementInfo.transportZ = playerTransportOffset_.z;
+}
+
+bool GameHandler::playerFights() const {
+    const uint16_t flags = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    const auto player = getEntityManager().getEntity(playerGuid);
+    return player && flags != 0xFFFF && (player->getField(flags) & UNIT_FLAG_IN_COMBAT) != 0;
+}
+
+void GameHandler::sayFightOnEntry() {
+    if (playerFights()) fireAddonEvent("PLAYER_REGEN_DISABLED", {});
+}
+
 void GameHandler::onLeaveWorld(bool worldport) {
     // CGGameUI's leaving of the world (0x00528c30). The client reaches it from
     // the player object's end (0x006e78d0 -> 0x006e5090), so on every
     // worldport - 0x00403b70 destroys every object - and at logout through
     // 0x00528f00. In its order, what wowee has of it:
     //
+    // A player in a fight is first told it is over (0x006e5090: the player's
+    // UNIT_FLAG_IN_COMBAT, 0x00524600(1) and only then 0x00528c30): the object
+    // that comes back has no flags before its own to see it end by, and the
+    // interface stayed locked in the fight.
+    if (worldport && playerFights()) fireAddonEvent("PLAYER_REGEN_ENABLED", {});
     // The three mirror timers stop, each said by name (0x00513ea0).
     for (size_t i = 0; i < 3; ++i) {
         mirrorTimers_[i] = MirrorTimer{};
@@ -4336,9 +4404,13 @@ void GameHandler::onLeaveWorld(bool worldport) {
     // A level grant offered and not yet answered (0xbd08b8, kept by
     // 0x00513fd0 from SMSG_PROPOSE_LEVEL_GRANT) is forgotten with them.
     levelGrantMentorGuid_ = 0;
-    // PLAYER_LEAVING_WORLD (event 0x100). At logout the interface is taken
-    // down with it before this runs (Application::unloadInterface).
-    if (worldport) fireAddonEvent("PLAYER_LEAVING_WORLD", {});
+    // INSTANCE_LOCK_STOP (0x279) and PLAYER_LEAVING_WORLD (0x100). At logout
+    // the interface is taken down with them before this runs
+    // (Application::unloadInterface).
+    if (worldport) {
+        fireAddonEvent("INSTANCE_LOCK_STOP", {});
+        fireAddonEvent("PLAYER_LEAVING_WORLD", {});
+    }
 }
 
 void GameHandler::updatePetActionBar() {

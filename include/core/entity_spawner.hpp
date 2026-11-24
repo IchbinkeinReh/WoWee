@@ -200,6 +200,8 @@ public:
     /// A game object whose model is loaded and draws nothing (M2Renderer::
     /// instanceDrawsNothing). False while there is no model yet.
     [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
+    /// The game object a collision face belongs to (Application's).
+    [[nodiscard]] uint64_t gameObjectOfFace(bool building, uint32_t owner, const glm::vec3& at) const;
     /// Where a world ray first meets the triangles a unit's model draws
     /// (CharacterRenderer::rayHitInstance); none for a unit without one.
     [[nodiscard]] std::optional<float> rayHitUnit(uint64_t guid, const glm::vec3& origin,
@@ -459,6 +461,8 @@ public:
     /// (rendering/melee_sound.hpp).
     void onMeleeHit(const game::AttackerStateUpdateData& data);
     void onMeleeAttackStop(uint64_t attacker);
+    /// The character instance a unit's animations play on, the player's too; 0 for none.
+    [[nodiscard]] uint32_t unitAnimationInstance(uint64_t guid) const;
     /// A spell missing a target (SMSG_SPELL_GO): a parry's or block's
     /// clash on it (0x00755850).
     void onSpellMiss(uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId);
@@ -1687,6 +1691,10 @@ private:
     void settleKeptMeleeHit(uint64_t attacker);
     void settleMeleeHit(const rendering::melee_sound::Hit& hit);
     void landMeleeHit(const rendering::melee_sound::Hit& hit);
+    /// A unit's wound (0x00736640) and what it avoids a blow with.
+    void woundUnit(uint64_t guid, bool critical);
+    void defendUnit(uint64_t guid, game::melee_landing::Reaction reaction);
+    [[nodiscard]] bool playsNothing(const game::Unit& unit) const;
     void meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const glm::vec3& at);
     void landWithNothingKept(uint64_t guid, const glm::vec3& at);
     /// FootstepTerrainLookup by creature footstep id and terrain type, built

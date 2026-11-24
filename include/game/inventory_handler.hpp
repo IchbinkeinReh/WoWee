@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/equipment_sets.hpp"
 #include "game/world_packets.hpp"
 #include "game/auction_query_gate.hpp"
 #include "game/opcode_table.hpp"
@@ -239,25 +240,27 @@ public:
     /// The items a saved set holds, by equipment slot, and which slots it was
     /// told to leave alone. Held as item guids, which is what the server sends.
     /// Null when no set has that id.
+    /// A slot the set leaves alone holds the guid 1.
     const std::array<uint64_t, 19>* getEquipmentSetItems(uint32_t setId) const {
         for (const auto& set : equipmentSets_) {
-            if (set.setId == setId) return &set.itemGuids;
+            if (set.setId == setId) return &set.items;
         }
         return nullptr;
     }
     uint32_t getEquipmentSetIgnoreMask(uint32_t setId) const {
         for (const auto& set : equipmentSets_) {
-            if (set.setId == setId) return set.ignoreSlotMask;
+            if (set.setId == setId) return equipment_sets::ignoreMask(set);
         }
         return 0;
     }
     bool supportsEquipmentSets() const;
-    void useEquipmentSet(uint32_t setId);
+    /// Asks for the set's items to be put on (0x005ada20); false when that is
+    /// refused, with its error said. `itemOnCursor`: an item is held.
+    bool useEquipmentSet(const std::string& name, bool itemOnCursor);
     /// ignoredSlotMask: bit i set leaves equipment slot i out of the set.
-    void saveEquipmentSet(const std::string& name, const std::string& iconName = "INV_Misc_QuestionMark",
-                          uint64_t existingGuid = 0, uint32_t setIndex = 0xFFFFFFFF,
-                          uint32_t ignoredSlotMask = 0);
-    void deleteEquipmentSet(uint64_t setGuid);
+    void saveEquipmentSet(const std::string& name, const std::string& iconName, uint32_t ignoredSlotMask);
+    void renameEquipmentSet(const std::string& oldName, const std::string& newName, uint32_t ignoredSlotMask);
+    void deleteEquipmentSet(const std::string& name);
 
     // ---- Vendor ----
     struct BuybackItem {
@@ -1298,20 +1301,16 @@ private:
     std::vector<TrainerTab> trainerTabs_;
 
     // ---- Equipment set state ----
-    struct EquipmentSet {
-        uint64_t setGuid = 0;
-        uint32_t setId = 0;
-        std::string name;
-        std::string iconName;
-        uint32_t ignoreSlotMask = 0;
-        std::array<uint64_t, 19> itemGuids{};
-    };
-    std::vector<EquipmentSet> equipmentSets_;
-    std::string pendingSaveSetName_;
+    std::vector<equipment_sets::Set> equipmentSets_;
+    [[nodiscard]] equipment_sets::Worn wornGuids() const;
+    void sendEquipmentSet(const equipment_sets::Set& set);
+    void rebuildEquipmentSetInfo();
+    /// What the interface lists (equipmentSetInfo_) and EQUIPMENT_SETS_CHANGED.
+    void equipmentSetsChanged();
     /// The set a CMSG_EQUIPMENT_SET_USE is out for (0x00c1e958), whose name
     /// EQUIPMENT_SWAP_FINISHED carries when the answer comes (0x005af710).
     uint32_t pendingUseSetId_ = 0;
-    std::string pendingSaveSetIcon_;
+    bool equipmentSwapPending_ = false;   ///< 0x00c1e956
     std::vector<EquipmentSetInfo> equipmentSetInfo_;
 
     // ---- Repair cost DBC cache ----

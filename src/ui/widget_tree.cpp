@@ -326,6 +326,13 @@ void WidgetTree::setPortraitUnit(uint32_t id, const std::string& unit) {
     if (auto* w = get(id)) w->isUnitPortrait = true;
 }
 
+std::vector<std::string> WidgetTree::portraitClaims() const {
+    std::vector<std::string> claims;
+    for (const auto& [unit, ids] : portraitsByUnit_)
+        if (!ids.empty()) claims.push_back(unit);
+    return claims;
+}
+
 const std::vector<uint32_t>& WidgetTree::portraitsFor(const std::string& unit) const {
     static const std::vector<uint32_t> kNone;
     auto it = portraitsByUnit_.find(unit);

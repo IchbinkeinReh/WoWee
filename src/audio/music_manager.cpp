@@ -1,3 +1,4 @@
+#include "audio/sound_names.hpp"
 #include "audio/music_manager.hpp"
 
 #include <chrono>
@@ -76,6 +77,7 @@ void MusicManager::playMusic(const std::string& mpqPath, bool loop, float fadeIn
     auto cacheIt = musicDataCache_.find(mpqPath);
     if (cacheIt == musicDataCache_.end()) {
         auto data = assetManager->readFile(mpqPath);
+        sound_names::note(data, mpqPath);
         if (!data.empty())
             musicDataCache_[mpqPath] = std::make_shared<const std::vector<uint8_t>>(std::move(data));
         cacheIt = musicDataCache_.find(mpqPath);
@@ -374,6 +376,7 @@ bool MusicManager::playZoneTrack(int32_t sound, int slot, float fadeIn, float fa
         [assets, path]() -> std::shared_ptr<const std::vector<uint8_t>> {
             auto bytes = assets->readFile(path);
             if (bytes.empty()) return nullptr;
+            sound_names::note(bytes, path);
             return std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
         });
     const uint32_t id = nextZoneTrack_++;

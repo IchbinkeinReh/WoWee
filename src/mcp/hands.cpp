@@ -15,6 +15,7 @@
 #include "core/window.hpp"
 #include "game/game_handler.hpp"
 #include "mcp/game_view.hpp"
+#include "mcp/lua_error.hpp"
 #include "mcp/lua_json.hpp"
 #include "mcp/ui_view.hpp"
 #include "rendering/camera_controller.hpp"
@@ -109,13 +110,15 @@ json Aftermath::report(ToolContext& context) const {
         if (!c.value.args.empty()) lines.push_back(plainText(c.value.args[0]).substr(0, 200));
     }
     if (!lines.empty()) out["chat"] = std::move(lines);
+    if (json scripts = luaErrorsSince(context, log, 5); !scripts.empty()) out["lua_errors"] = std::move(scripts);
     json failures = json::array();
     for (const auto& l : context.log.after(log, 3, [](const LogLine& line) {
-             return line.level >= static_cast<int>(core::kLogLevelError);
+             return line.level >= static_cast<int>(core::kLogLevelError) && !luaErrorOfLogLine(line.text);
          })) {
         failures.push_back(l.value.text.substr(0, 300));
     }
     if (!failures.empty()) out["log_errors"] = std::move(failures);
+    if (context.app.loadingScreenUp()) out["loading"] = true;
     if (json p = popups(context); !p.empty()) out["popups"] = std::move(p);
     return out;
 }
@@ -126,6 +129,24 @@ Script::Fn finishWith(ToolContext& context, Aftermath after, std::function<json(
         json more = after.report(context);
         if (out.is_object()) out.update(more);
         return s.done(std::move(out));
+    };
+}
+
+json luaErrorsSince(ToolContext& context, uint64_t logSeq, size_t most) {
+    json out = json::array();
+    for (const auto& line : context.log.after(logSeq, 50, [](const LogLine& l) {
+             return l.level >= static_cast<int>(core::LogLevel::WARNING) && luaErrorOfLogLine(l.text).has_value();
+         })) {
+        if (out.size() >= most) break;
+        out.push_back(luaErrorJson(*luaErrorOfLogLine(line.value.text)));
+    }
+    return out;
+}
+
+Script::Fn worldShown(ToolContext& context, double seconds) {
+    return [&context, seconds, until = -1.0](Script& s) mutable {
+        if (until < 0.0) until = s.now() + seconds;
+        return !context.app.loadingScreenUp() || s.now() > until ? Script::Step::Next : Script::Step::Again;
     };
 }
 
@@ -217,8 +238,15 @@ Steps clickAt(ToolContext& context, std::function<std::optional<glm::vec2>()> wh
     return out;
 }
 
-Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button) {
+Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button, SDL_Keymod mods) {
     Steps out = movePointer(context, [from] { return std::optional<glm::vec2>(from); });
+    if (mods != SDL_KMOD_NONE) {
+        out.push_back([&context, mods](Script&) {
+            context.input.modifiers(mods, true);
+            return Script::Step::Next;
+        });
+        out.push_back(Script::frames(2));
+    }
     out.push_back([&context, button](Script&) {
         context.input.button(button, true);
         return Script::Step::Next;
@@ -237,7 +265,14 @@ Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button)
         context.input.button(button, false);
         return Script::Step::Next;
     });
-    out.push_back(Script::frames(3));
+    out.push_back(Script::frames(2));
+    if (mods != SDL_KMOD_NONE) {
+        out.push_back([&context, mods](Script&) {
+            context.input.modifiers(mods, false);
+            return Script::Step::Next;
+        });
+    }
+    out.push_back(Script::frames(1));
     return out;
 }
 

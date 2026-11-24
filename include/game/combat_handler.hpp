@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/melee_landing.hpp"
 #include "game/auto_attack.hpp"
 #include "game/tutorials.hpp"
 
@@ -58,6 +59,13 @@ public:
     /// health falling: a buff running out or a piece of gear taken off lowers
     /// the maximum and the health with it, and that is no hit.
     [[nodiscard]] uint32_t playerDamageHits() const { return playerDamageHits_; }
+    /// A melee blow settled (0x00755a60): its text over its victim and
+    /// UNIT_COMBAT; and landed (0x00755e40), settled first: the victim's blood.
+    void settleMeleeBlow(const melee_landing::Blow& blow);
+    void bleedFromMeleeBlow(const melee_landing::Blow& blow);
+    /// Whether text of what `src` did to `dst` is for the player: its own or
+    /// its units' (0x007190a0), or done to it.
+    [[nodiscard]] bool combatTextOurs(uint64_t src, uint64_t dst) const;
     void updateCombatText(float deltaTime);
 
     // Combat log (persistent rolling history)
@@ -95,7 +103,7 @@ public:
     /// its spell (floaterIsSwing).
     void addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId,
                        bool isPlayerSource, uint8_t powerType = 0,
-                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false);
+                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false, bool periodic = false);
 
     // Spellsteal dedup (used by aura update handler)
     bool shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId);

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <set>
 #include <vector>
 
 #include "core/application.hpp"
@@ -46,6 +48,13 @@ namespace {
 
 constexpr float kDegrees = 57.29578f;
 
+json objectNamed(ToolContext& context, uint64_t guid) {
+    json out = {{"guid", guidText(guid)}};
+    auto* gh = context.app.getGameHandler();
+    if (const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr) out["name"] = entityName(context, *e);
+    return out;
+}
+
 json terrain(ToolContext& context, const json& args) {
     const auto radius = static_cast<float>(args.value("radius", 10.0));
     const auto step = static_cast<float>(args.value("step", 2.0));
@@ -61,6 +70,7 @@ json terrain(ToolContext& context, const json& args) {
     json liquid = json::array();
     json built = json::array();
     bool anyLiquid = false;
+    std::set<uint64_t> objects;
     for (int row = 0; row < grid.side; ++row) {
         json line = json::array();
         std::string steepLine;
@@ -71,10 +81,17 @@ json terrain(ToolContext& context, const json& args) {
             const glm::vec2 p = grid.place(row, column);
             line.push_back(g ? json(rounded(g->z - me.z, 1)) : json());
             steepLine += !g ? '?' : (g->slopeDegrees > 50.0f ? '#' : (g->slopeDegrees > 30.0f ? '+' : '.'));
-            builtLine += !g ? '?'
-                            : (g->kind == probe::Facet::Kind::Building ? 'B'
-                               : g->kind == probe::Facet::Kind::Doodad ? 'd'
-                                                                       : '.');
+            const bool built = g && (g->kind == probe::Facet::Kind::Building || g->kind == probe::Facet::Kind::Doodad);
+            const uint64_t object =
+                built ? context.app.gameObjectOfFace(g->kind == probe::Facet::Kind::Building, g->owner,
+                                                     glm::vec3(p, g->z))
+                      : 0;
+            builtLine += !g              ? '?'
+                         : object != 0   ? 'o'
+                         : !built        ? '.'
+                         : g->kind == probe::Facet::Kind::Building ? 'B'
+                                                                   : 'd';
+            if (object != 0) objects.insert(object);
             json depth;
             if (water) {
                 if (const auto h = water->getWaterHeightAt(p.x, p.y); h && g && *h > g->z) {
@@ -96,7 +113,13 @@ json terrain(ToolContext& context, const json& args) {
                 {"slope", std::move(steep)},
                 {"slope_key", ". up to 30 deg, + up to 50, # too steep to walk, ? nothing there"},
                 {"made_of", std::move(built)},
+                {"made_of_key", ". ground, B building, d doodad, o game object, ? nothing there"},
                 {"faces", facets.size()}};
+    if (!objects.empty()) {
+        json list = json::array();
+        for (const uint64_t guid : objects) list.push_back(objectNamed(context, guid));
+        out["objects"] = std::move(list);
+    }
     if (anyLiquid) out["liquid_depth"] = std::move(liquid);
     return out;
 }
@@ -117,7 +140,11 @@ json lookAround(ToolContext& context, const json& args) {
         json w = {{"bearing", rounded(bearing > 180.0f ? bearing - 360.0f : bearing, 1)},
                   {"clear", rounded(way.clear, 1)}};
         using Why = probe::Way::Why;
-        if (way.why == Why::Wall) w["then"] = std::string("wall of ") + probe::kindName(way.kind);
+        if (way.why == Why::Wall) {
+            const json what = faceOwnerJson(context, way.kind, way.owner, way.at);
+            w["then"] = "wall of " + what["of"].get<std::string>();
+            if (what.contains("guid")) w["object"] = {{"guid", what["guid"]}, {"name", what.value("name", "")}};
+        }
         if (way.why == Why::Drop) w["then"] = "drop";
         if (way.why == Why::Steep) w["then"] = "too steep";
         ways.push_back(std::move(w));
@@ -137,7 +164,7 @@ json raycast(ToolContext& context, const json& args) {
     } else if (args.contains("guid") || args.contains("name")) {
         const auto entity = findEntity(context, args);
         if (!entity) throw ToolError("no such entity");
-        to = entityAt(*entity);
+        to = entityAt(context, *entity);
         float radius = 0.0f;
         if (!context.app.getRenderBoundsForGuid(entity->getGuid(), to, radius)) to.z += 1.0f;
         out["entity"] = guidText(entity->getGuid());
@@ -153,12 +180,32 @@ json raycast(ToolContext& context, const json& args) {
     out["from"] = vec3Json(from);
     out["to"] = vec3Json(to);
     out["length"] = rounded(length, 2);
-    if (const auto hit = renderer->intersectSegment(from, to)) {
-        out["hit"] = vec3Json(from + (to - from) * *hit);
-        out["hit_distance"] = rounded(length * *hit, 2);
-    } else {
-        out["hit"] = nullptr;
+    // The faces the character is moved against, game objects' among them; and
+    // what the client asks for a line of sight, which are the ground's and the
+    // buildings' from either side.
+    auto* cc = renderer->getCameraController();
+    float known = 0.0f;
+    std::optional<probe::Hit> face;
+    if (cc) {
+        face = probe::castLine([cc](const glm::vec3& lo, const glm::vec3& hi) { return cc->gatherWorldFacets(lo, hi); },
+                               from, to, &known);
     }
+    std::optional<float> distance;
+    if (face) distance = face->distance;
+    if (const auto sight = renderer->intersectSegment(from, to); sight && (!distance || *sight * length < *distance)) {
+        distance = *sight * length;
+        face.reset();
+    }
+    if (!distance) {
+        out["hit"] = nullptr;
+        if (known < length) out["looked_at_yards"] = rounded(known, 1);
+        return out;
+    }
+    const glm::vec3 at = length > 0.0f ? from + (to - from) * (*distance / length) : from;
+    out["hit"] = vec3Json(at);
+    out["hit_distance"] = rounded(*distance, 2);
+    if (face) out.update(faceOwnerJson(context, face->kind, face->owner, at));
+    else out["of"] = "building or ground";
     return out;
 }
 
@@ -168,7 +215,7 @@ json findPath(ToolContext& context, const json& args) {
         to = glm::vec3(args["to"][0].get<float>(), args["to"][1].get<float>(),
                        args["to"].size() > 2 ? args["to"][2].get<float>() : playerAt(context).z);
     } else if (const auto entity = findEntity(context, args)) {
-        to = entityAt(*entity);
+        to = entityAt(context, *entity);
     } else {
         throw ToolError("to, guid or name");
     }
@@ -194,13 +241,15 @@ void addTerrainTools(Toolbox& box) {
                                    optional("step", number("yards between points, 2 by default", 0.5, 10))}),
                            terrain));
     box.push_back(lookTool("look_around",
-                           "How far one can walk in each direction before a wall, a drop or a slope.",
+                           "How far one can walk in each direction before a wall (of what: a game object's with its "
+                           "guid), a drop or a slope.",
                            object({optional("directions", integer("how many, 16 by default", 4, 72)),
                                    optional("reach", number("yards, 20 by default", 2, 50))}),
                            lookAround));
     box.push_back(lookTool("raycast",
-                           "What a straight line from the player meets (ground, buildings, doodads): towards a place, "
-                           "an entity, or a bearing and pitch in degrees.",
+                           "What a straight line from the player meets (ground, buildings, doodads, game objects - "
+                           "lifts, ships, doors - with their guid): towards a place, an entity, or a bearing and pitch "
+                           "in degrees.",
                            object({optional("to", place), optional("guid", guid("0x...")),
                                    optional("name", text("the nearest with this in its name", 64)),
                                    optional("bearing", number("degrees clockwise from ahead", -360, 360)),

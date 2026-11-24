@@ -153,6 +153,9 @@ private:
 // Keeps what the client sends instead of writing it anywhere.
 class SentPackets : public wowee::network::WorldSocket {
 public:
+    // Not connected, as far as the client can tell, unless a test says so.
+    [[nodiscard]] bool isConnected() const override { return connected; }
+    bool connected = false;
     void send(const wowee::network::Packet& packet) override { sent_.push_back(packet); }
 
     [[nodiscard]] const std::vector<wowee::network::Packet>& all() const { return sent_; }
@@ -195,6 +198,7 @@ public:
 
     wowee::game::GameHandler& handler() { return handler_; }
     const SentPackets& sent() const { return *sent_; }
+    void setConnected(bool connected) { sent_->connected = connected; }
 
     void receive(const wowee::network::Packet& packet) {
         wowee::game::GameHandlerTestAccess::receive(handler_, packet);

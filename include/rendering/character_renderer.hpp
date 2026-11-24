@@ -761,6 +761,8 @@ private:
             /// Played by the vehicle for a seat (0x00756f80, its bit at
             /// +0x58): the bone is the vehicle's until it is let go.
             bool vehicle = false;
+            /// How far its events have been passed.
+            float eventsFrom = -1.0f;
         };
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;
@@ -1279,8 +1281,8 @@ private:
     std::vector<SteppedEvent> steppedEvents_;
     std::vector<FiredEvent> firedEvents_;
     /// The unit events of `sequence` the instance passed from `from` to `to`.
-    void stepInstanceEvents(uint32_t instanceId, const CharacterInstance& inst, int sequence, float from,
-                            float to);
+    void stepInstanceEvents(uint32_t instanceId, const CharacterInstance& inst, int sequence, float from, float to,
+                            anim::PlayMode mode, int32_t keyBoneId = -1);
 
     // Shadow pipeline resources
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;

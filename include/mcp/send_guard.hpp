@@ -66,6 +66,11 @@ bool isPlayerGuid(uint64_t guid);
 /// among them. `text` begins with '.' or '!'.
 Verdict judgeGmCommand(std::string_view text, const GuardContext& context);
 
+/// Whether a game master's command is about a player and answers "player not
+/// found" with a creature selected (.learn, .levelup, .modify money): the
+/// character itself is selected for it.
+bool gmCommandWantsPlayer(std::string_view text);
+
 /// Whether text given to the chat box may be entered: the slash commands that
 /// run Lua are --mcp-lua's, and those that end the session have tools of their
 /// own. What is said to somebody is decided by the packet.

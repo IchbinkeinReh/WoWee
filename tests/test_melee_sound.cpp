@@ -126,3 +126,66 @@ TEST_CASE("the columns a target and a defender's item sound by", "[melee_sound]"
     CHECK(ms::twoHanded(ms::Item{2, 8, -1, 1}));
     CHECK_FALSE(ms::twoHanded(ms::Item{2, 7, -1, 1}));
 }
+
+// What was blocked, absorbed or resisted of a hit had a text beside its number.
+TEST_CASE("a blow is one text over its victim (0x00755a60)", "[melee_landing]") {
+    namespace ml = wowee::game::melee_landing;
+    using T = wowee::game::CombatTextEntry;
+    CHECK(ml::text(hit(1, 30), false) == T::MELEE_DAMAGE);
+    CHECK(ml::text(hit(1, 30, ml::kCrit), false) == T::CRIT_DAMAGE);
+    auto partly = hit(1, 30, 0x2040);
+    partly.blocked = 5;
+    CHECK(ml::text(partly, false) == T::MELEE_DAMAGE);
+    CHECK(ml::text(hit(5, 30), false) == T::BLOCK);
+    CHECK(ml::text(hit(2, 0), true) == T::DODGE);
+    CHECK(ml::text(hit(3, 0), false) == T::PARRY);
+    CHECK(ml::text(hit(6, 0), false) == T::EVADE);
+    CHECK(ml::text(hit(7, 0), false) == T::IMMUNE);
+    CHECK(ml::text(hit(8, 0), false) == T::DEFLECT);
+    // Nothing done: none of it on the active player.
+    CHECK(ml::text(hit(0, 0, 0x10), false) == T::MISS);
+    CHECK(ml::text(hit(1, 0, ml::kFullAbsorb), false) == T::ABSORB);
+    CHECK(ml::text(hit(1, 0, ml::kFullResist), false) == T::RESIST);
+    CHECK_FALSE(ml::text(hit(0, 0, 0x10), true).has_value());
+    CHECK_FALSE(ml::text(hit(1, 0, ml::kNoDamageHit), false).has_value());
+    // A melee spell's only where it hit.
+    auto spell = hit(3, 0);
+    spell.meleeSpellId = 78;
+    CHECK_FALSE(ml::text(spell, false).has_value());
+    CHECK_FALSE(ml::said(spell));
+    spell.victimState = 1;
+    CHECK(ml::said(spell));
+}
+
+TEST_CASE("a victim avoids a blow at $CPP and is not wounded by it", "[melee_landing]") {
+    namespace ml = wowee::game::melee_landing;
+    CHECK(ml::reaction(hit(3, 0)) == ml::Reaction::Parry);
+    CHECK(ml::reaction(hit(2, 0)) == ml::Reaction::Dodge);
+    CHECK(ml::reaction(hit(8, 0)) == ml::Reaction::Dodge);
+    auto blocked = hit(1, 20);
+    blocked.blocked = 12;
+    CHECK(ml::reaction(blocked) == ml::Reaction::Block);
+    CHECK(ml::reaction(hit(1, 20)) == ml::Reaction::None);
+    CHECK(ml::wounds(hit(1, 20, 0x2)));
+    CHECK_FALSE(ml::wounds(hit(1, 20)));
+    CHECK(ml::bleeds(hit(1, 20, 0x2)));
+    CHECK(ml::bleeds(hit(4, 20, 0x2)));
+    CHECK_FALSE(ml::bleeds(hit(1, 0, 0x2)));
+    CHECK_FALSE(ml::bleeds(hit(3, 20, 0x2)));
+    CHECK(ms::isMeleeEvent(ms::kEventReact));
+}
+
+// A parry was a wound's animation.
+TEST_CASE("a unit parries with what it holds (0x0073b050)", "[melee_landing]") {
+    const auto weapon = [](uint32_t subClass) { return ms::Item{ms::kClassWeapon, subClass, -1, 0}; };
+    CHECK(ms::parryAnimation(std::nullopt, true, false) == 20u);
+    CHECK(ms::parryAnimation(ms::Item{ms::kClassArmor, 6, -1, 0}, true, false) == 20u);
+    CHECK(ms::parryAnimation(weapon(7), false, false) == 20u);
+    CHECK(ms::parryAnimation(weapon(7), true, false) == 21u);
+    CHECK(ms::parryAnimation(weapon(15), true, true) == 21u);
+    CHECK(ms::parryAnimation(weapon(8), true, false) == 22u);
+    CHECK(ms::parryAnimation(weapon(8), true, true) == 21u);
+    CHECK(ms::parryAnimation(weapon(6), true, false) == 23u);
+    CHECK(ms::parryAnimation(weapon(13), true, true) == 20u);
+    CHECK_FALSE(ms::parryAnimation(weapon(2), true, false).has_value());
+}

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "core/application.hpp"
+#include "game/entity.hpp"
 #include "game/game_handler.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/hands.hpp"
@@ -145,18 +146,53 @@ void slash(ToolContext& context, const json& args, Script& script) {
 void gm(ToolContext& context, const json& args, Script& script) {
     const Aftermath after(context);
     const std::string command = args["command"].get<std::string>();
-    const GuardContext guard = guardOf(context);
+    GuardContext guard = guardOf(context);
     if (command.empty() || command[0] != '.') return failNow(script, "a game master's command begins with .");
+    // Whom it is about is who is selected: the character, where a command
+    // wants one and a creature would make it fail.
+    const bool onSelf = args.value("on", std::string(gmCommandWantsPlayer(command) ? "self" : "target")) == "self";
+    if (onSelf) guard.targetGuid = guard.ownGuid;
     if (const Verdict v = judgeGmCommand(command, guard); !v.allowed()) {
         context.refusals.push({.what = command.substr(0, 40), .why = v.why, .at = context.now});
         return failNow(script, v.why);
     }
     if (guard.ownName.empty()) return failNow(script, "the character's name is not known");
-    // A whisper to oneself, typed, which the realm takes a command out of.
-    for (auto& fn : chatLine(context, "/w " + guard.ownName + " " + command)) script.then(std::move(fn));
+    auto selected = std::make_shared<uint64_t>(0);
+    script.then([&context, onSelf, selected](Script&) {
+        auto* gh = context.app.getGameHandler();
+        if (!onSelf || !gh || gh->getTargetGuid() == gh->getPlayerGuid()) return Script::Step::Next;
+        *selected = gh->getTargetGuid();
+        // With nothing selected it is the character's own anyway.
+        if (*selected != 0) gh->targetUnit(gh->getPlayerGuid());
+        return Script::Step::Next;
+    });
+    // A whisper to oneself, which the realm takes a command out of. It is no
+    // act of a player's, so it is not typed: a dialog or an edit box that has
+    // the keyboard is not in its way.
+    script.then([&context, guard, command](Script& s) {
+        context.origin.actedByServer();
+        try {
+            queryLua(context, "SendChatMessage(" + luaQuote(command) + ", 'WHISPER', nil, " + luaQuote(guard.ownName) + ")");
+        } catch (const ToolError& e) {
+            return s.fail(e.what());
+        }
+        return Script::Step::Next;
+    });
     script.then(Script::seconds(args.value("settle", 1.0)));
-    script.then(finishWith(context, after, [&context] {
-        return json{{"pos", vec3Json(playerAt(context))}, {"facing", rounded(playerFacing(context), 4)}};
+    script.then([&context, selected](Script&) {
+        auto* gh = context.app.getGameHandler();
+        // Back to what was selected, where it is still there and nothing else
+        // has been selected since.
+        if (gh && *selected != 0 && gh->getTargetGuid() == gh->getPlayerGuid() &&
+            gh->getEntityManager().getEntity(*selected)) {
+            gh->targetUnit(*selected);
+        }
+        return Script::Step::Next;
+    });
+    script.then(finishWith(context, after, [&context, onSelf] {
+        return json{{"pos", vec3Json(playerAt(context))},
+                    {"facing", rounded(playerFacing(context), 4)},
+                    {"on", onSelf ? "self" : "target"}};
     }));
 }
 
@@ -357,8 +393,11 @@ void addKeyTools(Toolbox& box) {
     box.push_back(handsTool("gm",
                             "A game master's command for the own character, whispered to itself: .revive, .gps, "
                             ".go xyz, .tele, .gm on/off, .modify ..., .additem id. Only a list of harmless ones "
-                            "(docs/MCP_SERVER.md), and never with another player selected.",
+                            "(docs/MCP_SERVER.md), and never on another player. Commands that want a player (.learn, "
+                            ".levelup, .modify money ...) are given with the character selected, and what was selected "
+                            "is selected again after. A dialog may be open.",
                             object({required("command", text("beginning with a dot", 200)),
+                                    optional("on", choice("whom it is about", {"self", "target"})),
                                     optional("settle", number("seconds to wait for the answer", 0, 15))}),
                             gm));
     Tool a = handsTool(

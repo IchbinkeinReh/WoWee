@@ -954,6 +954,41 @@ TEST_CASE("Handler bodies get their arguments by name", "[framexml][emit]") {
     REQUIRE_FALSE(has(r.lua, "local arg1, arg2, arg3, arg4 = ..."));
 }
 
+// The names are the client's (0x0048e680, 0x009628f0, 0x0061a280): a body
+// saying any other reads a global, which is nil - ScrollingEdit's caret height
+// was, in every multi-line box, and OnTextChanged never knew who typed.
+TEST_CASE("Handler bodies get the client's argument names", "[framexml][emit]") {
+    const std::pair<const char*, const char*> kNames[] = {
+        {"OnCursorChanged", "self, x, y, w, h"},
+        {"OnTextChanged", "self, userInput"},
+        {"OnSizeChanged", "self, w, h"},
+        {"PreClick", "self, button, down"},
+        {"PostClick", "self, button, down"},
+        {"OnDragStart", "self, button"},
+        {"OnChar", "self, text"},
+        {"OnCharComposition", "self, text"},
+        {"OnInputLanguageChanged", "self, language"},
+        {"OnAttributeChanged", "self, name, value"},
+        {"OnHyperlinkClick", "self, link, text, button"},
+        {"OnHyperlinkEnter", "self, link, text"},
+        {"OnHyperlinkLeave", "self, link, text"},
+        {"OnTooltipAddMoney", "self, cost, maxcost"},
+        {"OnMinMaxChanged", "self, min, max"},
+        {"OnScrollRangeChanged", "self, xrange, yrange"},
+        {"OnStop", "self, requested"},
+        {"OnFinished", "self, requested"},
+        {"OnLoop", "self, loopState"},
+        {"OnMouseWheel", "self, delta"},
+    };
+    for (const auto& [script, names] : kNames) {
+        XmlNode root = parseOrFail(std::string("<Ui><EditBox name=\"F\"><Scripts><") + script +
+                                   ">Foo(self)</" + script + "></Scripts></EditBox></Ui>");
+        const EmitResult r = emitFrameXml(root);
+        INFO(script);
+        CHECK(has(r.lua, (std::string("function(") + names + ", ...)").c_str()));
+    }
+}
+
 TEST_CASE("A handler with no named arguments still takes self",
           "[framexml][emit]") {
     XmlNode root = parseOrFail(

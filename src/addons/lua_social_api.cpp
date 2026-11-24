@@ -1,6 +1,8 @@
 // lua_social_api.cpp - Chat, guild, friends, ignore, gossip, party management, and emotes Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "addons/unit_or_name.hpp"
+#include "game/mail_text.hpp"
+#include "game/packed_time.hpp"
 #include "game/gossip_icon.hpp"
 #include "game/gossip_quest_status.hpp"
 #include "game/name_rules.hpp"
@@ -2743,91 +2745,47 @@ void registerSocialLuaAPI(lua_State* L) {
 
                 // ---- Mail: invoices, stationery, and the spam report ----
                 //
-                // GetInboxInvoiceInfo(id) → invoiceType, itemName, playerName,
-                //   bid, buyout, deposit, consignment, moneyDelay, etaHour, etaMin
-                //
-                // This answered ten nils beside a comment saying nothing here
-                // parsed an invoice body. Something did: parseAuctionMailBody
-                // has been decoding them all along, and this client's own mail
-                // window has been printing the breakdown from it. Handing mail
-                // over left that behind, so a sale arrived as a letter with the
-                // raw colon-separated body and no figures.
-                //
-                // Found by asking which parsed fields nothing reads.
-                // AuctionMailInvoice::ownerGuidLow was one, and a field nobody
-                // reads usually means a branch nobody runs.
+                // GetInboxInvoiceInfo(index) (0x0056e9b0) → invoiceType,
+                //   itemName, playerName, bid, buyout, deposit, consignment,
+                //   moneyDelay, etaHour, etaMin; for a letter that is none nil
+                //   three times and four zeros.
                 {"GetInboxInvoiceInfo", [](lua_State* L) -> int {
-            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInboxInvoiceInfo(index)");   // 0x0056e9b0
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInboxInvoiceInfo(index)");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!gh) {
-                for (int i = 0; i < 10; ++i) lua_pushnil(L);
-                return 10;
-            }
-            // Bound after the null check rather than through a conditional
-            // with an empty vector on the other side: that ternary yields a
-            // prvalue, so it copies the whole inbox on every call in the case
-            // that matters and only looks like it binds a reference.
-            const auto& inbox = gh->getMailInbox();
-            if (index < 1 || index > static_cast<int>(inbox.size())) {
-                for (int i = 0; i < 10; ++i) lua_pushnil(L);
-                return 10;
-            }
-            const auto& mail = inbox[static_cast<size_t>(index) - 1];
-            game::AuctionMailInvoice invoice;
-            if (mail.messageType != 2 ||
-                !game::parseAuctionMailBody(mail.body, invoice)) {
-                for (int i = 0; i < 10; ++i) lua_pushnil(L);
-                return 10;
-            }
-
-            // Which side of the sale this letter is. The auction house sends
-            // the buyer a "won" mail and the seller a "sold" one, and the two
-            // halves of OpenMail_Update draw entirely different panels from it
-            // - the buyer's shows what was paid, the seller's the deposit and
-            // the house's cut.
-            //
-            // The subject carries the response code that says which.
+            const int index = luaToClientInt(L, 1);
+            const auto none = [L] {
+                for (int i = 0; i < 3; ++i) lua_pushnil(L);
+                for (int i = 0; i < 4; ++i) lua_pushnumber(L, 0);
+                return 7;
+            };
+            if (!gh || index < 1 || index > static_cast<int>(gh->getMailInbox().size())) return none();
+            const auto& mail = gh->getMailInbox()[static_cast<size_t>(index) - 1];
             game::AuctionMailSubject subject;
-            const bool haveSubject =
-                game::parseAuctionMailSubject(mail.subject, subject);
-            // A sold-auction invoice names a deposit and a cut; a purchase
-            // does not, which is the difference the panel is drawn from.
-            const bool seller = invoice.deposit > 0 || invoice.consignment > 0;
-            lua_pushstring(L, seller ? "seller" : "buyer");
-
-            const uint32_t entry = haveSubject ? subject.itemEntry : 0;
-            const auto* info = entry ? gh->getItemInfo(entry) : nullptr;
-            lua_pushstring(L, info ? info->name.c_str() : "");
-
-            // The other party. Their guid low is what the invoice carries, and
-            // the name cache is asked rather than the server: an invoice is
-            // read long after the sale and the seller may be anywhere.
-            std::string other;
-            if (invoice.ownerGuidLow != 0) {
-                for (const auto& [guid, name] : gh->getPlayerNameCache()) {
-                    if (static_cast<uint32_t>(guid & 0xFFFFFFFFu) != invoice.ownerGuidLow) {
-                        continue;
-                    }
-                    other = name;
-                    break;
-                }
-            }
-            // A name, even an unknown one: FrameXML draws the whole panel
-            // behind `if ( playerName )`, so answering nothing here would keep
-            // it shut for the sake of a label.
-            lua_pushstring(L, other.empty() ? "Unknown" : other.c_str());
-
+            game::AuctionMailInvoice invoice;
+            const bool parsed = game::parseAuctionMailSubject(mail.subject, subject);
+            const auto* info = parsed ? gh->getItemInfo(subject.itemEntry) : nullptr;
+            if (mail.body.empty() || !game::mail_text::isInvoice(mail, info != nullptr) ||
+                !game::parseAuctionMailBody(mail.body, invoice))
+                return none();
+            // Which side of the sale the letter is decides the panel drawn.
+            lua_pushstring(L, game::mail_text::invoiceType(subject.response));
+            lua_pushstring(L, info->name.c_str());
+            // The other party's name, "" until it is known - not nil, which
+            // would keep FrameXML's panel shut.
+            std::string other = gh->lookupName(invoice.ownerGuid);
+            if (other.empty() && invoice.ownerGuid != 0)
+                gh->askNameThen(invoice.ownerGuid, "mail invoice", [gh](bool found, const std::string&) {
+                    if (found) gh->fireAddonEvent("MAIL_INBOX_UPDATE", {});
+                });
+            lua_pushstring(L, other.c_str());
             lua_pushnumber(L, invoice.bid);
             lua_pushnumber(L, invoice.buyout);
             lua_pushnumber(L, invoice.deposit);
             lua_pushnumber(L, invoice.consignment);
-            // The hour the money becomes available, which the server does not
-            // send. Nil rather than a guess: the panel guards each of these and
-            // shows "not yet sent" without them, which is true.
-            lua_pushnil(L);
-            lua_pushnil(L);
-            lua_pushnil(L);
+            lua_pushnumber(L, invoice.moneyDelay);
+            const game::WowDate eta = game::unpackWowPackedTime(invoice.eta);
+            lua_pushnumber(L, eta.hour);
+            lua_pushnumber(L, eta.minute);
             return 10;
         }},
                 // Stationery is the paper a letter is written on, and the list
@@ -2931,9 +2889,14 @@ void registerSocialLuaAPI(lua_State* L) {
                 // Lua alone never reported it.
                 {"TakeInboxTextItem", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TakeInboxTextItem(index)");   // 0x0056eef0
+            // By the letter's own id, of a letter that has a text not taken yet.
             auto* gh = getGameHandler(L);
-            const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (gh && id) gh->takeInboxTextItem(id);
+            const int index = luaToClientInt(L, 1);
+            if (!gh || index < 1 || index > static_cast<int>(gh->getMailInbox().size())) return 0;
+            const auto& mail = gh->getMailInbox()[static_cast<size_t>(index) - 1];
+            if ((!mail.body.empty() || mail.mailTemplateId != 0) &&
+                (mail.flags & game::mail_text::kFlagTextTaken) == 0)
+                gh->takeInboxTextItem(mail.messageId);
             return 0;
         }},
                 // SetSendMailShowing(showing) - the send-mail tab is open, or

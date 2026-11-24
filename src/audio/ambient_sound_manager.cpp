@@ -1,3 +1,4 @@
+#include "audio/sound_names.hpp"
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
@@ -58,8 +59,10 @@ const AmbientSoundManager::Kit* AmbientSoundManager::kit(int32_t soundId) {
             for (uint32_t f = 0; f < 10; ++f) {
                 const std::string name = dbc->getString(row, 3 + f);
                 if (name.empty()) continue;
-                auto data = assets_->readFile(dir.empty() ? name : dir + "\\" + name);
+                const std::string path = dir.empty() ? name : dir + "\\" + name;
+                auto data = assets_->readFile(path);
                 if (data.empty()) continue;
+                sound_names::note(data, path);
                 loaded.files.push_back(std::move(data));
                 loaded.frequency.push_back(dbc->getUInt32(row, 13 + f));
             }

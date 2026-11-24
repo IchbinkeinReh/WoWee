@@ -72,6 +72,18 @@ bool isRootContinent(const std::vector<Zone>& zones, int idx);
 /// Check whether the zone at idx is a leaf continent (parentWorldMapID != 0, areaID == 0).
 bool isLeafContinent(const std::vector<Zone>& zones, int idx);
 
+/// A DungeonMap row's rectangle, its four columns in the file's order
+/// (0x00544140: +0xc and +0x10 across the map, +0x14 and +0x18 down it).
+inline ZoneBounds floorRectangle(float minY, float maxY, float minX, float maxX) {
+    return {.locLeft = maxY, .locRight = minY, .locTop = maxX, .locBottom = minX};
+}
+
+/// Whether a unit is on what a zone's map shows: with a floor selected, on that
+/// floor (0x00544140).
+[[nodiscard]] constexpr bool onShownFloor(int selectedRow, int unitRow) {
+    return selectedRow <= 0 || unitRow == selectedRow;
+}
+
 /// What a zone's map spans with a floor selected: the floor's rectangle, else
 /// the zone's own (0x00544140).
 inline const ZoneBounds& shownBounds(const Zone& zone, int floorRowId) {

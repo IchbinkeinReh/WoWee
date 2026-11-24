@@ -236,7 +236,10 @@ void WorldLoader::processPendingEntry() {
 
 void WorldLoader::releaseTeleportAck() {
     if (!gameHandler_) return;
-    if (auto* mh = gameHandler_->getMovementHandler()) mh->releaseTeleportAck();
+    if (auto* mh = gameHandler_->getMovementHandler()) {
+        mh->releaseTeleportAck();
+        mh->releaseWorldportAck();
+    }
 }
 
 void WorldLoader::reloadAfterDeviceLoss(uint32_t mapId, float x, float y, float z) {
@@ -1113,6 +1116,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         gameHandler_->respawnKnownEntities();
     }
 
+    // The world is loaded: the server is told (MovementHandler::holdWorldportAck)
+    // and puts the player and the units about into it.
+    if (gameHandler_) {
+        if (auto* mh = gameHandler_->getMovementHandler()) mh->releaseWorldportAck();
+    }
+
     // Keep the loading screen visible until all spawn/equipment/gameobject queues
     // are fully drained. This ensures the player sees a fully populated world
     // (character clothed, NPCs placed, game objects loaded) when the screen drops.
@@ -1354,7 +1363,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             }
 
             // Exit when: (min time passed AND queues drained AND ground ready) OR hard cap
-            bool readyToExit = (elapsed >= kMinWarmupSeconds && idleIterations >= kIdleThreshold && groundReady);
+            // And the player in it (the screen ends with the player's object,
+            // 0x006e7f50 -> 0x00409550).
+            const bool playerIn =
+                !gameHandler_ || gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid()) != nullptr;
+            bool readyToExit =
+                (elapsed >= kMinWarmupSeconds && idleIterations >= kIdleThreshold && groundReady && playerIn);
             // Past the queue cap with the floor there, go; without it, wait
             // for the floor up to its own cap.
             const bool capped = groundReady ? elapsed >= kMaxWarmupSeconds
@@ -1491,6 +1505,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         addonManager_->fireEvent("UPDATE_CHAT_WINDOWS");
         addonManager_->fireEvent("PLAYER_LOGIN");
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+        if (gameHandler_) gameHandler_->sayFightOnEntry();
         // What the login said about reputation, said again to an interface that
         // was not there to hear it. The client is already listening when
         // SMSG_INITIALIZE_FACTIONS (0x005d2e30) and the player's watched-faction
@@ -1505,6 +1520,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     } else if (addonManager_ && app_.addonsLoaded_) {
         // Subsequent world entries (e.g. teleport, instance entry)
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+        if (gameHandler_) gameHandler_->sayFightOnEntry();
         // A transfer resends SMSG_INITIALIZE_FACTIONS ahead of the player
         // object, so its UPDATE_FACTION found UnitLevel("player") at 0 and put
         // the experience bar back over the max-level bar. The client's own

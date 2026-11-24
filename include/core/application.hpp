@@ -4,6 +4,7 @@
 #include "game/opcodes.hpp"
 #include <chrono>
 #include "core/gamepad.hpp"
+#include "ui/portrait_claims.hpp"
 #include "ui/unit_portrait.hpp"
 
 namespace wowee::rendering { class ModelFrameView; }
@@ -166,10 +167,20 @@ public:
 
     // Logout to login screen
     void logoutToLogin();
+    /// Out of the world to the character selection, the connection to the
+    /// world kept (0x006b2180 -> 0x00406510(1, 1, 0) -> "charselect").
+    void logoutToCharacterSelection();
 
     // Render bounds lookup (for click targeting / selection) - delegates to EntitySpawner
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
     [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
+    /// The game object a collision face belongs to, by the face's owner
+    /// (collision::Facet::owner) and a place on it; 0 for the world's own.
+    /// `building`: a map object's face, not a model's.
+    [[nodiscard]] uint64_t gameObjectOfFace(bool building, uint32_t owner, const glm::vec3& at) const;
+    /// A loading screen is drawn over the world: the entry's, until the world
+    /// settles behind it, or a difficulty change's.
+    [[nodiscard]] bool loadingScreenUp() const { return settleScreen_ || difficultyLoadingScreen_; }
     /// Where a world ray first meets the triangles a unit's model draws
     /// (CharacterRenderer::rayHitInstance); none for a unit without one.
     [[nodiscard]] std::optional<float> rayHitUnit(uint64_t guid, const glm::vec3& origin,
@@ -251,8 +262,10 @@ private:
     /// jump began.
     [[nodiscard]] bool playerFallsFar() const;
     void render();
-    void performLogoutToLogin();
-    void processDeferredLogoutToLogin();
+    enum class LeaveTo { Login, CharacterSelection };
+    void leaveWorld(LeaveTo to);
+    void performLeaveWorld(LeaveTo to);
+    void processDeferredLeaveWorld();
 
     /// The camera controller's and the spell visual system's hooks into the
     /// session, and the game handler's into the world - what entering the
@@ -439,15 +452,12 @@ private:
     /// interface owns it. WorldMapDetailFrame rather than WorldMapFrame: the
     /// first is the map area, the second is the panel around it.
     uint32_t worldMapWidgetId_ = 0;
-    /// The target's face, on the same terms as the player's. A third offscreen
-    /// pass because all three are on screen at once and each holds a different
-    /// model - the alternative is reloading a model per frame, which is what a
-    /// shared view would amount to.
-    ui::UnitPortrait targetPortrait_;
-    /// And the focus, which is deliberate enough to be worth its own pass.
-    ui::UnitPortrait focusPortrait_;
-    /// SetLootPortrait's face: whoever the open loot is from (0x00588f00).
-    ui::UnitPortrait lootPortrait_;
+    /// The faces SetPortraitTexture gave a texture, other than the player's
+    /// own: a view to each unit claimed (ui/portrait_claims.hpp), drawn once
+    /// and kept, and which claim each view's picture is of.
+    ui::portrait_claims::Pool facePool_;
+    std::vector<std::unique_ptr<ui::UnitPortrait>> faceViews_;
+    std::vector<std::string> facePictures_;
     /// The dressing room's figure, and its frame. The player plus whatever
     /// has been tried on, which is the paperdoll with an overlay.
     ui::UnitPortrait dressUpModel_;
@@ -478,17 +488,6 @@ private:
     /// else's paperdoll.
     ui::UnitPortrait inspectModel_;
     uint32_t inspectModelWidgetId_ = 0;
-    /// And whoever this client is dealing with - the face in the gossip,
-    /// quest, merchant, flight master and trade panels. One view for all of
-    /// them because only one such window is open at a time.
-    ui::UnitPortrait npcPortrait_;
-    /// And the four party members. Affordable now that a portrait is sized for
-    /// the circle it is drawn into rather than for the paperdoll: at 160x200 a
-    /// party face is a sixteenth of the pixels the paperdoll's target is, and
-    /// four of them together cost a quarter of one of it.
-    std::array<ui::UnitPortrait, 4> partyPortraits_;
-    /// And the pet's, which is always a creature and so always has one.
-    ui::UnitPortrait petPortrait_;
 
     /// The paperdoll's model view, and the frame it is drawn into. A second
     /// offscreen pass rather than a shared one: the portrait shows the face
@@ -530,7 +529,7 @@ private:
     AppState state = AppState::AUTHENTICATION;
     bool running = false;
     bool renderingFrame_ = false;
-    bool logoutToLoginPending_ = false;
+    std::optional<LeaveTo> leaveWorldPending_;
     /// lastUploadFailure's serial as last seen between frames.
     uint64_t uploadFailureSeen_ = 0;
     /// Why the player is back at the login screen, when it was not their idea.

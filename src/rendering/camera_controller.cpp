@@ -2108,11 +2108,16 @@ void CameraController::update(float deltaTime) {
     // Up/Down move, Left/Right turn (strafe stays on Q/E).
     // MoveForwardStart() and the rest hold their control the way the key does.
     const auto held = [this](uint32_t bit) { return (bindingControls_ & bit) != 0; };
-    bool keyW = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_W) || input.isKeyPressed(SDL_SCANCODE_UP) || held(kControlForward));
-    bool keyS = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_S) || input.isKeyPressed(SDL_SCANCODE_DOWN) || held(kControlBackward));
+    //
+    // The arrows are the game's while a line is typed into the chat too, with
+    // Alt they are its box's (0x00967760).
+    const bool arrowsFree = !ImGui::GetIO().WantTextInput && !cinematicKeysHeld_ && ui::editBoxLeavesArrows();
+    const auto arrow = [&](SDL_Scancode key) { return (!uiWantsKeyboard || arrowsFree) && input.isKeyPressed(key); };
+    bool keyW = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_W) || held(kControlForward))) || arrow(SDL_SCANCODE_UP));
+    bool keyS = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_S) || held(kControlBackward))) || arrow(SDL_SCANCODE_DOWN));
     // TurnLeftStart()/TurnRightStart() hold a turn the way the key does.
-    bool keyA = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_A) || input.isKeyPressed(SDL_SCANCODE_LEFT) || bindingTurnLeft_);
-    bool keyD = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_D) || input.isKeyPressed(SDL_SCANCODE_RIGHT) || bindingTurnRight_);
+    bool keyA = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_A) || bindingTurnLeft_)) || arrow(SDL_SCANCODE_LEFT));
+    bool keyD = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_D) || bindingTurnRight_)) || arrow(SDL_SCANCODE_RIGHT));
     bool keyQ = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_Q) || held(kControlStrafeLeft));
     bool keyE = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_E) || held(kControlStrafeRight));
     bool shiftDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LSHIFT) || input.isKeyPressed(SDL_SCANCODE_RSHIFT));
@@ -2295,6 +2300,7 @@ void CameraController::update(float deltaTime) {
     // Nor a turn or a jump for a held mover (0x005fa0d0, 0x005fbf80 ->
     // 0x0074ba40).
     if (moverHeld_) nowTurnLeft = nowTurnRight = nowJump = false;
+    if (!moverKeysTurn_) nowTurnLeft = nowTurnRight = false;
     if (!moverKeysMove_) nowJump = false;
     if (nowJump && thirdPerson && followTarget && moverState_.jumpPressed) {
         const auto liquid = portLiquidLevelAt(*followTarget);
@@ -2346,7 +2352,7 @@ void CameraController::update(float deltaTime) {
     // brought to the mover's pitch (0x005fa910), so the two pitch together.
     const int pitchKeys = int(held(kControlPitchUp)) - int(held(kControlPitchDown));
     const bool pitchKeysPitch = pitchKeys != 0 && !uiWantsKeyboard && !movementSuppressed && !rightMouseDown &&
-                                !moverHeld_ && (swimming || isFlightAirborne());
+                                !moverHeld_ && moverKeysTurn_ && (swimming || isFlightAirborne());
     nowPitchKeys_ = pitchKeysPitch ? pitchKeys : 0;
     if (pitchKeysPitch) {
         const float pitched = float(pitchKeys) * 180.0f * (moverState_.pitchShare ? moverState_.pitchShare() : 1.0f) *
@@ -2423,8 +2429,10 @@ void CameraController::update(float deltaTime) {
     // character turns to face where the player is looking, so that walking
     // forward goes where the screen points.
     // Not a swimmer click-to-move steers: it turns the mover itself.
-    bool cameraDrivesFacing = rightMouseDown || mouseAutorun || steering_ ||
-                              (swimming && hasMoveInput && !clickToMoveActive_);
+    // Nor one that may not be turned: the stunned, the dead, one sitting.
+    const bool mouseSteers = (rightMouseDown || mouseAutorun || steering_) && moverMouseTurns_;
+    bool cameraDrivesFacing =
+        mouseSteers || (swimming && hasMoveInput && !clickToMoveActive_ && moverKeysTurn_);
     // During taxi flights, orientation is controlled by the flight path, not player input
     if (cameraDrivesFacing && !externalFollow_) {
         facingYaw = yaw;
@@ -2487,7 +2495,7 @@ void CameraController::update(float deltaTime) {
     }
     // Not "swimming and moving", which turns the facing here: the pitch
     // follows the camera only while the camera steers.
-    if ((rightMouseDown || mouseAutorun || steering_) && !externalFollow_) {
+    if (mouseSteers && !externalFollow_) {
         const float len = glm::length(forward3D);
         if (len > 1e-4f) swimPitchDeg_ = glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f)));
     }
@@ -2537,19 +2545,19 @@ void CameraController::update(float deltaTime) {
             input.isKeyPressed(SDL_SCANCODE_W) || input.isKeyPressed(SDL_SCANCODE_S) ||
             input.isKeyPressed(SDL_SCANCODE_A) || input.isKeyPressed(SDL_SCANCODE_D) ||
             input.isKeyPressed(SDL_SCANCODE_Q) || input.isKeyPressed(SDL_SCANCODE_E) ||
-            input.isKeyPressed(SDL_SCANCODE_UP) || input.isKeyPressed(SDL_SCANCODE_DOWN) ||
-            input.isKeyPressed(SDL_SCANCODE_LEFT) || input.isKeyPressed(SDL_SCANCODE_RIGHT) ||
             input.isKeyPressed(SDL_SCANCODE_SPACE) ||
             held(kControlForward | kControlBackward | kControlStrafeLeft |
                  kControlStrafeRight | kControlAscend) ||
             bindingTurnLeft_ || bindingTurnRight_);
+        const bool anyArrow = arrow(SDL_SCANCODE_UP) || arrow(SDL_SCANCODE_DOWN) || arrow(SDL_SCANCODE_LEFT) ||
+                              arrow(SDL_SCANCODE_RIGHT);
         // Not gated on uiWantsKeyboard, which is a different question, and not
         // on the interface wanting the mouse either: both flags are already
         // cleared at the press when it did.
         const bool mouseWalk = leftMouseDown && rightMouseDown;
         // A click-to-move stands the player as it starts (0x00727400 ->
         // 0x006dcb40(0)).
-        if (anyMoveKey || mouseWalk || clickToMoveActive_) sitting = false;
+        if (anyMoveKey || anyArrow || mouseWalk || clickToMoveActive_) sitting = false;
     }
 
     // Notify server when the player stands up via local input

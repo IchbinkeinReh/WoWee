@@ -16,6 +16,7 @@
 #include <cmath>
 #include <algorithm>
 
+#include "game/action_drop.hpp"
 #include "game/item_text.hpp"
 #include "addons/lua_services.hpp"
 #include "game/game_handler.hpp"
@@ -318,11 +319,11 @@ inline std::string& currentClickButton() {
 /// set of flags each of which one call per run may spend (all set as the
 /// outermost macro starts; TargetDirectionEnemy spends 0x20).
 ///
-/// RunMacroText runs a macro that is no saved one, so its index is zero and
+/// RunMacroText runs a macro that is no saved one, so its id is zero and
 /// GetRunningMacro answers nil inside it (0x00564c10 asks the macro's +0x18).
 struct RunningMacro {
     bool running = false;
-    int index = 0;
+    int index = 0;   ///< the macro's id
     bool hasButton = false;
     std::string button;
     uint32_t onceFlags = 0;
@@ -356,6 +357,25 @@ public:
 
 private:
     RunningMacro saved_;
+};
+
+/// The id of the macro a Lua argument names, by index or by name (0x00566df0);
+/// 0 for none.
+uint32_t macroIdArg(lua_State* L, int idx);
+
+/// A key binding is being carried out (0x00beadd8 + 0x12c, which 0x00563150
+/// sets around every binding of a key and clears after it).
+inline int& bindingRunDepth() {
+    static int depth = 0;
+    return depth;
+}
+inline bool bindingRunning() { return bindingRunDepth() > 0; }
+class BindingRunScope {
+public:
+    BindingRunScope() { ++bindingRunDepth(); }
+    ~BindingRunScope() { --bindingRunDepth(); }
+    BindingRunScope(const BindingRunScope&) = delete;
+    BindingRunScope& operator=(const BindingRunScope&) = delete;
 };
 
 /// The button a CLICK binding presses, for as long as the press lasts
@@ -694,16 +714,10 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
         const auto p = gh->vehicleRoster().passenger(player);
         return p ? p->vehicleGuid : 0;
     }
-    // The NPC whose window is open, which is how FrameXML titles three of
-    // them: GossipFrameNpcNameText and BankFrameTitleText both read
-    // UnitName("npc"), and QuestFrameNpcNameText reads UnitName("questnpc").
-    // Neither token resolved, so all three came up blank - and the
-    // UnitExists() beside each is what decides whether the portrait model is
-    // set at all.
-    //
-    // Whichever window is actually open answers (0x00bd07a8, which each sets
-    // as it opens, 0x0051fce0) - and nobody does with none open.
-    if (uid == "npc" || uid == "questnpc") return gh->getInteractNpcGuid();
+    // Whoever the open window belongs to (0x00bd07a8, which every window's
+    // opening sets: 0x0051fce0), and the quest window's own (0x006081b0).
+    if (uid == "npc") return gh->getInteractionObject();
+    if (uid == "questnpc") return gh->questNpcGuid();
     // Compound unit IDs: targettarget, focustarget, pettarget, mouseovertarget
     if (uid == "targettarget")    return getEntityTargetGuid(gh, gh->getTargetGuid());
     if (uid == "focustarget")     return getEntityTargetGuid(gh, gh->getFocusGuid());
@@ -1483,6 +1497,13 @@ int cursorEquipSlot();
 /// and the prompt reads the cursor - so the drag has to end with the item still
 /// on it.
 bool cursorItemCameFromInventory();
+
+/// What the cursor holds, as a click into the world asks it.
+game::action_drop::Held cursorHeld();
+
+/// 0x00524650, a click into the world with an own item held: one that cannot
+/// be destroyed is refused, any other is asked about (DELETE_ITEM_CONFIRM).
+void askToDeleteCursorItem(lua_State* L);
 
 /// Put a vendor's list entry on the cursor, which is what a left-click in
 /// FrameXML's merchant window does. Buying happens when it is dropped.

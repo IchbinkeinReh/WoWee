@@ -1355,6 +1355,11 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
                 if (!addonManager_ || !addonsLoaded_) return false;
                 auto* engine = addonManager_->getLuaEngine();
                 return engine != nullptr && engine->editBoxHasFocus();
+            },
+            [this]() -> bool {
+                if (!addonManager_ || !addonsLoaded_) return false;
+                auto* engine = addonManager_->getLuaEngine();
+                return engine != nullptr && engine->editBoxLeavesArrows((SDL_GetModState() & SDL_KMOD_ALT) != 0);
             });
         addons::LuaServices luaSvc;
         luaSvc.window            = window.get();
@@ -1583,7 +1588,7 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             if (!wmap || !gameHandler) return false;
             const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(x, y, z));
-            const auto uv = wmap->mapPointOf(gameHandler->getCurrentMapId(), wire.x, wire.y);
+            const auto uv = wmap->mapPointOf(gameHandler->getCurrentMapId(), wire.x, wire.y, wire.z);
             if (!uv) return false;
             u = uv->x;
             v = uv->y;
@@ -2612,6 +2617,20 @@ void Application::run() {
             // interface nor the camera may act on it.
             if (mapWindow_ && mapWindow_->handleEvent(event)) continue;
 
+            // The right button lets go of what the cursor holds before
+            // anything else hears of it, and that is all it does: no frame,
+            // no camera and no world gets the press (0x0051fa50, which
+            // 0x00495470 asks first). Not over this client's own windows.
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT &&
+                state == AppState::IN_GAME && addonManager_ && addonsLoaded_ &&
+                !ImGui::GetIO().WantCaptureMouse && addonManager_->getLuaEngine() &&
+                addonManager_->getLuaEngine()->rightPressPutsCursorDown()) {
+                Input::getInstance().setMouseButtonSpent(SDL_BUTTON_RIGHT, true);
+                continue;
+            }
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT)
+                Input::getInstance().setMouseButtonSpent(SDL_BUTTON_RIGHT, false);
+
             // Connected and disconnected, which is all the pad needs from the
             // queue - its sticks and buttons are sampled once a frame rather
             // than accumulated out of events.
@@ -2829,7 +2848,8 @@ void Application::run() {
                     // closes it, Space and Enter stop the movie), and with
                     // only presses reaching frames the movie could not be
                     // skipped.
-                    if (!engine->editBoxHasFocus() && engine->dispatchFrameKey(event.key.key, false)) continue;
+                    if ((!engine->editBoxHasFocus() || engine->keyIsTheGames(event.key.key, event.key.mod)) &&
+                        engine->dispatchFrameKey(event.key.key, false)) continue;
                     (void)engine->dispatchBindingKey(event.key.key, false, false, false,
                                                      false, false);
                 }
@@ -2840,7 +2860,8 @@ void Application::run() {
                 // walk the character, and backspace would trip a keybind.
                 if (addonManager_ && addonsLoaded_) {
                     if (auto* engine = addonManager_->getLuaEngine();
-                        engine && engine->editBoxHasFocus()) {
+                        engine && engine->editBoxHasFocus() &&
+                        !engine->keyIsTheGames(event.key.key, event.key.mod)) {
                         // Command counts as control here, because this is the
                         // copy-and-paste modifier and on a Mac that is the one
                         // every other program uses. Windows and Linux send
@@ -3095,7 +3116,7 @@ void Application::run() {
             throw;
         }
 
-        processDeferredLogoutToLogin();
+        processDeferredLeaveWorld();
 
         // An upload that ran out of memory since the last frame: whatever it
         // was for is missing from the world, and more will follow it.
@@ -3426,10 +3447,9 @@ void Application::endWorldSettle(const char* why) {
 
 void Application::shutdownPortraits() {
     unitPortrait_.shutdown(renderer.get());
-    targetPortrait_.shutdown(renderer.get());
-    petPortrait_.shutdown(renderer.get());
-    focusPortrait_.shutdown(renderer.get());
-    npcPortrait_.shutdown(renderer.get());
+    for (auto& face : faceViews_)
+        if (face) face->shutdown(renderer.get());
+    facePictures_.assign(facePictures_.size(), std::string());
     inspectModel_.shutdown(renderer.get());
     dressUpModel_.shutdown(renderer.get());
     auctionDressUpModel_.shutdown(renderer.get());
@@ -3437,7 +3457,6 @@ void Application::shutdownPortraits() {
     petModel_.shutdown(renderer.get());
     stableModel_.shutdown(renderer.get());
     companionModel_.shutdown(renderer.get());
-    for (auto& p : partyPortraits_) p.shutdown(renderer.get());
     paperdollModel_.shutdown(renderer.get());
 }
 
@@ -3669,7 +3688,7 @@ void Application::setState(AppState newState) {
             if (uiManager && assetManager) {
                 uiManager->getCharacterScreen().setAssetManager(assetManager.get());
             }
-            // A backstop. Leaving the world goes through performLogoutToLogin,
+            // A backstop. Leaving the world goes through performLeaveWorld,
             // which takes the interface down there; this catches any other way
             // of arriving here with it still standing, and does nothing when
             // it is already down.
@@ -4378,7 +4397,7 @@ void Application::connectWorldHooks() {
                 if (window) window->setShouldClose(true);
             } else {
                 LOG_INFO("Logout complete - returning to character select");
-                logoutToLogin();
+                logoutToCharacterSelection();
             }
         });
         // The extra action bars as the realm keeps them (PLAYER_FIELD_BYTES
@@ -4563,16 +4582,22 @@ void Application::handleWorldDisconnect() {
     logoutToLogin();
 }
 
-void Application::logoutToLogin() {
+void Application::logoutToLogin() { leaveWorld(LeaveTo::Login); }
+
+void Application::logoutToCharacterSelection() { leaveWorld(LeaveTo::CharacterSelection); }
+
+void Application::leaveWorld(LeaveTo to) {
     if (renderingFrame_) {
-        if (!logoutToLoginPending_) {
+        if (!leaveWorldPending_) {
             LOG_INFO("Logout requested during render; deferring until frame completes");
         }
-        logoutToLoginPending_ = true;
+        // The login screen, once asked for, stays what it is: the connection
+        // is gone, or must go.
+        if (!leaveWorldPending_ || to == LeaveTo::Login) leaveWorldPending_ = to;
         return;
     }
 
-    performLogoutToLogin();
+    performLeaveWorld(to);
 }
 
 bool Application::leaveWorldOutOfMemory(const char* where, const char* what, bool midFrame) {
@@ -4584,7 +4609,7 @@ bool Application::leaveWorldOutOfMemory(const char* where, const char* what, boo
         // thrown away and an empty frame goes in its place, so the next one
         // begins as after any other. The interface's frame is closed too.
         renderingFrame_ = false;
-        logoutToLoginPending_ = false;
+        leaveWorldPending_.reset();
         if (renderer) renderer->abandonFrame();
         if (ImGuiContext* g = ImGui::GetCurrentContext(); g && g->WithinFrameScope) ImGui::EndFrame();
     }
@@ -4592,10 +4617,11 @@ bool Application::leaveWorldOutOfMemory(const char* where, const char* what, boo
     return true;
 }
 
-void Application::processDeferredLogoutToLogin() {
-    if (!logoutToLoginPending_) return;
-    logoutToLoginPending_ = false;
-    performLogoutToLogin();
+void Application::processDeferredLeaveWorld() {
+    if (!leaveWorldPending_) return;
+    const LeaveTo to = *leaveWorldPending_;
+    leaveWorldPending_.reset();
+    performLeaveWorld(to);
 }
 
 void Application::fireInterfaceLeaving() {
@@ -4614,14 +4640,7 @@ void Application::fireInterfaceLeaving() {
         // UNIT_FIELD_FLAGS, event 0x99, then 0x00528c30). Nothing else ends
         // the fight for an interface on its way out, so an addon that locked
         // itself on PLAYER_REGEN_DISABLED saved its state still locked.
-        if (gameHandler) {
-            const uint16_t flagsIdx = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
-            auto player = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
-            if (player && flagsIdx != 0xFFFF &&
-                (player->getField(flagsIdx) & game::UNIT_FLAG_IN_COMBAT) != 0) {
-                addonManager_->fireEvent("PLAYER_REGEN_ENABLED");
-            }
-        }
+        if (gameHandler && gameHandler->playerFights()) addonManager_->fireEvent("PLAYER_REGEN_ENABLED");
         // 0x00528c30 ends with INSTANCE_LOCK_STOP (0x279), which closes a
         // pending instance-bind prompt, then PLAYER_LEAVING_WORLD (0x100).
         addonManager_->fireEvent("INSTANCE_LOCK_STOP");
@@ -4651,8 +4670,8 @@ void Application::unloadInterface() {
     addonsLoaded_ = false;
 }
 
-void Application::performLogoutToLogin() {
-    LOG_INFO("Logout requested");
+void Application::performLeaveWorld(LeaveTo to) {
+    LOG_INFO("Logout requested, to the ", to == LeaveTo::Login ? "login screen" : "character selection");
     if (cinematicPlayer_) cinematicPlayer_->abandon();
 
     // The interface leaves the world with the character that was wearing it.
@@ -4672,7 +4691,12 @@ void Application::performLogoutToLogin() {
         gameHandler->getTransportManager()->setWMORenderer(nullptr);
     }
 
-    if (gameHandler) {
+    // The connection stays where the server has only let the character out
+    // of the world (0x006b2180); one that is gone meanwhile is the login
+    // screen's (0x004da9d0).
+    if (to == LeaveTo::CharacterSelection && !(gameHandler && gameHandler->leaveWorldForCharacterList()))
+        to = LeaveTo::Login;
+    if (gameHandler && to == LeaveTo::Login) {
         gameHandler->disconnect();
     }
 
@@ -4710,7 +4734,7 @@ void Application::performLogoutToLogin() {
 
     // The session's transports go with it.
     if (gameHandler && gameHandler->getTransportManager())
-        gameHandler->getTransportManager()->clearTransports("logout to the login screen");
+        gameHandler->getTransportManager()->clearTransports("logout");
 
     // --- Reset all EntitySpawner state (mount, creatures, players, GOs, queues, caches) ---
     if (entitySpawner_) entitySpawner_->resetAllState();
@@ -4752,10 +4776,10 @@ void Application::performLogoutToLogin() {
 
     // Clear stale realm/character selection so switching servers starts fresh
     if (uiManager) {
-        uiManager->getRealmScreen().reset();
+        if (to == LeaveTo::Login) uiManager->getRealmScreen().reset();
         uiManager->getCharacterScreen().reset();
     }
-    setState(AppState::AUTHENTICATION);
+    setState(to == LeaveTo::Login ? AppState::AUTHENTICATION : AppState::CHARACTER_SELECTION);
 
     // Said on the screen the player lands on, because there is nowhere to say
     // it on the way out: the world is being torn down as this runs.
@@ -4797,10 +4821,29 @@ void Application::applyServerMovementState(float deltaTime) {
         const auto moverEntity = gameHandler->getEntityManager().getEntity(gameHandler->activeMover());
         const auto* moverUnit =
             moverEntity && moverEntity->isUnit() ? static_cast<const game::Unit*>(moverEntity.get()) : nullptr;
-        const bool keysMove = !moverUnit || game::keysMayMove(static_cast<int32_t>(moverUnit->getHealth()),
-                                                              moverUnit->getStandState());
+        bool keysMove = true, keysTurn = true, mouseTurns = true;
+        if (moverUnit) {
+            uint32_t animation = 0;
+            float timeMs = 0.0f, durationMs = 0.0f;
+            const uint32_t instance = entitySpawner_ ? entitySpawner_->unitAnimationInstance(moverUnit->getGuid()) : 0;
+            if (auto* cr = renderer->getCharacterRenderer(); !cr || instance == 0 ||
+                                                             !cr->getAnimationState(instance, animation, timeMs, durationMs))
+                animation = 0;
+            const auto health = static_cast<int32_t>(moverUnit->getHealth());
+            // The player's own as its keys have it already (0x006dcb40), the dead's
+            // as the server says.
+            constexpr uint8_t kSits = 1, kStandDead = 7;
+            uint8_t stand = moverUnit->getStandState();
+            if (moverUnit->getGuid() == gameHandler->getPlayerGuid() && gameHandler->getStandState() != kStandDead)
+                stand = renderer->getCameraController()->isSitting() ? kSits : 0;
+            keysMove = game::keysMayMove(health, stand, animation);
+            // Stunned it does not turn either, nor does the mouse turn it sitting.
+            keysTurn = game::keysMayTurn(health, moverUnit->getUnitFlags(), animation);
+            mouseTurns = game::mouseMayTurn(health, moverUnit->getUnitFlags(), stand, animation);
+        }
         renderer->getCameraController()->setMovementRooted(gameHandler->isPlayerRooted());
         renderer->getCameraController()->setMoverKeysMove(keysMove);
+        renderer->getCameraController()->setMoverTurns(keysTurn, mouseTurns);
         // The mover's flags2 hold its strafe and jump keys.
         const auto held = game::vehicle::moverKeyRestrictions(gameHandler->getMovementInfo().flags2);
         renderer->getCameraController()->setMoverKeyRestrictions(held.noStrafe, held.noJump);
@@ -6813,14 +6856,7 @@ void Application::update(float deltaTime) {
             // PLAYER_ENTERING_WORLD, UNIT_FLAG_IN_COMBAT is event 0x98 and
             // +0x124c cleared) - the other half of what fireInterfaceLeaving
             // says on the way out.
-            if (gameHandler) {
-                const uint16_t flagsIdx = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
-                auto player = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
-                if (player && flagsIdx != 0xFFFF &&
-                    (player->getField(flagsIdx) & game::UNIT_FLAG_IN_COMBAT) != 0) {
-                    addonManager_->fireEvent("PLAYER_REGEN_DISABLED");
-                }
-            }
+            if (gameHandler) gameHandler->sayFightOnEntry();
             // Then the player's vehicle seat, said again (0x00749ed0).
             if (entitySpawner_) entitySpawner_->refirePlayerSeatEvents();
             addons::LuaEngine::setUiSoundsSuppressed(false);
@@ -7653,176 +7689,157 @@ void Application::render() {
                     }
                 }
 
-                // The target's face and the pet's, on the same terms as the
-                // player's, and only while a frame is asking for one - each is
-                // a whole offscreen model pass, and running it for a portrait
-                // nothing draws costs a render and a composite every frame to
-                // produce a picture nobody sees.
+                // The other faces, on the same terms as the player's: one to
+                // each unit a texture was given, and only while one of its
+                // textures is on screen. Each is a whole offscreen model pass.
                 //
                 // A player from their appearance and anything else from its
                 // display id. Both are read from what the world already has:
                 // a creature is a model path, and a player's skin, face and
                 // hair come off the update fields their spawn was built from.
-                struct UnitFace {
-                    const char* unit;
-                    ui::UnitPortrait* portrait;
-                    uint64_t guid;
-                    /// A second name for the same unit, drawn from the same
-                    /// view. "npc" and "questnpc" are one face under two names,
-                    /// and giving each its own row would render it twice a
-                    /// frame to produce the same picture.
-                    const char* alias = nullptr;
-                };
-                // Party guids in the interface's order, which excludes the
-                // player - party1 is the first other member.
-                std::array<uint64_t, 4> partyGuids{};
-                {
-                    int found = 0;
-                    for (const auto& m : gameHandler->getPartyData().members) {
-                        if (m.guid == gameHandler->getPlayerGuid()) continue;
-                        if (found >= 4) break;
-                        partyGuids[static_cast<size_t>(found++)] = m.guid;
+                std::vector<std::string> faces;
+                for (auto& claim : widgets.portraitClaims()) {
+                    if (!ui::portrait_claims::unitOf(claim)) continue;
+                    const auto& ids = widgets.portraitsFor(claim);
+                    if (std::any_of(ids.begin(), ids.end(), [&widgets](uint32_t id) {
+                            const ui::Widget* w = widgets.get(id);
+                            return w && w->visible;
+                        })) {
+                        faces.push_back(std::move(claim));
+                    } else {
+                        // Its view may draw another by the time it is back.
+                        for (uint32_t id : ids)
+                            if (ui::Widget* w = widgets.get(id)) w->externalTexture = 0;
                     }
                 }
-                const uint64_t npcGuid = gameHandler->getInteractNpcGuid();
-                // NOLINTBEGIN(modernize-use-designated-initializers) - a table
-                // whose columns are its field names, with the struct in view
-                // directly above.
-                const UnitFace kFaces[] = {
-                    // "npc" and "questnpc" are the same unit under two names -
-                    // whoever the open window belongs to. The interface uses
-                    // the second only in questframe and means nothing different
-                    // by it.
-                    {"npc", &npcPortrait_, npcGuid, "questnpc"},
-                    {"target", &targetPortrait_,   gameHandler->getTargetGuid()},
-                    {"pet",    &petPortrait_,      gameHandler->getPetGuid()},
-                    {"focus",  &focusPortrait_,    gameHandler->getFocusGuid()},
-                    // SetLootPortrait's (0x00588f00): the loot's own unit.
-                    {"loot",   &lootPortrait_,
-                     gameHandler->isLootWindowOpen() ? gameHandler->getCurrentLoot().lootGuid : 0},
-                    {"party1", &partyPortraits_[0], partyGuids[0]},
-                    {"party2", &partyPortraits_[1], partyGuids[1]},
-                    {"party3", &partyPortraits_[2], partyGuids[2]},
-                    {"party4", &partyPortraits_[3], partyGuids[3]},
-                };
-                // NOLINTEND(modernize-use-designated-initializers)
-                for (const UnitFace& face : kFaces) {
-                    static const std::vector<uint32_t> kNoAlias;
-                    const auto& claimed = widgets.portraitsFor(face.unit);
-                    const auto& alsoClaimed = face.alias
-                        ? widgets.portraitsFor(face.alias) : kNoAlias;
-                    if (claimed.empty() && alsoClaimed.empty()) continue;
+                facePool_.assign(faces);
+                faceViews_.resize(facePool_.views());
+                facePictures_.resize(facePool_.views());
+                for (const std::string& claim : faces) {
+                    const auto guid = ui::portrait_claims::unitOf(claim);
+                    const auto view = facePool_.viewOf(claim);
+                    if (!guid || !view) continue;
+                    if (!faceViews_[*view]) faceViews_[*view] = std::make_unique<ui::UnitPortrait>();
+                    struct UnitFace {
+                        ui::UnitPortrait* portrait;
+                        uint64_t guid;
+                    };
+                    const UnitFace face{faceViews_[*view].get(), *guid};
+                    const auto& claimed = widgets.portraitsFor(claim);
+                    const bool there = gameHandler->getEntityManager().getEntity(face.guid) != nullptr;
 
-                    bool built = false;
-                    face.portrait->setFraming(ui::UnitPortrait::Framing::Face);
-                    face.portrait->setAnimated(animatedPortraits);
-                    // Sized for the circle it is drawn into rather than for the
-                    // paperdoll - the shape as much as the scale, since a
-                    // portrait frame is square and the old target was not.
-                    sizeFor(*face.portrait,
-                            widgets.get(claimed.empty() ? alsoClaimed.front()
-                                                        : claimed.front()));
+                    // Draws it, and answers whether the picture is that unit's.
+                    const auto draw = [&]() -> bool {
+                        bool built = false;
+                        face.portrait->setFraming(ui::UnitPortrait::Framing::Face);
+                        face.portrait->setAnimated(animatedPortraits);
+                        // Sized for the circle it is drawn into rather than for the
+                        // paperdoll, and no smaller than another circle the view
+                        // may draw later wants: the client's are 64 (0x00619580).
+                        face.portrait->setTargetSize(128, 128);
+                        sizeFor(*face.portrait, widgets.get(claimed.front()));
 
-                    // A player first, because a player has a display id too and
-                    // it is the wrong thing to draw them from: it names the
-                    // naked race model, with none of their skin, face or hair.
-                    // The world already reads all three off their update
-                    // fields, and now so does this.
-                    uint8_t race = 0, gender = 0, facial = 0;
-                    uint32_t appearance = 0;
-                    if (face.guid != 0 &&
-                        gameHandler->getPlayerAppearance(face.guid, race, gender,
-                                                         appearance, facial)) {
-                        // What they are visibly wearing, where it is known.
-                        // Empty means the item queries have not come back, and
-                        // the portrait leaves the model dressed as it was
-                        // rather than stripping it.
-                        // A real player composites their own skin; no bake.
-                        face.portrait->setBakedSkin("");
-                        // Their class: a death knight's eyes glow (0x004ed900).
-                        face.portrait->setUnitClass(gameHandler->lookupPlayerClass(face.guid));
-                        // Their guild tabard's design (0x006db510).
-                        face.portrait->setGuildEmblem(
-                            gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(face.guid)));
-                        std::vector<game::EquipmentItem> worn;
-                        std::array<uint32_t, 19> displayIds{};
-                        std::array<uint8_t, 19> invTypes{};
-                        if (gameHandler->getOtherPlayerEquipment(face.guid, displayIds,
-                                                                 invTypes)) {
-                            for (size_t slot = 0; slot < displayIds.size(); ++slot) {
-                                if (displayIds[slot] == 0) continue;
-                                worn.push_back({.displayModel = displayIds[slot],
-                                                .inventoryType = invTypes[slot],
-                                                .enchantment = 0u});
+                        // A player first, because a player has a display id too and
+                        // it is the wrong thing to draw them from: it names the
+                        // naked race model, with none of their skin, face or hair.
+                        // The world already reads all three off their update
+                        // fields, and now so does this.
+                        uint8_t race = 0, gender = 0, facial = 0;
+                        uint32_t appearance = 0;
+                        if (face.guid != 0 &&
+                            gameHandler->getPlayerAppearance(face.guid, race, gender,
+                                                             appearance, facial)) {
+                            // What they are visibly wearing, where it is known.
+                            // Empty means the item queries have not come back, and
+                            // the portrait leaves the model dressed as it was
+                            // rather than stripping it.
+                            // A real player composites their own skin; no bake.
+                            face.portrait->setBakedSkin("");
+                            // Their class: a death knight's eyes glow (0x004ed900).
+                            face.portrait->setUnitClass(gameHandler->lookupPlayerClass(face.guid));
+                            // Their guild tabard's design (0x006db510).
+                            face.portrait->setGuildEmblem(
+                                gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(face.guid)));
+                            std::vector<game::EquipmentItem> worn;
+                            std::array<uint32_t, 19> displayIds{};
+                            std::array<uint8_t, 19> invTypes{};
+                            if (gameHandler->getOtherPlayerEquipment(face.guid, displayIds,
+                                                                     invTypes)) {
+                                for (size_t slot = 0; slot < displayIds.size(); ++slot) {
+                                    if (displayIds[slot] == 0) continue;
+                                    worn.push_back({.displayModel = displayIds[slot],
+                                                    .inventoryType = invTypes[slot],
+                                                    .enchantment = 0u});
+                                }
                             }
-                        }
-                        // Whether a model actually loaded, not whether one was
-                        // asked for. A failed load leaves the view holding the
-                        // last unit's face, and a frame that has just changed
-                        // unit would go on showing it.
-                        built = face.portrait->updatePlayer(
-                            race, gender, appearance, facial, worn,
-                            assetManager.get(), renderer.get(), io.DeltaTime);
-                    } else {
-                        uint32_t displayId = 0;
-                        if (face.guid != 0) {
-                            // A unit, not any entity: the display id lives on
-                            // Unit and on GameObject, and a targeted game
-                            // object has no portrait to put one in.
-                            if (game::Unit* u = gameHandler->getUnitByGuid(face.guid)) {
-                                displayId = u->getDisplayId();
-                            }
-                        }
-                        // A humanoid NPC - a guard, a questgiver, an innkeeper -
-                        // is drawn the way a character is, from a race and the
-                        // same skin, face and hair choices a player has.
-                        // CreatureDisplayInfo leaves the skin fields empty for
-                        // these, so loading one as a creature gives a shape with
-                        // nothing on it. Tried first for that reason.
-                        uint8_t nRace = 0, nSex = 0, nFacial = 0;
-                        uint32_t nBytes = 0;
-                        if (displayId != 0 && entitySpawner_ &&
-                            entitySpawner_->getHumanoidAppearance(displayId, nRace, nSex,
-                                                                  nBytes, nFacial)) {
-                            // Dressed, from the same row. A questgiver's helm
-                            // and shoulders are most of what a portrait framed
-                            // on the head can show of them.
-                            std::vector<game::EquipmentItem> npcWorn;
-                            for (const auto& [did, invType] :
-                                     entitySpawner_->getHumanoidEquipment(displayId)) {
-                                npcWorn.push_back({.displayModel = did, .inventoryType = invType,
-                                                   .enchantment = 0u});
-                            }
-                            // The bake, where there is one - nearly always.
-                            // It is the whole appearance already composited,
-                            // armour included, which is the half this client
-                            // cannot build for an NPC. The equipment above
-                            // still matters: it decides the geosets, and the
-                            // bake only paints what they draw.
-                            face.portrait->setBakedSkin(
-                                entitySpawner_->getHumanoidBakePath(displayId));
-                            face.portrait->setGuildEmblem(std::nullopt);
-                            face.portrait->setUnitClass(0);
+                            // Whether a model actually loaded, not whether one was
+                            // asked for. A failed load leaves the view holding the
+                            // last unit's face, and a frame that has just changed
+                            // unit would go on showing it.
                             built = face.portrait->updatePlayer(
-                                nRace, nSex, nBytes, nFacial, npcWorn,
+                                race, gender, appearance, facial, worn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);
+                        } else {
+                            uint32_t displayId = 0;
+                            if (face.guid != 0) {
+                                // A unit, not any entity: the display id lives on
+                                // Unit and on GameObject, and a targeted game
+                                // object has no portrait to put one in.
+                                if (game::Unit* u = gameHandler->getUnitByGuid(face.guid)) {
+                                    displayId = u->getDisplayId();
+                                }
+                            }
+                            // A humanoid NPC - a guard, a questgiver, an innkeeper -
+                            // is drawn the way a character is, from a race and the
+                            // same skin, face and hair choices a player has.
+                            // CreatureDisplayInfo leaves the skin fields empty for
+                            // these, so loading one as a creature gives a shape with
+                            // nothing on it. Tried first for that reason.
+                            uint8_t nRace = 0, nSex = 0, nFacial = 0;
+                            uint32_t nBytes = 0;
+                            if (displayId != 0 && entitySpawner_ &&
+                                entitySpawner_->getHumanoidAppearance(displayId, nRace, nSex,
+                                                                      nBytes, nFacial)) {
+                                // Dressed, from the same row. A questgiver's helm
+                                // and shoulders are most of what a portrait framed
+                                // on the head can show of them.
+                                std::vector<game::EquipmentItem> npcWorn;
+                                for (const auto& [did, invType] :
+                                         entitySpawner_->getHumanoidEquipment(displayId)) {
+                                    npcWorn.push_back({.displayModel = did, .inventoryType = invType,
+                                                       .enchantment = 0u});
+                                }
+                                // The bake, where there is one - nearly always.
+                                // It is the whole appearance already composited,
+                                // armour included, which is the half this client
+                                // cannot build for an NPC. The equipment above
+                                // still matters: it decides the geosets, and the
+                                // bake only paints what they draw.
+                                face.portrait->setBakedSkin(
+                                    entitySpawner_->getHumanoidBakePath(displayId));
+                                face.portrait->setGuildEmblem(std::nullopt);
+                                face.portrait->setUnitClass(0);
+                                built = face.portrait->updatePlayer(
+                                    nRace, nSex, nBytes, nFacial, npcWorn,
+                                    assetManager.get(), renderer.get(), io.DeltaTime);
+                            }
+                            std::string modelPath;
+                            if (!built && displayId != 0 && entitySpawner_) {
+                                modelPath = entitySpawner_->getModelPathForDisplayId(displayId);
+                            }
+                            if (!modelPath.empty()) {
+                                built = face.portrait->updateCreature(
+                                    modelPath,
+                                    entitySpawner_->getCreatureSkinPaths(displayId, modelPath),
+                                    assetManager.get(), renderer.get(), io.DeltaTime);
+                            }
                         }
-                        std::string modelPath;
-                        if (!built && displayId != 0 && entitySpawner_) {
-                            modelPath = entitySpawner_->getModelPathForDisplayId(displayId);
-                        }
-                        if (!modelPath.empty()) {
-                            built = face.portrait->updateCreature(
-                                modelPath,
-                                entitySpawner_->getCreatureSkinPaths(displayId, modelPath),
-                                assetManager.get(), renderer.get(), io.DeltaTime);
-                        }
-                    }
-                    const uint64_t drawn = built ? face.portrait->textureId() : 0;
+                        return built;
+                    };
+                    // A unit gone out of sight keeps the picture taken of it.
+                    if (there) facePictures_[*view] = draw() ? claim : std::string();
+                    const uint64_t drawn = facePictures_[*view] == claim ? face.portrait->textureId() : 0;
                     for (uint32_t id : claimed) {
-                        if (ui::Widget* w = widgets.get(id)) w->externalTexture = drawn;
-                    }
-                    for (uint32_t id : alsoClaimed) {
                         if (ui::Widget* w = widgets.get(id)) w->externalTexture = drawn;
                     }
                 }
@@ -7995,27 +8012,6 @@ void Application::render() {
                 buttons.button5 = ImGui::IsMouseDown(4);
                 engine->dispatchMouse(io.MousePos.x, io.MousePos.y,
                                       io.DisplaySize.y, buttons);
-
-                // Letting a carried item go over the world is how an item is
-                // destroyed. The C client raises DELETE_ITEM_CONFIRM for it and
-                // uiparent.lua answers with the delete prompt, choosing the
-                // sterner wording by quality; nothing fired it, so dragging an
-                // item out of a bag and dropping it did nothing at all.
-                //
-                // Only when the release landed on no widget: over a frame the
-                // drop belongs to that frame, which has already had its say
-                // above.
-                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
-                    !engine->mouseOverFrameXml()) {
-                    const uint32_t carried = addons::cursorItemId();
-                    if (carried != 0 && gameHandler) {
-                        const auto* info = gameHandler->getItemInfo(carried);
-                        const std::string name = info ? info->name : std::string();
-                        const uint32_t quality = info ? info->quality : 0u;
-                        gameHandler->fireAddonEvent(
-                            "DELETE_ITEM_CONFIRM", {name, std::to_string(quality)});
-                    }
-                }
             }
         });
     }
@@ -8094,7 +8090,12 @@ void Application::render() {
     if (auto click = vrRuntime.takeWorldClick(); click && gameHandler && uiManager && state == AppState::IN_GAME) {
         const rendering::Ray ray{.origin = click->origin, .direction = click->direction};
         const ui::ScenePick pick = ui::pickScene(*gameHandler, ray, ui::ScenePickParams{});
-        if (const uint64_t guid = pick.resolve(); guid != 0) {
+        const uint64_t guid = pick.resolve();
+        auto* engine = addonManager_ ? addonManager_->getLuaEngine() : nullptr;
+        // What is held goes first, as on the desktop.
+        const bool taken = engine && (click->interact ? engine->rightPressPutsCursorDown()
+                                                      : engine->worldLeftClickTakenByCursor(guid != 0));
+        if (!taken && guid != 0) {
             gameHandler->setTarget(guid);
             if (click->interact) uiManager->getGameScreen().interactWithTarget(*gameHandler);
         }
@@ -8278,7 +8279,7 @@ void Application::render() {
     stageStatFrames_ += 1;
     reportStageTimes();
     renderingFrame_ = false;
-    processDeferredLogoutToLogin();
+    processDeferredLeaveWorld();
 }
 
 void Application::noteStageTime(const char* stage, float milliseconds) {
@@ -8710,6 +8711,10 @@ bool Application::getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, fl
 
 bool Application::gameObjectDrawsNothing(uint64_t guid) const {
     return entitySpawner_ && entitySpawner_->gameObjectDrawsNothing(guid);
+}
+
+uint64_t Application::gameObjectOfFace(bool building, uint32_t owner, const glm::vec3& at) const {
+    return entitySpawner_ ? entitySpawner_->gameObjectOfFace(building, owner, at) : 0;
 }
 
 std::optional<float> Application::rayHitUnit(uint64_t guid, const glm::vec3& origin, const glm::vec3& direction,

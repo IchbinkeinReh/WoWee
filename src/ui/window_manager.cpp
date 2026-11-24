@@ -564,7 +564,7 @@ void WindowManager::renderEquipSetWindow(game::GameHandler& gameHandler) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.40f, 0.30f, 0.15f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.45f, 0.20f, 1.0f));
         if (ImGui::Button("##icon", iconSize)) {
-            gameHandler.useEquipmentSet(set.setId);
+            gameHandler.useEquipmentSet(std::string(set.name), false);
         }
         ImGui::PopStyleColor(3);
 
@@ -580,7 +580,7 @@ void WindowManager::renderEquipSetWindow(game::GameHandler& gameHandler) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.35f, 0.15f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.50f, 0.22f, 1.0f));
         if (ImGui::SmallButton("Equip")) {
-            gameHandler.useEquipmentSet(set.setId);
+            gameHandler.useEquipmentSet(std::string(set.name), false);
         }
         ImGui::PopStyleColor(2);
         ImGui::EndGroup();

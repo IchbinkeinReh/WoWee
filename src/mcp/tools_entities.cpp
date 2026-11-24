@@ -75,7 +75,7 @@ json entities(ToolContext& context, const json& args) {
     for (const auto& [guid, entity] : gh->getEntityManager().getEntities()) {
         if (!entity || guid == gh->getPlayerGuid()) continue;
         if (!kindWanted(entity->getType(), kind)) continue;
-        const float d = glm::length(entityAt(*entity) - me);
+        const float d = glm::length(entityAt(context, *entity) - me);
         if (d > radius) continue;
         if (!name.empty() && lower(entityName(context, *entity)).find(name) == std::string::npos) continue;
         ++total;
@@ -117,7 +117,7 @@ void addEntityTools(Toolbox& box) {
         "lootable, usable.",
         object({optional("kind", choice("which kind", {"all", "units", "players", "objects", "corpses", "dynamic"})),
                 optional("radius", number("yards, 60 by default", 1, 500)),
-                optional("limit", integer("how many, 20 by default", 1, 100)),
+                optional("limit", integer("how many, 20 by default", 1, 500)),
                 optional("name", text("only names with this in them", 64)),
                 optional("filter", text("hostile, attackable, friendly, npc, quest, lootable, usable, dead, alive, or a "
                                         "role: vendor, trainer, questgiver, flightmaster, innkeeper, banker, ...",

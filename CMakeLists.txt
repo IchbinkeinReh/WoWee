@@ -1478,6 +1478,7 @@ if(NOT ANDROID AND NOT IOS)
         src/mcp/image_encode.cpp
         src/mcp/input_driver.cpp
         src/mcp/json_rpc.cpp
+        src/mcp/lua_error.cpp
         src/mcp/lua_json.cpp
         src/mcp/main_queue.cpp
         src/mcp/options.cpp
@@ -1497,6 +1498,7 @@ if(NOT ANDROID AND NOT IOS)
         src/mcp/tools_move.cpp
         src/mcp/tools_point.cpp
         src/mcp/tools_shot.cpp
+        src/mcp/tools_sound.cpp
         src/mcp/tools_state.cpp
         src/mcp/tools_terrain.cpp
         src/mcp/tools_ui.cpp

@@ -167,7 +167,7 @@ std::function<std::optional<glm::vec3>()> placeMeant(ToolContext& context, const
         auto* gh = context.app.getGameHandler();
         const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr;
         if (!e) return std::nullopt;
-        return entityAt(*e);
+        return entityAt(context, *e);
     };
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -206,6 +207,29 @@ public:
     // Update (call once per frame for cleanup/position sync)
     void update(float deltaTime);
 
+    /// A sound going on, or one lately begun (recent), for who wants to see
+    /// them. `name` is the file's, "" where none is known by its bytes
+    /// (audio/sound_names.hpp).
+    struct Shown {
+        std::string name;
+        const char* kind = "effect";  ///< effect, stream, music
+        bool spatial = false;
+        glm::vec3 position{0.0f};
+        float distance = 0.0f;      ///< from the listener, a 3D one's
+        float volume = 1.0f;        ///< what it was asked to play at
+        bool loops = false;
+        bool heard = true;          ///< has a voice: not silent for want of one, out of reach or held
+        const char* why = "";       ///< where it is not heard
+        int priority = voice_priority::kDefault;
+        double seconds = 0.0;       ///< in, and how long it is
+        double length = 0.0;
+        double ago = 0.0;           ///< since it began
+    };
+    [[nodiscard]] std::vector<Shown> playing() const;
+    /// The sounds begun in the last `seconds`, the newest first, whether they
+    /// have ended or not. The last hundred and twenty-eight are kept.
+    [[nodiscard]] std::vector<Shown> recent(double seconds) const;
+
     /// Keep a copy of what the speakers play, for the screen recorder.
     ///
     /// Taken in the device's own callback after the mix and the master volume,
@@ -246,8 +270,21 @@ private:
         float minDistance = 1.0f;     // a 3D sound's full-volume reach
         Channel channel = Channel::Own;
         uint64_t serial = 0;          // the order it started in
+        uint64_t key = 0;             // sound_key::of its file
     };
     std::vector<ActiveSound> activeSounds_;
+    struct Begun {
+        uint64_t key = 0;
+        bool spatial = false;
+        bool heard = true;
+        bool loops = false;
+        glm::vec3 position{0.0f};
+        float volume = 1.0f;
+        int priority = voice_priority::kDefault;
+        std::chrono::steady_clock::time_point at{};
+    };
+    std::array<Begun, 128> begun_{};
+    size_t begunNext_ = 0;
     SoundSlots soundSlots_;  ///< where a handle's sound is in it
     [[nodiscard]] const ActiveSound* findSound(uint32_t id) const;
     [[nodiscard]] ActiveSound* findSound(uint32_t id);
@@ -276,7 +313,7 @@ private:
     uint32_t voicesInUse_ = 0;  ///< given out, and taken by the starts since
     /// The sound just tracked: its handle, priority, volume and reach, and
     /// the voice it starts with, if any.
-    void noteStarted(int priority, float volume, Channel channel, bool spatial, float minDistance);
+    void noteStarted(int priority, float volume, Channel channel, bool spatial, float minDistance, uint64_t key);
     int maxRealVoices_ = voice_priority::kDefaultRealVoices;
     uint64_t nextSerial_ = 1;
     uint32_t nextSoundId_ = 1;

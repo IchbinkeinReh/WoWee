@@ -1,5 +1,6 @@
 // lua_unit_api.cpp - Unit query, stats, party/raid, and player state Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "ui/portrait_claims.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/battleground_flag.hpp"
 #include "game/chr_names.hpp"
@@ -2752,104 +2753,159 @@ static int lua_GetInventoryItemCooldown(lua_State* L) {
     return 3;
 }
 
-// SetPortraitTexture(texture, unit) - put a unit's face in a texture.
-//
-// The player's and the target's, each rendered to an offscreen image of its
-// own. Any other unit leaves the texture as it was and clears every claim on
-// it, so a portrait frame reused for a party member does not keep showing
-// whichever of the two it last held.
-//
-// The texture is remembered rather than filled here: the handle is rebuilt
-// whenever the portrait's render target is, so it has to be assigned every
-// frame, which the render loop does for everything on this list.
+/// The texture argument's widget, 0 where there is none. widgetIdOf lives in
+/// lua_engine.cpp and is not declared anywhere this file can see it.
+static uint32_t portraitWidget(lua_State* L) {
+    if (!lua_istable(L, 1)) return 0;
+    lua_getfield(L, 1, "__wid");
+    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    return id;
+}
+
+/// A portrait texture with a file in it, "" to leave it empty, and no unit's
+/// face.
+static void portraitFile(wowee::ui::WidgetTree* tree, uint32_t id, const std::string& file, bool disc = false) {
+    tree->setPortraitUnit(id, std::string());
+    auto* w = tree->get(id);
+    if (!w) return;
+    w->solidColor = false;
+    w->texturePath = file;
+    w->portraitDisc = disc;
+    w->texCoord[0] = w->texCoord[2] = 0.0f;
+    w->texCoord[1] = w->texCoord[3] = 1.0f;
+    w->texCoordRotated = false;
+}
+
+/// The unit's face on the texture. The image is remembered rather than filled
+/// here: its handle is rebuilt whenever the portrait's render target is, so it
+/// is assigned every frame, which the render loop does for every claim.
+static void portraitFace(wowee::ui::WidgetTree* tree, game::GameHandler* gh, uint32_t id, uint64_t guid) {
+    namespace claims = wowee::ui::portrait_claims;
+    if (auto* w = tree->get(id)) {
+        w->solidColor = false;
+        w->texturePath.clear();
+        w->portraitDisc = false;
+    }
+    tree->setPortraitUnit(id, guid == gh->getPlayerGuid() ? std::string(claims::kPlayer) : claims::unitKey(guid));
+}
+
+/// CreatureDisplayInfo's PortraitTextureName (0x00715950): the icon a display
+/// is shown as instead of a face - a totem, a spore, a wisp. "" for most.
+static std::string displayPortraitIcon(game::GameHandler* gh, uint32_t displayId) {
+    static std::unordered_map<uint32_t, std::string> icons;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh->services().assetManager;
+        if (!am || !am->isInitialized()) return {};
+        loaded = true;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* l = layouts ? layouts->getLayout("CreatureDisplayInfo") : nullptr;
+        const uint32_t col = l ? l->tryField("PortraitTextureName") : 0xFFFFFFFFu;
+        auto dbc = am->loadDBC("CreatureDisplayInfo.dbc");
+        if (dbc && dbc->isLoaded() && col < dbc->getFieldCount()) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                std::string icon = dbc->getString(i, col);
+                if (!icon.empty()) icons[dbc->getUInt32(i, 0)] = std::move(icon);
+            }
+        }
+    }
+    const auto it = icons.find(displayId);
+    return it != icons.end() ? it->second : std::string();
+}
+
 /// SetLootPortrait(texture) (0x00588f00): the face of whoever the open loot is
 /// from (0x00bfa8d8) on the texture, and 1; with no such unit the texture is
 /// emptied (0x00481520) and nil.
 static int lua_SetLootPortrait(lua_State* L) {
     auto* tree = getWidgetTree(L);
     auto* gh = getGameHandler(L);
-    if (!tree || !lua_istable(L, 1)) { lua_pushnil(L); return 1; }
-    lua_getfield(L, 1, "__wid");
-    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
-    lua_pop(L, 1);
+    const uint32_t id = portraitWidget(L);
+    if (!tree || id == 0) { lua_pushnil(L); return 1; }
     const uint64_t guid = gh && gh->isLootWindowOpen() ? gh->getCurrentLoot().lootGuid : 0;
-    if (id != 0 && guid != 0 && gh->getEntityManager().getEntity(guid)) {
-        tree->setPortraitUnit(id, "loot");
+    if (guid != 0 && gh->getEntityManager().getEntity(guid)) {
+        portraitFace(tree, gh, id, guid);
         lua_pushnumber(L, 1);
         return 1;
     }
-    if (id != 0) {
-        tree->setPortraitUnit(id, std::string());
-        if (auto* w = tree->get(id)) {
-            w->solidColor = false;
-            w->texturePath.clear();
-        }
-    }
+    portraitFile(tree, id, std::string());
     lua_pushnil(L);
     return 1;
 }
 
+/// SetPortraitTexture(texture, "unit") (0x006113e0) -> whether there was one.
+///
+/// The face of the unit the token names now, and it stays that unit's until
+/// the texture is given another. A display with an icon for a portrait shows
+/// that. A player the client has no object for - a party or raid member out
+/// of sight - gets the race's stand-in face (0x00618180):
+/// Interface\\CharacterFrame\\TemporaryPortrait-<Male|Female>-<race>, the race
+/// named by ChrRaces' ClientFileString and both read off the name cache's
+/// record; without one the texture is emptied and the record asked for, whose
+/// answer raises UNIT_PORTRAIT_UPDATE for the unit (0x00608540 ->
+/// 0x00618110). A group member's pet out of sight gets TemporaryPortrait-Pet
+/// (0x00513cb0 -> 0x00618230). Anything else leaves the texture empty.
 static int lua_SetPortraitTexture(lua_State* L) {
     auto* tree = getWidgetTree(L);
-    if (!tree || !lua_istable(L, 1)) return 0;
-    // The widget id the frame table carries. widgetIdOf lives in lua_engine.cpp
-    // and is not declared anywhere this file can see it.
-    lua_getfield(L, 1, "__wid");
-    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
-    lua_pop(L, 1);
-    if (id == 0) return 0;
-
-    std::string unit(luaL_optstring(L, 2, ""));
-    toLowerInPlace(unit);
-    // Only the units this client can build a face for. Anything else releases
-    // the texture rather than claiming it, so a portrait frame reused for a
-    // unit with no picture does not keep the last one it had.
-    const bool answerable =
-        (unit == "player" || unit == "target" || unit == "pet" ||
-         unit == "focus" || unit == "npc" || unit == "questnpc" ||
-         (unit.rfind("party", 0) == 0 && unit.size() == 6 &&
-          unit[5] >= '1' && unit[5] <= '4'));
-    // A player the client has no object for - a party or raid member out of
-    // sight - gets the race's stand-in face (0x006113e0 -> 0x00618180):
-    // Interface\CharacterFrame\TemporaryPortrait-<Male|Female>-<race>, the
-    // race named by ChrRaces' ClientFileString and both read off the name
-    // cache's record. Without one the texture is emptied and the record asked
-    // for; its answer raises UNIT_PORTRAIT_UPDATE for the unit (0x00608540
-    // -> 0x00618110).
     auto* gh = getGameHandler(L);
+    const uint32_t id = portraitWidget(L);
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: SetPortraitTexture(texture, \"unit\")");
+    if (!tree || id == 0) return 0;
+    std::string unit(lua_tostring(L, 2));
+    toLowerInPlace(unit);
     const uint64_t guid = gh ? resolveUnitGuid(gh, unit) : 0;
-    const bool playerGuid = guid != 0 && ((guid >> 32) & 0xF0000000u) == 0;
-    if (playerGuid && !gh->getEntityManager().getEntity(guid)) {
-        tree->setPortraitUnit(id, std::string());
-        auto* w = tree->get(id);
-        if (!w) return 0;
-        w->solidColor = false;
-        w->texturePath.clear();
-        const uint8_t race = gh->lookupPlayerRace(guid);
-        const uint8_t gender = gh->lookupPlayerGender(guid);
-        if (race == 0 || gender > 1) {
-            gh->askNameThen(guid, "portrait", [gh, guid](bool found, const std::string&) {
-                if (!found) return;
-                for (const auto& token : gh->unitTokensForGuid(guid))
-                    gh->fireAddonEvent("UNIT_PORTRAIT_UPDATE", {token});
-            });
-            return 0;
+    const auto answer = [L](bool there) {
+        lua_pushboolean(L, there ? 1 : 0);
+        return 1;
+    };
+    const auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+    if (entity || (guid != 0 && guid == gh->getPlayerGuid())) {
+        if (guid != gh->getPlayerGuid() && !entity->isUnit()) {
+            portraitFile(tree, id, std::string());
+            return answer(false);
         }
-        auto* am = gh->services().assetManager;
-        auto races = am && am->isInitialized() ? am->loadDBC("ChrRaces.dbc") : nullptr;
-        const auto* layouts = pipeline::getActiveDBCLayout();
-        const auto* l = layouts ? layouts->getLayout("ChrRaces") : nullptr;
-        const uint32_t fileCol = l ? l->tryField("ClientFileString") : 0xFFFFFFFFu;
-        const int32_t row = races && races->isLoaded() ? races->findRecordById(race) : -1;
-        if (row >= 0 && fileCol != 0xFFFFFFFFu) {
-            w->texturePath = std::string("Interface\\CharacterFrame\\TemporaryPortrait-") +
-                             (gender == 1 ? "Female" : "Male") + "-" +
-                             races->getString(static_cast<uint32_t>(row), fileCol);
+        if (entity && entity->getType() == game::ObjectType::UNIT) {
+            const auto creature = std::static_pointer_cast<game::Unit>(entity);
+            if (const std::string icon = displayPortraitIcon(gh, creature->getDisplayId()); !icon.empty()) {
+                portraitFile(tree, id, "Interface\\Icons\\" + icon, /*disc=*/true);
+                return answer(true);
+            }
         }
-        return 0;
+        portraitFace(tree, gh, id, guid);
+        return answer(true);
     }
-    tree->setPortraitUnit(id, answerable ? unit : std::string());
-    return 0;
+    const bool playerGuid = guid != 0 && ((guid >> 32) & 0xF0000000u) == 0;
+    if (!playerGuid) {
+        bool pet = false;
+        if (guid != 0) {
+            for (const auto& token : gh->unitTokensForGuid(guid)) pet = pet || token.find("pet") != std::string::npos;
+        }
+        portraitFile(tree, id, pet ? "Interface\\CharacterFrame\\TemporaryPortrait-Pet" : "");
+        return answer(pet);
+    }
+    portraitFile(tree, id, std::string());
+    const uint8_t race = gh->lookupPlayerRace(guid);
+    const uint8_t gender = gh->lookupPlayerGender(guid);
+    if (race == 0 || gender > 1) {
+        gh->askNameThen(guid, "portrait", [gh, guid](bool found, const std::string&) {
+            if (!found) return;
+            for (const auto& token : gh->unitTokensForGuid(guid))
+                gh->fireAddonEvent("UNIT_PORTRAIT_UPDATE", {token});
+        });
+        return answer(false);
+    }
+    auto* am = gh->services().assetManager;
+    auto races = am && am->isInitialized() ? am->loadDBC("ChrRaces.dbc") : nullptr;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* l = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+    const uint32_t fileCol = l ? l->tryField("ClientFileString") : 0xFFFFFFFFu;
+    const int32_t row = races && races->isLoaded() ? races->findRecordById(race) : -1;
+    if (row >= 0 && fileCol != 0xFFFFFFFFu) {
+        portraitFile(tree, id,
+                     std::string("Interface\\CharacterFrame\\TemporaryPortrait-") + (gender == 1 ? "Female" : "Male") +
+                         "-" + races->getString(static_cast<uint32_t>(row), fileCol));
+    }
+    return answer(true);
 }
 
 // --- What the barber shop calls the two things it can change ---

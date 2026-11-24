@@ -1,6 +1,7 @@
 // lua_inventory_api.cpp - Items, containers, merchant, loot, equipment, trading, auction, and mail Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
-#include "game/mail_template.hpp"
+#include "game/mail_text.hpp"
+#include "game/packed_time.hpp"
 #include "game/item_text.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_api_helpers.hpp"
@@ -1933,53 +1934,95 @@ const game::MailMessage* mailAt(game::GameHandler* gh, int index) {
     return &inbox[index - 1];
 }
 
-const game::MailAttachment* attachmentAt(const game::MailMessage* mail, int slot) {
-    if (!mail || slot < 1 || slot > static_cast<int>(mail->attachments.size())) {
-        return nullptr;
-    }
-    return &mail->attachments[slot - 1];
+/// The attachment at stack position `arg`, counted from one - the first there
+/// is when it is no number (0x0056d420).
+const game::MailAttachment* attachmentArg(lua_State* L, const game::MailMessage* mail, int arg) {
+    if (!mail) return nullptr;
+    return game::mail_text::attachment(
+        *mail, lua_isnumber(L, arg) ? std::optional<int>(luaToClientInt(L, arg)) : std::nullopt);
+}
+
+/// The invoice a letter is (0x0056f520), its item known.
+bool mailIsInvoice(game::GameHandler* gh, const game::MailMessage& mail) {
+    game::AuctionMailSubject auction;
+    const bool known = mail.messageType == game::mail_text::kAuction &&
+                       game::parseAuctionMailSubject(mail.subject, auction) &&
+                       gh->getItemInfo(auction.itemEntry) != nullptr;
+    return game::mail_text::isInvoice(mail, known);
 }
 
 }  // namespace
 
-// GetInboxItem(index, slot) → name, texture, count, quality, canUse
+// GetInboxItem(index [, slot]) (0x00570f10) → name, texture, count, quality,
+// canUse; nil, nil, 0, 0, nil where there is none, UNKNOWNOBJECT and the
+// question mark with the rest of those for an item not known yet.
 static int lua_GetInboxItem(lua_State* L) {
-    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetInboxItem(messageIndex, attachIndex)");   // 0x00570f10
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInboxItem(messageIndex, attachIndex)");
     auto* gh = getGameHandler(L);
-    const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-    const auto* att = attachmentAt(mail, static_cast<int>(luaL_optnumber(L, 2, 1)));
-    if (!att) { return luaReturnNil(L); }
-    const auto* info = gh->getItemInfo(att->itemId);
-    lua_pushstring(L, info ? info->name.c_str() : "");
-    lua_pushstring(L, info ? gh->getItemIconPath(info->displayInfoId).c_str() : "");
+    const auto* att = attachmentArg(L, mailAt(gh, luaToClientInt(L, 1)), 2);
+    const auto* info = att ? gh->getItemInfo(att->itemId) : nullptr;
+    if (!info) {
+        if (att) {
+            gh->ensureItemInfo(att->itemId);
+            lua_pushstring(L, game::interfaceString("UNKNOWNOBJECT", "Unknown").c_str());
+            lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");
+        } else {
+            lua_pushnil(L);
+            lua_pushnil(L);
+        }
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
+        lua_pushnil(L);
+        return 5;
+    }
+    lua_pushstring(L, gh->itemNameWithProperty(info->name, static_cast<int32_t>(att->randomPropertyId)).c_str());
+    lua_pushstring(L, gh->getItemIconPath(info->displayInfoId).c_str());
     lua_pushnumber(L, att->stackCount);
-    lua_pushnumber(L, info ? info->quality : 1);
-    luaPushOneOrNil(L, 1);
+    lua_pushnumber(L, info->quality);
+    luaPushOneOrNil(L, gh->judgeItemRequirements(*info).usable() ? 1 : 0);   // 0x006dc3f0
     return 5;
 }
 
-// GetInboxItemLink(index, slot) → the link for a tooltip
+// GetInboxItemLink(index [, slot]) (0x0056eca0) → the attachment's link, or
+// no value at all.
 static int lua_GetInboxItemLink(lua_State* L) {
-    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetInboxItemLink(messageIndex, attachIndex)");   // 0x0056eca0
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInboxItemLink(messageIndex, attachIndex)");
     auto* gh = getGameHandler(L);
-    const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-    const auto* att = attachmentAt(mail, static_cast<int>(luaL_optnumber(L, 2, 1)));
+    const auto* att = attachmentArg(L, mailAt(gh, luaToClientInt(L, 1)), 2);
     const auto* info = att ? gh->getItemInfo(att->itemId) : nullptr;
-    if (!info || info->name.empty()) { return luaReturnNil(L); }
-    const std::string link = game::itemChatLink(att->itemId, static_cast<uint32_t>(info->quality), info->name,
-                                 {}, gh->getPlayerLevel());
+    if (!info || info->name.empty()) {
+        if (att) gh->ensureItemInfo(att->itemId);
+        return 0;
+    }
+    game::ItemLinkInstance inst;
+    inst.enchantId = att->enchantId;
+    inst.randomPropertyId = static_cast<int32_t>(att->randomPropertyId);
+    inst.seed = att->randomSuffix;
+    const std::string link = game::itemChatLink(att->itemId, static_cast<uint32_t>(info->quality),
+                                                gh->itemNameWithProperty(info->name, inst.randomPropertyId), inst,
+                                                gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
 
-// TakeInboxItem(index, slot) - an attachment is asked for by its own id, not by
-// where it sits in the list
+// TakeInboxItem(index [, slot]) (0x005711c0) - an attachment is asked for by
+// its own id, not by where it sits in the list; with less money than the
+// letter's COD, ERR_NOT_ENOUGH_MONEY.
 static int lua_TakeInboxItem(lua_State* L) {
-    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: TakeInboxItem(messageIndex, attachIndex)");   // 0x005711c0
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TakeInboxItem(messageIndex, attachIndex)");
     auto* gh = getGameHandler(L);
-    const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-    const auto* att = attachmentAt(mail, static_cast<int>(luaL_optnumber(L, 2, 1)));
-    if (gh && mail && att) gh->mailTakeItem(mail->messageId, att->itemGuidLow);
+    const auto* mail = mailAt(gh, luaToClientInt(L, 1));
+    const auto* att = attachmentArg(L, mail, 2);
+    if (!att) {
+        LOG_WARNING("TakeInboxItem: there is no letter ", lua_tostring(L, 1), " with an attachment at that place");
+        return 0;
+    }
+    if (gh->getMoneyCopper() < mail->cod) {
+        gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+        return 0;
+    }
+    gh->mailTakeItem(mail->messageId, att->itemGuidLow);
     return 0;
 }
 
@@ -2494,15 +2537,13 @@ static int lua_GetNumEquipmentSets(lua_State* L) {
 // GetEquipmentSetInfo(index) → name, icon, setID (0x005af120): the icon as a
 // path SetTexture takes, under the directory every one of them lives in.
 static int lua_GetEquipmentSetInfo(lua_State* L) {
+    const int index = luaToClientInt(L, 1);
+    if (index < 1 || index > 10) return luaL_error(L, "Usage: GetEquipmentSetInfo(setIndex)");
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh) { return luaReturnNil(L); }
-    const auto& sets = gh->getEquipmentSets();
-    if (index < 1 || index > static_cast<int>(sets.size())) { return luaReturnNil(L); }
-    const auto& set = sets[index - 1];
+    if (!gh || index > static_cast<int>(gh->getEquipmentSets().size())) return 0;
+    const auto& set = gh->getEquipmentSets()[static_cast<size_t>(index) - 1];
     lua_pushstring(L, set.name.c_str());
-    if (set.iconName.empty()) lua_pushnil(L);
-    else lua_pushstring(L, ("Interface\\Icons\\" + set.iconName).c_str());
+    lua_pushstring(L, ("Interface\\Icons\\" + set.iconName).c_str());
     lua_pushnumber(L, set.setId);
     return 3;
 }
@@ -2510,8 +2551,9 @@ static int lua_GetEquipmentSetInfo(lua_State* L) {
 // GetEquipmentSetInfoByName(name) → icon, setID (0x005af1d0): the icon as the
 // server named it, without the directory, and nothing for no such set.
 static int lua_GetEquipmentSetInfoByName(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetEquipmentSetInfoByName(\"setName\")");
     auto* gh = getGameHandler(L);
-    const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
     if (!set) return 0;
     lua_pushstring(L, set->iconName.c_str());
     lua_pushnumber(L, set->setId);
@@ -2554,7 +2596,8 @@ static int lua_SaveEquipmentSet(lua_State* L) {
         return luaL_error(L, "Usage: SaveEquipmentSet(\"setName\", iconIndex)");
     auto* gh = getGameHandler(L);
     const std::string name = luaL_optstring(L, 1, "");
-    if (!gh || name.empty()) return 0;
+    if (!gh) return 0;
+    if (!equipmentSetNameValid(name)) return luaL_error(L, "Invalid string for setName");
 
     // The icon arrives as a position in the same list the macro picker shows,
     // and the server wants its name rather than its path.
@@ -2583,11 +2626,9 @@ static int lua_SaveEquipmentSet(lua_State* L) {
     // Overwriting one keeps its guid, which is how the server knows it is the
     // same set rather than a new one with the same name. A new one needs a
     // free place among the ten.
-    const auto* existing = equipmentSetByName(gh, name);
-    if (!existing && gh->getEquipmentSets().size() >= 10)
+    if (!equipmentSetByName(gh, name) && gh->getEquipmentSets().size() >= 10)
         return luaL_error(L, "Too many sets! You can only have %d sets", 10);
-    gh->saveEquipmentSet(name, iconName, existing ? existing->setGuid : 0,
-                         existing ? existing->setId : 0xFFFFFFFFu, pendingIgnoredSlotMask());
+    gh->saveEquipmentSet(name, iconName, pendingIgnoredSlotMask());
     return 0;
 }
 
@@ -2601,15 +2642,7 @@ static int lua_RenameEquipmentSet(lua_State* L) {
     }
     std::string newName = lua_tostring(L, 2);
     if (!equipmentSetNameValid(newName)) return luaL_error(L, "Invalid string for setName");
-    auto* gh = getGameHandler(L);
-    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
-    if (!set) return 0;
-    for (const auto& other : gh->getEquipmentSets()) {
-        if (other.name == newName) return 0;
-    }
-    gh->saveEquipmentSet(newName, set->iconName, set->setGuid, set->setId,
-                         pendingIgnoredSlotMask());
-    gh->fireAddonEvent("EQUIPMENT_SETS_CHANGED", {});
+    if (auto* gh = getGameHandler(L)) gh->renameEquipmentSet(lua_tostring(L, 1), newName, pendingIgnoredSlotMask());
     return 0;
 }
 
@@ -2680,22 +2713,28 @@ static int lua_DeleteEquipmentSet(lua_State* L) {
     // 0x005ae800
     if (!lua_isstring(L, 1))
         return luaL_error(L, "Usage: DeleteEquipmentSet(\"setName\")");
-    auto* gh = getGameHandler(L);
-    if (const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""))) {
-        gh->deleteEquipmentSet(set->setGuid);
-    }
+    if (auto* gh = getGameHandler(L)) gh->deleteEquipmentSet(lua_tostring(L, 1));
     return 0;
 }
 
+// UseEquipmentSet("setName") (0x005af380 -> 0x005ada20): true when the set's
+// items were asked for, nil when that was refused, and nothing for a set there
+// is none of. EQUIPMENT_SWAP_PENDING goes out with the request and
+// EQUIPMENT_SWAP_FINISHED with the server's answer (0x005af710), which is when
+// the manager refreshes.
 static int lua_UseEquipmentSet(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UseEquipmentSet(\"setName\")");
     auto* gh = getGameHandler(L);
-    const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
-    if (!gh || !set) { lua_pushboolean(L, 0); return 1; }
-    // EQUIPMENT_SWAP_PENDING goes out with the request and
-    // EQUIPMENT_SWAP_FINISHED with the server's answer (0x005ada20,
-    // 0x005af710), which is when the manager refreshes.
-    gh->useEquipmentSet(set->setId);
-    lua_pushboolean(L, 1);
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
+    if (!set) return 0;
+    if (storedCVarValue("equipmentManager", "0") == "0") {
+        gh->addUIError(game::interfaceString("EQUIPMENT_MANAGER_IS_DISABLED", "The equipment manager is disabled."));
+        lua_pushnil(L);
+        return 1;
+    }
+    const std::string name = set->name;
+    if (gh->useEquipmentSet(name, cursorItemCameFromInventory())) lua_pushboolean(L, 1);
+    else lua_pushnil(L);
     return 1;
 }
 
@@ -5978,10 +6017,13 @@ static std::string mailSenderName(game::GameHandler* gh, const game::MailMessage
         case 5: {
             if (mail.stationeryId == 61) return game::interfaceString("GM_EMAIL_NAME", "Game Master");
             if (!mail.senderName.empty()) return mail.senderName;
-            if (mail.senderGuid == 0) return {};
-            const std::string name = gh->lookupName(mail.senderGuid);
+            // A calendar letter's sender is in its subject (0x00571c50).
+            const uint64_t from = mail.messageType == 5 ? game::mail_text::calendarSubject(mail.subject).remover
+                                                        : mail.senderGuid;
+            if (from == 0) return {};
+            const std::string name = gh->lookupName(from);
             if (!name.empty()) return name;
-            gh->askNameThen(mail.senderGuid, "mail sender", [gh](bool found, const std::string&) {
+            gh->askNameThen(from, "mail sender", [gh](bool found, const std::string&) {
                 if (!found) return;
                 gh->fireAddonEvent("MAIL_INBOX_UPDATE", {});
                 gh->fireAddonEvent("UPDATE_PENDING_MAIL", {});
@@ -6010,6 +6052,47 @@ static std::string mailSenderName(game::GameHandler* gh, const game::MailMessage
         default:
             return {};
     }
+}
+
+/// A packed date as a calendar letter says it (0x005b7e50): FULLDATE_AND_TIME
+/// of FULLDATE - weekday, month, day, year - and the clock, by
+/// timeMgrUseMilitaryTime.
+static std::string packedDateAndTime(lua_State* L, uint32_t packed) {
+    static constexpr std::array<std::pair<const char*, const char*>, 12> kMonths = {{
+        {"FULLDATE_MONTH_JANUARY", "January"}, {"FULLDATE_MONTH_FEBRUARY", "February"},
+        {"FULLDATE_MONTH_MARCH", "March"}, {"FULLDATE_MONTH_APRIL", "April"},
+        {"FULLDATE_MONTH_MAY", "May"}, {"FULLDATE_MONTH_JUNE", "June"},
+        {"FULLDATE_MONTH_JULY", "July"}, {"FULLDATE_MONTH_AUGUST", "August"},
+        {"FULLDATE_MONTH_SEPTEMBER", "September"}, {"FULLDATE_MONTH_OCTOBER", "October"},
+        {"FULLDATE_MONTH_NOVEMBER", "November"}, {"FULLDATE_MONTH_DECEMBER", "December"}}};
+    static constexpr std::array<std::pair<const char*, const char*>, 7> kDays = {{
+        {"WEEKDAY_SUNDAY", "Sunday"}, {"WEEKDAY_MONDAY", "Monday"}, {"WEEKDAY_TUESDAY", "Tuesday"},
+        {"WEEKDAY_WEDNESDAY", "Wednesday"}, {"WEEKDAY_THURSDAY", "Thursday"}, {"WEEKDAY_FRIDAY", "Friday"},
+        {"WEEKDAY_SATURDAY", "Saturday"}}};
+    const game::WowDate when = game::unpackWowPackedTime(packed);
+    const auto& month = kMonths[static_cast<size_t>(std::clamp(when.month, 1, 12) - 1)];
+    const auto& day = kDays[static_cast<size_t>(std::clamp(when.weekday, 0, 6))];
+    const std::string date = game::interfaceFormat(
+        "FULLDATE", "%1$s, %2$s %3$d, %4$d",
+        {game::interfaceString(day.first, day.second), game::interfaceString(month.first, month.second),
+         std::to_string(when.day), std::to_string(when.fullYear())});
+    int hour = when.hour;
+    std::string clock;
+    lua_getglobal(L, "GetCVarBool");
+    lua_pushstring(L, "timeMgrUseMilitaryTime");
+    const bool military = lua_pcall(L, 1, 1, 0) == 0 && lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    if (military) {
+        clock = game::interfaceString("TIME_TWENTYFOURHOURS", "%d:%02d");
+    } else {
+        const bool afternoon = hour >= 12;
+        if (hour == 0) hour = 12;
+        else if (hour > 12) hour -= 12;
+        clock = afternoon ? game::interfaceString("TIME_TWELVEHOURPM", "%d:%02d PM")
+                          : game::interfaceString("TIME_TWELVEHOURAM", "%d:%02d AM");
+    }
+    return game::interfaceFormat("FULLDATE_AND_TIME", "%1$s, %2$s",
+                                 {date, game::mail_text::clockTime(clock, hour, when.minute)});
 }
 
 // GetMasterLootCandidate(index) → the name of whoever can be given this loot.
@@ -7985,12 +8068,19 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 {"GetInboxHeaderInfo", [](lua_State* L) -> int {
             // GetInboxHeaderInfo(index) → packageIcon, stationeryIcon, sender, subject, money, COD, daysLeft, hasItem, wasRead, wasReturned, textCreated, canReply, isGM
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInboxHeaderInfo(index)");   // 0x0056e520
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || index < 1) { return luaReturnNil(L); }
-            const auto& inbox = gh->getMailInbox();
-            if (index > static_cast<int>(inbox.size())) { return luaReturnNil(L); }
-            const auto& mail = inbox[index - 1];
+            const auto* letter = mailAt(gh, luaToClientInt(L, 1));
+            if (!letter) {
+                // No such letter: money, COD and the days left are 0, the rest nil.
+                lua_settop(L, 0);
+                for (int i = 1; i <= 14; ++i) {
+                    if (i >= 5 && i <= 7) lua_pushnumber(L, 0);
+                    else lua_pushnil(L);
+                }
+                return 14;
+            }
+            const auto& mail = *letter;
             // packageIcon and stationeryIcon, as the client builds them
             // (0x0056e520).  Both were answered with the same hardcoded
             // INV_Letter_15, so every row of the inbox carried one and the same
@@ -8115,35 +8205,50 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // as the letter opens, and the real client marks read at the
                 // same point.
                 {"GetInboxText", [](lua_State* L) -> int {
+            // 0x00570bd0. The third answer is whether the text can be taken
+            // as a letter of one's own, the fourth whether it is an invoice -
+            // OpenMail_Update asks here first and only then for the invoice.
+            namespace mt = game::mail_text;
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInboxText(index)");
             auto* gh = getGameHandler(L);
-            const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-            if (!mail) { return luaReturnNil(L); }
+            const auto* mail = mailAt(gh, luaToClientInt(L, 1));
+            if (!mail) {
+                for (int i = 0; i < 4; ++i) lua_pushnil(L);
+                return 4;
+            }
             if (!mail->read && mail->messageId != 0) gh->mailMarkAsRead(mail->messageId);
-            // A templated letter has no text of its own: MailTemplate's body,
-            // its $-tokens filled for the player (0x00579590), or nothing at all
-            // for a template with no row.
-            if (mail->body.empty() && mail->mailTemplateId != 0) {
-                if (const auto* text = game::mailTemplate(gh->services().assetManager, mail->mailTemplateId))
-                    lua_pushstring(L, game::resolveTextTokens(text->body, *gh).c_str());
-                else
+            const auto* row = game::mailTemplate(gh->services().assetManager, mail->mailTemplateId);
+            switch (mt::body(*mail, row != nullptr)) {
+                case mt::Body::None:
                     lua_pushnil(L);
-            } else {
-                lua_pushstring(L, mail->body.c_str());
+                    break;
+                case mt::Body::Template:
+                    lua_pushstring(L, game::resolveTextTokens(row->body, *gh).c_str());
+                    break;
+                case mt::Body::Tokens:
+                    lua_pushstring(L, game::resolveTextTokens(mail->body, *gh).c_str());
+                    break;
+                case mt::Body::Plain: {
+                    std::string text = mail->body;
+                    gh->filterMatureLanguage(text);
+                    lua_pushstring(L, text.c_str());
+                    break;
+                }
+                case mt::Body::Calendar: {
+                    const bool invite = (mail->flags & mt::kFlagCalendarInvite) != 0;
+                    const auto subject = mt::calendarSubject(mail->subject);
+                    lua_pushstring(L, game::interfaceFormat(
+                        invite ? "CALENDAR_INVITE_REMOVED_MAIL_BODY" : "CALENDAR_EVENT_REMOVED_MAIL_BODY",
+                        invite ? "%s removed you from \"%s\". (%s)" : "%s cancelled %s. (%s)",
+                        {mailSenderName(gh, *mail), subject.title,
+                         packedDateAndTime(L, static_cast<uint32_t>(std::strtoul(mail->body.c_str(), nullptr, 10)))}).c_str());
+                    break;
+                }
             }
             lua_pushstring(L, game::stationeryTexture(mail->stationeryId, mail->messageType));
-            luaPushOneOrNil(L, (mail->money > 0 || !mail->attachments.empty()) ? 1 : 0);
-            // Whether this is an auction house invoice, which was answered no
-            // for every letter. OpenMail_Update asks here first and only calls
-            // GetInboxInvoiceInfo `if ( isInvoice )`, so saying no kept the
-            // whole invoice panel shut: a sale arrived as a letter with the
-            // raw colon-separated body in it and no breakdown at all.
-            //
-            // The body decides, not the sender: an auction mail's body parses
-            // as an invoice and nothing else does.
-            game::AuctionMailInvoice invoice;
-            const bool isInvoice = mail->messageType == 2 &&
-                                   game::parseAuctionMailBody(mail->body, invoice);
-            luaPushOneOrNil(L, isInvoice ? 1 : 0);
+            const bool invoice = mailIsInvoice(gh, *mail);
+            luaPushOneOrNil(L, mt::textTakeable(*mail, invoice) ? 1 : 0);
+            luaPushOneOrNil(L, invoice ? 1 : 0);
             return 4;
         }},
                 // Whether there is unread mail waiting, which is what the

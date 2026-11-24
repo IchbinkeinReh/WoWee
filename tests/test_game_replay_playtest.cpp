@@ -569,21 +569,23 @@ TEST_CASE("the npc is whoever the open window is of", "[replay][playtest]") {
     Session s;
     spawnPlayer(s);
     constexpr uint64_t kBanker = 0xF130000C2E000010ull, kAuctioneer = 0xF130000C2F000011ull;
-    CHECK(s.handler().getInteractNpcGuid() == 0);
+    CHECK(s.handler().getInteractionObject() == 0);
     wowee::network::Packet bank(wowee::game::wireOpcode(Opcode::SMSG_SHOW_BANK));
     bank.writeUInt64(kBanker);
     s.receive(bank);
-    CHECK(s.handler().getInteractNpcGuid() == kBanker);
+    CHECK(s.handler().getInteractionObject() == kBanker);
     s.handler().closeBank();
-    CHECK(s.handler().getInteractNpcGuid() == 0);
+    s.handler().settleInteractionObject();
+    CHECK(s.handler().getInteractionObject() == 0);
     wowee::network::Packet auction(wowee::game::wireOpcode(Opcode::MSG_AUCTION_HELLO));
     auction.writeUInt64(kAuctioneer);
     auction.writeUInt32(1);
     auction.writeUInt8(1);
     s.receive(auction);
-    CHECK(s.handler().getInteractNpcGuid() == kAuctioneer);
+    CHECK(s.handler().getInteractionObject() == kAuctioneer);
     s.handler().closeAuctionHouse();
-    CHECK(s.handler().getInteractNpcGuid() == 0);
+    s.handler().settleInteractionObject();
+    CHECK(s.handler().getInteractionObject() == 0);
 }
 
 // A portal run into led nowhere: the server was told of it without being told
@@ -660,4 +662,312 @@ TEST_CASE("a split's count is four bytes", "[replay][playtest]") {
     CHECK(data[1] == 27);
     CHECK(data[3] == 23);
     CHECK((data[4] | data[5] << 8 | data[6] << 16 | data[7] << 24) == 300);
+}
+
+// A worldport in a fight left the interface in it: the player that comes back has
+// no flags before its own to see the fight end by.
+TEST_CASE("a fight is over as the world is left", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}, {UF::UNIT_FIELD_FLAGS, 0x80008}});
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>&) {
+        if (event.rfind("PLAYER_REGEN", 0) == 0 || event == "PLAYER_LEAVING_WORLD" || event == "INSTANCE_LOCK_STOP")
+            events.push_back(event);
+    });
+    using Heard = std::vector<std::string>;
+    s.handler().onLeaveWorld(/*worldport=*/true);
+    CHECK(events == Heard{"PLAYER_REGEN_ENABLED", "INSTANCE_LOCK_STOP", "PLAYER_LEAVING_WORLD"});
+    events.clear();
+    s.handler().sayFightOnEntry();
+    CHECK(events == Heard{"PLAYER_REGEN_DISABLED"});
+    events.clear();
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0x8}}));
+    CHECK(events == Heard{"PLAYER_REGEN_ENABLED"});
+    events.clear();
+    s.handler().onLeaveWorld(/*worldport=*/true);
+    s.handler().sayFightOnEntry();
+    CHECK(events == Heard{"INSTANCE_LOCK_STOP", "PLAYER_LEAVING_WORLD"});
+    s.handler().setAddonEventCallback({});
+}
+
+// The movement said so with its next packet only.
+TEST_CASE("the movement is on the transport the player is on", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_FORWARD);
+    constexpr uint64_t kTram = 0xF11002AFD0000001ull;
+    // UPDATEFLAG_TRANSPORT with a stationary position.
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_UPDATE_OBJECT));
+    p.writeUInt32(1);
+    p.writeUInt8(static_cast<uint8_t>(wowee::game::UpdateType::CREATE_OBJECT2));
+    p.writePackedGuid(kTram);
+    p.writeUInt8(static_cast<uint8_t>(wowee::game::ObjectType::GAMEOBJECT));
+    p.writeUInt16(0x0042);
+    for (int i = 0; i < 4; ++i) p.writeFloat(0.0f);
+    p.writeUInt32(0);
+    p.writeUInt8(0);
+    s.receive(p);
+    REQUIRE(s.handler().isTransportGuid(kTram));
+    s.handler().setPlayerOnTransport(kTram, glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(has(s, MovementFlags::ONTRANSPORT));
+    CHECK(s.handler().getMovementInfo().transportGuid == kTram);
+    CHECK(s.handler().getMovementInfo().transportZ == 3.0f);
+    s.handler().clearPlayerTransport();
+    CHECK_FALSE(has(s, MovementFlags::ONTRANSPORT));
+    CHECK(has(s, MovementFlags::FORWARD));
+}
+
+namespace {
+
+constexpr uint64_t kWolf = 0xF130000BEC001510ull, kPet = 0xF140000BEC001511ull;
+
+void spawnFoes(Session& s) {
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kWolf, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    s.receive(UpdateObject().create(kPet, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100},
+                                     {UF::UNIT_FIELD_MAXHEALTH, 100},
+                                     {UF::UNIT_FIELD_CREATEDBY, static_cast<uint32_t>(Session::kPlayerGuid)}}));
+}
+
+// Unit::SendAttackStateUpdate.
+wowee::network::Packet swing(uint64_t attacker, uint64_t target, uint32_t hitInfo, uint32_t damage, uint8_t state,
+                             uint32_t absorbed = 0, uint32_t blocked = 0) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ATTACKERSTATEUPDATE));
+    p.writeUInt32(hitInfo);
+    p.writePackedGuid(attacker);
+    p.writePackedGuid(target);
+    p.writeUInt32(damage);
+    p.writeUInt32(0);
+    p.writeUInt8(1);
+    p.writeUInt32(1);
+    p.writeFloat(static_cast<float>(damage));
+    p.writeUInt32(damage);
+    if ((hitInfo & 0x60u) != 0) p.writeUInt32(absorbed);
+    p.writeUInt8(state);
+    p.writeUInt32(0);
+    p.writeUInt32(0);
+    if ((hitInfo & 0x2000u) != 0) p.writeUInt32(blocked);
+    return p;
+}
+
+// Unit::SendSpellNonMeleeDamageLog.
+wowee::network::Packet spellHit(uint64_t caster, uint64_t target, uint32_t spellId, uint32_t damage, uint32_t absorbed,
+                                uint32_t resisted, uint32_t blocked, uint32_t flags) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_SPELLNONMELEEDAMAGELOG));
+    p.writePackedGuid(target);
+    p.writePackedGuid(caster);
+    p.writeUInt32(spellId);
+    p.writeUInt32(damage);
+    p.writeUInt32(0);
+    p.writeUInt8(4);
+    p.writeUInt32(absorbed);
+    p.writeUInt32(resisted);
+    p.writeUInt8(0);
+    p.writeUInt8(0);
+    p.writeUInt32(blocked);
+    p.writeUInt32(flags);
+    p.writeUInt8(0);
+    return p;
+}
+
+std::vector<wowee::game::CombatTextEntry::Type> floaters(Session& s) {
+    std::vector<wowee::game::CombatTextEntry::Type> types;
+    for (const auto& entry : s.handler().getCombatText()) types.push_back(entry.type);
+    s.handler().clearCombatText();
+    return types;
+}
+
+}  // namespace
+
+// The numbers, the portrait's word and the blood came as the packet did, up to half
+// a second before the blow, with a word of their own for what was blocked or absorbed
+// of it; a pet's numbers never.
+TEST_CASE("a blow shows what it did as it is settled", "[replay][playtest]") {
+    using T = wowee::game::CombatTextEntry;
+    using Types = std::vector<T::Type>;
+    Session s;
+    spawnFoes(s);
+    s.handler().setTarget(kWolf);
+    std::vector<wowee::game::AttackerStateUpdateData> kept;
+    int words = 0, spurts = 0;
+    s.handler().setMeleeHitCallback([&](const wowee::game::AttackerStateUpdateData& d) { kept.push_back(d); });
+    s.handler().setBloodSpurtCallback([&](uint64_t victim, uint64_t, bool) { spurts += victim == kWolf; });
+    s.handler().setAddonEventValuesCallback(
+        [&](const std::string& event, const std::vector<wowee::game::combat_log::Arg>&) { words += event == "UNIT_COMBAT"; });
+    s.receive(swing(Session::kPlayerGuid, kWolf, 0x2042, 30, 1, 12, 5));
+    REQUIRE(kept.size() == 1);
+    CHECK(floaters(s).empty());
+    CHECK(words == 0);
+    CHECK(spurts == 0);
+    auto* combat = s.handler().getCombatHandler();
+    combat->settleMeleeBlow(kept[0].blow());
+    CHECK(floaters(s) == Types{T::MELEE_DAMAGE});
+    CHECK(words == 1);
+    combat->bleedFromMeleeBlow(kept[0].blow());
+    CHECK(spurts == 1);
+    // The pet's.
+    s.receive(swing(kPet, kWolf, 0x202, 7, 1));
+    combat->settleMeleeBlow(kept[1].blow());
+    CHECK(floaters(s) == Types{T::CRIT_DAMAGE});
+    CHECK(words == 2);
+    // Another's is said and shows none.
+    s.receive(swing(0xF130000BEC001599ull, kWolf, 0x2, 7, 1));
+    combat->settleMeleeBlow(kept[2].blow());
+    CHECK(floaters(s).empty());
+    CHECK(words == 3);
+    s.handler().setMeleeHitCallback({});
+    s.handler().setBloodSpurtCallback({});
+    s.handler().setAddonEventValuesCallback({});
+}
+
+// A spell's number came with a word for what was absorbed or resisted of it, a share
+// of split damage and a hidden spell's as well, and a pet's never.
+TEST_CASE("a spell's damage is one text", "[replay][playtest]") {
+    using T = wowee::game::CombatTextEntry;
+    using Types = std::vector<T::Type>;
+    Session s;
+    spawnFoes(s);
+    s.handler().spellNameCacheRef()[kFireball].name = "Fireball";
+    s.handler().spellNameCacheRef()[kProc].name = "Proc";
+    s.handler().spellNameCacheRef()[kProc].attr = 0x100;
+    const auto hit = [&](uint64_t caster, uint32_t spell, uint32_t damage, uint32_t absorbed, uint32_t resisted,
+                         uint32_t blocked, uint32_t flags) {
+        s.receive(spellHit(caster, kWolf, spell, damage, absorbed, resisted, blocked, flags));
+        return floaters(s);
+    };
+    CHECK(hit(Session::kPlayerGuid, kFireball, 100, 20, 30, 0, 0) == Types{T::SPELL_DAMAGE});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 100, 0, 0, 0, 2) == Types{T::CRIT_DAMAGE});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 0, 20, 30, 0, 0) == Types{T::ABSORB});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 0, 0, 30, 10, 0) == Types{T::BLOCK});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 0, 0, 30, 0, 0) == Types{T::RESIST});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 100, 0, 0, 0, 8).empty());
+    CHECK(hit(Session::kPlayerGuid, kProc, 100, 0, 0, 0, 0).empty());
+    CHECK(hit(kPet, kFireball, 100, 0, 0, 0, 0) == Types{T::SPELL_DAMAGE});
+    CHECK(hit(0xF130000BEC001599ull, kFireball, 100, 0, 0, 0, 0).empty());
+}
+
+// The acknowledgement went as SMSG_NEW_WORLD came, and the player stood in the new
+// world for as long as its client loaded it.
+TEST_CASE("a worldport is acknowledged once the world is in", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    const auto acks = [&] { return s.sent().of(Opcode::MSG_MOVE_WORLDPORT_ACK).size(); };
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    world.writeFloat(-2328.0f);
+    world.writeFloat(-358.0f);
+    world.writeFloat(-8.7f);
+    world.writeFloat(0.4f);
+    auto* mh = s.handler().getMovementHandler();
+    SECTION("loaded") {
+        s.handler().setWorldEntryCallback([&](uint32_t, float, float, float, bool) { mh->holdWorldportAck(); });
+        s.receive(world);
+        CHECK(acks() == 0);
+        CHECK(mh->releaseWorldportAck());
+        CHECK(acks() == 1);
+        CHECK_FALSE(mh->releaseWorldportAck());
+    }
+    SECTION("with nothing to load") {
+        s.handler().setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+        s.receive(world);
+        CHECK(acks() == 1);
+        CHECK_FALSE(mh->releaseWorldportAck());
+    }
+    s.handler().setWorldEntryCallback({});
+}
+
+// SMSG_LOGOUT_COMPLETE takes the character out of the world and leaves the
+// connection standing (0x006b2180 -> 0x00406510(1, 1, 0) -> "charselect"),
+// where the client dropped it and asked for the password again.
+TEST_CASE("a logout keeps the connection for the character selection", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kGiver, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 10}}));
+    REQUIRE(s.handler().getEntityManager().getEntity(kGiver));
+    int completes = 0;
+    bool left = false;
+    s.handler().setLogoutCompleteCallback([&](bool exiting) {
+        ++completes;
+        CHECK_FALSE(exiting);
+        left = s.handler().leaveWorldForCharacterList();
+    });
+    s.setConnected(true);
+    s.receive(wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_LOGOUT_COMPLETE)));
+    REQUIRE(completes == 1);
+    CHECK(left);
+    // The socket is the same one, and what the character selection asks for
+    // went out on it.
+    CHECK(s.handler().isConnected());
+    CHECK(s.sent().of(Opcode::CMSG_READY_FOR_ACCOUNT_DATA_TIMES).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_CHAR_ENUM).size() == 1);
+    CHECK(s.handler().getState() == wowee::game::WorldState::CHAR_LIST_REQUESTED);
+    // The world is gone with the character.
+    CHECK_FALSE(s.handler().getEntityManager().getEntity(kGiver));
+    CHECK_FALSE(s.handler().getEntityManager().getEntity(Session::kPlayerGuid));
+}
+
+// With no connection to keep there is only the login screen (0x004da9d0).
+TEST_CASE("a logout without a connection leaves none", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    CHECK_FALSE(s.handler().leaveWorldForCharacterList());
+    CHECK(s.handler().getState() == wowee::game::WorldState::IN_WORLD);
+    s.setConnected(true);
+    s.handler().disconnect();
+    CHECK_FALSE(s.handler().leaveWorldForCharacterList());
+    CHECK(s.handler().getState() == wowee::game::WorldState::DISCONNECTED);
+}
+
+// The equipment manager draws its list on EQUIPMENT_SETS_CHANGED alone, which
+// the client raises as it saves, renames and deletes (0x005ade50, 0x005af400,
+// 0x005ae260): a deleted set stayed in the window, and a renamed or saved one
+// was the old one until the next login.
+TEST_CASE("the equipment manager hears of every change at once", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_EQUIPMENT_SET_LIST));
+    list.writeUInt32(2);
+    for (uint32_t i = 0; i < 2; ++i) {
+        list.writePackedGuid(0x70 + i);
+        list.writeUInt32(i);
+        list.writeString(i == 0 ? "Tank" : "Heal");
+        list.writeString("INV_Shield_06");
+        for (int slot = 0; slot < 19; ++slot) list.writePackedGuid(slot == 4 ? 1 : 0);
+    }
+    s.receive(list);
+    auto& gh = s.handler();
+    REQUIRE(gh.getEquipmentSets().size() == 2);
+    // The slot left alone is a 1, as GetEquipmentSetLocations answers it.
+    REQUIRE(gh.getEquipmentSetItems(0));
+    CHECK((*gh.getEquipmentSetItems(0))[4] == 1);
+    CHECK(gh.getEquipmentSetIgnoreMask(0) == 1u << 4);
+    gh.setActionBarSlot(5, wowee::game::ActionBarSlot::EQUIPMENT_SET, 0);
+
+    int changed = 0;
+    gh.setAddonEventCallback([&](const std::string& event, const std::vector<std::string>&) {
+        if (event == "EQUIPMENT_SETS_CHANGED") ++changed;
+    });
+    gh.renameEquipmentSet("Heal", "Mend", 0);
+    CHECK(changed >= 1);
+    CHECK(gh.getEquipmentSets()[1].name == "Mend");
+    changed = 0;
+    gh.saveEquipmentSet("New", "INV_Helmet_01", 0);
+    CHECK(changed == 1);
+    REQUIRE(gh.getEquipmentSets().size() == 3);
+    CHECK(gh.getEquipmentSets()[2].setId == 2);
+    changed = 0;
+    gh.deleteEquipmentSet("Tank");
+    CHECK(changed == 1);
+    CHECK(gh.getEquipmentSets().size() == 2);
+    CHECK(s.sent().of(Opcode::CMSG_DELETEEQUIPMENT_SET).size() == 1);
+    // And off the action bar (0x005aae20).
+    CHECK(gh.getActionBar()[5].isEmpty());
+    // Wearing a set leaves its ignored slot alone: the guid of one.
+    CHECK(gh.useEquipmentSet("Mend", false));
+    const auto used = s.sent().of(Opcode::CMSG_EQUIPMENT_SET_USE);
+    REQUIRE(used.size() == 1);
+    wowee::network::Packet p = used[0];
+    CHECK_FALSE(gh.useEquipmentSet("Mend", false));   // the first is not answered
 }

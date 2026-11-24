@@ -476,3 +476,15 @@ TEST_CASE("Word deletes take the spaces and one word", "[text_markup][editbox]")
     CHECK(wowee::ui::wordDeleteForwardTo(t, 7) == 14);   // "two|  three|"
     CHECK(wowee::ui::wordDeleteForwardTo(t, 0) == 3);
 }
+
+// The chat box declares ignoreArrows: the character turns while a line is
+// typed, and the box has the arrows with Alt (0x00967760).
+TEST_CASE("an edit box may leave the arrows to the game", "[text_markup]") {
+    using wowee::ui::isArrowKey;
+    using wowee::ui::leavesArrows;
+    for (const int key : {0x4000004F, 0x40000050, 0x40000051, 0x40000052}) CHECK(isArrowKey(key));
+    for (const int key : {0x4000004A, 0x4000004D, 0x40000053, int('a'), 13, 8}) CHECK_FALSE(isArrowKey(key));
+    CHECK(leavesArrows(true, false));
+    CHECK_FALSE(leavesArrows(true, true));
+    CHECK_FALSE(leavesArrows(false, false));
+}

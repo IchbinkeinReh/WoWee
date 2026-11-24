@@ -85,15 +85,25 @@ std::function<bool()>& typedInputProbe() {
     static std::function<bool()> probe;
     return probe;
 }
+std::function<bool()>& leavesArrowsProbe() {
+    static std::function<bool()> probe;
+    return probe;
+}
 }  // namespace
+
+bool editBoxLeavesArrows() {
+    const auto& probe = leavesArrowsProbe();
+    return probe && probe();
+}
 
 bool interfaceTakingTypedInput() {
     const auto& probe = typedInputProbe();
     return probe && probe();
 }
 
-void setTypedInputProbe(std::function<bool()> probe) {
+void setTypedInputProbe(std::function<bool()> probe, std::function<bool()> leavesArrows) {
     typedInputProbe() = std::move(probe);
+    leavesArrowsProbe() = std::move(leavesArrows);
 }
 
 namespace {

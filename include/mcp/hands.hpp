@@ -36,6 +36,13 @@ struct Aftermath {
 /// aftermath beside it.
 Script::Fn finishWith(ToolContext& context, Aftermath after, std::function<json()> value);
 
+/// The script errors the client's log tells of since a line, in parts
+/// (lua_error.hpp); the first `most`.
+json luaErrorsSince(ToolContext& context, uint64_t logSeq, size_t most);
+
+/// Waits for the loading screen to be gone, `seconds` at most.
+Script::Fn worldShown(ToolContext& context, double seconds);
+
 /// Fails the call while an edit box or a dialog of the client's own takes the
 /// keys: what is pressed would be typed.
 Script::Fn wantKeysFree(ToolContext& context);
@@ -49,8 +56,8 @@ Steps pressButton(ToolContext& context, int button, SDL_Keymod mods, int clicks)
 /// The pointer there, and a click.
 Steps clickAt(ToolContext& context, std::function<std::optional<glm::vec2>()> where, int button, SDL_Keymod mods,
               int clicks);
-/// From one place to another with the button held.
-Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button);
+/// From one place to another with the button held, and with the modifiers.
+Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button, SDL_Keymod mods = SDL_KMOD_NONE);
 
 /// A point of the window that is the world's and not the interface's, for a
 /// drag to begin at.

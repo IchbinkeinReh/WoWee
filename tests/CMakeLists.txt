@@ -1486,6 +1486,10 @@ wowee_add_test(test_item_stat_names SOURCES test_item_stat_names.cpp)
 # ── test_mail_packets ───────────────────────────────────────
 wowee_add_packet_test(test_mail_packets)
 
+# ── test_mail_text ──────────────────────────────────────────
+# What a letter in the mailbox shows, and which attachment a call names.
+wowee_add_packet_test(test_mail_text)
+
 # ── test_raid_target_packets ────────────────────────────────
 wowee_add_packet_test(test_raid_target_packets)
 
@@ -4195,6 +4199,48 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# ── test_portrait_claims ─────────────────────────────────────
+# Whose face a portrait texture shows (0x006113e0), and the views that draw
+# them. Header-only.
+wowee_add_test(test_portrait_claims
+    SOURCES test_portrait_claims.cpp)
+
+# ── test_equipment_sets ──────────────────────────────────────
+# The equipment manager's own sets (0x005ade50, 0x005ada20). Header-only.
+wowee_add_test(test_equipment_sets
+    SOURCES test_equipment_sets.cpp)
+
+# ── test_battleground_rules ──────────────────────────────────
+# Who may enter a battleground (0x0054ba00). Header-only.
+wowee_add_test(test_battleground_rules
+    SOURCES test_battleground_rules.cpp)
+
+# ── test_edit_history ────────────────────────────────────────
+# The lines an edit box remembers (0x00964690). Header-only.
+wowee_add_test(test_edit_history
+    SOURCES test_edit_history.cpp)
+
+# ── test_text_changes ────────────────────────────────────────
+# What an edit box owes of OnTextChanged (0x00967020). Header-only.
+wowee_add_test(test_text_changes
+    SOURCES test_text_changes.cpp)
+
+# ── test_macro_list ──────────────────────────────────────────
+# The macros as the interface numbers them (0x00566240). Header-only.
+wowee_add_test(test_macro_list
+    SOURCES test_macro_list.cpp)
+
+# ── test_cursor_info ─────────────────────────────────────────
+# What GetCursorInfo says of a spell (0x00515200). Header-only.
+wowee_add_test(test_cursor_info
+    SOURCES test_cursor_info.cpp)
+
+# ── test_action_drop ─────────────────────────────────────────
+# What the cursor holds against an action slot (0x005abbc0, 0x005ab120) and a
+# click into the world (0x005278c0, 0x0051fa50). Header-only.
+wowee_add_test(test_action_drop
+    SOURCES test_action_drop.cpp)
+
 # ── test_latest_criteria ─────────────────────────────────────
 # The statistics most recently updated (0x005b2520, 0x005b2cb0) that
 # GetLatestUpdatedStats and GetLatestUpdatedComparisonStats read. Header-only.
@@ -4527,6 +4573,7 @@ wowee_add_test(test_mcp_http
 wowee_add_test(test_mcp_rpc
     SOURCES test_mcp_rpc.cpp
             ${CMAKE_SOURCE_DIR}/src/mcp/json_rpc.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/lua_error.cpp
             ${CMAKE_SOURCE_DIR}/src/mcp/redact.cpp
             ${CMAKE_SOURCE_DIR}/src/mcp/schema.cpp)
 wowee_add_test(test_mcp_guard

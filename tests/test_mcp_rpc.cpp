@@ -6,10 +6,12 @@
 #include <string>
 
 #include "mcp/json_rpc.hpp"
+#include "mcp/lua_error.hpp"
 #include "mcp/redact.hpp"
 #include "mcp/schema.hpp"
 
 using namespace wowee::mcp;
+using namespace std::string_literals;
 
 namespace {
 
@@ -190,7 +192,7 @@ TEST_CASE("the schemas hold what they say", "[mcp][schema]") {
         INFO(bad);
         CHECK_FALSE(ok(bad));
     }
-    CHECK_FALSE(validate(s, json{{"guid", std::string("0x1\0", 4)}}).empty());
+    CHECK_FALSE(validate(s, json{{"guid", "0x1\0"s}}).empty());
     CHECK_FALSE(validate(s, json{{"guid", "0x1"}, {"n", std::numeric_limits<double>::infinity()}}).empty());
 }
 
@@ -219,4 +221,72 @@ TEST_CASE("a secret inside a longer one leaves nothing of it standing", "[mcp][r
     r.add("word");
     r.add("password-word-more");
     CHECK(r.apply("a password-word-more b") == "a [redacted] b");
+}
+
+TEST_CASE("a Lua error is told in parts", "[mcp][lua]") {
+    const LuaError file = parseLuaError(
+        "Interface\\FrameXML\\UIPanelTemplates.lua:380: attempt to perform arithmetic on field 'cursorHeight' (a nil value)");
+    CHECK(file.source == "Interface\\FrameXML\\UIPanelTemplates.lua");
+    CHECK(file.line == 380);
+    CHECK(file.message == "attempt to perform arithmetic on field 'cursorHeight' (a nil value)");
+    CHECK(file.handler.empty());
+    CHECK(file.stack.empty());
+
+    // A chunk is named by its own text, colons and numbers in it too.
+    const LuaError chunk = parseLuaError("[string \"local t = {a:b():12:} return x\"]:195: Usage: f(x): 12: no");
+    CHECK(chunk.source == "[string \"local t = {a:b():12:} return x\"]");
+    CHECK(chunk.line == 195);
+    CHECK(chunk.message == "Usage: f(x): 12: no");
+
+    const LuaError query = parseLuaError("query:1: oh");
+    CHECK(query.source == "query");
+    CHECK(query.line == 1);
+    CHECK(query.message == "oh");
+
+    // One that names no place is all message, whatever colons it has.
+    const LuaError none = parseLuaError("Usage: UseAction(slot): at 12:30: no");
+    CHECK(none.source.empty());
+    CHECK(none.line == 0);
+    CHECK(none.message == "Usage: UseAction(slot): at 12:30: no");
+    CHECK(parseLuaError("").message.empty());
+    CHECK(parseLuaError("[string \"unended").message == "[string \"unended");
+
+    // The stack the interface's handler folds in.
+    const LuaError traced = parseLuaError("a.lua:3: oh\n      at a.lua:3 in f\n      at [C]:-1");
+    CHECK(traced.message == "oh");
+    REQUIRE(traced.stack.size() == 2);
+    CHECK(traced.stack[0] == "a.lua:3 in f");
+    CHECK(traced.stack[1] == "[C]:-1");
+    const json j = luaErrorJson(traced);
+    CHECK(j == json{{"source", "a.lua"}, {"line", 3}, {"message", "oh"}, {"stack", {"a.lua:3 in f", "[C]:-1"}}});
+    CHECK(luaErrorJson(none) == json{{"message", none.message}});
+}
+
+TEST_CASE("the log's lines about scripts are known", "[mcp][lua]") {
+    const auto e = luaErrorOfLogLine("LuaEngine: OnEnter on MailItem1Button error: [string \"do...\"]:195: Usage: x");
+    REQUIRE(e);
+    CHECK(e->handler == "OnEnter on MailItem1Button");
+    CHECK(e->line == 195);
+    CHECK(e->message == "Usage: x");
+    const auto event = luaErrorOfLogLine("LuaEngine: event 'BAG_UPDATE' handler error: ContainerFrame.lua:9: oh");
+    REQUIRE(event);
+    CHECK(event->handler == "event 'BAG_UPDATE' handler");
+    CHECK(event->source == "ContainerFrame.lua");
+    CHECK(luaErrorOfLogLine("[Lua] OnShow error: oh")->message == "oh");
+    CHECK_FALSE(luaErrorOfLogLine("LuaEngine: the full list is in x"));
+    CHECK_FALSE(luaErrorOfLogLine("World: socket error: oh"));
+    CHECK_FALSE(luaErrorOfLogLine(""));
+}
+
+TEST_CASE("a failure may be in parts", "[mcp][rpc]") {
+    RpcTarget t = target();
+    t.call = [](const std::string&, const json&) {
+        return ToolAnswer{.value = {{"error", {{"message", "oh"}, {"line", 3}}}}, .failed = true, .imageBase64 = {},
+                          .imageMime = {}};
+    };
+    const auto answer = answerRpc(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fail"}})", t);
+    REQUIRE(answer);
+    const json j = json::parse(*answer);
+    CHECK(j["result"]["isError"] == true);
+    CHECK(json::parse(j["result"]["content"][0]["text"].get<std::string>())["error"]["line"] == 3);
 }

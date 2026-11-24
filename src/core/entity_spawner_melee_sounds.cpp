@@ -2,6 +2,7 @@
 // client's tables (rendering/melee_sound.hpp).
 #include "core/entity_spawner.hpp"
 
+#include "game/combat_handler.hpp"
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
 #include "game/update_field_table.hpp"
@@ -180,13 +181,7 @@ int EntitySpawner::meleePriority(const ms::Hit& hit, MeleeParty party) const {
 
 void EntitySpawner::onMeleeHit(const game::AttackerStateUpdateData& data) {
     if (!gameHandler_) return;
-    ms::Hit hit{.attacker = data.attackerGuid,
-                .target = data.targetGuid,
-                .hitInfo = data.hitInfo,
-                .damage = data.totalDamage,
-                .victimState = data.victimState,
-                .meleeSpellId = data.meleeSpellId,
-                .blocked = data.blocked};
+    const ms::Hit hit = data.blow();
     auto& entities = gameHandler_->getEntityManager();
     // 0x00756800 case 0x14a: an attacker not in the world - the hit lands
     // on its target at once; else the one it kept is settled and this one
@@ -221,6 +216,7 @@ void EntitySpawner::settleKeptMeleeHit(uint64_t attacker) {
 
 void EntitySpawner::settleMeleeHit(const ms::Hit& hit) {
     // 0x00755a60.
+    if (game::CombatHandler* combat = gameHandler_->getCombatHandler()) combat->settleMeleeBlow(hit);
     loadMeleeSoundTables();
     if (!renderer_ || !meleeTables_) return;
     auto& entities = gameHandler_->getEntityManager();
@@ -356,11 +352,15 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
     if (!target || !target->isUnit()) return;
     if ((static_cast<const game::Unit&>(*target).getDynamicFlags() & game::UNIT_DYNFLAG_LOOTABLE) != 0) return;
     settleMeleeHit(hit);
+    // Its wound (0x00736640) and blood.
+    const bool noWound = playsNoWound(*target);
+    if (game::melee_landing::wounds(hit) && !noWound) woundUnit(hit.target, (hit.hitInfo & ms::kHitCrit) != 0);
+    if (game::CombatHandler* combat = gameHandler_->getCombatHandler()) combat->bleedFromMeleeBlow(hit);
     if (!renderer_ || !meleeTables_) return;
     // A blow landing on a target that plays no wound animation holds off
     // the next such target's reaction for three to five seconds, and is
     // silent while one is held (0x00722180, 0x00ca1600).
-    if (playsNoWound(*target)) {
+    if (noWound) {
         const uint32_t now = steadyMs();
         if (meleeReactionHeld_ && static_cast<int32_t>(now - meleeReactionUntilMs_) <= 0) return;
         meleeReactionHeld_ = true;
@@ -409,6 +409,53 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
     }
 }
 
+uint32_t EntitySpawner::unitAnimationInstance(uint64_t guid) const {
+    if (renderer_ && gameHandler_ && guid == gameHandler_->getPlayerGuid()) return renderer_->getCharacterInstanceId();
+    for (const auto* instances : {&creatureInstances_, &playerInstances_}) {
+        if (const auto it = instances->find(guid); it != instances->end()) return it->second;
+    }
+    return 0;
+}
+
+bool EntitySpawner::playsNothing(const game::Unit& unit) const {
+    // 0x0071f560: no health, feigning death or the stand state of the dead.
+    const uint16_t flags2 = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+    return unit.getHealth() == 0 || (flags2 != 0xFFFF && (unit.getField(flags2) & 0x1u) != 0) ||
+           unit.getStandState() == 7;
+}
+
+void EntitySpawner::woundUnit(uint64_t guid, bool critical) {
+    const auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    const uint32_t instance = unitAnimationInstance(guid);
+    if (!cr || instance == 0 || !entity || !entity->isUnit() ||
+        playsNothing(static_cast<const game::Unit&>(*entity))) {
+        return;
+    }
+    if (const auto wound = cr->woundFor(instance, critical)) cr->playWound(instance, *wound);
+}
+
+void EntitySpawner::defendUnit(uint64_t guid, game::melee_landing::Reaction reaction) {
+    // 0x0073b050 for a parry, else Dodge or ShieldBlock (0x007385c0).
+    using game::melee_landing::Reaction;
+    const auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    const uint32_t instance = unitAnimationInstance(guid);
+    if (!cr || instance == 0 || !entity || !entity->isUnit()) return;
+    const auto& unit = static_cast<const game::Unit&>(*entity);
+    if (playsNothing(unit)) return;
+    uint32_t animation = reaction == Reaction::Dodge ? ms::kAnimDodge : ms::kAnimShieldBlock;
+    if (reaction == Reaction::Parry) {
+        if (playsNoWound(unit)) return;
+        const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+        const bool drawn = bytes2 != 0xFFFF && (unit.getField(bytes2) & 0xFFu) != 0;
+        const auto parry = ms::parryAnimation(heldItem(unit, 0), drawn, heldItem(unit, 1).has_value());
+        if (!parry) return;
+        animation = *parry;
+    }
+    cr->playAnimation(instance, animation, false);
+}
+
 void EntitySpawner::landWithNothingKept(uint64_t guid, const glm::vec3& at) {
     // 0x00756240 with no hit kept and no target.
     if (!gameHandler_ || !renderer_ || !assetManager_) return;
@@ -445,7 +492,8 @@ void EntitySpawner::onSpellMiss(uint64_t caster, uint64_t target, uint8_t missTy
     // 0x0080e1b0: only a spell that lands at once, without AttributesEx2
     // 0x80.
     const ms::SpellDefend defend = ms::spellDefend(missType);
-    if (defend == ms::SpellDefend::None || !gameHandler_ || !renderer_) return;
+    const bool dodged = missType == ms::kSpellMissDodge;
+    if ((defend == ms::SpellDefend::None && !dodged) || !gameHandler_ || !renderer_) return;
     gameHandler_->loadSpellNameCache();
     const auto& spells = gameHandler_->spellNameCacheRef();
     const auto spell = spells.find(spellId);
@@ -457,6 +505,10 @@ void EntitySpawner::onSpellMiss(uint64_t caster, uint64_t target, uint8_t missTy
     const uint16_t flags2 = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
     if (flags2 != 0xFFFF && (victim->getField(flags2) & 0x1u) != 0) return;
     if (static_cast<const game::Unit&>(*victim).getStandState() == 7) return;
+    defendUnit(target, dodged                             ? game::melee_landing::Reaction::Dodge
+                       : defend == ms::SpellDefend::Parry ? game::melee_landing::Reaction::Parry
+                                                          : game::melee_landing::Reaction::Block);
+    if (dodged) return;
     loadMeleeSoundTables();
     if (!meleeTables_) return;
     const auto at = unitSoundPosition(target);
@@ -503,11 +555,30 @@ void EntitySpawner::onSpellMiss(uint64_t caster, uint64_t target, uint8_t missTy
 }
 
 void EntitySpawner::meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const glm::vec3& at) {
-    // 0x00756240: the swing's whoosh at $CSS; the blow landing at $CAH and
-    // $AH0..$AH3.
+    // 0x00756240: the swing's whoosh at $CSS; the victim parrying, dodging or
+    // blocking at $CPP; the blow landing at $CAH and $AH0..$AH3.
     const auto it = pendingMeleeHits_.find(unitGuid);
     if (it == pendingMeleeHits_.end()) {
         if (ms::isLandEvent(eventId)) landWithNothingKept(unitGuid, at);
+        return;
+    }
+    if (eventId == ms::kEventReact) {
+        // The victim, not one feigning death or dead: avoided, it does not wound.
+        ms::Hit& hit = it->second;
+        const game::melee_landing::Reaction reaction = game::melee_landing::reaction(hit);
+        const auto target = gameHandler_ ? gameHandler_->getEntityManager().getEntity(hit.target) : nullptr;
+        if (reaction == game::melee_landing::Reaction::None || !target || !target->isUnit()) return;
+        const auto& unit = static_cast<const game::Unit&>(*target);
+        const uint16_t flags2 = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+        if ((flags2 != 0xFFFF && (unit.getField(flags2) & 0x1u) != 0) || unit.getStandState() == 7) return;
+        bool shows = true;
+        if (target->getType() == game::ObjectType::UNIT) {
+            const auto& info = gameHandler_->getCreatureInfoCache();
+            if (const auto known = info.find(unit.getEntry()); known != info.end())
+                shows = (known->second.typeFlags & ms::kCreatureTypeFlagNoReaction) == 0;
+        }
+        if (shows) defendUnit(hit.target, reaction);
+        hit.hitInfo &= ~game::melee_landing::kAffectsVictim;
         return;
     }
     if (eventId == ms::kEventSwing) {

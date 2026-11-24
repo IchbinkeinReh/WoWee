@@ -3165,6 +3165,16 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                 if (heldMode(k.mode)) continue;
                 const float duration = static_cast<float>(inst.cachedModel->data.sequences[k.sequence].duration);
                 k.time += deltaTime * 1000.0f * k.rate;
+                // Its events as the body's (0x00832260 goes through every bone
+                // with a sequence of its own): a swing's on the upper body of
+                // a unit that runs were passed by nothing.
+                const auto stepKeyBone = [&](float from, float to) {
+                    stepInstanceEvents(pair.first, inst, k.sequence, from, to, k.mode, k.keyBoneId);
+                };
+                const bool round = duration > 0.0f && k.time >= duration;
+                stepKeyBone(k.eventsFrom, round ? duration : k.time);
+                if (round && !k.once) stepKeyBone(-1.0f, std::fmod(k.time, duration));
+                k.eventsFrom = round && !k.once ? std::fmod(k.time, duration) : k.time;
                 if (k.once && k.time >= duration) {
                     // A one-shot ended on a bone of its own: a seated
                     // passenger's upper body has passed its start (0x0073bbd0
@@ -3175,6 +3185,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         k.animationId = k.thenAnimationId;
                         k.mode = k.thenMode;
                         k.time = startTime(inst.cachedModel->data, k.sequence, k.mode);
+                        k.eventsFrom = k.time > 0.0f ? k.time : -1.0f;
                         k.once = false;
                         k.rate = 1.0f;
                         continue;
@@ -3217,7 +3228,8 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             const float eventsFrom = inst.eventsRestart ? inst.eventsFrom : inst.animationTime;
             inst.eventsRestart = false;
             const auto stepEvents = [&](int sequence, float from, float to) {
-                stepInstanceEvents(pair.first, inst, sequence, from, to);
+                stepInstanceEvents(pair.first, inst, sequence, from, to,
+                                   sequence == inst.currentSequenceIndex ? inst.playMode : anim::PlayMode::Forward);
             };
             const int eventsSequence = inst.currentSequenceIndex;
             // A movement sequence plays at the unit's speed over its own
@@ -3902,6 +3914,7 @@ bool CharacterRenderer::startKeyBoneAnimation(CharacterInstance& instance, int32
     const float time = startMs > 0.0f ? std::min(startMs, duration) : startTime(model, sequence, mode);
     *a = CharacterInstance::KeyBoneAnimation{keyBoneId, animationId, sequence, time, once};
     a->mode = mode;
+    a->eventsFrom = time > 0.0f ? time : -1.0f;
     a->blend = from;
     if (once && then) {
         std::tie(a->thenSequence, a->thenMode) = sequenceOf(*then);
@@ -6181,11 +6194,21 @@ std::optional<CharacterRenderer::AnimationSlot> CharacterRenderer::animationSlot
 }
 
 void CharacterRenderer::stepInstanceEvents(uint32_t instanceId, const CharacterInstance& inst, int sequence,
-                                           float from, float to) {
+                                           float from, float to, anim::PlayMode mode, int32_t keyBoneId) {
     // A unit's model: not a login scene's, nor an effect hung on a unit.
     if (!inst.cachedModel || inst.isSceneModel || inst.isEffectModel) return;
     const auto& model = inst.cachedModel->data;
     if (model.events.empty() || sequence < 0 || static_cast<size_t>(sequence) >= model.sequences.size()) return;
+    int sequenceBone = 0;
+    if (keyBoneId >= 0) {
+        while (static_cast<size_t>(sequenceBone) < model.bones.size() && model.bones[sequenceBone].keyBoneId != keyBoneId)
+            ++sequenceBone;
+        if (static_cast<size_t>(sequenceBone) >= model.bones.size()) return;
+    }
+    const auto parentOf = [&](int bone) {
+        return bone >= 0 && static_cast<size_t>(bone) < model.bones.size() ? static_cast<int>(model.bones[bone].parentBone)
+                                                                           : -1;
+    };
     for (uint32_t e = 0; e < model.events.size(); ++e) {
         const auto& event = model.events[e];
         // Only what a unit's callback plays. An event on a global sequence
@@ -6195,12 +6218,13 @@ void CharacterRenderer::stepInstanceEvents(uint32_t instanceId, const CharacterI
         // A melee swing's were not among them, so no blow landed: the next
         // swing settled it, without its target's part.
         if (!unit_event::handedOn(event.id)) continue;
+        if (!unit_event::passesOnBone(sequenceBone, static_cast<int>(event.bone), parentOf)) continue;
         const size_t timeline = event.globalSequence >= 0 ? 0u : static_cast<size_t>(sequence);
         if (timeline >= event.times.size()) continue;
         const auto fire = [&](uint32_t) { steppedEvents_.push_back({instanceId, e}); };
         // A sequence standing in reversed passes them from its end
         // (0x00830fb0 at the negative rate 0x00826350 gives it).
-        if (inst.playMode == anim::PlayMode::Reversed && sequence == inst.currentSequenceIndex) {
+        if (mode == anim::PlayMode::Reversed) {
             m2_event::forEachCrossedReversed(event.times[timeline], model.sequences[sequence].duration, from, to, 0.0f,
                                              fire);
         } else {

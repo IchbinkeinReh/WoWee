@@ -63,13 +63,14 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 
 | Tool | |
 |---|---|
-| `state` | where the client is (login, char_select, entering_world, in_world, dead, ghost), the player, its place, movement flags, camera, clock, weather, auras, target, recent errors, the cursors of the logs |
+| `state` | where the client is (login, char_select, entering_world, in_world, dead, ghost), whether a loading screen is up (`loading`: the realm has the character in the world, and the player does not see it yet), the player, its place and the transport it is on, movement flags, camera, clock, weather, auras, target, recent errors, the cursors of the logs |
 | `actions` | what can be done now, each with the tool and the arguments that do it |
 | `entities`, `entity` | what is about, nearest first, with filters; one in full, with where a click would pick it |
-| `terrain`, `look_around`, `raycast`, `path` | the ground, the ways that are open, what a line meets, the way `walk_to` would take - out of the faces the character itself is moved against |
+| `terrain`, `look_around`, `raycast`, `path` | the ground, the ways that are open, what a line meets, the way `walk_to` would take - out of the faces the character itself is moved against, those of game objects (lifts, ships, doors) where they are now among them, by name |
 | `ui`, `ui_at` | windows, dialogs, tooltips, error texts; one window's texts and controls; what is under a point |
 | `inventory`, `spellbook`, `action_bars`, `quest_log`, `character`, `map` | asked of the interface's own functions |
 | `log`, `events`, `chat`, `combat_log` | since a cursor: pass the `next` of the last answer as `since` |
+| `sounds` | the sounds going on, and those begun in the last seconds: file, place, volume, whether heard |
 | `screenshot` | the frame, a part of it or one window, as JPEG or PNG |
 | `wait` | for an event, a window, a text, a chat line or a state, or for a time |
 | `server_info` | what the server may do and what it has refused |
@@ -79,16 +80,18 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 | Tool | |
 |---|---|
 | `move`, `jump`, `stop`, `turn`, `walk_to`, `camera` | the movement keys, the turn keys or a drag, the wheel. `walk_to` plans a way over the loaded ground and walks it by keys, jumping or stepping back where it is stuck |
-| `target`, `interact` | a click on an entity in the world, where the client's own picker finds it; `interact` walks up to it first |
+| `target`, `interact` | a click on an entity in the world, where the client's own picker finds it - turned to, and looked at from elsewhere, where it is out of the window; `interact` walks up to it first. `target` with `which` presses the key bound to it, or types the slash command where none is |
 | `click_ui`, `hover`, `mouse` | the mouse on a frame by name, or by pixels |
 | `key`, `binding`, `type_text`, `slash` | a key, the key a command is bound to, text into an edit box, a slash command through the chat box |
 | `use_action`, `use_item` | an action button by its key or a click, an item in its bag |
+| `record` | the client's own recording, as `/record` makes it: start, stop, status; the answer has the file |
 | `gm` | a game master's command for the own character, whispered to itself |
 | `enter_world`, `quit` | from the character selection; out of the game. Logging in is left to the user (or to `WOWEE_AUTO_LOGIN`), also after `/logout` |
 | `lua` | only with `--mcp-lua` |
 
 Every acting tool answers with what came of it: the interface's events, error and info messages, system chat lines,
-open dialogs and refused packets since it began.
+open dialogs, refused packets and script errors since it began. A script error comes in parts: `handler`, `source`,
+`line`, `message`, `stack`; so does one of the `lua` tool's chunk, under `error`.
 
 ### How acts are done
 
@@ -97,6 +100,11 @@ before the frame's events are read - the two ways a device's press goes. Nothing
 called: key bindings, protected actions, edit boxes, the click picking and the camera see a press and cannot tell. While
 the server uses the mouse, the real pointer is kept out; somebody who moves it over the focused window, or clicks, has
 it back.
+
+Two things are no act of a player's and are not pressed: `gm` sends its whisper by the interface's own
+`SendChatMessage`, so that no dialog or edit box is in its way, and selects the character itself for a command that
+wants a player (`on` says otherwise), with what was selected selected again after; `record` starts and stops the
+recorder.
 
 Calls are put in a queue by the connection's thread and run by the game's loop, for at most four milliseconds a frame
 (always one step of one call). During a loading screen the loop does not run; a call waits, and says so when its time
@@ -120,7 +128,8 @@ creatures. In water it swims straight at its goal.
   double `Host` / `Content-Length` / `Authorization` and the like are refused. 16 KB of head, 64 headers, 256 KB of
   body, 8 connections, 10 s for a request, 60 s idle, JSON nested at most 32 deep.
 - A call's arguments are held to the schema `tools/list` gives; what it does not name is refused.
-- No tool reads a file or runs a program. Every string of an answer is held against the account's name, the streaming
+- No tool reads a file or runs a program, and none is given the name of one to write: a recording goes where `/record`
+  puts it, under a name of the client's. Every string of an answer is held against the account's name, the streaming
   key and the token, and blanked where it has one. No pictures are taken of the login and set-up screens.
 - Nothing is pressed on the screens for logging in, realms, new characters and set-up.
 - Lua runs only with `--mcp-lua`; without it `/run`, `/script`, `/dump` and macros that run Lua do nothing while the
@@ -141,7 +150,8 @@ A whisper to the own character goes out. One that is a game master's command has
 .unaura .learn .unlearn ID|all`, `.additem ID`, `.morph ID`, `.go xyz|creature|gameobject|...`, `.tele PLACE`, `.gm
 on|off|fly|visible`, `.modify ...`, `.quest add|complete|remove|reward ID`, `.npc info|near`, `.gobject
 info|near|target`, `.cast ID|self|back`, `.lookup` (not `player`), `.server info|motd`, `.instance listbinds|unbind`,
-`.help`, `.commands`. None of them with another player, or their pet, selected.
+`.help`, `.commands`. None of them with another player, or their pet, selected; those given with the character itself
+selected (above) are judged by that.
 
 Never sent, whatever is allowed: deleting, creating or renaming characters, destroying items, abandoning a pet,
 unlearning a profession, the game masters' and developers' own packets. Quitting from inside the game is refused; the

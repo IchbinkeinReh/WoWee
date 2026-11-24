@@ -283,3 +283,29 @@ TEST_CASE("a unit's model hands on its swing's events", "[unit_model_events]") {
     CHECK_FALSE(handedOn(fourCC("$HIT")));
     CHECK_FALSE(handedOn(fourCC("$CHD")));
 }
+
+// A swing's events on the upper body of a unit that runs were passed by nothing.
+TEST_CASE("a sequence on a bone of its own passes the events under it") {
+    using namespace wowee::rendering::unit_event;
+    // HumanMale: 0 the root, 1 under it, 2 the upper body, 4 the chest, 86 ($CPP) and
+    // 108 ($CAH) under those, 60 a leg's, 68 ($FSD) on nothing.
+    const auto parentOf = [](int bone) {
+        switch (bone) {
+            case 1: return 0;
+            case 2: return 1;
+            case 4: return 2;
+            case 86: return 2;
+            case 108: return 4;
+            case 60: return 1;
+            default: return -1;
+        }
+    };
+    CHECK(passesOnBone(2, 86, parentOf));
+    CHECK(passesOnBone(2, 108, parentOf));
+    CHECK_FALSE(passesOnBone(2, 60, parentOf));
+    CHECK_FALSE(passesOnBone(2, 2, parentOf));
+    CHECK(passesOnBone(2, 68, parentOf));
+    // The body's passes all.
+    CHECK(passesOnBone(0, 60, parentOf));
+    CHECK(passesOnBone(0, 86, parentOf));
+}

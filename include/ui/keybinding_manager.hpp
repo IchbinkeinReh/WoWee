@@ -101,8 +101,13 @@ private:
  */
 bool interfaceTakingTypedInput();
 
-/// How to answer the question above. Set once, while the interface is built.
-void setTypedInputProbe(std::function<bool()> probe);
+/// Whether the edit box that has the keyboard leaves the arrow keys to the
+/// game: one with ignoreArrows - the chat's - while Alt is not held
+/// (0x00967760). False where none has it.
+bool editBoxLeavesArrows();
+
+/// How to answer the questions above. Set once, while the interface is built.
+void setTypedInputProbe(std::function<bool()> probe, std::function<bool()> leavesArrows);
 
 /**
  * Whether the interface's focused edit box has already taken this key, this

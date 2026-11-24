@@ -38,6 +38,8 @@
 // target's part - when the next swing's hit arrives or the attack stops
 // (0x00756770). One whose attacker is not in the world lands at once.
 
+#include "game/melee_landing.hpp"
+
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -46,15 +48,7 @@
 namespace wowee::rendering::melee_sound {
 
 /// A swing kept on its attacker until its model lands it.
-struct Hit {
-    uint64_t attacker = 0;
-    uint64_t target = 0;
-    uint32_t hitInfo = 0;
-    int32_t damage = 0;
-    uint32_t victimState = 0;
-    uint32_t meleeSpellId = 0;
-    uint32_t blocked = 0;
-};
+using Hit = game::melee_landing::Blow;
 
 constexpr uint32_t kHitOffhand = 0x4;
 constexpr uint32_t kHitMiss = 0x10;
@@ -87,10 +81,11 @@ constexpr SpellDefend spellDefend(uint8_t missType) {
 /// The model events (four characters, little-endian).
 constexpr uint32_t kEventSwing = 0x53534324;  ///< $CSS
 constexpr uint32_t kEventHit = 0x48414324;    ///< $CAH
+constexpr uint32_t kEventReact = 0x50504324;  ///< $CPP
 constexpr bool isLandEvent(uint32_t id) {
     return id == kEventHit || id == 0x30484124 || id == 0x31484124 || id == 0x32484124 || id == 0x33484124;
 }
-constexpr bool isMeleeEvent(uint32_t id) { return id == kEventSwing || isLandEvent(id); }
+constexpr bool isMeleeEvent(uint32_t id) { return id == kEventSwing || id == kEventReact || isLandEvent(id); }
 
 /// A creature's custom attack sound as its attack lands (0x00756240): for
 /// $AH0..$AH3, a kept hit that did damage plays the attacker's
@@ -153,6 +148,25 @@ constexpr bool twoHanded(const std::optional<Item>& item) {
     default: return false;
     }
 }
+
+/// The animation a unit parries with (0x0073b050): ParryUnarmed with no weapon in
+/// its main hand, one in its sheath or a fist weapon, Parry1H, Parry2H - Parry1H
+/// with something in the other hand - or Parry2HL; none with a bow or a wand.
+constexpr uint32_t kAnimParryUnarmed = 20, kAnimParry1H = 21, kAnimParry2H = 22, kAnimParry2HL = 23;
+constexpr uint32_t kAnimShieldBlock = 24, kAnimDodge = 30;
+constexpr std::optional<uint32_t> parryAnimation(const std::optional<Item>& weapon, bool drawn, bool offHand) {
+    if (!weapon || weapon->itemClass != kClassWeapon || !drawn) return kAnimParryUnarmed;
+    switch (weapon->subClass) {
+    case 0: case 4: case 7: case 11: case 14: case 15: case 20: return kAnimParry1H;
+    case 1: case 5: case 8: case 12: return offHand ? kAnimParry1H : kAnimParry2H;
+    case 6: case 10: case 17: return kAnimParry2HL;
+    case 13: return kAnimParryUnarmed;
+    default: return std::nullopt;
+    }
+}
+/// A creature that does not show it has avoided a blow ($CPP, its cache's type
+/// flags); the blow does not wound it either way.
+constexpr uint32_t kCreatureTypeFlagNoReaction = 0x200000;
 
 /// What settling a hit sounds (0x00755a60).
 enum class Settle { None, Miss, Impact };

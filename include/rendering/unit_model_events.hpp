@@ -181,6 +181,18 @@ constexpr bool handedOn(uint32_t eventId) {
            melee_sound::isMeleeEvent(eventId);
 }
 
+/// Whether a sequence passes an event (0x00830fb0). The body's passes every one;
+/// one on a bone of its own - a unit's upper body - those on the bones under it,
+/// not on the bone itself, and those on a bone that hangs on nothing.
+template <typename ParentOf>
+[[nodiscard]] constexpr bool passesOnBone(int sequenceBone, int eventBone, ParentOf&& parentOf) {
+    if (sequenceBone <= 0) return true;
+    int bone = parentOf(eventBone);
+    if (bone < 0) return true;
+    while (bone >= 0 && bone != sequenceBone) bone = parentOf(bone);
+    return bone >= 0;
+}
+
 /// The CreatureSoundData column a slot plays (0x007461e0), 0 for none.
 constexpr uint32_t slotColumn(uint32_t slot) {
     switch (slot) {

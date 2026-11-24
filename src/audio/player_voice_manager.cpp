@@ -1,3 +1,4 @@
+#include "audio/sound_names.hpp"
 #include "audio/player_voice_manager.hpp"
 #include "audio/audio_engine.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -98,8 +99,10 @@ const PlayerVoiceManager::Kit* PlayerVoiceManager::kit(uint32_t soundId) {
             for (uint32_t f = 0; f < 10; ++f) {
                 const std::string name = dbc->getString(row, kSoundFile0 + f);
                 if (name.empty()) continue;
-                auto data = assetManager_->readFile(dir.empty() ? name : dir + "\\" + name);
+                const std::string path = dir.empty() ? name : dir + "\\" + name;
+                auto data = assetManager_->readFile(path);
                 if (data.empty()) continue;
+                sound_names::note(data, path);
                 loaded.files.push_back(std::move(data));
                 loaded.frequency.push_back(dbc->getUInt32(row, kSoundFreq0 + f));
             }

@@ -1212,59 +1212,22 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         //
         // The old guard wanted twelve bytes for a packet whose shortest valid
         // form is five, so an all-zero guid was dropped rather than read.
-        std::string setName;
-        if (packet.hasRemaining(5)) {
-            uint32_t setIndex = packet.readUInt32();
-            uint64_t setGuid  = packet.readPackedGuid();
-            bool found = false;
-            for (auto& es : equipmentSets_) {
-                if (es.setGuid == setGuid || es.setId == setIndex) {
-                    es.setGuid = setGuid;
-                    setName = es.name;
-                    found = true;
-                    break;
-                }
-            }
-            for (auto& info : equipmentSetInfo_) {
-                if (info.setGuid == setGuid || info.setId == setIndex) {
-                    info.setGuid = setGuid;
-                    break;
-                }
-            }
-            if (!found && setGuid != 0) {
-                EquipmentSet newEs;
-                newEs.setGuid = setGuid;
-                newEs.setId   = setIndex;
-                newEs.name    = pendingSaveSetName_;
-                newEs.iconName = pendingSaveSetIcon_;
-                for (int s = 0; s < 19; ++s)
-                    newEs.itemGuids[s] = owner_.getEquipSlotGuid(s);
-                equipmentSets_.push_back(std::move(newEs));
-                EquipmentSetInfo newInfo;
-                newInfo.setGuid = setGuid;
-                newInfo.setId   = setIndex;
-                newInfo.name    = pendingSaveSetName_;
-                newInfo.iconName = pendingSaveSetIcon_;
-                equipmentSetInfo_.push_back(std::move(newInfo));
-                setName = pendingSaveSetName_;
-            }
-            pendingSaveSetName_.clear();
-            pendingSaveSetIcon_.clear();
-            LOG_INFO("SMSG_EQUIPMENT_SET_SAVED: index=", setIndex,
-                     " guid=", setGuid, " name=", setName);
-        }
-        // No line: 0x005af6c0 only stores the guid. This printed "Equipment
-        // set "X" saved." in English.
-        // The set list just gained a row, or an existing row gained the guid
-        // the server knows it by. The equipment manager rebuilds its list only
-        // on this event, so without it a set saved this session is missing
-        // from the frame until the next login.
-        owner_.addonEventCallbackRef()("EQUIPMENT_SETS_CHANGED", {});
+        //
+        // No line and no event: 0x005ae760 only stores the guid, or takes the
+        // set the server would not keep (a guid of none) off the list. What
+        // the save changed was told as it was sent.
+        if (!packet.hasRemaining(5)) return;
+        const uint32_t setIndex = packet.readUInt32();
+        const uint64_t setGuid = packet.readPackedGuid();
+        equipment_sets::saved(equipmentSets_, setIndex, setGuid);
+        rebuildEquipmentSetInfo();
+        LOG_INFO("SMSG_EQUIPMENT_SET_SAVED: index=", setIndex, " guid=", setGuid);
     };
 
     table[Opcode::SMSG_EQUIPMENT_SET_USE_RESULT] = [this](network::Packet& packet) {
         if (packet.hasRemaining(1)) {
             uint8_t result = packet.readUInt8();
+            equipmentSwapPending_ = false;
             // 0x005af710: EQUIPMENT_SWAP_FINISHED - 1 for a swap that went
             // through, 0 for one that did not - with the set's name.
             std::string setName = kEventNil;
@@ -6253,95 +6216,154 @@ bool InventoryHandler::supportsEquipmentSets() const {
     return isActiveExpansion("wotlk");
 }
 
-void InventoryHandler::useEquipmentSet(uint32_t setId) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    uint16_t wire = wireOpcode(Opcode::CMSG_EQUIPMENT_SET_USE);
-    // No opcode for it in this expansion, and nothing to say about that:
-    // the real client has the manager or does not. "Equipment sets not
-    // supported." was this client's own English.
-    if (wire == 0xFFFF) return;
-    const EquipmentSet* es = nullptr;
-    for (const auto& s : equipmentSets_) {
-        if (s.setId == setId) { es = &s; break; }
+equipment_sets::Worn InventoryHandler::wornGuids() const {
+    equipment_sets::Worn worn{};
+    for (size_t i = 0; i < worn.size(); ++i) worn[i] = owner_.getEquipSlotGuid(static_cast<int>(i));
+    return worn;
+}
+
+void InventoryHandler::rebuildEquipmentSetInfo() {
+    equipmentSetInfo_.clear();
+    equipmentSetInfo_.reserve(equipmentSets_.size());
+    for (const auto& set : equipmentSets_) {
+        EquipmentSetInfo info;
+        info.setGuid = set.setGuid;
+        info.setId = set.setId;
+        info.name = set.name;
+        info.iconName = set.iconName;
+        equipmentSetInfo_.push_back(std::move(info));
     }
-    if (!es) {
-        // UseEquipmentSet (0x005af380) returns nothing for a name it does
-        // not know; this said "Equipment set not found." in English.
-        return;
+}
+
+void InventoryHandler::equipmentSetsChanged() {
+    rebuildEquipmentSetInfo();
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("EQUIPMENT_SETS_CHANGED", {});
+}
+
+bool InventoryHandler::useEquipmentSet(const std::string& name, bool itemOnCursor) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return false;
+    // No opcode for it in this expansion, and nothing to say about that: the
+    // real client has the manager or does not.
+    const uint16_t wire = wireOpcode(Opcode::CMSG_EQUIPMENT_SET_USE);
+    const auto* set = equipment_sets::byName(equipmentSets_, name);
+    if (wire == 0xFFFF || !set) return false;
+    // One at a time, and an item held is put down first (0x005ada20).
+    if (equipmentSwapPending_) return false;
+    if (itemOnCursor) {
+        owner_.addUIError(uiText("SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW", "You can't do that right now"));
+        return false;
     }
-    network::Packet pkt(wire);
-    for (int slot = 0; slot < 19; ++slot) {
-        uint64_t itemGuid = es->itemGuids[slot];
-        pkt.writePackedGuid(itemGuid);
-        uint8_t srcBag = 0xFF;
-        uint8_t srcSlot = 0;
-        if (itemGuid != 0) {
-            bool found = false;
-            for (int eq = 0; eq < 19 && !found; ++eq) {
-                if (owner_.getEquipSlotGuid(eq) == itemGuid) {
-                    srcBag = 0xFF;
-                    srcSlot = static_cast<uint8_t>(eq);
-                    found = true;
-                }
-            }
-            for (int bp = 0; bp < 16 && !found; ++bp) {
-                if (owner_.getBackpackItemGuid(bp) == itemGuid) {
-                    srcBag = 0xFF;
-                    srcSlot = static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + bp);
-                    found = true;
-                }
-            }
-            for (int bag = 0; bag < 4 && !found; ++bag) {
-                int bagSize = owner_.inventoryRef().getBagSize(bag);
-                for (int s = 0; s < bagSize && !found; ++s) {
-                    if (owner_.getBagItemGuid(bag, s) == itemGuid) {
-                        srcBag = static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bag);
-                        srcSlot = static_cast<uint8_t>(s);
-                        found = true;
-                    }
-                }
-            }
+    bool inCombat = false;
+    if (const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        const uint16_t flags = fieldIndex(UF::UNIT_FIELD_FLAGS);
+        inCombat = flags != 0xFFFF && (player->getField(flags) & UNIT_FLAG_IN_COMBAT) != 0;
+    }
+    const auto find = [this](uint64_t guid) -> std::optional<equipment_sets::Place> {
+        for (int eq = 0; eq < 19; ++eq)
+            if (owner_.getEquipSlotGuid(eq) == guid) return equipment_sets::Place{0xFF, static_cast<uint8_t>(eq)};
+        for (int i = 0; i < Inventory::BACKPACK_SLOTS; ++i)
+            if (owner_.getBackpackItemGuid(i) == guid)
+                return equipment_sets::Place{0xFF, static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + i)};
+        for (int bag = 0; bag < Inventory::NUM_BAG_SLOTS; ++bag) {
+            const int size = owner_.inventoryRef().getBagSize(bag);
+            for (int i = 0; i < size; ++i)
+                if (owner_.getBagItemGuid(bag, i) == guid)
+                    return equipment_sets::Place{static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bag),
+                                                 static_cast<uint8_t>(i)};
         }
-        pkt.writeUInt8(srcBag);
-        pkt.writeUInt8(srcSlot);
+        // The bank while it is open (0x00beb9a0), and its bags.
+        if (!owner_.isBankOpen()) return std::nullopt;
+        for (int i = 0; i < Inventory::BANK_SLOTS; ++i)
+            if (getBankSlotGuid(i) == guid)
+                return equipment_sets::Place{0xFF, static_cast<uint8_t>(Inventory::BANK_SLOT_START + i)};
+        for (int bag = 0; bag < 7; ++bag)
+            for (int i = 0; i < 36; ++i)
+                if (getBankBagItemGuid(bag, i) == guid)
+                    return equipment_sets::Place{static_cast<uint8_t>(Inventory::BANK_BAG_CONTAINER_START + bag),
+                                                 static_cast<uint8_t>(i)};
+        return std::nullopt;
+    };
+    const auto swap = equipment_sets::swap(set->items, wornGuids(), inCombat, find);
+    if (swap.combat)
+        owner_.addUIError(interfaceFormat("EQUIPMENT_MANAGER_COMBAT_SWAP",
+                                          "You cannot swap your %s set's armor in combat.", {set->name}));
+    if (swap.missing)
+        owner_.addUIError(interfaceFormat("EQUIPMENT_MANAGER_MISSING_ITEM",
+                                          "Some items are missing from your %s set.", {set->name}));
+    network::Packet pkt(wire);
+    for (const auto& slot : swap.slots) {
+        pkt.writePackedGuid(slot.guid);
+        pkt.writeUInt8(slot.from.bag);
+        pkt.writeUInt8(slot.from.slot);
     }
     owner_.getSocket()->send(pkt);
     // 0x005ada20: the swap is pending until the server answers.
-    pendingUseSetId_ = setId;
+    pendingUseSetId_ = set->setId;
+    equipmentSwapPending_ = true;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("EQUIPMENT_SWAP_PENDING", {});
+    return true;
+}
+
+void InventoryHandler::sendEquipmentSet(const equipment_sets::Set& set) {
+    // The buttons that hold it are drawn again, once the server knows the set
+    // (0x005ade50 -> 0x005aaa00).
+    if (set.setGuid != 0 && owner_.addonEventCallbackRef()) {
+        const auto& bar = owner_.getActionBar();
+        for (size_t i = 0; i < bar.size(); ++i) {
+            if (bar[i].type == ActionBarSlot::EQUIPMENT_SET && bar[i].id == set.setId)
+                owner_.addonEventCallbackRef()("ACTIONBAR_SLOT_CHANGED", {std::to_string(i + 1)});
+        }
+    }
+    const uint16_t wire = wireOpcode(Opcode::CMSG_EQUIPMENT_SET_SAVE);
+    if (wire != 0xFFFF && owner_.getSocket()) {
+        network::Packet pkt(wire);
+        // Packed, like everything guid-shaped in this family:
+        // HandleEquipmentSetSave opens with readPackGUID.
+        pkt.writePackedGuid(set.setGuid);
+        pkt.writeUInt32(set.setId);
+        pkt.writeString(set.name);
+        pkt.writeString(set.iconName);
+        for (const uint64_t guid : set.items) pkt.writePackedGuid(guid);
+        owner_.getSocket()->send(pkt);
+    }
+    equipmentSetsChanged();
 }
 
 void InventoryHandler::saveEquipmentSet(const std::string& name, const std::string& iconName,
-                                         uint64_t existingGuid, uint32_t setIndex,
-                                         uint32_t ignoredSlotMask) {
+                                        uint32_t ignoredSlotMask) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    uint16_t wire = wireOpcode(Opcode::CMSG_EQUIPMENT_SET_SAVE);
-    if (wire == 0xFFFF) return;   // as useEquipmentSet: nothing to say
-    pendingSaveSetName_ = name;
-    pendingSaveSetIcon_ = iconName;
-    if (setIndex == 0xFFFFFFFF) {
-        setIndex = 0;
-        for (const auto& es : equipmentSets_) {
-            if (es.setId >= setIndex) setIndex = es.setId + 1;
-        }
+    if (wireOpcode(Opcode::CMSG_EQUIPMENT_SET_SAVE) == 0xFFFF) return;   // as useEquipmentSet: nothing to say
+    if (const auto* set = equipment_sets::save(equipmentSets_, name, iconName, wornGuids(), ignoredSlotMask))
+        sendEquipmentSet(*set);
+}
+
+void InventoryHandler::renameEquipmentSet(const std::string& oldName, const std::string& newName,
+                                          uint32_t ignoredSlotMask) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const auto renamed = equipment_sets::rename(equipmentSets_, oldName, newName, wornGuids(), ignoredSlotMask);
+    if (renamed.send) sendEquipmentSet(*renamed.send);
+    if (renamed.changed) equipmentSetsChanged();   // 0x005af400
+}
+
+void InventoryHandler::deleteEquipmentSet(const std::string& name) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const uint16_t wire = wireOpcode(Opcode::CMSG_DELETEEQUIPMENT_SET);
+    const auto* found = equipment_sets::byName(equipmentSets_, name);
+    if (wire == 0xFFFF || !found) return;
+    const equipment_sets::Set set = *found;
+    // 0x005ae260: off the action bars (0x005aae20) and the list, the server
+    // told, and EQUIPMENT_SETS_CHANGED.
+    const auto& bar = owner_.getActionBar();
+    for (size_t i = 0; i < bar.size(); ++i) {
+        if (bar[i].type == ActionBarSlot::EQUIPMENT_SET && bar[i].id == set.setId)
+            owner_.setActionBarSlot(static_cast<int>(i), ActionBarSlot::EMPTY, 0);
     }
+    std::erase_if(equipmentSets_, [&set](const equipment_sets::Set& s) { return s.setId == set.setId; });
     network::Packet pkt(wire);
-    // Packed, like everything guid-shaped in this family.
-    // HandleEquipmentSetSave opens with readPackGUID, so a fixed eight bytes
-    // here left seven behind: the server read the index out of the padding,
-    // the name out of what was left of it, and the nineteen item guids from
-    // wherever it had got to. Saving a set has never worked.
-    pkt.writePackedGuid(existingGuid);
-    pkt.writeUInt32(setIndex);
-    pkt.writeString(name);
-    pkt.writeString(iconName);
-    for (int i = 0; i < 19; ++i) {
-        // A slot the player chose to leave out goes as the guid 1, which is
-        // what the set list sends back for it (0x005ade50 writes 1 for every
-        // slot marked in 0x00c1e908).
-        pkt.writePackedGuid((ignoredSlotMask & (1u << i)) ? 1u : owner_.getEquipSlotGuid(i));
-    }
+    // HandleEquipmentSetDelete reads this packed too.
+    pkt.writePackedGuid(set.setGuid);
     owner_.getSocket()->send(pkt);
+    equipmentSetsChanged();
 }
 
 uint64_t InventoryHandler::getBankBagItemGuid(int bag, int slot) const {
@@ -6356,26 +6378,6 @@ uint64_t InventoryHandler::getBankBagItemGuid(int bag, int slot) const {
     return it->second.slotGuids[static_cast<size_t>(slot)];
 }
 
-void InventoryHandler::deleteEquipmentSet(uint64_t setGuid) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    uint16_t wire = wireOpcode(Opcode::CMSG_DELETEEQUIPMENT_SET);
-    if (wire == 0xFFFF) return;   // as useEquipmentSet: nothing to say
-    network::Packet pkt(wire);
-    // HandleEquipmentSetDelete reads this packed too.
-    pkt.writePackedGuid(setGuid);
-    owner_.getSocket()->send(pkt);
-    equipmentSets_.erase(
-        std::remove_if(equipmentSets_.begin(), equipmentSets_.end(),
-                        [setGuid](const EquipmentSet& es) { return es.setGuid == setGuid; }),
-        equipmentSets_.end());
-    equipmentSetInfo_.erase(
-        std::remove_if(equipmentSetInfo_.begin(), equipmentSetInfo_.end(),
-                        [setGuid](const EquipmentSetInfo& info) { return info.setGuid == setGuid; }),
-        equipmentSetInfo_.end());
-    // 0x005ae260, at once: the server says nothing.
-    owner_.fireAddonEvent("EQUIPMENT_SETS_CHANGED", {});
-}
-
 void InventoryHandler::handleEquipmentSetList(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t count = packet.readUInt32();
@@ -6386,6 +6388,7 @@ void InventoryHandler::handleEquipmentSetList(network::Packet& packet) {
     }
     equipmentSets_.clear();
     equipmentSets_.reserve(count);
+    equipmentSwapPending_ = false;
     for (uint32_t i = 0; i < count; ++i) {
         // Every guid in this message is packed - a mask byte and then only the
         // non-zero bytes - and all twenty were read as fixed eight-byte values.
@@ -6394,47 +6397,23 @@ void InventoryHandler::handleEquipmentSetList(network::Packet& packet) {
         // lost its place entirely. SendEquipmentSetList writes each of these
         // with appendPackGUID.
         if (!packet.hasRemaining(2)) break;
-        EquipmentSet es;
+        equipment_sets::Set es;
         es.setGuid  = packet.readPackedGuid();
         if (!packet.hasRemaining(4)) break;
         es.setId    = packet.readUInt32();
         es.name     = packet.readString();
         es.iconName = packet.readString();
-        // No ignore mask on the wire. A uint32 was being read for one here and
-        // the server never sends it: an ignored slot is written as an item guid
-        // of literal one, which is the mask. Reading a word that is not there
-        // took the first four bytes of the slot list every time.
-        es.ignoreSlotMask = 0;
+        // No ignore mask on the wire: an ignored slot is written as an item
+        // guid of literal one, and kept as that - it is what every reader of
+        // the set asks for, and what the server is told again.
         for (int slot = 0; slot < 19; ++slot) {
             if (!packet.hasRemaining(1)) break;
-            const uint64_t itemGuid = packet.readPackedGuid();
-            if (itemGuid == 1) {
-                // "Ignore this slot" - the set leaves whatever is worn there.
-                es.ignoreSlotMask |= (1u << slot);
-                es.itemGuids[slot] = 0;
-            } else {
-                es.itemGuids[slot] = itemGuid;
-            }
+            es.items[static_cast<size_t>(slot)] = packet.readPackedGuid();
         }
         equipmentSets_.push_back(std::move(es));
     }
-    equipmentSetInfo_.clear();
-    equipmentSetInfo_.reserve(equipmentSets_.size());
-    for (const auto& es : equipmentSets_) {
-        EquipmentSetInfo info;
-        info.setGuid  = es.setGuid;
-        info.setId    = es.setId;
-        info.name     = es.name;
-        info.iconName = es.iconName;
-        equipmentSetInfo_.push_back(std::move(info));
-    }
     LOG_INFO("SMSG_EQUIPMENT_SET_LIST: ", equipmentSets_.size(), " equipment sets received");
-    // The manager redraws on this, and the list arriving is the only time it
-    // has anything new to draw - including straight after a set is saved or
-    // deleted, which is when the server sends it again.
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("EQUIPMENT_SETS_CHANGED", {});
-    }
+    equipmentSetsChanged();
 }
 
 // ============================================================

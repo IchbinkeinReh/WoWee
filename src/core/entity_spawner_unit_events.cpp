@@ -545,8 +545,8 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
 
     rendering::M2EventSounds& player = renderer_->getM2EventSounds();
     for (const auto& event : fired) {
-        // A melee swing's whoosh and landing (0x00756240).
-        if (event.id == rendering::melee_sound::kEventSwing || rendering::melee_sound::isLandEvent(event.id)) {
+        // A melee swing's whoosh, its victim's reaction and its landing (0x00756240).
+        if (rendering::melee_sound::isMeleeEvent(event.id)) {
             if (const uint64_t attacker = ownerOf(event.instanceId)) meleeModelEvent(attacker, event.id, event.position);
             continue;
         }

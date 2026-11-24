@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 #include "game/spell_defines.hpp"
 
@@ -107,6 +108,25 @@ inline uint32_t floaterColour(CombatTextEntry::Type type, FloaterSource source, 
         default:
             return 0u;
     }
+}
+
+/// The text of a spell's damage, or a tick's, over its target (0x006d3840,
+/// 0x007531f0): the amount, or why there was none - absorbed, blocked, resisted.
+inline std::optional<CombatTextEntry::Type> spellDamageText(uint32_t damage, uint32_t absorbed, uint32_t blocked,
+                                                            uint32_t resisted, bool crit, bool periodic = false) {
+    using T = CombatTextEntry;
+    if (damage != 0) return crit ? T::CRIT_DAMAGE : periodic ? T::PERIODIC_DAMAGE : T::SPELL_DAMAGE;
+    if (absorbed != 0) return T::ABSORB;
+    if (blocked != 0) return T::BLOCK;
+    if (resisted != 0) return T::RESIST;
+    return std::nullopt;
+}
+
+/// Whether a heal's number shows (0x00751f70, 0x00750860): of a spell neither
+/// hidden (Attributes 0x80) nor kept out of the log (0x100), and a tick's only where
+/// the spell lasts no more than half a minute.
+inline bool healTextShown(std::optional<uint32_t> attributes, bool periodic, int32_t durationMs) {
+    return attributes && (*attributes & 0x180u) == 0 && (!periodic || durationMs <= 30000);
 }
 
 /// The global string 0x0071f990 shows for a miss and its kin - the table at

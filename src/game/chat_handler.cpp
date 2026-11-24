@@ -759,6 +759,10 @@ void ChatHandler::filterProfanity(ChatType type, std::string& text) {
         default:
             return;
     }
+    filterMatureLanguage(text);
+}
+
+void ChatHandler::filterMatureLanguage(std::string& text) {
     if (text.empty() || addons::storedCVarValue("profanityFilter", "1") == "0") return;
     if (loadProfanity()) profanity_.apply(text);
 }

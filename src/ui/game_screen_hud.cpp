@@ -842,6 +842,7 @@ void GameScreen::stopRecording() {
     auto* renderer = services_.renderer;
     if (!renderer || !services_.gameHandler || !renderer->isRecording()) return;
     const auto stats = renderer->stopRecording();
+    recordingStats_ = stats;
     const int seconds = static_cast<int>(stats.seconds + 0.5);
     char length[32];
     std::snprintf(length, sizeof(length), "%d:%02d", seconds / 60, seconds % 60);

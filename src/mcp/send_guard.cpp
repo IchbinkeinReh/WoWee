@@ -382,17 +382,37 @@ bool gmWordsAllowed(const std::vector<std::string>& w, const std::string& ownNam
     return false;
 }
 
-}  // namespace
-
-Verdict judgeGmCommand(std::string_view text, const GuardContext& context) {
+/// A command's words, in lower case, past its '.' or '!'.
+std::vector<std::string> gmWords(std::string_view text) {
     std::vector<std::string> words;
-    size_t at = 1;  // past the '.' or '!'
+    size_t at = 1;
     while (at < text.size() && words.size() < 16) {
         while (at < text.size() && text[at] == ' ') ++at;
         std::string word;
         while (at < text.size() && text[at] != ' ') word += text[at++];
         if (!word.empty()) words.push_back(lower(word));
     }
+    return words;
+}
+
+}  // namespace
+
+bool gmCommandWantsPlayer(std::string_view text) {
+    const std::vector<std::string> words = gmWords(text);
+    if (words.empty()) return false;
+    const std::string sub = words.size() > 1 ? words[1] : std::string();
+    if (isOneOf(words[0], {"learn", "unlearn", "levelup", "maxskill", "cooldown", "revive", "additem", "quest", "save",
+                           "combatstop"})) {
+        return true;
+    }
+    if (words[0] == "modify" || words[0] == "mod") {
+        return isOneOf(sub, {"money", "honor", "reputation", "talentpoints", "drunk"});
+    }
+    return false;
+}
+
+Verdict judgeGmCommand(std::string_view text, const GuardContext& context) {
+    const std::vector<std::string> words = gmWords(text);
     if (words.empty()) return never("an empty command");
     // Where somebody else is selected, a command is about them.
     if (aimsAtOther(context.targetGuid, context)) {

@@ -1,4 +1,5 @@
 #include "core/app_clock.hpp"
+#include "game/mail_text.hpp"
 #include "game/ground_target.hpp"
 #include <array>
 #include <string_view>
@@ -1438,19 +1439,21 @@ bool GameHandler::supportsEquipmentSets() const {
     return inventoryHandler_ && inventoryHandler_->supportsEquipmentSets();
 }
 
-void GameHandler::useEquipmentSet(uint32_t setId) {
-    if (inventoryHandler_) inventoryHandler_->useEquipmentSet(setId);
+bool GameHandler::useEquipmentSet(const std::string& name, bool itemOnCursor) {
+    return inventoryHandler_ && inventoryHandler_->useEquipmentSet(name, itemOnCursor);
 }
 
-void GameHandler::saveEquipmentSet(const std::string& name, const std::string& iconName,
-                                    uint64_t existingGuid, uint32_t setIndex,
-                                    uint32_t ignoredSlotMask) {
-    if (inventoryHandler_)
-        inventoryHandler_->saveEquipmentSet(name, iconName, existingGuid, setIndex, ignoredSlotMask);
+void GameHandler::saveEquipmentSet(const std::string& name, const std::string& iconName, uint32_t ignoredSlotMask) {
+    if (inventoryHandler_) inventoryHandler_->saveEquipmentSet(name, iconName, ignoredSlotMask);
 }
 
-void GameHandler::deleteEquipmentSet(uint64_t setGuid) {
-    if (inventoryHandler_) inventoryHandler_->deleteEquipmentSet(setGuid);
+void GameHandler::renameEquipmentSet(const std::string& oldName, const std::string& newName,
+                                     uint32_t ignoredSlotMask) {
+    if (inventoryHandler_) inventoryHandler_->renameEquipmentSet(oldName, newName, ignoredSlotMask);
+}
+
+void GameHandler::deleteEquipmentSet(const std::string& name) {
+    if (inventoryHandler_) inventoryHandler_->deleteEquipmentSet(name);
 }
 
 // --- Inventory state delegation (canonical state lives in InventoryHandler) ---
@@ -1626,21 +1629,21 @@ std::vector<MailMessage>& GameHandler::mailInboxRef() {
     if (inventoryHandler_) return inventoryHandler_->mailInboxRef();
     return mailInbox_;
 }
+void GameHandler::filterMatureLanguage(std::string& text) {
+    if (chatHandler_) chatHandler_->filterMatureLanguage(text);
+}
+
 std::string GameHandler::getMailDisplaySubject(const MailMessage& mail) {
-    const std::string& subject = mailSubject(mail.subject, mailTemplate(services().assetManager, mail.mailTemplateId));
-    if (mail.messageType != 2) return subject;
-
-    AuctionMailSubject auction;
-    if (!parseAuctionMailSubject(subject, auction)) return subject;
-
-    ensureItemInfo(auction.itemEntry);
-    const auto* info = getItemInfo(auction.itemEntry);
-    const std::string itemName = info && !info->name.empty()
-        ? info->name
-        : "Item #" + std::to_string(auction.itemEntry);
-    return formatAuctionMailSubject(auction, itemName, [](const char* key, const char* enUS) {
-        return interfaceString(key, enUS);
-    });
+    std::string subject = mail_text::subject(
+        mail, mailTemplate(services_.assetManager, mail.mailTemplateId),
+        [this](const AuctionMailSubject& auction) {
+            ensureItemInfo(auction.itemEntry);
+            const auto* info = getItemInfo(auction.itemEntry);
+            return info ? info->name : std::string();
+        },
+        [](const char* key, const char* enUS) { return interfaceString(key, enUS); });
+    filterMatureLanguage(subject);   // 0x00509a50
+    return subject;
 }
 int GameHandler::getSelectedMailIndex() const {
     return inventoryHandler_ ? inventoryHandler_->getSelectedMailIndex() : selectedMailIndex_;
@@ -2536,43 +2539,15 @@ bool GameHandler::applyInventoryFields(const FlatFieldMap& fields, bool initial)
     return inventoryHandler_ ? inventoryHandler_->applyInventoryFields(fields, initial) : false;
 }
 
-uint64_t GameHandler::getInteractNpcGuid() const {
-    if (inventoryHandler_) {
-        if (const uint64_t peer = inventoryHandler_->getTradePeerGuid()) return peer;
-        if (const uint64_t vendor = getVendorGuid()) return vendor;
-        if (inventoryHandler_->isBankOpen()) return inventoryHandler_->getBankerGuid();
-        if (inventoryHandler_->isAuctionHouseOpen()) return inventoryHandler_->getAuctioneerGuid();
+uint64_t GameHandler::questNpcGuid() const {
+    if (!questHandler_) return 0;
+    if (questHandler_->isQuestOfferRewardOpen()) return questHandler_->getQuestOfferReward().npcGuid;
+    if (questHandler_->isQuestRequestItemsOpen()) return questHandler_->getQuestRequestItems().npcGuid;
+    if (questHandler_->isQuestDetailsOpen()) {
+        const auto& details = questHandler_->getQuestDetails();
+        return details.informUnit != 0 ? details.informUnit : details.npcGuid;
     }
-    // The trainer, which the list above this function has always named and
-    // this function never asked.
-    //
-    // Nothing else answers for it either: SMSG_TRAINER_LIST closes the gossip
-    // that led to the trainer, so by the time the panel is up the gossip row
-    // below returns 0 as well. With no unit to render, the portrait kept the
-    // stand-in SetPortraitTexture stamps when it cannot get a face - which is
-    // a class circle, and a tailoring trainer was drawn as a warrior's sword.
-    //
-    // Above the gossip for the same reason the vendor is: a trainer is a window
-    // opened from a gossip and covering it.
-    if (isTrainerWindowOpen()) {
-        if (const uint64_t trainer = getTrainerSpells().trainerGuid) return trainer;
-    }
-    // From the movement handler, which owns both. GameHandler kept members of
-    // the same two names that the decomposition left behind unwritten, so this
-    // read false forever and the flight master had no portrait in the taxi
-    // frame.
-    if (movementHandler_ && movementHandler_->isTaxiWindowOpen()) {
-        if (const uint64_t taxiNpc = movementHandler_->getTaxiNpcGuid()) return taxiNpc;
-    }
-    if (socialHandler_ && socialHandler_->hasPetitionShowlist()) return socialHandler_->getPetitionNpcGuid();
-    if (tabardVendorGuid_ != 0) return tabardVendorGuid_;
-    if (stableWindowOpen_) return stableMasterGuid_;
-    if (questHandler_) {
-        if (questHandler_->isQuestDetailsOpen()) return questHandler_->getQuestDetails().npcGuid;
-        if (questHandler_->isQuestRequestItemsOpen()) return questHandler_->getQuestRequestItems().npcGuid;
-        if (questHandler_->isQuestOfferRewardOpen()) return questHandler_->getQuestOfferReward().npcGuid;
-        if (const uint64_t gossip = questHandler_->getCurrentGossip().npcGuid) return gossip;
-    }
+    if (questHandler_->isQuestGreetingOpen()) return questHandler_->getCurrentGossip().npcGuid;
     return 0;
 }
 
@@ -2635,9 +2610,9 @@ void GameHandler::stopAutoAttack() {
 }
 
 void GameHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId, bool isPlayerSource, uint8_t powerType,
-                                uint64_t srcGuid, uint64_t dstGuid, bool spellFlag) {
+                                uint64_t srcGuid, uint64_t dstGuid, bool spellFlag, bool periodic) {
     if (combatHandler_)
-        combatHandler_->addCombatText(type, amount, spellId, isPlayerSource, powerType, srcGuid, dstGuid, spellFlag);
+        combatHandler_->addCombatText(type, amount, spellId, isPlayerSource, powerType, srcGuid, dstGuid, spellFlag, periodic);
 }
 
 bool GameHandler::shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId) {
@@ -2674,6 +2649,10 @@ uint64_t GameHandler::getLastMeleeSwingMs() const {
 
 uint32_t GameHandler::numPlayerDamageHits() const {
     return combatHandler_ ? combatHandler_->playerDamageHits() : 0u;
+}
+
+bool GameHandler::combatTextOurs(uint64_t src, uint64_t dst) const {
+    return combatHandler_ && combatHandler_->combatTextOurs(src, dst);
 }
 
 const std::vector<CombatTextEntry>& GameHandler::getCombatText() const {
@@ -4599,7 +4578,9 @@ std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
     }
     if (guid == targetGuid) out.emplace_back("target");
     if (guid == focusGuid) out.emplace_back("focus");
-    if (guid == getInteractNpcGuid()) out.emplace_back("npc");
+    // Whoever the open window belongs to, and the quest window's own.
+    if (guid == getInteractionObject()) out.emplace_back("npc");
+    if (guid == questNpcGuid()) out.emplace_back("questnpc");
     return out;
 }
 
@@ -4660,7 +4641,7 @@ void GameHandler::fireSpellMissileMiss(uint32_t spellId, uint64_t casterGuid, ui
     // and UNIT_COMBAT (0x00513410).
     if (unit_combat::spellRaises(getSpellAttributes(spellId))) {
         const bool playerIsCaster = casterGuid != 0 && casterGuid == playerGuid;
-        if (playerIsCaster || unitGuid == playerGuid)
+        if (combatTextOurs(casterGuid, unitGuid))
             addCombatText(combatTextTypeFromSpellMissInfo(missReason), 0, spellId, playerIsCaster, 0, casterGuid,
                           unitGuid);
         if (const char* action = unit_combat::missAction(missReason))

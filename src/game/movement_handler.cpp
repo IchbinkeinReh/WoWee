@@ -2755,6 +2755,19 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
     if (originMisfire) sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
 }
 
+void MovementHandler::sendWorldportAck() {
+    if (!owner_.getSocket()) return;
+    network::Packet ack(wireOpcode(Opcode::MSG_MOVE_WORLDPORT_ACK));
+    owner_.getSocket()->send(ack);
+    LOG_INFO("Sent MSG_MOVE_WORLDPORT_ACK");
+}
+
+bool MovementHandler::releaseWorldportAck() {
+    if (!worldportAck_.release()) return false;
+    sendWorldportAck();
+    return true;
+}
+
 bool MovementHandler::releaseTeleportAck() {
     const auto ack = teleportAck_.release();
     if (!ack) return false;
@@ -3045,24 +3058,22 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     if (auto* combat = owner_.getCombatHandler()) combat->forgetAttack();
     owner_.resetCastState();
 
-    if (owner_.getSocket()) {
-        network::Packet ack(wireOpcode(Opcode::MSG_MOVE_WORLDPORT_ACK));
-        owner_.getSocket()->send(ack);
-        LOG_INFO("Sent MSG_MOVE_WORLDPORT_ACK");
-
-        // And no movement with it (0x00403b70, 0xdc): the server has put the
-        // player where it said.
-    }
-
     owner_.timeSinceLastPingRef() = 0.0f;
     if (owner_.getSocket()) {
-        LOG_WARNING("World transfer keepalive: sending immediate ping after MSG_MOVE_WORLDPORT_ACK");
+        LOG_WARNING("World transfer keepalive: sending immediate ping");
         owner_.sendPing();
     }
 
+    // The acknowledgement waits for the world: the client loads the map and
+    // then sends it (0x00403b70, 0xdc), and no movement with it, the server
+    // having put the player where it said. Sent first, the player stood in the
+    // new world while its client was loading it. The world-entry callback
+    // holds it when it queues the load, and the loader lets it go.
+    if (worldportAck_.arrive(0, 0)) sendWorldportAck();
     if (owner_.worldEntryCallbackRef()) {
         owner_.worldEntryCallbackRef()(mapId, serverX, serverY, serverZ, isSameMap);
     }
+    if (worldportAck_.settle()) sendWorldportAck();
 
     // No PLAYER_ENTERING_WORLD here. The client raises it once per world
     // entry, when the new world is in (0x00528010, event 0xff), which is

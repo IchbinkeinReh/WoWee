@@ -1947,6 +1947,18 @@ bool EntitySpawner::gameObjectDrawsNothing(uint64_t guid) const {
     return m2 && m2->instanceDrawsNothing(goIt->second.instanceId);
 }
 
+uint64_t EntitySpawner::gameObjectOfFace(bool building, uint32_t owner, const glm::vec3& at) const {
+    const auto* wmo = renderer_ ? renderer_->queryWMORenderer() : nullptr;
+    for (const auto& [guid, object] : gameObjectInstances_) {
+        if (object.isWmo != building) continue;
+        // A model's face has its instance's number; a map object's its
+        // file's, which two of them may share.
+        if (building ? wmo && wmo->instanceHasFace(object.instanceId, owner, at) : object.instanceId == owner)
+            return guid;
+    }
+    return 0;
+}
+
 std::optional<float> EntitySpawner::rayHitUnit(uint64_t guid, const glm::vec3& origin,
                                               const glm::vec3& direction, float maxDistance) const {
     const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;

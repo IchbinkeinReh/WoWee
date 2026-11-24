@@ -116,40 +116,6 @@ void AnimationCallbackHandler::setupCallbacks() {
         }
     });
 
-    // Hit reaction callback - plays one-shot dodge/block/wound animation on the victim
-    gameHandler_.setHitReactionCallback([this](uint64_t victimGuid, game::GameHandler::HitReaction reaction) {
-        auto* cr = renderer_.getCharacterRenderer();
-        if (!cr) return;
-
-        // Determine animation based on reaction type
-        uint32_t animId = rendering::anim::COMBAT_WOUND;
-        switch (reaction) {
-            case game::GameHandler::HitReaction::DODGE:      animId = rendering::anim::DODGE; break;
-            case game::GameHandler::HitReaction::PARRY:      break; // Parry already handled by existing system
-            case game::GameHandler::HitReaction::BLOCK:      animId = rendering::anim::BLOCK; break;
-            case game::GameHandler::HitReaction::SHIELD_BLOCK: animId = rendering::anim::SHIELD_BLOCK; break;
-            case game::GameHandler::HitReaction::CRIT_WOUND: animId = rendering::anim::COMBAT_CRITICAL; break;
-            case game::GameHandler::HitReaction::WOUND:      animId = rendering::anim::COMBAT_WOUND; break;
-        }
-
-        // A blow taken (0x00755e40 -> 0x00736640): StandWound, CombatWound
-        // in a fight, CombatCritical, on the upper body or the whole body as
-        // the unit stands - the player's as any unit's.
-        uint32_t instanceId = victimGuid == gameHandler_.getPlayerGuid()
-                                  ? renderer_.getCharacterInstanceId()
-                                  : entitySpawner_.getCreatureInstanceId(victimGuid);
-        if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(victimGuid);
-        if (instanceId == 0) return;
-        if (reaction == game::GameHandler::HitReaction::WOUND ||
-            reaction == game::GameHandler::HitReaction::CRIT_WOUND) {
-            const auto wound =
-                cr->woundFor(instanceId, reaction == game::GameHandler::HitReaction::CRIT_WOUND);
-            if (wound) cr->playWound(instanceId, *wound);
-            return;
-        }
-        if (cr->hasAnimation(instanceId, animId)) cr->playAnimation(instanceId, animId, false);
-    });
-
     // Another unit's jump, as the client plays it for one. MSG_MOVE_JUMP
     // plays JumpStart (FUN_0073ed10, case 0xbb), and when that ends the Jump
     // loop follows (FUN_0073b510), held while the unit is in the air by the

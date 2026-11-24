@@ -101,14 +101,20 @@ Tool handsTool(std::string name, std::string description, json schema,
                std::function<void(ToolContext&, const json&, Script&)> build, double patience = 30.0,
                Tool::Where where = Tool::Where::World);
 
-/// What went wrong in a looking tool, told to the caller as it is.
+/// What went wrong in a looking tool, told to the caller as it is: a sentence,
+/// or the parts of it.
 class ToolError : public std::exception {
 public:
-    explicit ToolError(std::string why) : why_(std::move(why)) {}
+    explicit ToolError(std::string why) : why_(std::move(why)), value_(why_) {}
+    explicit ToolError(const char* why) : ToolError(std::string(why)) {}
+    explicit ToolError(json value) : why_(value.dump(-1, ' ', false, json::error_handler_t::replace)),
+                                     value_(std::move(value)) {}
     [[nodiscard]] const char* what() const noexcept override { return why_.c_str(); }
+    [[nodiscard]] const json& value() const { return value_; }
 
 private:
     std::string why_;
+    json value_;
 };
 
 void addStateTools(Toolbox& box);
@@ -124,5 +130,6 @@ void addKeyTools(Toolbox& box);
 void addWaitTools(Toolbox& box);
 void addActionsTool(Toolbox& box);
 void addClientTools(Toolbox& box);
+void addSoundTools(Toolbox& box);
 
 }  // namespace wowee::mcp

@@ -57,6 +57,8 @@ public:
     /// SMSG_QUESTGIVER_QUEST_LIST. Empty when the window came from gossip
     /// instead, which carries its text as an npc-text id rather than inline.
     [[nodiscard]] const std::string& getQuestGreeting() const { return questGreeting_; }
+    /// The quest giver's list (QUEST_GREETING) is the window open.
+    [[nodiscard]] bool isQuestGreetingOpen() const { return gossipWindowOpen_ && gossipIsQuestGreeting_; }
 
     // Quest details
     /// Whether a quest giver's detail page is up. True from the moment the

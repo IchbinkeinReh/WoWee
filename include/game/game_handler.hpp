@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/macro_list.hpp"
 #include "game/achievement_tracking.hpp"
 #include "game/npc_interaction.hpp"
 #include "game/tutorials.hpp"
@@ -384,17 +385,10 @@ public:
     /**
      * Get entity manager (for accessing entities in view)
      */
-    /// Whoever this client is dealing with right now - the unit behind an open
-    /// window. The interface calls it "npc" and "questnpc" and puts its face in
-    /// the panel's portrait: the gossip frame, the quest frame, the merchant,
-    /// the flight master, the trainer, the trade partner.
-    ///
-    /// Answered from the windows that are open rather than from a guid tracked
-    /// on the side. Every one of these already knows who it is talking to, and
-    /// a separate record of the same fact is one more thing to leave stale.
-    /// The order is the order a window would cover another: a trade or a
-    /// merchant is more specific than the gossip that opened it.
-    uint64_t getInteractNpcGuid() const;
+    /// The quest window's own unit, the interface's "questnpc" (0x006081b0):
+    /// the player sharing the quest (0x00c0d650), else the giver (0x00c0d648).
+    /// "npc" is getInteractionObject().
+    uint64_t questNpcGuid() const;
     /// The innkeeper whose bind confirmation is open, and the trainer whose
     /// talent-wipe confirmation is. Both dialogs close themselves when the
     /// player walks out of range, which is the only thing these answer.
@@ -1502,6 +1496,8 @@ public:
     // Zero if no swing has occurred this session.
     uint64_t getLastMeleeSwingMs() const;
     const std::vector<CombatTextEntry>& getCombatText() const;
+    /// CombatHandler::combatTextOurs.
+    [[nodiscard]] bool combatTextOurs(uint64_t src, uint64_t dst) const;
     /// Hits that did the player damage so far (CombatHandler::playerDamageHits).
     uint32_t numPlayerDamageHits() const;
     void clearCombatText();
@@ -1940,8 +1936,15 @@ public:
     const std::string& getMacroIcon(uint32_t macroId) const;
     void setMacroMeta(uint32_t macroId, const std::string& name,
                       const std::string& icon);
-    /// Every macro id in use, ascending, so the interface can list them.
+    /// Every macro id in use, ascending. The interface's own numbers are
+    /// another thing: macroList() and game/macro_list.hpp.
     std::vector<uint32_t> getMacroIds() const;
+    /// A macro has a name or a body.
+    bool macroExists(uint32_t macroId) const;
+    std::vector<macro_list::Entry> macroList() const;
+    /// A macro gone: its text, name and icon, and the action slots that held
+    /// it (0x00566d50 -> 0x005aadd0). The others keep their ids.
+    void deleteMacro(uint32_t macroId);
 
     void saveCharacterConfig();
     void loadCharacterConfig();
@@ -2026,6 +2029,12 @@ public:
     // standState: 0=stand, 1-6=sit variants, 7=dead, 8=kneel
     using StandStateCallback = std::function<void(uint8_t standState)>;
     void setStandStateCallback(StandStateCallback cb) { standStateCallback_ = std::move(cb); }
+
+    /// The character is out of the world and the connection stays
+    /// (0x00406510(1, 1, 0)): what goes with the world goes, and the
+    /// character list is asked for again. False, with nothing done, where
+    /// there is no world or no connection to keep.
+    bool leaveWorldForCharacterList();
 
     // Logout complete callback - fired when SMSG_LOGOUT_COMPLETE says the character
     // is out of the world. exiting is true for /quit and /exit (leave the game),
@@ -2163,10 +2172,6 @@ public:
     using NpcSwingCallback = std::function<void(uint64_t guid)>;
     void setNpcSwingCallback(NpcSwingCallback cb) { npcSwingCallback_ = std::move(cb); }
 
-    // Hit reaction callback - triggers victim animation (dodge, block, wound, crit wound)
-    enum class HitReaction : uint8_t { WOUND, CRIT_WOUND, DODGE, PARRY, BLOCK, SHIELD_BLOCK };
-    using HitReactionCallback = std::function<void(uint64_t victimGuid, HitReaction reaction)>;
-    void setHitReactionCallback(HitReactionCallback cb) { hitReactionCallback_ = std::move(cb); }
     /// A melee hit the victim bleeds from (0x00755e40 -> 0x00755380): who was
     /// hit, by whom, and whether the blow crushed (HITINFO 0x8000).
     using BloodSpurtCallback = std::function<void(uint64_t victimGuid, uint64_t attackerGuid, bool crushing)>;
@@ -2589,6 +2594,7 @@ public:
         playerTransportStickyGuid_ = transportGuid;
         playerTransportStickyTimer_ = 8.0f;
         movementInfo.transportGuid = transportGuid;
+        sayTransportInMovement();
     }
     void setPlayerTransportOffset(const glm::vec3& offset) {
         playerTransportOffset_ = offset;
@@ -2601,7 +2607,11 @@ public:
         playerTransportGuid_ = 0;
         playerTransportOffset_ = glm::vec3(0.0f);
         movementInfo.transportGuid = 0;
+        sayTransportInMovement();
     }
+    /// The player's movement's flag 0x200 and place on its transport, with the
+    /// transport (0x006ec400), not with the movement's next packet.
+    void sayTransportInMovement();
     // Preserve an authoritative on-deck offset while a continent transfer tears
     // down the origin map's transport and constructs its destination instance.
     void beginPlayerTransportWorldTransfer(uint32_t destinationMapId,
@@ -3235,12 +3245,11 @@ public:
         return it == onlineItems_.end() ? 0u : it->second.creatorGuid;
     }
     bool supportsEquipmentSets() const;
-    void useEquipmentSet(uint32_t setId);
+    bool useEquipmentSet(const std::string& name, bool itemOnCursor);
     /// ignoredSlotMask: bit i set leaves equipment slot i out of the set.
-    void saveEquipmentSet(const std::string& name, const std::string& iconName = "INV_Misc_QuestionMark",
-                          uint64_t existingGuid = 0, uint32_t setIndex = 0xFFFFFFFF,
-                          uint32_t ignoredSlotMask = 0);
-    void deleteEquipmentSet(uint64_t setGuid);
+    void saveEquipmentSet(const std::string& name, const std::string& iconName, uint32_t ignoredSlotMask);
+    void renameEquipmentSet(const std::string& oldName, const std::string& newName, uint32_t ignoredSlotMask);
+    void deleteEquipmentSet(const std::string& name);
 
     // NPC Gossip
     /// 0x006ddbb0. `clickToMove`: out of reach, walked to first (kind 5).
@@ -3676,6 +3685,13 @@ public:
     /// focus and remembered units go unless they are of the group.
     /// PLAYER_LEAVING_WORLD with it on a worldport.
     void onLeaveWorld(bool worldport);
+    /// The player's UNIT_FLAG_IN_COMBAT, and the interface told of a fight the
+    /// player comes into the world in (0x00528010, event 0x98).
+    [[nodiscard]] bool playerFights() const;
+    void sayFightOnEntry();
+    /// What goes with the world on a way out of it to the character selection
+    /// or the login screen (0x00406510); the socket is the caller's.
+    void leaveWorldState(bool wasInWorld, const char* why);
     /// The object the player has a window open with (0xbd07a8), set as one
     /// opens (0x0051fce0): the one before is let go first (0x00518d50 ->
     /// 0x00512e60, a game object's CLOSE, and the window open with it
@@ -3683,6 +3699,8 @@ public:
     /// Let go once no window is open with it any more.
     void setInteractionObject(uint64_t guid, std::optional<go_interaction::Window> opening = std::nullopt);
     uint64_t getInteractionObject() const { return interactionObject_; }
+    /// Once a frame: lets it go when its window has closed.
+    void settleInteractionObject();
     /// A quest window sets it too (0x0058c5a0), but not over a game object
     /// that already is it.
     void setQuestInteractionObject(uint64_t guid, go_interaction::Window opening = go_interaction::Window::Quest);
@@ -4978,6 +4996,9 @@ public:
     bool isMailboxOpen() const;
     const std::vector<MailMessage>& getMailInbox() const;
     std::string getMailDisplaySubject(const MailMessage& mail);
+    /// The mature-language filter over a text that is no chat line
+    /// (0x00509a50): a letter's subject and text.
+    void filterMatureLanguage(std::string& text);
     int getSelectedMailIndex() const;
     void setSelectedMailIndex(int idx);
     bool isMailComposeOpen() const;
@@ -5894,7 +5915,6 @@ public:
     auto& gameObjectStateCallbackRef() { return gameObjectStateCallback_; }
     auto& ghostStateCallbackRef() { return ghostStateCallback_; }
     auto& hearthstonePreloadCallbackRef() { return hearthstonePreloadCallback_; }
-    auto& hitReactionCallbackRef() { return hitReactionCallback_; }
     auto& itemLootCallbackRef() { return itemLootCallback_; }
     auto& knockBackCallbackRef() { return knockBackCallback_; }
     auto& moverEventCallbackRef() { return moverEventCallback_; }
@@ -5944,7 +5964,7 @@ public:
     // ── Methods moved from private (domain handler use) ──────────────
     void addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId,
                        bool isPlayerSource, uint8_t powerType = 0,
-                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false);
+                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false, bool periodic = false);
     bool shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId);
     void addSystemChatMessage(const std::string& message);
     /// A chat line of a given kind - money looted, experience gained, a
@@ -7660,7 +7680,6 @@ private:
     UnitJumpCallback unitJumpCallback_;
     UnitMoveFlagsCallback unitMoveFlagsCallback_;
     NpcSwingCallback npcSwingCallback_;
-    HitReactionCallback hitReactionCallback_;
     BloodSpurtCallback bloodSpurtCallback_;
     NpcGreetingCallback npcGreetingCallback_;
     NpcFarewellCallback npcFarewellCallback_;
@@ -7789,16 +7808,6 @@ private:
 
     // ---- Completed quest IDs (SMSG_QUERY_QUESTS_COMPLETED_RESPONSE) ----
     std::unordered_set<uint32_t> completedQuests_;
-
-    // ---- Equipment sets (SMSG_EQUIPMENT_SET_LIST) ----
-    struct EquipmentSet {
-        uint64_t setGuid = 0;
-        uint32_t setId = 0;
-        std::string name;
-        std::string iconName;
-        uint32_t ignoreSlotMask = 0;
-        std::array<uint64_t, 19> itemGuids{};
-    };
 
     // forcedReactions_ moved to CombatHandler
 
