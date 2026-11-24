@@ -658,22 +658,30 @@ void MovementHandler::setFlightAirborne(bool airborne) {
     if (!(movementInfo.flags & canFly)) return;
     const bool now = (movementInfo.flags & flying) != 0;
     if (airborne == now) return;
+    // Taking off and landing are events of their own (0x006ef230, 0x2d and
+    // 0x2e of 0x006ef860): the state first, then CMSG_MOVE_SET_FLY with it.
+    // The server hears of neither otherwise. Landed, the mover falls from
+    // where it is (0x0098c240), and the fall's next step lands it.
     if (airborne) {
         startFlying(movementInfo, endFallTimer());
-        return;
+    } else if (stopFlying(movementInfo)) {
+        fallBegan(movementClockMs());
     }
-    // Landed. Said with a heartbeat, which carries the flags and is never
-    // held back: the landing is otherwise only visible in the next movement
-    // packet, and a player who lands and stands still sends none.
-    movementInfo.flags &= ~(flying | static_cast<uint32_t>(MovementFlags::ASCENDING) |
-                            static_cast<uint32_t>(MovementFlags::DESCENDING));
-    sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+    sendMovement(Opcode::CMSG_MOVE_SET_FLY);
 }
 
 void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> trailer) {
     if (owner_.getState() != WorldState::IN_WORLD) {
         LOG_WARNING("Cannot send movement in state: ", (int)owner_.getState());
         return;
+    }
+
+    // Into the air before rising in it: the take-off's CMSG_MOVE_SET_FLY, and
+    // the controls looked at again after it (0x007413f0 -> 0x005fbbc0). Not
+    // from the water: a swimmer swims up (0x009898e0 keeps SWIMMING).
+    if (opcode == Opcode::MSG_MOVE_START_ASCEND && movementInfo.hasFlag(MovementFlags::CAN_FLY) &&
+        !movementInfo.hasFlag(MovementFlags::SWIMMING) && !movementInfo.hasFlag(MovementFlags::FLYING)) {
+        setFlightAirborne(true);
     }
 
     // A landing that ends no fall is no landing (landingSent): put on a
@@ -890,18 +898,6 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         case Opcode::MSG_MOVE_START_ASCEND:
             movementInfo.flags |= static_cast<uint32_t>(MovementFlags::ASCENDING);
             movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::DESCENDING);
-            // A climb with flight allowed is a take-off, and the client is
-            // the one that says so: FLYING goes out on this packet, not a
-            // frame later. See setFlightAirborne for the landing.
-            // Not from the water: a swimmer swims up (0x009898e0 keeps
-            // SWIMMING), and takes off only once out of it.
-            // A fall it takes off from is over with it (0x00989890): left
-            // set, FALLING kept a mount up in the air in its fall, as it
-            // rose out of water.
-            if ((movementInfo.flags & static_cast<uint32_t>(MovementFlags::CAN_FLY)) &&
-                !(movementInfo.flags & static_cast<uint32_t>(MovementFlags::SWIMMING))) {
-                startFlying(movementInfo, endFallTimer());
-            }
             break;
         case Opcode::MSG_MOVE_STOP_ASCEND:
             movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::ASCENDING);
@@ -1595,10 +1591,7 @@ void MovementHandler::handleForceMoveFlagChange(network::Packet& packet, const c
     // carries the flags.
     const uint32_t flying = static_cast<uint32_t>(MovementFlags::FLYING);
     if (!set && flag == static_cast<uint32_t>(MovementFlags::CAN_FLY) && (info->flags & flying)) {
-        info->flags &= ~(flying | static_cast<uint32_t>(MovementFlags::ASCENDING) |
-                         static_cast<uint32_t>(MovementFlags::DESCENDING) |
-                         static_cast<uint32_t>(MovementFlags::PITCH_UP) |
-                         static_cast<uint32_t>(MovementFlags::PITCH_DOWN));
+        if (stopFlying(*info) && info == &movementInfo) fallBegan(movementClockMs());
     }
 
     if (!owner_.getSocket()) return;

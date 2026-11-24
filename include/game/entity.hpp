@@ -187,9 +187,9 @@ inline OutgoingJump outgoingJumpBlock(uint32_t flags, float orientation, float w
     constexpr uint32_t kForward = 0x1, kBackward = 0x2, kStrafeLeft = 0x4,
                        kStrafeRight = 0x8, kWalking = 0x100, kSwimming = 0x200000;
     OutgoingJump j;
-    // From the water a jump goes up faster, -9.096718 (0xc1118c48; the
+    // From the water a jump goes up faster, -9.096748 (0xc1118c48; the
     // swimming branch of FUN_009883f0).
-    j.verticalSpeed = (flags & kSwimming) ? -9.096718f : -7.955547f;
+    j.verticalSpeed = (flags & kSwimming) ? -9.096748f : -7.955547f;
     const float fwd = ((flags & kForward) ? 1.0f : 0.0f) - ((flags & kBackward) ? 1.0f : 0.0f);
     const float side = ((flags & kStrafeLeft) ? 1.0f : 0.0f) - ((flags & kStrafeRight) ? 1.0f : 0.0f);
     if (fwd == 0.0f && side == 0.0f) return j;

@@ -207,3 +207,38 @@ TEST_CASE("a proc going off says nothing and ends no cast", "[replay][playtest]"
     CHECK_FALSE(s.handler().isCasting());
     s.handler().setAddonEventCallback({});
 }
+
+// CMSG_MOVE_SET_FLY (0x346) was never sent: the take-off went out on the
+// ascent, the landing on a heartbeat.
+TEST_CASE("taking off and landing are said with CMSG_MOVE_SET_FLY", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto* mh = s.handler().getMovementHandler();
+    // Flying allowed: SMSG_MOVE_SET_CAN_FLY as the server sends it.
+    wowee::network::Packet allow(wowee::game::wireOpcode(Opcode::SMSG_MOVE_SET_CAN_FLY));
+    allow.writePackedGuid(Session::kPlayerGuid);
+    allow.writeUInt32(1);
+    s.receive(allow);
+    REQUIRE(has(s, MovementFlags::CAN_FLY));
+
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_ASCEND);
+    CHECK(has(s, MovementFlags::FLYING));
+    CHECK(has(s, MovementFlags::ASCENDING));
+    CHECK(s.sent().of(Opcode::CMSG_MOVE_SET_FLY).size() == 1);
+    CHECK(s.sent().of(Opcode::MSG_MOVE_START_ASCEND).size() == 1);
+
+    mh->setFlightAirborne(false);
+    CHECK_FALSE(has(s, MovementFlags::FLYING));
+    CHECK(has(s, MovementFlags::FALLING));
+    CHECK(s.sent().of(Opcode::CMSG_MOVE_SET_FLY).size() == 2);
+    // The fall's first step lands it, and the packet told of the fall.
+    mh->landFall(0.0f);
+    CHECK_FALSE(has(s, MovementFlags::FALLING));
+    CHECK(s.sent().of(Opcode::MSG_MOVE_FALL_LAND).size() == 1);
+
+    // A swimmer swims up and takes off from nothing.
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_SWIM);
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_ASCEND);
+    CHECK_FALSE(has(s, MovementFlags::FLYING));
+    CHECK(s.sent().of(Opcode::CMSG_MOVE_SET_FLY).size() == 2);
+}

@@ -128,6 +128,17 @@ inline void placeMover(MovementInfo& m, std::optional<uint32_t> fellMs) {
     m.pitch = 0.0f;
 }
 
+/// What landing from it makes of it, or being forbidden to fly (0x0098c240):
+/// FLYING, rising, sinking and the pitch keys off (flags & 0xfd3fff3f), level,
+/// and a fall begun where it may (0x006eaba0, 0x00988370). True where it fell.
+inline bool stopFlying(MovementInfo& m) {
+    m.flags &= 0xfd3fff3fu;
+    m.pitch = 0.0f;
+    if (!mayStartFall(m.flags)) return false;
+    m.flags = fallFlags(m.flags, m.flags2);
+    return true;
+}
+
 /// What taking to the air makes of it (0x00989890), where it is allowed to
 /// fly: FLYING on, SWIMMING, SPLINE_ELEVATION and a fall off
 /// (flags & 0xfbdfcfff | 0x2000000).

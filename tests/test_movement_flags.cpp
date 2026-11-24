@@ -228,3 +228,17 @@ TEST_CASE("our own jump goes where the wire's facing points", "[movementflags]")
     CHECK(west.dirX == Catch::Approx(0.0f).margin(1e-6));
     CHECK(west.dirY == Catch::Approx(1.0f));
 }
+
+TEST_CASE("landing from flight is level and falls from there (0x0098c240)", "[movementflags]") {
+    MovementInfo info = withFlags(bit(MovementFlags::FORWARD) | bit(MovementFlags::CAN_FLY) |
+                                  bit(MovementFlags::FLYING) | bit(MovementFlags::DESCENDING) |
+                                  bit(MovementFlags::PITCH_DOWN));
+    info.pitch = -0.4f;
+    CHECK(wowee::game::stopFlying(info));
+    CHECK(info.flags == (bit(MovementFlags::FORWARD) | bit(MovementFlags::CAN_FLY) | bit(MovementFlags::FALLING)));
+    CHECK(info.pitch == 0.0f);
+    // Rooted it falls nowhere.
+    info = withFlags(bit(MovementFlags::FLYING) | bit(MovementFlags::ROOT));
+    CHECK_FALSE(wowee::game::stopFlying(info));
+    CHECK(info.flags == bit(MovementFlags::ROOT));
+}
