@@ -3602,6 +3602,39 @@ void CameraController::applyKnockBack(float vcos, float vsin, float hspeed, floa
     airborneSeconds_ = 0.0f;
 }
 
+void CameraController::setBarberShopView(bool on) {
+    if (on == barberView_) return;
+    barberView_ = on;
+    // Whatever the collision sweep had taken off the zoom goes with it.
+    // This view sets its own distance and restores the player's on the way
+    // out, and a debt carried across either edge is given back on top of a
+    // number it was never taken from.
+    collisionZoomDebt_ = 0.0f;
+    collisionClearSeconds_ = 0.0f;
+    if (on) {
+        savedBarberYaw_ = yaw;
+        savedBarberPitch_ = pitch;
+        savedBarberDistance_ = userTargetDistance;
+        savedBarberPivot_ = pivotHeight_;
+        // Round to the front: the camera yaw is the character's facing, so
+        // half a turn from it is looking back at them.
+        yaw = facingYaw + 180.0f;
+        // Slightly above level, so the face is in view rather than the top
+        // of the head, and close enough for hair to be worth choosing.
+        pitch = 8.0f;
+        userTargetDistance = 2.4f;
+        pivotHeight_ = 1.7f;
+    } else {
+        yaw = savedBarberYaw_;
+        pitch = savedBarberPitch_;
+        userTargetDistance = savedBarberDistance_;
+        pivotHeight_ = savedBarberPivot_;
+    }
+    // The view is only turned where something turns it: without this it stayed
+    // behind the character until the next turn by hand.
+    if (camera) camera->setRotation(yaw, pitch);
+}
+
 void CameraController::faceAfterTeleport(float yawDeg) {
     facingYaw = yawDeg;
     yaw = yawDeg;
