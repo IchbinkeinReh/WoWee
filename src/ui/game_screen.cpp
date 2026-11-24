@@ -2215,6 +2215,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     if (picked && picked->getType() == game::ObjectType::GAMEOBJECT) {
                         gameHandler.interactWithGameObject(closestGuid);
                     } else {
+                        gameHandler.clickVoice(closestGuid);   // 0x005274f0
                         gameHandler.targetUnit(closestGuid);
                     }
                 } else if (addons::storedCVarValue("deselectOnClick", "1") != "0") {
@@ -2467,6 +2468,8 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                         gameHandler.startAutoAttack(target->getGuid());
                         // Then closed in on, or turned to (0x0072ee20).
                         gameHandler.clickToMoveAttack(target->getGuid());
+                    } else if (gameHandler.activeMover() == gameHandler.getPlayerGuid()) {
+                        gameHandler.clickVoice(target->getGuid());
                     }
                 }
             } else if (target->getType() == game::ObjectType::GAMEOBJECT) {

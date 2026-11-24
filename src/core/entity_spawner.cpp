@@ -1740,49 +1740,6 @@ std::string EntitySpawner::getModelPathForDisplayId(uint32_t displayId) const {
     return itPath->second;
 }
 
-audio::VoiceType EntitySpawner::detectVoiceTypeFromDisplayId(uint32_t displayId) const {
-    // Look up display data
-    auto itDisplay = displayDataMap_.find(displayId);
-    if (itDisplay == displayDataMap_.end() || itDisplay->second.extraDisplayId == 0) {
-        LOG_INFO("Voice detection: displayId ", displayId, " -> GENERIC (no display data)");
-        return audio::VoiceType::GENERIC;  // Not a humanoid or no extra data
-    }
-
-    // Look up humanoid extra data (race/sex info)
-    auto itExtra = humanoidExtraMap_.find(itDisplay->second.extraDisplayId);
-    if (itExtra == humanoidExtraMap_.end()) {
-        LOG_INFO("Voice detection: displayId ", displayId, " -> GENERIC (no humanoid extra data)");
-        return audio::VoiceType::GENERIC;
-    }
-
-    uint8_t raceId = itExtra->second.raceId;
-    uint8_t sexId = itExtra->second.sexId;
-
-    const char* raceName = "Unknown";
-    const char* sexName = (sexId == 0) ? "Male" : "Female";
-
-    // Map (raceId, sexId) to VoiceType
-    // Race IDs: 1=Human, 2=Orc, 3=Dwarf, 4=NightElf, 5=Undead, 6=Tauren, 7=Gnome, 8=Troll
-    // Sex IDs: 0=Male, 1=Female
-    audio::VoiceType result;
-    switch (raceId) {
-        case 1: raceName = "Human"; result = (sexId == 0) ? audio::VoiceType::HUMAN_MALE : audio::VoiceType::HUMAN_FEMALE; break;
-        case 2: raceName = "Orc"; result = (sexId == 0) ? audio::VoiceType::ORC_MALE : audio::VoiceType::ORC_FEMALE; break;
-        case 3: raceName = "Dwarf"; result = (sexId == 0) ? audio::VoiceType::DWARF_MALE : audio::VoiceType::DWARF_FEMALE; break;
-        case 4: raceName = "NightElf"; result = (sexId == 0) ? audio::VoiceType::NIGHTELF_MALE : audio::VoiceType::NIGHTELF_FEMALE; break;
-        case 5: raceName = "Undead"; result = (sexId == 0) ? audio::VoiceType::UNDEAD_MALE : audio::VoiceType::UNDEAD_FEMALE; break;
-        case 6: raceName = "Tauren"; result = (sexId == 0) ? audio::VoiceType::TAUREN_MALE : audio::VoiceType::TAUREN_FEMALE; break;
-        case 7: raceName = "Gnome"; result = (sexId == 0) ? audio::VoiceType::GNOME_MALE : audio::VoiceType::GNOME_FEMALE; break;
-        case 8: raceName = "Troll"; result = (sexId == 0) ? audio::VoiceType::TROLL_MALE : audio::VoiceType::TROLL_FEMALE; break;
-        case 10: raceName = "BloodElf"; result = (sexId == 0) ? audio::VoiceType::BLOODELF_MALE : audio::VoiceType::BLOODELF_FEMALE; break;
-        case 11: raceName = "Draenei"; result = (sexId == 0) ? audio::VoiceType::DRAENEI_MALE : audio::VoiceType::DRAENEI_FEMALE; break;
-        default: result = audio::VoiceType::GENERIC; break;
-    }
-
-    LOG_INFO("Voice detection: displayId ", displayId, " -> ", raceName, " ", sexName, " (race=", static_cast<int>(raceId), ", sex=", static_cast<int>(sexId), ")");
-    return result;
-}
-
 void EntitySpawner::setMirrorLook(const game::MirrorImageLook& look) {
     auto it = mirrorLooks_.find(look.guid);
     // A changed look - other gear, the barber - is a display of its own: the

@@ -2180,15 +2180,22 @@ public:
     void setBloodSpurtCallback(BloodSpurtCallback cb) { bloodSpurtCallback_ = std::move(cb); }
     auto& bloodSpurtCallbackRef() { return bloodSpurtCallback_; }
 
-    // NPC greeting callback (plays voice line when NPC is clicked)
-    using NpcGreetingCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
-    void setNpcGreetingCallback(NpcGreetingCallback cb) { npcGreetingCallback_ = std::move(cb); }
+    /// The models the client puts on a unit of itself (0x006f9260's table at 0x00ada764).
+    enum class UnitEffect : uint8_t { LevelUp, Reputation, Achievement };
+    using UnitEffectCallback = std::function<void(uint64_t guid, UnitEffect effect)>;
+    void setUnitEffectCallback(UnitEffectCallback cb) { unitEffectCallback_ = std::move(cb); }
+    void playUnitEffect(uint64_t guid, UnitEffect effect) {
+        if (unitEffectCallback_) unitEffectCallback_(guid, effect);
+    }
 
-    using NpcFarewellCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
-    void setNpcFarewellCallback(NpcFarewellCallback cb) { npcFarewellCallback_ = std::move(cb); }
-
-    using NpcVendorCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
-    void setNpcVendorCallback(NpcVendorCallback cb) { npcVendorCallback_ = std::move(cb); }
+    /// A unit's lines: of a click (0x0072a680), of a window opening with it and of
+    /// its closing (0x00720860).
+    enum class NpcLine : uint8_t { Click, Hello, Farewell };
+    using NpcLineCallback = std::function<void(uint64_t guid, NpcLine line, const glm::vec3& position)>;
+    void setNpcLineCallback(NpcLineCallback cb) { npcLineCallback_ = std::move(cb); }
+    /// 0x0072a680: a click at a unit has it say something, where both regard each
+    /// other as neutral or better.
+    void clickVoice(uint64_t guid);
 
     // XP tracking
     uint32_t getPlayerXp() const { return playerXp_; }
@@ -3703,6 +3710,7 @@ public:
     /// Let go once no window is open with it any more.
     void setInteractionObject(uint64_t guid, std::optional<go_interaction::Window> opening = std::nullopt);
     uint64_t getInteractionObject() const { return interactionObject_; }
+    void sayNpcLine(const Unit& unit, NpcLine line);
     /// Once a frame: lets it go when its window has closed.
     void settleInteractionObject();
     /// A quest window sets it too (0x0058c5a0), but not over a game object
@@ -5942,8 +5950,6 @@ public:
     auto& mountCallbackRef() { return mountCallback_; }
     auto& npcDeathCallbackRef() { return npcDeathCallback_; }
     auto& unitDiedCallbackRef() { return unitDiedCallback_; }
-    auto& npcFarewellCallbackRef() { return npcFarewellCallback_; }
-    auto& npcGreetingCallbackRef() { return npcGreetingCallback_; }
     auto& npcRespawnCallbackRef() { return npcRespawnCallback_; }
     auto& npcVendorCallbackRef() { return npcVendorCallback_; }
     auto& openLfgCallbackRef() { return openLfgCallback_; }
@@ -7699,9 +7705,7 @@ private:
     UnitJumpCallback unitJumpCallback_;
     UnitMoveFlagsCallback unitMoveFlagsCallback_;
     BloodSpurtCallback bloodSpurtCallback_;
-    NpcGreetingCallback npcGreetingCallback_;
-    NpcFarewellCallback npcFarewellCallback_;
-    NpcVendorCallback npcVendorCallback_;
+    NpcLineCallback npcLineCallback_;
     LevelUpCallback levelUpCallback_;
     LevelUpDeltas lastLevelUpDeltas_;
     std::vector<TempEnchantTimer> tempEnchantTimers_;

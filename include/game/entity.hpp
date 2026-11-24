@@ -576,6 +576,11 @@ public:
         return std::exchange(locomotionRequested_, false);
     }
 
+    /// Its base animation is to be asked again, once what it reads has been
+    /// brought up to date (0x0073ac30 of a unit spoken to).
+    void requestBaseAnimation() { baseAnimationAsked_ = true; }
+    [[nodiscard]] bool takeBaseAnimationRequest() { return std::exchange(baseAnimationAsked_, false); }
+
     /// Moved down by gravity from a packet's fall (startMoveByFlags), rather
     /// than along the ground.
     [[nodiscard]] bool isFallingByFlags() const { return movingByFlags_ && falling_; }
@@ -1052,6 +1057,7 @@ private:
     bool launched_ = false;
     // Asked for its locomotion again; see takeLocomotionRequest.
     bool locomotionRequested_ = false;
+    bool baseAnimationAsked_ = false;
     // Moved on by its flags (startMoveByFlags): moveEnd is the packet's
     // position, the corr* offset is taken out over moveDuration_.
     bool movingByFlags_ = false;

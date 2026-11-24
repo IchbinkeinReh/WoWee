@@ -3750,15 +3750,6 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
             repairAll(currentVendorItems_.vendorGuid, false);
         }
     }
-
-    // Play vendor sound
-    if (owner_.npcVendorCallbackRef() && currentVendorItems_.vendorGuid != 0) {
-        auto entity = owner_.getEntityManager().getEntity(currentVendorItems_.vendorGuid);
-        if (entity && entity->getType() == ObjectType::UNIT) {
-            glm::vec3 pos(entity->getX(), entity->getY(), entity->getZ());
-            owner_.npcVendorCallbackRef()(currentVendorItems_.vendorGuid, pos);
-        }
-    }
 }
 
 // ============================================================

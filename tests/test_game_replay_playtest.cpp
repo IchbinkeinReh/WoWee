@@ -1136,3 +1136,66 @@ TEST_CASE("away ends with a step, and is the server's", "[replay][playtest]") {
     gh.logoutIdle();
     CHECK(s.sent().of(Opcode::CMSG_LOGOUT_REQUEST).size() == 1);
 }
+
+// A line came with a gossip alone, a race library's with a vendor, and none with the rest.
+TEST_CASE("a unit says hello as a window opens with it, and farewell", "[replay][playtest]") {
+    using NpcLine = wowee::game::GameHandler::NpcLine;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    s.receive(UpdateObject().create(kGiver, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 10}}));
+    const auto giver = gh.getEntityManager().getEntity(kGiver);
+    REQUIRE(giver);
+    (void)giver->takeBaseAnimationRequest();
+    std::vector<NpcLine> said;
+    gh.setNpcLineCallback([&](uint64_t guid, NpcLine line, const glm::vec3&) {
+        CHECK(guid == kGiver);
+        said.push_back(line);
+    });
+    gh.setInteractionObject(kGiver);
+    CHECK(said == std::vector<NpcLine>{NpcLine::Hello});
+    CHECK(giver->takeBaseAnimationRequest());
+    // The next window with the same one is not another hello.
+    gh.setInteractionObject(kGiver);
+    CHECK(said.size() == 1);
+    gh.setInteractionObject(0);
+    CHECK(said == std::vector<NpcLine>{NpcLine::Hello, NpcLine::Farewell});
+    CHECK(giver->takeBaseAnimationRequest());
+    // The dead say nothing.
+    s.receive(UpdateObject().values(kGiver, {{UF::UNIT_FIELD_HEALTH, 0}}));
+    gh.setInteractionObject(kGiver);
+    CHECK(said.size() == 2);
+    gh.setNpcLineCallback({});
+}
+
+// Revived by the server between two maps, the player stayed dead for all that asked: no update
+// of the old object ever said so (playtest T59).
+TEST_CASE("a death is over where the player's new object lives", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 0}}));
+    REQUIRE(gh.isPlayerDead());
+    const auto born = [&](uint32_t health, uint32_t flags) {
+        s.receive(UpdateObject().create(Session::kPlayerGuid, wowee::game::ObjectType::PLAYER,
+                                        {{UF::UNIT_FIELD_HEALTH, health},
+                                         {UF::UNIT_FIELD_MAXHEALTH, 100},
+                                         {UF::PLAYER_FLAGS, flags}}));
+    };
+    SECTION("alive") {
+        born(50, 0);
+        CHECK_FALSE(gh.isPlayerDead());
+        CHECK_FALSE(gh.isPlayerGhost());
+    }
+    SECTION("a ghost") {
+        born(1, 0x10);
+        CHECK(gh.isPlayerDead());
+        CHECK(gh.isPlayerGhost());
+        born(50, 0);
+        CHECK_FALSE(gh.isPlayerGhost());
+    }
+    SECTION("still dead") {
+        born(0, 0);
+        CHECK(gh.isPlayerDead());
+    }
+}

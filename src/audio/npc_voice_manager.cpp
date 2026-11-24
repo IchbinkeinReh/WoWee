@@ -36,40 +36,14 @@ bool NpcVoiceManager::initialize(pipeline::AssetManager* assets) {
         return false;
     }
 
-    // Files are .WAV not .OGG in WotLK 3.3.5a!
-    LOG_INFO("=== Probing for NPC voice files (.wav format) ===");
-    std::vector<std::string> testPaths = {
-        "Sound\\Creature\\HumanMaleStandardNPC\\HumanMaleStandardNPCGreetings01.wav",
-        "Sound\\Creature\\HumanFemaleStandardNPC\\HumanFemaleStandardNPCGreeting01.wav",
-        "Sound\\Creature\\DwarfMaleStandardNPC\\DwarfMaleStandardNPCGreeting01.wav",
-        "Sound\\Creature\\OrcMaleStandardNPC\\OrcMaleStandardNPCGreeting01.wav",
-    };
-    for (const auto& path : testPaths) {
-        bool exists = assetManager_->fileExists(path);
-        LOG_INFO("  ", path, ": ", (exists ? "EXISTS" : "NOT FOUND"));
-    }
-    LOG_INFO("===================================");
-
-    loadVoiceSounds();
-
-    int totalSamples = 0;
-    for (const auto& [type, samples] : greetingLibrary_) totalSamples += samples.size();
-    for (const auto& [type, samples] : farewellLibrary_) totalSamples += samples.size();
-    for (const auto& [type, samples] : vendorLibrary_) totalSamples += samples.size();
-    for (const auto& [type, samples] : pissedLibrary_) totalSamples += samples.size();
-    for (const auto& [type, samples] : fleeLibrary_) totalSamples += samples.size();
-    LOG_INFO("NPC voice manager initialized (", totalSamples, " voice clips)");
+    indexSoundEntriesReach();
+    indexVoiceKits();
+    LOG_INFO("NPC voice manager initialized (", kitRows_.size(), " kits)");
     return true;
 }
 
 void NpcVoiceManager::shutdown() {
-    greetingLibrary_.clear();
-    farewellLibrary_.clear();
-    vendorLibrary_.clear();
-    pissedLibrary_.clear();
-    fleeLibrary_.clear();
     lineHandle_.clear();
-    askCount_.clear();
     reachByName_.clear();
     kitIdByDisplay_.clear();
     kitRows_.clear();
@@ -200,218 +174,6 @@ std::pair<const std::vector<VoiceSample>*, int32_t*> NpcVoiceManager::kitSlot(ui
     return {&samples, &kitLastFile_[kitId][slot]};
 }
 
-void NpcVoiceManager::loadVoiceSounds() {
-    if (!assetManager_) return;
-    indexSoundEntriesReach();
-    indexVoiceKits();
-
-    // Helper to load voice category for a race/gender
-    auto loadCategory = [this](
-        std::unordered_map<VoiceType, std::vector<VoiceSample>>& library,
-        VoiceType type,
-        const std::string& npcType,
-        const std::string& soundType,
-        int count) {
-
-        auto& samples = library[type];
-        for (int i = 1; i <= count; ++i) {
-            std::string num = (i < 10) ? ("0" + std::to_string(i)) : std::to_string(i);
-            std::string path = "Sound\\Creature\\" + npcType + "\\" + npcType + soundType + num + ".wav";
-            VoiceSample sample;
-            if (loadSound(path, sample)) samples.push_back(std::move(sample));
-        }
-    };
-
-    // Generic fallback voices (male only)
-    auto& genericGreet = greetingLibrary_[VoiceType::GENERIC];
-    for (const auto& path : {
-        "Sound\\Creature\\DwarfMaleStandardNPC\\DwarfMaleStandardNPCGreeting01.wav",
-        "Sound\\Creature\\GnomeMaleStandardNPC\\GnomeMaleStandardNPCGreeting01.wav",
-        "Sound\\Creature\\NightElfMaleStandardNPC\\NightElfMaleStandardNPCGreeting01.wav",
-        "Sound\\Creature\\OrcMaleStandardNPC\\OrcMaleStandardNPCGreeting01.wav",
-    }) {
-        VoiceSample sample;
-        if (loadSound(path, sample)) genericGreet.push_back(std::move(sample));
-    }
-
-    // Load all race/gender combinations
-    // Human Male uses "Greetings" (plural), others use "Greeting" (singular)
-    loadCategory(greetingLibrary_, VoiceType::HUMAN_MALE, "HumanMaleStandardNPC", "Greetings", 6);
-    loadCategory(farewellLibrary_, VoiceType::HUMAN_MALE, "HumanMaleStandardNPC", "Farewell", 5);
-    loadCategory(vendorLibrary_, VoiceType::HUMAN_MALE, "HumanMaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::HUMAN_MALE, "HumanMaleStandardNPC", "Pissed", 4);
-
-    loadCategory(greetingLibrary_, VoiceType::HUMAN_FEMALE, "HumanFemaleStandardNPC", "Greeting", 5);
-    loadCategory(farewellLibrary_, VoiceType::HUMAN_FEMALE, "HumanFemaleStandardNPC", "Farewell", 5);
-    loadCategory(vendorLibrary_, VoiceType::HUMAN_FEMALE, "HumanFemaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::HUMAN_FEMALE, "HumanFemaleStandardNPC", "Pissed", 4);
-
-    loadCategory(greetingLibrary_, VoiceType::DWARF_MALE, "DwarfMaleStandardNPC", "Greeting", 6);
-    loadCategory(farewellLibrary_, VoiceType::DWARF_MALE, "DwarfMaleStandardNPC", "Farewell", 4);
-    loadCategory(vendorLibrary_, VoiceType::DWARF_MALE, "DwarfMaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::DWARF_MALE, "DwarfMaleStandardNPC", "Pissed", 4);
-
-    loadCategory(greetingLibrary_, VoiceType::GNOME_MALE, "GnomeMaleStandardNPC", "Greeting", 6);
-    loadCategory(farewellLibrary_, VoiceType::GNOME_MALE, "GnomeMaleStandardNPC", "Farewell", 5);
-    loadCategory(vendorLibrary_, VoiceType::GNOME_MALE, "GnomeMaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::GNOME_MALE, "GnomeMaleStandardNPC", "Pissed", 4);
-
-    loadCategory(greetingLibrary_, VoiceType::GNOME_FEMALE, "GnomeFemaleStandardNPC", "Greeting", 6);
-    loadCategory(farewellLibrary_, VoiceType::GNOME_FEMALE, "GnomeFemaleStandardNPC", "Farewell", 5);
-    loadCategory(vendorLibrary_, VoiceType::GNOME_FEMALE, "GnomeFemaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::GNOME_FEMALE, "GnomeFemaleStandardNPC", "Pissed", 4);
-
-    // Goblin Male
-    loadCategory(greetingLibrary_, VoiceType::GOBLIN_MALE, "GoblinMaleStandardNPC", "Greeting", 5);
-    loadCategory(farewellLibrary_, VoiceType::GOBLIN_MALE, "GoblinMaleStandardNPC", "Farewell", 5);
-    loadCategory(vendorLibrary_, VoiceType::GOBLIN_MALE, "GoblinMaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::GOBLIN_MALE, "GoblinMaleStandardNPC", "Pissed", 4);
-
-    // Goblin Female
-    loadCategory(greetingLibrary_, VoiceType::GOBLIN_FEMALE, "GoblinFemaleStandardNPC", "Greeting", 5);
-    loadCategory(farewellLibrary_, VoiceType::GOBLIN_FEMALE, "GoblinFemaleStandardNPC", "Farewell", 5);
-    loadCategory(vendorLibrary_, VoiceType::GOBLIN_FEMALE, "GoblinFemaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::GOBLIN_FEMALE, "GoblinFemaleStandardNPC", "Pissed", 4);
-
-    loadCategory(greetingLibrary_, VoiceType::NIGHTELF_MALE, "NightElfMaleStandardNPC", "Greeting", 8);
-    loadCategory(farewellLibrary_, VoiceType::NIGHTELF_MALE, "NightElfMaleStandardNPC", "Farewell", 7);
-    loadCategory(vendorLibrary_, VoiceType::NIGHTELF_MALE, "NightElfMaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::NIGHTELF_MALE, "NightElfMaleStandardNPC", "Pissed", 6);
-
-    loadCategory(greetingLibrary_, VoiceType::NIGHTELF_FEMALE, "NightElfFemaleStandardNPC", "Greeting", 6);
-    loadCategory(farewellLibrary_, VoiceType::NIGHTELF_FEMALE, "NightElfFemaleStandardNPC", "Farewell", 6);
-    loadCategory(vendorLibrary_, VoiceType::NIGHTELF_FEMALE, "NightElfFemaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::NIGHTELF_FEMALE, "NightElfFemaleStandardNPC", "Pissed", 6);
-
-    loadCategory(greetingLibrary_, VoiceType::ORC_MALE, "OrcMaleStandardNPC", "Greeting", 5);
-    loadCategory(farewellLibrary_, VoiceType::ORC_MALE, "OrcMaleStandardNPC", "Farewell", 5);
-    loadCategory(vendorLibrary_, VoiceType::ORC_MALE, "OrcMaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::ORC_MALE, "OrcMaleStandardNPC", "Pissed", 4);
-
-    loadCategory(greetingLibrary_, VoiceType::ORC_FEMALE, "OrcFemaleStandardNPC", "Greeting", 6);
-    loadCategory(farewellLibrary_, VoiceType::ORC_FEMALE, "OrcFemaleStandardNPC", "Farewell", 6);
-    loadCategory(vendorLibrary_, VoiceType::ORC_FEMALE, "OrcFemaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::ORC_FEMALE, "OrcFemaleStandardNPC", "Pissed", 6);
-
-    loadCategory(greetingLibrary_, VoiceType::TAUREN_MALE, "TaurenMaleStandardNPC", "Greeting", 5);
-    loadCategory(farewellLibrary_, VoiceType::TAUREN_MALE, "TaurenMaleStandardNPC", "Farewell", 5);
-    // Tauren Male has no Vendor/Pissed sounds in manifest
-
-    loadCategory(greetingLibrary_, VoiceType::TAUREN_FEMALE, "TaurenFemaleStandardNPC", "Greeting", 5);
-    loadCategory(farewellLibrary_, VoiceType::TAUREN_FEMALE, "TaurenFemaleStandardNPC", "Farewell", 5);
-    // Tauren Female has no Vendor/Pissed sounds in manifest
-
-    loadCategory(greetingLibrary_, VoiceType::TROLL_MALE, "TrollMaleStandardNPC", "Greeting", 6);
-    loadCategory(farewellLibrary_, VoiceType::TROLL_MALE, "TrollMaleStandardNPC", "Farewell", 6);
-    loadCategory(vendorLibrary_, VoiceType::TROLL_MALE, "TrollMaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::TROLL_MALE, "TrollMaleStandardNPC", "Pissed", 6);
-
-    loadCategory(greetingLibrary_, VoiceType::TROLL_FEMALE, "TrollFemaleStandardNPC", "Greeting", 5);
-    loadCategory(farewellLibrary_, VoiceType::TROLL_FEMALE, "TrollFemaleStandardNPC", "Farewell", 6);
-    loadCategory(vendorLibrary_, VoiceType::TROLL_FEMALE, "TrollFemaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::TROLL_FEMALE, "TrollFemaleStandardNPC", "Pissed", 5);
-
-    loadCategory(greetingLibrary_, VoiceType::UNDEAD_MALE, "UndeadMaleStandardNPC", "Greeting", 6);
-    loadCategory(farewellLibrary_, VoiceType::UNDEAD_MALE, "UndeadMaleStandardNPC", "Farewell", 6);
-    loadCategory(vendorLibrary_, VoiceType::UNDEAD_MALE, "UndeadMaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::UNDEAD_MALE, "UndeadMaleStandardNPC", "Pissed", 6);
-
-    loadCategory(greetingLibrary_, VoiceType::UNDEAD_FEMALE, "UndeadFemaleStandardNPC", "Greeting", 6);
-    loadCategory(farewellLibrary_, VoiceType::UNDEAD_FEMALE, "UndeadFemaleStandardNPC", "Farewell", 6);
-    loadCategory(vendorLibrary_, VoiceType::UNDEAD_FEMALE, "UndeadFemaleStandardNPC", "Vendor", 2);
-    loadCategory(pissedLibrary_, VoiceType::UNDEAD_FEMALE, "UndeadFemaleStandardNPC", "Pissed", 6);
-
-    // Blood Elf Male (TBC+ NPCBloodElfMaleStandard, sparse numbering up to 12)
-    loadCategory(greetingLibrary_, VoiceType::BLOODELF_MALE, "NPCBloodElfMaleStandard", "Greeting", 12);
-    loadCategory(farewellLibrary_, VoiceType::BLOODELF_MALE, "NPCBloodElfMaleStandard", "Farewell", 12);
-    loadCategory(vendorLibrary_, VoiceType::BLOODELF_MALE, "NPCBloodElfMaleStandard", "Vendor", 6);
-    loadCategory(pissedLibrary_, VoiceType::BLOODELF_MALE, "NPCBloodElfMaleStandard", "Pissed", 10);
-
-    // Blood Elf Female
-    loadCategory(greetingLibrary_, VoiceType::BLOODELF_FEMALE, "NPCBloodElfFemaleStandard", "Greeting", 12);
-    loadCategory(farewellLibrary_, VoiceType::BLOODELF_FEMALE, "NPCBloodElfFemaleStandard", "Farewell", 12);
-    loadCategory(vendorLibrary_, VoiceType::BLOODELF_FEMALE, "NPCBloodElfFemaleStandard", "Vendor", 6);
-    loadCategory(pissedLibrary_, VoiceType::BLOODELF_FEMALE, "NPCBloodElfFemaleStandard", "Pissed", 10);
-
-    // Draenei Male
-    loadCategory(greetingLibrary_, VoiceType::DRAENEI_MALE, "NPCDraeneiMaleStandard", "Greeting", 12);
-    loadCategory(farewellLibrary_, VoiceType::DRAENEI_MALE, "NPCDraeneiMaleStandard", "Farewell", 12);
-    loadCategory(vendorLibrary_, VoiceType::DRAENEI_MALE, "NPCDraeneiMaleStandard", "Vendor", 6);
-    loadCategory(pissedLibrary_, VoiceType::DRAENEI_MALE, "NPCDraeneiMaleStandard", "Pissed", 10);
-
-    // Draenei Female
-    loadCategory(greetingLibrary_, VoiceType::DRAENEI_FEMALE, "NPCDraeneiFemaleStandard", "Greeting", 12);
-    loadCategory(farewellLibrary_, VoiceType::DRAENEI_FEMALE, "NPCDraeneiFemaleStandard", "Farewell", 12);
-    loadCategory(vendorLibrary_, VoiceType::DRAENEI_FEMALE, "NPCDraeneiFemaleStandard", "Vendor", 6);
-    loadCategory(pissedLibrary_, VoiceType::DRAENEI_FEMALE, "NPCDraeneiFemaleStandard", "Pissed", 10);
-
-    // Load combat sounds from Character vocal files
-    // These use a different path structure: Sound\Character\{Race}\{Race}Vocal{Gender}\{Race}{Gender}{Sound}.wav
-    auto loadCombatCategory = [this](
-        std::unordered_map<VoiceType, std::vector<VoiceSample>>& library,
-        VoiceType type,
-        const std::string& raceFolder,
-        const std::string& raceGender,
-        const std::string& soundType,
-        int count) {
-
-        auto& samples = library[type];
-        for (int i = 1; i <= count; ++i) {
-            std::string num = (i < 10) ? ("0" + std::to_string(i)) : std::to_string(i);
-            std::string path = "Sound\\Character\\" + raceFolder + "\\" + raceFolder + "Vocal" +
-                               (raceGender.find("Male") != std::string::npos ? "Male" : "Female") +
-                               "\\" + raceGender + soundType + num + ".wav";
-            VoiceSample sample;
-            if (loadSound(path, sample)) samples.push_back(std::move(sample));
-        }
-    };
-
-    // A race's flee lines, which nothing asks for yet - kept because the
-    // library's shape is the same one the interaction lines use. What an angry
-    // unit says is not here: the client asks that out of the unit's own
-    // CreatureSoundData row (0x007474b0 kind 0, through EntitySpawner).
-    loadCombatCategory(fleeLibrary_, VoiceType::HUMAN_MALE, "Human", "HumanMale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::HUMAN_FEMALE, "Human", "HumanFemale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::DWARF_MALE, "Dwarf", "DwarfMale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::GNOME_MALE, "Gnome", "GnomeMale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::GNOME_FEMALE, "Gnome", "GnomeFemale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::NIGHTELF_MALE, "NightElf", "NightElfMale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::NIGHTELF_FEMALE, "NightElf", "NightElfFemale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::ORC_MALE, "Orc", "OrcMale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::ORC_FEMALE, "Orc", "OrcFemale", "Flee", 2);
-    // The Undead lines sit under a Scourge folder.
-    loadCombatCategory(fleeLibrary_, VoiceType::UNDEAD_MALE, "Scourge", "UndeadMale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::UNDEAD_FEMALE, "Scourge", "UndeadFemale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::TAUREN_MALE, "Tauren", "TaurenMale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::TAUREN_FEMALE, "Tauren", "TaurenFemale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::TROLL_MALE, "Troll", "TrollMale", "Flee", 2);
-    loadCombatCategory(fleeLibrary_, VoiceType::TROLL_FEMALE, "Troll", "TrollFemale", "Flee", 2);
-
-    // Blood Elf and Draenei combat sounds (flat folder structure, no VocalMale/Female subfolder)
-    auto loadCombatFlat = [this](
-        std::unordered_map<VoiceType, std::vector<VoiceSample>>& library,
-        VoiceType type,
-        const std::string& raceFolder,
-        const std::string& raceGender,
-        const std::string& soundType,
-        int count) {
-
-        auto& samples = library[type];
-        for (int i = 1; i <= count; ++i) {
-            std::string num = (i < 10) ? ("0" + std::to_string(i)) : std::to_string(i);
-            std::string path = "Sound\\Character\\" + raceFolder + "\\" + raceGender + soundType + num + ".wav";
-            VoiceSample sample;
-            if (loadSound(path, sample)) samples.push_back(std::move(sample));
-        }
-    };
-
-    // Blood Elf and Draenei, whose folders have no VocalMale/VocalFemale half.
-    loadCombatFlat(fleeLibrary_, VoiceType::BLOODELF_MALE, "BloodElf", "BloodElfMale", "Flee", 3);
-    loadCombatFlat(fleeLibrary_, VoiceType::BLOODELF_FEMALE, "BloodElf", "BloodElfFemale", "Flee", 3);
-    loadCombatFlat(fleeLibrary_, VoiceType::DRAENEI_MALE, "Draenei", "DraeneiMale", "Flee", 3);
-    loadCombatFlat(fleeLibrary_, VoiceType::DRAENEI_FEMALE, "Draenei", "DraeneiFemale", "Flee", 3);
-}
-
 bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
     if (!assetManager_) return false;
 
@@ -439,113 +201,36 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
     return true;
 }
 
-bool NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType,
-                                SoundCategory category, int32_t variant, const glm::vec3& position) {
-    if (!AudioEngine::instance().isInitialized())
-        return false;
-
-    // Whether a line is already going for this unit is asked by the callers, at
-    // the same points the client asks it - on the interaction (00720000.c:8066)
-    // and on the farewell (:382) - not here, so that a refused ask leaves the
-    // unit's ask counter where it was, which is what the client's does too.
-    const VoiceSample* sample = nullptr;
-
-    // The line the unit's own display names, when it names one: the client takes
-    // the interaction line, the farewell and the irritated answer out of the kit
-    // NPCSounds gives that display, and from among its files by their weights.
-    // The vendor's line is not asked of the kit. A kit's first slot holds a
-    // vendor's own clips for the 87 rows whose kit is a vendor's, which is a
-    // property of the display rather than the rule "a vendor window is open", and
-    // where the client's vendor line really comes from has not been found.
-    size_t slot = 0;
-    bool kitAsked = true;
-    switch (category) {
-        case SoundCategory::GREETING: slot = 0; break;
-        case SoundCategory::FAREWELL: slot = 1; break;
-        case SoundCategory::PISSED: slot = 2; break;
-        default: kitAsked = false; break;
-    }
-    if (kitAsked) {
-        if (const auto kit = kitSlot(displayId, slot); kit.first != nullptr) {
-            const auto& clips = *kit.first;
-            size_t chosen = 0;
-            if (variant >= 0) {
-                // Picked by position rather than by weight: once the unit's counter
-                // is past the first slot's five asks, 0x00746900 walks the kit's
-                // alternates in order and hands back the position as the variant
-                // index. The caller only asks a position it has just counted, so a
-                // position that is not in the kit means it changed under the ask -
-                // refuse it, which is the answer the client's counter turns into a
-                // reset and a first-slot line.
-                if (static_cast<size_t>(variant) >= clips.size()) return false;
-                chosen = static_cast<size_t>(variant);
-            } else {
-                std::vector<uint32_t> frequency;
-                frequency.reserve(clips.size());
-                for (const auto& candidate : clips) frequency.push_back(candidate.frequency);
-                // Which of a kit's files, by those weights, is the client's own
-                // rule (0x004cbac0), and this repo already implements it for the
-                // music. A voice line is asked through it with the variant index
-                // left unset, which is the form that remembers the file it last
-                // gave on the SoundEntries record (+0x44) and will not give that
-                // one again while another file has weight; the same is remembered
-                // per kit slot here. A kit with no weight on any file is left to
-                // the even pick below, where the music would play none.
-                std::optional<size_t> lastFile;
-                if (kit.second != nullptr && *kit.second >= 0)
-                    lastFile = static_cast<size_t>(*kit.second);
-                const uint32_t roll = std::uniform_int_distribution<uint32_t>(0, UINT32_MAX)(rng_);
-                if (const auto picked = zone_music::pickFile(frequency, lastFile, roll);
-                    picked.has_value()) {
-                    chosen = *picked;
-                    if (kit.second != nullptr) *kit.second = static_cast<int32_t>(chosen);
-                } else {
-                    chosen = std::uniform_int_distribution<size_t>(0, clips.size() - 1)(rng_);
-                }
-            }
-            sample = &clips[chosen];
+bool NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, size_t slot, int32_t variant,
+                                const glm::vec3& position) {
+    if (!AudioEngine::instance().isInitialized()) return false;
+    // Most displays name no kit (13754 of CreatureDisplayInfo's 24262 rows), and
+    // those units say nothing: 0x00746900 answers -1 where the row or its first
+    // line is missing, 0x00720860 refuses where the row is.
+    const auto kit = kitSlot(displayId, slot);
+    if (kit.first == nullptr) return false;
+    const auto& clips = *kit.first;
+    size_t chosen = 0;
+    if (variant >= 0) {
+        if (static_cast<size_t>(variant) >= clips.size()) return false;
+        chosen = static_cast<size_t>(variant);
+    } else {
+        // By the rows' weights (0x004cbac0), not the file given last while
+        // another has weight (the SoundEntries record's +0x44).
+        std::vector<uint32_t> frequency;
+        frequency.reserve(clips.size());
+        for (const auto& candidate : clips) frequency.push_back(candidate.frequency);
+        std::optional<size_t> lastFile;
+        if (kit.second != nullptr && *kit.second >= 0) lastFile = static_cast<size_t>(*kit.second);
+        const uint32_t roll = std::uniform_int_distribution<uint32_t>(0, UINT32_MAX)(rng_);
+        if (const auto picked = zone_music::pickFile(frequency, lastFile, roll); picked.has_value()) {
+            chosen = *picked;
+            if (kit.second != nullptr) *kit.second = static_cast<int32_t>(chosen);
         } else {
-            // The display names no kit, or none behind the slot asked for, and the
-            // client asks for no line at that point at all: 0x00746900 returns -1
-            // when the row is missing or its first column is 0, and 0x00720860
-            // refuses when the row cannot be found. Most displays are in that
-            // group - 13754 of CreatureDisplayInfo's 24262 rows name no kit - and
-            // that is the client's "the wolf says nothing". Falling back to a race
-            // library here was this code's own, and it put a guard's line in a
-            // wolf's mouth.
-            return false;
+            chosen = std::uniform_int_distribution<size_t>(0, clips.size() - 1)(rng_);
         }
     }
-
-    if (sample == nullptr) {
-        // Only the vendor's line (and a flee, which has no slot in these kits
-        // either) is still taken from the race library, because where the client's
-        // vendor line comes from has not been found.
-
-        // Select library based on category
-        std::unordered_map<VoiceType, std::vector<VoiceSample>>* library = nullptr;
-        switch (category) {
-            case SoundCategory::GREETING: library = &greetingLibrary_; break;
-            case SoundCategory::FAREWELL: library = &farewellLibrary_; break;
-            case SoundCategory::VENDOR: library = &vendorLibrary_; break;
-            case SoundCategory::PISSED: library = &pissedLibrary_; break;
-            case SoundCategory::FLEE: library = &fleeLibrary_; break;
-        }
-
-        // Find voice samples for this type
-        auto libIt = library->find(voiceType);
-        if (libIt == library->end() || libIt->second.empty()) {
-            // Fallback to GENERIC
-            libIt = library->find(VoiceType::GENERIC);
-            if (libIt == library->end() || libIt->second.empty()) {
-                return false;
-            }
-        }
-
-        const auto& samples = libIt->second;
-        std::uniform_int_distribution<size_t> dist(0, samples.size() - 1);
-        sample = &samples[dist(rng_)];
-    }
+    const VoiceSample* sample = &clips[chosen];
 
     // Play sound at the reach the clip's own row asks for. A voice line is a
     // sound of the few yards round the unit saying it: 8 yards at full volume
@@ -595,54 +280,24 @@ bool NpcVoiceManager::linePlaying(uint64_t npcGuid) const {
            AudioEngine::instance().isSoundPlaying(it->second);
 }
 
-void NpcVoiceManager::playGreeting(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
-    // One line at a time. While this unit's line is still going the ask is refused
-    // outright and its counter does not move - 0x0072a680 asks the same question of
-    // the unit's sound handle at 00720000.c:8066, and there is no timer anywhere in
-    // that path. The wall-clock cooldown this used to keep refused the second click
-    // for two seconds and then answered the cooldown with the irritated line, which
-    // is not what a second click does in the client: it is simply not asked.
-    if (linePlaying(npcGuid))
-        return;
-
-    // Which slot serves, and which alternate of it, is the counter rule of
-    // 0x00746900: five asks answered from the kit's first slot, then its third
-    // slot walked once per alternate, then the counter resets and the first slot
-    // serves again. The counter moves only when a line actually started (:8087).
-    int& counter = askCount_[npcGuid];
-    SoundCategory category = SoundCategory::GREETING;
-    int32_t variant = -1;
-    if (counter >= kAsksFromFirstSlot) {
-        const int extra = counter - kAsksFromFirstSlot;
-        const auto walked = kitSlot(displayId, 2);
-        if (walked.first == nullptr || static_cast<size_t>(extra) >= walked.first->size()) {
-            counter = 0;  // walked out of the third slot: the first serves again
-        } else {
-            category = SoundCategory::PISSED;
-            variant = extra;
-        }
-    }
-
-    if (playSound(npcGuid, displayId, voiceType, category, variant, position))
-        ++counter;
+void NpcVoiceManager::playClick(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position) {
+    // 0x0072a680: nothing while the unit's line is still going, and its counter
+    // then does not move.
+    if (linePlaying(npcGuid)) return;
+    const auto irritated = kitSlot(displayId, 2);
+    const auto ask = counter_.ask(npcGuid, irritated.first ? irritated.first->size() : 0);
+    if (playSound(npcGuid, displayId, ask.irritated ? 2 : 0, ask.irritated ? static_cast<int32_t>(ask.line) : -1, position))
+        counter_.started(ask);
 }
 
-void NpcVoiceManager::playFarewell(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
-    // The ask count starts over on a hello or a goodbye, before anything else the
-    // routine does (00720000.c:376-377 clears the counter and the unit it belongs
-    // to, ahead of the busy test at :382).
-    askCount_.erase(npcGuid);
-    if (linePlaying(npcGuid))
-        return;
-    playSound(npcGuid, displayId, voiceType, SoundCategory::FAREWELL, -1, position);
+void NpcVoiceManager::playHello(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position) {
+    counter_.forget();
+    if (!linePlaying(npcGuid)) playSound(npcGuid, displayId, 0, -1, position);
 }
 
-void NpcVoiceManager::playVendor(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
-    // Still the race library, and still not asked of the kit: where the client's
-    // vendor line comes from has not been found. Nor is it known whether that path
-    // is one line at a time, so no busy test is applied that the client has not
-    // been seen to apply.
-    playSound(npcGuid, displayId, voiceType, SoundCategory::VENDOR, -1, position);
+void NpcVoiceManager::playFarewell(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position) {
+    counter_.forget();
+    if (!linePlaying(npcGuid)) playSound(npcGuid, displayId, 1, -1, position);
 }
 
 } // namespace audio

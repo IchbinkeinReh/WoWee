@@ -36,7 +36,6 @@ namespace wowee {
 // Forward declarations
 namespace rendering { class Renderer; namespace unit_event { class FootstepTerrainSounds; } }
 namespace pipeline { class AssetManager; class DBCFile; struct M2Model; struct WMOModel; }
-namespace audio { enum class VoiceType; }
 namespace game { class GameHandler; class Entity; class Unit; struct CorpseLook; struct AttackerStateUpdateData; }
 
 namespace core {
@@ -285,7 +284,6 @@ public:
     /// queued path in the second is the one most spawns actually take -
     /// so fixing the first left the bug on screen.
     static std::string transportModelPath(uint32_t entry, uint32_t displayId);
-    audio::VoiceType detectVoiceTypeFromDisplayId(uint32_t displayId) const;
 
     /// Every other unit's weapons as its items and sheath state have them,
     /// re-dressed when either changes (0x0072dbc0, 0x00731f40): creatures

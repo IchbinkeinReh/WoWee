@@ -1,6 +1,7 @@
 // Which sounds are heard past the real voices (audio/voice_priority.hpp).
 #include <catch_amalgamated.hpp>
 
+#include "audio/npc_line_counter.hpp"
 #include "audio/finite_audio.hpp"
 #include "audio/sound_key.hpp"
 #include "audio/sound_names.hpp"
@@ -140,4 +141,29 @@ TEST_CASE("a loop paused out of reach is still the one its handle is for", "[voi
     CHECK(vp::stillGoing(true, false, false));
     CHECK(vp::stillGoing(false, false, true));
     CHECK_FALSE(vp::stillGoing(false, false, false));
+}
+
+// 0x0072a680, 0x00746900.
+TEST_CASE("a clicked unit says its hello five times, then its irritated lines in turn", "[audio]") {
+    wowee::audio::NpcLineCounter counter;
+    const auto click = [&](uint64_t unit, size_t irritated) {
+        const auto ask = counter.ask(unit, irritated);
+        counter.started(ask);
+        return ask.irritated ? static_cast<int>(ask.line) : -1;
+    };
+    for (int i = 0; i < 5; ++i) CHECK(click(7, 2) == -1);
+    CHECK(click(7, 2) == 0);
+    CHECK(click(7, 2) == 1);
+    for (int i = 0; i < 6; ++i) CHECK(click(7, 2) == -1);
+    CHECK(click(7, 2) == 0);
+    // One unit is counted: another, and this one again, begin anew.
+    CHECK(click(8, 2) == -1);
+    for (int i = 0; i < 5; ++i) CHECK(click(7, 2) == -1);
+    CHECK(click(7, 2) == 0);
+    // A window's hello forgets it.
+    counter.forget();
+    for (int i = 0; i < 5; ++i) CHECK(click(7, 2) == -1);
+    // A line that did not start is not counted.
+    wowee::audio::NpcLineCounter refused;
+    for (int i = 0; i < 9; ++i) CHECK_FALSE(refused.ask(7, 2).irritated);
 }

@@ -367,7 +367,11 @@ rendering::upper_body::Unit unitAnimationState(game::GameHandler& gh, EntitySpaw
     unitSplineState(u, gh, guid, unit.getReportedMoveFlags());
     u.meleeReady = spawner.unitMeleeReady(guid);
     u.rangedSubClass = spawner.unitRangedSubClass(guid);
-    if (const uint32_t emote = unit.getNpcEmoteState(); emote != 0) {
+    // Not a state with Emotes Flags 0x2000 - working, mining, dancing - while it is
+    // spoken to (0x007171c0: the interaction object, 0x00bd07a8).
+    if (const uint32_t emote = unit.getNpcEmoteState(); emote != 0 &&
+        (gh.getInteractionObject() != guid ||
+         (rendering::AnimationController::getEmoteFlagsByEmotesId(emote) & 0x2000u) == 0)) {
         if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
             u.emoteStateAnim = anim;
     }
@@ -5761,10 +5765,8 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         u.inCombat = (self.getField(f) & 0x800u) != 0;
     u.inCombat = u.inCombat || u.autoAttacking;
     u.autoRepeat = gameHandler->isAutoRepeating();
-    // Its emote state (0x007171c0) - not one whose Emotes row has Flags
-    // 0x2000, for the active player.
-    if (const uint32_t emote = self.getNpcEmoteState(); emote != 0 &&
-        (rendering::AnimationController::getEmoteFlagsByEmotesId(emote) & 0x2000u) == 0) {
+    // Its emote state (0x007171c0).
+    if (const uint32_t emote = self.getNpcEmoteState(); emote != 0) {
         if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
             u.emoteStateAnim = anim;
     }
@@ -6231,6 +6233,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // A jump keeps its animations until it is down and landed.
                 bool jumpRefresh = false;
                 const bool locomotionAsked = entity->takeLocomotionRequest();
+                const bool baseAsked = entity->takeBaseAnimationRequest();
                 const bool jumpHolds = !deadOrCorpse &&
                     jumpHoldsAnimation(*charRenderer, creatureMount ? creatureMount->instanceId : instanceId,
                                        *entity, isFlyingNow, locomotionAsked, jumpRefresh);
@@ -6238,7 +6241,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // asks it (0x0073ed10), so one swimming on to the side turns
                 // to it.
                 const bool stateChanged = !jumpHolds &&
-                                          (jumpRefresh ||
+                                          (jumpRefresh || baseAsked ||
                                            (isMovingNow  != prevMoving)   ||
                                            (isSwimmingNow != prevSwimming) ||
                                            (isFlyingNow   != prevFlying)   ||
@@ -8437,7 +8440,7 @@ void Application::setupUICallbacks() {
 
     // ── NPC interaction: greeting, farewell, vendor, aggro voice ──
     npcInteractionCallbacks_ = std::make_unique<NPCInteractionCallbackHandler>(
-        *entitySpawner_, renderer.get(), *gameHandler, audioCoordinator_.get());
+        *gameHandler, audioCoordinator_.get());
     npcInteractionCallbacks_->setupCallbacks();
 
     // ── Audio: music, sound effects, level-up, achievement, LFG ──

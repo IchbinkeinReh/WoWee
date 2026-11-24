@@ -4104,13 +4104,19 @@ void GameHandler::setInteractionObject(uint64_t guid, std::optional<go_interacti
     // closes (0x00512e60) - not the one opening now, which wowee has given
     // its object already.
     const uint64_t released = interactionObject_;
-    releaseInteractionObject();
+    releaseInteractionObject(guid == 0);
     if (const auto window = go_interaction::windowClosedWith(interactionWindowObjects(), released, opening)) {
         closeInteractionWindow(*window);
     }
     interactionObject_ = guid;
-    // A game object (type mask 0x20) plays its OPEN (0x0070bab0, slot 0x98).
     auto entity = guid ? getEntityManager().getEntity(guid) : nullptr;
+    // A creature (type mask 0x8, not a player) that was not it already says hello
+    // (0x00720860(1)), and its base animation is asked again.
+    if (entity && entity->getType() == ObjectType::UNIT && guid != released) {
+        sayNpcLine(static_cast<const Unit&>(*entity), NpcLine::Hello);
+        entity->requestBaseAnimation();
+    }
+    // A game object (type mask 0x20) plays its OPEN (0x0070bab0, slot 0x98).
     if (entity && entity->getType() == ObjectType::GAMEOBJECT && gameObjectInteractionCallback_) {
         gameObjectInteractionCallback_(guid, true);
     }
@@ -4131,18 +4137,40 @@ void GameHandler::releaseInteractionObject(bool farewell) {
     // 0x00518d50 with nothing to follow: a creature (type mask 0x8, not a
     // player) that is alive - health, no UNIT_DYNFLAG_DEAD - says farewell
     // (0x00720860(0)). Not when another object replaces it (0x0051fce0).
-    if (farewell && entity && entity->getType() == ObjectType::UNIT && npcFarewellCallback_) {
-        auto unit = std::static_pointer_cast<Unit>(entity);
-        if (unit->getHealth() > 0 && (unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0) {
-            npcFarewellCallback_(guid, glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
-        }
-    }
+    const bool unit = entity && entity->getType() == ObjectType::UNIT;
+    if (farewell && unit) sayNpcLine(static_cast<const Unit&>(*entity), NpcLine::Farewell);
     // 0x00512e60: cleared, and a game object plays its CLOSE (0x0070bac0,
     // slot 0x9c).
     interactionObject_ = 0;
+    if (unit) entity->requestBaseAnimation();
     if (entity && entity->getType() == ObjectType::GAMEOBJECT && gameObjectInteractionCallback_) {
         gameObjectInteractionCallback_(guid, false);
     }
+}
+
+void GameHandler::sayNpcLine(const Unit& unit, NpcLine line) {
+    // 0x00720860: not to a dead player, nor one that is dead or lies so
+    // (health, UNIT_DYNFLAG_DEAD).
+    if (!npcLineCallback_ || isPlayerDead() || isPlayerGhost()) return;
+    if (unit.getHealth() == 0 || (unit.getDynamicFlags() & UNIT_DYNFLAG_DEAD) != 0) return;
+    npcLineCallback_(unit.getGuid(), line, glm::vec3(unit.getX(), unit.getY(), unit.getZ()));
+}
+
+void GameHandler::clickVoice(uint64_t guid) {
+    const auto entity = getEntityManager().getEntity(guid);
+    if (!npcLineCallback_ || !entity || entity->getType() != ObjectType::UNIT || isPlayerDead() || isPlayerGhost())
+        return;
+    const auto& unit = static_cast<const Unit&>(*entity);
+    // Not dead, feigning it (0x0071f560) or asleep.
+    const uint16_t flags2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+    if (unit.getHealth() == 0 || (flags2 != 0xFFFF && (unit.getField(flags2) & 0x1u) != 0) ||
+        unit.getStandState() == 7 || unit.getStandState() == 3)
+        return;
+    const auto mover = getEntityManager().getEntity(activeMover());
+    if (!mover || !mover->isUnit()) return;
+    const auto& moving = static_cast<const Unit&>(*mover);
+    if (unitReaction(unit, moving) <= 2 || unitReaction(moving, unit) <= 2) return;
+    npcLineCallback_(guid, NpcLine::Click, glm::vec3(unit.getX(), unit.getY(), unit.getZ()));
 }
 
 std::array<uint64_t, go_interaction::kWindowCount> GameHandler::interactionWindowObjects() {
