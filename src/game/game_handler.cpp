@@ -4267,6 +4267,20 @@ void GameHandler::tickCapturePointWarning() {
     }
 }
 
+void GameHandler::sayTransportInMovement() {
+    // The unit the keys move in the player's stead has a movement of its own.
+    if (const uint64_t mover = activeMover(); mover != playerGuid && mover != 0) return;
+    constexpr uint32_t kOnTransport = static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
+    if (playerTransportGuid_ == 0) {
+        movementInfo.flags &= ~kOnTransport;
+        return;
+    }
+    movementInfo.flags |= kOnTransport;
+    movementInfo.transportX = playerTransportOffset_.x;
+    movementInfo.transportY = playerTransportOffset_.y;
+    movementInfo.transportZ = playerTransportOffset_.z;
+}
+
 bool GameHandler::playerFights() const {
     const uint16_t flags = fieldIndex(UF::UNIT_FIELD_FLAGS);
     const auto player = getEntityManager().getEntity(playerGuid);

@@ -687,3 +687,30 @@ TEST_CASE("a fight is over as the world is left", "[replay][playtest]") {
     CHECK(events == Heard{"INSTANCE_LOCK_STOP", "PLAYER_LEAVING_WORLD"});
     s.handler().setAddonEventCallback({});
 }
+
+// The movement said so with its next packet only.
+TEST_CASE("the movement is on the transport the player is on", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_FORWARD);
+    constexpr uint64_t kTram = 0xF11002AFD0000001ull;
+    // UPDATEFLAG_TRANSPORT with a stationary position.
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_UPDATE_OBJECT));
+    p.writeUInt32(1);
+    p.writeUInt8(static_cast<uint8_t>(wowee::game::UpdateType::CREATE_OBJECT2));
+    p.writePackedGuid(kTram);
+    p.writeUInt8(static_cast<uint8_t>(wowee::game::ObjectType::GAMEOBJECT));
+    p.writeUInt16(0x0042);
+    for (int i = 0; i < 4; ++i) p.writeFloat(0.0f);
+    p.writeUInt32(0);
+    p.writeUInt8(0);
+    s.receive(p);
+    REQUIRE(s.handler().isTransportGuid(kTram));
+    s.handler().setPlayerOnTransport(kTram, glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(has(s, MovementFlags::ONTRANSPORT));
+    CHECK(s.handler().getMovementInfo().transportGuid == kTram);
+    CHECK(s.handler().getMovementInfo().transportZ == 3.0f);
+    s.handler().clearPlayerTransport();
+    CHECK_FALSE(has(s, MovementFlags::ONTRANSPORT));
+    CHECK(has(s, MovementFlags::FORWARD));
+}

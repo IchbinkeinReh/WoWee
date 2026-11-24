@@ -2589,6 +2589,7 @@ public:
         playerTransportStickyGuid_ = transportGuid;
         playerTransportStickyTimer_ = 8.0f;
         movementInfo.transportGuid = transportGuid;
+        sayTransportInMovement();
     }
     void setPlayerTransportOffset(const glm::vec3& offset) {
         playerTransportOffset_ = offset;
@@ -2601,7 +2602,11 @@ public:
         playerTransportGuid_ = 0;
         playerTransportOffset_ = glm::vec3(0.0f);
         movementInfo.transportGuid = 0;
+        sayTransportInMovement();
     }
+    /// The player's movement's flag 0x200 and place on its transport, with the
+    /// transport (0x006ec400), not with the movement's next packet.
+    void sayTransportInMovement();
     // Preserve an authoritative on-deck offset while a continent transfer tears
     // down the origin map's transport and constructs its destination instance.
     void beginPlayerTransportWorldTransfer(uint32_t destinationMapId,
