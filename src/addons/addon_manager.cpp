@@ -1990,6 +1990,7 @@ void AddonManager::saveAllSavedVariables() {
 }
 
 bool AddonManager::unloadAll() {
+    ui::frameXmlInterfaceUnloaded();
     saveAllSavedVariables();
     // The world UI's teardown is where the client writes AddOns.txt.
     saveEnabledState();

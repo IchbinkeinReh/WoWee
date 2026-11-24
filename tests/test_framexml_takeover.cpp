@@ -113,3 +113,28 @@ TEST_CASE("A point is the interface's only where the tree says so", "[takeover]"
     wowee::ui::frameXmlSetPointTest(nullptr);
     REQUIRE_FALSE(wowee::ui::frameXmlPointOwnsMouse(150.0f, 60.0f));
 }
+
+// /reload left the addons of the interface before noted as loaded: the talents'
+// window, which its addon had not built yet, was taken for one that failed to
+// build, handed back to this client - and its key did nothing from then on.
+TEST_CASE("A new interface is asked afresh what it has built", "[takeover]") {
+    using namespace wowee::ui;
+    if (!frameXmlOwns(UiElement::Talents)) SKIP("the interface is not loaded here");
+    const auto allButTalents = [](const std::string& name) { return name != "PlayerTalentFrame"; };
+    // Not asked for yet: it has not failed to build.
+    CHECK(frameXmlReleaseUnbuiltElements(allButTalents) == 0);
+    frameXmlNoteAddOnLoaded("Blizzard_TalentUI");
+    CHECK(frameXmlAddOnLoaded("blizzard_talentui"));
+
+    frameXmlInterfaceUnloaded();
+    CHECK_FALSE(frameXmlAddOnLoaded("Blizzard_TalentUI"));
+    CHECK(frameXmlReleaseUnbuiltElements(allButTalents) == 0);
+    CHECK(frameXmlOwns(UiElement::Talents));
+
+    // Loaded and not there, it has; until there is another interface.
+    frameXmlNoteAddOnLoaded("Blizzard_TalentUI");
+    CHECK(frameXmlReleaseUnbuiltElements(allButTalents) == 1);
+    CHECK_FALSE(frameXmlOwns(UiElement::Talents));
+    frameXmlInterfaceUnloaded();
+    CHECK(frameXmlOwns(UiElement::Talents));
+}
