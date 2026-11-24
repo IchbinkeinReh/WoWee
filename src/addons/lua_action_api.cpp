@@ -99,6 +99,13 @@ static bool droppedItemFromNowhere(lua_State* L);
 /// Sell what the cursor is holding. Defined below, beside the buy it mirrors.
 static void soldHeldItem(lua_State* L);
 
+/// Whether the cursor carries what an action button takes.
+static bool cursorCarriesAction() {
+    return (s_cursorId != 0 && (s_cursorType == CursorType::SPELL || s_cursorType == CursorType::ITEM ||
+                                s_cursorType == CursorType::MACRO)) ||
+           s_cursorType == CursorType::EQUIPMENT_SET;
+}
+
 uint64_t cursorMoney() {
     return s_cursorType == CursorType::MONEY ? s_cursorMoney : 0;
 }
@@ -1391,6 +1398,7 @@ static int lua_GetActionCooldown(lua_State* L) {
 // every action went at the current target, so self-cast did nothing, and a
 // unit-frame button carrying its own unit acted on whoever was targeted
 // instead.
+static int lua_PlaceAction(lua_State* L);
 static int lua_UseAction(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
@@ -1404,6 +1412,8 @@ static int lua_UseAction(lua_State* L) {
         }
         return 0;
     }
+    // What the cursor carries is put there instead (0x005abbc0 -> 0x005ab120).
+    if (cursorCarriesAction()) return lua_PlaceAction(L);
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) return 0;
     const auto& action = bar[slot];
@@ -1746,12 +1756,7 @@ static int lua_PlaceAction(lua_State* L) {
     // 0x005ab840
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: PlaceAction(slot)");
-    const bool holding = (s_cursorId != 0 &&
-                          (s_cursorType == CursorType::SPELL ||
-                           s_cursorType == CursorType::ITEM ||
-                           s_cursorType == CursorType::MACRO)) ||
-                         s_cursorType == CursorType::EQUIPMENT_SET;
-    if (!holding) return 0;
+    if (!cursorCarriesAction()) return 0;
     return lua_PickupAction(L);
 }
 
