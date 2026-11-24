@@ -1366,16 +1366,36 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     if (w->rectW != oldRectW || w->rectH != oldRectH) resizePending_.set(id);
 }
 
+namespace {
+/// Whether `a` is above `b`: the draw order's comparison read the other way
+/// round, the last thing painted being the first reached.
+bool drawnAbove(const Widget& a, const Widget& b) {
+    const int sa = strataRank(a.effStrata), sb = strataRank(b.effStrata);
+    if (sa != sb) return sa > sb;
+    if (a.effLevel != b.effLevel) return a.effLevel > b.effLevel;
+    return a.creationOrder > b.creationOrder;
+}
+}  // namespace
+
 uint32_t WidgetTree::hitTest(float x, float y) const {
-    return hitTestFor(x, y, false);
-}
-
-uint32_t WidgetTree::hitTestWheel(float x, float y) const {
-    return hitTestFor(x, y, true);
-}
-
-uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
     const Widget* best = nullptr;
+    framesAt(x, y, false, [&](const Widget& w) {
+        if (!best || drawnAbove(w, *best)) best = &w;
+    });
+    return best ? best->id : 0;
+}
+
+std::vector<uint32_t> WidgetTree::wheelFramesAt(float x, float y) const {
+    std::vector<const Widget*> found;
+    framesAt(x, y, true, [&](const Widget& w) { found.push_back(&w); });
+    std::sort(found.begin(), found.end(), [](const Widget* a, const Widget* b) { return drawnAbove(*a, *b); });
+    std::vector<uint32_t> ids;
+    ids.reserve(found.size());
+    for (const Widget* w : found) ids.push_back(w->id);
+    return ids;
+}
+
+void WidgetTree::framesAt(float x, float y, bool forWheel, const std::function<void(const Widget&)>& take) const {
     // Over the widgets that may be visible, in id order as the walk over all
     // of them went: only a visible frame takes the mouse, and touching every
     // one of 28,000 widgets to find the few hundred was ~1.4 ms a frame.
@@ -1384,10 +1404,10 @@ uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
         const Widget& w = widgets_[id];
         if (w.id == 0 || w.kind != WidgetKind::Frame) continue;
         if (!w.visible) continue;
-        // The wheel is enabled separately from the mouse and a scroll frame
-        // asks for only the wheel, so requiring mouseEnabled for both hid
-        // every one of them from the cursor.
-        if (!w.mouseEnabled && !(forWheel && w.wheelEnabled)) continue;
+        // The wheel is enabled separately from the mouse, and one is nothing
+        // to the other: the client keeps a list of frames for each kind of
+        // event (0x00495880) and the wheel goes down its own.
+        if (forWheel ? !w.wheelEnabled : !w.mouseEnabled) continue;
         if (w.rectW <= 0.0f || w.rectH <= 0.0f) continue;
         // A rect with a NaN in it matches *everything*. Every comparison
         // against a NaN is false, so both `x < left` and `x > right` are false
@@ -1420,15 +1440,8 @@ uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
                 continue;
             }
         }
-        if (!best) { best = &w; continue; }
-        // Same comparison the draw order uses, read the other way round: the
-        // last thing painted is the first thing clicked.
-        const int sa = strataRank(w.effStrata), sb = strataRank(best->effStrata);
-        if (sa != sb) { if (sa > sb) best = &w; continue; }
-        if (w.effLevel != best->effLevel) { if (w.effLevel > best->effLevel) best = &w; continue; }
-        if (w.creationOrder > best->creationOrder) best = &w;
+        take(w);
     }
-    return best ? best->id : 0;
 }
 
 bool WidgetTree::buttonArtVisible(const Widget& w) const {

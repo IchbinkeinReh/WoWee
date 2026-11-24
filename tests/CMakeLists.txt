@@ -3870,6 +3870,7 @@ if(NOT ANDROID)
     target_sources(test_game_replay PRIVATE test_game_replay_stance_bar.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_taxi.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_spline.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_interface.cpp)
     register_test_target(test_game_replay)
 endif()
 

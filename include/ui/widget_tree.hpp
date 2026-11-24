@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -1480,17 +1481,18 @@ public:
     /// UIPanelScrollFrameTemplate asks for only the first - it declares
     /// OnMouseWheel and never enables the mouse. Asking the plain hit test
     /// meant no scroll frame in the interface was ever found under the cursor,
-    /// so the wheel fell through to the camera and nothing scrolled.
-    [[nodiscard]] uint32_t hitTestWheel(float x, float y) const;
+    /// so the wheel fell through to the camera and nothing scrolled. All of
+    /// them, the topmost first: the wheel goes down the list until one takes
+    /// it (0x00494890), and a frame that takes only the mouse is not in it.
+    [[nodiscard]] std::vector<uint32_t> wheelFramesAt(float x, float y) const;
 
     /// Widgets to draw, in the order to draw them. Only those that resolved to a
     /// visible, non-empty rect. Valid until the next layout().
     [[nodiscard]] const std::vector<const Widget*>& drawOrder() const { return drawOrder_; }
 
 private:
-    /// Both hit tests, which differ only in whether a frame that took the
-    /// wheel without taking the mouse counts as under the cursor.
-    [[nodiscard]] uint32_t hitTestFor(float x, float y, bool forWheel) const;
+    /// Every frame under the cursor that takes the mouse, or the wheel.
+    void framesAt(float x, float y, bool forWheel, const std::function<void(const Widget&)>& take) const;
     std::vector<LinkRect> linkRects_;
     void layoutWidget(uint32_t id, float screenW, float screenH);
     /// Clear the drawing and running flags under a hidden frame without

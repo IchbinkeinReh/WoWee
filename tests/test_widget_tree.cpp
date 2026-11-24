@@ -1993,7 +1993,26 @@ TEST_CASE("The wheel finds a frame that took the wheel and not the mouse",
     // Invisible to the mouse, which is correct and is why it must not be the
     // test the wheel uses.
     REQUIRE(tree.hitTest(50.0f, 50.0f) != scroll);
-    REQUIRE(tree.hitTestWheel(50.0f, 50.0f) == scroll);
+    REQUIRE(tree.wheelFramesAt(50.0f, 50.0f) == std::vector<uint32_t>{scroll});
+
+    // P51: a list's rows are buttons beside the scroll frame, over it, and
+    // take only the mouse. The client's wheel list has no such frame in it
+    // (0x00494890); every frame that takes the wheel is, the topmost first.
+    const uint32_t row = tree.create(WidgetKind::Frame, tree.root(), "Row");
+    tree.get(row)->mouseEnabled = true;
+    tree.get(row)->level = 9;
+    tree.get(row)->levelExplicit = true;
+    tree.get(row)->width = 100.0f;
+    tree.get(row)->height = 20.0f;
+    tree.addPoint(row, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 40.0f});
+    const uint32_t inner = tree.create(WidgetKind::Frame, scroll, "Inner");
+    tree.get(inner)->wheelEnabled = true;
+    tree.get(inner)->width = 100.0f;
+    tree.get(inner)->height = 100.0f;
+    tree.addPoint(inner, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 0.0f});
+    tree.layout(kScreenW, kScreenH);
+    CHECK(tree.hitTest(50.0f, 50.0f) == row);
+    CHECK(tree.wheelFramesAt(50.0f, 50.0f) == std::vector<uint32_t>{inner, scroll});
 }
 
 // A measurement taken between two moves.

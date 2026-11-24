@@ -18311,23 +18311,18 @@ bool LuaEngine::dispatchMouseWheel(float x, float y, float delta) {
     if (delta == 0.0f) return false;
     const float travel = delta * wheelSensitivity_;
 
-    // Up from whatever is under the cursor to the first frame that asked for
-    // the wheel. WoW works the same way: a scroll frame's child fills it and
-    // takes the hit, and the scroll frame above is what handles the wheel.
-    // The wheel's own hit test. A scroll frame enables the wheel and not the
-    // mouse - UIPanelScrollFrameTemplate declares OnMouseWheel and never calls
-    // EnableMouse - so the plain hit test could not see one, and this walk
-    // started from whatever mouse-enabled child happened to be under the
-    // cursor or, over the empty parts of a panel, from nothing at all. The
-    // talent tree is all empty parts between its buttons.
+    // Down the frames that take the wheel, the topmost first, to one that has
+    // an OnMouseWheel (0x00494890 -> 0x0048f730, then +0xb4: 0x0048fdb0, which
+    // says no without one). What takes only the mouse is not in that list and
+    // covers nothing: a list's rows are buttons beside the scroll frame and
+    // not in it, and the wheel over one of them went up its parents, past the
+    // scroll frame under the cursor.
     //
     // Taken even when this event made no whole notch: it is still the
     // interface's travel, and the camera must not zoom on it.
-    uint32_t wid = widgets_.hitTestWheel(x, y);
-    while (wid != 0) {
+    for (const uint32_t wid : widgets_.wheelFramesAt(x, y)) {
         const auto* w = widgets_.get(wid);
-        if (!w) break;
-        if (w->wheelEnabled) {
+        if (w && frameHasScript(wid, "OnMouseWheel")) {
             // A frame whose scroll bar has been seen moving glides it, by
             // fractions of a notch - see glideWheel.
             if (glideWheel(wid, travel)) {
@@ -18389,7 +18384,6 @@ bool LuaEngine::dispatchMouseWheel(float x, float y, float delta) {
             }
             return true;
         }
-        wid = w->parent;
     }
     // Nothing here to scroll: what was gathered belongs to no window.
     wheelCarry_ = 0.0f;
