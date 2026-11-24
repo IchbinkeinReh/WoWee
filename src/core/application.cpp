@@ -15,6 +15,7 @@
 #include "game/mover_keys.hpp"
 #include "game/game_utils.hpp"
 #include "game/mover_mode.hpp"
+#include "game/protocol_constants.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
 #include "core/frame_pacer.hpp"
@@ -5320,6 +5321,13 @@ void Application::applyServerMovementState(float deltaTime) {
     // coordinates - for as long as the load took.
     const bool enteringWorld = worldLoader_ && worldLoader_->isWorldEntryUnderway();
     if (enteringWorld) lastSentCanonicalYaw_ = kFacingFromServer;
+    // Whether what the camera looks at is on a flight path (0x00606f90 asks
+    // the unit it looks at; with none it is not run).
+    if (renderer && renderer->getCameraController() && gameHandler && !enteringWorld) {
+        if (const auto unit = std::dynamic_pointer_cast<game::Unit>(
+                gameHandler->getEntityManager().getEntity(gameHandler->cameraTarget())))
+            renderer->getCameraController()->setOnFlight((unit->getUnitFlags() & game::UNIT_FLAG_TAXI_FLIGHT) != 0);
+    }
     if (renderer && gameHandler && !enteringWorld) {
     // For position sync branching, only WMO transports use the dedicated
     // onTransport branch. M2 transports use the normal movement else branch

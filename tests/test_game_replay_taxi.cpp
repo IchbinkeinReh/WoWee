@@ -614,3 +614,43 @@ TEST_CASE("a fall does not outlive the flight it was taken from", "[taxi][camera
         CHECK(w.at.z > landing.z - 1.0f);
     }
 }
+
+// P44. 0x00606f90: the yaw is off the facing on a flight path, and as the
+// flight begins it eases behind the unit.
+TEST_CASE("the camera turns with the flight and begins behind it", "[taxi][camera]") {
+    Walker w;
+    auto& cc = w.controller;
+    const auto off = [&] { return std::remainder(cc.getYaw() - cc.getFacingYaw(), 360.0f); };
+    cc.faceAfterTeleport(10.0f);
+    cc.turnWithVehicle(60.0f);
+    cc.setExternalFollow(true);
+    cc.faceInFlight(40.0f);
+    CHECK(cc.getFacingYaw() == Catch::Approx(40.0f));
+    CHECK(cc.getYaw() == Catch::Approx(100.0f));
+    // The short way round.
+    cc.faceInFlight(-170.0f);
+    cc.faceInFlight(170.0f);
+    CHECK(off() == Catch::Approx(60.0f).margin(0.01f));
+    // 60 degrees at 180 a second, turning on the way.
+    float facing = 170.0f;
+    cc.setOnFlight(true);
+    for (int i = 0; i < 10; ++i) {
+        facing += 3.0f;
+        cc.faceInFlight(facing);
+        cc.setOnFlight(true);
+        w.run(0.02f);
+    }
+    CHECK(off() < 45.0f);
+    CHECK(off() > 5.0f);
+    w.run(0.3f);
+    CHECK(off() == Catch::Approx(0.0f).margin(0.1f));
+    // Turned by the player, it is left there - and turns along.
+    cc.turnWithVehicle(-30.0f);
+    for (int i = 0; i < 50; ++i) {
+        facing -= 2.0f;
+        cc.faceInFlight(facing);
+        cc.setOnFlight(true);
+        w.run(0.02f);
+    }
+    CHECK(off() == Catch::Approx(-30.0f).margin(0.1f));
+}

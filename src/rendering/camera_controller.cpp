@@ -2998,6 +2998,27 @@ void CameraController::startFollowSmoothing(camera_smooth::State state, bool pit
     viewBlending_ = viewDistance_.easing() || viewPitch_.easing() || viewYaw_.easing();
 }
 
+void CameraController::faceInFlight(float yawDegrees) {
+    turnWithVehicle(std::remainder(yawDegrees - facingYaw, 360.0f));
+    setFacingYaw(yawDegrees);
+}
+
+void CameraController::setOnFlight(bool onFlight) {
+    if (onFlight && !onFlight_) {
+        const float from = std::remainder(yaw - facingYaw, 360.0f);
+        const bool easingThere = viewYaw_.easing() && std::fabs(viewYaw_.to) < camera_smooth::kAtRest;
+        if (std::fabs(from) >= camera_smooth::kAtRest && !easingThere) {
+            viewYaw_.startMs = viewYaw_.endMs;
+            viewYaw_.value = from;
+            viewYawApplied_ = from;
+            viewYaw_.set(0.0f, cameraClockMs_,
+                         cameraClockMs_ + static_cast<uint32_t>(std::fabs(from) / camera_smooth::kYawSpeed * 1000.0f));
+            viewBlending_ = viewDistance_.easing() || viewPitch_.easing() || viewYaw_.easing();
+        }
+    }
+    onFlight_ = onFlight;
+}
+
 void CameraController::lookBy(float yawDegrees, float pitchDegrees) {
     viewMovedByPlayer_ = true;  // 0x006020b0
     // 0x005fe5f0: the yaw being eased to turns with the camera. The ease is

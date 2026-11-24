@@ -563,6 +563,17 @@ public:
         // fixed in the world while the deck turned under it.
         if (camera) camera->setRotation(yaw, pitch);
     }
+    /// A flight path turns the character: the camera's yaw is kept off the
+    /// facing (+0x11c, with +0xac 0), so it turns along. Only a unit on a
+    /// spline that is not a flight's has the camera keep its own heading
+    /// (0x00606f90 calls 0x00602eb0 with 1 where a spline runs and the unit's
+    /// flag 0x100000 is off; 0x006019b0 adds the facing to +0x11c).
+    void faceInFlight(float yawDegrees);
+    /// The unit the camera looks at has UNIT_FLAG_TAXI_FLIGHT: as it gets it
+    /// (+0x2a4, the last frame's) the yaw eases to straight behind, at the
+    /// yaw's smooth speed and whatever the following style (0x00606f90 ->
+    /// 0x00601410(0, 0, 1)); after that it is where the player turns it.
+    void setOnFlight(bool onFlight);
     /// The driver's camera turns with its vehicle camera's facing, not with
     /// the keys (0x00604490 adds +0x84): the turn keys turn the vehicle
     /// alone, and the camera follows its facing as it is chased (0x0075a1c0).
@@ -841,6 +852,7 @@ private:
     float currentDistance = 10.0f;      // Smoothed actual distance
     float collisionDistance = 10.0f;    // Max allowed by collision
     bool externalFollow_ = false;
+    bool onFlight_ = false;  ///< setOnFlight
     std::optional<glm::vec3> vehiclePivot_;
     std::optional<CameraFadeTarget> cameraFadeTarget_;
     std::optional<glm::vec3> vehicleCollisionOrigin_;
