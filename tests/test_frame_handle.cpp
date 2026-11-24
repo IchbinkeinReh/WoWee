@@ -141,3 +141,21 @@ TEST_CASE("a handle taints nobody and is nobody's", "[lua]") {
         lua_settop(s.L, 0);
     }
 }
+
+TEST_CASE("the table behind a widget", "[lua]") {
+    State s;
+    wowee::addons::pushFrameByHandle(s.L, 6);
+    lua_getfield(s.L, -1, "__name");
+    CHECK(std::string(lua_tostring(s.L, -1)) == "F2");
+    lua_settop(s.L, 0);
+    wowee::addons::pushFrameByHandle(s.L, 99);
+    CHECK(lua_gettop(s.L) == 1);
+    CHECK(lua_isnil(s.L, 1));
+    lua_settop(s.L, 0);
+    const int addon = wowee::addons::taint::intern("SomeAddon");
+    {
+        wowee::addons::taint::Scope insecure(addon);
+        wowee::addons::pushFrameByHandle(s.L, 6);
+        CHECK(lua_gettaintof(s.L, -1) == addon);
+    }
+}

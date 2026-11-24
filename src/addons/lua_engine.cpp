@@ -2080,6 +2080,7 @@ static int lua_Region_SetParent(lua_State* L) {
             const bool moves = w && engine && w->kind == wowee::ui::WidgetKind::Frame && w->parent != to;
             const bool wasUp = moves && tree->shownNow(id), wasTold = moves && w->toldShown;
             if (wasTold) engine->frameHidden(id);
+            tree->pinPoints(id);
             tree->setParent(id, np);
             w = tree->get(id);
             if (moves && w && w->shown && (wasTold || !wasUp)) engine->frameShown(id);
@@ -2187,26 +2188,19 @@ int lua_Frame_GetFrameLevel(lua_State* L) {
 /// relativeTo comes back as the frame itself, not its name, because that is
 /// what SetPoint is handed straight back in.
 int lua_Region_GetPoint(lua_State* L) {
+    // 0x0049d950: the first without a number, and what the point is placed by
+    // whatever that is - a texture, a font string, the parent - nil for the
+    // screen.
+    auto* tree = wowee::addons::getWidgetTree(L);
     const auto* w = widgetOf(L, 1);
-    if (!w || w->anchors.empty()) return 0;
-    // One-based, and no argument means the first - which is what FrameXML
-    // relies on where a frame has only one.
-    size_t index = static_cast<size_t>(luaL_optnumber(L, 2, 1));
-    if (index < 1) index = 1;
-    if (index > w->anchors.size()) return 0;
-    const wowee::ui::Anchor& a = w->anchors[index - 1];
-
-    lua_pushstring(L, a.point.c_str());
-    // Zero means "my parent", which SetPoint also treats as the default, so it
-    // comes back as nil rather than as a frame that was never named.
-    if (a.relativeTo == 0) {
-        lua_pushnil(L);
-    } else {
-        pushFrameByWid(L, a.relativeTo);
-    }
-    lua_pushstring(L, a.relativePoint.c_str());
-    lua_pushnumber(L, a.x);
-    lua_pushnumber(L, a.y);
+    const wowee::ui::Anchor* a =
+        tree && w ? tree->pointAt(w->id, lua_isnumber(L, 2) ? luaToClientInt(L, 2) - 1 : 0) : nullptr;
+    if (!a) return 0;
+    lua_pushstring(L, a->point.c_str());
+    pushFrameByHandle(L, a->relativeTo != 0 ? a->relativeTo : w->parent);
+    lua_pushstring(L, a->relativePoint.c_str());
+    lua_pushnumber(L, a->x);
+    lua_pushnumber(L, a->y);
     return 5;
 }
 

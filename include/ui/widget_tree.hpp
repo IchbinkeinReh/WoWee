@@ -1070,6 +1070,14 @@ public:
     /// units. Held inside SetMinResize/SetMaxResize.
     void resizeBy(uint32_t id, const std::string& point, float dx, float dy);
     void addPoint(uint32_t id, const Anchor& anchor);
+    /// A region's points as GetPoint counts them (0x0049d950), by their names:
+    /// TOPLEFT, TOP, TOPRIGHT, LEFT, CENTER, RIGHT, BOTTOMLEFT, BOTTOM,
+    /// BOTTOMRIGHT, whenever each was set. The first for an index below 0, null
+    /// past the last.
+    [[nodiscard]] const Anchor* pointAt(uint32_t id, int index) const;
+    /// SetParent: the points stay where they are - by the region that was the
+    /// parent, where they were set by the parent (0x004911b0 leaves them).
+    void pinPoints(uint32_t id);
     void setAllPoints(uint32_t id, uint32_t relativeTo);
 
     /// Resolve every widget's rect and visibility for a screen of this size.

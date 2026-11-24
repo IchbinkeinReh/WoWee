@@ -3536,3 +3536,35 @@ TEST_CASE("A frame goes with one that was never told it is up", "[widget][visibi
     told.hide(driver);
     CHECK(told.take() == "-Panel");
 }
+
+TEST_CASE("a region's points are counted by their names", "[widgets]") {
+    WidgetTree tree;
+    const uint32_t f = tree.create(WidgetKind::Frame, tree.rootId(), "F");
+    const uint32_t g = tree.create(WidgetKind::Frame, tree.rootId(), "G");
+    CHECK(tree.pointAt(f, 0) == nullptr);
+    tree.addPoint(f, {"BOTTOMRIGHT", g, "TOPLEFT", 1.0f, 2.0f});
+    tree.addPoint(f, {"LEFT", 0, "LEFT", 3.0f, 4.0f});
+    tree.addPoint(f, {"TOPLEFT", g, "TOPLEFT", 5.0f, 6.0f});
+    REQUIRE(tree.pointAt(f, 0) != nullptr);
+    CHECK(tree.pointAt(f, 0)->point == "TOPLEFT");
+    CHECK(tree.pointAt(f, -3)->point == "TOPLEFT");
+    CHECK(tree.pointAt(f, 1)->point == "LEFT");
+    CHECK(tree.pointAt(f, 2)->point == "BOTTOMRIGHT");
+    CHECK(tree.pointAt(f, 2)->relativeTo == g);
+    CHECK(tree.pointAt(f, 3) == nullptr);
+    CHECK(tree.pointAt(9999, 0) == nullptr);
+}
+
+TEST_CASE("a new parent leaves the points where they are", "[widgets]") {
+    WidgetTree tree;
+    const uint32_t a = tree.create(WidgetKind::Frame, tree.rootId(), "A");
+    const uint32_t b = tree.create(WidgetKind::Frame, tree.rootId(), "B");
+    const uint32_t f = tree.create(WidgetKind::Frame, a, "F");
+    tree.addPoint(f, {"CENTER", 0, "CENTER", 0.0f, 0.0f});
+    tree.addPoint(f, {"LEFT", b, "LEFT", 0.0f, 0.0f});
+    tree.pinPoints(f);
+    tree.setParent(f, b);
+    CHECK(tree.get(f)->parent == b);
+    CHECK(tree.pointAt(f, 1)->relativeTo == a);   // CENTER, set by the parent it had
+    CHECK(tree.pointAt(f, 0)->relativeTo == b);
+}

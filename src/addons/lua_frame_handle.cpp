@@ -52,6 +52,21 @@ uint32_t widgetOfHandle(const void* handle) {
     return (value & 0xF) == kMark ? static_cast<uint32_t>(value >> 4) : 0;
 }
 
+void pushFrameByHandle(lua_State* L, uint32_t widget) {
+    const int caller = taint::current();
+    taint::Quiet quiet;
+    lua_getfield(L, LUA_REGISTRYINDEX, kObjects);
+    if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, static_cast<int>(widget));
+        lua_remove(L, -2);
+    }
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_pushnil(L);
+    }
+    lua_settaintof(L, -1, caller);
+}
+
 void takeSelfByHandle(lua_State* L) {
     if (lua_type(L, 1) != LUA_TTABLE) return;
     const int caller = taint::current();
@@ -66,18 +81,13 @@ void takeSelfByHandle(lua_State* L) {
     const uint32_t widget = lua_islightuserdata(L, -1) ? widgetOfHandle(lua_touserdata(L, -1)) : 0;
     lua_pop(L, 1);
     if (widget == 0) return;
-    lua_getfield(L, LUA_REGISTRYINDEX, kObjects);
+    pushFrameByHandle(L, widget);
     if (lua_istable(L, -1)) {
-        lua_rawgeti(L, -1, static_cast<int>(widget));
-        if (lua_istable(L, -1)) {
-            // As the client pushes an object: with the caller's taint.
-            lua_settaintof(L, -1, caller);
-            lua_replace(L, 1);
-        } else {
-            lua_pop(L, 1);
-        }
+        lua_settaintof(L, -1, caller);
+        lua_replace(L, 1);
+    } else {
+        lua_pop(L, 1);
     }
-    lua_pop(L, 1);
 }
 
 void pushMethodByHandle(lua_State* L, lua_CFunction method) {

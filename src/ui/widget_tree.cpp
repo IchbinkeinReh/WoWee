@@ -1,4 +1,5 @@
 #include "ui/widget_tree.hpp"
+#include "ui/layout_cache.hpp"
 
 #include <chrono>
 
@@ -683,6 +684,25 @@ void WidgetTree::lower(uint32_t id) {
     shiftExplicitLevels(id, newLevel - w->effLevel);
     w->level = newLevel;
     w->levelExplicit = true;
+}
+
+const Anchor* WidgetTree::pointAt(uint32_t id, int index) const {
+    const Widget* w = get(id);
+    if (!w) return nullptr;
+    std::vector<const Anchor*> points;
+    for (const Anchor& a : w->anchors) points.push_back(&a);
+    const auto slot = [](const Anchor* a) { return layout_cache::pointIndex(a->point); };
+    std::stable_sort(points.begin(), points.end(),
+                     [&](const Anchor* a, const Anchor* b) { return slot(a) < slot(b); });
+    const size_t at = index > 0 ? static_cast<size_t>(index) : 0;
+    return at < points.size() ? points[at] : nullptr;
+}
+
+void WidgetTree::pinPoints(uint32_t id) {
+    Widget* w = get(id);
+    if (!w) return;
+    for (Anchor& a : w->anchors)
+        if (a.relativeTo == 0) a.relativeTo = w->parent;
 }
 
 void WidgetTree::addPoint(uint32_t id, const Anchor& anchor) {

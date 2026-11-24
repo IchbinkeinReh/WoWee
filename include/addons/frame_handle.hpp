@@ -20,6 +20,10 @@ namespace wowee::addons {
 /// one behind it.
 void setFrameHandle(lua_State* L, uint32_t widget);
 
+/// Pushes the table behind a widget, as the client pushes an object - with the
+/// caller's taint - or nil for a widget that has none.
+void pushFrameByHandle(lua_State* L, uint32_t widget);
+
 /// The widget of a handle, 0 for a pointer that is none.
 uint32_t widgetOfHandle(const void* handle);
 
