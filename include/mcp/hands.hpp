@@ -49,8 +49,8 @@ Steps pressButton(ToolContext& context, int button, SDL_Keymod mods, int clicks)
 /// The pointer there, and a click.
 Steps clickAt(ToolContext& context, std::function<std::optional<glm::vec2>()> where, int button, SDL_Keymod mods,
               int clicks);
-/// From one place to another with the button held.
-Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button);
+/// From one place to another with the button held, and with the modifiers.
+Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button, SDL_Keymod mods = SDL_KMOD_NONE);
 
 /// A point of the window that is the world's and not the interface's, for a
 /// drag to begin at.

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "core/application.hpp"
@@ -168,7 +170,8 @@ void mouse(ToolContext& context, const json& args, Script& script) {
             script.then([](Script& s) { return s.fail("to_x and to_y are wanted"); });
             return;
         }
-        for (auto& fn : dragFromTo(context, pointOf(args, "x", "y"), pointOf(args, "to_x", "to_y"), button)) {
+        for (auto& fn : dragFromTo(context, pointOf(args, "x", "y"), pointOf(args, "to_x", "to_y"), button,
+                                   modsOf(args))) {
             script.then(std::move(fn));
         }
     } else if (action == "release") {
@@ -188,44 +191,59 @@ void mouse(ToolContext& context, const json& args, Script& script) {
     }));
 }
 
+std::optional<glm::vec3> placeOf(ToolContext& context, uint64_t guid) {
+    auto* gh = context.app.getGameHandler();
+    const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr;
+    if (!e) return std::nullopt;
+    return entityAt(context, *e);
+}
+
 /// Steps that bring an entity into the window, so that it can be pointed at:
-/// the character turned to it, and the camera moved where something is in the
-/// way of it.
+/// the character turned to it - by the turn keys, and by the mouse where they
+/// do not do it - and the camera moved where something is in the way of it.
 Steps bringIntoView(ToolContext& context, uint64_t guid) {
+    const auto at = [&context, guid] { return placeOf(context, guid); };
+    // Whether the character looks elsewhere, so that it is out of the window
+    // with the camera behind the character.
+    const auto looksAway = [&context, guid](float degrees) {
+        const auto place = placeOf(context, guid);
+        return place && std::fabs(bearingTo(context, *place)) > degrees;
+    };
     Steps out;
-    out.push_back([&context, guid](Script& s) {
-        auto* gh = context.app.getGameHandler();
-        const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr;
-        if (!e) return s.fail("it is gone");
-        if (clickPointOf(context, guid)) return Script::Step::Next;
-        // The camera is behind the character; what it faces is in view.
-        Steps steps = turnToward(
-            context,
-            [&context, guid]() -> std::optional<glm::vec3> {
-                auto* game = context.app.getGameHandler();
-                const auto it = game ? game->getEntityManager().getEntity(guid) : nullptr;
-                if (!it) return std::nullopt;
-                return entityAt(*it);
-            },
-            false);
+    out.push_back([&context, guid, at, looksAway](Script& s) {
+        if (!at()) return s.fail("it is gone");
+        if (!looksAway(90.0f) && clickPointOf(context, guid)) return Script::Step::Next;
+        Steps steps = turnToward(context, at, false);
+        steps.push_back([&context, at, looksAway](Script& script) {
+            // The keys are bound to something else, or the character is not
+            // turned by them now.
+            if (looksAway(20.0f)) script.first(turnToward(context, at, true));
+            return Script::Step::Next;
+        });
         steps.push_back(Script::seconds(0.6));
         s.first(std::move(steps));
         return Script::Step::Next;
     });
-    // Behind the character itself, or under it: looked at from elsewhere.
+    // Behind the character itself, or under it: looked at from elsewhere. By
+    // where it is and not by where the character looks, which may be one that
+    // cannot be turned.
     struct Views {
         static Script::Fn make(ToolContext& context, uint64_t guid, size_t i) {
             return [&context, guid, i](Script& s) {
-                constexpr std::array<glm::vec2, 4> kViews = {{{0.0f, 30.0f}, {45.0f, 25.0f}, {-45.0f, 25.0f},
-                                                              {0.0f, 55.0f}}};
+                constexpr std::array<glm::vec2, 5> kViews = {{{0.0f, 30.0f}, {45.0f, 25.0f}, {-45.0f, 25.0f},
+                                                              {0.0f, 55.0f}, {180.0f, 35.0f}}};
                 if (i >= kViews.size() || clickPointOf(context, guid)) return Script::Step::Next;
                 const glm::vec2 view = kViews[i];
-                Steps steps = dragView(context, SDL_BUTTON_LEFT, [&context, view] {
+                Steps steps = dragView(context, SDL_BUTTON_LEFT, [&context, guid, view] {
                     auto* renderer = context.app.getRenderer();
                     auto* cc = renderer ? renderer->getCameraController() : nullptr;
                     if (!cc) return glm::vec2(0.0f);
                     const auto pose = cc->currentViewPose();
-                    return glm::vec2(std::remainder(view.x - pose.yaw, 360.0f), view.y - pose.pitch);
+                    // A pose's yaw is to the left of the facing, a bearing to
+                    // its right.
+                    const auto place = placeOf(context, guid);
+                    const float bearing = place ? static_cast<float>(bearingTo(context, *place)) : 0.0f;
+                    return glm::vec2(std::remainder(view.x - bearing - pose.yaw, 360.0f), view.y - pose.pitch);
                 });
                 steps.push_back(Script::seconds(0.3));
                 steps.push_back(make(context, guid, i + 1));
@@ -239,38 +257,52 @@ Steps bringIntoView(ToolContext& context, uint64_t guid) {
 }
 
 /// Pointing at an entity where the client's own picker finds it, and seeing
-/// that it is what the pointer is on.
+/// that it is what the pointer is on. One that moves on meanwhile - past the
+/// character, out of the window - is brought into view again.
 Steps pointAtEntity(ToolContext& context, uint64_t guid) {
-    Steps out = bringIntoView(context, guid);
-    auto tries = std::make_shared<int>(0);
-    auto instead = std::make_shared<uint64_t>(0);
+    struct Hunt {
+        int rounds = 0;
+        int tries = 0;
+        uint64_t instead = 0;
+    };
+    auto hunt = std::make_shared<Hunt>();
     struct Loop {
-        static Script::Fn make(ToolContext& context, uint64_t guid, std::shared_ptr<int> tries,
-                               std::shared_ptr<uint64_t> instead) {
-            return [&context, guid, tries, instead](Script& s) {
-                const auto at = clickPointOf(context, guid, instead.get());
+        static Script::Step lost(ToolContext& context, uint64_t guid, const std::shared_ptr<Hunt>& hunt, Script& s,
+                                 const char* why) {
+            constexpr int kRounds = 3;
+            if (++hunt->rounds < kRounds) {
+                hunt->tries = 0;
+                Steps again = bringIntoView(context, guid);
+                again.push_back(make(context, guid, hunt));
+                s.first(std::move(again));
+                return Script::Step::Next;
+            }
+            std::string said = why;
+            if (hunt->instead != 0) said += "; the client's picker finds " + guidText(hunt->instead) + " there";
+            if (const auto place = placeOf(context, guid)) {
+                said += "; bearing " + json(rounded(bearingTo(context, *place), 0)).dump() + ", " +
+                        json(rounded(glm::length(*place - playerAt(context)), 1)).dump() + " yards";
+            }
+            return s.fail(std::move(said));
+        }
+        static Script::Fn make(ToolContext& context, uint64_t guid, std::shared_ptr<Hunt> hunt) {
+            return [&context, guid, hunt](Script& s) {
+                const auto at = clickPointOf(context, guid, &hunt->instead);
                 if (!at) {
-                    if (++*tries > 40) {
-                        auto* gh = context.app.getGameHandler();
-                        const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr;
-                        std::string why = "no point of the window picks it";
-                        if (*instead != 0) why += "; the client's picker finds " + guidText(*instead) + " there";
-                        if (e) why += "; bearing " + json(rounded(bearingTo(context, entityAt(*e)), 0)).dump();
-                        return s.fail(std::move(why));
-                    }
-                    return Script::Step::Again;
+                    if (++hunt->tries <= 15) return Script::Step::Again;
+                    return lost(context, guid, hunt, s, "no point of the window picks it");
                 }
                 context.input.moveTo(*at);
                 // It may have moved from under the pointer by the time the
                 // frame has seen it.
                 Steps check;
                 check.push_back(Script::frames(2));
-                check.push_back([&context, guid, tries, instead](Script& script) {
+                check.push_back([&context, guid, hunt](Script& script) {
                     const glm::vec2 p = context.input.pointer();
                     if (!interfaceAt(context, p) && pickedAt(context, p) == guid) return Script::Step::Next;
-                    if (++*tries > 40) return script.fail("it keeps moving from under the pointer");
+                    if (++hunt->tries > 20) return lost(context, guid, hunt, script, "it keeps moving from under the pointer");
                     Steps again;
-                    again.push_back(make(context, guid, tries, instead));
+                    again.push_back(make(context, guid, hunt));
                     script.first(std::move(again));
                     return Script::Step::Next;
                 });
@@ -279,7 +311,8 @@ Steps pointAtEntity(ToolContext& context, uint64_t guid) {
             };
         }
     };
-    out.push_back(Loop::make(context, guid, tries, instead));
+    Steps out = bringIntoView(context, guid);
+    out.push_back(Loop::make(context, guid, hunt));
     return out;
 }
 
@@ -307,25 +340,34 @@ void target(ToolContext& context, const json& args, Script& script) {
     const Aftermath after(context);
     const std::string which = args.value("which", std::string());
     if (!which.empty()) {
-        // By the key its binding has, as a player cycles.
-        const char* command = which == "nearest_enemy"    ? "TARGETNEARESTENEMY"
-                              : which == "nearest_friend" ? "TARGETNEARESTFRIEND"
-                              : which == "self"           ? "TARGETSELF"
-                              : which == "last"           ? "TARGETLASTTARGET"
-                              : which == "pet"            ? "TARGETPET"
-                                                          : "";
+        // By the key its binding has, as a player cycles, or where it has none
+        // by the slash command that does the same, in the words every language
+        // of the client takes.
+        struct Way {
+            const char* which;
+            const char* command;
+            const char* slash;
+        };
+        constexpr std::array<Way, 6> kWays = {{{"nearest_enemy", "TARGETNEARESTENEMY", "/targetenemy"},
+                                               {"nearest_friend", "TARGETNEARESTFRIEND", "/targetfriend"},
+                                               {"self", "TARGETSELF", "/target player"},
+                                               {"last", "TARGETLASTTARGET", "/targetlasttarget"},
+                                               {"pet", "TARGETPET", "/target pet"},
+                                               {"none", "", "/cleartarget"}}};
+        const auto way = std::find_if(kWays.begin(), kWays.end(), [&](const Way& w) { return which == w.which; });
+        if (way == kWays.end()) {
+            script.then([](Script& s) { return s.fail("which?"); });
+            return;
+        }
+        const json key = *way->command ? tryQueryLua(context, std::string("return GetBindingKey('") + way->command + "')")
+                                       : json();
+        SDL_Scancode code = SDL_SCANCODE_UNKNOWN;
+        SDL_Keymod mods = SDL_KMOD_NONE;
         script.then(wantKeysFree(context));
-        if (which == "none") {
-            for (auto& fn : chatLine(context, "/cleartarget")) script.then(std::move(fn));
-        } else {
-            const json key = tryQueryLua(context, std::string("return GetBindingKey('") + command + "')");
-            SDL_Scancode code = SDL_SCANCODE_UNKNOWN;
-            SDL_Keymod mods = SDL_KMOD_NONE;
-            if (!key.is_string() || !parseChord(key.get<std::string>(), code, mods)) {
-                script.then([command](Script& s) { return s.fail(std::string("no key is bound to ") + command); });
-                return;
-            }
+        if (key.is_string() && parseChord(key.get<std::string>(), code, mods)) {
             for (auto& fn : pressKey(context, code, mods, 0.05)) script.then(std::move(fn));
+        } else {
+            for (auto& fn : chatLine(context, way->slash)) script.then(std::move(fn));
         }
     } else {
         std::string bad;
@@ -354,23 +396,33 @@ void interact(ToolContext& context, const json& args, Script& script) {
         auto* gh = context.app.getGameHandler();
         const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr;
         if (!e) return std::nullopt;
-        return entityAt(*e);
+        return entityAt(context, *e);
     };
     auto walked = std::make_shared<json>();
     const auto within = static_cast<float>(args.value("within", 4.0));
     script.then(wantKeysFree(context));
     if (args.value("approach", true)) {
-        script.then([&context, here, walked, within](Script& s) {
-            const auto at = here();
-            if (!at) return s.fail("it is gone");
-            if (glm::length(*at - playerAt(context)) <= within) return Script::Step::Next;
-            WalkOptions options;
-            options.stopWithin = std::max(1.0f, within - 1.0f);
-            options.timeout = 45.0;
-            *walked = json::object();
-            s.first(walkTo(context, here, options, walked));
-            return Script::Step::Next;
-        });
+        struct Walk {
+            static Script::Fn make(ToolContext& context, std::function<std::optional<glm::vec3>()> here,
+                                   std::shared_ptr<json> walked, float within, int left) {
+                return [&context, here, walked, within, left](Script& s) {
+                    const auto at = here();
+                    if (!at) return s.fail("it is gone");
+                    if (glm::length(*at - playerAt(context)) <= within || left <= 0) return Script::Step::Next;
+                    WalkOptions options;
+                    options.stopWithin = std::max(1.0f, within - 1.0f);
+                    options.timeout = 45.0;
+                    *walked = json::object();
+                    Steps steps = walkTo(context, here, options, walked);
+                    // Where it was walked to is where it was thought to be.
+                    steps.push_back(Script::seconds(0.3));
+                    steps.push_back(make(context, here, walked, within, left - 1));
+                    s.first(std::move(steps));
+                    return Script::Step::Next;
+                };
+            }
+        };
+        script.then(Walk::make(context, here, walked, within, 2));
     }
     for (auto& fn : pointAtEntity(context, guid)) script.then(std::move(fn));
     const int button = buttonNamed(args.value("button", std::string("right")));
@@ -393,7 +445,7 @@ void interact(ToolContext& context, const json& args, Script& script) {
         auto* gh = context.app.getGameHandler();
         if (const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr) {
             out["name"] = entityName(context, *e);
-            out["distance"] = rounded(glm::length(entityAt(*e) - playerAt(context)), 1);
+            out["distance"] = rounded(glm::length(entityAt(context, *e) - playerAt(context)), 1);
         }
         if (!walked->is_null()) out["walk"] = *walked;
         json windows = json::array();
@@ -437,7 +489,7 @@ void addPointTools(Toolbox& box) {
     box.push_back(handsTool(
         "target",
         "Target something: an entity by a click on it in the world, or nearest_enemy / nearest_friend / self / last / "
-        "pet by the key bound to it, or none.",
+        "pet by the key bound to it (by a slash command where none is), or none.",
         object({optional("guid", guid("0x...")), optional("name", text("the nearest with this in its name", 64)),
                 optional("unit", text("pet, mouseover, ...", 16)),
                 optional("which", choice("", {"nearest_enemy", "nearest_friend", "self", "last", "pet", "none"}))}),
@@ -451,7 +503,7 @@ void addPointTools(Toolbox& box) {
                 optional("modifiers", modifiers),
                 optional("wait", number("seconds to wait for what comes of it, 2 by default", 0, 20))}),
         interact);
-    i.patienceOf = [](const json& a) { return 75.0 + a.value("wait", 2.0); };
+    i.patienceOf = [](const json& a) { return 110.0 + a.value("wait", 2.0); };
     box.push_back(std::move(i));
 }
 

@@ -217,8 +217,15 @@ Steps clickAt(ToolContext& context, std::function<std::optional<glm::vec2>()> wh
     return out;
 }
 
-Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button) {
+Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button, SDL_Keymod mods) {
     Steps out = movePointer(context, [from] { return std::optional<glm::vec2>(from); });
+    if (mods != SDL_KMOD_NONE) {
+        out.push_back([&context, mods](Script&) {
+            context.input.modifiers(mods, true);
+            return Script::Step::Next;
+        });
+        out.push_back(Script::frames(2));
+    }
     out.push_back([&context, button](Script&) {
         context.input.button(button, true);
         return Script::Step::Next;
@@ -237,7 +244,14 @@ Steps dragFromTo(ToolContext& context, glm::vec2 from, glm::vec2 to, int button)
         context.input.button(button, false);
         return Script::Step::Next;
     });
-    out.push_back(Script::frames(3));
+    out.push_back(Script::frames(2));
+    if (mods != SDL_KMOD_NONE) {
+        out.push_back([&context, mods](Script&) {
+            context.input.modifiers(mods, false);
+            return Script::Step::Next;
+        });
+    }
+    out.push_back(Script::frames(1));
     return out;
 }
 
