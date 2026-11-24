@@ -498,14 +498,11 @@ struct Widget {
     float reportedRangeX = -1.0f, reportedRangeY = -1.0f;
 
     bool  isEditBox = false;
-    /// Whether this box takes the keyboard the moment it appears.
-    ///
-    /// Declared on 42 boxes in FrameXML and false on 40 of them, which is the
-    /// point of the attribute - a box that grabs focus on sight takes the
-    /// keyboard away from whatever the player was doing. The two that ask for
-    /// it are the channel-name field and the box that names an equipment set,
-    /// where typing is the only reason the dialog opened.
-    bool  editAutoFocus = false;
+    /// Whether this box takes the keyboard, where none has it, as it is shown
+    /// and as a key is pressed. On unless it is told otherwise (+0x2a0 bit 0,
+    /// 0x00966b70): FrameXML tells nearly every box otherwise that is not the
+    /// one thing to type in.
+    bool  editAutoFocus = true;
     /// Where an edit box's text starts inside its own frame. WoW's default is
     /// nothing; the four units used here until now were a stand-in, and a box
     /// whose art has a wide border drew its text on top of it.
@@ -1131,6 +1128,10 @@ public:
     /// BOTTOMRIGHT, whenever each was set. The first for an index below 0, null
     /// past the last.
     [[nodiscard]] const Anchor* pointAt(uint32_t id, int index) const;
+    /// Whether a region's rect can be worked out (0x00489230 after
+    /// 0x00489de0): a frame with no points has none, and what is placed by it
+    /// has none either.
+    [[nodiscard]] bool placed(uint32_t id, int depth = 0) const;
     /// SetParent: the points stay where they are - by the region that was the
     /// parent, where they were set by the parent (0x004911b0 leaves them).
     void pinPoints(uint32_t id);

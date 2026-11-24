@@ -11,6 +11,7 @@ extern "C" {
 
 #include "addons/lua_arg_guard.hpp"
 #include "addons/lua_std_libs.hpp"
+#include "addons/lua_time.hpp"
 #include "addons/missing_api_rule.hpp"
 
 #include <algorithm>
@@ -197,4 +198,28 @@ TEST_CASE("the usage lines are whole", "[lua]") {
         CHECK(std::string(guard.usage).rfind("Usage: ", 0) == 0);
     }
     CHECK(names.size() > 100);
+}
+
+TEST_CASE("time() takes a date table", "[lua]") {
+    State s;
+    lua_pushcfunction(s.L, wowee::addons::luaTimeOf);
+    lua_setglobal(s.L, "time");
+    const auto at = [](int year, int month, int day, int hour, int min, int sec) {
+        std::tm tm{};
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = min;
+        tm.tm_sec = sec;
+        tm.tm_isdst = -1;
+        return std::to_string(static_cast<long long>(std::mktime(&tm)));
+    };
+    CHECK(s.run("return time({year = 2010, month = 3, day = 14})") == at(2010, 3, 14, 12, 0, 0));
+    CHECK(s.run("return time({year = 2010, month = 3, day = '14', hour = 1, min = 2, sec = 3})") == at(2010, 3, 14, 1, 2, 3));
+    CHECK(s.run("return time({year = 2010, month = 3})").find("field 'day' missing in date table") != std::string::npos);
+    CHECK(s.run("return time({month = 3, day = 4})").find("field 'year' missing in date table") != std::string::npos);
+    CHECK(s.run("return time(5)").rfind("error: ", 0) == 0);
+    CHECK(s.run("return time() > 1200000000, time(nil) > 1200000000") == "true true");
+    CHECK(s.run("return time({year = 1800, month = 1, day = 1})") == "nil");
 }

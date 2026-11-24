@@ -2868,6 +2868,7 @@ void Application::run() {
                 // else looks at it. Otherwise typing into one would also
                 // walk the character, and backspace would trip a keybind.
                 if (addonManager_ && addonsLoaded_) {
+                    if (auto* engine = addonManager_->getLuaEngine()) engine->takeKeyboard();
                     if (auto* engine = addonManager_->getLuaEngine();
                         engine && engine->editBoxHasFocus() &&
                         !engine->keyIsTheGames(event.key.key, event.key.mod)) {

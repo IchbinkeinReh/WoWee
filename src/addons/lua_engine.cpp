@@ -801,6 +801,14 @@ wowee::ui::Widget* measuredWidgetOf(lua_State* L, int index) {
     return tree->get(id);
 }
 
+/// The same, null where its rect cannot be worked out: the edges are nil then
+/// (0x0049d0b0 and its kin).
+wowee::ui::Widget* placedWidgetOf(lua_State* L, int index) {
+    auto* w = measuredWidgetOf(L, index);
+    auto* tree = wowee::addons::getWidgetTree(L);
+    return w && tree && tree->placed(w->id) ? w : nullptr;
+}
+
 /// A name a script handed to an anchoring call, resolved to a widget.
 ///
 /// $parent is not only markup. FrameXML writes it in runtime strings too -
@@ -1983,8 +1991,9 @@ static float ownUnits(const wowee::ui::Widget* w, float v) {
     return v / es;
 }
 int lua_Region_GetLeft(lua_State* L) {
-    const auto* w = measuredWidgetOf(L, 1);
-    lua_pushnumber(L, w ? ownUnits(w, w->left) : 0.0);
+    const auto* w = placedWidgetOf(L, 1);
+    if (!w) return luaReturnNil(L);
+    lua_pushnumber(L, ownUnits(w, w->left));
     return 1;
 }
 /// GetCenter() - the middle of the frame, in the same screen units GetLeft and
@@ -1997,7 +2006,7 @@ int lua_Region_GetLeft(lua_State* L) {
 /// click into a ping position, and what the world map uses to place its
 /// markers.
 int lua_Region_GetCenter(lua_State* L) {
-    const auto* w = measuredWidgetOf(L, 1);
+    const auto* w = placedWidgetOf(L, 1);
     if (!w) { lua_pushnil(L); lua_pushnil(L); return 2; }
     lua_pushnumber(L, ownUnits(w, w->left + w->rectW * 0.5f));
     lua_pushnumber(L, ownUnits(w, w->bottom + w->rectH * 0.5f));
@@ -2084,18 +2093,21 @@ static int lua_Region_GetParent(lua_State* L) {
 }
 
 int lua_Region_GetRight(lua_State* L) {
-    const auto* w = measuredWidgetOf(L, 1);
-    lua_pushnumber(L, w ? ownUnits(w, w->left + w->rectW) : 0.0);
+    const auto* w = placedWidgetOf(L, 1);
+    if (!w) return luaReturnNil(L);
+    lua_pushnumber(L, ownUnits(w, w->left + w->rectW));
     return 1;
 }
 int lua_Region_GetBottom(lua_State* L) {
-    const auto* w = measuredWidgetOf(L, 1);
-    lua_pushnumber(L, w ? ownUnits(w, w->bottom) : 0.0);
+    const auto* w = placedWidgetOf(L, 1);
+    if (!w) return luaReturnNil(L);
+    lua_pushnumber(L, ownUnits(w, w->bottom));
     return 1;
 }
 int lua_Region_GetTop(lua_State* L) {
-    const auto* w = measuredWidgetOf(L, 1);
-    lua_pushnumber(L, w ? ownUnits(w, w->bottom + w->rectH) : 0.0);
+    const auto* w = placedWidgetOf(L, 1);
+    if (!w) return luaReturnNil(L);
+    lua_pushnumber(L, ownUnits(w, w->bottom + w->rectH));
     return 1;
 }
 /// GetRect() → left, bottom, width, height. All four at once, which is what
@@ -2119,7 +2131,7 @@ int lua_Region_IsMouseOver(lua_State* L) {
 }
 
 int lua_Region_GetRect(lua_State* L) {
-    const auto* w = measuredWidgetOf(L, 1);
+    const auto* w = placedWidgetOf(L, 1);   // nothing at all where it has none (0x0049ce50)
     if (!w) return 0;
     lua_pushnumber(L, ownUnits(w, w->left));
     lua_pushnumber(L, ownUnits(w, w->bottom));
@@ -7528,8 +7540,12 @@ static int lua_SetPortraitToTexture(lua_State* L) {
     return 0;
 }
 int lua_Texture_GetTexture(lua_State* L) {
+    // 0x0048c670: the texture's name - a colour's is "SolidTexture"
+    // (0x004b9550) - or nil without one.
     const auto* w = widgetOf(L, 1);
-    lua_pushstring(L, w ? w->texturePath.c_str() : "");
+    if (w && w->solidColor) lua_pushstring(L, "SolidTexture");
+    else if (w && !w->texturePath.empty()) lua_pushstring(L, w->texturePath.c_str());
+    else lua_pushnil(L);
     return 1;
 }
 // SetTexCoord (0x0048e170): exactly four numbers - left, right, top, bottom -
@@ -10104,9 +10120,20 @@ int lua_StatusBar_SetStatusBarTexture(lua_State* L) {
         if (lua_isstring(L, 2)) w->barTexture = lua_tostring(L, 2);
         else if (lua_istable(L, 2)) {
             if (auto* tex = widgetOf(L, 2)) w->barTexture = tex->texturePath;
+            // The object itself is the bar's from here on.
+            taint::Quiet quiet;
+            lua_pushvalue(L, 2);
+            lua_setfield(L, 1, "__barTexture");
+        } else {
+            w->barTexture.clear();
         }
     }
     return 0;
+}
+int lua_wowee_barHasTexture(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushboolean(L, w && !w->barTexture.empty());
+    return 1;
 }
 int lua_StatusBar_SetStatusBarColor(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
@@ -10871,7 +10898,10 @@ static int lua_CreateFrame(lua_State* L) {
                 lua_pushboolean(L, 1);
                 lua_setfield(L, -2, "__isEditBox");
                 // A new one owes an OnTextChanged (0x00966b70).
-                if (auto* engine = engineFrom(L)) engine->noteTextChanged(id, /*userInput=*/false);
+                if (auto* engine = engineFrom(L)) {
+                    engine->noteTextChanged(id, /*userInput=*/false);
+                    engine->noteEditBox(id);
+                }
             }
             if (w->isSlider) w->mouseEnabled = true;
         }
@@ -11187,6 +11217,7 @@ void LuaEngine::shutdown() {
         // - which is what a logout followed by another login did, since that
         // path loads the interface again on a state it thought was empty.
         widgets_.reset();
+        editBoxes_.clear();
         hoverWid_ = 0;
         focusedWid_ = 0;
         draggingWid_ = 0;
@@ -11787,6 +11818,8 @@ void LuaEngine::registerCoreAPI() {
     }, 1);
     lua_setglobal(L_, "__WoweeDrainTextChanged");
 
+    lua_pushcfunction(L_, lua_wowee_barHasTexture);
+    lua_setglobal(L_, "__WoweeBarHasTexture");
     lua_pushcfunction(L_, lua_wowee_setAnimOffset);
     lua_setglobal(L_, "__WoweeSetAnimOffset");
     lua_pushcfunction(L_, lua_wowee_setAnimRotation);
@@ -13545,6 +13578,8 @@ void LuaEngine::registerCoreAPI() {
         // drive the fill, which is drawn from the path - an honest stand-in
         // rather than a working one, and it is the raise that was the bug.
         "function mt:GetStatusBarTexture()\n"
+        // 0x009715d0: nil until it has one.
+        "    if not __WoweeBarHasTexture(self) then return nil end\n"
         "    if not self.__barTexture then\n"
         "        self.__barTexture = self:CreateTexture(nil, 'ARTWORK')\n"
         "    end\n"
@@ -17104,6 +17139,17 @@ void LuaEngine::setEditFocus(uint32_t wid) {
     }
 }
 
+void LuaEngine::takeKeyboard() {
+    if (!L_ || focusedWid_ != 0) return;
+    const ui::Widget* top = nullptr;
+    for (const uint32_t id : editBoxes_) {
+        const auto* w = widgets_.get(id);
+        if (!w || !w->isEditBox || !w->editAutoFocus || !w->visible || !widgets_.shownNow(id)) continue;
+        if (!top || w->strata > top->strata || (w->strata == top->strata && w->level > top->level)) top = w;
+    }
+    if (top) setEditFocus(top->id);
+}
+
 void LuaEngine::dispatchText(const char* utf8) {
     // An entry from the client's own loop: what it looks up taints nothing,
     // and each handler it reaches is run under its own taint (pcallScript).
@@ -18004,15 +18050,16 @@ void LuaEngine::frameHidden(uint32_t id) {
     widgets_.hideNow(id, [this](uint32_t gone) { tellVisibility(gone, false); });
 }
 
-void LuaEngine::tellVisibility(uint32_t id, bool up) {
+void LuaEngine::tellVisibility(uint32_t id, bool up, bool shown) {
     if (auto* button = widgets_.get(id); button && !up) button->mouseButtonState(false);   // 0x0096f410
     callFrameScript(id, up ? "OnShow" : "OnHide");
     const auto* w = widgets_.get(id);
     if (!w || !w->isEditBox) return;
-    // A box that asks for the keyboard takes it as it appears, where none has
-    // it (0x009655c0); every box gives it up as it goes (0x009655f0).
+    // A box that asks for the keyboard takes it as it is shown, where none has
+    // it (0x009655c0) - not as it is made, which its base sees to (0x004922f0);
+    // every box gives it up as it goes (0x009655f0).
     if (up) {
-        if (w->editAutoFocus && focusedWid_ == 0 && widgets_.shownNow(id)) setEditFocus(id);
+        if (shown && w->editAutoFocus && focusedWid_ == 0 && widgets_.shownNow(id)) setEditFocus(id);
     } else if (focusedWid_ == id) {
         setEditFocus(0);
     }
@@ -18040,7 +18087,7 @@ void LuaEngine::updateVisibility() {
         const bool up = (w->visible || w->toldShown) && widgets_.shownNow(id);
         if (up == w->toldShown) continue;
         w->toldShown = up;
-        tellVisibility(id, up);
+        tellVisibility(id, up, /*shown=*/false);
     }
 }
 

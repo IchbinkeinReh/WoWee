@@ -38,6 +38,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_time.hpp"
 #include "addons/modifier_keys.hpp"
 #include "addons/object_type.hpp"
 #include "ui/layout_cache.hpp"
@@ -2840,14 +2841,22 @@ static int lua_WoweeReportMissingFixedControls(lua_State* L) {
 }
 
 static int lua_SetCVar(lua_State* L) {
-    const char* name = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
-    if (!name) return 0;
-    // A number is as valid as a string here and FrameXML passes both.
+    // 0x00514c10: one that is not registered, or hidden, raises, and one that
+    // is not to be written.
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SetCVar(\"cvar\", value [, \"scriptCvar\")");
+    const char* name = lua_tostring(L, 1);
+    {
+        std::string lower(name);
+        toLowerInPlace(lower);
+        const auto flags = registeredCVarFlags(lower);
+        if (!flags || (*flags & kCVarHidden)) return luaL_error(L, "Couldn't find CVar named '%s'", name);
+        if (*flags & (kCVarReadOnly | 0x100u)) return luaL_error(L, "\"%s\" is read-only", name);
+    }
+    // A number is as valid as a string here and FrameXML passes both; a
+    // boolean is neither (0x0084e0e0), so that true writes "0" as nil does.
     std::string value;
-    if (lua_isstring(L, 2) || lua_isnumber(L, 2)) {
+    if (lua_isstring(L, 2)) {
         value = lua_tostring(L, 2);
-    } else if (lua_isboolean(L, 2)) {
-        value = lua_toboolean(L, 2) ? "1" : "0";
     } else {
         // nil is how an unticked box reports itself, and these are written
         // straight through: SetCVar("questPOI", self:GetChecked()). Storing
@@ -4130,10 +4139,8 @@ static int lua_wow_date(lua_State* L) {
 }
 
 // time() - current unix timestamp
-static int lua_wow_time(lua_State* L) {
-    lua_pushnumber(L, static_cast<double>(time(nullptr)));
-    return 1;
-}
+// time([table]) (0x00817650): now, or the time a date table gives, as os.time.
+static int lua_wow_time(lua_State* L) { return luaTimeOf(L); }
 
 // GetTime() - returns elapsed seconds since engine start (shared epoch)
 static int lua_wow_gettime(lua_State* L) {

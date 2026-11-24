@@ -426,11 +426,17 @@ private:
     /// click already.
 public:
     void clickButton(uint32_t wid, const char* button, bool down);
+    /// A key pressed with no edit box to have it: the box in view, the topmost
+    /// one, that takes the keyboard by itself (0x009658d0).
+    void takeKeyboard();
+    /// An edit box made.
+    void noteEditBox(uint32_t wid) { editBoxes_.push_back(wid); }
 private:
+    std::vector<uint32_t> editBoxes_;
     /// Whether a button is registered for the press, or the release, of a
     /// mouse button: the left one's release where nothing is.
     bool frameTakesClick(uint32_t wid, const char* button, bool down);
-    void tellVisibility(uint32_t id, bool up);
+    void tellVisibility(uint32_t id, bool up, bool shown = true);
     /// The same, with a number. A handler that compares its argument against
     /// zero cannot be handed a numeric string.
     void callFrameScriptNumber(uint32_t wid, const char* script, double arg);

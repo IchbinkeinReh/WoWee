@@ -698,6 +698,21 @@ const Anchor* WidgetTree::pointAt(uint32_t id, int index) const {
     return at < points.size() ? points[at] : nullptr;
 }
 
+bool WidgetTree::placed(uint32_t id, int depth) const {
+    const Widget* w = get(id);
+    if (!w || id == rootId_ || id == uiParentId_ || depth > 64) return true;
+    const Widget* parent = get(w->parent);
+    if (w->anchors.empty()) {
+        // What the client places itself: the art and the text of a frame, a
+        // scroll frame's child, a tooltip.
+        const bool bySelf = w->kind == WidgetKind::Frame && !w->isTooltip && !(parent && parent->scrollChild == id);
+        return !bySelf && placed(w->parent, depth + 1);
+    }
+    return std::all_of(w->anchors.begin(), w->anchors.end(), [&](const Anchor& a) {
+        return placed(a.relativeTo != 0 ? a.relativeTo : w->parent, depth + 1);
+    });
+}
+
 void WidgetTree::pinPoints(uint32_t id) {
     Widget* w = get(id);
     if (!w) return;

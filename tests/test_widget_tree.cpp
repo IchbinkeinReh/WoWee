@@ -3676,3 +3676,32 @@ TEST_CASE("a double click is a release soon after a click, with a handler for on
     CHECK_FALSE(b.releaseIsDouble(false, 11.5));  // without a handler two clicks
     CHECK(b.releaseIsDouble(true, 11.9, 0.5));
 }
+
+TEST_CASE("a frame without points has no rect, nor has what is placed by it", "[widgets]") {
+    WidgetTree tree;
+    const uint32_t f = tree.create(WidgetKind::Frame, tree.rootId(), "F");
+    const uint32_t art = tree.create(WidgetKind::Texture, f, "Art");
+    const uint32_t child = tree.create(WidgetKind::Frame, f, "Child");
+    tree.addPoint(child, {"CENTER", 0, "CENTER", 0.0f, 0.0f});
+    const uint32_t other = tree.create(WidgetKind::Frame, tree.rootId(), "Other");
+    tree.addPoint(other, {"CENTER", child, "CENTER", 0.0f, 0.0f});
+    CHECK(tree.placed(tree.rootId()));
+    CHECK(tree.placed(tree.uiParentId()));
+    CHECK_FALSE(tree.placed(f));
+    CHECK_FALSE(tree.placed(art));
+    CHECK_FALSE(tree.placed(child));
+    CHECK_FALSE(tree.placed(other));
+    tree.addPoint(f, {"CENTER", 0, "CENTER", 0.0f, 0.0f});
+    CHECK(tree.placed(f));
+    CHECK(tree.placed(art));
+    CHECK(tree.placed(other));
+    // What the client places itself.
+    const uint32_t inner = tree.create(WidgetKind::Frame, f, "Inner");
+    CHECK_FALSE(tree.placed(inner));
+    tree.get(f)->scrollChild = inner;
+    CHECK(tree.placed(inner));
+    const uint32_t tip = tree.create(WidgetKind::Frame, tree.rootId(), "Tip");
+    tree.get(tip)->isTooltip = true;
+    CHECK(tree.placed(tip));
+    CHECK(Widget().editAutoFocus);
+}
