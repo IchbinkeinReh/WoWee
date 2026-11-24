@@ -33,6 +33,8 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include "game/action_drop.hpp"
+#include "game/cursor_info.hpp"
 #include "game/pet_action.hpp"
 #include "game/macro_eval.hpp"
 #include "game/shapeshift_forms.hpp"
@@ -1567,22 +1569,51 @@ static int lua_ClearCursor(lua_State* L) {
     return 0;
 }
 
+/// The interface's index of a macro's id (0x00564ab0), 0 for none.
+static int macroIndex(lua_State* L, uint32_t macroId) {
+    auto* gh = getGameHandler(L);
+    return gh ? game::macro_list::indexOf(gh->macroList(), macroId) : 0;
+}
+
+/// The link of the item held: an own one's with all it has on it (0x0061e3a0),
+/// any other's by its number alone (0x0061e360); "" where its item is unknown.
+static std::string cursorItemLink(game::GameHandler* gh) {
+    const auto* info = gh->getItemInfo(s_cursorId);
+    if (!info) return {};
+    uint8_t bag = 0, slot = 0;
+    game::ItemLinkInstance on;
+    if (cursorWireSlot(bag, slot)) {
+        if (auto* inv = gh->getInventoryHandler()) on = gh->itemLinkInstance(inv->itemGuidAtWire(bag, slot));
+    }
+    const std::string name =
+        on.randomPropertyId != 0 ? gh->itemNameWithProperty(info->name, on.randomPropertyId) : info->name;
+    return game::itemChatLink(s_cursorId, info->quality, name, on, gh->getPlayerLevel());
+}
+
+// GetCursorInfo() (0x00515200)
 static int lua_GetCursorInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     switch (s_cursorType) {
-        case CursorType::SPELL:
-            lua_pushstring(L, "spell");
-            lua_pushnumber(L, 0);          // bookSlotIndex
-            lua_pushstring(L, "spell");    // bookType
-            lua_pushnumber(L, s_cursorId); // spellId
-            return 4;
+        case CursorType::SPELL: {
+            if (!gh) return 0;
+            std::vector<uint32_t> critters, mounts, book;
+            for (const auto& c : gh->getCompanions(false)) critters.push_back(c.spellId);
+            for (const auto& c : gh->getCompanions(true)) mounts.push_back(c.spellId);
+            for (const auto& tab : gh->getSpellBookTabs())
+                book.insert(book.end(), tab.spellIds.begin(), tab.spellIds.end());
+            const auto held = game::cursor_info::spell(s_cursorId, critters, mounts, book, gh->getPetBookSpells());
+            lua_pushstring(L, held.kind);
+            lua_pushnumber(L, held.place);
+            lua_pushstring(L, held.list);
+            return 3;
+        }
         case CursorType::ITEM:
         // An item out of the guild bank is an item, and the ammunition off the
         // ammo slot (cases 7, 9 and 0xb).
         case CursorType::GUILDBANK:
-        // And the ammunition off the ammo slot: "item" and its entry
-        // (0x00515200 cases 7, 9 and 0xb).
-        case CursorType::AMMO:
+        case CursorType::AMMO: {
+            const std::string link = gh ? cursorItemLink(gh) : std::string();
+            if (link.empty()) return 0;
             lua_pushstring(L, "item");
             lua_pushnumber(L, s_cursorId);
             lua_pushstring(L, link.c_str());
@@ -1593,9 +1624,10 @@ static int lua_GetCursorInfo(lua_State* L) {
             lua_pushnumber(L, macroIndex(L, s_cursorId));
             return 2;
         case CursorType::MONEY:
-            // containerframe.lua branches on this exact string to decide that
-            // a click in a bag is money being put back.
-            lua_pushstring(L, "money");
+            // containerframe.lua branches on these exact strings to decide that
+            // a click in a bag is money being put back, or taken out of the
+            // guild bank.
+            lua_pushstring(L, s_cursorMoneyGuildBank ? "guildbankmoney" : "money");
             lua_pushnumber(L, static_cast<lua_Number>(s_cursorMoney));
             return 2;
         case CursorType::MERCHANT:
@@ -1638,7 +1670,8 @@ static int lua_CursorHasSpell(lua_State* L) {
 // CursorHasMoney() (0x005151c0) / CursorHasMacro() (0x00515180): the
 // cursor's type is 2 / 8. 1 or nil.
 static int lua_CursorHasMoney(lua_State* L) {
-    if (s_cursorType == CursorType::MONEY) lua_pushnumber(L, 1); else lua_pushnil(L);
+    // Not the guild bank's, which is type 0xc.
+    if (s_cursorType == CursorType::MONEY && !s_cursorMoneyGuildBank) lua_pushnumber(L, 1); else lua_pushnil(L);
     return 1;
 }
 static int lua_CursorHasMacro(lua_State* L) {

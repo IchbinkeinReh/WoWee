@@ -4186,6 +4186,11 @@ wowee_add_test(test_glyph_socket
 wowee_add_test(test_macro_list
     SOURCES test_macro_list.cpp)
 
+# ── test_cursor_info ─────────────────────────────────────────
+# What GetCursorInfo says of a spell (0x00515200). Header-only.
+wowee_add_test(test_cursor_info
+    SOURCES test_cursor_info.cpp)
+
 # ── test_action_drop ─────────────────────────────────────────
 # What the cursor holds against an action slot (0x005abbc0, 0x005ab120) and a
 # click into the world (0x005278c0, 0x0051fa50). Header-only.
