@@ -208,4 +208,6 @@ TEST_CASE("A triangle's face word says its front and its room's light apart", "[
     CHECK(((bits(packRtFace(true, room)) >> 16) & 0xFFu) == 10u);
     // A black room is a room's light all the same.
     CHECK(bits(packRtFace(false, packRtRoomLight(0, 0, 0))) == kRtFaceRoomLight);
+    CHECK(bits(packRtFace(true, kRtFaceOpenAir)) == (kRtFaceFront | kRtFaceOpenAir));
+    CHECK((kRtFaceOpenAir & (kRtFaceRoomLight | kRtFaceFront | 0xFFFFFFu)) == 0u);
 }

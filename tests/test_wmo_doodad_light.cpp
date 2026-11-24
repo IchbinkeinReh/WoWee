@@ -6,6 +6,7 @@
 #include <catch_amalgamated.hpp>
 #include <array>
 
+#include "pipeline/wmo_open_air_room.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 
 #include <string>
@@ -403,4 +404,23 @@ TEST_CASE("A room's faces carry the light it is painted with", "[wmo][light]") {
     wl::GroupDraw bare = room;
     bare.vertexColors = false;
     CHECK_FALSE(wl::roomLight(bare, K::Interior, 0, mocv, 0, ambient).has_value());
+}
+
+TEST_CASE("A room lit as the open air is one that is indoors, lit by the zone and unpainted", "[wmo]") {
+    // silvermoon_city_01: 2ndAH and TowersFlight; AH_Interior is painted, extleft outside.
+    CHECK(wowee::pipeline::isOpenAirRoom(0xa841));
+    CHECK_FALSE(wowee::pipeline::isOpenAirRoom(0x2805));
+    CHECK_FALSE(wowee::pipeline::isOpenAirRoom(0x8809));
+    CHECK(wowee::pipeline::isOpenAirRoom(0x12041));
+    // A room of 20 by 20 with its roof at 10, beside a yard.
+    const std::vector<glm::vec3> v = {{0, 0, 0}, {40, 0, 0}, {40, 20, 0}, {0, 20, 0},
+                                      {0, 0, 10}, {20, 0, 10}, {20, 20, 10}, {0, 20, 10}};
+    const std::vector<uint16_t> idx = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+    const wowee::pipeline::RoofColumns roof(v, idx);
+    const glm::vec3 up(0, 0, 1), side(1, 0, 0), down(0, 0, -1);
+    CHECK(roof.inside({5, 5, 0}, {6, 5, 0}, {5, 6, 0}, up));       // its floor
+    CHECK(roof.inside({1, 5, 3}, {1, 6, 3}, {1, 5, 5}, side));     // its wall
+    CHECK(roof.inside({5, 5, 10}, {6, 5, 10}, {5, 6, 10}, down));  // its ceiling
+    CHECK_FALSE(roof.inside({5, 5, 10}, {6, 5, 10}, {5, 6, 10}, up));  // the roof
+    CHECK_FALSE(roof.inside({30, 5, 0}, {31, 5, 0}, {30, 6, 0}, up));  // the yard
 }

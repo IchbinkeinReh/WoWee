@@ -11,6 +11,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/model_memory.hpp"
 #include <cstdio>
+#include "pipeline/wmo_open_air_room.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/rt_bvh.hpp"
@@ -5373,6 +5374,9 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
         } else {
             src.uvs.resize(src.positions.size(), glm::vec2(0.0f));
         }
+        std::optional<pipeline::RoofColumns> openAirRoom;
+        if (pipeline::isOpenAirRoom(group.groupFlags))
+            openAirRoom.emplace(group.collisionVertices, group.collisionIndices);
         for (const auto& batch : group.batches) {
             const uint32_t mat = batch.materialId;
             const uint32_t blend = mat < model.materialBlendModes.size() ? model.materialBlendModes[mat] : 0;
@@ -5426,6 +5430,16 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
                         room = packRtRoomLight(static_cast<uint32_t>(c->r), static_cast<uint32_t>(c->g),
                                                static_cast<uint32_t>(c->b));
                     }
+                }
+                if (room == 0 && openAirRoom) {
+                    const uint32_t i0 = group.collisionIndices[i], i1 = group.collisionIndices[i + 1],
+                                   i2 = group.collisionIndices[i + 2];
+                    const glm::vec3 normal = group.collisionNormals.size() == group.collisionVertices.size()
+                                                 ? group.collisionNormals[i0]
+                                                 : glm::vec3(0.0f);
+                    if (openAirRoom->inside(group.collisionVertices[i0], group.collisionVertices[i1],
+                                            group.collisionVertices[i2], normal))
+                        room = kRtFaceOpenAir;
                 }
                 src.roomLight.push_back(room);
                 src.indices.push_back(base + group.collisionIndices[i]);

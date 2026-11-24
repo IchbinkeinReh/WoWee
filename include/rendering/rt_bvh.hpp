@@ -88,7 +88,9 @@ glm::vec4 unpackRtSurface(float packed);
 /// there (bytes, as WMORenderer gives them), where it is a room's.
 inline constexpr uint32_t kRtFaceFront = 0x01000000u;
 inline constexpr uint32_t kRtFaceRoomLight = 0x02000000u;
-/// `roomLight`: kRtFaceRoomLight and the colour, or 0 for none.
+/// Or that the room is lit as the open air (wmo_open_air_room.hpp).
+inline constexpr uint32_t kRtFaceOpenAir = 0x04000000u;
+/// `roomLight`: kRtFaceRoomLight and the colour, kRtFaceOpenAir, or 0 for none.
 [[nodiscard]] constexpr uint32_t packRtRoomLight(uint32_t r, uint32_t g, uint32_t b) {
     return kRtFaceRoomLight | r | (g << 8) | (b << 16);
 }

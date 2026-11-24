@@ -97,6 +97,12 @@ void main() {
         // sun that comes in is not painted and goes on top.
         vec3 room;
         bool painted = rtFaceRoomLight(rtTris[rtHitTri].v1.w, room);
+        // A room lit as the open air: what the open air's light is, as a ray
+        // that leaves the scene brings it (the client lights it by the zone).
+        if (rtFaceOpenAir(rtTris[rtHitTri].v1.w)) {
+            painted = true;
+            room = rayDir.z >= 0.0 ? pass.giSky.rgb : pass.giGround.rgb;
+        }
         vec3 light = painted ? vec3(0.0) : bounceAt(hp, hn, -rayDir);
         float ndl = dot(hn, L);
         if (pass.sunColor.w > 0.5 && ndl > 0.0 &&
