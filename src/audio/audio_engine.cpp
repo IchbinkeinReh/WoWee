@@ -3,6 +3,7 @@
 #include "audio/finite_audio.hpp"
 #include "audio/sound_key.hpp"
 #include "audio/sound_names.hpp"
+#include "audio/stream_time.hpp"
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/sound_distance.hpp"
@@ -1222,6 +1223,8 @@ void AudioEngine::noteStarted(int priority, float volume, Channel channel, bool 
 std::vector<AudioEngine::Shown> AudioEngine::playing() const {
     std::vector<Shown> out;
     if (!initialized_) return out;
+    // Of a sound decoded beforehand, whose buffer is a fixed one; a stream's
+    // decoder is the audio thread's (stream_time.hpp).
     const auto times = [](const ma_sound* sound, Shown& shown) {
         ma_uint64 cursor = 0, length = 0;
         ma_uint32 rate = 0;
@@ -1258,7 +1261,7 @@ std::vector<AudioEngine::Shown> AudioEngine::playing() const {
         shown.loops = ma_sound_is_looping(sound) == MA_TRUE;
         shown.heard = !held;
         shown.why = held ? "loading screen" : "";
-        times(sound, shown);
+        shown.seconds = streamSeconds(sound, ma_engine_get_sample_rate(engine_));
         out.push_back(std::move(shown));
     };
     for (const auto& stream : activeStreams_) streamed(stream.sound, stream.data.get(), stream.held, "stream");

@@ -625,6 +625,22 @@ target_link_libraries(test_addon_lua_snippets PRIVATE catch2_main lua51)
 add_test(NAME addon_lua_snippets COMMAND test_addon_lua_snippets)
 register_test_target(test_addon_lua_snippets)
 
+# ── test_stream_time ─────────────────────────────────────────
+# miniaudio's engine without a device, a decoder or anything of the system's.
+add_executable(test_stream_time
+    test_stream_time.cpp
+)
+target_include_directories(test_stream_time PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_stream_time SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern)
+find_package(Threads REQUIRED)
+target_link_libraries(test_stream_time PRIVATE catch2_main Threads::Threads ${CMAKE_DL_LIBS})
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_stream_time PRIVATE m)
+endif()
+add_test(NAME stream_time COMMAND test_stream_time)
+register_test_target(test_stream_time)
+
 # ── test_lua_std_libs ────────────────────────────────────────
 # The Lua libraries the interface has, against the client's own tables.
 add_executable(test_lua_std_libs
