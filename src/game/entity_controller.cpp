@@ -1472,12 +1472,10 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 if (!uid.empty())
                     pendingEvents_.emit("UNIT_LEVEL", {uid});
             }
-            if (block.guid != owner_.getPlayerGuid() &&
-                entity->getType() == ObjectType::PLAYER &&
-                val > oldLvl && oldLvl > 0 &&
-                owner_.otherPlayerLevelUpCallbackRef()) {
-                owner_.otherPlayerLevelUpCallbackRef()(block.guid, val);
-            }
+            // Any unit's, as its level changes (0x00730050 -> 0x0072e3a0); the
+            // player's own comes with SMSG_LEVELUP_INFO.
+            if (block.guid != owner_.getPlayerGuid() && val != oldLvl && oldLvl > 0)
+                owner_.playUnitEffect(block.guid, GameHandler::UnitEffect::LevelUp);
         }
         else if (key == ufi.faction) {
             unit->setFactionTemplate(val);

@@ -170,31 +170,6 @@ void AudioCallbackHandler::setupCallbacks() {
         }
     });
 
-    // Other player level-up callback - trigger 3D effect + chat notification
-    gameHandler_.setOtherPlayerLevelUpCallback([this](uint64_t guid, uint32_t newLevel) {
-        if (!renderer_) return;
-
-        // Trigger 3D effect at the other player's position
-        auto entity = gameHandler_.getEntityManager().getEntity(guid);
-        if (entity) {
-            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
-            glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
-            if (auto* ac = renderer_->getAnimationController())
-                ac->triggerLevelUpEffect(renderPos, gameHandler_.resolveUnitRenderInstance(guid));
-        }
-
-        // Show chat message if in group
-        if (gameHandler_.isInGroup()) {
-            std::string name = gameHandler_.getCachedPlayerName(guid);
-            if (name.empty()) name = "A party member";
-            game::MessageChatData msg;
-            msg.type = game::ChatType::SYSTEM;
-            msg.language = game::ChatLanguage::UNIVERSAL;
-            msg.message = name + " has reached level " + std::to_string(newLevel) + "!";
-            gameHandler_.addLocalChatMessage(msg);
-        }
-    });
-
     // Open dungeon finder callback - server sends SMSG_OPEN_LFG_DUNGEON_FINDER
     gameHandler_.setOpenLfgCallback([this]() {
         if (uiManager_) uiManager_->getGameScreen().openDungeonFinder(gameHandler_);

@@ -4070,10 +4070,6 @@ public:
     /// zero when the file names no such language.
     uint32_t languageIdByName(const std::string& name) const;
 
-    // Other player level-up callback - fires when another player gains a level
-    using OtherPlayerLevelUpCallback = std::function<void(uint64_t guid, uint32_t newLevel)>;
-    void setOtherPlayerLevelUpCallback(OtherPlayerLevelUpCallback cb) { otherPlayerLevelUpCallback_ = std::move(cb); }
-
     const std::unordered_set<uint32_t>& getEarnedAchievements() const { return earnedAchievements_; }
 
     // Title system - earned title bits and the currently displayed title
@@ -5948,7 +5944,6 @@ public:
     auto& unitDiedCallbackRef() { return unitDiedCallback_; }
     auto& npcRespawnCallbackRef() { return npcRespawnCallback_; }
     auto& openLfgCallbackRef() { return openLfgCallback_; }
-    auto& otherPlayerLevelUpCallbackRef() { return otherPlayerLevelUpCallback_; }
     auto& otherPlayerMountCallbackRef() { return otherPlayerMountCallback_; }
     auto& growthFitCallbackRef() { return growthFitCallback_; }
     auto& playerDespawnCallbackRef() { return playerDespawnCallback_; }
@@ -7715,7 +7710,6 @@ private:
     /// Languages.dbc, read once on the first ask like the caches beside it.
     mutable std::unordered_map<uint32_t, std::string> languageNames_;
     mutable bool languageNamesLoaded_ = false;
-    OtherPlayerLevelUpCallback otherPlayerLevelUpCallback_;
     OtherPlayerMountCallback otherPlayerMountCallback_;
     GrowthFitCallback growthFitCallback_;
     MountRoomCallback mountRoomCallback_;
