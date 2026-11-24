@@ -1945,6 +1945,10 @@ target_link_libraries(test_combat_text_filter PRIVATE catch2_main)
 add_test(NAME combat_text_filter COMMAND test_combat_text_filter)
 register_test_target(test_combat_text_filter)
 
+# ── test_unit_pointer ────────────────────────────────────────
+wowee_add_test(test_unit_pointer
+    SOURCES test_unit_pointer.cpp)
+
 # ── test_threat_table ────────────────────────────────────────
 wowee_add_test(test_threat_table
     SOURCES test_threat_table.cpp)

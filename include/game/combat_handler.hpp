@@ -35,7 +35,8 @@ public:
     void registerOpcodes(DispatchTable& table);
 
     // --- Public API (delegated from GameHandler) ---
-    void startAutoAttack(uint64_t targetGuid);
+    /// False where the player may not start one now (0x0072bdb0).
+    bool startAutoAttack(uint64_t targetGuid);
     void stopAutoAttack();
     [[nodiscard]] bool isAutoAttacking() const { return attack_.attacking(); }
     [[nodiscard]] bool isInCombat() const { return attack_.attacking() || !hostileAttackers_.empty(); }

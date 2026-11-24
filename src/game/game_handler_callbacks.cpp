@@ -2620,8 +2620,8 @@ void GameHandler::respawnKnownEntities() {
 // Combat (delegated to CombatHandler)
 // ============================================================
 
-void GameHandler::startAutoAttack(uint64_t targetGuid) {
-    if (combatHandler_) combatHandler_->startAutoAttack(targetGuid);
+bool GameHandler::startAutoAttack(uint64_t targetGuid) {
+    return combatHandler_ && combatHandler_->startAutoAttack(targetGuid);
 }
 
 void GameHandler::stopAutoAttack() {
@@ -4208,12 +4208,22 @@ void GameHandler::vehicleGone(uint64_t vehicleGuid) {
 }
 
 bool GameHandler::npcServiceOffered(uint64_t guid) const {
+    const auto ask = serviceAskOf(guid);
+    return ask && npc_interaction::serviceOffered(*ask);
+}
+
+bool GameHandler::mayInteractWith(uint64_t guid) const {
+    const auto ask = serviceAskOf(guid);
+    return ask && npc_interaction::mayInteract(*ask);
+}
+
+std::optional<npc_interaction::ServiceAsk> GameHandler::serviceAskOf(uint64_t guid) const {
     // 0x00729620 with the player as asker.
     auto entity = getEntityManager().getEntity(guid);
     auto* unit = dynamic_cast<Unit*>(entity.get());
     auto playerEntity = getEntityManager().getEntity(playerGuid);
     auto* player = dynamic_cast<Unit*>(playerEntity.get());
-    if (!unit || !player) return false;
+    if (!unit || !player) return std::nullopt;
     const auto field = [](const Entity& e, UF f) -> uint32_t {
         const uint16_t i = fieldIndex(f);
         return i == 0xFFFF ? 0u : e.getField(i);
@@ -4248,7 +4258,7 @@ bool GameHandler::npcServiceOffered(uint64_t guid) const {
     const auto [toPlayer, fromPlayer] = unitReactionsBothWays(*unit, *player);
     a.reactionToPlayer = toPlayer;
     a.playerReaction = fromPlayer;
-    return npc_interaction::serviceOffered(a);
+    return a;
 }
 
 uint64_t GameHandler::softInteractTarget() {
@@ -4288,30 +4298,9 @@ uint64_t GameHandler::softInteractTarget() {
             if (it->second.effectIds[e] == 116) skinPlayer = id;
         }
     }
-    const bool looting = isLootWindowOpen();
-    const uint64_t lootObject = looting ? getCurrentLoot().lootGuid : 0;
+    const uint64_t lootObject = isLootWindowOpen() ? getCurrentLoot().lootGuid : 0;
     const float playerReach = player->getCombatReach();
-    // 0x006d5a60's questions of the player, the same for every object.
-    si::LootCheck lootBase;
-    // 0x00721f50: the player alive (UNIT_FIELD_HEALTH above 0), the active
-    // mover, and autoInteract on - registered by 0x0051d990 with "1" for the
-    // koKR client (locale index 0x00c5de9c 1) and "0" for every other.
-    {
-        const auto* profile = services_.expansionRegistry ? services_.expansionRegistry->getActive() : nullptr;
-        const bool korean = profile && chat_profanity::localeIndex(profile->locale) == 1;
-        const bool autoInteract = addons::storedCVarValue("autoInteract", korean ? "1" : "0") != "0";
-        lootBase.anyDistance = player->getHealth() > 0 && activeMover() == playerGuid && autoInteract;
-    }
-    // 0x00721ca0 with the form's Flags 0x100.
-    if (playerInForm()) {
-        const auto* form = shapeshiftFormRow(getShapeshiftFormId());
-        lootBase.formForbids = form && (form->flags & 0x100u) != 0;
-    }
-    lootBase.looting = looting;
-    lootBase.deadOrGhost = isPlayerDead() || isPlayerGhost();
-    lootBase.falling = (movementInfo.flags & 0x1000u) != 0;
-    lootBase.stunned = (player->getUnitFlags() & 0x40000u) != 0;
-    lootBase.clientControl = movementHandler_ && movementHandler_->unitHasClientControl(playerGuid);
+    const si::LootCheck lootBase = playerLootCheck();
     // The race a corpse was, by CORPSE_FIELD_BYTES_1's second byte, and that
     // race's faction (ChrRaces FactionID, 0x00705a80) as the player regards
     // it (0x00718c20 -> 0x00715440).

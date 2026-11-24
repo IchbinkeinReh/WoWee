@@ -4,6 +4,8 @@
 #include "game/pet_action.hpp"
 #include "game/achievement_tracking.hpp"
 #include "game/npc_interaction.hpp"
+#include "game/soft_interact.hpp"
+#include "game/unit_pointer.hpp"
 #include "game/tutorials.hpp"
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
 #include "game/visible_item_fields.hpp"   // the visible-item pair as the client's record reads it
@@ -1495,7 +1497,8 @@ public:
         return entityController_->getCreatureFamily(entry);
     }
 
-    void startAutoAttack(uint64_t targetGuid);
+    /// False where the player may not start one now (0x0072bdb0).
+    bool startAutoAttack(uint64_t targetGuid);
     void stopAutoAttack();
     bool isAutoAttacking() const;
     /// The player's UNIT_FLAG_IN_COMBAT, as UnitAffectingCombat (0x0060f860) and
@@ -3279,6 +3282,14 @@ public:
     /// 0x00729620: whether the client offers this unit's services - its
     /// service cursor - at all.
     bool npcServiceOffered(uint64_t guid) const;
+    /// 0x00729530: whether the player may speak to the unit.
+    bool mayInteractWith(uint64_t guid) const;
+    /// The picture of the cursor over a unit (0x004f7a50), empty for the
+    /// pointer as it is; and what a right click on it does (0x00731260).
+    std::string unitCursorArt(uint64_t guid);
+    unit_pointer::Click unitClick(uint64_t guid);
+    /// 0x006d5a60's questions of the player, the same for every object.
+    soft_interact::LootCheck playerLootCheck() const;
     /// 0x005220b0: the object the client makes the mouseover while its cursor
     /// is turned off - the best in front of the mover by 0x00519e80's gates
     /// (game/soft_interact.hpp); 0 for none.
@@ -7237,6 +7248,10 @@ private:
     float gameObjectScale(const GameObject& go) const;
     glm::quat gameObjectRotation(const GameObject& go) const;
     bool playerInForm() const;
+    unit_pointer::Player unitPointerPlayer() const;
+    /// 0x00729a70 of the player.
+    bool playerMayAttackNow(const Unit& unit) const;
+    std::optional<npc_interaction::ServiceAsk> serviceAskOf(uint64_t guid) const;
     bool chairSeatInReach(const GameObject& go, const GameObjectFacts& f) const;
     bool ritualAllows(const GameObject& go, const GameObjectFacts& f);
     int gameObjectReactionToPlayer(const GameObject& go) const;

@@ -388,10 +388,10 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
 // Auto-attack
 // ============================================================
 
-void CombatHandler::startAutoAttack(uint64_t targetGuid) {
+bool CombatHandler::startAutoAttack(uint64_t targetGuid) {
     // Can't attack yourself
-    if (targetGuid == owner_.getPlayerGuid()) return;
-    if (targetGuid == 0) return;
+    if (targetGuid == owner_.getPlayerGuid()) return false;
+    if (targetGuid == 0) return false;
 
     // What the player's own state forbids, said as 0x0072bdb0 says it, in its
     // order: dead (ERR_ATTACK_DEAD); charmed by someone else; then
@@ -413,7 +413,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     };
     if (owner_.isPlayerDead() || owner_.isPlayerGhost()) {
         owner_.addUIError(interfaceString("ERR_ATTACK_DEAD", "You can't attack while dead."));
-        return;
+        return false;
     }
     if (auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
         const uint16_t charmedBy = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
@@ -422,25 +422,25 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
                   self->getField(charmedBy);
         if (charmer != 0 && charmer != owner_.getPlayerGuid()) {
             refuse({6u, 177u, 2u}, "ERR_ATTACK_CHARMED", "You can't attack while charmed.");
-            return;
+            return false;
         }
         const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
         const uint32_t flags = flagsIdx == 0xFFFF ? 0 : self->getField(flagsIdx);
         if ((flags & 0x00040000u) != 0) {
             refuse({12u}, "ERR_ATTACK_STUNNED", "You can't attack while stunned.");
-            return;
+            return false;
         }
         if ((flags & 0x00020000u) != 0) {
             refuse({25u, 60u}, "ERR_ATTACK_PACIFIED", "You can't attack while pacified.");
-            return;
+            return false;
         }
         if ((flags & 0x00800000u) != 0) {
             refuse({7u}, "ERR_ATTACK_FLEEING", "You can't attack while fleeing.");
-            return;
+            return false;
         }
         if ((flags & 0x00400000u) != 0) {
             refuse({5u}, "ERR_ATTACK_CONFUSED", "You can't attack while confused.");
-            return;
+            return false;
         }
         // Then a channel in progress (UNIT_CHANNEL_SPELL): no attack starts
         // while one runs, and ERR_ATTACK_CHANNEL says so when the channel is
@@ -451,7 +451,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
             if (const auto it = cache.find(channel); it != cache.end()) {
                 if ((it->second.channelInterruptFlags & 0x1000u) != 0)
                     owner_.addUIError(interfaceString("ERR_ATTACK_CHANNEL", "You can't attack while channeling."));
-                return;
+                return false;
             }
         }
     }
@@ -476,7 +476,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
                 if (theirUnit && owner_.unitMayAttack(me, theirTarget)) {
                     targetGuid = theirTarget;
                 } else {
-                    return;   // nothing of theirs worth swinging at
+                    return false;   // nothing of theirs worth swinging at
                 }
             }
         }
@@ -496,7 +496,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
             // ERR_ATTACK_MOUNTED, as 0x0072bdb0 refuses an attack it will not
             // dismount for (0x0071b0c0). This was English.
             owner_.addUIError(interfaceString("ERR_ATTACK_MOUNTED", "Can't attack while mounted."));
-            return;
+            return false;
         }
         if (victim && me) {
             const uint32_t ranged = owner_.autoRangedAttackSpell();
@@ -506,19 +506,19 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
                                     : click_to_move::meleeReach(me->getCombatReach(), victim->getCombatReach());
             if (reach * reach < distanceSqTo(owner_.movementInfoRef(), *victim)) {
                 owner_.raiseUiError(interfaceString("ERR_OUT_OF_RANGE", "Out of range."));
-                return;
+                return true;
             }
         }
         owner_.dismount();
     }
     // 0x006e2610: one that may not be attacked now (0x00729a70) ends a running
     // attack and starts none.
-    if (!victim || !me) return;
+    if (!victim || !me) return true;
     if (!unit_target::mayAttackNow(owner_.isPlayerDead(), owner_.isMounted(), true, victim->getHealth(),
                                    victim->getDynamicFlags(),
                                    owner_.unitMayAttack(owner_.getPlayerGuid(), targetGuid))) {
         if (attack_.attacking()) stopAutoAttack();
-        return;
+        return true;
     }
     // 0x00806550: the player's pending ranged casts (Attributes 0x2) are
     // cancelled, the server told of one with a cast time; then up from a seat
@@ -540,7 +540,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
         const auto& cache = owner_.spellNameCacheRef();
         if (const auto it = cache.find(owner_.getCurrentCastSpellId());
             it != cache.end() && (it->second.interruptFlags & 0x8u) != 0)
-            return;
+            return true;
     }
 
     // Face the target, once, on the command to attack it. This is the only
@@ -571,6 +571,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     // (0x00807560(1)).
     owner_.stopAutoRepeat(true);
     LOG_INFO("Starting auto-attack on 0x", std::hex, targetGuid, std::dec);
+    return true;
 }
 
 void CombatHandler::stopAutoAttack() {

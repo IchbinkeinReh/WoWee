@@ -876,6 +876,7 @@ set(WOWEE_SOURCES
     src/game/chat_language.cpp
     src/game/chat_profanity.cpp
     src/game/game_handler_object_use.cpp
+    src/game/game_handler_unit_pointer.cpp
     src/game/game_handler_click_to_move.cpp
     src/game/macro_eval.cpp
     src/game/macro_options.cpp
