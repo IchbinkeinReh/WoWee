@@ -1366,47 +1366,43 @@ void WidgetRenderer::drawMovie(ImDrawList* dl, const Widget& w, float x0, float 
     dl->AddImage(reinterpret_cast<ImTextureID>(movieTexture_->descriptorSet), ImVec2(dx, dy), ImVec2(dx + dw, dy + dh));
 }
 
+namespace {
+const std::string kCooldownStar = "Interface\\Cooldown\\star4";
+const std::string kCooldownEdge = "Interface\\Cooldown\\edge";
+}  // namespace
+
 void WidgetRenderer::drawCooldown(ImDrawList* dl, const Widget& w,
                                   float x0, float y0, float x1, float y1) {
-    if (w.cooldownDuration <= 0.0) return;
-    const double elapsed = core::appTimeSeconds() - w.cooldownStart;
-    if (elapsed < 0.0 || elapsed >= w.cooldownDuration) return;
-    const float done = static_cast<float>(elapsed / w.cooldownDuration);
-    // Reversed, the wedge covers what has passed rather than what is left.
-    const float remaining = w.cooldownReverse ? done : (1.0f - done);
-
-    // A wedge from twelve o'clock, shrinking clockwise as the time runs out.
-    // Drawn to the corners rather than to an inscribed circle - the thing being
-    // covered is a square icon, and a circle would leave its corners lit - and
-    // clipped to the frame so the overrun does not spill onto its neighbours.
-    const ImVec2 centre((x0 + x1) * 0.5f, (y0 + y1) * 0.5f);
-    const float radius = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
-    constexpr float kTwoPi = 6.2831853f;
-    constexpr int kSegments = 48;
-    const int used = std::max(1, static_cast<int>(kSegments * remaining));
-
-    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
-    dl->PathClear();
-    dl->PathLineTo(centre);
-    for (int i = 0; i <= used; ++i) {
-        // -pi/2 starts at the top; positive sweep runs clockwise on a screen
-        // whose y grows downward.
-        const float a = -kTwoPi * 0.25f +
-                        kTwoPi * remaining * (static_cast<float>(i) / used);
-        dl->PathLineTo(ImVec2(centre.x + std::cos(a) * radius,
-                              centre.y + std::sin(a) * radius));
+    if (!w.cooldownClock.runs()) return;
+    const float passed = w.cooldownClock.passed(core::appTimeSeconds());
+    // A whole texture over the frame, its corners sampled as they are turned.
+    const auto turned = [&](VkDescriptorSet tex, float turn, float extent, ImU32 colour) {
+        if (tex == kMissing) return;
+        const auto uv = cooldown::turnedCorners(turn, extent);
+        dl->AddImageQuad(reinterpret_cast<ImTextureID>(tex), ImVec2(x0, y0), ImVec2(x1, y0), ImVec2(x1, y1),
+                         ImVec2(x0, y1), ImVec2(uv[0].x, uv[0].y), ImVec2(uv[1].x, uv[1].y),
+                         ImVec2(uv[3].x, uv[3].y), ImVec2(uv[2].x, uv[2].y), colour);
+    };
+    const auto alpha = [&](float of) { return static_cast<int>(std::clamp(w.alpha * of, 0.0f, 1.0f) * 255.0f + 0.5f); };
+    if (w.cooldownClock.flash) {
+        const auto flash = cooldown::flashAt(passed);
+        turned(resident(kCooldownStar, kVariantAdd), flash.turn, flash.extent,
+               IM_COL32(0x50, 0xa0, 0xff, alpha(flash.alpha)));
+        return;
     }
-    dl->PathFillConvex(IM_COL32(0, 0, 0, 160));
+    // The shade: the rim and the middle, as triangles side by side - without
+    // the smoothing of their edges, which would show between them.
+    const auto at = [&](const cooldown::Point& p) { return ImVec2(x0 + (x1 - x0) * p.x, y0 + (y1 - y0) * p.y); };
+    const ImVec2 middle = at({0.5f, 0.5f});
+    const auto rim = cooldown::covered(passed, w.cooldownReverse);
+    const ImU32 shade = IM_COL32(0, 0, 0, alpha(cooldown::kShade));
+    const ImDrawListFlags flags = dl->Flags;
+    dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+    for (size_t i = 0; i + 1 < rim.size(); ++i) dl->AddTriangleFilled(middle, at(rim[i]), at(rim[i + 1]), shade);
+    dl->Flags = flags;
     if (w.cooldownDrawEdge) {
-        // One bright spoke along the leading edge, which is what makes a slow
-        // sweep readable at a glance.
-        const float edge = -kTwoPi * 0.25f + kTwoPi * remaining;
-        dl->AddLine(centre,
-                    ImVec2(centre.x + std::cos(edge) * radius,
-                           centre.y + std::sin(edge) * radius),
-                    IM_COL32(255, 255, 255, 180), 1.5f);
+        turned(resident(kCooldownEdge), passed * -6.2831855f, w.effScale, IM_COL32(255, 255, 255, alpha(1.0f)));
     }
-    dl->PopClipRect();
 }
 
 void WidgetRenderer::render(WidgetTree& tree, float screenW, float screenH) {
@@ -2511,6 +2507,10 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             if (w->hasBackdrop) { want(w->bgFile); want(w->edgeFile); }
             if (w->isStatusBar) want(w->barTexture);
             if (w->isSlider) want(w->thumbTexture);
+            if (w->isCooldown) {
+                want(kCooldownStar, kVariantAdd);
+                if (w->cooldownDrawEdge) want(kCooldownEdge);
+            }
         }
     }
 

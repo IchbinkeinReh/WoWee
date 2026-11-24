@@ -447,8 +447,14 @@ public:
     void unitTooltipChanged(uint64_t guid) { changedTooltipUnits_.insert(guid); }
     /// An edit box made.
     void noteEditBox(uint32_t wid) { editBoxes_.push_back(wid); }
+    /// A Cooldown frame made.
+    void noteCooldown(uint32_t wid) { cooldowns_.push_back(wid); }
 private:
     void refreshUnitTooltip();
+    /// Cooldown frames whose time is up flash, and hide once they have
+    /// (0x005ec8f0).
+    void advanceCooldowns();
+    std::vector<uint32_t> cooldowns_;
     std::set<uint64_t> changedTooltipUnits_;
     std::vector<uint32_t> editBoxes_;
     std::vector<uint32_t> attributesAllowed_;

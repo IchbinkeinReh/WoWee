@@ -9962,21 +9962,23 @@ int lua_MovieFrame_EnableSubtitles(lua_State* L) {
 int lua_Cooldown_SetCooldown(lua_State* L) {
     // 0x005ece80
     if (!requireNumbers(L, 2, 2, "Usage: %s:SetCooldown(start, duration)")) return 0;
-    if (auto* w = widgetOf(L, 1)) {
-        w->cooldownStart = luaL_optnumber(L, 2, 0.0);
-        w->cooldownDuration = luaL_optnumber(L, 3, 0.0);
-    }
-    return 0;
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    // In whole milliseconds, and the frame is shown by it (0x005ecd70).
+    const auto ms = [L](int i) { return std::round(lua_tonumber(L, i) * 1000.0) / 1000.0; };
+    w->cooldownClock = {.start = ms(2), .duration = ms(3), .flash = false};
+    lua_settop(L, 1);
+    return lua_Region_Show(L);
 }
 int lua_Cooldown_GetCooldownTimes(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     // Milliseconds, which is what this one answers in.
-    lua_pushnumber(L, w ? w->cooldownStart * 1000.0 : 0.0);
-    lua_pushnumber(L, w ? w->cooldownDuration * 1000.0 : 0.0);
+    lua_pushnumber(L, w ? w->cooldownClock.start * 1000.0 : 0.0);
+    lua_pushnumber(L, w ? w->cooldownClock.duration * 1000.0 : 0.0);
     return 2;
 }
 int lua_Cooldown_Clear(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) { w->cooldownStart = 0.0; w->cooldownDuration = 0.0; }
+    if (auto* w = widgetOf(L, 1)) w->cooldownClock = {};
     return 0;
 }
 
@@ -10927,6 +10929,8 @@ static int lua_CreateFrame(lua_State* L) {
             // the emitter writes it after the frame is created.
             if (w->isSlider) w->barVertical = true;
             w->isCooldown = (ft == "Cooldown");
+            if (w->isCooldown)
+                if (auto* engine = engineFrom(L)) engine->noteCooldown(id);
             w->isMovieFrame = (ft == "MovieFrame");
             // Marked at creation rather than only when a child is set, so a
             // scroll frame clips what is under it even while it is empty.
@@ -11290,6 +11294,7 @@ void LuaEngine::shutdown() {
         editBoxes_.clear();
         attributesAllowed_.clear();
         changedTooltipUnits_.clear();
+        cooldowns_.clear();
         toldOnce_ = false;
         hoverWid_ = 0;
         focusedWid_ = 0;
@@ -19350,6 +19355,24 @@ void LuaEngine::settleTextChanged(uint32_t wid) {
     if (const auto userInput = textChanges_.takeOf(wid)) fireTextChanged(wid, *userInput);
 }
 
+void LuaEngine::advanceCooldowns() {
+    const double now = core::appTimeSeconds();
+    for (const uint32_t id : cooldowns_) {
+        auto* w = widgets_.get(id);
+        if (!w || !w->visibleChain || !ui::cooldown::advance(w->cooldownClock, w->cooldownReverse, now)) continue;
+        // Its flash is over (0x0048f620).
+        taint::Scope secure(0);
+        const int top = lua_gettop(L_);
+        pushFrameByWid(L_, id);
+        if (lua_istable(L_, -1)) {
+            lua_getfield(L_, -1, "Hide");
+            lua_pushvalue(L_, -2);
+            if (taint::callProtected(L_, 1, 0, 0) != 0) recordScriptError(L_, "Cooldown:Hide");
+        }
+        lua_settop(L_, top);
+    }
+}
+
 void LuaEngine::refreshUnitTooltip() {
     // 0x00512ab0: while it shows one of them and is not fading.
     const auto changed = std::exchange(changedTooltipUnits_, {});
@@ -19392,6 +19415,7 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     taint::Quiet quiet;
 
     drainPendingTextChanged();
+    advanceCooldowns();
     advanceWheelGlide(elapsed);
     tickTooltipFades(L_, elapsed);
     tickDestructibleBar(L_);

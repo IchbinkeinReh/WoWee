@@ -4288,6 +4288,11 @@ wowee_add_test(test_glyph_socket
 wowee_add_test(test_stat_tables
     SOURCES test_stat_tables.cpp)
 
+# ── test_cooldown_sweep ──────────────────────────────────────
+wowee_add_test(test_cooldown_sweep
+    SOURCES test_cooldown_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/ui/widget_tree.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

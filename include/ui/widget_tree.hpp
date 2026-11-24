@@ -31,6 +31,7 @@
 
 #include "core/platform.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "ui/cooldown_sweep.hpp"
 #include "ui/edit_history.hpp"
 #include "ui/simple_html.hpp"
 
@@ -580,8 +581,7 @@ struct Widget {
     bool  isCooldown = false;
     /// A MovieFrame: draws its movie (WidgetRenderer::drawMovie).
     bool  isMovieFrame = false;
-    double cooldownStart = 0.0;
-    double cooldownDuration = 0.0;
+    cooldown::Clock cooldownClock;
     /// The shaded wedge grows instead of shrinking. An ability's cooldown
     /// shrinks as it becomes usable again; an aura's timer on a unit frame
     /// grows as the aura runs out, and the target frame and the totem bar both
