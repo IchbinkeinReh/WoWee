@@ -1,7 +1,9 @@
 // lua_quest_api.cpp - Quest log, skills, talents, glyphs, and achievements Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "addons/lua_api_registrations.hpp"
 #include "addons/row_selection.hpp"
 #include "core/local_time.hpp"
+#include "game/statistic_text.hpp"
 #include "game/item_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -146,65 +148,25 @@ bool achievementOutsideStatistics(game::GameHandler* gh, uint32_t achievementId)
     return true;
 }
 
-/// GetStatistic's text (0x005b5620 -> 0x005b0ea0) for the paths this client
-/// carries: the achievement's flags pick a sum (0x8), the largest counter
-/// (0x10, with the criterion's name when the achievement has flag 0x1), how
-/// many criteria reached their quantity (0x20), or the last counted
-/// criterion's counter. (0x40, a per-day average from the criterion's own
-/// date, and the money and date formats are not carried: the progress
-/// dates are not kept here.) With
-/// nothing counted the answer is "--" for a flag-0x1 achievement and "0"
-/// otherwise, and a progress-bar criterion appends " / quantity".
-std::string statisticText(game::GameHandler* gh, uint32_t id) {
-    const auto& list = gh->getAchievementCriteria(id);
+/// Money as 0x005b0ea0 writes it: the coins' icons, or with colorblindMode
+/// their letters (0x00767440).
+auto statisticMoney(lua_State* L) {
+    return [L](uint64_t amount) {
+        const auto copper = static_cast<int32_t>(std::min<uint64_t>(amount, 0x7FFFFFFFu));
+        return storedCVarValue("colorblindMode", "0") == "1" ? coinSymbolText(L, copper) : coinTextureText(L, copper, 0);
+    };
+}
+
+std::vector<game::StatisticCriterion> statisticCriteria(game::GameHandler* gh, uint32_t id) {
+    std::vector<game::StatisticCriterion> out;
     const auto& progress = gh->getCriteriaProgress();
-    const uint32_t aflags = gh->getAchievementFlags(id);
-    uint64_t sum = 0, best = 0, reached = 0, last = 0;
-    const game::GameHandler::AchievementCriterion* bestCriterion = nullptr;
-    const game::GameHandler::AchievementCriterion* lastCriterion = nullptr;
-    bool tie = false, any = false;
-    for (const auto& c : list) {
+    for (const auto& c : gh->getAchievementCriteria(id)) {
         const auto it = progress.find(c.id);
-        if (it == progress.end()) continue;
-        any = true;
-        const uint64_t v = it->second;
-        sum += v;
-        if (v > best || !bestCriterion) { best = v; bestCriterion = &c; tie = false; }
-        else if (v == best) tie = true;
-        if (v >= c.quantity) ++reached;
-        last = v;
-        lastCriterion = &c;
-    }
-    char buf[256];
-    if (aflags & 0x8) {
-        std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(sum));
-        return buf;
-    }
-    if (aflags & 0x10) {
-        if (!any) return (aflags & 0x1) ? "--" : "0";
-        // A tie for the largest names no criterion on a flag-0x400 row.
-        if ((aflags & 0x1) && bestCriterion && !(tie && (aflags & 0x400)))
-            std::snprintf(buf, sizeof(buf), "%llu (%s)", static_cast<unsigned long long>(best),
-                          bestCriterion->description.c_str());
-        else
-            std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(best));
-        return buf;
-    }
-    if (aflags & 0x20) {
-        if (reached == 0) return (aflags & 0x1) ? "--" : "0";
-        std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(reached));
-        return buf;
-    }
-    if (!any || last == 0) return (aflags & 0x1) ? "--" : "0";
-    uint64_t value = last;
-    // Capped at the criterion's quantity unless the achievement has flag 0x1.
-    if (!(aflags & 0x1) && lastCriterion && lastCriterion->quantity != 0 && lastCriterion->quantity <= value)
-        value = lastCriterion->quantity;
-    std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(value));
-    std::string out = buf;
-    if (lastCriterion && (lastCriterion->flags & 0x1)) {
-        std::snprintf(buf, sizeof(buf), "%s / %u", out.c_str(), lastCriterion->quantity);
-        out = buf;
+        out.push_back({.counted = it != progress.end(),
+                       .value = it != progress.end() ? it->second : 0u,
+                       .quantity = c.quantity,
+                       .flags = c.flags,
+                       .description = c.description});
     }
     return out;
 }
@@ -7327,6 +7289,9 @@ void registerQuestLuaAPI(lua_State* L) {
             gh->ensureAchievementCategoriesLoaded();
             int n = 0;
             for (uint32_t id : gh->getStatisticCategoryOrder()) {
+                // What descends from the Statistics root, category 1: not the
+                // root itself (0x005b14b0 begins at each one's parent).
+                if (id == 1) continue;
                 lua_pushnumber(L, ++n);
                 lua_pushnumber(L, id);
                 lua_settable(L, -3);
@@ -7478,7 +7443,12 @@ void registerQuestLuaAPI(lua_State* L) {
             // bar and a tick, so zero drew every counted criterion as a tick.
             lua_pushnumber(L, c.flags);                        // 7: flags
             lua_pushnumber(L, c.assetId);                      // 8: assetID
-            lua_pushstring(L, std::to_string(shown).c_str());  // 9: quantityString
+            // 9: quantityString, the number as 0x005b0ea0 writes it
+            const std::string none = (gh->getAchievementFlags(id) & 0x1) ? "--" : "0";
+            const game::StatisticCriterion text{.quantity = c.quantity, .flags = c.flags};
+            lua_pushstring(L, game::criterionText(shown == 0 && !(c.flags & game::kCriterionMoney) ? none
+                                                  : game::criterionNumber(shown, c.flags, statisticMoney(L)),
+                                                  text, statisticMoney(L)).c_str());
             lua_pushnumber(L, c.id);                           // 10: criteriaID
             return 10;
         }},
@@ -7604,7 +7574,8 @@ void registerQuestLuaAPI(lua_State* L) {
             gh->ensureAchievementCriteriaLoaded();
             gh->ensureAchievementNamesLoaded();
             if (gh->getAchievementName(id).empty()) return 0;
-            lua_pushstring(L, statisticText(gh, id).c_str());
+            lua_pushstring(L, game::statisticText(gh->getAchievementFlags(id), statisticCriteria(gh, id),
+                                                  statisticMoney(L)).c_str());
             return 1;
         }},
                 // The comparison tab, which used to say the server is never

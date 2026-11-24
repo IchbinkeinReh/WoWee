@@ -902,6 +902,12 @@ wowee_add_test(test_memory_growth SOURCES
     test_memory_growth.cpp
 )
 
+# ── test_achievement_lists ──────────────────────────────────
+# What the achievement and statistics windows list, and their numbers' text.
+wowee_add_test(test_achievement_lists SOURCES
+    test_achievement_lists.cpp
+)
+
 # ── test_row_selection ──────────────────────────────────────
 # What a list's selection is of, rather than where it was.
 wowee_add_test(test_row_selection SOURCES

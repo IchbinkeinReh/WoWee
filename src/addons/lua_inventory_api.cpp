@@ -2176,10 +2176,7 @@ static int lua_GetCoinIcon(lua_State* L) {
 // and its siblings with (count, height, height), joined by one space. Zero
 // is COPPER_AMOUNT_TEXTURE with 0. The height is 14 unless given. The usage
 // line is the client's, naming GetCoinText.
-static int lua_GetCoinTextureString(lua_State* L) {
-    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinText(amount, fontHeight)");
-    const int height = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) : 14;
-    int32_t amount = static_cast<int32_t>(std::llround(lua_tonumber(L, 1)));
+std::string coinTextureText(lua_State* L, int32_t amount, int height) {
     const auto piece = [L, height](const char* key, int32_t count) {
         lua_getglobal(L, "string");
         lua_getfield(L, -1, "format");
@@ -2194,10 +2191,7 @@ static int lua_GetCoinTextureString(lua_State* L) {
         lua_pop(L, 1);
         return out;
     };
-    if (amount == 0) {
-        lua_pushstring(L, piece("COPPER_AMOUNT_TEXTURE", 0).c_str());
-        return 1;
-    }
+    if (amount == 0) return piece("COPPER_AMOUNT_TEXTURE", 0);
     static constexpr std::pair<const char*, int32_t> kCoins[3] = {
         {"GOLD_AMOUNT_TEXTURE", 10000}, {"SILVER_AMOUNT_TEXTURE", 100}, {"COPPER_AMOUNT_TEXTURE", 1}};
     std::string out;
@@ -2208,7 +2202,34 @@ static int lua_GetCoinTextureString(lua_State* L) {
         if (!out.empty()) out += ' ';
         out += piece(key, count);
     }
-    lua_pushstring(L, out.c_str());
+    return out;
+}
+
+std::string coinSymbolText(lua_State* L, int32_t amount) {
+    const auto symbol = [L](const char* key) {
+        lua_getglobal(L, key);
+        std::string out = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+        return out;
+    };
+    if (amount == 0) return "0" + symbol("COPPER_AMOUNT_SYMBOL");
+    static constexpr std::pair<const char*, int32_t> kCoins[3] = {
+        {"GOLD_AMOUNT_SYMBOL", 10000}, {"SILVER_AMOUNT_SYMBOL", 100}, {"COPPER_AMOUNT_SYMBOL", 1}};
+    std::string out;
+    for (const auto& [key, unit] : kCoins) {
+        const int32_t count = amount >= unit ? amount / unit : 0;
+        if (count == 0) continue;
+        amount %= unit;
+        if (!out.empty()) out += ' ';
+        out += std::to_string(count) + symbol(key);
+    }
+    return out;
+}
+
+static int lua_GetCoinTextureString(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinText(amount, fontHeight)");
+    const int height = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) : 14;
+    lua_pushstring(L, coinTextureText(L, static_cast<int32_t>(std::llround(lua_tonumber(L, 1))), height).c_str());
     return 1;
 }
 
