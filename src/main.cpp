@@ -3,6 +3,10 @@
 #include "core/config_paths.hpp"
 #include "core/logger.hpp"
 #include "core/version.hpp"
+#include "core/platform.hpp"
+#ifndef WOWEE_MOBILE
+#include "mcp/options.hpp"
+#endif
 #include <exception>
 #include <csignal>
 #include <cstdio>
@@ -228,6 +232,15 @@ static void selectUserDataPath() {
 }
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
+#ifndef WOWEE_MOBILE
+    // The few things the command line says. Before anything is opened, so that
+    // --help is only that.
+    const wowee::mcp::Options mcpOptions = wowee::mcp::parseOptions(argc, argv);
+    if (mcpOptions.help) {
+        std::fputs(wowee::mcp::helpText().c_str(), stdout);
+        return 0;
+    }
+#endif
 #ifdef __ANDROID__
     // Everything after this opens its files relative to the working directory,
     // which on Android is not a directory that holds any of them.
@@ -365,6 +378,12 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
         wowee::core::migratePortableConfigIfNeeded();
 
         wowee::core::Application app;
+#ifndef WOWEE_MOBILE
+        for (const auto& problem : mcpOptions.problems) {
+            LOG_ERROR("MCP server: ", problem, "; not started");
+        }
+        app.setMcpOptions(mcpOptions);
+#endif
 
         if (!app.initialize()) {
             LOG_FATAL("Failed to initialize application");

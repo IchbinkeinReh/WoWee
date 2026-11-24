@@ -19,7 +19,8 @@ follow.
 | 7  | **World preload**      | `WorldLoader` preload, up to four `std::thread`s held in `WorldPreload::workers` (`world_loader.cpp`) | Preload start → `cancelWorldPreload()` joins them |
 | 8  | **Update check**       | `UpdateCheck::start()` (`update_check.cpp`), called from `Application` initialization | One request → joined in `~UpdateCheck()` |
 | 9  | **Asset builder**      | `assets::Job::start()` (`tools/asset_manager/job.cpp`), the extractor's own pool inside it, and `App::packThread` for pack save/install (`tools/asset_manager/panel.cpp`) - only in a client built with `WOWEE_HAVE_ASSET_PANEL` | One build/pack → joined by `~Job()` / `~App()` |
-| 10 | **Task-scoped**        | `std::async` / `std::thread(...).detach()` (various) | Task-scoped (entity model loading, normal-map gen, warden check processing, login backdrop decode) |
+| 10 | **MCP server**         | `HttpServer::start()` (`src/mcp/http_server.cpp`), only with `--mcp`: one thread that accepts and one for each connection, at most eight | `Application::run()` → `Application::shutdown()` |
+| 11 | **Task-scoped**        | `std::async` / `std::thread(...).detach()` (various) | Task-scoped (entity model loading, normal-map gen, warden check processing, login backdrop decode) |
 
 ### Thread Responsibilities
 
@@ -32,6 +33,10 @@ follow.
   The main thread drains this queue via `dispatchQueuedPackets()`.
   `WOWEE_NET_ASYNC_PUMP=0` disables the thread; the main thread then pumps
   the socket itself in `WorldSocket::update()`.
+* **MCP server** - HTTP and JSON only. Each call is put into `mcp::MainQueue` and
+  run by the main thread (`mcp::Server::pump`, before the frame's events); its
+  connection's thread waits for it. A way for `walk_to` is planned in a
+  `std::async` task over faces the main thread gathered.
 * **Terrain workers** - background ADT/WMO/M2 file I/O, mesh decoding, texture
   decompression.  Workers push completed `PendingTile` objects into `readyQueue`
   (locked by `queueMutex`).  The main thread finalizes (GPU upload) via

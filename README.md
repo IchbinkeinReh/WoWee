@@ -355,6 +355,10 @@ so, shows its tag beside the version on the login screen. Nothing is
 downloaded; **Check for new versions** under Interface → WoWee → Interface
 turns it off.
 
+`wowee --help` lists the command line's options. `--mcp` starts a server on
+127.0.0.1 that lets another program see the game and play it, for playtests
+([MCP server](docs/MCP_SERVER.md)); it is off otherwise.
+
 If a MaNGOS realm advertises a world address that is unreachable from your LAN,
 override only the host; the advertised port is preserved:
 
@@ -585,6 +589,7 @@ download small.
 - [Architecture](docs/architecture.md)
 - [Authentication](docs/authentication.md) and [SRP Implementation](docs/srp-implementation.md)
 - [Packet Framing](docs/packet-framing.md) and [Realm List](docs/realm-list.md)
+- [MCP Server](docs/MCP_SERVER.md)
 - [Sky System](docs/SKY_SYSTEM.md)
 - [Warden Quick Reference](docs/WARDEN_QUICK_REFERENCE.md) and [Implementation](docs/WARDEN_IMPLEMENTATION.md)
 

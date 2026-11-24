@@ -1472,6 +1472,46 @@ if(APPLE AND NOT IOS)
 endif()
 
 set(WOWEE_PLATFORM_SOURCES)
+if(NOT ANDROID AND NOT IOS)
+    # The MCP server (--mcp, docs/MCP_SERVER.md), which is the desktop's only.
+    list(APPEND WOWEE_SOURCES
+        src/mcp/game_view.cpp
+        src/mcp/hands.cpp
+        src/mcp/http_auth.cpp
+        src/mcp/http_message.cpp
+        src/mcp/http_server.cpp
+        src/mcp/image.cpp
+        src/mcp/image_encode.cpp
+        src/mcp/input_driver.cpp
+        src/mcp/json_rpc.cpp
+        src/mcp/lua_json.cpp
+        src/mcp/main_queue.cpp
+        src/mcp/options.cpp
+        src/mcp/redact.cpp
+        src/mcp/schema.cpp
+        src/mcp/script.cpp
+        src/mcp/send_guard.cpp
+        src/mcp/server.cpp
+        src/mcp/social.cpp
+        src/mcp/token_file.cpp
+        src/mcp/tools_actions.cpp
+        src/mcp/tools_character.cpp
+        src/mcp/tools_client.cpp
+        src/mcp/tools_entities.cpp
+        src/mcp/tools_keys.cpp
+        src/mcp/tools_logs.cpp
+        src/mcp/tools_move.cpp
+        src/mcp/tools_point.cpp
+        src/mcp/tools_shot.cpp
+        src/mcp/tools_state.cpp
+        src/mcp/tools_terrain.cpp
+        src/mcp/tools_ui.cpp
+        src/mcp/tools_wait.cpp
+        src/mcp/ui_view.cpp
+        src/mcp/walk.cpp
+        src/mcp/walk_planner.cpp
+        src/mcp/world_probe.cpp)
+endif()
 if(IOS)
     # The data folder screen's "Choose folder..." on iOS: the system's
     # document picker and the folder's access bookmark (SDL has no folder

@@ -347,6 +347,18 @@ Components:
 - `WardenEmulator` - Unicorn Engine x86 CPU emulation with Windows API interception
 - `WardenMemory` - WoW.exe PE image loading (the active expansion's, from `Data/expansions/<id>/misc`) with bounds-checked reads, runtime global patching
 
+### 10. MCP Server (`src/mcp/`)
+
+Off unless the client is started with `--mcp`; desktop only. Lets another program
+on the same machine see the game and play it, for playtests
+([MCP_SERVER.md](MCP_SERVER.md)).
+- `HttpServer`, `HttpRequestReader`, `authorize` - the loopback socket, the requests and who may ask
+- `answerRpc`, `validate` - the protocol and the tools' arguments
+- `MainQueue`, `Script` - calls run by the main loop, a step a frame
+- `InputDriver` - presses as SDL events and `core::Input` states, before the frame's events are read
+- `judgeSend` - what is not sent towards other players, asked by `WorldSocket::send` through `mcp/gate.hpp`
+- `tools_*.cpp` - the tools
+
 ## Threading Model
 
 See `docs/threading.md` for the full inventory.

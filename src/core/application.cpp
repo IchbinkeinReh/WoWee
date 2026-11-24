@@ -126,6 +126,10 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "pipeline/spell_icon_paths.hpp"
+#include "mcp/gate.hpp"
+#ifndef WOWEE_MOBILE
+#include "mcp/server.hpp"
+#endif
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -1361,6 +1365,7 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             return uim ? uim->getGameScreen().getSettingsPanel().settingValue(key) : std::string{};
         };
         luaSvc.quitApplication = [this]() {
+            if (!mcp::gate::quitAllowed()) return;
             LOG_INFO("Exit Game with no session to leave - closing");
             if (window) window->setShouldClose(true);
         };
@@ -2282,6 +2287,10 @@ void Application::run() {
 #endif
     }
 
+#ifndef WOWEE_MOBILE
+    if (mcpOptions_.enabled) mcp_ = mcp::Server::start(*this, mcpOptions_);
+#endif
+
     frameProfileEnabled_ = core::envFlagEnabled("WOWEE_FRAME_PROFILE", false);
     if (frameProfileEnabled_) {
         LOG_WARNING("Frame timing profile enabled (WOWEE_FRAME_PROFILE=1) - "
@@ -2502,6 +2511,12 @@ void Application::run() {
             }
         }
 
+#ifndef WOWEE_MOBILE
+        // The MCP server's calls, where the command line asked for one: before
+        // the events are read, so that what they press is this frame's.
+        if (mcp_) mcp_->pump(deltaTime);
+#endif
+
         SDL_Event event;
         auto nextEvent = [](SDL_Event& e) {
 #ifdef WOWEE_MOBILE
@@ -2512,6 +2527,9 @@ void Application::run() {
             return SDL_PollEvent(&e);
         };
         while (nextEvent(event)) {
+#ifndef WOWEE_MOBILE
+            if (mcp_ && mcp_->filterEvent(event)) continue;
+#endif
             // Sound in Background. Off in the real client and off here: losing
             // focus silences the client rather than playing on behind whatever
             // the player switched to. Read at the moment focus changes, so
@@ -3152,6 +3170,10 @@ void Application::updateMapWindow() {
 }
 
 void Application::shutdown() {
+#ifndef WOWEE_MOBILE
+    // First: its calls read everything that is taken down below.
+    mcp_.reset();
+#endif
     // A streaming start from the data screen still waiting on the server:
     // its thread writes into this object.
     if (streamStartThread_.joinable()) streamStartThread_.join();
@@ -8073,6 +8095,9 @@ void Application::render() {
         renderer->captureScreenshot(testFrameShotPath);
         testFrameShotPath.clear();
     }
+#ifndef WOWEE_MOBILE
+    if (mcp_) mcp_->afterFrame(*renderer);
+#endif
     if (const char* shot = std::getenv("WOWEE_SCREENSHOT"); shot != nullptr) {
         // Let the interface settle first: ImGui sizes much of its layout from
         // what it measured last frame, and hides a window outright for its

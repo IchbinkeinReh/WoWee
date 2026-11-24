@@ -21,6 +21,7 @@ extern "C" {
 #include <sstream>
 #include "ui/xml_parser.hpp"
 #include "ui/framexml_emitter.hpp"
+#include "mcp/gate.hpp"
 #include <cctype>
 #include <algorithm>
 #include <set>
@@ -1902,7 +1903,7 @@ bool AddonManager::runScript(const std::string& code) {
     // Typed and sent with Enter, so inside the hardware event the chat box's
     // OnEnterPressed is run in (0x00967760) - what lets a typed /run do what
     // a click could.
-    if (!luaEngine_.isInitialized()) return false;
+    if (!luaEngine_.isInitialized() || !mcp::gate::luaAllowed()) return false;
     taint::HardwareEvent hardware;
     luaEngine_.runScriptAs(code, taint::macro());
     return true;

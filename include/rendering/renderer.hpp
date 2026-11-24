@@ -351,6 +351,9 @@ public:
     /// Writes the next frame to outputPath, by its extension: .jpg at
     /// jpegQuality (1-100), .tga (32-bit, uncompressed), anything else PNG.
     bool captureScreenshot(const std::string& outputPath, int jpegQuality = 90);
+    /// The frame just drawn, four bytes a pixel, blue first, as
+    /// captureScreenshot has it before it is written. The GPU is waited for.
+    bool readFrame(std::vector<uint8_t>& bgra, uint32_t& width, uint32_t& height);
 
     /// Start writing the screen, interface included, and what the client
     /// plays to a video file. False, with the reason in error, when it cannot.

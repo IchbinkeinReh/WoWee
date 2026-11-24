@@ -21,6 +21,7 @@
 #include <chrono>
 #include "core/window.hpp"
 #include "core/application.hpp"
+#include "core/input.hpp"
 #include "core/logger.hpp"
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
@@ -588,6 +589,11 @@ void UIManager::update([[maybe_unused]] float deltaTime) {
     // Start ImGui frame
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
+    // With the window focused the backend puts the device's pointer over what
+    // the events said; one held from elsewhere stays where it was put.
+    if (const auto held = core::Input::getInstance().virtualMousePosition()) {
+        ImGui::GetIO().AddMousePosEvent(held->x, held->y);
+    }
     ImGui::NewFrame();
 
     safe_area::set(insets);

@@ -2268,7 +2268,7 @@ void Renderer::recordScreenCapture() {
     }
 }
 
-bool Renderer::captureScreenshot(const std::string& outputPath, int jpegQuality) {
+bool Renderer::readFrame(std::vector<uint8_t>& bgra, uint32_t& width, uint32_t& height) {
     if (!vkCtx) return false;
 
     VkDevice device     = vkCtx->getDevice();
@@ -2347,7 +2347,7 @@ bool Renderer::captureScreenshot(const std::string& outputPath, int jpegQuality)
     vkCtx->endSingleTimeCommands(cmd);
 
     // The pixels out in one pass, and the buffer given back at once.
-    std::vector<uint8_t> pixels(static_cast<size_t>(bufSize));
+    bgra.resize(static_cast<size_t>(bufSize));
     void* mapped = nullptr;
     if (vmaMapMemory(alloc, stagingAlloc, &mapped) != VK_SUCCESS) {
         vmaDestroyBuffer(alloc, stagingBuf, stagingAlloc);
@@ -2355,9 +2355,19 @@ bool Renderer::captureScreenshot(const std::string& outputPath, int jpegQuality)
         return false;
     }
     vmaInvalidateAllocation(alloc, stagingAlloc, 0, VK_WHOLE_SIZE);
-    std::memcpy(pixels.data(), mapped, pixels.size());
+    std::memcpy(bgra.data(), mapped, bgra.size());
     vmaUnmapMemory(alloc, stagingAlloc);
     vmaDestroyBuffer(alloc, stagingBuf, stagingAlloc);
+    width = w;
+    height = h;
+    return true;
+}
+
+bool Renderer::captureScreenshot(const std::string& outputPath, int jpegQuality) {
+    std::vector<uint8_t> pixels;
+    uint32_t w = 0;
+    uint32_t h = 0;
+    if (!readFrame(pixels, w, h)) return false;
 
     // The rest - BGRA to RGBA, the folder, the PNG's compression - on a
     // worker, while the client goes on drawing. Finished writes are dropped

@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/profiler.hpp"
 #include "core/frame_profiler.hpp"
+#include "mcp/gate.hpp"
 #include <iomanip>
 #include <sstream>
 #include <cstdio>
@@ -294,6 +295,8 @@ void WorldSocket::dumpRecentPacketHistoryLocked(const char* reason, size_t buffe
 }
 
 void WorldSocket::send(const Packet& packet) {
+    // What the MCP server set off and may not (mcp/send_guard.hpp).
+    if (!mcp::gate::sendAllowed(packet.getOpcode(), packet.getData())) return;
     static const bool kLogCharCreatePayload = core::envFlagEnabled("WOWEE_NET_LOG_CHAR_CREATE", false);
     static const bool kLogSwapItemPackets = core::envFlagEnabled("WOWEE_NET_LOG_SWAP_ITEM", false);
     std::lock_guard<std::mutex> lock(ioMutex_);

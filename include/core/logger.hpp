@@ -43,6 +43,11 @@ public:
     /// The folder the session log was opened in - where the client's other
     /// logs (Logs\\taint.log) belong too. Empty before the log is opened.
     [[nodiscard]] std::filesystem::path logDirectory() const { return logDirectory_; }
+    /// Told each line as it is written, on whatever thread logs it and with
+    /// the logger's lock held, so it may not log itself (the MCP server's log
+    /// tool). Null for nobody.
+    using Tap = void (*)(int level, const std::string& message);
+    void setTap(Tap tap) { tap_.store(tap, std::memory_order_release); }
 
     template<typename... Args>
     void debug(Args&&... args) {
@@ -103,6 +108,7 @@ private:
     }
 
     std::atomic<int> minLevel_{kDefaultMinLevelValue};
+    std::atomic<Tap> tap_{nullptr};
     std::mutex mutex;
     std::ofstream fileStream;
     std::filesystem::path logDirectory_;

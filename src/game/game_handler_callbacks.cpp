@@ -64,6 +64,7 @@
 #include "core/logger.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/animation_data.hpp"
+#include "mcp/gate.hpp"
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
 #include <cmath>
@@ -2189,6 +2190,7 @@ void GameHandler::faceCanonicalYaw(float canonicalYaw) {
 }
 
 void GameHandler::requestLogout(bool exitAfterLogout) {
+    if (exitAfterLogout && !mcp::gate::quitAllowed()) return;
     if (socialHandler_) socialHandler_->requestLogout(exitAfterLogout);
 }
 

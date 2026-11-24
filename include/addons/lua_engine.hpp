@@ -54,6 +54,12 @@ public:
     /// answer to give, not something this client can work out from outside.
     bool evaluateBoolean(const std::string& expression);
 
+    /// Run a chunk for the one value it returns, which `read` is given the
+    /// stack index of. The host's own question, run as nobody's code: it
+    /// neither taints nor is tainted, and an error in it is the caller's and
+    /// not the interface's. Two seconds at most.
+    bool query(const std::string& code, const std::function<void(lua_State*, int)>& read, std::string& error);
+
     /// Error from the last executeFile/executeString that returned false.
     /// Lets a caller loading many files report them together rather than
     /// leaving the reasons scattered through the log.

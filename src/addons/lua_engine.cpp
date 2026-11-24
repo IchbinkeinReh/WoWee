@@ -75,6 +75,7 @@
 #include <filesystem>
 #include <unordered_set>
 #include "ui/movie_playback.hpp"
+#include "mcp/gate.hpp"
 
 extern "C" {
 #include <lua.h>
@@ -16130,6 +16131,7 @@ void pushEventArg(lua_State* L, const std::string& arg) {
 
 void LuaEngine::fireEvent(const std::string& eventName,
                            const std::vector<std::string>& args) {
+    if (mcp::gate::heardEvent) mcp::gate::heardEvent(eventName, args);
     fireEventWith(eventName, static_cast<int>(args.size()),
                   [&args](lua_State* L) {
                       for (const auto& arg : args) pushEventArg(L, arg);
@@ -16140,6 +16142,20 @@ void LuaEngine::fireEvent(const std::string& eventName,
 void LuaEngine::fireEventValues(const std::string& eventName,
                                 const std::vector<game::combat_log::Arg>& args) {
     using Kind = game::combat_log::Arg::Kind;
+    if (mcp::gate::heardEvent) {
+        std::vector<std::string> text;
+        text.reserve(args.size());
+        for (const auto& arg : args) {
+            if (arg.kind != Kind::Number) {
+                text.push_back(arg.text);
+                continue;
+            }
+            char number[32];
+            std::snprintf(number, sizeof(number), "%.14g", arg.number);
+            text.emplace_back(number);
+        }
+        mcp::gate::heardEvent(eventName, text);
+    }
     fireEventWith(eventName, static_cast<int>(args.size()),
                   [&args](lua_State* L) {
                       for (const auto& arg : args) {
@@ -19990,6 +20006,30 @@ bool LuaEngine::evaluateBoolean(const std::string& expression) {
     const bool truth = lua_toboolean(L_, -1) != 0;
     lua_settop(L_, base);
     return truth;
+}
+
+bool LuaEngine::query(const std::string& code, const std::function<void(lua_State*, int)>& read,
+                      std::string& error) {
+    if (!L_) {
+        error = "no interface";
+        return false;
+    }
+    // Asked by the host: nothing it reads taints anybody, and it taints
+    // nothing (taint::Quiet).
+    taint::Quiet quiet;
+    const int base = lua_gettop(L_);
+    BudgetGuard guard(L_, 2000);
+    // Without the interface's own error handler: a question of the host's that
+    // goes wrong is no script error of anybody's.
+    if (luaL_loadbuffer(L_, code.c_str(), code.size(), "=query") != 0 || lua_pcall(L_, 0, 1, 0) != 0) {
+        const char* e = lua_tostring(L_, -1);
+        error = e ? e : "(unknown error)";
+        lua_settop(L_, base);
+        return false;
+    }
+    if (read) read(L_, base + 1);
+    lua_settop(L_, base);
+    return true;
 }
 
 std::string LuaEngine::globalText(const char* name) const {

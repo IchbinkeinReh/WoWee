@@ -40,6 +40,7 @@
 #include "addons/object_type.hpp"
 #include "ui/layout_cache.hpp"
 #include "game/chat_log.hpp"
+#include "mcp/gate.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
@@ -5826,6 +5827,7 @@ static int lua_RunScript(lua_State* L) {
     if (!lua_isstring(L, 1)) return 0;
     const char* body = lua_tostring(L, 1);
     if (!body || !*body) return 0;
+    if (!mcp::gate::luaAllowed()) return 0;
     taint::execute(L, body, body, taint::macro());
     return 0;
 }

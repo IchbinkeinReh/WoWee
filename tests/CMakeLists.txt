@@ -4454,6 +4454,38 @@ function(wowee_share_test_sources)
 endfunction()
 wowee_share_test_sources()
 
+# The MCP server (--mcp, docs/MCP_SERVER.md), in four: what is read off its
+# socket and who is let in; the protocol, the arguments and what is kept out of
+# the answers; what it does not do; and the parts at work - the socket, the
+# threads, the token's file, the ways it walks. Only the server's own sources:
+# what has the game behind it is not tested here.
+wowee_add_test(test_mcp_http
+    SOURCES test_mcp_http.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/http_auth.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/http_message.cpp)
+wowee_add_test(test_mcp_rpc
+    SOURCES test_mcp_rpc.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/json_rpc.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/redact.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/schema.cpp)
+wowee_add_test(test_mcp_guard
+    SOURCES test_mcp_guard.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/options.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/send_guard.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/social.cpp)
+wowee_add_test(test_mcp_server
+    SOURCES test_mcp_server.cpp ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/mcp/http_auth.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/http_message.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/http_server.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/image.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/main_queue.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/script.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/token_file.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/walk_planner.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/world_probe.cpp)
+target_link_libraries(test_mcp_server PRIVATE OpenSSL::Crypto)
+
 # No weather drawn on the screen by the interface: the world's rain is the
 # only rain (test_no_screen_weather.cpp). Reads the sources.
 wowee_add_test(test_no_screen_weather

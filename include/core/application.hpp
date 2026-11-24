@@ -19,6 +19,10 @@ namespace wowee::rendering { class ModelFrameView; }
 #include "core/update_check.hpp"
 #include "rendering/device_recovery.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "core/platform.hpp"
+#ifndef WOWEE_MOBILE
+#include "mcp/options.hpp"
+#endif
 #include <memory>
 #include <map>
 #include <string>
@@ -45,6 +49,7 @@ namespace game { class GameHandler; class World; class ExpansionRegistry; struct
 namespace pipeline { class AssetManager; class DBCLayout; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; class AudioCoordinator; }
 namespace addons { class AddonManager; }
+namespace mcp { class Server; }
 
 namespace core {
 
@@ -151,6 +156,11 @@ public:
 
     // Singleton access
     static Application& getInstance() { return *instance; }
+
+#ifndef WOWEE_MOBILE
+    /// --mcp and what goes with it, before run().
+    void setMcpOptions(const mcp::Options& options) { mcpOptions_ = options; }
+#endif
 
 
 
@@ -370,6 +380,12 @@ private:
     void setupTestTransport();  // Test transport boat for development
 
     static Application* instance;
+
+#ifndef WOWEE_MOBILE
+    /// Null unless the client was started with --mcp.
+    mcp::Options mcpOptions_;
+    std::unique_ptr<mcp::Server> mcp_;
+#endif
 
     game::GameServices gameServices_;
     /// The pad family the interface's key names were written for.

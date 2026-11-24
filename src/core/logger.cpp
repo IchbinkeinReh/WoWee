@@ -168,6 +168,7 @@ void Logger::emitLineLocked(LogLevel level, const std::string& rawMessage) {
     // log_privacy.hpp. Read once: it does not change while the client runs.
     static const std::string home = homeDirectory();
     const std::string message = redactHome(rawMessage, home);
+    if (const Tap tap = tap_.load(std::memory_order_acquire)) tap(static_cast<int>(level), message);
 
     // Get current time
     auto now = std::chrono::system_clock::now();

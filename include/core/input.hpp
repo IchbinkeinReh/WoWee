@@ -2,6 +2,7 @@
 
 #include <SDL3/SDL.h>
 #include <array>
+#include <optional>
 #include <glm/glm.hpp>
 
 namespace wowee {
@@ -40,10 +41,13 @@ public:
     /// click into both buttons, which is walking forward.
     void setMouseButtonMasked(int button, bool masked);
     /// Where a scripted test run puts the pointer (__WoweeTestMouse, only
-    /// with WOWEE_AUTO_LUA), read in place of the device's; cleared to give
-    /// the device's back.
+    /// with WOWEE_AUTO_LUA), or the MCP server's mouse does, read in place of
+    /// the device's; cleared to give the device's back.
     void setVirtualMousePosition(const glm::vec2& at) { virtualMousePos_ = at; hasVirtualMousePos_ = true; }
     void clearVirtualMousePosition() { hasVirtualMousePos_ = false; }
+    [[nodiscard]] std::optional<glm::vec2> virtualMousePosition() const {
+        return hasVirtualMousePos_ ? std::optional<glm::vec2>(virtualMousePos_) : std::nullopt;
+    }
     [[nodiscard]] bool isKeyJustPressed(SDL_Scancode key) const;
 
     // Mouse

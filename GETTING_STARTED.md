@@ -207,6 +207,7 @@ With more than one expansion's assets installed, an **Assets** row on the login 
 - Comprehensive troubleshooting: See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 - Check `logs/wowee.log` in the working directory for errors. If that directory cannot be written (for example an installed macOS app), the log goes to `~/Library/Logs/Wowee` on macOS, `%LOCALAPPDATA%\Wowee\logs` on Windows, or `$XDG_STATE_HOME/wowee/logs` (default `~/.local/state/wowee/logs`) on Linux, and the path is printed to the console
 - `WOWEE_LOG_LEVEL=info` (or `debug`) writes more than the default warnings and errors
+- `wowee --help` lists the command line's options (the [MCP server](docs/MCP_SERVER.md))
 - Verify expansion matches server requirements
 
 ## Server Configuration
