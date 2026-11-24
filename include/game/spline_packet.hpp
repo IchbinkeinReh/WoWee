@@ -99,7 +99,13 @@ namespace SplineFlagWotlk {
     constexpr uint32_t FROZEN          = 0x00400000;
     constexpr uint32_t ORIENT_INVERSED = 0x08000000;
 
-    constexpr uint32_t UNCOMPRESSED_MASK = CATMULLROM | CYCLIC | ENTER_CYCLE;
+    /// Either of these and SMSG_MONSTER_MOVE's points are whole, twelve bytes
+    /// each; without both, the last is and the others are packed (0x0073cbcb
+    /// tests 0x42000 and nothing else). CYCLIC only closes the path in the
+    /// whole branch (0x0073cecf), ENTER_CYCLE is asked after nowhere in it. A
+    /// flight and a flying creature are FLYING alone: read as packed, their
+    /// points were somewhere within 256 yards of the way.
+    constexpr uint32_t UNCOMPRESSED_MASK = FLYING | CATMULLROM;
 } // namespace SplineFlagWotlk
 
 [[nodiscard]] constexpr bool isPreWotlkSplineWalking(uint32_t splineFlags) {

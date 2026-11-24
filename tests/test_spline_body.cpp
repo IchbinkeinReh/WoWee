@@ -217,3 +217,67 @@ TEST_CASE("an implausible point count is refused", "[splinebody]") {
     SplineBlockData out;
     CHECK_FALSE(parseMonsterMoveSplineBodyVanilla(packet, out, 0, glm::vec3(0.0f)));
 }
+
+// Which splines have whole points is FLYING or CATMULLROM, 0x42000, and no
+// other flag (0x0073cbcb). A server's flights and flying creatures are 0x2000.
+TEST_CASE("a flying WotLK spline's points are whole", "[splinebody]") {
+    for (const uint32_t flags : {0x2000u, 0x40000u, 0x42000u, 0x82000u, 0x182000u, 0x42000u | 0x1000u}) {
+        INFO("flags " << std::hex << flags);
+        Writer w;
+        w.u32(60000);
+        w.u32(3);
+        w.vec3(3500.0f, -4500.0f, 140.0f);
+        w.vec3(3300.0f, -4700.0f, 180.0f);
+        w.vec3(3100.0f, -4900.0f, 90.0f);
+        wowee::network::Packet packet(0, w.bytes);
+        SplineBlockData out;
+        REQUIRE(parseMonsterMoveSplineBody(packet, out, flags, glm::vec3(3600.0f, -4400.0f, 120.0f), false,
+                                           SplineFlagSet::Wotlk));
+        REQUIRE(out.waypoints.size() == 2);
+        CHECK(out.waypoints[0] == glm::vec3(3500.0f, -4500.0f, 140.0f));
+        CHECK(out.waypoints[1] == glm::vec3(3300.0f, -4700.0f, 180.0f));
+        CHECK(out.destination == glm::vec3(3100.0f, -4900.0f, 90.0f));
+        CHECK(packet.getRemainingSize() == 0);
+    }
+}
+
+TEST_CASE("any other WotLK spline's points are packed, cyclic or not", "[splinebody]") {
+    for (const uint32_t flags : {0x0u, 0x1000u, 0x80000u, 0x100000u, 0x180000u, 0x4000u}) {
+        INFO("flags " << std::hex << flags);
+        Writer w;
+        w.u32(1000);
+        w.u32(2);
+        w.vec3(10.0f, 0.0f, 0.0f);
+        w.u32(0);  // the middle of the way
+        wowee::network::Packet packet(0, w.bytes);
+        SplineBlockData out;
+        REQUIRE(parseMonsterMoveSplineBody(packet, out, flags, glm::vec3(0.0f), false, SplineFlagSet::Wotlk));
+        CHECK(out.destination == glm::vec3(10.0f, 0.0f, 0.0f));
+        REQUIRE(out.waypoints.size() == 1);
+        CHECK(out.waypoints[0] == glm::vec3(5.0f, 0.0f, 0.0f));
+        CHECK(packet.getRemainingSize() == 0);
+    }
+}
+
+// The older generations' masks are as they were: vanilla's Catmull-Rom and
+// cyclic bits, TBC's with 0x2000.
+TEST_CASE("the pre-WotLK splines keep their own bits", "[splinebody]") {
+    const auto whole = [](uint32_t flags, bool tbc) {
+        Writer w;
+        w.u32(1000);
+        w.u32(2);
+        w.vec3(1.0f, 2.0f, 3.0f);
+        w.vec3(4.0f, 5.0f, 6.0f);
+        wowee::network::Packet packet(0, w.bytes);
+        SplineBlockData out;
+        REQUIRE(parseMonsterMoveSplineBody(packet, out, flags, glm::vec3(0.0f), tbc));
+        return out.destination == glm::vec3(4.0f, 5.0f, 6.0f);
+    };
+    CHECK(whole(0x00080000, false));
+    CHECK(whole(0x00100000, false));
+    CHECK_FALSE(whole(0x00002000, false));
+    CHECK_FALSE(whole(0x00040000, false));
+    CHECK(whole(0x00080000, true));
+    CHECK(whole(0x00002000, true));
+    CHECK_FALSE(whole(0x00040000, true));
+}

@@ -6,6 +6,7 @@
 #include "game_replay.hpp"
 #include "game/movement_handler.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 #include <utility>
@@ -40,16 +41,17 @@ void spawn(Session& s, uint32_t unitFlags, uint32_t mount, const glm::vec3& serv
     place(s, server);
 }
 
-// MoveSplineInit::Launch with Flying | Catmullrom: the points whole.
+// A flight's spline as the server writes it: FLYING alone, the points whole.
+// FLYING | CATMULLROM is the same to the client (0x42000).
 wowee::network::Packet flight(uint32_t splineId, const glm::vec3& from, const std::vector<glm::vec3>& points,
-                              uint32_t durationMs) {
+                              uint32_t durationMs, uint32_t flags = 0x2000, uint64_t guid = Session::kPlayerGuid) {
     wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_MONSTER_MOVE));
-    p.writePackedGuid(Session::kPlayerGuid);
+    p.writePackedGuid(guid);
     p.writeUInt8(0);
     for (float f : {from.x, from.y, from.z}) p.writeFloat(f);
     p.writeUInt32(splineId);
     p.writeUInt8(0);
-    p.writeUInt32(0x42000);
+    p.writeUInt32(flags);
     p.writeUInt32(durationMs);
     p.writeUInt32(static_cast<uint32_t>(points.size()));
     for (const auto& at : points)
@@ -276,4 +278,127 @@ TEST_CASE("a flight does not outlive the world it was in", "[replay][taxi]") {
     CHECK_FALSE(s.handler().isOnTaxiFlight());
     CHECK(closeTo(standsAt(s), at));
     CHECK(reports(s).empty());
+}
+
+namespace {
+
+float offTheWay(const glm::vec3& p, const std::vector<glm::vec3>& way) {
+    float best = 1.0e9f;
+    for (size_t i = 1; i < way.size(); ++i) {
+        const glm::vec3 d = way[i] - way[i - 1];
+        const float t = glm::clamp(glm::dot(p - way[i - 1], d) / glm::dot(d, d), 0.0f, 1.0f);
+        best = std::min(best, glm::length(p - (way[i - 1] + d * t)));
+    }
+    return best;
+}
+
+glm::vec3 placeOf(const wowee::game::Entity& e) {
+    return wowee::core::coords::canonicalToServer(glm::vec3(e.getX(), e.getY(), e.getZ()));
+}
+
+}  // namespace
+
+// P32: the points of a FLYING spline read as packed lay all over the 256 yards
+// round the middle, and every flight flew a tangle of them.
+TEST_CASE("a flight of many points flies from one to the next", "[replay][taxi]") {
+    const uint32_t flags = GENERATE(0x2000u, 0x42000u);
+    INFO("flags " << std::hex << flags);
+    Session s;
+    uint32_t mount = 0;
+    s.handler().setMountCallback([&](uint32_t display) { mount = display; });
+    const glm::vec3 from = kBorder0 - glm::vec3(0.0f, 0.0f, 5.0f);
+    spawn(s, 0, 0, from);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, kTaxiFlag | kDisableMove},
+                                                           {UF::UNIT_FIELD_MOUNTDISPLAYID, 1149}}));
+    const std::vector<glm::vec3> first = {from + glm::vec3(3.0f, 0.0f, 2.0f), from + glm::vec3(6.0f, 1.0f, 4.0f),
+                                          from + glm::vec3(9.0f, 3.0f, 4.0f), from + glm::vec3(12.0f, 6.0f, 4.0f)};
+    s.receive(flight(21, from, first, 400, flags));
+    std::vector<glm::vec3> way = first;
+    way.insert(way.begin(), from);
+    float worst = 0.0f, farthest = 0.0f;
+    for (int i = 0; i < 60; ++i) {
+        frames(s, 10);
+        const auto self = s.handler().getEntityManager().getEntity(Session::kPlayerGuid);
+        REQUIRE(self);
+        worst = std::max(worst, offTheWay(placeOf(*self), way));
+        farthest = std::max(farthest, glm::length(placeOf(*self) - from));
+    }
+    CHECK(worst < 0.5f);
+    CHECK(farthest < 15.0f);
+    // The end, reported where the server has it; a stop-over: on by the next
+    // spline, the flag and the mount kept.
+    REQUIRE(reports(s).size() == 1);
+    CHECK(reports(s)[0].id == 21);
+    CHECK(closeTo(reports(s)[0].at, first.back()));
+    CHECK(s.handler().isOnTaxiFlight());
+    CHECK(mount == 1149);
+    const std::vector<glm::vec3> second = {first.back() + glm::vec3(0.0f, 3.0f, -1.0f),
+                                           first.back() + glm::vec3(-2.0f, 6.0f, -2.0f),
+                                           first.back() + glm::vec3(-4.0f, 8.0f, -3.0f)};
+    s.receive(flight(22, first.back(), second, 300, flags));
+    way = second;
+    way.insert(way.begin(), first.back());
+    worst = 0.0f;
+    for (int i = 0; i < 50; ++i) {
+        frames(s, 10);
+        worst = std::max(worst, offTheWay(standsAt(s), way));
+    }
+    CHECK(worst < 0.5f);
+    REQUIRE(reports(s).size() == 2);
+    CHECK(closeTo(reports(s)[1].at, second.back()));
+    // Down: dismounted, the place kept, the keys the player's again.
+    s.receive(UpdateObject().values(Session::kPlayerGuid,
+                                    {{UF::UNIT_FIELD_FLAGS, 0}, {UF::UNIT_FIELD_MOUNTDISPLAYID, 0}}));
+    frames(s, 20);
+    CHECK_FALSE(s.handler().isOnTaxiFlight());
+    CHECK(mount == 0);
+    CHECK(closeTo(standsAt(s), second.back()));
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_FORWARD);
+    REQUIRE(s.sent().of(Opcode::MSG_MOVE_START_FORWARD).size() == 1);
+    s.handler().setMountCallback({});
+}
+
+// The server dismounts the player as its own reckoning of the spline ends, a
+// moment before the client's: flown to its end, then down.
+TEST_CASE("a flight of many points is landed where it ends though the flag goes first", "[replay][taxi]") {
+    Session s;
+    spawn(s, kTaxiFlag, 1149, kBorder0);
+    frames(s, 10);
+    const glm::vec3 landing = kBorder0 + glm::vec3(6.0f, 2.0f, -2.0f);
+    s.receive(flight(31, kBorder0, {kBorder0 + glm::vec3(2.0f, 0.0f, 1.0f), kBorder0 + glm::vec3(4.0f, 1.0f, 0.0f), landing}, 250));
+    frames(s, 150);
+    s.receive(UpdateObject().values(Session::kPlayerGuid,
+                                    {{UF::UNIT_FIELD_FLAGS, 0}, {UF::UNIT_FIELD_MOUNTDISPLAYID, 0}}));
+    frames(s, 250);
+    CHECK_FALSE(s.handler().isOnTaxiFlight());
+    REQUIRE(reports(s).size() == 1);
+    CHECK(closeTo(reports(s)[0].at, landing));
+    CHECK(closeTo(standsAt(s), landing));
+}
+
+// A creature's is read the same.
+TEST_CASE("a flying creature flies from point to point", "[replay][taxi]") {
+    Session s;
+    spawn(s, 0, 0, kBorder0);
+    constexpr uint64_t kDrake = 0xF130005490000042ull;
+    s.receive(UpdateObject().create(kDrake, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    const auto drake = s.handler().getEntityManager().getEntity(kDrake);
+    REQUIRE(drake);
+    const glm::vec3 from = kBorder0 + glm::vec3(30.0f, 0.0f, 0.0f);
+    const glm::vec3 c = wowee::core::coords::serverToCanonical(from);
+    drake->setPosition(c.x, c.y, c.z, 0.0f);
+    const std::vector<glm::vec3> points = {from + glm::vec3(4.0f, 0.0f, 2.0f), from + glm::vec3(8.0f, 4.0f, 3.0f),
+                                           from + glm::vec3(8.0f, 9.0f, 5.0f)};
+    s.receive(flight(41, from, points, 400, 0x2000, kDrake));
+    std::vector<glm::vec3> way = points;
+    way.insert(way.begin(), from);
+    float worst = 0.0f;
+    for (int i = 0; i < 60 && drake->isActivelyMoving(); ++i) {
+        worst = std::max(worst, offTheWay(placeOf(*drake), way));
+        drake->updateMovement(0.01f);
+    }
+    CHECK(worst < 0.6f);
+    CHECK(closeTo(wowee::core::coords::canonicalToServer(
+                      glm::vec3(drake->getLatestX(), drake->getLatestY(), drake->getLatestZ())),
+                  points.back()));
 }
