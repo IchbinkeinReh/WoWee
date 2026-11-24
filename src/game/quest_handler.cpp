@@ -103,12 +103,9 @@ void QuestHandler::questItemAnswered(uint32_t itemId) {
 
 QuestLogRows<QuestHandler::QuestLogEntry> QuestHandler::questLogRows() const {
     const auto titleOf = [this](int32_t group) {
-        std::string name;
-        if (group > 0) name = owner_.getWhoAreaName(static_cast<uint32_t>(group));
-        else if (group < 0) name = owner_.getQuestSortName(static_cast<uint32_t>(-group));
-        // A quest whose query response has not landed has no zone yet, and one
-        // whose zone is not in the file still has to sit somewhere nameable.
-        return name.empty() ? std::string("Miscellaneous") : name;
+        if (group > 0) return owner_.getWhoAreaName(static_cast<uint32_t>(group));
+        if (group < 0) return std::string(owner_.getQuestSortName(static_cast<uint32_t>(-group)));
+        return std::string(kQuestLogNoHeader);
     };
     return wowee::game::questLogRows(questLog_, collapsedQuestGroups_, titleOf,
                                      static_cast<int32_t>(owner_.getPlayerLevel()));

@@ -300,3 +300,12 @@ TEST_CASE("a quest the server takes out of its slot is watched no more", "[repla
     s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 0}}));
     CHECK(s.handler().getQuestWatchOrder() == std::vector<uint32_t>{9340});
 }
+
+TEST_CASE("quests without a zone stand under the client's own header", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 8021}}));
+    const auto rows = s.handler().getQuestHandler()->questLogRows();
+    REQUIRE(rows.rows.size() == 2);
+    CHECK(rows.rows[0].headerTitle == "Missing header! (quest designers)");
+}

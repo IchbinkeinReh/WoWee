@@ -15,6 +15,10 @@
 
 namespace wowee::game {
 
+/// The header of quests without a zone or sort, the client's own words in every
+/// language (0x005e0000).
+inline constexpr const char* kQuestLogNoHeader = "Missing header! (quest designers)";
+
 template <class Entry>
 struct QuestLogRows {
     struct Row {
