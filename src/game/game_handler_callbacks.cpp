@@ -741,6 +741,7 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         movementHandler_->resetMovementClock();
         movementHandler_->forgetMoveSplines();
         movementHandler_->forgetTaxi();
+        movementHandler_->noteServerPlace(canonical);
         movementHandler_->dropTeleportAck();
         movementHandler_->forgetCollisionHeight();
     }

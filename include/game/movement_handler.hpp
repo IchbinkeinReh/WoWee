@@ -261,6 +261,9 @@ public:
     void forgetTaxi();
     /// The splines of a world left: their clock and their units are gone.
     void forgetMoveSplines() { moveSplines_.clear(); }
+    /// Where the server put the player, canonical: what the next packet with a
+    /// place in it is measured by (noteOutgoingPlace).
+    void noteServerPlace(const glm::vec3& canonical) { knownPlace_ = canonical; }
     // Ends the active client-simulated taxi flight. See the definition in
     // movement_handler.cpp for what snapToFinalWaypoint means - callers outside
     // MovementHandler (SMSG_DISMOUNT / UNIT_FIELD_MOUNTDISPLAYID handlers reacting
@@ -461,6 +464,13 @@ private:
     /// on the first one's report. The route in the tables is never flown.
     void updateServerTaxi(float deltaTime);
     void endServerTaxi();
+    /// Whether the unit a forced change names is there to take it and answer
+    /// it. 0x00732450, the handler of all of them, looks it up (0x004d4db0)
+    /// and has nothing to do with one that is not: no answer goes out.
+    [[nodiscard]] bool unitForForcedChange(uint64_t guid, const char* name);
+    /// Says so in the log when a place about to be told the server is nowhere
+    /// near the last one it or we named.
+    void noteOutgoingPlace(uint16_t wireOp, const MovementInfo& canonical);
     [[nodiscard]] bool playerTaxiFlag() const;
     bool restoreWorldTransferFallbackIfNearOrigin(const char* context);
 
@@ -547,6 +557,7 @@ private:
     /// The flight's UNIT_FLAG_TAXI_FLIGHT has been there (updateServerTaxi);
     /// until then the accepted request stands for it, for so long.
     bool taxiFlagSeen_ = false;
+    std::optional<glm::vec3> knownPlace_;
     float taxiFlagWait_ = 0.0f;
     std::string taxiDestName_;
     // Set in activateTaxi(); used by finishClientTaxiFlight() to snap to the

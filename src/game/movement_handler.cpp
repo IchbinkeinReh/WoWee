@@ -1158,6 +1158,8 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         }
     }
 
+    if (moverIsPlayer) noteOutgoingPlace(wireOpcode(opcode), movementInfo);
+
     // Convert canonical → server coordinates for the wire
     MovementInfo wireInfo = movementInfo;
     glm::vec3 serverPos = core::coords::canonicalToServer(glm::vec3(wireInfo.x, wireInfo.y, wireInfo.z));
@@ -1396,6 +1398,35 @@ void MovementHandler::dismount() {
 // root, flag, collision-height, knockback) require the same ACK structure:
 // GUID + counter + movement payload with server-space coordinates. Centralised
 // here so transport coordinate conversion can't diverge between handlers.
+bool MovementHandler::unitForForcedChange(uint64_t guid, const char* name) {
+    if (guid != 0 && owner_.getEntityManager().getEntity(guid)) return true;
+    // Answered all the same, the answer had the movement of no unit at all:
+    // before the first world of a client that is the origin, facing
+    // 1.5707964 on the wire, and the server may take it at its word - with
+    // the player out of sight of everything until they moved.
+    static core::LogBudget budget(20, "Forced movement change");
+    if (budget.take()) {
+        LOG_WARNING("Forced movement change ", name, " for 0x", std::hex, guid, std::dec, guid == owner_.getPlayerGuid() ? " (the player)" : "",
+                    " not answered: the unit is not there, state=", static_cast<int>(owner_.getState()));
+    }
+    return false;
+}
+
+void MovementHandler::noteOutgoingPlace(uint16_t wireOp, const MovementInfo& canonical) {
+    const glm::vec3 at(canonical.x, canonical.y, canonical.z);
+    constexpr float kFar = 300.0f;
+    if (wireOp != wireOpcode(Opcode::CMSG_MOVE_SPLINE_DONE) && knownPlace_ && glm::length(at - *knownPlace_) > kFar) {
+        static core::LogBudget budget(20, "Outgoing place");
+        if (budget.take()) {
+            LOG_WARNING("Outgoing packet 0x", std::hex, wireOp, std::dec, " places the player ",
+                        glm::length(at - *knownPlace_), " yd from where the server had them: canonical ", at.x, ", ",
+                        at.y, ", ", at.z, " facing ", canonical.orientation, " for ", knownPlace_->x, ", ",
+                        knownPlace_->y, ", ", knownPlace_->z);
+        }
+    }
+    knownPlace_ = at;
+}
+
 network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counter, uint64_t guid) {
     // The unit the change was for and its movement (0x0071ef80): the
     // player's, or the unit the client moves in its stead.
@@ -1412,6 +1443,7 @@ network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counte
 
     MovementInfo wire = movementOf(guid);
     wire.time = nextMovementTimestampMs();
+    if (guid == owner_.getPlayerGuid()) noteOutgoingPlace(wireOpcode(ackOpcode), wire);
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         wire.transportTime = wire.time;
         wire.transportTime2 = wire.time;
@@ -1458,6 +1490,8 @@ void MovementHandler::handleForceSpeedChange(network::Packet& packet, const char
 
     LOG_INFO("SMSG_FORCE_", name, "_CHANGE: guid=0x", std::hex, guid, std::dec,
              " counter=", counter, " speed=", newSpeed);
+
+    if (!unitForForcedChange(guid, name)) return;
 
     // The player's, or the unit the client moves in its stead (a driven
     // vehicle's): any unit's change lands on its movement (0x00732450 ->
@@ -1509,6 +1543,7 @@ void MovementHandler::handleForceMoveRootState(network::Packet& packet, bool roo
     LOG_INFO(rooted ? "SMSG_FORCE_MOVE_ROOT" : "SMSG_FORCE_MOVE_UNROOT",
              ": guid=0x", std::hex, guid, std::dec, " counter=", counter);
 
+    if (!unitForForcedChange(guid, rooted ? "MOVE_ROOT" : "MOVE_UNROOT")) return;
     MovementInfo* info = movementFor(guid);
     if (!info) return;
 
@@ -1536,6 +1571,7 @@ void MovementHandler::handleForceMoveFlagChange(network::Packet& packet, const c
 
     LOG_INFO("SMSG_FORCE_", name, ": guid=0x", std::hex, guid, std::dec, " counter=", counter);
 
+    if (!unitForForcedChange(guid, name)) return;
     MovementInfo* info = movementFor(guid);
     if (!info) return;
 
@@ -1575,7 +1611,7 @@ void MovementHandler::handleMoveSetCollisionHeight(network::Packet& packet) {
     LOG_INFO("SMSG_MOVE_SET_COLLISION_HGT: guid=0x", std::hex, guid, std::dec,
              " counter=", counter, " height=", height);
 
-    if (guid != owner_.getPlayerGuid()) return;
+    if (guid != owner_.getPlayerGuid() || !unitForForcedChange(guid, "COLLISION_HGT")) return;
     // 0x006ef860 event 0x3a -> 0x006e9600: the body's height (+0xcc) from
     // here on. A mount's comes this way (0x0073d5d0 sets none for a player
     // that mounts in the world: 0x006e9570 with its last argument 0), and a
@@ -1618,7 +1654,7 @@ void MovementHandler::handleMoveKnockBack(network::Packet& packet) {
              " counter=", counter, " vcos=", vcos, " vsin=", vsin,
              " hspeed=", hspeed, " vspeed=", vspeed);
 
-    if (guid != owner_.getPlayerGuid()) return;
+    if (guid != owner_.getPlayerGuid() || !unitForForcedChange(guid, "KNOCK_BACK")) return;
 
     if (owner_.knockBackCallbackRef()) {
         owner_.knockBackCallbackRef()(vcos, vsin, hspeed, vspeed);
@@ -2757,6 +2793,7 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         // and a flight's camera follows the unit: it is here now as well.
         moveSplines_.erase(guid);
         forgetTaxi();
+        noteServerPlace(canonical);
         if (auto self = owner_.getEntityManager().getEntity(guid)) {
             self->setPosition(canonical.x, canonical.y, canonical.z, movementInfo.orientation);
         }
@@ -3068,6 +3105,9 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     // went with the objects they moved (0x004d6750).
     forgetTaxi();
     moveSplines_.clear();
+    // A ride's coordinates are its offset on the transport.
+    if (crossMapTransportTransfer) knownPlace_.reset();
+    else noteServerPlace(canonical);
     owner_.currentMountDisplayIdRef() = 0;
     if (owner_.mountCallbackRef()) {
         owner_.mountCallbackRef()(0);

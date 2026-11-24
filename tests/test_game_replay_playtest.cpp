@@ -971,3 +971,57 @@ TEST_CASE("the equipment manager hears of every change at once", "[replay][playt
     wowee::network::Packet p = used[0];
     CHECK_FALSE(gh.useEquipmentSet("Mend", false));   // the first is not answered
 }
+
+// A forced change answered while the player's own unit is not there yet went out
+// with the movement of none: 0/0/0 facing 1.5707964, where the server then had
+// the character until it moved. 0x00732450 looks the unit up for every one of
+// them and leaves the packet be where there is none.
+TEST_CASE("a forced movement change is answered by a unit that is there", "[replay][playtest]") {
+    struct Forced {
+        Opcode op;
+        Opcode ack;
+        std::vector<float> floats;
+        bool extraByte = false;
+    };
+    const Forced forced = GENERATE(
+        Forced{Opcode::SMSG_FORCE_RUN_SPEED_CHANGE, Opcode::CMSG_FORCE_RUN_SPEED_CHANGE_ACK, {8.05f}, true},
+        Forced{Opcode::SMSG_FORCE_SWIM_SPEED_CHANGE, Opcode::CMSG_FORCE_SWIM_SPEED_CHANGE_ACK, {4.7f}},
+        Forced{Opcode::SMSG_FORCE_MOVE_ROOT, Opcode::CMSG_FORCE_MOVE_ROOT_ACK, {}},
+        Forced{Opcode::SMSG_FORCE_MOVE_UNROOT, Opcode::CMSG_FORCE_MOVE_UNROOT_ACK, {}},
+        Forced{Opcode::SMSG_MOVE_SET_CAN_FLY, Opcode::CMSG_MOVE_SET_CAN_FLY_ACK, {}},
+        Forced{Opcode::SMSG_MOVE_WATER_WALK, Opcode::CMSG_MOVE_WATER_WALK_ACK, {}},
+        Forced{Opcode::SMSG_MOVE_SET_COLLISION_HGT, Opcode::CMSG_MOVE_SET_COLLISION_HGT_ACK, {2.0f}},
+        Forced{Opcode::SMSG_MOVE_KNOCK_BACK, Opcode::CMSG_MOVE_KNOCK_BACK_ACK, {1.0f, 0.0f, 5.0f, -5.0f}});
+    const auto packet = [&] {
+        wowee::network::Packet p(wowee::game::wireOpcode(forced.op));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt32(7);
+        if (forced.extraByte) p.writeUInt8(1);
+        for (float f : forced.floats) p.writeFloat(f);
+        return p;
+    };
+    Session s;
+    s.receive(packet());
+    CHECK(s.sent().of(forced.ack).empty());
+
+    spawnPlayer(s);
+    s.receive(packet());
+    REQUIRE(s.sent().of(forced.ack).size() == 1);
+    auto ack = s.sent().of(forced.ack).front();
+    CHECK(ack.readPackedGuid() == Session::kPlayerGuid);
+    CHECK(ack.readUInt32() == 7);
+    ack.readUInt32();
+    ack.readUInt16();
+    ack.readUInt32();
+    CHECK(ack.readFloat() == -2337.2f);
+    CHECK(ack.readFloat() == -356.4f);
+    CHECK(ack.readFloat() == -8.7f);
+
+    // Between two worlds there is none either (0x004d6750 took it away).
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    for (float f : {-2328.0f, -358.0f, -8.7f, 0.4f}) world.writeFloat(f);
+    s.receive(world);
+    s.receive(packet());
+    CHECK(s.sent().of(forced.ack).size() == 1);
+}
