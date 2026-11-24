@@ -1,6 +1,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "ui/keyboard_frame.hpp"
+#include "ui/visibility_scripts.hpp"
 #include "ui/widget_tree.hpp"
 
 #include <algorithm>
@@ -3600,4 +3601,62 @@ TEST_CASE("The shade uncovers clockwise from the top", "[cooldown]") {
     REQUIRE(flash(333).alpha == Catch::Approx(1.0f).margin(0.01));
     REQUIRE(flash(1000).alpha == Catch::Approx(0.0f).margin(0.01));
     REQUIRE(flash(1000).angle == Catch::Approx(-0.7853982f));
+}
+
+TEST_CASE("A tooltip's OnHide is run in Hide and not owed again", "[widget][visibility]") {
+    Widget tip;
+    tip.objectType = "GameTooltip";
+    // Up, and said to be.
+    tip.shown = tip.visible = tip.visibleChain = tip.reportedVisible = true;
+    // Hidden by the frame the pointer leaves (0x00491830 runs OnHide there).
+    REQUIRE(hideRunsOnHide(tip, true));
+    tip.shown = false;
+    ++tip.shownToggles;
+    noteHideSaid(tip);
+    // Filled and shown by the one it enters, in the same frame: Show counts as
+    // a toggle and runs OnShow, being the only one.
+    ++tip.shownToggles;
+    REQUIRE(tip.shownToggles == 1);
+    tip.shown = true;
+    tip.onShowFired = true;
+    // The pass has nothing to add - not the OnHide that took the money down.
+    const VisibilityOwed owed = takeVisibilityOwed(tip);
+    CHECK_FALSE(owed.hide);
+    CHECK_FALSE(owed.show);
+    CHECK(tip.reportedVisible);
+    // Hidden for good, it is said once, in Hide.
+    REQUIRE(hideRunsOnHide(tip, true));
+    tip.shown = false;
+    noteHideSaid(tip);
+    tip.visible = tip.visibleChain = false;
+    CHECK_FALSE(takeVisibilityOwed(tip).hide);
+    // Not where it was not on screen.
+    CHECK_FALSE(hideRunsOnHide(tip, true));
+    tip.shown = true;
+    CHECK_FALSE(hideRunsOnHide(tip, false));
+}
+
+TEST_CASE("Any other frame's Hide and Show are said by the pass, in order", "[widget][visibility]") {
+    Widget panel;
+    panel.objectType = "Frame";
+    panel.shown = panel.visible = panel.visibleChain = panel.reportedVisible = true;
+    CHECK_FALSE(hideRunsOnHide(panel, true));
+    panel.shownToggles = 2;
+    VisibilityOwed owed = takeVisibilityOwed(panel);
+    CHECK_FALSE(owed.changed);
+    CHECK(owed.hide);
+    CHECK(owed.show);
+    owed = takeVisibilityOwed(panel);
+    CHECK_FALSE(owed.hide);
+    panel.visible = panel.visibleChain = false;
+    owed = takeVisibilityOwed(panel);
+    CHECK(owed.changed);
+    CHECK(owed.hide);
+    CHECK_FALSE(owed.show);
+    panel.visible = true;
+    panel.onShowFired = true;
+    owed = takeVisibilityOwed(panel);
+    CHECK(owed.changed);
+    CHECK_FALSE(owed.show);
+    CHECK_FALSE(panel.onShowFired);
 }

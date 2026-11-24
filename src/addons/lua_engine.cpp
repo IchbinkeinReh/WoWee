@@ -4,6 +4,7 @@
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
+#include "ui/visibility_scripts.hpp"
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
@@ -7373,6 +7374,25 @@ static bool frameScriptSet(lua_State* L, int frameIndex, const char* name) {
     return has;
 }
 
+/// Runs a frame's script now, inside the call that brought it about; false
+/// where it has none. Errors are reported the same way every other script call
+/// reports them rather than unwinding through that call.
+static bool runFrameScriptNow(lua_State* L, int frameIndex, const char* script) {
+    const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
+    taint::Quiet quiet;   // see callScriptOnTable
+    lua_getfield(L, abs, "__scripts");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    lua_getfield(L, -1, script);
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return false; }
+    lua_pushvalue(L, abs);                       // self
+    if (pcallScript(L, script, 1, 0) != 0) {
+        LOG_WARNING("[Lua] ", script, " error: ", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);                               // __scripts
+    return true;
+}
+
 /// Run a frame's OnShow now, from inside Show().
 ///
 /// The visibility pass that normally fires it runs once a frame, and that is
@@ -7388,21 +7408,7 @@ static bool frameScriptSet(lua_State* L, int frameIndex, const char* name) {
 /// The real client runs OnShow as part of Show, so this is the faithful
 /// order rather than a workaround for that one function.
 static void fireOnShowNow(lua_State* L, int frameIndex, wowee::ui::Widget* w) {
-    const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
-    taint::Quiet quiet;   // see callScriptOnTable
-    lua_getfield(L, abs, "__scripts");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
-    lua_getfield(L, -1, "OnShow");
-    if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return; }
-    lua_pushvalue(L, abs);                       // self
-    // Errors are reported the same way every other script call reports them
-    // rather than unwinding through Show.
-    if (pcallScript(L, "OnShow", 1, 0) != 0) {
-        LOG_WARNING("[Lua] OnShow error: ", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);                               // __scripts
-    w->onShowFired = true;
+    if (runFrameScriptNow(L, frameIndex, "OnShow")) w->onShowFired = true;
 }
 
 int lua_Region_Show(lua_State* L) {
@@ -7468,7 +7474,12 @@ int lua_Region_Hide(lua_State* L) {
     //
     // The vendor and guild bank no longer take the reopen path - see
     // openBagsForTrading - so what is left exposed is the bag keybind.
+    //
+    // A tooltip is the exception (ui/visibility_scripts.hpp): its OnHide runs
+    // here, at the end.
+    bool runOnHide = false;
     if (auto* w = widgetOf(L, 1)) {
+        runOnHide = ui::hideRunsOnHide(*w, ancestorsShown(L, w));
         // Counted only where a handler is owed. A frame hidden before anything
         // was hooked to it owes nothing, and the real client runs nothing
         // there either. Turtle's transmog timer is CreateFrame, Hide, and only
@@ -7514,6 +7525,10 @@ int lua_Region_Hide(lua_State* L) {
         tooltipLineStringWritten(L, w);
     }
     lua_pushboolean(L, 0); lua_setfield(L, 1, "__visible");
+    if (runOnHide) {
+        if (auto* w = widgetOf(L, 1)) ui::noteHideSaid(*w);
+        runFrameScriptNow(L, 1, "OnHide");
+    }
     return 0;
 }
 int lua_Region_IsShown(lua_State* L) {
@@ -18138,9 +18153,8 @@ void LuaEngine::updateVisibility() {
          id = widgets_.takeVisibilityPending(id + 1)) {
         auto* w = widgets_.get(id);
         if (!w || w->id == 0) continue;
-        const uint8_t toggles = w->shownToggles;
-        w->shownToggles = 0;
-        if (w->visible == w->reportedVisible) {
+        const ui::VisibilityOwed owed = ui::takeVisibilityOwed(*w);
+        if (!owed.changed) {
             // Nothing changed overall - but if Lua hid this and showed it again
             // before anything looked, something *did* happen and both handlers
             // are owed. `panel:Hide(); panel:Show()` is the interface asking a
@@ -18165,7 +18179,7 @@ void LuaEngine::updateVisibility() {
             // The risk this guard was written for is unaffected: a frame Lua
             // never touched cannot reach two toggles, so nothing wakes here
             // that the interface did not explicitly hide and show again.
-            if (toggles < 2 || !w->visibleChain) continue;
+            if (!owed.hide) continue;
             callFrameScript(id, "OnHide");
             callFrameScript(id, "OnShow");
             // Deliberately both, and in the order they happened. OnHide is
@@ -18173,16 +18187,7 @@ void LuaEngine::updateVisibility() {
             // leave the second OnShow building on top of the first one's state.
             continue;
         }
-        w->reportedVisible = w->visible;
-        // Show() runs OnShow itself when the frame became shown under shown
-        // ancestors, so the change is recorded here without being announced
-        // twice. The flag is cleared either way: a frame that was shown and
-        // then anchored later arrives here once, and only once.
-        const bool already = w->onShowFired;
-        w->onShowFired = false;
-        if (!(already && w->visible)) {
-            callFrameScript(id, w->visible ? "OnShow" : "OnHide");
-        }
+        if (owed.show || owed.hide) callFrameScript(id, owed.show ? "OnShow" : "OnHide");
         // A box that asked for the keyboard takes it as it appears, and gives
         // it up when it goes. Only the two that ask: the rest say autoFocus
         // ="false" precisely so that opening a panel does not swallow the
