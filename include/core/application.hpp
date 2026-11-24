@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/player_animation_seen.hpp"
 #include "rendering/memory_growth.hpp"
 #include "core/window.hpp"
 #include "game/opcodes.hpp"
@@ -569,19 +570,8 @@ private:
     float lastSentCanonicalYaw_ = kFacingFromServer;
     bool idleYawned_ = false;
     // What the player's base animation read last frame (syncPlayerAnimation).
-    struct PlayerAnimationSeen {
-        uint32_t instanceId = 0;
-        bool fellFar = false;
-        bool turning = false;
-        bool turningLeft = false;
-        bool alive = true;
-        bool looting = false;
-        bool stealthed = false;
-        bool autoAttacking = false;
-        bool swimming = false;
-        bool onFlightPath = false;
-    };
-    PlayerAnimationSeen playerAnimationSeen_;
+    rendering::PlayerAnimationSeen playerAnimationSeen_;
+    uint32_t playerSplineMoves_ = 0;  ///< PlayerAnimationSeen::splineMoves
     /// The player's instance its ammunition was last hung on (0x006e8280).
     uint32_t ammoInstanceSeen_ = 0;
 

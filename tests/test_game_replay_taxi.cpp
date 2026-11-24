@@ -517,9 +517,14 @@ TEST_CASE("a spline ends the fall it finds the player in and begins one at its e
     s.handler().setFallEndsCallback([&] { ++over; });
     s.handler().setPlacedFallCallback([&] { ++placed; });
     frames(s, 10);
+    constexpr uint32_t kFallFlags = 0x3000;
+    s.handler().getMovementHandler()->startFall(0);
+    s.handler().getMovementHandler()->setFallingFar();
+    REQUIRE((s.handler().getMovementInfo().flags & kFallFlags) == kFallFlags);
     s.receive(flight(101, kBorder0, {kBorder0 + glm::vec3(4.0f, 0.0f, 0.0f)}, 100));
     CHECK(over == 1);
     CHECK(placed == 0);
+    CHECK((s.handler().getMovementInfo().flags & kFallFlags) == 0);
     // One sent while another runs ends nothing more (0x006ed7e0).
     s.receive(flight(102, kBorder0, {kBorder0 + glm::vec3(5.0f, 0.0f, 0.0f)}, 100));
     CHECK(over == 1);
@@ -585,8 +590,12 @@ TEST_CASE("a fall does not outlive the flight it was taken from", "[taxi][camera
     SECTION("taken by the spline") {
         Walker w;
         fall(w);
+        // Falling far, as the Fall animation goes by it: over with it.
+        REQUIRE(w.controller.isFallingFar());
         w.controller.endFall();
+        CHECK_FALSE(w.controller.isFallingFar());
         carry(w);
+        CHECK_FALSE(w.controller.isFallingFar());
         w.run(0.1f);
         CHECK(w.at.z == Catch::Approx(landing.z).margin(0.01f));
         CHECK(w.controller.isGrounded());

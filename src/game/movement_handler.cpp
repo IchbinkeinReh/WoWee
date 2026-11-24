@@ -4557,8 +4557,15 @@ void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splin
     // stop in any case (0x006f11b0 -> 0x006ed7e0(0, 1)). What steps the player
     // - or what it drives - is told.
     const uint64_t stepped = activeMover() != 0 ? activeMover() : owner_.getPlayerGuid();
-    if (guid == stepped && (!hasPath || !onMoveSpline(guid)) && owner_.fallEndsCallbackRef())
-        owner_.fallEndsCallbackRef()();
+    if (guid == stepped && (!hasPath || !onMoveSpline(guid))) {
+        // Its flags with it, without a landing said or played.
+        if ((movementInfo.flags & (static_cast<uint32_t>(MovementFlags::FALLING) |
+                                   static_cast<uint32_t>(MovementFlags::FALLINGFAR))) != 0) {
+            movementInfo.time = movementClockMs();
+            endFall(movementInfo, endFallTimer());
+        }
+        if (owner_.fallEndsCallbackRef()) owner_.fallEndsCallbackRef()();
+    }
     const uint32_t now = movementClockMs();
     if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now)) {
         spline->splineId = splineId;

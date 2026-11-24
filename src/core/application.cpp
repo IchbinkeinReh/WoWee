@@ -1302,8 +1302,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         });
         gameHandler->setPlacedFallCallback([this] {
             if (renderer && renderer->getCameraController()) renderer->getCameraController()->queuePlacedFall();
+            ++playerSplineMoves_;
         });
         gameHandler->setFallEndsCallback([this] {
+            ++playerSplineMoves_;
             if (renderer && renderer->getCameraController()) renderer->getCameraController()->endFall();
         });
         // SMSG_OVERRIDE_LIGHT into the lighting (0x007f10a0, 0x007f11a0).
@@ -5968,7 +5970,7 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
     // The mount under it, which plays what the player is asked (0x007385c0).
     cr->setRiderMount(instanceId, u.riding && entitySpawner_ ? entitySpawner_->getMountInstanceId() : 0u);
     cr->setUnitAnimationState(instanceId, u);
-    const PlayerAnimationSeen now{.instanceId = instanceId,
+    const rendering::PlayerAnimationSeen now{.instanceId = instanceId,
                                   .fellFar = (u.moveFlags & kMoveFallingFar) != 0,
                                   .turning = u.turningInPlace,
                                   .turningLeft = u.turningLeft,
@@ -5977,8 +5979,9 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
                                   .stealthed = u.stealthed,
                                   .autoAttacking = u.autoAttacking,
                                   .swimming = (u.moveFlags & rendering::upper_body::kMoveSwimOrFly) != 0,
-                                  .onFlightPath = u.splineFlying};
-    const PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
+                                  .onFlightPath = u.splineFlying,
+                                  .splineMoves = playerSplineMoves_};
+    const rendering::PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
     // A new instance starts on Stand. Made after the swim began, at a teleport
     // into water across maps, no movement event comes to ask again, and the
     // character stood in the water until the next one.
@@ -5986,12 +5989,7 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
         if (now.swimming) cr->playBaseAnimation(instanceId);
         return;
     }
-    const bool changed = now.turning != before.turning ||
-                         now.turningLeft != before.turningLeft || now.alive != before.alive ||
-                         now.looting != before.looting || now.stealthed != before.stealthed ||
-                         now.autoAttacking != before.autoAttacking || now.swimming != before.swimming ||
-                         now.onFlightPath != before.onFlightPath;
-    if (changed) cr->playBaseAnimation(instanceId);
+    if (rendering::asksBaseAgain(before, now)) cr->playBaseAnimation(instanceId);
     if (now.fellFar && !before.fellFar && now.alive) cr->playAnimation(instanceId, rendering::anim::FALL, true);
 }
 
