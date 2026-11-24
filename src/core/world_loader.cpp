@@ -18,6 +18,7 @@
 #include "rendering/vk_context.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
+#include "rendering/camera_entry.hpp"
 #include "rendering/movement_limits.hpp"
 #include "rendering/terrain_manager.hpp"
 #include "rendering/character_renderer.hpp"
@@ -942,7 +943,11 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         float canonicalYaw = gameHandler_->getMovementInfo().orientation;
         spawnYawDeg = core::coords::canonicalToCharacterYawDeg(canonicalYaw);
     }
+    // How the player has the camera, before it is put to the new place below.
+    rendering::CameraStand keptCamera;
     if (renderer_->getCameraController()) {
+        const auto view = renderer_->getCameraController()->currentViewPose();
+        keptCamera = {.distance = view.distance, .pitchDown = view.pitch};
         renderer_->getCameraController()->setOnlineMode(true);
         renderer_->getCameraController()->setDefaultSpawn(spawnRender, spawnYawDeg, -15.0f);
         renderer_->getCameraController()->reset();
@@ -1034,15 +1039,22 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             const glm::vec3 placed = core::coords::renderToCanonical(renderer_->getCharacterPosition());
             gameHandler_->setPosition(placed.x, placed.y, placed.z);
         }
-        // Where the player left the camera last time (0x005ff3e0), or the
-        // client's own defaults for its default camera style (5.55 yards,
-        // 10 degrees down: the table at 0x00ad1ba8, row 2). The CVar counts
-        // pitch down as positive; this camera counts it up.
-        const float dist = std::strtof(addons::storedCVarValue("cameraSavedDistance", "5.55").c_str(), nullptr);
-        const float pitch = std::strtof(addons::storedCVarValue("cameraSavedPitch", "10.0").c_str(), nullptr);
-        renderer_->getCameraController()->restoreSaved(dist, -pitch);
-        renderer_->getCameraController()->restoreSavedVehicleDistance(
-            std::strtof(addons::storedCVarValue("cameraSavedVehicleDistance", "-1.0").c_str(), nullptr));
+        // From another map it stands as it did; at the login where the player
+        // left it last time (0x005ff3e0), or the client's own defaults for
+        // its default camera style (5.55 yards, 10 degrees down: the table at
+        // 0x00ad1ba8, row 2). The CVar counts pitch down as positive; this
+        // camera counts it up.
+        const bool mapChange = app_.addonsLoaded_;
+        const auto stand = rendering::cameraStandOnEntry(mapChange, keptCamera, [] {
+            return rendering::CameraStand{
+                .distance = std::strtof(addons::storedCVarValue("cameraSavedDistance", "5.55").c_str(), nullptr),
+                .pitchDown = std::strtof(addons::storedCVarValue("cameraSavedPitch", "10.0").c_str(), nullptr)};
+        });
+        renderer_->getCameraController()->restoreSaved(stand.distance, -stand.pitchDown);
+        if (!mapChange) {
+            renderer_->getCameraController()->restoreSavedVehicleDistance(
+                std::strtof(addons::storedCVarValue("cameraSavedVehicleDistance", "-1.0").c_str(), nullptr));
+        }
     }
     renderer_->setCharacterYaw(spawnYawDeg);
     // Drawn facing that way from the start, not shuffled round from the last world.
