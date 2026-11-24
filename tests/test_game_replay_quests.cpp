@@ -266,3 +266,26 @@ TEST_CASE("only an item the quest window waits for is its news", "[replay][quest
     CHECK(updates == 1);
     s.handler().setAddonEventCallback(nullptr);
 }
+
+// Taken, dropped and taken again at its giver: the log had a title and a
+// sentence, level 0, no zone and nothing to do - and the tracker a quest done.
+TEST_CASE("a quest known already is whole when it is taken again", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    auto* quests = s.handler().getQuestHandler();
+    quests->addQuestToLocalLogIfMissing(10086, "Quest #10086", "");
+    s.receive(questAnswer(10086, "wotlk", 0, 25802, 8));
+    REQUIRE(questOf(s, 10086));
+    REQUIRE(questOf(s, 10086)->level == 60);
+
+    quests->questLogRef().clear();
+    quests->addQuestToLocalLogIfMissing(10086, "Ich arbeite...", "Ein Satz.");
+    const auto* q = questOf(s, 10086);
+    REQUIRE(q);
+    CHECK(q->title == kTitle);
+    CHECK(q->level == 60);
+    CHECK(q->description == kDetails);
+    CHECK(q->itemObjectives[0].itemId == 25802);
+    CHECK(wowee::game::questObjectiveCount(*q) == 1);
+    CHECK_FALSE(q->complete);
+}

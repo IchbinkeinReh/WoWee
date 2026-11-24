@@ -298,6 +298,10 @@ public:
     // --- Internal helpers called from GameHandler ---
     [[nodiscard]] bool hasQuestInLog(uint32_t questId) const;
     [[nodiscard]] int findQuestLogSlotIndexFromServer(uint32_t questId) const;
+    /// Progress kept for objectives the quest turns out not to have, dropped.
+    void keepQuestProgressWithin(QuestLogEntry& q);
+    /// The names and icons the log draws a quest with, asked for.
+    void queryQuestNames(const QuestLogEntry& q);
     void addQuestToLocalLogIfMissing(uint32_t questId, const std::string& title, const std::string& objectives);
     bool resyncQuestLogFromServerSlots(bool forceQueryMetadata);
     void applyQuestStateFromFields(const FlatFieldMap& fields);
