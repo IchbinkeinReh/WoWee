@@ -387,6 +387,10 @@ static std::optional<PetActionRef> petActionRef(game::GameHandler* gh, int slot)
     if (i < 0 || i >= game::GameHandler::PET_ACTION_BAR_SLOTS) return std::nullopt;
     return PetActionRef{static_cast<uint32_t>(i), gh->getPetActionSlot(i)};
 }
+std::optional<uint32_t> petActionAt(game::GameHandler* gh, int slot) {
+    if (const auto ref = petActionRef(gh, slot)) return ref->packed;
+    return std::nullopt;
+}
 using game::pet::petSlotSpell;
 /// Whether this pet belongs to a hunter (0x0071b630).
 ///
@@ -1283,11 +1287,25 @@ static int lua_IsActionInRange(lua_State* L) {
     return pushSpellRangeAnswer(L, gh, spellId, gh->getTargetGuid());
 }
 
-// GetActionInfo(slot) → actionType, id, subType
+/// A spell by its place, as GetCursorInfo and GetActionInfo say it. `pet`: the
+/// pet's book counts too.
+static game::cursor_info::Spell spellInfo(game::GameHandler* gh, uint32_t spell, bool pet) {
+    std::vector<uint32_t> critters, mounts, book;
+    for (const auto& c : gh->getCompanions(false)) critters.push_back(c.spellId);
+    for (const auto& c : gh->getCompanions(true)) mounts.push_back(c.spellId);
+    for (const auto& tab : gh->getSpellBookTabs()) book.insert(book.end(), tab.spellIds.begin(), tab.spellIds.end());
+    return game::cursor_info::spell(spell, critters, mounts, book,
+                                    pet ? gh->getPetBookSpells() : std::vector<uint32_t>{});
+}
+
+// GetActionInfo(slot) (0x005a8f10) → "spell", place in the book, "spell" or
+// "pet", spell; "companion", place, "CRITTER" or "MOUNT", spell; "item", item;
+// "macro", index; "equipmentset", name
 static int lua_GetActionInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return 0; }
-    int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetActionInfo(slot)");
+    int slot = static_cast<int>(lua_tonumber(L, 1)) - 1;
     if (const auto ref = petActionRef(gh, slot)) {
         // 0x005a8f10: "spell", its place in the pet's spellbook, "pet", the
         // spell - for any of the ten, whatever it holds.
@@ -1307,22 +1325,20 @@ static int lua_GetActionInfo(lua_State* L) {
     }
     const auto& action = bar[slot];
     switch (action.type) {
-        case game::ActionBarSlot::SPELL:
-            lua_pushstring(L, "spell");
-            lua_pushnumber(L, action.id);
-            lua_pushstring(L, "spell");
-            // The fourth value, which for a spell action is the same id.
-            // vehiclemenubar reads it to build a link on a modified click -
-            // HandleModifiedItemClick(GetSpellLink(spellID)) - so without it
-            // shift-clicking a vehicle button linked nothing. Only spells have
-            // one; an item or a macro answers nil, as the real client does.
+        case game::ActionBarSlot::SPELL: {
+            // Its place in the player's book or a companion's among its kind,
+            // and the spell (0x005a8f10).
+            const auto said = spellInfo(gh, action.id, /*pet=*/false);
+            lua_pushstring(L, said.kind);
+            lua_pushnumber(L, said.place);
+            lua_pushstring(L, said.list);
             lua_pushnumber(L, action.id);
             return 4;
+        }
         case game::ActionBarSlot::ITEM:
             lua_pushstring(L, "item");
             lua_pushnumber(L, action.id);
-            lua_pushstring(L, "item");
-            return 3;
+            return 2;
         case game::ActionBarSlot::MACRO:
             lua_pushstring(L, "macro");
             lua_pushnumber(L, macroIndex(L, action.id));   // 0x00564ab0
@@ -1596,12 +1612,7 @@ static int lua_GetCursorInfo(lua_State* L) {
     switch (s_cursorType) {
         case CursorType::SPELL: {
             if (!gh) return 0;
-            std::vector<uint32_t> critters, mounts, book;
-            for (const auto& c : gh->getCompanions(false)) critters.push_back(c.spellId);
-            for (const auto& c : gh->getCompanions(true)) mounts.push_back(c.spellId);
-            for (const auto& tab : gh->getSpellBookTabs())
-                book.insert(book.end(), tab.spellIds.begin(), tab.spellIds.end());
-            const auto held = game::cursor_info::spell(s_cursorId, critters, mounts, book, gh->getPetBookSpells());
+            const auto held = spellInfo(gh, s_cursorId, /*pet=*/true);
             lua_pushstring(L, held.kind);
             lua_pushnumber(L, held.place);
             lua_pushstring(L, held.list);
@@ -4269,9 +4280,9 @@ void registerActionLuaAPI(lua_State* L) {
                 // missing, so GetNumMacros answered zero and the panel opened
                 // empty over a full set.
                 //
-                // WoW splits the ids: 1-36 are account-wide, 37 and up belong
-                // to the character. That split is what GetNumMacros reports and
-                // what CreateMacro's perCharacter flag chooses between.
+                // The account's and the character's (macro_list), which is what
+                // GetNumMacros reports and what CreateMacro's perCharacter flag
+                // chooses between.
                 {"GetNumMacros",        [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             int global = 0, perChar = 0;

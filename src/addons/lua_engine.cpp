@@ -3728,8 +3728,8 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
             }
         } else {
             // The name in white and its rank to the right in grey - only in
-            // a brief tooltip or where the caller asks for it; SetSpell,
-            // SetHyperlink and a full SetAction leave the rank off.
+            // a brief tooltip or where the caller asks for it, as SetAction
+            // does; SetSpell and SetHyperlink leave the rank off.
             line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
             auto& title = w->tooltipLines.back();
             title.rc[0] = title.rc[1] = title.rc[2] = 128.0f / 255.0f;  // 0xad2d38: ff808080
@@ -4143,6 +4143,31 @@ int lua_Tooltip_SetAction(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0)) - 1;
     if (!w || !gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
+    const auto text = [&](const std::string& said, const float* color) {
+        w->isTooltip = true;
+        clearTooltipLines(L, w);
+        wowee::ui::Widget::TooltipLine line;
+        line.left = said;
+        for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = i < 3 ? color[i] : 1.0f;
+        w->tooltipLines.push_back(std::move(line));
+        w->shown = true;
+        luaPushOneOrNil(L, 0);
+        return 1;
+    };
+    static constexpr float kWhite[3] = {1.0f, 1.0f, 1.0f};
+    // The pet's or the vehicle's bar (0x00631000 -> 0x005a79a0): its spell as
+    // SetPetAction has it, a stance's or an order's word.
+    if (const auto packed = wowee::addons::petActionAt(gh, slot)) {
+        if (const uint32_t spell = game::pet::petSlotSpell(*packed)) {
+            luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, spell, false, true, nullptr, true) ? 1 : 0);
+            return 1;
+        }
+        const auto token = game::pet::petTokenInfo(*packed, gh->getPetReact(), gh->getPetCommand(),
+                                                   gh->isPetAttacking());
+        if (!token.word) { luaPushOneOrNil(L, 0); return 1; }
+        const std::string key = std::string(token.mode ? "PET_MODE_" : "PET_ACTION_") + token.word;
+        return text(globalOr(L, key.c_str(), token.word), kTalentGold);
+    }
     const auto& bar = gh->getActionBar();
     if (slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         luaPushOneOrNil(L, 0);
@@ -4158,7 +4183,14 @@ int lua_Tooltip_SetAction(lua_State* L) {
         return 1;
     }
     if (action.type == game::ActionBarSlot::SPELL) {
-        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id, !uberTooltips(L)) ? 1 : 0);
+        // The spell one attacks with (effect 78) is the word alone (0x005a96d0).
+        gh->loadSpellNameCache();
+        const auto& spells = gh->spellNameCacheRef();
+        constexpr uint32_t kEffectAttack = 78;
+        if (const auto it = spells.find(action.id); it != spells.end() && it->second.effectIds[0] == kEffectAttack)
+            return text(globalOr(L, "ATTACK", "Attack"), kWhite);
+        // With its rank, brief or not (0x006238a0's sixth argument is 1).
+        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id, !uberTooltips(L), true) ? 1 : 0);
         return 1;
     }
     if (action.type == game::ActionBarSlot::MACRO) {
@@ -4196,7 +4228,7 @@ int lua_Tooltip_SetAction(lua_State* L) {
             // flag (+0x56c) goes to the cooldown only: the builder is asked
             // as for the player's own spell, as a spell on the bar is.
             const bool built = shown.spell > 0 &&
-                fillSpellTooltip(L, w, gh, static_cast<uint32_t>(shown.spell), !uberTooltips(L));
+                fillSpellTooltip(L, w, gh, static_cast<uint32_t>(shown.spell), !uberTooltips(L), true);
             if (!built) {
                 clearTooltipLines(L, w);
                 w->shown = false;
@@ -4347,8 +4379,6 @@ static bool fillGlyphLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameH
     const uint32_t slotId = number(at);
     uint32_t propertiesId = 0;
     if (at < link.size() && link[at] == ':') propertiesId = number(++at);
-    // The second number is the one that names the tooltip: the properties row
-    // holds the spell, and the slot row only ever adds the major/minor line.
     if (propertiesId == 0) return false;
     gh->ensureGlyphPropertiesLoaded();
     const uint32_t spellId = gh->getGlyphSpellId(propertiesId);
@@ -4899,7 +4929,7 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
 int lua_Tooltip_SetGlyph(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    const int socket = static_cast<int>(luaL_optnumber(L, 2, 0));
+    const int socket = static_cast<int>(std::lround(lua_tonumber(L, 2)));
     const int spec = static_cast<int>(luaL_optnumber(L, 3, 0));
     if (!w || !gh || socket < 1 || socket > game::GameHandler::MAX_GLYPH_SLOTS) {
         lua_pushboolean(L, 0);
@@ -15424,9 +15454,8 @@ void LuaEngine::registerCoreAPI() {
         "    self:ClearLines()\n"
         "    if not slot then return false end\n"
         "    local actionType, id = GetActionInfo(slot)\n"
-        "    if actionType == 'spell' and id and id > 0 then\n"
-        "        self:SetSpellByID(id, nil, nil, GetCVar('UberTooltips') == '0')\n"
-        "        return self:NumLines() > 0\n"
+        "    if actionType == 'spell' or actionType == 'companion' then\n"
+        "        return __WoweeTooltipSetAction(self, slot)\n"
         "    elseif actionType == 'item' and id and id > 0 then\n"
         "        __WoweeTooltipItemBuilt(self, _WoweePopulateItemTooltip(self, id), id)\n"
         "        return self:NumLines() > 0\n"

@@ -54,6 +54,7 @@
 // Exit status is the number of expressions that raised, capped at 100, so a
 // script can ask "did this one still work" without reading the output.
 
+#include "core/application.hpp"
 #include "addons/addon_manager.hpp"
 #include "addons/lua_services.hpp"
 #include "addons/lua_taint.hpp"
@@ -107,6 +108,9 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string assetPath = argv[1];
+    // Some of the bindings ask the application for its parts and take none for
+    // an answer; that there is no application they do not expect.
+    static wowee::core::Application application;
 
     // The client's settings, so the panels the schema generates have values to
     // show. Without this every control was built against a nil: WoweeGetSetting

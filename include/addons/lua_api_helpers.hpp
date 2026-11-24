@@ -1498,6 +1498,11 @@ int cursorEquipSlot();
 /// on it.
 bool cursorItemCameFromInventory();
 
+/// The pet's packed action a slot of the bonus bar (0-based) stands for while
+/// that bar is the pet's or the vehicle's; nothing for any other slot, 0 for
+/// one of them that is empty.
+std::optional<uint32_t> petActionAt(game::GameHandler* gh, int slot);
+
 /// What the cursor holds, as a click into the world asks it.
 game::action_drop::Held cursorHeld();
 
