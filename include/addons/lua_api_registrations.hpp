@@ -167,6 +167,9 @@ void setCVarFromConsole(lua_State* L, const std::string& name, const std::string
 /// something - so twice means the panel opens and shuts again on one press and
 /// the key reads as dead. Consulted before running a binding.
 bool clientActsOnBinding(const std::string& command);
+/// Whether the client reads this key for the command itself, so that its
+/// script is not run on it as well (binding_lookup.hpp).
+bool clientReadsBindingKey(const std::string& command, const std::string& key);
 
 /// Whether the client's cursor has been turned off by a TOGGLEMOUSE binding
 /// (0x00562d60): once the account's key bindings have been read, a key bound

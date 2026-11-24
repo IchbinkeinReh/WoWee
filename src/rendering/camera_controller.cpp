@@ -2548,14 +2548,6 @@ void CameraController::update(float deltaTime) {
     if (mounted_) sitting = false;
     xKeyWasDown = xKey;
 
-    // Reset camera angles with R key (edge-triggered) - only when UI doesn't want keyboard
-    // Does NOT move the player; full reset() is reserved for world-entry/respawn.
-    bool rDown = !uiWantsKeyboard && input.isKeyPressed(SDL_SCANCODE_R);
-    if (rDown && !rKeyWasDown) {
-        resetAngles();
-    }
-    rKeyWasDown = rDown;
-
     // Stand up on any movement input or jump while sitting (WoW behaviour)
     //
     // Both mouse buttons is a way of walking forward, and it was missing from
@@ -3110,14 +3102,6 @@ void CameraController::releaseMouseCapture() {
     dragOffsetY_ = 0.0f;
     SDL_SetWindowRelativeMouseMode(SDL_GetKeyboardFocus(), false);
     SDL_ShowCursor();
-}
-
-void CameraController::resetAngles() {
-    if (!camera) return;
-    yaw = defaultYaw;
-    facingYaw = defaultYaw;
-    pitch = defaultPitch;
-    camera->setRotation(yaw, pitch);
 }
 
 void CameraController::reset() {

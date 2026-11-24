@@ -12,6 +12,9 @@
 #include "addons/lua_taint.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/account_bindings.hpp"
+#include "addons/binding_lookup.hpp"
+#include "addons/modifier_keys.hpp"
+#include "core/application.hpp"
 #include "addons/lua_api_registrations.hpp"
 // For fireEvent: paging has to reach the frames as well as the addons.
 #include "addons/lua_engine.hpp"
@@ -2874,12 +2877,10 @@ static int lua_EquipCursorItem(lua_State* L) {
 
 // The modifier state comes from the keyboard rather than from ImGui, which
 // learns it from events this client does not always route there once FrameXML
-// owns the mouse. lua_system_api registers the same three names against
-// SDL_GetModState; these agree with it now instead of racing it, and the
-// duplicate Is*KeyDown bindings that used to live here are gone with them.
-static bool shiftHeld() { return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0; }
-static bool ctrlHeld()  { return (SDL_GetModState() & SDL_KMOD_CTRL)  != 0; }
-static bool altHeld()   { return (SDL_GetModState() & SDL_KMOD_ALT)   != 0; }
+// owns the mouse, and is the same lua_system_api answers Is*KeyDown with.
+static bool shiftHeld() { return (interfaceModifiers() & (kLeftShift | kRightShift)) != 0; }
+static bool ctrlHeld()  { return (interfaceModifiers() & (kLeftCtrl | kRightCtrl)) != 0; }
+static bool altHeld()   { return (interfaceModifiers() & (kLeftAlt | kRightAlt)) != 0; }
 
 
 /// What bindings.xml declares for a modified-click action, or empty.
@@ -3409,7 +3410,9 @@ const LiveBinding kLiveBindings[] = {
     {"TOGGLEMINIMAP",     wowee::ui::KeybindingManager::Action::TOGGLE_MINIMAP},
     {"TOGGLEACHIEVEMENT", wowee::ui::KeybindingManager::Action::TOGGLE_ACHIEVEMENTS},
     {"TOGGLELFGPARENT",   wowee::ui::KeybindingManager::Action::TOGGLE_DUNGEON_FINDER},
-    {"TOGGLEGUILDTAB",    wowee::ui::KeybindingManager::Action::TOGGLE_GUILD_ROSTER},
+    {"TOGGLESOCIAL",      wowee::ui::KeybindingManager::Action::TOGGLE_GUILD_ROSTER},
+    {"TOGGLECHARACTER1",  wowee::ui::KeybindingManager::Action::TOGGLE_SKILLS},
+    {"TOGGLECHARACTER4",  wowee::ui::KeybindingManager::Action::TOGGLE_PVP},
 };
 
 /// The named key whose name matches, or none. ImGui offers no reverse lookup,
@@ -3464,10 +3467,22 @@ std::optional<std::string> liveKeyFor(const std::string& command) {
     return std::nullopt;
 }
 
-/// The keys the client is actually listening for, asked of the manager that
-/// listens rather than restated here - a second copy would be wrong the moment
-/// either side moved. Commands the client has no action for keep their retail
-/// default, so the list reads correctly even where nothing acts on it yet.
+/// The client's default keys, WTF\\DefaultBindings.wtf of its archives
+/// (0x00562b80 loads the default set from it). Empty where there is none.
+const BindingKeyMap& shippedBindings() {
+    static BindingKeyMap keys;
+    static bool read = false;
+    auto* am = core::Application::getInstance().getAssetManager();
+    if (read || !am || !am->isInitialized()) return keys;
+    read = true;
+    const auto file = am->readFileOptional("WTF\\DefaultBindings.wtf");
+    keys = bindingsFromCacheText({}, std::string(file.begin(), file.end()));
+    LOG_INFO("Key bindings: ", keys.size(), " commands bound by default");
+    return keys;
+}
+
+/// The default keys, with what the manager was told to listen for in place of
+/// them.
 ///
 /// A fresh map each time, because it is also what the realm's copy of the
 /// bindings is read over (applyAccountBindingsText) and what the copy sent up
@@ -3480,11 +3495,8 @@ BindingKeyMap defaultBindingKeys() {
         {"TURNLEFT", "A"},      {"TURNRIGHT", "D"},
         {"STRAFELEFT", "Q"},    {"STRAFERIGHT", "E"},
         {"JUMP", "SPACE"},      {"TOGGLEAUTORUN", "NUMLOCK"},
-        // Tab targets, and has since the client was written; the panel said
-        // this one was unbound because nothing had ever told it.
         {"TARGETNEARESTENEMY", "TAB"},
         {"TOGGLEGAMEMENU", "ESCAPE"},
-        // Run through their scripts, ToggleSheath() and ToggleRun().
         {"TOGGLESHEATH", "Z"},  {"TOGGLERUN", "NUMPADDIVIDE"},
         {"SCREENSHOT", "PRINTSCREEN"},
         {"ACTIONBUTTON1", "1"}, {"ACTIONBUTTON2", "2"},
@@ -3493,17 +3505,22 @@ BindingKeyMap defaultBindingKeys() {
         {"ACTIONBUTTON7", "7"}, {"ACTIONBUTTON8", "8"},
         {"ACTIONBUTTON9", "9"}, {"ACTIONBUTTON10", "0"},
         {"ACTIONBUTTON11", "-"},{"ACTIONBUTTON12", "="},
-        // The nameplate keys, which the client answers itself.
         {"NAMEPLATES", "V"}, {"FRIENDNAMEPLATES", "SHIFT-V"}, {"ALLNAMEPLATES", "CTRL-V"},
     };
-    for (const auto& d : kDefaults) keys[d.command] = {d.key, ""};
+    keys = shippedBindings();
+    if (keys.empty())
+        for (const auto& d : kDefaults) keys[d.command] = {d.key, ""};
 
-    // Where a command corresponds to something the client really does, the key
-    // shown is the one it really answers to.
+    // Where a command corresponds to something the client itself listens for,
+    // the key it listens for is one of the command's.
     auto& manager = wowee::ui::KeybindingManager::getInstance();
     for (const auto& live : kLiveBindings) {
         const std::string key = wowKeyFromImGui(manager.getKeyForAction(live.action));
-        if (!key.empty()) keys[live.command] = {key, ""};
+        if (key.empty()) continue;
+        auto& slots = keys[live.command];
+        if (slots[0] == key || slots[1] == key) continue;
+        placeBindingKey(keys, key, live.command);
+        if (slots[0] != key) std::swap(slots[0], slots[1]);
     }
 
     // And the controller's own defaults, as second keys.
@@ -3567,35 +3584,27 @@ std::string bindingAt(lua_State* L, int index) {
 bool cursorTurnedOffByBinding() { return cursorBitCleared(); }
 
 bool clientActsOnBinding(const std::string& command) {
-    // The nine the client really performs, asked of the same list that keeps
-    // their keys in step rather than restated - a second copy would be wrong
-    // the moment either side moved.
+    // What the client performs without a binding's script: its panels, asked
+    // of the list that keeps their keys in step, and the movement, chat and
+    // menu keys it reads every frame. A pad button bound to one presses that
+    // key (dispatchPadKey).
     for (const auto& live : kLiveBindings) {
         if (command == live.command) return true;
     }
-    // And the rest of what the client answers without going through a binding
-    // at all. Each is a real call site: movement and jumping are polled every
-    // frame, the action bar takes 1 through 0 and the two beside them in
-    // GameScreen, chat opens on Enter and on slash, Tab targets, and Escape has
-    // a whole chain of its own in escape_action.hpp.
-    //
-    // By command rather than by key, because the conflict is that the *action*
-    // happens twice. Most bindings toggle something, so two answers to one
-    // press cancel out and the key reads as dead - which is worse than doing
-    // nothing, since it looks like the binding never ran.
     static constexpr const char* kClientAnswers[] = {
-        "MOVEFORWARD", "MOVEBACKWARD", "TURNLEFT", "TURNRIGHT",
-        "STRAFELEFT", "STRAFERIGHT", "JUMP", "TOGGLEAUTORUN",
-        "TOGGLEGAMEMENU", "OPENCHAT", "OPENCHATSLASH", "TARGETNEARESTENEMY",
+        "MOVEFORWARD", "MOVEBACKWARD", "TURNLEFT", "TURNRIGHT", "STRAFELEFT", "STRAFERIGHT",
+        "JUMP", "SITORSTAND", "TOGGLEAUTORUN", "TOGGLEGAMEMENU", "OPENCHAT", "OPENCHATSLASH",
         "SCREENSHOT", "NAMEPLATES", "FRIENDNAMEPLATES", "ALLNAMEPLATES",
-        "ACTIONBUTTON1", "ACTIONBUTTON2", "ACTIONBUTTON3", "ACTIONBUTTON4",
-        "ACTIONBUTTON5", "ACTIONBUTTON6", "ACTIONBUTTON7", "ACTIONBUTTON8",
-        "ACTIONBUTTON9", "ACTIONBUTTON10", "ACTIONBUTTON11", "ACTIONBUTTON12",
     };
     for (const char* name : kClientAnswers) {
         if (command == name) return true;
     }
     return false;
+}
+
+bool clientReadsBindingKey(const std::string& command, const std::string& key) {
+    if (const auto live = liveKeyFor(command)) return *live == key;
+    return clientReadsKey(command, key);
 }
 
 int clientImGuiKeyForBinding(const std::string& command) {
@@ -3622,12 +3631,13 @@ static int lua_GetBindingKey(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetBindingKey(\"COMMAND\"[, mode])");   // 0x0055e9b0
     seedBindingDefaults();
     const std::string command = luaL_checkstring(L, 1);
-    if (auto live = liveKeyFor(command)) {
+    auto it = bindingKeys().find(command);
+    if (auto live = liveKeyFor(command); live && (it == bindingKeys().end() ||
+                                                  (it->second[0] != *live && it->second[1] != *live))) {
         lua_pushstring(L, live->c_str());
         lua_pushnil(L);
         return 2;
     }
-    auto it = bindingKeys().find(command);
     if (it == bindingKeys().end()) { lua_pushnil(L); lua_pushnil(L); return 2; }
     for (const std::string& key : it->second) {
         if (key.empty()) lua_pushnil(L); else lua_pushstring(L, key.c_str());
@@ -3685,12 +3695,13 @@ static int lua_GetBinding(lua_State* L) {
     const std::string command = bindingAt(L, index);
     if (command.empty()) { lua_pushnil(L); return 1; }
     lua_pushstring(L, command.c_str());
-    if (auto live = liveKeyFor(command)) {
+    auto it = bindingKeys().find(command);
+    if (auto live = liveKeyFor(command); live && (it == bindingKeys().end() ||
+                                                  (it->second[0] != *live && it->second[1] != *live))) {
         lua_pushstring(L, live->c_str());
         lua_pushnil(L);
         return 3;
     }
-    auto it = bindingKeys().find(command);
     if (it == bindingKeys().end()) { lua_pushnil(L); lua_pushnil(L); return 3; }
     for (const std::string& key : it->second) {
         if (key.empty()) lua_pushnil(L); else lua_pushstring(L, key.c_str());
@@ -3806,27 +3817,47 @@ static void writeBindingsFile() {
     }
 }
 
-// LoadBindings(which) → what a previous run saved, over the defaults
+// LoadBindings(which) → the default keys (0), with what was saved on top
+// (0x00562b80: the default set copied over, then the saved one read).
 static int lua_LoadBindings(lua_State* L) {
     if (!taint::allowed(L, 0xd)) return 0;   // 0x00564070 -> 0x00562b80
-    seedBindingDefaults();
-    std::ifstream in(bindingsFilePath());
-    if (!in) return 0;   // Nothing saved yet is not a failure.
-    std::string line;
-    while (std::getline(in, line)) {
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string command = line.substr(0, eq);
-        const std::string rest = line.substr(eq + 1);
-        const size_t comma = rest.find(',');
-        bindingKeys()[command] = {
-            rest.substr(0, comma),
-            comma == std::string::npos ? "" : rest.substr(comma + 1)
-        };
-        // What was saved is what the client should answer to, not what it
-        // started with - otherwise a rebind survives in the list and nowhere
-        // else, and only until the next save overwrites it.
-        pushBindingToClient(command, bindingKeys()[command][0]);
+    BindingKeyMap keys = defaultBindingKeys();
+    if (lua_tointeger(L, 1) != 0) {
+        std::ifstream in(bindingsFilePath());
+        std::vector<std::array<std::string, 3>> saved;
+        std::string line;
+        while (in && std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string rest = line.substr(eq + 1);
+            // Between the keys; a key of a comma is one too.
+            const size_t comma = rest.find(',', rest.rfind(',', 0) == 0 && rest.size() > 1 && rest[1] == ',' ? 1 : 0);
+            saved.push_back({line.substr(0, eq), rest.substr(0, comma),
+                             comma == std::string::npos ? std::string() : rest.substr(comma + 1)});
+        }
+        // Written before the default keys were the client's: O stood on the
+        // guild's tab, and what is saved of it is that default.
+        const bool known = std::any_of(saved.begin(), saved.end(),
+                                       [](const auto& row) { return row[0] == "TOGGLESOCIAL"; });
+        for (const auto& row : saved) {
+            if (!known && row[0] == "TOGGLEGUILDTAB" && row[1] == "O") continue;
+            keys[row[0]] = {};
+        }
+        for (const auto& row : saved) {
+            if (!known && row[0] == "TOGGLEGUILDTAB" && row[1] == "O") continue;
+            placeBindingKey(keys, row[1], row[0]);
+            placeBindingKey(keys, row[2], row[0]);
+        }
+    }
+    bindingKeys() = std::move(keys);
+    // What was loaded is what the client should answer to, not what it started
+    // with.
+    for (const auto& live : kLiveBindings) {
+        const auto it = bindingKeys().find(live.command);
+        pushBindingToClient(live.command, it == bindingKeys().end() ? std::string()
+                                          : it->second[0].empty()   ? it->second[1]
+                                                                    : it->second[0]);
     }
     if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
     return 0;

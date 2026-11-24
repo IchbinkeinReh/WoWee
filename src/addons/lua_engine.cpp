@@ -1,4 +1,6 @@
 #include "addons/lua_engine.hpp"
+#include "addons/binding_lookup.hpp"
+#include "addons/modifier_keys.hpp"
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
@@ -17322,6 +17324,7 @@ void LuaEngine::dispatchText(const char* utf8) {
 static std::string wowKeyName(int sym) {
     // The mouse's side buttons, as the binding tables name them (0x0055e340:
     // "BUTTON%d" for button masks from 0x8 up).
+    if (sym == LuaEngine::kBindingKeyButton3) return "BUTTON3";
     if (sym == LuaEngine::kBindingKeyButton4) return "BUTTON4";
     if (sym == LuaEngine::kBindingKeyButton5) return "BUTTON5";
     if (sym >= 'a' && sym <= 'z') return std::string(1, static_cast<char>(sym - 32));
@@ -17348,8 +17351,22 @@ static std::string wowKeyName(int sym) {
         case 0x40000056: return "NUMPADMINUS";
         case 0x40000057: return "NUMPADPLUS";
         case 0x40000063: return "NUMPADDECIMAL";
+        case 0x40000039: return "CAPSLOCK";
+        case 0x40000046: return "PRINTSCREEN";
+        case 0x40000047: return "SCROLLLOCK";
+        case 0x40000048: return "PAUSE";
+        case 0x40000053: return "NUMLOCK";
         default: break;
     }
+    // A layout's own letters, in capitals (0x00868d90 takes MapVirtualKey's
+    // character for a key it has no name for).
+    if (sym >= 0xC0 && sym <= 0xFF && sym != 0xD7 && sym != 0xF7) {
+        const int upper = sym >= 0xE0 && sym != 0xFF ? sym - 0x20 : sym;
+        return {static_cast<char>(0xC0 | (upper >> 6)), static_cast<char>(0x80 | (upper & 0x3F))};
+    }
+    // The marks, each by itself.
+    if (sym > ' ' && sym < 0x7f && std::string_view("-=[];',./\\`").find(static_cast<char>(sym)) != std::string_view::npos)
+        return std::string(1, static_cast<char>(sym));
     // SDLK_KP_1..SDLK_KP_9 run on from 0x40000059, and SDLK_KP_0 follows them.
     if (sym >= 0x40000059 && sym <= 0x40000061) {
         return "NUMPAD" + std::to_string(sym - 0x40000059 + 1);
@@ -17363,7 +17380,7 @@ static std::string wowKeyName(int sym) {
 }
 
 std::string LuaEngine::bindingCommandFor(int sdlKeycode, bool shift, bool ctrl,
-                                         bool alt) {
+                                         bool alt, std::string* matched) {
     if (!L_) return "";
     std::string key = wowKeyName(sdlKeycode);
     if (key.empty()) return "";
@@ -17373,12 +17390,23 @@ std::string LuaEngine::bindingCommandFor(int sdlKeycode, bool shift, bool ctrl,
     if (shift) key = "SHIFT-" + key;
     if (ctrl)  key = "CTRL-"  + key;
     if (alt)   key = "ALT-"   + key;
-    return bindingCommandForKey(key);
+    return bindingCommandForKey(key, matched);
 }
 
-std::string LuaEngine::bindingCommandForKey(const std::string& key) {
+std::string LuaEngine::bindingCommandForKey(const std::string& pressed, std::string* matched) {
     taint::Quiet quiet;   // as dispatchText
-    if (!L_ || key.empty()) return "";
+    if (!L_ || pressed.empty()) return "";
+    // With its modifiers, then with fewer (0x005622e0).
+    for (const std::string& key : bindingLookups(pressed)) {
+        std::string command = bindingCommandForExactKey(key);
+        if (command.empty()) continue;
+        if (matched) *matched = key;
+        return command;
+    }
+    return "";
+}
+
+std::string LuaEngine::bindingCommandForExactKey(const std::string& key) {
     // Which command the key runs, and then the command's script - both asked
     // of the interface's own tables rather than restated here. GetBindingAction
     // already honours SetBinding, so a key the player rebound in game answers
@@ -17413,25 +17441,62 @@ std::string LuaEngine::bindingCommandForKey(const std::string& key) {
 bool LuaEngine::dispatchBindingKey(int sdlKeycode, bool shift, bool ctrl,
                                    bool alt, bool down, bool repeat) {
     if (!L_) return false;
-    // A release reaches only the commands carried out here, which act on it
-    // (0x00563150); a binding script runs on the press.
+    // A release reaches only the commands that act on it: those carried out
+    // here (0x00563150), and those whose script asks for it (runOnUp).
     if (!down) {
-        auto held = heldDirectBindings_.find(sdlKeycode);
-        if (held == heldDirectBindings_.end()) return false;
-        const std::string command = held->second;
-        heldDirectBindings_.erase(held);
+        const auto pressed = heldDirectBindings_.find(sdlKeycode);
+        if (pressed == heldDirectBindings_.end()) return false;
+        const std::string command = pressed->second;
+        heldDirectBindings_.erase(pressed);
+        // With the modifiers held as it comes up.
+        const uint32_t held = heldModifiers();
+        std::string up;
+        if (bindingCommandFor(sdlKeycode, (held & (kLeftShift | kRightShift)) != 0,
+                              (held & (kLeftCtrl | kRightCtrl)) != 0, (held & (kLeftAlt | kRightAlt)) != 0,
+                              &up) != command)
+            up.clear();
+        const BindingModifiers modifiers(up);
         return runBindingScript(command, false);
     }
-    const std::string command = bindingCommandFor(sdlKeycode, shift, ctrl, alt);
+    std::string key;
+    const std::string command = bindingCommandFor(sdlKeycode, shift, ctrl, alt, &key);
     if (command.empty()) return false;
-    // Left alone if the client performs it. Not "already handled, so skip the
-    // work" - running it as well would undo it.
-    if (clientActsOnBinding(command)) return false;
+    // Left alone if the client reads the key for it. Not "already handled, so
+    // skip the work" - running it as well would undo it.
+    if (clientReadsBindingKey(command, key)) return false;
     if (repeat) return true;
-    if (parseDirectBinding(command).kind != DirectBinding::Kind::None) {
-        heldDirectBindings_[sdlKeycode] = command;
-    }
+    if (actsOnRelease(command)) heldDirectBindings_[sdlKeycode] = command;
+    const BindingModifiers modifiers(key);
     return runBindingScript(command, down);
+}
+
+bool LuaEngine::actsOnRelease(const std::string& command) {
+    if (parseDirectBinding(command).kind != DirectBinding::Kind::None) return true;
+    taint::Quiet quiet;
+    lua_getglobal(L_, "__WoweeBindingRunOnUp");
+    bool onUp = false;
+    if (lua_istable(L_, -1)) {
+        lua_getfield(L_, -1, command.c_str());
+        onUp = lua_toboolean(L_, -1) != 0;
+        lua_pop(L_, 1);
+    }
+    lua_pop(L_, 1);
+    return onUp;
+}
+
+bool LuaEngine::dispatchWheelBinding(bool up, bool shift, bool ctrl, bool alt) {
+    if (!L_) return false;
+    std::string key = up ? "MOUSEWHEELUP" : "MOUSEWHEELDOWN";
+    if (shift) key = "SHIFT-" + key;
+    if (ctrl) key = "CTRL-" + key;
+    if (alt) key = "ALT-" + key;
+    std::string matched;
+    const std::string command = bindingCommandForKey(key, &matched);
+    if (command.empty() || command == "CAMERAZOOMIN" || command == "CAMERAZOOMOUT") return false;
+    const BindingModifiers modifiers(matched);
+    const bool ran = runBindingScript(command, true);
+    if (actsOnRelease(command)) (void)runBindingScript(command, false);
+    return ran;
 }
 
 namespace {
@@ -17615,9 +17680,7 @@ LuaEngine::PadKeyOutcome LuaEngine::dispatchPadKey(const char* padKey) {
     // dispatch carries out itself act as the key comes up - a spell bound
     // with SetBindingSpell is cast on the release - so they are given the
     // release as well, or a pad button bound to one would do nothing.
-    if (parseDirectBinding(command).kind != DirectBinding::Kind::None) {
-        (void)runBindingScript(command, false);
-    }
+    if (actsOnRelease(command)) (void)runBindingScript(command, false);
     outcome.taken = true;
     return outcome;
 }

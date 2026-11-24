@@ -37,6 +37,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/modifier_keys.hpp"
 #include "addons/object_type.hpp"
 #include "ui/layout_cache.hpp"
 #include "game/chat_log.hpp"
@@ -5511,26 +5512,25 @@ static int lua_GetWeaponEnchantInfo(lua_State* L) {
 /// falsely, because a shift-click means something different from a click and
 /// FrameXML asks these on every button press.
 static int lua_IsShiftKeyDown(lua_State* L) {
-    luaPushOneOrNil(L, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0);
+    luaPushOneOrNil(L, (interfaceModifiers() & (kLeftShift | kRightShift)) != 0);
     return 1;
 }
 static int lua_IsControlKeyDown(lua_State* L) {
-    luaPushOneOrNil(L, (SDL_GetModState() & SDL_KMOD_CTRL) != 0);
+    luaPushOneOrNil(L, (interfaceModifiers() & (kLeftCtrl | kRightCtrl)) != 0);
     return 1;
 }
 static int lua_IsAltKeyDown(lua_State* L) {
-    luaPushOneOrNil(L, (SDL_GetModState() & SDL_KMOD_ALT) != 0);
+    luaPushOneOrNil(L, (interfaceModifiers() & (kLeftAlt | kRightAlt)) != 0);
     return 1;
 }
 // The one-sided forms (0x005144c0 and its five siblings): each its own key.
-template <SDL_Keymod Mod>
+template <uint32_t Modifier>
 static int lua_IsSidedKeyDown(lua_State* L) {
-    luaPushOneOrNil(L, (SDL_GetModState() & Mod) != 0);
+    luaPushOneOrNil(L, (interfaceModifiers() & Modifier) != 0);
     return 1;
 }
 static int lua_IsModifierKeyDown(lua_State* L) {
-    const SDL_Keymod m = SDL_GetModState();
-    luaPushOneOrNil(L, (m & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT)) != 0);
+    luaPushOneOrNil(L, interfaceModifiers() != 0);
     return 1;
 }
 
@@ -9832,14 +9832,14 @@ void registerSystemLuaAPI(lua_State* L) {
                 // Read from the real keyboard: a shift-click means something
                 // different from a click, and FrameXML asks on every press.
                 {"IsShiftKeyDown",           lua_IsShiftKeyDown},
-                {"IsLeftShiftKeyDown", lua_IsSidedKeyDown<SDL_KMOD_LSHIFT>},
-                {"IsRightShiftKeyDown", lua_IsSidedKeyDown<SDL_KMOD_RSHIFT>},
+                {"IsLeftShiftKeyDown", lua_IsSidedKeyDown<kLeftShift>},
+                {"IsRightShiftKeyDown", lua_IsSidedKeyDown<kRightShift>},
                 {"IsControlKeyDown",         lua_IsControlKeyDown},
-                {"IsLeftControlKeyDown", lua_IsSidedKeyDown<SDL_KMOD_LCTRL>},
-                {"IsRightControlKeyDown", lua_IsSidedKeyDown<SDL_KMOD_RCTRL>},
+                {"IsLeftControlKeyDown", lua_IsSidedKeyDown<kLeftCtrl>},
+                {"IsRightControlKeyDown", lua_IsSidedKeyDown<kRightCtrl>},
                 {"IsAltKeyDown",             lua_IsAltKeyDown},
-                {"IsLeftAltKeyDown", lua_IsSidedKeyDown<SDL_KMOD_LALT>},
-                {"IsRightAltKeyDown", lua_IsSidedKeyDown<SDL_KMOD_RALT>},
+                {"IsLeftAltKeyDown", lua_IsSidedKeyDown<kLeftAlt>},
+                {"IsRightAltKeyDown", lua_IsSidedKeyDown<kRightAlt>},
                 {"IsModifierKeyDown",        lua_IsModifierKeyDown},
                 // The four predicates actionbutton.lua asks about a slot.
                 //

@@ -134,7 +134,6 @@ public:
         userTargetDistance = currentDistance = clampedZoomDistance(std::clamp(distance, 0.0f, 50.0f));
         pitch = pitchDeg;
     }
-    void resetAngles();
     /// Put the unit at `pos`; it then falls from there unless on ground
     /// (portMove), not when `onTransport` - 0x00988370 starts no fall for a
     /// passenger (+0x44 & 0x200).
@@ -1211,7 +1210,6 @@ private:
     float maxDistanceFactor_ = 1.0f;
     float distanceMax_ = MAX_DISTANCE_NORMAL;
     bool xKeyWasDown = false;
-    bool rKeyWasDown = false;
     bool autoRunning = false;
     bool bindingTurnLeft_ = false;
     bool bindingTurnRight_ = false;

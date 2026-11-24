@@ -2653,17 +2653,20 @@ void Application::run() {
                     renderer->getCameraController()->processMouseMotion(event.motion);
                 }
                 else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-                    // The side buttons over the world are keys to the binding
-                    // tables, BUTTON4 and BUTTON5 (0x0055e340), with the
-                    // modifiers held - over a frame they are its clicks.
-                    if ((event.button.button == SDL_BUTTON_X1 || event.button.button == SDL_BUTTON_X2) &&
+                    // The middle and the side buttons over the world are keys
+                    // to the binding tables, BUTTON3 to BUTTON5 (0x0055e340),
+                    // with the modifiers held - over a frame they are its
+                    // clicks.
+                    if ((event.button.button == SDL_BUTTON_MIDDLE || event.button.button == SDL_BUTTON_X1 ||
+                         event.button.button == SDL_BUTTON_X2) &&
                         addonManager_ && addonsLoaded_ && !ImGui::GetIO().WantTextInput) {
                         if (auto* engine = addonManager_->getLuaEngine()) {
                             const SDL_Keymod mods = SDL_GetModState();
                             const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
                             (void)engine->dispatchBindingKey(
-                                event.button.button == SDL_BUTTON_X1 ? addons::LuaEngine::kBindingKeyButton4
-                                                                     : addons::LuaEngine::kBindingKeyButton5,
+                                event.button.button == SDL_BUTTON_MIDDLE ? addons::LuaEngine::kBindingKeyButton3
+                                : event.button.button == SDL_BUTTON_X1   ? addons::LuaEngine::kBindingKeyButton4
+                                                                         : addons::LuaEngine::kBindingKeyButton5,
                                 down && (mods & SDL_KMOD_SHIFT) != 0, down && (mods & SDL_KMOD_CTRL) != 0,
                                 down && (mods & SDL_KMOD_ALT) != 0, down, false);
                         }
@@ -2687,6 +2690,15 @@ void Application::run() {
                         takenByUi = addonManager_->getLuaEngine()->dispatchMouseWheel(
                             mio.MousePos.x, mio.DisplaySize.y - mio.MousePos.y,
                             wheelClicks(event.wheel.y, event.wheel.timestamp));
+                    }
+                    // Then the wheel's binding: the camera's zoom unless the
+                    // modifiers held make it another.
+                    if (!takenByUi && event.wheel.y != 0.0f && addonManager_ && addonsLoaded_ &&
+                        addonManager_->getLuaEngine()) {
+                        const SDL_Keymod mods = SDL_GetModState();
+                        takenByUi = addonManager_->getLuaEngine()->dispatchWheelBinding(
+                            event.wheel.y > 0.0f, (mods & SDL_KMOD_SHIFT) != 0, (mods & SDL_KMOD_CTRL) != 0,
+                            (mods & SDL_KMOD_ALT) != 0);
                     }
                     if (!takenByUi) {
                         renderer->getCameraController()->processMouseWheel(
@@ -2907,6 +2919,10 @@ void Application::run() {
                                 (mods & SDL_KMOD_CTRL) != 0,
                                 (mods & SDL_KMOD_ALT) != 0, true,
                                 event.key.repeat)) {
+                            // Not the client's own panels' as well.
+                            if (event.key.key >= SDLK_A && event.key.key <= SDLK_Z)
+                                ui::noteInterfaceConsumedKey(
+                                    static_cast<ImGuiKey>(ImGuiKey_A + static_cast<int>(event.key.key - SDLK_A)));
                             // The fourth way a press can end in the pump - an
                             // interface key binding claimed it - which had no
                             // line. For the DEFAULT Escape this does not fire:
@@ -2975,14 +2991,6 @@ void Application::run() {
                 if (event.key.scancode == SDL_SCANCODE_F12 && event.key.repeat == 0 &&
                     (event.key.mod & SDL_KMOD_CTRL)) {
                     core::FrameProfiler::get().toggle();
-                }
-                // F8: Debug WMO floor at current position
-                if (event.key.scancode == SDL_SCANCODE_F8 && event.key.repeat == 0) {
-                    if (renderer && renderer->getWMORenderer()) {
-                        glm::vec3 pos = renderer->getCharacterPosition();
-                        LOG_WARNING("F8: WMO floor debug at render pos (", pos.x, ", ", pos.y, ", ", pos.z, ")");
-                        renderer->getWMORenderer()->debugDumpGroupsAtPosition(pos.x, pos.y, pos.z);
-                    }
                 }
             }
         }
@@ -7967,13 +7975,6 @@ void Application::render() {
                 for (const Route& r : kRoutes) {
                     if (!ui::frameXmlOwns(r.element)) continue;
                     if (!K::getInstance().isActionPressed(r.action)) continue;
-                    // SHIFT-B is OPENALLBAGS in 3.3.5's DefaultBindings.wtf
-                    // and B alone TOGGLEBACKPACK - the key that opens every
-                    // bag, now that I is the Dungeon Finder's again.
-                    if (r.element == UiElement::Bags && ImGui::GetIO().KeyShift) {
-                        engine->executeString("OpenAllBags()");
-                        continue;
-                    }
                     engine->executeString(r.call);
                 }
             }

@@ -62,6 +62,10 @@ bool KeybindingManager::isActionPressed(Action action, bool repeat) {
     // that path, so the key arrived twice.
     if (interfaceTakingTypedInput()) return false;
 
+    // Nor does a key a binding of the interface's has taken, with the
+    // modifiers held: CTRL-M is the music's and not the map's M as well.
+    if (interfaceConsumedKey(key)) return false;
+
     // When typing in a text field (e.g. chat input), never treat A-Z or 0-9 as shortcuts.
     const ImGuiIO& io = ImGui::GetIO();
     if (io.WantTextInput) {

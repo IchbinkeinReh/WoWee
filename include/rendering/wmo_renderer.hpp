@@ -453,9 +453,6 @@ public:
                                                 float glX, float glY, float glZ,
                                                 float* outNormalZ = nullptr) const;
 
-    /** Dump diagnostic info about WMO groups overlapping a position */
-    void debugDumpGroupsAtPosition(float glX, float glY, float glZ) const;
-
     /**
      * Append the 2D footprints of instances touching the given window, for
      * the grass generator's clearings - grass grows short and sparse beside

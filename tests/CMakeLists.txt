@@ -3430,6 +3430,12 @@ wowee_add_test(test_auto_attack
     SOURCES test_auto_attack.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_binding_lookup ──────────────────────────────────────
+# Which binding a press runs, and the client's default ones. Header-only.
+wowee_add_test(test_binding_lookup
+    SOURCES test_binding_lookup.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_mover_report ────────────────────────────────────────
 # What the movement state is told of a step: a fall ended on ground however it
 # came there, a swim its flags do not say. Header-only.

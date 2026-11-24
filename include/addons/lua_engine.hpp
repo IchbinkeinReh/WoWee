@@ -229,6 +229,7 @@ public:
     /// Key codes for the mouse's side buttons, outside SDL's keycode range,
     /// so a binding to BUTTON4 / BUTTON5 goes through the same dispatch as a
     /// key (wowKeyName names them).
+    static constexpr int kBindingKeyButton3 = 0x7F000003;
     static constexpr int kBindingKeyButton4 = 0x7F000004;
     static constexpr int kBindingKeyButton5 = 0x7F000005;
     bool dispatchBindingKey(int sdlKeycode, bool shift, bool ctrl, bool alt,
@@ -238,10 +239,13 @@ public:
     /// a separate question - see clientActsOnBinding - and keeping the two
     /// apart is what lets a declined key be told from an unbound one.
     std::string bindingCommandFor(int sdlKeycode, bool shift, bool ctrl,
-                                  bool alt);
+                                  bool alt, std::string* matched = nullptr);
     /// The command a key holds, by WoW's name for it - "SHIFT-1", "PAD3" - or
     /// empty.
-    std::string bindingCommandForKey(const std::string& key);
+    std::string bindingCommandForKey(const std::string& key, std::string* matched = nullptr);
+    /// A turn of the wheel, by its binding name: pressed and let go. False
+    /// where nothing, or the camera's zoom, is bound to it.
+    bool dispatchWheelBinding(bool up, bool shift, bool ctrl, bool alt);
 
     /// A controller button, by its binding name.
     ///
@@ -480,11 +484,16 @@ private:
     /// what focus means.
     uint32_t focusedWid_ = 0;
     std::array<std::vector<std::string>, 2> registeredForSave_;
-    /// Keys held down on a SPELL, ITEM, MACRO or CLICK binding, by key code,
+    /// Keys held down on a SPELL, ITEM, MACRO or CLICK binding, or on one
+    /// whose script runs on the release too (runOnUp), by key code,
     /// with the command they were pressed on. The release is that binding's
     /// whatever the modifiers are by then, as 0x004f6b70 keeps the modifiers a
     /// key went down with for its release.
     std::unordered_map<int, std::string> heldDirectBindings_;
+    /// Whether letting go of a key on the command does anything.
+    bool actsOnRelease(const std::string& command);
+    /// The command the key itself holds, no modifier left off.
+    std::string bindingCommandForExactKey(const std::string& key);
     /// Per button, because a press and its release belong together: sliding off
     /// a button between them is how a player changes their mind, and holding
     /// one button while clicking another must not confuse the first.
