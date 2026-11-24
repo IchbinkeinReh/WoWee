@@ -319,11 +319,11 @@ inline std::string& currentClickButton() {
 /// set of flags each of which one call per run may spend (all set as the
 /// outermost macro starts; TargetDirectionEnemy spends 0x20).
 ///
-/// RunMacroText runs a macro that is no saved one, so its index is zero and
+/// RunMacroText runs a macro that is no saved one, so its id is zero and
 /// GetRunningMacro answers nil inside it (0x00564c10 asks the macro's +0x18).
 struct RunningMacro {
     bool running = false;
-    int index = 0;
+    int index = 0;   ///< the macro's id
     bool hasButton = false;
     std::string button;
     uint32_t onceFlags = 0;

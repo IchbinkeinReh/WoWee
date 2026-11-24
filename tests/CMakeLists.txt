@@ -4181,6 +4181,11 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# ── test_macro_list ──────────────────────────────────────────
+# The macros as the interface numbers them (0x00566240). Header-only.
+wowee_add_test(test_macro_list
+    SOURCES test_macro_list.cpp)
+
 # ── test_action_drop ─────────────────────────────────────────
 # What the cursor holds against an action slot (0x005abbc0, 0x005ab120) and a
 # click into the world (0x005278c0, 0x0051fa50). Header-only.

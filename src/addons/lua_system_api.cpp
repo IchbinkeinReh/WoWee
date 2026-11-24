@@ -7901,15 +7901,7 @@ static int lua_RunMacro(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!svc || !svc->runMacroText || !gh) return 0;
     if (!taint::allowed(L, 3)) return 0;   // 0x00566e80 -> 0x00564db0
-    uint32_t macroId = 0;
-    if (lua_isnumber(L, 1)) {
-        macroId = static_cast<uint32_t>(lua_tonumber(L, 1));
-    } else if (const char* name = lua_tostring(L, 1)) {
-        // By name, which is how a macro written into another macro names it.
-        for (uint32_t id : gh->getMacroIds()) {
-            if (gh->getMacroName(id) == name) { macroId = id; break; }
-        }
-    }
+    const uint32_t macroId = macroIdArg(L, 1);
     if (macroId == 0) return 0;
     const std::string body = gh->getMacroText(macroId);
     if (!body.empty()) {
@@ -7926,7 +7918,9 @@ static int lua_RunMacro(lua_State* L) {
 // (0x00564c10). Nil inside RunMacroText, whose macro is no saved one.
 static int lua_GetRunningMacro(lua_State* L) {
     const RunningMacro& m = runningMacro();
-    if (m.running && m.index > 0) lua_pushnumber(L, m.index);
+    auto* gh = getGameHandler(L);
+    if (m.running && m.index > 0 && gh)
+        lua_pushnumber(L, game::macro_list::indexOf(gh->macroList(), static_cast<uint32_t>(m.index)));
     else lua_pushnil(L);
     return 1;
 }

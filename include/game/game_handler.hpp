@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/macro_list.hpp"
 #include "game/achievement_tracking.hpp"
 #include "game/npc_interaction.hpp"
 #include "game/tutorials.hpp"
@@ -1942,8 +1943,15 @@ public:
     const std::string& getMacroIcon(uint32_t macroId) const;
     void setMacroMeta(uint32_t macroId, const std::string& name,
                       const std::string& icon);
-    /// Every macro id in use, ascending, so the interface can list them.
+    /// Every macro id in use, ascending. The interface's own numbers are
+    /// another thing: macroList() and game/macro_list.hpp.
     std::vector<uint32_t> getMacroIds() const;
+    /// A macro has a name or a body.
+    bool macroExists(uint32_t macroId) const;
+    std::vector<macro_list::Entry> macroList() const;
+    /// A macro gone: its text, name and icon, and the action slots that held
+    /// it (0x00566d50 -> 0x005aadd0). The others keep their ids.
+    void deleteMacro(uint32_t macroId);
 
     void saveCharacterConfig();
     void loadCharacterConfig();

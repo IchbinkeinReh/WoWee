@@ -1348,11 +1348,31 @@ std::vector<uint32_t> GameHandler::getMacroIds() const {
     std::vector<uint32_t> ids;
     ids.reserve(macros_.size());
     for (const auto& [id, text] : macros_) { (void)text; ids.push_back(id); }
-    // Ascending, because the interface indexes macros by position in this list
-    // and an unordered_map hands them back in whatever order it likes - the
-    // same macro would answer to a different index each session.
+    for (const auto& [id, name] : macroNames_)
+        if (!name.empty() && !macros_.count(id)) ids.push_back(id);
     std::sort(ids.begin(), ids.end());
     return ids;
+}
+
+bool GameHandler::macroExists(uint32_t macroId) const {
+    return macroId != 0 && (!getMacroText(macroId).empty() || !getMacroName(macroId).empty());
+}
+
+std::vector<macro_list::Entry> GameHandler::macroList() const {
+    std::vector<macro_list::Entry> list;
+    for (const uint32_t id : getMacroIds()) list.push_back({id, getMacroName(id)});
+    return list;
+}
+
+void GameHandler::deleteMacro(uint32_t macroId) {
+    if (!macroExists(macroId)) return;
+    setMacroText(macroId, std::string());
+    setMacroMeta(macroId, std::string(), std::string());
+    for (int slot = 0; slot < ACTION_BAR_SLOTS; ++slot) {
+        const auto& action = actionBar[static_cast<size_t>(slot)];
+        if (action.type == ActionBarSlot::MACRO && action.id == macroId)
+            setActionBarSlot(slot, ActionBarSlot::EMPTY, 0);
+    }
 }
 
 void GameHandler::setMacroText(uint32_t macroId, const std::string& text) {

@@ -87,6 +87,7 @@ static bool       s_cursorMoneyGuildBank = false;
 static uint32_t   s_cursorSplit = 0;
 static void setCursorType(lua_State* L, CursorType type);
 static void clearCursorItem(lua_State* L);
+static int macroIndex(lua_State* L, uint32_t macroId);
 /// Where the cursor's item came from, in wire bag/slot space. Declared here
 /// because the guild bank pickup above needs it and it is defined further down
 /// with the other cursor helpers.
@@ -819,33 +820,24 @@ static int lua_WoweeUpdateShownMacros(lua_State* L) {
     return 0;
 }
 
-/// The macro a Lua argument names (0x00566df0): its index, or its name without
-/// case (0x00566330). 0 for none.
+/// The id of the macro a Lua argument names (0x00566df0): by its index in the
+/// interface's list, or its name without case (0x00566330). 0 for none.
 static uint32_t macroArg(lua_State* L, game::GameHandler* gh, int idx) {
     if (!gh) return 0;
-    if (lua_isnumber(L, idx)) {
-        const int index = luaToClientInt(L, idx);
-        return index >= 1 && index <= 0x48 && !gh->getMacroText(static_cast<uint32_t>(index)).empty()
-                   ? static_cast<uint32_t>(index) : 0;
-    }
-    if (!lua_isstring(L, idx)) return 0;
-    std::string want = lua_tostring(L, idx);
-    if (want.empty()) return 0;
-    toLowerInPlace(want);
-    for (uint32_t id : gh->getMacroIds()) {
-        std::string name = gh->getMacroName(id);
-        toLowerInPlace(name);
-        if (name == want && !gh->getMacroText(id).empty()) return id;
-    }
-    return 0;
+    if (lua_isnumber(L, idx)) return game::macro_list::idAt(gh->macroList(), luaToClientInt(L, idx));
+    return lua_isstring(L, idx) ? game::macro_list::byName(gh->macroList(), lua_tostring(L, idx)) : 0;
 }
 
-/// The macro EditMacro, DeleteMacro and PickupMacro are asked for, by index -
-/// one without a text too, as a new one is - or name; 0 for anything else.
-static uint32_t macroNamed(lua_State* L, game::GameHandler* gh) {
-    if (!lua_isnumber(L, 1)) return macroArg(L, gh, 1);
-    const int index = luaToClientInt(L, 1);
-    return index >= 1 && index <= 0x48 ? static_cast<uint32_t>(index) : 0;
+uint32_t macroIdArg(lua_State* L, int idx) { return macroArg(L, getGameHandler(L), idx); }
+
+/// The icon a macro is given (CreateMacro, EditMacro): the name at that index
+/// of the macro icons (0x00564d70), or none past them.
+static std::optional<std::string> macroIconArg(lua_State* L, int idx) {
+    if (!lua_isnumber(L, idx)) return std::nullopt;
+    const int index = luaToClientInt(L, idx);
+    const auto* lists = macroIconLists(L);
+    if (!lists || index < 1 || index > static_cast<int>(lists->macro.size())) return std::nullopt;
+    return lists->macro[static_cast<size_t>(index) - 1];
 }
 
 /// A macro's texture (0x00566ac0): the icon it was given - unless that is the
@@ -1005,7 +997,7 @@ static int lua_GetActionTexture(lua_State* L) {
     const auto& action = bar[slot];
     if (action.type == game::ActionBarSlot::MACRO) {
         // The macro's texture (0x005a97f0 -> 0x00566ac0).
-        if (gh->getMacroText(action.id).empty()) return luaReturnNil(L);
+        if (!gh->macroExists(action.id)) return luaReturnNil(L);
         lua_pushstring(L, macroTexture(L, gh, action.id).c_str());
         return 1;
     }
@@ -1331,9 +1323,8 @@ static int lua_GetActionInfo(lua_State* L) {
             return 3;
         case game::ActionBarSlot::MACRO:
             lua_pushstring(L, "macro");
-            lua_pushnumber(L, action.id);
-            lua_pushstring(L, "macro");
-            return 3;
+            lua_pushnumber(L, macroIndex(L, action.id));   // 0x00564ab0
+            return 2;
         case game::ActionBarSlot::EQUIPMENT_SET:
             // "equipmentset" and its name, while it is there (0x005a8f10).
             if (const auto* set = equipmentSetById(gh, action.id)) {
@@ -1599,7 +1590,7 @@ static int lua_GetCursorInfo(lua_State* L) {
         }
         case CursorType::MACRO:
             lua_pushstring(L, "macro");
-            lua_pushnumber(L, s_cursorId);
+            lua_pushnumber(L, macroIndex(L, s_cursorId));
             return 2;
         case CursorType::MONEY:
             // containerframe.lua branches on this exact string to decide that
@@ -1656,19 +1647,143 @@ static int lua_CursorHasMacro(lua_State* L) {
 }
 
 // PickupAction(slot) - picks up an action from the action bar
-/// PickupAction(slot) - take what is in a slot onto the cursor, and put down
-/// what the cursor was already holding.
-///
-/// A swap, which is what the real client does and what the interface expects:
-/// ActionButton_OnClick calls this for a click on a button whether or not
-/// anything is held.
-///
-/// The slot used to be left exactly as it was. Picking an action up put a copy
-/// on the cursor and the button went on showing it, so dragging something off
-/// the bar looked like it had done nothing at all - and because the slot never
-/// changed, no ACTIONBAR_SLOT_CHANGED was fired and nothing redrew. The empty
-/// half only understood a spell, so an item or a macro dropped on a free slot
-/// vanished.
+/// What of the cursor an action bar takes (0x005abe70), named as the slots
+/// name theirs.
+static game::action_drop::Action heldAction() {
+    using game::action_drop::Kind;
+    switch (s_cursorType) {
+        case CursorType::SPELL: return {s_cursorId != 0 ? Kind::Spell : Kind::None, s_cursorId};
+        case CursorType::ITEM: return {s_cursorId != 0 ? Kind::Item : Kind::None, s_cursorId};
+        case CursorType::MACRO: return {s_cursorId != 0 ? Kind::Macro : Kind::None, s_cursorId};
+        case CursorType::EQUIPMENT_SET: return {Kind::EquipmentSet, s_cursorId};
+        default: return {};
+    }
+}
+
+static game::action_drop::Action slotAction(const game::ActionBarSlot& slot) {
+    using game::action_drop::Kind;
+    switch (slot.type) {
+        case game::ActionBarSlot::SPELL: return {slot.id != 0 ? Kind::Spell : Kind::None, slot.id};
+        case game::ActionBarSlot::ITEM: return {slot.id != 0 ? Kind::Item : Kind::None, slot.id};
+        case game::ActionBarSlot::MACRO: return {slot.id != 0 ? Kind::Macro : Kind::None, slot.id};
+        case game::ActionBarSlot::EQUIPMENT_SET: return {Kind::EquipmentSet, slot.id};
+        default: return {};
+    }
+}
+
+/// Whether the slot's macro or equipment set still exists (0x005a7a40,
+/// 0x005ae4f0); a spell and an item always do.
+static bool slotActionThere(game::GameHandler* gh, const game::action_drop::Action& action) {
+    using game::action_drop::Kind;
+    switch (action.kind) {
+        case Kind::Macro: return gh->macroExists(action.id);
+        case Kind::EquipmentSet: return equipmentSetById(gh, action.id) != nullptr;
+        default: return true;
+    }
+}
+
+/// What a slot held, onto the cursor (0x00520960, 0x00520d30, 0x00520be0,
+/// 0x00520dc0); a macro or a set that is gone leaves it empty.
+static void pickupSlotAction(lua_State* L, game::GameHandler* gh, int slot,
+                             const game::action_drop::Action& action) {
+    using game::action_drop::Kind;
+    if (action.kind == Kind::None || !slotActionThere(gh, action)) {
+        clearCursorItem(L);
+        return;
+    }
+    if (action.kind == Kind::EquipmentSet) {
+        pickupEquipmentSet(L, gh, action.id);
+        return;
+    }
+    setCursorType(L, action.kind == Kind::Spell  ? CursorType::SPELL
+                     : action.kind == Kind::Item ? CursorType::ITEM
+                                                 : CursorType::MACRO);
+    s_cursorId = action.id;
+    s_cursorSlot = slot + 1;
+    // Which button, not which slot of which bag - a fourth numbering, and
+    // the reason the source has to say so. An item action carries a real
+    // itemId, so without this the cursor was indistinguishable from one
+    // lifted off the paperdoll and the button number was spent as an
+    // equipment slot. See kCursorNoSource.
+    s_cursorBag = game::slots::kCursorNoSource;
+    // The shared cursor as well, which is a separate record of the same
+    // thing and would otherwise still be naming wherever the *previous*
+    // pickup came from: clicking a button while carrying a bag item swaps
+    // the two, and the bag slot it left behind stayed on this cursor as
+    // the source PutItemInBag would have moved from.
+    cursorItemSlot() = {};
+    // And on the pointer, or the drag reads as not having started.
+    if (action.kind == Kind::Spell) {
+        wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(action.id));
+    } else if (action.kind == Kind::Item) {
+        const auto* info = gh->getItemInfo(action.id);
+        wowee::ui::frameXmlSetCursorItem(info ? gh->getItemIconPath(info->displayInfoId) : std::string());
+    } else {
+        wowee::ui::frameXmlSetCursorItem(macroTexture(L, gh, action.id));
+    }
+}
+
+/// What the cursor holds into an action slot, 0-based (0x005ab120). The taint
+/// check (kind 0xe) refused puts the cursor down.
+static void dropOnAction(lua_State* L, game::GameHandler* gh, int slot) {
+    using game::action_drop::Kind;
+    using game::action_drop::Result;
+    const auto& bar = gh->getActionBar();
+    if (slot < 0 || slot >= static_cast<int>(bar.size())) return;
+    if (!taint::allowed(L, 0xe)) {
+        clearCursorItem(L);
+        return;
+    }
+    const auto held = heldAction();
+    const auto inSlot = slotAction(bar[static_cast<size_t>(slot)]);
+    game::action_drop::Facts facts;
+    facts.slotActionThere = slotActionThere(gh, inSlot);
+    if (held.kind == Kind::Spell) {
+        gh->loadSpellNameCache();
+        const auto& cache = gh->spellNameCacheRef();
+        if (const auto it = cache.find(held.id); it != cache.end()) {
+            facts.spellKnown = true;
+            facts.spellPassive = gh->isSpellPassive(held.id);
+            facts.spellTotemCategories[0] = it->second.totemCategories[0];
+            facts.spellTotemCategories[1] = it->second.totemCategories[1];
+        }
+    } else if (held.kind == Kind::Item) {
+        if (const auto* info = gh->getItemInfo(held.id)) {
+            facts.itemKnown = true;
+            facts.itemInventoryType = info->inventoryType;
+            for (const auto& spell : info->spells)
+                if (spell.spellId != 0 && spell.spellTrigger == 0) facts.itemUseSpell = true;
+        }
+    }
+    switch (game::action_drop::drop(slot, held, inSlot, facts)) {
+        case Result::Keep:
+            return;
+        case Result::PutDown:
+            clearCursorItem(L);
+            return;
+        case Result::PassiveSpell:
+            gh->addUIError(game::interfaceString("ERR_PASSIVE_ABILITY", "You can't put a passive ability in the action bar."));
+            return;
+        case Result::WrongTotem: {
+            const std::string& name = gh->getTotemCategoryName(game::totem_bar::slotCategory(slot));
+            gh->addUIError(game::interfaceFormat("ERR_MULTI_CAST_ACTION_TOTEM_S", "Requires %s", {name}));
+            return;
+        }
+        case Result::Place:
+            break;
+    }
+    // The slot's action comes up before the held one is written over it.
+    pickupSlotAction(L, gh, slot, inSlot);
+    const auto type = held.kind == Kind::Spell   ? game::ActionBarSlot::SPELL
+                      : held.kind == Kind::Item  ? game::ActionBarSlot::ITEM
+                      : held.kind == Kind::Macro ? game::ActionBarSlot::MACRO
+                                                 : game::ActionBarSlot::EQUIPMENT_SET;
+    gh->setActionBarSlot(slot, type, held.id);
+}
+
+/// PickupAction(slot) (0x005ac090 -> 0x005abe70): the slot's action onto the
+/// cursor and the slot left empty, or - with something a bar takes held - what
+/// is held into the slot (dropOnAction). Not the bonus bar's slots.
 static int lua_PickupAction(lua_State* L) {
     // 0x005ac090
     if (!lua_isnumber(L, 1))
@@ -1684,66 +1799,12 @@ static int lua_PickupAction(lua_State* L) {
         dropOnAction(L, gh, slot - 1);
         return 0;
     }
-    // A passive spell does not go on a bar (0x005ab120, Attributes 0x40):
-    // ERR_PASSIVE_ABILITY, and the slot and the cursor stay as they were.
-    if (holding && held == CursorType::SPELL && gh->isSpellPassive(heldId)) {
-        gh->addUIError(game::interfaceString("ERR_PASSIVE_ABILITY", "You can't put a passive ability in the action bar."));
-        return 0;
-    }
-    if (holding) {
-        gh->setActionBarSlot(slot - 1, typeForCursor(held), heldId);
-    } else if (hadAction) {
-        // Nothing held, so the slot empties. This is the fire that redraws the
-        // button: setActionBarSlot raises ACTIONBAR_SLOT_CHANGED for it.
-        gh->setActionBarSlot(slot - 1, game::ActionBarSlot::EMPTY, 0);
-    }
-
-    if (hadAction && existing.type == game::ActionBarSlot::EQUIPMENT_SET) {
-        // A set goes to the cursor as a set, if it is still there; one
-        // deleted since lets the cursor go (0x005ab120 -> 0x005ae4f0,
-        // 0x00520dc0).
-        if (equipmentSetById(gh, existing.id)) pickupEquipmentSet(L, gh, existing.id);
-        else clearCursorItem(L);
-    } else if (hadAction) {
-        // What was there goes to the cursor, whether this was a swap or a
-        // plain pick-up. existing.type is never EMPTY here (hadAction), so
-        // this covers every case - CursorType::ACTION was a dead end lua_
-        // PlaceAction had no branch for, and picking a macro up off the bar
-        // fell to it by default: the macro left its slot, rode the cursor as
-        // an unplaceable "action", and vanished on drop instead of landing
-        // anywhere.
-        setCursorType(L, (existing.type == game::ActionBarSlot::SPELL) ? CursorType::SPELL :
-                       (existing.type == game::ActionBarSlot::ITEM)  ? CursorType::ITEM :
-                       CursorType::MACRO);
-        s_cursorId = existing.id;
-        s_cursorSlot = slot;
-        // Which button, not which slot of which bag - a fourth numbering, and
-        // the reason the source has to say so. An item action carries a real
-        // itemId, so without this the cursor was indistinguishable from one
-        // lifted off the paperdoll and the button number was spent as an
-        // equipment slot. See kCursorNoSource.
-        s_cursorBag = game::slots::kCursorNoSource;
-        // The shared cursor as well, which is a separate record of the same
-        // thing and would otherwise still be naming wherever the *previous*
-        // pickup came from: clicking a button while carrying a bag item swaps
-        // the two, and the bag slot it left behind stayed on this cursor as
-        // the source PutItemInBag would have moved from.
-        cursorItemSlot() = {};
-        // And on the pointer, or the drag reads as not having started.
-        if (existing.type == game::ActionBarSlot::SPELL) {
-            wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(existing.id));
-        } else if (existing.type == game::ActionBarSlot::ITEM) {
-            const auto* info = gh->getItemInfo(existing.id);
-            wowee::ui::frameXmlSetCursorItem(
-                info ? gh->getItemIconPath(info->displayInfoId) : std::string());
-        } else {
-            std::string icon = gh->getMacroIcon(existing.id);
-            if (icon.empty()) icon = "Interface\\Icons\\INV_Misc_QuestionMark";
-            wowee::ui::frameXmlSetCursorItem(icon);
-        }
-    } else {
-        clearCursorItem(L);
-    }
+    const auto inSlot = slotAction(gh->getActionBar()[static_cast<size_t>(slot - 1)]);
+    if (inSlot.kind == game::action_drop::Kind::None) return 0;
+    pickupSlotAction(L, gh, slot - 1, inSlot);
+    // The slot empties (0x005aaa90), which is the event that redraws its
+    // button.
+    gh->setActionBarSlot(slot - 1, game::ActionBarSlot::EMPTY, 0);
     return 0;
 }
 
@@ -4183,7 +4244,7 @@ void registerActionLuaAPI(lua_State* L) {
             int global = 0, perChar = 0;
             if (gh) {
                 for (uint32_t id : gh->getMacroIds()) {
-                    if (id <= 36) ++global; else ++perChar;
+                    if (game::macro_list::perCharacter(id)) ++perChar; else ++global;
                 }
             }
             lua_pushnumber(L, global);
@@ -4219,7 +4280,8 @@ void registerActionLuaAPI(lua_State* L) {
                 // macro of that name without case, 0 for none.
                 {"GetMacroIndexByName", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetMacroIndexByName(name)");
-            lua_pushnumber(L, macroArg(L, getGameHandler(L), 1));
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? macroIndex(L, game::macro_list::byName(gh->macroList(), lua_tostring(L, 1))) : 0);
             return 1;
         }},
                 // GetMacroSpell(index or name) (0x00567450) → the name and
@@ -4291,8 +4353,7 @@ void registerActionLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const uint32_t id = macroArg(L, gh, 1);
             if (id == 0) return 0;
-            std::string name = gh->getMacroName(id);
-            if (name.empty()) name = "Macro";
+            const std::string name = gh->getMacroName(id);
             // The texture as 0x00566ac0 gives it: the question mark shows
             // what the macro casts.
             const std::string icon = macroTexture(L, gh, id);
@@ -4301,101 +4362,63 @@ void registerActionLuaAPI(lua_State* L) {
             lua_pushstring(L, gh->getMacroText(id).c_str());
             return 3;
         }},
-                // CreateMacro(name, icon, body, perCharacter) → id
+                // CreateMacro(name, iconIndex, body, perCharacter) (0x00568160)
+                // → the new macro's index; raises for no name and for a half
+                // that is full.
                 {"CreateMacro",         [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            if (!gh) return luaReturnNil(L);
-            const char* name = luaL_optstring(L, 1, "Macro");
-            const char* icon = luaL_optstring(L, 2, "");
-            const char* body = luaL_optstring(L, 3, "");
-            const bool perChar = lua_toboolean(L, 4) != 0;
+            if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: CreateMacro(name, iconIndex, body, perCharacter)");
             // The macro verbs ask the taint check (0x00568160, 0x00566fa0,
             // 0x00566f70: kind 0xc - not insecure code in combat lockdown).
             if (!taint::allowed(L, 0xc)) return 0;
-            // The first free id in the half that was asked for. WoW allows 18
-            // of each; refusing past that is what stops a full list growing
-            // ids the interface will not show.
-            const uint32_t first = perChar ? 37u : 1u;
-            const uint32_t last  = perChar ? 54u : 36u;
-            uint32_t id = 0;
-            for (uint32_t candidate = first; candidate <= last; ++candidate) {
-                if (gh->getMacroText(candidate).empty()) { id = candidate; break; }
-            }
-            if (id == 0) return luaReturnNil(L);
-            gh->setMacroText(id, body);
-            gh->setMacroMeta(id, name, icon);
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const std::string name = lua_tostring(L, 1);
+            if (name.empty()) return luaL_error(L, "CreateMacro() failed, no name specified");
+            const uint32_t id = game::macro_list::freeId(gh->macroList(), lua_toboolean(L, 4) != 0);
+            if (id == 0) return luaL_error(L, "CreateMacro() failed, already have %d macros", 36);
+            gh->setMacroText(id, lua_isstring(L, 3) ? lua_tostring(L, 3) : "");
+            gh->setMacroMeta(id, name, macroIconArg(L, 2).value_or(std::string()));
             // 0x00568020 -> 0x00566240: the lists rebuilt and UPDATE_MACROS.
             gh->fireAddonEvent("UPDATE_MACROS", {});
-            lua_pushnumber(L, id);
+            lua_pushnumber(L, macroIndex(L, id));
             return 1;
         }},
-                // EditMacro(id, name, icon, body) → id
+                // EditMacro(index or name [, name [, iconIndex [, body]]])
+                // (0x00566fa0) → the macro's index, which its new name may
+                // have moved; 0 for no macro. Each part is optional and nil
+                // means "leave it".
                 {"EditMacro",           [](lua_State* L) -> int {
             if (!taint::allowed(L, 0xc)) return 0;   // see CreateMacro
             auto* gh = getGameHandler(L);
-            const uint32_t id = macroNamed(L, gh);
-            if (!gh || id == 0) return luaReturnNil(L);
-            const char* name = luaL_optstring(L, 2, nullptr);
-            const char* icon = luaL_optstring(L, 3, nullptr);
-            const char* body = luaL_optstring(L, 4, nullptr);
-            // Each part is optional and nil means "leave it": EditMacro is
-            // called with only a name when a macro is renamed, and writing the
-            // other two as empty would erase the macro being renamed.
-            // Only a macro that is there (0x00566cd0 finds it first).
-            if (gh->getMacroText(id).empty() && gh->getMacroName(id).empty())
-                return luaReturnNil(L);
-            if (body) gh->setMacroText(id, body);
-            gh->setMacroMeta(id, name ? name : gh->getMacroName(id),
-                                 icon ? icon : gh->getMacroIcon(id));
-            gh->fireAddonEvent("UPDATE_MACROS", {});   // 0x00566cd0
-            lua_pushnumber(L, id);
+            const uint32_t id = macroArg(L, gh, 1);
+            if (id != 0) {
+                const std::string name = lua_isstring(L, 2) ? lua_tostring(L, 2) : gh->getMacroName(id);
+                const std::string icon = macroIconArg(L, 3).value_or(gh->getMacroIcon(id));
+                if (lua_isstring(L, 4)) gh->setMacroText(id, lua_tostring(L, 4));
+                gh->setMacroMeta(id, name, icon);
+                gh->fireAddonEvent("UPDATE_MACROS", {});   // 0x00566cd0
+                // 0x005aa920: the slots that hold it are drawn again.
+                const auto& bar = gh->getActionBar();
+                for (size_t i = 0; i < bar.size(); ++i) {
+                    if (bar[i].type == game::ActionBarSlot::MACRO && bar[i].id == id)
+                        gh->fireAddonEvent("ACTIONBAR_SLOT_CHANGED", {std::to_string(i + 1)});
+                }
+            }
+            lua_pushnumber(L, id != 0 ? macroIndex(L, id) : 0);
             return 1;
         }},
-                // DeleteMacro(index) - and the rest of the half shifts down.
-                //
-                // Every macro verb here takes what WoW calls an index and what
-                // this client stores as an id, and the two are the same number
-                // only while the slots are dense. CreateMacro fills the first
-                // free slot, so they start dense; this emptied one and left a
-                // hole, and from then on the two disagreed.
-                //
-                // What that costs: with macros in slots 1, 2 and 3, deleting
-                // the second leaves 1 and 3. GetNumMacros counts two, so the
-                // macro frame asks for slots 1 and 2 - one macro, one blank
-                // row, and the macro in slot 3 invisible and unreachable.
-                //
-                // Compacting is also what WoW does. Deleting a macro there
-                // shifts the ones after it down, which is why a macro on an
-                // action bar can move when an earlier one is deleted; matching
-                // that is more faithful than keeping a hole, and it is the
-                // assumption getMacroIds already documents.
+                // DeleteMacro(index or name) (0x00566f70 -> 0x00566d50):
+                // silently nothing for no macro. The action slots that held it
+                // are emptied, the other macros keep theirs: a slot holds a
+                // macro's id, and only the index closes the gap.
                 {"DeleteMacro",         [](lua_State* L) -> int {
             if (!taint::allowed(L, 0xc)) return 0;   // see CreateMacro
             auto* gh = getGameHandler(L);
-            const uint32_t id = macroNamed(L, gh);
-            if (!gh || id == 0) return 0;
-            // Which half this slot belongs to; the two do not shift into
-            // each other.
-            const uint32_t first = (id >= 37u) ? 37u : 1u;
-            const uint32_t last  = (id >= 37u) ? 54u : 36u;
-            if (id < first || id > last) return 0;
-            // Only a macro that is there (0x00566d50 finds it first).
-            if (gh->getMacroText(id).empty() && gh->getMacroName(id).empty()) return 0;
-            for (uint32_t slot = id; slot < last; ++slot) {
-                const std::string next = gh->getMacroText(slot + 1);
-                if (next.empty()) {
-                    gh->setMacroText(slot, "");
-                    gh->setMacroMeta(slot, "", "");
-                    break;
-                }
-                gh->setMacroText(slot, next);
-                gh->setMacroMeta(slot, gh->getMacroName(slot + 1),
-                                       gh->getMacroIcon(slot + 1));
+            if (const uint32_t id = macroArg(L, gh, 1)) {
+                gh->deleteMacro(id);
+                gh->fireAddonEvent("UPDATE_MACROS", {});
             }
-            // The last slot in the half is never written by the loop above.
-            gh->setMacroText(last, "");
-            gh->setMacroMeta(last, "", "");
-            gh->fireAddonEvent("UPDATE_MACROS", {});   // 0x00566d50
             return 0;
         }},
                 // Saved as each change is made, so this has nothing to do.
@@ -4407,13 +4430,12 @@ void registerActionLuaAPI(lua_State* L) {
                 {"PickupMacro",         [](lua_State* L) -> int {
             if (!taint::allowed(L, 0xe)) return 0;   // 0x005674f0
             auto* gh = getGameHandler(L);
-            const uint32_t id = macroNamed(L, gh);
-            if (!gh || id == 0 || gh->getMacroText(id).empty()) return 0;
+            const uint32_t id = macroArg(L, gh, 1);
+            if (id == 0) return 0;
+            clearCursorItem(L);   // 0x00520be0
             setCursorType(L, CursorType::MACRO);
             s_cursorId = id;
-            std::string icon = gh->getMacroIcon(id);
-            if (icon.empty()) icon = "Interface\\Icons\\INV_Misc_QuestionMark";
-            wowee::ui::frameXmlSetCursorItem(icon);
+            wowee::ui::frameXmlSetCursorItem(macroTexture(L, gh, id));
             return 0;
         }},
                 {"GetTradePlayerItemInfo", lua_GetTradePlayerItemInfo},
