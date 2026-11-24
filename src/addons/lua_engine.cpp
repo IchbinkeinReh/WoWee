@@ -8,6 +8,7 @@
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
 #include "game/expansion_profile.hpp"
+#include "ui/keyboard_frame.hpp"
 #include "ui/widget_tree.hpp"
 #include "ui/tooltip_line_strings.hpp"
 #include "ui/interface_fonts.hpp"
@@ -17651,7 +17652,7 @@ LuaEngine::PadKeyOutcome LuaEngine::dispatchPadKey(const char* padKey) {
     //
     // Asked in Lua, because "waiting" is the panel's own field and not
     // something the widget tree knows about.
-    const ui::Widget* top = topKeyboardFrame();
+    const ui::Widget* top = widgets_.get(topKeyboardFrame("OnKeyDown", "OnKeyUp"));
     if (top && top->name == "KeyBindingFrame") {
         bool waiting = false;
         if (luaL_loadstring(L_, "return KeyBindingFrame ~= nil and KeyBindingFrame.selected ~= nil") == 0 &&
@@ -17690,25 +17691,17 @@ LuaEngine::PadKeyOutcome LuaEngine::dispatchPadKey(const char* padKey) {
 /// Everything that declares a key handler in the interface is a dialog that is
 /// hidden until it is wanted, so in ordinary play there is nothing here and the
 /// key goes straight through to the game.
-const ui::Widget* LuaEngine::topKeyboardFrame() const {
-    const ui::Widget* best = nullptr;
-    for (size_t id = 1; id < widgets_.size(); ++id) {
-        const ui::Widget* w = widgets_.get(static_cast<uint32_t>(id));
-        if (!w || !w->keyboardEnabled || !w->visible) continue;
-        if (!best) { best = w; continue; }
-        if (w->effStrata > best->effStrata ||
-            (w->effStrata == best->effStrata && w->effLevel >= best->effLevel)) {
-            best = w;
-        }
-    }
-    return best;
+uint32_t LuaEngine::topKeyboardFrame(const char* script, const char* orScript) {
+    return ui::topKeyboardFrame(widgets_, [&](uint32_t id) {
+        return frameHasScript(id, script) || (orScript && frameHasScript(id, orScript));
+    });
 }
 
 void LuaEngine::dispatchFrameChar(const char* utf8) {
     taint::Quiet quiet;   // as dispatchText
     if (!L_ || !utf8 || !*utf8) return;
-    const ui::Widget* best = topKeyboardFrame();
-    if (!best) return;
+    const uint32_t best = topKeyboardFrame("OnChar");
+    if (best == 0) return;
     // One call per character, which is what a handler written against WoW
     // expects: StackSplitFrame_OnChar compares its argument with "0" and "9"
     // and multiplies the number it is building by ten.
@@ -17719,7 +17712,7 @@ void LuaEngine::dispatchFrameChar(const char* utf8) {
         else if ((lead & 0xF0u) == 0xE0u) len = 3;
         else if ((lead & 0xE0u) == 0xC0u) len = 2;
         const std::string one(at, len);
-        callFrameScript(best->id, "OnChar", one.c_str());
+        callFrameScript(best, "OnChar", one.c_str());
         at += len;
     }
 }
@@ -17730,13 +17723,28 @@ bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
     const std::string key = wowKeyName(sdlKeycode);
     if (key.empty()) return false;
 
-    const ui::Widget* best = topKeyboardFrame();
-    if (!best) return false;
+    // 0x00494490: the release is the frame's that took the press, with or
+    // without a script for it, and nobody else's.
+    if (!down) {
+        const auto held = frameKeysHeld_.find(sdlKeycode);
+        if (held == frameKeysHeld_.end()) return false;
+        const uint32_t id = held->second;
+        frameKeysHeld_.erase(held);
+        if (!widgets_.shownNow(id)) return false;  // hidden, it lets go (0x00495900)
+        callFrameScript(id, "OnKeyUp", key.c_str());
+        return true;
+    }
 
-    callFrameScript(best->id, down ? "OnKeyDown" : "OnKeyUp", key.c_str());
+    // 0x0048fb80: one with a script for the press or for the release.
+    const uint32_t id = topKeyboardFrame("OnKeyDown", "OnKeyUp");
+    const ui::Widget* best = widgets_.get(id);
+    if (!best) return false;
     // Consumed unless the frame asked for the key to carry on, which is WoW's
     // default and the reason a dialog stops the character walking.
-    return !best->propagateKeys;
+    const bool taken = !best->propagateKeys;
+    if (taken) frameKeysHeld_[sdlKeycode] = id;
+    callFrameScript(id, "OnKeyDown", key.c_str());
+    return taken;
 }
 
 void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {

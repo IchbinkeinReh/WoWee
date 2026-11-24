@@ -1,5 +1,6 @@
 #include <catch_amalgamated.hpp>
 
+#include "ui/keyboard_frame.hpp"
 #include "ui/widget_tree.hpp"
 
 #include <algorithm>
@@ -3401,4 +3402,31 @@ TEST_CASE("A frame hidden since the last layout runs no OnUpdate", "[widget][onu
         tree.get(panel)->shown = true;
         CHECK(tree.runsOnUpdate(driver));
     }
+}
+
+// enableKeyboard alone took every key: with a death dialog up, whose template
+// has it and no script, ENTER opened no chat and no binding ran.
+TEST_CASE("A key goes to the topmost frame that has a script for it", "[widget][keyboard]") {
+    WidgetTree tree;
+    const uint32_t under = tree.create(WidgetKind::Frame, 0, "Under");
+    const uint32_t popup = tree.create(WidgetKind::Frame, 0, "Popup");
+    for (const uint32_t id : {under, popup}) {
+        tree.get(id)->keyboardEnabled = true;
+        tree.setWidth(id, 100.0f);
+        tree.setHeight(id, 100.0f);
+        tree.addPoint(id, Anchor{});
+    }
+    tree.layout(kScreenW, kScreenH);
+    tree.get(popup)->effLevel = tree.get(under)->effLevel + 5;
+    const auto anyOf = [](std::vector<uint32_t> ids) {
+        return [ids](uint32_t id) { return std::find(ids.begin(), ids.end(), id) != ids.end(); };
+    };
+    CHECK(topKeyboardFrame(tree, anyOf({})) == 0);
+    CHECK(topKeyboardFrame(tree, anyOf({under})) == under);
+    CHECK(topKeyboardFrame(tree, anyOf({under, popup})) == popup);
+    // Hidden since the last layout, it is out of it.
+    tree.get(popup)->shown = false;
+    CHECK(topKeyboardFrame(tree, anyOf({under, popup})) == under);
+    tree.get(under)->keyboardEnabled = false;
+    CHECK(topKeyboardFrame(tree, anyOf({under, popup})) == 0);
 }

@@ -383,8 +383,11 @@ private:
     /// only symptom was a method quietly answering as though unimplemented.
     void bootstrap(const char* code);
 
-    /// The frame a typed key belongs to - see dispatchFrameKey.
-    [[nodiscard]] const ui::Widget* topKeyboardFrame() const;
+    /// The frame a typed key belongs to: the topmost with one of these scripts
+    /// (ui::topKeyboardFrame) - see dispatchFrameKey. 0 for none.
+    [[nodiscard]] uint32_t topKeyboardFrame(const char* script, const char* orScript = nullptr);
+    /// The frame that took each key now down (0x004943c0, CSimpleTop +0x80).
+    std::unordered_map<int, uint32_t> frameKeysHeld_;
     /// Runs a binding command's script. False when it has none, or it failed.
     bool runBindingScript(const std::string& command, bool down);
 
