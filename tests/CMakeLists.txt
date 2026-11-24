@@ -3301,6 +3301,13 @@ wowee_add_test(test_env_flag
     SOURCES test_env_flag.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_inventory_change ────────────────────────────────────
+# Which bags a change of the inventory is told of: the one the item is in.
+wowee_add_test(test_inventory_change
+    SOURCES test_inventory_change.cpp
+            ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/game/inventory.cpp)
+
 # ── test_inventory_count ─────────────────────────────────────
 # How many of an item the bags hold. Counted in five places with two rules:
 # the Lua bindings read an occupied slot with a zero stack as one item and the

@@ -2526,14 +2526,11 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
         }
     }
     if (inventoryChanged) {
+        // The bags whose slots show something else, and the one the item
+        // itself is in (0x00707f50).
         owner_.rebuildOnlineInventory();
-        // One per bag: the interface redraws only the bag whose id matches
-        // the event's argument.
-        for (int bag = 0; bag <= 4; ++bag) {
-            pendingEvents_.emit("BAG_UPDATE", {std::to_string(bag)});
-        }
-        LOG_WARNING("BAG_UPDATE fired for bags 0-4 (inventory fields changed)");
-        pendingEvents_.emit("UNIT_INVENTORY_CHANGED", {"player"});
+        if (auto* inventory = owner_.getInventoryHandler(); isItemInInventory && inventory)
+            inventory->announceItemChanged(block.guid);
         // An item on the action bar shows how many are left, and nothing in
         // FrameXML recomputes that from a bag change: ActionButton_UpdateCount
         // runs only from ActionButton_Update, which BAG_UPDATE does not reach.

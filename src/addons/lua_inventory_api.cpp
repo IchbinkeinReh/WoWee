@@ -608,12 +608,16 @@ static int lua_GetMerchantItemInfo(lua_State* L) {
     if (index > static_cast<int>(items.size())) { return luaReturnNil(L); }
     const auto& vi = items[index - 1];
     const auto* info = gh->getItemInfo(vi.itemId);
-    std::string name = info ? info->name : ("Item #" + std::to_string(vi.itemId));
-    lua_pushstring(L, name.c_str());                    // name
+    // No name before the item is known (0x00584e10); the picture is the list's
+    // own (its display id, 0x0070a910).
+    if (info) lua_pushstring(L, info->name.c_str());    // name
+    else {
+        if (auto* inv = gh->getInventoryHandler()) inv->askMerchantItem(vi.itemId);
+        lua_pushnil(L);
+    }
     // texture
-    std::string iconPath;
-    if (info && info->displayInfoId != 0)
-        iconPath = gh->getItemIconPath(info->displayInfoId);
+    const uint32_t display = vi.displayInfoId != 0 ? vi.displayInfoId : info ? info->displayInfoId : 0u;
+    const std::string iconPath = display != 0 ? gh->getItemIconPath(display) : std::string();
     if (!iconPath.empty()) lua_pushstring(L, iconPath.c_str());
     else lua_pushnil(L);
     lua_pushnumber(L, vi.buyPrice);                     // price (copper)

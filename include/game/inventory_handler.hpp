@@ -5,6 +5,7 @@
 #include "game/opcode_table.hpp"
 #include "game/item_text.hpp"      // ItemLinkInstance - what a trade row's link carries
 #include "game/inventory.hpp"
+#include "game/inventory_change.hpp"
 #include "game/handler_types.hpp"
 #include "network/packet.hpp"
 #include <array>
@@ -14,6 +15,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -59,6 +61,13 @@ public:
     /// id redraws nothing at all. That is why an item dragged to a new slot
     /// stayed drawn in its old one until the bag was closed and reopened.
     void fireBagUpdates();
+    /// A change of the item itself that its slot does not show - an
+    /// enchantment, its flags: told as 0x00707f50 does, for the bag it is in.
+    void announceItemChanged(uint64_t itemGuid);
+    /// A vendor's row asked for an item not known yet (0x00584680): asked of
+    /// the server, and counted until it is answered. MERCHANT_UPDATE goes out
+    /// with the last of them (0x005844c0), not with each.
+    void askMerchantItem(uint32_t itemId);
     /// SMSG_ITEM_PUSH_RESULT's tutorials (0x00523900), once the item's
     /// template is known.
     void triggerItemPushTutorials(uint64_t receiver, const ItemQueryResponseData& info, uint8_t bagSlot,
@@ -887,6 +896,11 @@ public:
     /// ERR_WRONG_BAG_TYPE_SUBCLASS (0x006d6720); empty for none.
     std::string wrongBagFamilyName(uint8_t slot) const;
 private:
+    /// The inventory as the interface was last told of it (fireBagUpdates).
+    Inventory announcedInventory_;
+    void announceInventoryChange(const InventoryChange& change);
+    std::set<uint32_t> merchantWaits_;
+    void merchantItemAnswered(uint32_t itemId);
     /// What the currency items the player holds summed to at the last
     /// CURRENCY_DISPLAY_UPDATE fireBagUpdates raised (~0: none raised yet).
     uint64_t currencySignature_ = ~uint64_t{0};

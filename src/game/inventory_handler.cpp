@@ -1882,9 +1882,21 @@ void InventoryHandler::openVendor(uint64_t npcGuid) {
     owner_.getSocket()->send(packet);
 }
 
+void InventoryHandler::askMerchantItem(uint32_t itemId) {
+    if (itemId == 0 || owner_.getItemInfo(itemId)) return;
+    merchantWaits_.insert(itemId);
+    owner_.ensureItemInfo(itemId);
+}
+
+void InventoryHandler::merchantItemAnswered(uint32_t itemId) {
+    if (merchantWaits_.erase(itemId) == 0 || !merchantWaits_.empty() || !vendorWindowOpen_) return;
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MERCHANT_UPDATE", {});
+}
+
 void InventoryHandler::closeVendor() {
     bool wasOpen = vendorWindowOpen_;
     vendorWindowOpen_ = false;
+    merchantWaits_.clear();
     currentVendorItems_ = ListInventoryData{};
     // Keep buybackItems_ and pendingSellToBuyback_: buyback slots live on the
     // player server-side (wire slots 74-85) and persist across vendor windows,
@@ -3371,24 +3383,27 @@ void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQue
 void InventoryHandler::fireBagUpdates() {
     auto& fire = owner_.addonEventCallbackRef();
     if (!fire) return;
-    // Every bag, because the callers that reach here know the inventory changed
-    // without always knowing which bag it was, and an interface that redraws a
-    // bag it did not need to is cheaper than one that never redraws at all.
-    //
-    // Every bag means the seven bank bags as well. The interface numbers them
-    // straight after the four worn ones - NUM_BAG_SLOTS + 1 upward - and each
-    // bank bag's frame redraws from BAG_UPDATE carrying its own number, exactly
-    // as a worn bag's does. Stopping at four left them out, so an item moved
-    // into or out of a purchased bank bag sat on screen where it had been until
-    // the bank was closed and reopened. The bank's own twenty-eight slots are
-    // not here: they are player fields rather than a container, and they are
-    // told through PLAYERBANKSLOTS_CHANGED.
-    constexpr int kLastWornBag = game::Inventory::NUM_BAG_SLOTS;          // 1..4
-    const int kLastBankBag = kLastWornBag + game::slots::bankBagCount();  // 5..11, or 5..10
-    for (int bag = 0; bag <= kLastBankBag; ++bag) fire("BAG_UPDATE", {std::to_string(bag)});
-    // The character sheet redraws from this one rather than from BAG_UPDATE, so
-    // both go out together - equipping something changes a bag and a slot.
-    fire("UNIT_INVENTORY_CHANGED", {"player"});
+    // What differs from what was told last, as the client tells the bag an
+    // item is in (inventory_change.hpp): the callers that reach here know the
+    // inventory changed without knowing where. The bank's own twenty-eight
+    // slots are not here: they are told through PLAYERBANKSLOTS_CHANGED.
+    const InventoryChange change = inventoryChange(announcedInventory_, owner_.inventoryRef());
+    if (!change.any()) return;
+    announcedInventory_ = owner_.inventoryRef();
+    announceInventoryChange(change);
+}
+
+void InventoryHandler::announceItemChanged(uint64_t itemGuid) {
+    const InventoryChange change = placeOfItem(owner_.inventoryRef(), itemGuid);
+    if (change.any()) announceInventoryChange(change);
+}
+
+void InventoryHandler::announceInventoryChange(const InventoryChange& change) {
+    auto& fire = owner_.addonEventCallbackRef();
+    if (!fire) return;
+    for (const int bag : change.bagNumbers()) fire("BAG_UPDATE", {std::to_string(bag)});
+    // The character sheet redraws from this one rather than from BAG_UPDATE.
+    if (change.worn) fire("UNIT_INVENTORY_CHANGED", {"player"});
     // ...and the token counters beside the bags, which no bag event reaches:
     // MainMenuBar registers BAG_UPDATE but its branch for it only handles the
     // keyring, and the branch that calls TokenFrame_Update and
@@ -3426,22 +3441,6 @@ void InventoryHandler::fireBagUpdates() {
     // It also releases the row list, whose canMake comes from the same bag
     // counts and is otherwise held between redraws.
     if (owner_.isCraftingWindowOpen()) fire("TRADE_SKILL_UPDATE", {});
-    // The first few only: enough to tell "the event never goes out" from "it
-    // goes out and the interface ignores it", without a line every time the
-    // inventory is rebuilt.
-    // Rate-limited rather than counted: the first few are the inventory being
-    // loaded at startup, and capping the count spent them all there - leaving
-    // nothing to say for the drag that prompted the question.
-    static double lastSaid = 0.0;
-    // ...and an end to it. The rate limit keeps the startup burst from
-    // spending the count, and the budget keeps a session of looting from
-    // writing this every two seconds until the player logs out.
-    static core::LogBudget bagUpdateBudget(8, "BAG_UPDATE + UNIT_INVENTORY_CHANGED");
-    const double now = core::appTimeSeconds();
-    if (now - lastSaid > 2.0 && bagUpdateBudget.take()) {
-        lastSaid = now;
-        LOG_WARNING("BAG_UPDATE + UNIT_INVENTORY_CHANGED fired");
-    }
 }
 
 /// Read and write a model slot by the wire's numbering.
@@ -3695,6 +3694,7 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
     // it is open with that vendor already - and only then is the list taken.
     owner_.setInteractionObject(data.vendorGuid);
     currentVendorItems_ = std::move(data);
+    merchantWaits_.clear();
 
     // Detect repair capability from NPC flags (covers direct vendors without gossip).
     // UNIT_NPC_FLAG_REPAIR = 0x1000.
@@ -3796,10 +3796,6 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
             glm::vec3 pos(entity->getX(), entity->getY(), entity->getZ());
             owner_.npcVendorCallbackRef()(currentVendorItems_.vendorGuid, pos);
         }
-    }
-
-    for (const auto& item : currentVendorItems_.items) {
-        owner_.queryItemInfo(item.itemId, 0);
     }
 }
 
@@ -6476,6 +6472,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             owner_.pendingItemQueriesRef().erase(rawEntry);
             owner_.combatLogFeed().itemAnswered(rawEntry, {}, false);
             owner_.onItemAnsweredForWaits(rawEntry, false);
+            merchantItemAnswered(rawEntry);
         }
         LOG_WARNING("handleItemQueryResponse: parse failed, size=", packet.getSize());
         return;
@@ -6486,9 +6483,12 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
     // The item cache's waits, run once this answer has been taken in -
     // whichever way the handler leaves.
     struct AnswerWaits {
-        GameHandler& gh; uint32_t entry; bool found;
-        ~AnswerWaits() { gh.onItemAnsweredForWaits(entry, found); }
-    } answerWaits{owner_, data.entry, data.valid};
+        InventoryHandler& self; uint32_t entry; bool found;
+        ~AnswerWaits() {
+            self.owner_.onItemAnsweredForWaits(entry, found);
+            self.merchantItemAnswered(entry);
+        }
+    } answerWaits{*this, data.entry, data.valid};
     LOG_DEBUG("handleItemQueryResponse: RECV entry=", data.entry, " name='", data.name,
               "' displayInfoId=", data.displayInfoId,
               " class=", data.itemClass, " subClass=", data.subClass,
@@ -6646,18 +6646,6 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             }
             if (listWants(auctionBidderResults_)) {
                 owner_.addonEventCallbackRef()("AUCTION_BIDDER_LIST_UPDATE", {});
-            }
-        }
-
-        // The vendor list, which arrives the same way: SMSG_LIST_INVENTORY
-        // gives an item id and a price per row and nothing a player can read.
-        // Same shape, same cause, same gate - the window has to be open and a
-        // row has to be waiting on this entry.
-        if (vendorWindowOpen_ && owner_.addonEventCallbackRef()) {
-            for (const auto& v : currentVendorItems_.items) {
-                if (v.itemId != data.entry) continue;
-                owner_.addonEventCallbackRef()("MERCHANT_UPDATE", {});
-                break;
             }
         }
 
