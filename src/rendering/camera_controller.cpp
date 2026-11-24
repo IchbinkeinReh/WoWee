@@ -20,6 +20,7 @@
 #include "core/thread_pool.hpp"
 #include <imgui.h>
 #include "rendering/terrain_manager.hpp"
+#include "rendering/collision_ray.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/collision_facets.hpp"
 #include "rendering/collision_sweep.hpp"
@@ -147,9 +148,16 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // allowed and not yet flying takes to the air once there is no ground
     // within half a yard under its feet (0x00714b60's ray from a yard over
     // them to a yard under, 1.5 or more) - the landing's test turned round.
+    const auto groundGap = [this](const glm::vec3& feet) {
+        std::vector<collision::Facet> faces;
+        constexpr float kAside = 0.1f;
+        gatherPortFacets(feet - glm::vec3(kAside, kAside, 1.0f), feet + glm::vec3(kAside, kAside, 1.0f), faces);
+        return collision::groundUnderFeet(feet, faces);
+    };
     if (flyingActive_ && !flightAirborne_ && m.falling && !m.swimming && !swimming) {
-        const auto down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), 0.5f);
-        if (down.facet < 0) {
+        // A ray, not the body: down a steep slope the body met it beside the
+        // feet all the way and fell.
+        if (groundGap(m.pos) >= collision::kFlightGround) {
             flightAirborne_ = true;
             portFlyMs_ = 0;
         }
@@ -200,9 +208,9 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             // yard under its feet (0x00714b60's ray from a yard over them to
             // a yard under), two seconds or more after it took off.
             portFlyMs_ += ms;
-            const auto down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), 0.5f);
-            grounded = down.facet >= 0 && portFlyMs_ > 2000;
-            if (grounded) lastGroundZ = m.pos.z - down.allowed;
+            const float gap = groundGap(m.pos);
+            grounded = gap < collision::kFlightGround && portFlyMs_ > 2000;
+            if (grounded) lastGroundZ = m.pos.z + 1.0f - gap;
         }
         if (!m.flying) portFlyMs_ = 0;
     } else if (hoverActive_ && !m.falling) {
@@ -725,6 +733,8 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         // once a flying mount is under the player.
         if (flyingActive_ && !flightAirborne_ && f.spaceHeld) {
             flightAirborne_ = true;
+            // The landing's two seconds are from here (0x00718860).
+            portFlyMs_ = 0;
             LOG_WARNING("Flight: took off");
         }
 

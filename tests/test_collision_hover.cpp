@@ -4,6 +4,7 @@
 
 #include <catch_amalgamated.hpp>
 
+#include "rendering/collision_ray.hpp"
 #include "rendering/collision_hover.hpp"
 
 #include <vector>
@@ -88,4 +89,30 @@ TEST_CASE("a hoverer slides along a wall", "[collision_hover]") {
     CHECK(m.pos.x <= 1.0f - kPlayerHalfWidth + 0.01f);
     CHECK(m.pos.y > 1.5f);
     CHECK(m.pos.z == Approx(1.0f).margin(0.01f));
+}
+
+// Down a steep slope a rider allowed to fly fell: the body met it beside the feet.
+TEST_CASE("the ground under the feet is a ray's (0x00714b60)", "[collision_hover]") {
+    using namespace wowee::rendering::collision;
+    const auto face = [](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c) {
+        return makeFacet(windingNormal(a, b, c), a, b, c);
+    };
+    // A slope of sixty degrees through the origin, rising along x.
+    const float rise = std::tan(glm::radians(60.0f));
+    const std::vector<Facet> slope{face({-5, -5, -5 * rise}, {5, -5, 5 * rise}, {5, 5, 5 * rise}),
+                                   face({-5, -5, -5 * rise}, {5, 5, 5 * rise}, {-5, 5, -5 * rise})};
+    CHECK(groundUnderFeet({0.0f, 0.0f, 0.0f}, slope) == Catch::Approx(1.0f));
+    // The body, a third of a yard wide, rests on it here.
+    CHECK(groundUnderFeet({0.0f, 0.0f, 0.6f}, slope) == Catch::Approx(1.6f));
+    CHECK(groundUnderFeet({0.0f, 0.0f, 0.6f}, slope) >= kFlightGround);
+    CHECK(groundUnderFeet({0.0f, 0.0f, 0.4f}, slope) < kFlightGround);
+    CHECK(groundUnderFeet({0.0f, 0.0f, 5.0f}, slope) == Catch::Approx(2.0f));
+    // Not a floor beside them.
+    const std::vector<Facet> beside{face({2, -5, 0}, {5, -5, 0}, {5, 5, 0})};
+    CHECK(groundUnderFeet({0.0f, 0.0f, 0.2f}, beside) == Catch::Approx(2.0f));
+    CHECK(groundUnderFeet({4.5f, -1.0f, 0.2f}, beside) == Catch::Approx(1.2f));
+    // Not a ceiling's underside, nor what is more than a yard over the feet.
+    const std::vector<Facet> ceiling{face({-5, -5, 0.5f}, {5, 5, 0.5f}, {5, -5, 0.5f})};
+    CHECK(groundUnderFeet({0.0f, 0.0f, 0.0f}, ceiling) == Catch::Approx(2.0f));
+    CHECK(groundUnderFeet({0.0f, 0.0f, -2.0f}, slope) == Catch::Approx(2.0f));
 }
