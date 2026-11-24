@@ -2092,6 +2092,8 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
         gpuModel.visualBoundRadius =
             glm::length(gpuModel.visualBoundMax - gpuModel.visualBoundMin) * 0.5f;
     }
+    gpuModel.sphere = modelSphere(model.hasVertexBox, model.vertexBoxMin, model.vertexBoxMax, model.vertexRadius,
+                                  gpuModel.visualBoundMin, gpuModel.visualBoundMax, gpuModel.visualBoundRadius);
     const auto classification = classifyM2Model(
         model.name, model.boundMin, model.boundMax,
         model.vertices.size(), model.particleEmitters.size());
@@ -3357,9 +3359,10 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
         // model each frame. Every second or fourth frame past 45 and 90 yards
         // made creature locomotion visibly step.
         if (viewProjection && !inst.isSceneModel && distSq > kAlwaysPoseRadiusSq) {
-            const float radius = (inst.cachedModel ? std::max(inst.cachedModel->data.boundRadius, 1.0f) : 2.0f) *
-                                 std::max(inst.scale, 0.01f);
-            if (!viewFrustum.intersectsSphere(inst.position, radius + kOffscreenMarginYards)) continue;
+            const ModelSphere sphere =
+                inst.cachedModel ? placedSphere(inst.cachedModel->sphere, getModelMatrix(inst), inst.scale, 2.0f)
+                                 : ModelSphere{.centre = inst.position, .radius = 2.0f};
+            if (!viewFrustum.intersectsSphere(sphere.centre, sphere.radius + kOffscreenMarginYards)) continue;
         }
         toUpdate_.push_back(std::ref(inst));
     }
@@ -4359,17 +4362,13 @@ bool CharacterRenderer::isDrawCandidate(const CharacterInstance& instance, const
         // Distance cull: skip if beyond render radius
         if (glm::dot(toInst, toInst) > renderRadiusSq) return false;
 
-        // Compute per-instance bounding radius from model data when available.
-        float cullRadius = kDefaultCharacterCullRadius;
-        auto mIt = models.find(instance.modelId);
-        if (mIt != models.end()) {
-            const float modelR = mIt->second.data.boundRadius;
-            if (modelR > 0.01f)
-                cullRadius = std::max(kDefaultCharacterCullRadius, modelR * std::max(0.001f, instance.scale));
-        }
-
-        // Frustum cull: skip if outside view frustum
-        if (!frustum.intersectsSphere(instance.position, cullRadius)) return false;
+        // Frustum cull: skip if outside view frustum. A giant's head is in
+        // view with its feet, where it stands, far out of it.
+        const ModelSphere sphere =
+            instance.cachedModel ? placedSphere(instance.cachedModel->sphere, getModelMatrix(instance), instance.scale,
+                                                kDefaultCharacterCullRadius)
+                                 : ModelSphere{.centre = instance.position, .radius = kDefaultCharacterCullRadius};
+        if (!frustum.intersectsSphere(sphere.centre, sphere.radius)) return false;
     }
 
     if (!instance.cachedModel) return false;

@@ -3,9 +3,12 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/figure_camera.hpp"
+#include "rendering/frustum.hpp"
+#include "rendering/model_sphere.hpp"
 #include "rendering/portrait_camera.hpp"
 
 #include <vector>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
 
@@ -84,4 +87,39 @@ TEST_CASE("a model without a portrait camera is taken from its stand's bounds", 
     CHECK(cam.eye == glm::vec3(0.5f + 3.0f * 1.7f, 0.0f, 2.0f));
     CHECK(cam.target == glm::vec3(0.5f, 0.0f, 2.0f));
     CHECK(cam.diagonalFov == 1.57f);
+}
+
+// The header's box and radius of NorthrendIceGiant.m2, whose collision box is
+// 2 yards tall.
+TEST_CASE("a giant is there where its head is", "[model_sphere]") {
+    namespace r = wowee::rendering;
+    const glm::vec3 boxMin(-13.548f, -10.905f, -12.041f), boxMax(12.998f, 11.016f, 21.350f);
+    const r::ModelSphere giant = r::modelSphere(true, boxMin, boxMax, 24.178f, glm::vec3(-4), glm::vec3(5), 8.0f);
+    CHECK(giant.radius == 24.178f);
+    CHECK(giant.centre.z == Catch::Approx(4.6545f).margin(0.001));
+    // A model whose file has none of it: what is drawn.
+    const r::ModelSphere drawn = r::modelSphere(false, {}, {}, 0.0f, glm::vec3(-4, -2, 0), glm::vec3(4, 2, 8), 6.0f);
+    CHECK(drawn.centre == glm::vec3(0, 0, 4));
+    CHECK(drawn.radius == 6.0f);
+    CHECK(r::modelSphere(true, boxMin, boxMax, 0.0f, glm::vec3(-4, -2, 0), glm::vec3(4, 2, 8), 6.0f).radius == 6.0f);
+
+    glm::mat4 stands = glm::translate(glm::mat4(1.0f), glm::vec3(100, 0, 0));
+    stands = glm::rotate(stands, glm::radians(90.0f), glm::vec3(0, 0, 1));
+    stands = glm::scale(stands, glm::vec3(0.5f));
+    const r::ModelSphere tall{.centre = {2, 0, 10}, .radius = 3};
+    const r::ModelSphere there = r::placedSphere(tall, stands, 0.5f, 1.0f);
+    CHECK(there.centre.x == Catch::Approx(100).margin(0.001));
+    CHECK(there.centre.y == Catch::Approx(1).margin(0.001));
+    CHECK(there.centre.z == Catch::Approx(5).margin(0.001));
+    CHECK(there.radius == 1.5f);
+    CHECK(r::placedSphere(tall, stands, 0.5f, 4.0f).radius == 4.0f);
+
+    // Its portrait's view, which has the head and not the feet in it.
+    r::Frustum view;
+    const glm::mat4 proj = glm::perspectiveRH_ZO(0.4032f / std::sqrt(2.0f), 1.0f, 0.1f, 1000.0f);
+    view.extractFromMatrix(proj * glm::lookAt(glm::vec3(12.537f, 8.047f, 10.057f), glm::vec3(2.222f, 0.422f, 11.796f),
+                                              glm::vec3(0, 0, 1)));
+    CHECK_FALSE(view.intersectsSphere(glm::vec3(0.0f), 4.0f));
+    const r::ModelSphere portrait = r::placedSphere(giant, glm::mat4(1.0f), 1.0f, 4.0f);
+    CHECK(view.intersectsSphere(portrait.centre, portrait.radius));
 }

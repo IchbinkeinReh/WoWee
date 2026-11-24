@@ -4152,7 +4152,8 @@ wowee_add_test(test_minimap_indoor
 # ── test_portrait_camera ─────────────────────────────────────
 # A portrait's framing and still drawing (rendering/portrait_camera.hpp).
 wowee_add_test(test_portrait_camera
-    SOURCES test_portrait_camera.cpp)
+    SOURCES test_portrait_camera.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/frustum.cpp)
 
 # ── test_quest_marker_facing ─────────────────────────────────
 # The questgiver's mark turned to the camera (rendering/quest_giver_markers.hpp).

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/model_sphere.hpp"
 #include "rendering/memory_report.hpp"
 
 #include "rendering/vk_shader.hpp"
@@ -659,6 +660,8 @@ private:
         glm::vec3 visualBoundMin{0.0f};
         glm::vec3 visualBoundMax{0.0f};
         float visualBoundRadius = 0.0f;
+        /// What it is culled by (model_sphere.hpp).
+        ModelSphere sphere;
 
         // Textures loaded from BLP (indexed by texture array position)
         std::vector<VkTexture*> textureIds;

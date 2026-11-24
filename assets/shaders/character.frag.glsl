@@ -337,7 +337,9 @@ void main() {
         if (alphaTest == 2 && texColor.a * opacity < 1.0 / 255.0) {
             discard;
         }
-        if (alphaTest == 1 && hairMaterial != 0) {
+        // What is not blended covers: its texture's alpha is a mask of
+        // something else, and would let what is behind the picture through.
+        if (alphaTest != 2) {
             texColor.a = 1.0;
         }
         outColor = colourBlendOutput(texColor.rgb, texColor.rgb, texColor.a * opacity);
