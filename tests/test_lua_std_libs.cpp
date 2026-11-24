@@ -10,6 +10,7 @@ extern "C" {
 }
 
 #include "addons/lua_std_libs.hpp"
+#include "addons/missing_api_rule.hpp"
 
 #include <algorithm>
 #include <set>
@@ -130,4 +131,15 @@ TEST_CASE("the string methods and the old loops are set from the libraries", "[l
     CHECK(s.run("return ('  a '):trim(), string.split(',', 'a,b')") == "a a b");
     CHECK(s.run("return string.join('-', 'a', 'b'), ('aXb'):replace('X', 'y')") == "a-b ayb");
     CHECK(s.run("return foreach == table.foreach, foreachi == table.foreachi") == "true true");
+}
+
+TEST_CASE("a global nobody set is nil in the 3.3.5 interface", "[lua]") {
+    using wowee::addons::missingApiStandsIn;
+    CHECK_FALSE(missingApiStandsIn("", "", false));
+    CHECK_FALSE(missingApiStandsIn("", "1", false));
+    // Asked for, it is there; and an older expansion's interface has it.
+    CHECK(missingApiStandsIn("1", "", false));
+    CHECK(missingApiStandsIn("", "", true));
+    CHECK_FALSE(missingApiStandsIn("", "0", true));
+    CHECK_FALSE(missingApiStandsIn("0", "", true));
 }

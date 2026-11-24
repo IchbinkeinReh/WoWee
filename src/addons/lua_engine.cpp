@@ -1,5 +1,6 @@
 #include "addons/lua_engine.hpp"
 #include "addons/lua_std_libs.hpp"
+#include "addons/missing_api_rule.hpp"
 #include "addons/binding_lookup.hpp"
 #include "addons/modifier_keys.hpp"
 #include "core/test_frame_shot.hpp"
@@ -8,6 +9,7 @@
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
+#include "game/game_utils.hpp"
 #include "game/glyph_tooltip.hpp"
 #include "game/expansion_profile.hpp"
 #include "ui/keyboard_frame.hpp"
@@ -16561,33 +16563,18 @@ void LuaEngine::callFrameScriptColor(uint32_t wid, const char* script,
 }
 
 void LuaEngine::installMissingApiFallback() {
-    // Off unless asked for. With it on, every unknown global answers, so code
+    // Off unless asked for, and but for the interfaces of the older expansions
+    // (missing_api_rule.hpp). With it on, every unknown global answers, so code
     // that checks whether a function exists before using it - which addons do
     // constantly - sees everything as present and takes branches meant for a
-    // newer client. That is the right trade for bringing FrameXML up, where the
-    // point is to get past a missing name and find out what actually matters,
-    // and the wrong one for everyday addon loading.
-    auto isSet = [](const char* name) {
+    // newer client. That is the right trade for bringing an interface up, where
+    // the point is to get past a missing name and find out what actually
+    // matters, and the wrong one for everything after.
+    const auto setting = [](const char* name) -> std::string_view {
         const char* v = std::getenv(name);
-        return v && *v && std::string(v) != "0";
+        return v ? v : "";
     };
-    // Loading FrameXML implies it. FrameXML cannot get through its own load
-    // without the fallback, so two separate switches where one is useless
-    // without the other is only a way to be handed a wall of failures for
-    // setting the obvious one.
-    //
-    // Said explicitly, though, the setting wins either way. The fallback is not
-    // free - it makes every feature check read as present - and now that the
-    // real gaps are closing it is worth being able to ask what it is still
-    // buying, which needs a way to turn it off with FrameXML on.
-    const char* explicitSetting = std::getenv("WOWEE_LUA_API_FALLBACK");
-    const char* loadSetting = std::getenv("WOWEE_LOAD_FRAMEXML");
-    const bool frameXmlOn = loadSetting ? (std::string(loadSetting) != "0") : true;
-    const bool enabled = (explicitSetting && *explicitSetting)
-                             ? std::string(explicitSetting) != "0"
-                             : frameXmlOn;
-    (void)isSet;
-    if (!enabled) return;
+    if (!missingApiStandsIn(setting("WOWEE_LUA_API_FALLBACK"), setting("WOWEE_LOAD_FRAMEXML"), game::isPreWotlk())) return;
 
     lua_pushcfunction(L_, lua_RecordMissingApi);
     lua_setglobal(L_, "__WoweeRecordMissingApi");

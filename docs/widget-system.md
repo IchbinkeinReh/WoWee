@@ -47,8 +47,9 @@ emitter's output is a string a test can read without a Lua state.
 
 ## Environment switches
 
-Both are on by default. FrameXML loads unless `WOWEE_LOAD_FRAMEXML=0`, and the
-fallback follows it unless `WOWEE_LUA_API_FALLBACK` is set either way.
+FrameXML loads unless `WOWEE_LOAD_FRAMEXML=0`. The fallback is off in the 3.3.5
+interface, which needs none, and on with those of the older expansions, unless
+`WOWEE_LUA_API_FALLBACK` is set either way.
 
 ### `WOWEE_LUA_API_FALLBACK`
 
@@ -71,8 +72,8 @@ load-on-demand panels: FrameXML tests all three for presence.
 ### `WOWEE_LOAD_FRAMEXML`
 
 Loads the original interface from `Interface/FrameXML/FrameXML.toc`, in the
-order that manifest states, before any addon. It turns the fallback above on by
-itself, because FrameXML cannot get through its own load without one.
+order that manifest states, before any addon. It gets through its own load, and
+its windows open, without the fallback above.
 
 Every file that fails is listed together at the end of the load, with the reason
 carried up from whichever include or referenced script actually broke, and each
@@ -105,13 +106,11 @@ reports 49 names FrameXML and Blizzard's own addons call that this client does
 not define, out of 5,296 they call in total and 3,797 they define themselves.
 That ranking counts static call sites, though, and most are never reached.
 
-The measurement that matters is a run with the fallback off:
-
-    WOWEE_LUA_API_FALLBACK=0 ./wowee
-
-With the fallback on, a missing name answers and the gap is invisible. With it
-off, the log names every one FrameXML actually reached - which is how the list
-that mattered was found, rather than by guessing from the ranking.
+The measurement that matters is a run without the fallback, as the 3.3.5
+interface runs: the log names every missing one FrameXML actually reached -
+which is how the list that mattered was found, rather than by guessing from the
+ranking. With it on (`WOWEE_LUA_API_FALLBACK=1 ./wowee`), a missing name answers
+and is listed as the client quits.
 
 Two tools check the front half of the pipeline, and neither has been the
 constraint for some time: `tools/framexml_compile_check.cpp` asks Lua whether
@@ -215,8 +214,8 @@ unset.
   drawn, 2 every named widget whether drawn or not, 3 outlines them on screen,
   4 fills them solid, 5 also draws ImGui's own font atlas through the same call
   - which separates "AddImage does not work here" from "these textures are bad".
-- `WOWEE_LUA_API_FALLBACK=0` turns off the stub that answers unknown globals,
-  so the log names every API FrameXML actually reached.
+- `WOWEE_LUA_API_FALLBACK=1` turns on the stub that answers unknown globals and
+  lists them as the client quits; without it they are nil, as in the client.
 - `WOWEE_WIDGET_TRACE=1` makes the missing-API report name the object that
   reached each no-op method as well as the method. It builds a closure on every
   such lookup, so it is for a session run to read that report.
