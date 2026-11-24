@@ -3447,10 +3447,9 @@ void Application::endWorldSettle(const char* why) {
 
 void Application::shutdownPortraits() {
     unitPortrait_.shutdown(renderer.get());
-    targetPortrait_.shutdown(renderer.get());
-    petPortrait_.shutdown(renderer.get());
-    focusPortrait_.shutdown(renderer.get());
-    npcPortrait_.shutdown(renderer.get());
+    for (auto& face : faceViews_)
+        if (face) face->shutdown(renderer.get());
+    facePictures_.assign(facePictures_.size(), std::string());
     inspectModel_.shutdown(renderer.get());
     dressUpModel_.shutdown(renderer.get());
     auctionDressUpModel_.shutdown(renderer.get());
@@ -3458,7 +3457,6 @@ void Application::shutdownPortraits() {
     petModel_.shutdown(renderer.get());
     stableModel_.shutdown(renderer.get());
     companionModel_.shutdown(renderer.get());
-    for (auto& p : partyPortraits_) p.shutdown(renderer.get());
     paperdollModel_.shutdown(renderer.get());
 }
 
@@ -7691,176 +7689,157 @@ void Application::render() {
                     }
                 }
 
-                // The target's face and the pet's, on the same terms as the
-                // player's, and only while a frame is asking for one - each is
-                // a whole offscreen model pass, and running it for a portrait
-                // nothing draws costs a render and a composite every frame to
-                // produce a picture nobody sees.
+                // The other faces, on the same terms as the player's: one to
+                // each unit a texture was given, and only while one of its
+                // textures is on screen. Each is a whole offscreen model pass.
                 //
                 // A player from their appearance and anything else from its
                 // display id. Both are read from what the world already has:
                 // a creature is a model path, and a player's skin, face and
                 // hair come off the update fields their spawn was built from.
-                struct UnitFace {
-                    const char* unit;
-                    ui::UnitPortrait* portrait;
-                    uint64_t guid;
-                    /// A second name for the same unit, drawn from the same
-                    /// view. "npc" and "questnpc" are one face under two names,
-                    /// and giving each its own row would render it twice a
-                    /// frame to produce the same picture.
-                    const char* alias = nullptr;
-                };
-                // Party guids in the interface's order, which excludes the
-                // player - party1 is the first other member.
-                std::array<uint64_t, 4> partyGuids{};
-                {
-                    int found = 0;
-                    for (const auto& m : gameHandler->getPartyData().members) {
-                        if (m.guid == gameHandler->getPlayerGuid()) continue;
-                        if (found >= 4) break;
-                        partyGuids[static_cast<size_t>(found++)] = m.guid;
+                std::vector<std::string> faces;
+                for (auto& claim : widgets.portraitClaims()) {
+                    if (!ui::portrait_claims::unitOf(claim)) continue;
+                    const auto& ids = widgets.portraitsFor(claim);
+                    if (std::any_of(ids.begin(), ids.end(), [&widgets](uint32_t id) {
+                            const ui::Widget* w = widgets.get(id);
+                            return w && w->visible;
+                        })) {
+                        faces.push_back(std::move(claim));
+                    } else {
+                        // Its view may draw another by the time it is back.
+                        for (uint32_t id : ids)
+                            if (ui::Widget* w = widgets.get(id)) w->externalTexture = 0;
                     }
                 }
-                const uint64_t npcGuid = gameHandler->getInteractNpcGuid();
-                // NOLINTBEGIN(modernize-use-designated-initializers) - a table
-                // whose columns are its field names, with the struct in view
-                // directly above.
-                const UnitFace kFaces[] = {
-                    // "npc" and "questnpc" are the same unit under two names -
-                    // whoever the open window belongs to. The interface uses
-                    // the second only in questframe and means nothing different
-                    // by it.
-                    {"npc", &npcPortrait_, npcGuid, "questnpc"},
-                    {"target", &targetPortrait_,   gameHandler->getTargetGuid()},
-                    {"pet",    &petPortrait_,      gameHandler->getPetGuid()},
-                    {"focus",  &focusPortrait_,    gameHandler->getFocusGuid()},
-                    // SetLootPortrait's (0x00588f00): the loot's own unit.
-                    {"loot",   &lootPortrait_,
-                     gameHandler->isLootWindowOpen() ? gameHandler->getCurrentLoot().lootGuid : 0},
-                    {"party1", &partyPortraits_[0], partyGuids[0]},
-                    {"party2", &partyPortraits_[1], partyGuids[1]},
-                    {"party3", &partyPortraits_[2], partyGuids[2]},
-                    {"party4", &partyPortraits_[3], partyGuids[3]},
-                };
-                // NOLINTEND(modernize-use-designated-initializers)
-                for (const UnitFace& face : kFaces) {
-                    static const std::vector<uint32_t> kNoAlias;
-                    const auto& claimed = widgets.portraitsFor(face.unit);
-                    const auto& alsoClaimed = face.alias
-                        ? widgets.portraitsFor(face.alias) : kNoAlias;
-                    if (claimed.empty() && alsoClaimed.empty()) continue;
+                facePool_.assign(faces);
+                faceViews_.resize(facePool_.views());
+                facePictures_.resize(facePool_.views());
+                for (const std::string& claim : faces) {
+                    const auto guid = ui::portrait_claims::unitOf(claim);
+                    const auto view = facePool_.viewOf(claim);
+                    if (!guid || !view) continue;
+                    if (!faceViews_[*view]) faceViews_[*view] = std::make_unique<ui::UnitPortrait>();
+                    struct UnitFace {
+                        ui::UnitPortrait* portrait;
+                        uint64_t guid;
+                    };
+                    const UnitFace face{faceViews_[*view].get(), *guid};
+                    const auto& claimed = widgets.portraitsFor(claim);
+                    const bool there = gameHandler->getEntityManager().getEntity(face.guid) != nullptr;
 
-                    bool built = false;
-                    face.portrait->setFraming(ui::UnitPortrait::Framing::Face);
-                    face.portrait->setAnimated(animatedPortraits);
-                    // Sized for the circle it is drawn into rather than for the
-                    // paperdoll - the shape as much as the scale, since a
-                    // portrait frame is square and the old target was not.
-                    sizeFor(*face.portrait,
-                            widgets.get(claimed.empty() ? alsoClaimed.front()
-                                                        : claimed.front()));
+                    // Draws it, and answers whether the picture is that unit's.
+                    const auto draw = [&]() -> bool {
+                        bool built = false;
+                        face.portrait->setFraming(ui::UnitPortrait::Framing::Face);
+                        face.portrait->setAnimated(animatedPortraits);
+                        // Sized for the circle it is drawn into rather than for the
+                        // paperdoll, and no smaller than another circle the view
+                        // may draw later wants: the client's are 64 (0x00619580).
+                        face.portrait->setTargetSize(128, 128);
+                        sizeFor(*face.portrait, widgets.get(claimed.front()));
 
-                    // A player first, because a player has a display id too and
-                    // it is the wrong thing to draw them from: it names the
-                    // naked race model, with none of their skin, face or hair.
-                    // The world already reads all three off their update
-                    // fields, and now so does this.
-                    uint8_t race = 0, gender = 0, facial = 0;
-                    uint32_t appearance = 0;
-                    if (face.guid != 0 &&
-                        gameHandler->getPlayerAppearance(face.guid, race, gender,
-                                                         appearance, facial)) {
-                        // What they are visibly wearing, where it is known.
-                        // Empty means the item queries have not come back, and
-                        // the portrait leaves the model dressed as it was
-                        // rather than stripping it.
-                        // A real player composites their own skin; no bake.
-                        face.portrait->setBakedSkin("");
-                        // Their class: a death knight's eyes glow (0x004ed900).
-                        face.portrait->setUnitClass(gameHandler->lookupPlayerClass(face.guid));
-                        // Their guild tabard's design (0x006db510).
-                        face.portrait->setGuildEmblem(
-                            gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(face.guid)));
-                        std::vector<game::EquipmentItem> worn;
-                        std::array<uint32_t, 19> displayIds{};
-                        std::array<uint8_t, 19> invTypes{};
-                        if (gameHandler->getOtherPlayerEquipment(face.guid, displayIds,
-                                                                 invTypes)) {
-                            for (size_t slot = 0; slot < displayIds.size(); ++slot) {
-                                if (displayIds[slot] == 0) continue;
-                                worn.push_back({.displayModel = displayIds[slot],
-                                                .inventoryType = invTypes[slot],
-                                                .enchantment = 0u});
+                        // A player first, because a player has a display id too and
+                        // it is the wrong thing to draw them from: it names the
+                        // naked race model, with none of their skin, face or hair.
+                        // The world already reads all three off their update
+                        // fields, and now so does this.
+                        uint8_t race = 0, gender = 0, facial = 0;
+                        uint32_t appearance = 0;
+                        if (face.guid != 0 &&
+                            gameHandler->getPlayerAppearance(face.guid, race, gender,
+                                                             appearance, facial)) {
+                            // What they are visibly wearing, where it is known.
+                            // Empty means the item queries have not come back, and
+                            // the portrait leaves the model dressed as it was
+                            // rather than stripping it.
+                            // A real player composites their own skin; no bake.
+                            face.portrait->setBakedSkin("");
+                            // Their class: a death knight's eyes glow (0x004ed900).
+                            face.portrait->setUnitClass(gameHandler->lookupPlayerClass(face.guid));
+                            // Their guild tabard's design (0x006db510).
+                            face.portrait->setGuildEmblem(
+                                gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(face.guid)));
+                            std::vector<game::EquipmentItem> worn;
+                            std::array<uint32_t, 19> displayIds{};
+                            std::array<uint8_t, 19> invTypes{};
+                            if (gameHandler->getOtherPlayerEquipment(face.guid, displayIds,
+                                                                     invTypes)) {
+                                for (size_t slot = 0; slot < displayIds.size(); ++slot) {
+                                    if (displayIds[slot] == 0) continue;
+                                    worn.push_back({.displayModel = displayIds[slot],
+                                                    .inventoryType = invTypes[slot],
+                                                    .enchantment = 0u});
+                                }
                             }
-                        }
-                        // Whether a model actually loaded, not whether one was
-                        // asked for. A failed load leaves the view holding the
-                        // last unit's face, and a frame that has just changed
-                        // unit would go on showing it.
-                        built = face.portrait->updatePlayer(
-                            race, gender, appearance, facial, worn,
-                            assetManager.get(), renderer.get(), io.DeltaTime);
-                    } else {
-                        uint32_t displayId = 0;
-                        if (face.guid != 0) {
-                            // A unit, not any entity: the display id lives on
-                            // Unit and on GameObject, and a targeted game
-                            // object has no portrait to put one in.
-                            if (game::Unit* u = gameHandler->getUnitByGuid(face.guid)) {
-                                displayId = u->getDisplayId();
-                            }
-                        }
-                        // A humanoid NPC - a guard, a questgiver, an innkeeper -
-                        // is drawn the way a character is, from a race and the
-                        // same skin, face and hair choices a player has.
-                        // CreatureDisplayInfo leaves the skin fields empty for
-                        // these, so loading one as a creature gives a shape with
-                        // nothing on it. Tried first for that reason.
-                        uint8_t nRace = 0, nSex = 0, nFacial = 0;
-                        uint32_t nBytes = 0;
-                        if (displayId != 0 && entitySpawner_ &&
-                            entitySpawner_->getHumanoidAppearance(displayId, nRace, nSex,
-                                                                  nBytes, nFacial)) {
-                            // Dressed, from the same row. A questgiver's helm
-                            // and shoulders are most of what a portrait framed
-                            // on the head can show of them.
-                            std::vector<game::EquipmentItem> npcWorn;
-                            for (const auto& [did, invType] :
-                                     entitySpawner_->getHumanoidEquipment(displayId)) {
-                                npcWorn.push_back({.displayModel = did, .inventoryType = invType,
-                                                   .enchantment = 0u});
-                            }
-                            // The bake, where there is one - nearly always.
-                            // It is the whole appearance already composited,
-                            // armour included, which is the half this client
-                            // cannot build for an NPC. The equipment above
-                            // still matters: it decides the geosets, and the
-                            // bake only paints what they draw.
-                            face.portrait->setBakedSkin(
-                                entitySpawner_->getHumanoidBakePath(displayId));
-                            face.portrait->setGuildEmblem(std::nullopt);
-                            face.portrait->setUnitClass(0);
+                            // Whether a model actually loaded, not whether one was
+                            // asked for. A failed load leaves the view holding the
+                            // last unit's face, and a frame that has just changed
+                            // unit would go on showing it.
                             built = face.portrait->updatePlayer(
-                                nRace, nSex, nBytes, nFacial, npcWorn,
+                                race, gender, appearance, facial, worn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);
+                        } else {
+                            uint32_t displayId = 0;
+                            if (face.guid != 0) {
+                                // A unit, not any entity: the display id lives on
+                                // Unit and on GameObject, and a targeted game
+                                // object has no portrait to put one in.
+                                if (game::Unit* u = gameHandler->getUnitByGuid(face.guid)) {
+                                    displayId = u->getDisplayId();
+                                }
+                            }
+                            // A humanoid NPC - a guard, a questgiver, an innkeeper -
+                            // is drawn the way a character is, from a race and the
+                            // same skin, face and hair choices a player has.
+                            // CreatureDisplayInfo leaves the skin fields empty for
+                            // these, so loading one as a creature gives a shape with
+                            // nothing on it. Tried first for that reason.
+                            uint8_t nRace = 0, nSex = 0, nFacial = 0;
+                            uint32_t nBytes = 0;
+                            if (displayId != 0 && entitySpawner_ &&
+                                entitySpawner_->getHumanoidAppearance(displayId, nRace, nSex,
+                                                                      nBytes, nFacial)) {
+                                // Dressed, from the same row. A questgiver's helm
+                                // and shoulders are most of what a portrait framed
+                                // on the head can show of them.
+                                std::vector<game::EquipmentItem> npcWorn;
+                                for (const auto& [did, invType] :
+                                         entitySpawner_->getHumanoidEquipment(displayId)) {
+                                    npcWorn.push_back({.displayModel = did, .inventoryType = invType,
+                                                       .enchantment = 0u});
+                                }
+                                // The bake, where there is one - nearly always.
+                                // It is the whole appearance already composited,
+                                // armour included, which is the half this client
+                                // cannot build for an NPC. The equipment above
+                                // still matters: it decides the geosets, and the
+                                // bake only paints what they draw.
+                                face.portrait->setBakedSkin(
+                                    entitySpawner_->getHumanoidBakePath(displayId));
+                                face.portrait->setGuildEmblem(std::nullopt);
+                                face.portrait->setUnitClass(0);
+                                built = face.portrait->updatePlayer(
+                                    nRace, nSex, nBytes, nFacial, npcWorn,
+                                    assetManager.get(), renderer.get(), io.DeltaTime);
+                            }
+                            std::string modelPath;
+                            if (!built && displayId != 0 && entitySpawner_) {
+                                modelPath = entitySpawner_->getModelPathForDisplayId(displayId);
+                            }
+                            if (!modelPath.empty()) {
+                                built = face.portrait->updateCreature(
+                                    modelPath,
+                                    entitySpawner_->getCreatureSkinPaths(displayId, modelPath),
+                                    assetManager.get(), renderer.get(), io.DeltaTime);
+                            }
                         }
-                        std::string modelPath;
-                        if (!built && displayId != 0 && entitySpawner_) {
-                            modelPath = entitySpawner_->getModelPathForDisplayId(displayId);
-                        }
-                        if (!modelPath.empty()) {
-                            built = face.portrait->updateCreature(
-                                modelPath,
-                                entitySpawner_->getCreatureSkinPaths(displayId, modelPath),
-                                assetManager.get(), renderer.get(), io.DeltaTime);
-                        }
-                    }
-                    const uint64_t drawn = built ? face.portrait->textureId() : 0;
+                        return built;
+                    };
+                    // A unit gone out of sight keeps the picture taken of it.
+                    if (there) facePictures_[*view] = draw() ? claim : std::string();
+                    const uint64_t drawn = facePictures_[*view] == claim ? face.portrait->textureId() : 0;
                     for (uint32_t id : claimed) {
-                        if (ui::Widget* w = widgets.get(id)) w->externalTexture = drawn;
-                    }
-                    for (uint32_t id : alsoClaimed) {
                         if (ui::Widget* w = widgets.get(id)) w->externalTexture = drawn;
                     }
                 }

@@ -385,17 +385,10 @@ public:
     /**
      * Get entity manager (for accessing entities in view)
      */
-    /// Whoever this client is dealing with right now - the unit behind an open
-    /// window. The interface calls it "npc" and "questnpc" and puts its face in
-    /// the panel's portrait: the gossip frame, the quest frame, the merchant,
-    /// the flight master, the trainer, the trade partner.
-    ///
-    /// Answered from the windows that are open rather than from a guid tracked
-    /// on the side. Every one of these already knows who it is talking to, and
-    /// a separate record of the same fact is one more thing to leave stale.
-    /// The order is the order a window would cover another: a trade or a
-    /// merchant is more specific than the gossip that opened it.
-    uint64_t getInteractNpcGuid() const;
+    /// The quest window's own unit, the interface's "questnpc" (0x006081b0):
+    /// the player sharing the quest (0x00c0d650), else the giver (0x00c0d648).
+    /// "npc" is getInteractionObject().
+    uint64_t questNpcGuid() const;
     /// The innkeeper whose bind confirmation is open, and the trainer whose
     /// talent-wipe confirmation is. Both dialogs close themselves when the
     /// player walks out of range, which is the only thing these answer.
@@ -3706,6 +3699,8 @@ public:
     /// Let go once no window is open with it any more.
     void setInteractionObject(uint64_t guid, std::optional<go_interaction::Window> opening = std::nullopt);
     uint64_t getInteractionObject() const { return interactionObject_; }
+    /// Once a frame: lets it go when its window has closed.
+    void settleInteractionObject();
     /// A quest window sets it too (0x0058c5a0), but not over a game object
     /// that already is it.
     void setQuestInteractionObject(uint64_t guid, go_interaction::Window opening = go_interaction::Window::Quest);

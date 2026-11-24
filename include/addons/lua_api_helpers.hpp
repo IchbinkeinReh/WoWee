@@ -714,16 +714,10 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
         const auto p = gh->vehicleRoster().passenger(player);
         return p ? p->vehicleGuid : 0;
     }
-    // The NPC whose window is open, which is how FrameXML titles three of
-    // them: GossipFrameNpcNameText and BankFrameTitleText both read
-    // UnitName("npc"), and QuestFrameNpcNameText reads UnitName("questnpc").
-    // Neither token resolved, so all three came up blank - and the
-    // UnitExists() beside each is what decides whether the portrait model is
-    // set at all.
-    //
-    // Whichever window is actually open answers (0x00bd07a8, which each sets
-    // as it opens, 0x0051fce0) - and nobody does with none open.
-    if (uid == "npc" || uid == "questnpc") return gh->getInteractNpcGuid();
+    // Whoever the open window belongs to (0x00bd07a8, which every window's
+    // opening sets: 0x0051fce0), and the quest window's own (0x006081b0).
+    if (uid == "npc") return gh->getInteractionObject();
+    if (uid == "questnpc") return gh->questNpcGuid();
     // Compound unit IDs: targettarget, focustarget, pettarget, mouseovertarget
     if (uid == "targettarget")    return getEntityTargetGuid(gh, gh->getTargetGuid());
     if (uid == "focustarget")     return getEntityTargetGuid(gh, gh->getFocusGuid());

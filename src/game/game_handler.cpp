@@ -903,12 +903,7 @@ void GameHandler::update(float deltaTime) {
         if (charDeleteCallback_) charDeleteCallback_(deleted, msg);
     }
 
-    // The interaction object is let go once its window has closed
-    // (0x00518d50 from each window's close, which a creature says farewell
-    // to).
-    if (interactionObject_ != 0 && !interactionWindowOpen(interactionObject_)) {
-        releaseInteractionObject(/*farewell=*/true);
-    }
+    settleInteractionObject();
 
     // No check here that the target is still in view: a unit leaving lets
     // itself go (0x00524350, CombatHandler::unitLeavesView), and one of the
@@ -4147,6 +4142,15 @@ std::array<uint64_t, go_interaction::kWindowCount> GameHandler::interactionWindo
     set(Window::AuctionHouse, isAuctionHouseOpen(), getAuctioneerGuid());
     set(Window::Stable, isStableWindowOpen(), getStableMasterGuid());
     return with;
+}
+
+void GameHandler::settleInteractionObject() {
+    // The interaction object is let go once its window has closed
+    // (0x00518d50 from each window's close, which a creature says farewell
+    // to).
+    if (interactionObject_ != 0 && !interactionWindowOpen(interactionObject_)) {
+        releaseInteractionObject(/*farewell=*/true);
+    }
 }
 
 bool GameHandler::interactionWindowOpen(uint64_t guid) {

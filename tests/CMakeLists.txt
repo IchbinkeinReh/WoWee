@@ -4185,6 +4185,12 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# ── test_portrait_claims ─────────────────────────────────────
+# Whose face a portrait texture shows (0x006113e0), and the views that draw
+# them. Header-only.
+wowee_add_test(test_portrait_claims
+    SOURCES test_portrait_claims.cpp)
+
 # ── test_equipment_sets ──────────────────────────────────────
 # The equipment manager's own sets (0x005ade50, 0x005ada20). Header-only.
 wowee_add_test(test_equipment_sets

@@ -7561,6 +7561,9 @@ int lua_Texture_SetTexture(lua_State* L) {
     if (!w) return 0;
     w->emblemMask = false;  // a texture of its own replaces a TabardModel's emblem
     w->portraitDisc = false;  // and an ordinary one replaces a round portrait
+    if (w->isUnitPortrait) {  // or a unit's face
+        if (auto* tree = getWidgetTree(L)) tree->setPortraitUnit(w->id, std::string());
+    }
     if (lua_isnumber(L, 2)) {
         // The image alone (0x004b9550): the vertex colour stays as it is.
         w->solidColor = true;
@@ -14340,42 +14343,6 @@ void LuaEngine::registerCoreAPI() {
         // (kNoticeFallbackLua).
         "table.wipe = wipe\n"
         "function SetDesaturation() end\n"
-        // A class circle rather than the 3D portrait the real client renders,
-        // which needs a model rendered to a texture. The coordinates come from
-        // FrameXML's own CLASS_ICON_TCOORDS, read when called so it does not
-        // matter that this is defined before that table exists.
-        // Captured before being replaced, and called rather than discarded.
-        //
-        // This bootstrap runs after the bindings are registered, so defining
-        // the name here won and the binding underneath it never ran again.
-        // That binding is not a stub: it marks the frame as one to fill with
-        // the player's rendered face, which application.cpp does every frame
-        // from widgets.playerPortraits(). The list stayed empty, so the five
-        // frames in FrameXML that name the player wore a class circle while
-        // the code that would have given them a face had nothing to iterate.
-        //
-        // PlayerPortrait itself was never affected - that one is found by name
-        // and filled directly - which is why the circle looked deliberate
-        // everywhere it appeared.
-        "local markPortrait = SetPortraitTexture\n"
-        "function SetPortraitTexture(texture, unit)\n"
-        "    if type(texture) ~= 'table' then return end\n"
-        "    if markPortrait then markPortrait(texture, unit) end\n"
-        // The player's face is a real render and is assigned every frame, so
-        // stamping a class circle over it would only fight that assignment.
-        "    if unit and strlower(unit) == 'player' then return end\n"
-        "    local _, class = UnitClass(unit or 'player')\n"
-        "    local coords = class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]\n"
-        "    if coords then\n"
-        "        texture:SetTexture('Interface\\\\TargetingFrame\\\\UI-Classes-Circles')\n"
-        "        texture:SetTexCoord(coords[1], coords[2], coords[3], coords[4])\n"
-        // Nothing at all when the class is not known yet, rather than the
-        // placeholder. This runs at world entry now that events reach frames,
-        // which is before the player's entity resolves - so it answered
-        // "Unknown", stamped the placeholder shield over the portrait, and
-        // never ran again to correct it.
-        "    end\n"
-        "end\n"
         "function UIParent_OnEvent() end\n"
         // Filling the screen, not sitting at a point on it. The widget tree's
         // root is already the screen, and a frame created with no anchors falls

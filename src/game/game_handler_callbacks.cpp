@@ -2539,43 +2539,15 @@ bool GameHandler::applyInventoryFields(const FlatFieldMap& fields, bool initial)
     return inventoryHandler_ ? inventoryHandler_->applyInventoryFields(fields, initial) : false;
 }
 
-uint64_t GameHandler::getInteractNpcGuid() const {
-    if (inventoryHandler_) {
-        if (const uint64_t peer = inventoryHandler_->getTradePeerGuid()) return peer;
-        if (const uint64_t vendor = getVendorGuid()) return vendor;
-        if (inventoryHandler_->isBankOpen()) return inventoryHandler_->getBankerGuid();
-        if (inventoryHandler_->isAuctionHouseOpen()) return inventoryHandler_->getAuctioneerGuid();
+uint64_t GameHandler::questNpcGuid() const {
+    if (!questHandler_) return 0;
+    if (questHandler_->isQuestOfferRewardOpen()) return questHandler_->getQuestOfferReward().npcGuid;
+    if (questHandler_->isQuestRequestItemsOpen()) return questHandler_->getQuestRequestItems().npcGuid;
+    if (questHandler_->isQuestDetailsOpen()) {
+        const auto& details = questHandler_->getQuestDetails();
+        return details.informUnit != 0 ? details.informUnit : details.npcGuid;
     }
-    // The trainer, which the list above this function has always named and
-    // this function never asked.
-    //
-    // Nothing else answers for it either: SMSG_TRAINER_LIST closes the gossip
-    // that led to the trainer, so by the time the panel is up the gossip row
-    // below returns 0 as well. With no unit to render, the portrait kept the
-    // stand-in SetPortraitTexture stamps when it cannot get a face - which is
-    // a class circle, and a tailoring trainer was drawn as a warrior's sword.
-    //
-    // Above the gossip for the same reason the vendor is: a trainer is a window
-    // opened from a gossip and covering it.
-    if (isTrainerWindowOpen()) {
-        if (const uint64_t trainer = getTrainerSpells().trainerGuid) return trainer;
-    }
-    // From the movement handler, which owns both. GameHandler kept members of
-    // the same two names that the decomposition left behind unwritten, so this
-    // read false forever and the flight master had no portrait in the taxi
-    // frame.
-    if (movementHandler_ && movementHandler_->isTaxiWindowOpen()) {
-        if (const uint64_t taxiNpc = movementHandler_->getTaxiNpcGuid()) return taxiNpc;
-    }
-    if (socialHandler_ && socialHandler_->hasPetitionShowlist()) return socialHandler_->getPetitionNpcGuid();
-    if (tabardVendorGuid_ != 0) return tabardVendorGuid_;
-    if (stableWindowOpen_) return stableMasterGuid_;
-    if (questHandler_) {
-        if (questHandler_->isQuestDetailsOpen()) return questHandler_->getQuestDetails().npcGuid;
-        if (questHandler_->isQuestRequestItemsOpen()) return questHandler_->getQuestRequestItems().npcGuid;
-        if (questHandler_->isQuestOfferRewardOpen()) return questHandler_->getQuestOfferReward().npcGuid;
-        if (const uint64_t gossip = questHandler_->getCurrentGossip().npcGuid) return gossip;
-    }
+    if (questHandler_->isQuestGreetingOpen()) return questHandler_->getCurrentGossip().npcGuid;
     return 0;
 }
 
@@ -4606,7 +4578,9 @@ std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
     }
     if (guid == targetGuid) out.emplace_back("target");
     if (guid == focusGuid) out.emplace_back("focus");
-    if (guid == getInteractNpcGuid()) out.emplace_back("npc");
+    // Whoever the open window belongs to, and the quest window's own.
+    if (guid == getInteractionObject()) out.emplace_back("npc");
+    if (guid == questNpcGuid()) out.emplace_back("questnpc");
     return out;
 }
 

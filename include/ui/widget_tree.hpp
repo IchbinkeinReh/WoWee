@@ -374,7 +374,7 @@ struct Widget {
     float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     bool solidColor = false;    ///< SetTexture(r,g,b[,a]) rather than a file.
     float solid[4] = {1.0f, 1.0f, 1.0f, 1.0f};  ///< the image of one, which the colour tints
-    /// A unit's face, claimed by SetPortraitTexture.
+    /// A unit's face, claimed by SetPortraitTexture (ui/portrait_claims.hpp).
     ///
     /// The interface's own portraits are circular images with transparent
     /// corners, and the art around them is drawn to cover a circle. A live
@@ -1393,6 +1393,8 @@ public:
     [[nodiscard]] const std::set<uint32_t>& modelFileFrames() const { return modelFileFrames_; }
     /// Every texture claimed for this unit, or an empty list.
     [[nodiscard]] const std::vector<uint32_t>& portraitsFor(const std::string& unit) const;
+    /// Every claim there is a texture for.
+    [[nodiscard]] std::vector<std::string> portraitClaims() const;
 
     /// What the mouse is doing, so state art can be chosen. The engine owns
     /// this - it is the only thing that knows what is under the cursor and

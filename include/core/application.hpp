@@ -4,6 +4,7 @@
 #include "game/opcodes.hpp"
 #include <chrono>
 #include "core/gamepad.hpp"
+#include "ui/portrait_claims.hpp"
 #include "ui/unit_portrait.hpp"
 
 namespace wowee::rendering { class ModelFrameView; }
@@ -444,15 +445,12 @@ private:
     /// interface owns it. WorldMapDetailFrame rather than WorldMapFrame: the
     /// first is the map area, the second is the panel around it.
     uint32_t worldMapWidgetId_ = 0;
-    /// The target's face, on the same terms as the player's. A third offscreen
-    /// pass because all three are on screen at once and each holds a different
-    /// model - the alternative is reloading a model per frame, which is what a
-    /// shared view would amount to.
-    ui::UnitPortrait targetPortrait_;
-    /// And the focus, which is deliberate enough to be worth its own pass.
-    ui::UnitPortrait focusPortrait_;
-    /// SetLootPortrait's face: whoever the open loot is from (0x00588f00).
-    ui::UnitPortrait lootPortrait_;
+    /// The faces SetPortraitTexture gave a texture, other than the player's
+    /// own: a view to each unit claimed (ui/portrait_claims.hpp), drawn once
+    /// and kept, and which claim each view's picture is of.
+    ui::portrait_claims::Pool facePool_;
+    std::vector<std::unique_ptr<ui::UnitPortrait>> faceViews_;
+    std::vector<std::string> facePictures_;
     /// The dressing room's figure, and its frame. The player plus whatever
     /// has been tried on, which is the paperdoll with an overlay.
     ui::UnitPortrait dressUpModel_;
@@ -483,17 +481,6 @@ private:
     /// else's paperdoll.
     ui::UnitPortrait inspectModel_;
     uint32_t inspectModelWidgetId_ = 0;
-    /// And whoever this client is dealing with - the face in the gossip,
-    /// quest, merchant, flight master and trade panels. One view for all of
-    /// them because only one such window is open at a time.
-    ui::UnitPortrait npcPortrait_;
-    /// And the four party members. Affordable now that a portrait is sized for
-    /// the circle it is drawn into rather than for the paperdoll: at 160x200 a
-    /// party face is a sixteenth of the pixels the paperdoll's target is, and
-    /// four of them together cost a quarter of one of it.
-    std::array<ui::UnitPortrait, 4> partyPortraits_;
-    /// And the pet's, which is always a creature and so always has one.
-    ui::UnitPortrait petPortrait_;
 
     /// The paperdoll's model view, and the frame it is drawn into. A second
     /// offscreen pass rather than a shared one: the portrait shows the face
