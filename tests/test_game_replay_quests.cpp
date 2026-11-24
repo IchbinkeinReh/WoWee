@@ -289,3 +289,14 @@ TEST_CASE("a quest known already is whole when it is taken again", "[replay][que
     CHECK(wowee::game::questObjectiveCount(*q) == 1);
     CHECK_FALSE(q->complete);
 }
+
+TEST_CASE("a quest the server takes out of its slot is watched no more", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 9387}, {slotField(1, 0, 5), 9340}}));
+    s.handler().setQuestTracked(9387, true);
+    s.handler().setQuestTracked(9340, true);
+    REQUIRE(s.handler().getQuestWatchOrder().size() == 2);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 0}}));
+    CHECK(s.handler().getQuestWatchOrder() == std::vector<uint32_t>{9340});
+}

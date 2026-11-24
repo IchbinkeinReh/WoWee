@@ -1977,6 +1977,11 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
                 // Its title and objectives, for one the log has not had.
                 if (before.count(q.questId) == 0) requestQuestQuery(q.questId, false);
             }
+            // One that has left the log is watched no more (0x005e6940 goes
+            // through the watch list with 0x005dea60).
+            for (uint32_t id : before) {
+                if (after.count(id) == 0) owner_.setQuestTracked(id, false);
+            }
             for (uint32_t id : after) {
                 if (before.count(id) == 0) announceQuestLogChanged(id);
             }
