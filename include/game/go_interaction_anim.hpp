@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -15,13 +16,57 @@ namespace wowee::game::go_interaction {
 /// A game object's animation states, CGGameObject_C's index into the table
 /// at 0x00ada938: Spawn, Closed, Open, Opened, Close, Destroy, Destroyed,
 /// Rebuild, then Custom0..3 and Despawn (AnimationData 145..157).
+inline constexpr uint8_t kStateClosed = 1;
 inline constexpr uint8_t kStateOpen = 2;
 inline constexpr uint8_t kStateOpened = 3;
 inline constexpr uint8_t kStateClose = 4;
 inline constexpr uint8_t kStateDestroy = 5;
+inline constexpr uint8_t kStateDestroyed = 6;
 inline constexpr uint8_t kStateRebuild = 7;
 inline constexpr uint8_t kStateCustom0 = 8;
 inline constexpr uint8_t kStateDespawn = 12;
+
+/// 0x00ada938: the states' animations (AnimationData).
+inline constexpr uint32_t kStateAnimation[13] = {145, 147, 148, 149, 146, 150, 151, 152, 153, 154, 155, 156, 157};
+
+/// 0x0070d7e0: the state a transition leads to as its sequence ends - none for the rest.
+[[nodiscard]] constexpr std::optional<uint8_t> stateAfter(uint8_t state) {
+    switch (state) {
+        case kStateOpen: return kStateOpened;
+        case kStateClose:
+        case kStateRebuild: return kStateClosed;
+        case kStateDestroy: return kStateDestroyed;
+        default: return std::nullopt;
+    }
+}
+
+/// 0x0070d1e0: the animation a state asks its model for - the state's own (0x00ada938), or
+/// the one that stands in for it on a model without, `held` on its first frame where it is
+/// asked for at speed 0. `has` answers for the model's sequences (0x00825ee0).
+struct StateAnimation {
+    uint32_t anim = 0;
+    bool held = false;
+};
+template <class Has>
+[[nodiscard]] StateAnimation stateAnimation(uint8_t state, const Has& has) {
+    constexpr uint32_t kStand = 0, kClose = 146, kClosed = 147, kOpen = 148, kOpened = 149, kDestroy = 150,
+                       kDestroyed = 151;
+    const uint32_t anim = state < std::size(kStateAnimation) ? kStateAnimation[state] : kStand;
+    if (has(anim)) return {anim};
+    switch (anim) {
+        case kClose: return {has(kOpen) ? kClose : kClosed};
+        case kClosed:
+            if (has(kClose)) return {kClosed};
+            return has(kOpen) ? StateAnimation{kOpen, true} : StateAnimation{kStand};
+        case kOpen:
+            if (has(kClose)) return {kOpen};
+            return {has(kDestroy) ? kDestroy : kOpened};
+        case kOpened:
+            if (has(kOpen)) return {kOpened};
+            return has(kClose) ? StateAnimation{kClose, true} : StateAnimation{kDestroyed};
+        default: return {anim};
+    }
+}
 
 /// What the type's handler does with its animation.
 enum class Action : uint8_t {
