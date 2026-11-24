@@ -2029,6 +2029,12 @@ public:
     using StandStateCallback = std::function<void(uint8_t standState)>;
     void setStandStateCallback(StandStateCallback cb) { standStateCallback_ = std::move(cb); }
 
+    /// The character is out of the world and the connection stays
+    /// (0x00406510(1, 1, 0)): what goes with the world goes, and the
+    /// character list is asked for again. False, with nothing done, where
+    /// there is no world or no connection to keep.
+    bool leaveWorldForCharacterList();
+
     // Logout complete callback - fired when SMSG_LOGOUT_COMPLETE says the character
     // is out of the world. exiting is true for /quit and /exit (leave the game),
     // false for /logout and /camp (back to character select).
@@ -3683,6 +3689,9 @@ public:
     /// player comes into the world in (0x00528010, event 0x98).
     [[nodiscard]] bool playerFights() const;
     void sayFightOnEntry();
+    /// What goes with the world on a way out of it to the character selection
+    /// or the login screen (0x00406510); the socket is the caller's.
+    void leaveWorldState(bool wasInWorld, const char* why);
     /// The object the player has a window open with (0xbd07a8), set as one
     /// opens (0x0051fce0): the one before is let go first (0x00518d50 ->
     /// 0x00512e60, a game object's CLOSE, and the window open with it

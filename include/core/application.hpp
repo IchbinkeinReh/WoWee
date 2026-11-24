@@ -166,6 +166,9 @@ public:
 
     // Logout to login screen
     void logoutToLogin();
+    /// Out of the world to the character selection, the connection to the
+    /// world kept (0x006b2180 -> 0x00406510(1, 1, 0) -> "charselect").
+    void logoutToCharacterSelection();
 
     // Render bounds lookup (for click targeting / selection) - delegates to EntitySpawner
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
@@ -251,8 +254,10 @@ private:
     /// jump began.
     [[nodiscard]] bool playerFallsFar() const;
     void render();
-    void performLogoutToLogin();
-    void processDeferredLogoutToLogin();
+    enum class LeaveTo { Login, CharacterSelection };
+    void leaveWorld(LeaveTo to);
+    void performLeaveWorld(LeaveTo to);
+    void processDeferredLeaveWorld();
 
     /// The camera controller's and the spell visual system's hooks into the
     /// session, and the game handler's into the world - what entering the
@@ -530,7 +535,7 @@ private:
     AppState state = AppState::AUTHENTICATION;
     bool running = false;
     bool renderingFrame_ = false;
-    bool logoutToLoginPending_ = false;
+    std::optional<LeaveTo> leaveWorldPending_;
     /// lastUploadFailure's serial as last seen between frames.
     uint64_t uploadFailureSeen_ = 0;
     /// Why the player is back at the login screen, when it was not their idea.

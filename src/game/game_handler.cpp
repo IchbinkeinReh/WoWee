@@ -190,9 +190,30 @@ void GameHandler::disconnect() {
         socket->disconnect();
         socket.reset();
     }
+    leaveWorldState(wasInWorld, "disconnect");
+    // Warden state is WardenHandler's; this used to clear a second copy of it
+    // that nothing ever filled.
+    if (wardenHandler_) wardenHandler_->reset();
+    pendingIncomingPackets_.clear();
+    setState(WorldState::DISCONNECTED);
+    LOG_INFO("Disconnected from world server");
+}
+
+bool GameHandler::leaveWorldForCharacterList() {
+    if (!socket || !socket->isConnected() || state != WorldState::IN_WORLD) return false;
+    leaveWorldState(/*wasInWorld=*/true, "logout");
+    setState(WorldState::READY);
+    // What the character selection asks for as it shows (CharacterSelect_OnShow:
+    // ReadyForAccountDataTimes 0x004de390, GetCharacterListUpdate).
+    sendReadyForAccountDataTimes();
+    requestCharacterList();
+    return true;
+}
+
+void GameHandler::leaveWorldState(bool wasInWorld, const char* why) {
     // Leaving the world (0x00406510 -> 0x00529160 -> 0x00528f00): the trade
     // skill window closes (0x005da5a0), and the rest of what goes with the
-    // world on any way out of it (0x00528c30). Nothing is sent: the
+    // world on any way out of it (0x00528c30). Nothing is sent where the
     // connection is already gone.
     // The combat and chat log files closed and their logging off (0x005072b0).
     if (combatLogFeed_) combatLogFeed_->closeLogFile();
@@ -215,11 +236,7 @@ void GameHandler::disconnect() {
     contacts_.clear();
     transportAttachments_.clear();
     // The session's transports go with it.
-    if (transportManager_) transportManager_->clearTransports("disconnect");
-    // Warden state is WardenHandler's; this used to clear a second copy of it
-    // that nothing ever filled.
-    if (wardenHandler_) wardenHandler_->reset();
-    pendingIncomingPackets_.clear();
+    if (transportManager_) transportManager_->clearTransports(why);
     // Fire despawn callbacks so the renderer releases M2/character model resources.
     for (const auto& [guid, entity] : entityController_->getEntityManager().getEntities()) {
         if (guid == playerGuid) continue;
@@ -246,8 +263,6 @@ void GameHandler::disconnect() {
     petActionsOnBonusBar_ = false;
     overrideBarActive_ = false;
     overrideSpellsId_ = 0;
-    setState(WorldState::DISCONNECTED);
-    LOG_INFO("Disconnected from world server");
 }
 
 void GameHandler::resetDbcCaches() {

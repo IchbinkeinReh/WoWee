@@ -875,3 +875,45 @@ TEST_CASE("a worldport is acknowledged once the world is in", "[replay][playtest
     }
     s.handler().setWorldEntryCallback({});
 }
+
+// SMSG_LOGOUT_COMPLETE takes the character out of the world and leaves the
+// connection standing (0x006b2180 -> 0x00406510(1, 1, 0) -> "charselect"),
+// where the client dropped it and asked for the password again.
+TEST_CASE("a logout keeps the connection for the character selection", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kGiver, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 10}}));
+    REQUIRE(s.handler().getEntityManager().getEntity(kGiver));
+    int completes = 0;
+    bool left = false;
+    s.handler().setLogoutCompleteCallback([&](bool exiting) {
+        ++completes;
+        CHECK_FALSE(exiting);
+        left = s.handler().leaveWorldForCharacterList();
+    });
+    s.setConnected(true);
+    s.receive(wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_LOGOUT_COMPLETE)));
+    REQUIRE(completes == 1);
+    CHECK(left);
+    // The socket is the same one, and what the character selection asks for
+    // went out on it.
+    CHECK(s.handler().isConnected());
+    CHECK(s.sent().of(Opcode::CMSG_READY_FOR_ACCOUNT_DATA_TIMES).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_CHAR_ENUM).size() == 1);
+    CHECK(s.handler().getState() == wowee::game::WorldState::CHAR_LIST_REQUESTED);
+    // The world is gone with the character.
+    CHECK_FALSE(s.handler().getEntityManager().getEntity(kGiver));
+    CHECK_FALSE(s.handler().getEntityManager().getEntity(Session::kPlayerGuid));
+}
+
+// With no connection to keep there is only the login screen (0x004da9d0).
+TEST_CASE("a logout without a connection leaves none", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    CHECK_FALSE(s.handler().leaveWorldForCharacterList());
+    CHECK(s.handler().getState() == wowee::game::WorldState::IN_WORLD);
+    s.setConnected(true);
+    s.handler().disconnect();
+    CHECK_FALSE(s.handler().leaveWorldForCharacterList());
+    CHECK(s.handler().getState() == wowee::game::WorldState::DISCONNECTED);
+}

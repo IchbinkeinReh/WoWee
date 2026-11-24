@@ -3095,7 +3095,7 @@ void Application::run() {
             throw;
         }
 
-        processDeferredLogoutToLogin();
+        processDeferredLeaveWorld();
 
         // An upload that ran out of memory since the last frame: whatever it
         // was for is missing from the world, and more will follow it.
@@ -3669,7 +3669,7 @@ void Application::setState(AppState newState) {
             if (uiManager && assetManager) {
                 uiManager->getCharacterScreen().setAssetManager(assetManager.get());
             }
-            // A backstop. Leaving the world goes through performLogoutToLogin,
+            // A backstop. Leaving the world goes through performLeaveWorld,
             // which takes the interface down there; this catches any other way
             // of arriving here with it still standing, and does nothing when
             // it is already down.
@@ -4378,7 +4378,7 @@ void Application::connectWorldHooks() {
                 if (window) window->setShouldClose(true);
             } else {
                 LOG_INFO("Logout complete - returning to character select");
-                logoutToLogin();
+                logoutToCharacterSelection();
             }
         });
         // The extra action bars as the realm keeps them (PLAYER_FIELD_BYTES
@@ -4563,16 +4563,22 @@ void Application::handleWorldDisconnect() {
     logoutToLogin();
 }
 
-void Application::logoutToLogin() {
+void Application::logoutToLogin() { leaveWorld(LeaveTo::Login); }
+
+void Application::logoutToCharacterSelection() { leaveWorld(LeaveTo::CharacterSelection); }
+
+void Application::leaveWorld(LeaveTo to) {
     if (renderingFrame_) {
-        if (!logoutToLoginPending_) {
+        if (!leaveWorldPending_) {
             LOG_INFO("Logout requested during render; deferring until frame completes");
         }
-        logoutToLoginPending_ = true;
+        // The login screen, once asked for, stays what it is: the connection
+        // is gone, or must go.
+        if (!leaveWorldPending_ || to == LeaveTo::Login) leaveWorldPending_ = to;
         return;
     }
 
-    performLogoutToLogin();
+    performLeaveWorld(to);
 }
 
 bool Application::leaveWorldOutOfMemory(const char* where, const char* what, bool midFrame) {
@@ -4584,7 +4590,7 @@ bool Application::leaveWorldOutOfMemory(const char* where, const char* what, boo
         // thrown away and an empty frame goes in its place, so the next one
         // begins as after any other. The interface's frame is closed too.
         renderingFrame_ = false;
-        logoutToLoginPending_ = false;
+        leaveWorldPending_.reset();
         if (renderer) renderer->abandonFrame();
         if (ImGuiContext* g = ImGui::GetCurrentContext(); g && g->WithinFrameScope) ImGui::EndFrame();
     }
@@ -4592,10 +4598,11 @@ bool Application::leaveWorldOutOfMemory(const char* where, const char* what, boo
     return true;
 }
 
-void Application::processDeferredLogoutToLogin() {
-    if (!logoutToLoginPending_) return;
-    logoutToLoginPending_ = false;
-    performLogoutToLogin();
+void Application::processDeferredLeaveWorld() {
+    if (!leaveWorldPending_) return;
+    const LeaveTo to = *leaveWorldPending_;
+    leaveWorldPending_.reset();
+    performLeaveWorld(to);
 }
 
 void Application::fireInterfaceLeaving() {
@@ -4644,8 +4651,8 @@ void Application::unloadInterface() {
     addonsLoaded_ = false;
 }
 
-void Application::performLogoutToLogin() {
-    LOG_INFO("Logout requested");
+void Application::performLeaveWorld(LeaveTo to) {
+    LOG_INFO("Logout requested, to the ", to == LeaveTo::Login ? "login screen" : "character selection");
     if (cinematicPlayer_) cinematicPlayer_->abandon();
 
     // The interface leaves the world with the character that was wearing it.
@@ -4665,7 +4672,12 @@ void Application::performLogoutToLogin() {
         gameHandler->getTransportManager()->setWMORenderer(nullptr);
     }
 
-    if (gameHandler) {
+    // The connection stays where the server has only let the character out
+    // of the world (0x006b2180); one that is gone meanwhile is the login
+    // screen's (0x004da9d0).
+    if (to == LeaveTo::CharacterSelection && !(gameHandler && gameHandler->leaveWorldForCharacterList()))
+        to = LeaveTo::Login;
+    if (gameHandler && to == LeaveTo::Login) {
         gameHandler->disconnect();
     }
 
@@ -4703,7 +4715,7 @@ void Application::performLogoutToLogin() {
 
     // The session's transports go with it.
     if (gameHandler && gameHandler->getTransportManager())
-        gameHandler->getTransportManager()->clearTransports("logout to the login screen");
+        gameHandler->getTransportManager()->clearTransports("logout");
 
     // --- Reset all EntitySpawner state (mount, creatures, players, GOs, queues, caches) ---
     if (entitySpawner_) entitySpawner_->resetAllState();
@@ -4745,10 +4757,10 @@ void Application::performLogoutToLogin() {
 
     // Clear stale realm/character selection so switching servers starts fresh
     if (uiManager) {
-        uiManager->getRealmScreen().reset();
+        if (to == LeaveTo::Login) uiManager->getRealmScreen().reset();
         uiManager->getCharacterScreen().reset();
     }
-    setState(AppState::AUTHENTICATION);
+    setState(to == LeaveTo::Login ? AppState::AUTHENTICATION : AppState::CHARACTER_SELECTION);
 
     // Said on the screen the player lands on, because there is nowhere to say
     // it on the way out: the world is being torn down as this runs.
@@ -8283,7 +8295,7 @@ void Application::render() {
     stageStatFrames_ += 1;
     reportStageTimes();
     renderingFrame_ = false;
-    processDeferredLogoutToLogin();
+    processDeferredLeaveWorld();
 }
 
 void Application::noteStageTime(const char* stage, float milliseconds) {
