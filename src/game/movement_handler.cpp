@@ -1243,6 +1243,23 @@ void MovementHandler::sanitizeMovementForTaxi() {
 // forceClearTaxiAndMovementState
 // ============================================================
 
+void MovementHandler::dropTaxiFlight() {
+    taxiActivatePending_ = false;
+    taxiActivateTimer_ = 0.0f;
+    taxiClientActive_ = false;
+    taxiClientPath_.clear();
+    taxiClientSegmentArcLengths_.clear();
+    taxiClientIndex_ = 0;
+    taxiClientSegmentProgress_ = 0.0f;
+    taxiServerCompletionPending_ = false;
+    taxiRecoverPending_ = false;
+    taxiStartGrace_ = 0.0f;
+    taxiDestNodeId_ = 0;
+    onTaxiFlight_ = false;
+    if (taxiMountActive_ && owner_.mountCallbackRef()) owner_.mountCallbackRef()(0);
+    taxiMountActive_ = false;
+}
+
 void MovementHandler::forceClearTaxiAndMovementState() {
     taxiActivatePending_ = false;
     taxiActivateTimer_ = 0.0f;
@@ -2652,8 +2669,10 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
 
     glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(serverX, serverY, serverZ));
 
-    // Put somewhere else: a click-to-move is over (0x0072d1b0 -> 0x007272c0).
+    // Put somewhere else: a click-to-move is over (0x0072d1b0 -> 0x007272c0),
+    // and a flight with it - the way flown goes with the spline the move ends.
     owner_.stopClickToMove();
+    if (onTaxiFlight_ || taxiClientActive_) dropTaxiFlight();
 
     // A destination that is the map origin itself, which is a server-side
     // area-trigger misfire rather than anywhere anyone goes.

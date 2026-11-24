@@ -189,6 +189,9 @@ public:
     [[nodiscard]] bool isTaxiMountActive() const { return taxiMountActive_; }
     [[nodiscard]] bool isTaxiActivationPending() const { return taxiActivatePending_; }
     void forceClearTaxiAndMovementState();
+    /// The flight under way is over where it is: the world is left or the
+    /// server has put the player somewhere else.
+    void dropTaxiFlight();
     [[nodiscard]] const std::string& getTaxiDestName() const { return taxiDestName_; }
     [[nodiscard]] const ShowTaxiNodesData& getTaxiData() const { return currentTaxiData_; }
     [[nodiscard]] uint32_t getTaxiCurrentNode() const { return currentTaxiData_.nearestNode; }
