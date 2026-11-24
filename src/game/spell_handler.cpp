@@ -5240,6 +5240,16 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         }
     }
 
+    // What a go says of its caster's casts (0x0080e1b0 -> 0x007fecc0 with
+    // 0xbb): a pending one - a proc, a spell another sets off - nothing at
+    // all, any other UNIT_SPELLCAST_SUCCEEDED, and UNIT_SPELLCAST_STOP with it
+    // only where it is the cast that runs.
+    const bool pendingGo = (data.castFlags & 0x1u) != 0;
+    const bool endsRunningCast = cast_check::goEndsRunningCast(pendingGo, casting_, castIsChannel_,
+                                                               currentCastSpellId_, data.spellId);
+    // Another cast of the player's runs on through it.
+    const bool otherCastRuns = data.casterUnit == owner_.getPlayerGuid() && casting_ && !endsRunningCast;
+
     if (data.casterUnit == owner_.getPlayerGuid()) {
         owner_.loadSpellNameCache();
         spellclass::RestChannelKind restKind = spellclass::RestChannelKind::NONE;
@@ -5308,7 +5318,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
 
         // Instant spell cast animation - if this wasn't a timed cast and isn't a
         // melee ability, play a brief spell cast animation (one-shot)
-        if (!wasInTimedCast && !isMeleeAbility && !rangedWeaponAttack && !restorationLoop &&
+        if (!wasInTimedCast && !otherCastRuns && !isMeleeAbility && !rangedWeaponAttack && !restorationLoop &&
             !owner_.isProfessionSpell(data.spellId)) {
             // Classify instant spell from SPELL_GO packet target info
             SpellCastType goType = SpellCastType::OMNI;
@@ -5325,19 +5335,17 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             }
         }
 
-        casting_ = false;
-        castIsChannel_ = false;
-        currentCastSpellId_ = 0;
-        castTimeRemaining_ = 0.0f;
-        castTimeTotal_ = 0.0f;
+        if (!otherCastRuns) {
+            casting_ = false;
+            castIsChannel_ = false;
+            currentCastSpellId_ = 0;
+            castTimeRemaining_ = 0.0f;
+            castTimeTotal_ = 0.0f;
 
-
-        if (owner_.spellCastAnimCallbackRef() && !rangedWeaponAttack && !restorationLoop) {
-            owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, false, SpellCastType::OMNI);
+            if (owner_.spellCastAnimCallbackRef() && !rangedWeaponAttack && !restorationLoop) {
+                owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, false, SpellCastType::OMNI);
+            }
         }
-
-        if (owner_.addonEventCallbackRef() && !rangedWeaponAttack)
-            owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", spellcastArgs("player", data.spellId));
 
         // Craft queue: re-cast if more crafts remaining
         if (craftQueueRemaining_ > 0 && craftQueueSpellId_ == data.spellId) {
@@ -5435,10 +5443,12 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     }
 
     // Fire UNIT_SPELLCAST_SUCCEEDED
-    if (owner_.addonEventCallbackRef()) {
+    if (owner_.addonEventCallbackRef() && !pendingGo) {
         std::string unitId = owner_.guidToUnitId(data.casterUnit);
         if (!unitId.empty())
             owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SUCCEEDED", spellcastArgs(unitId, data.spellId));
+        if (data.casterUnit == owner_.getPlayerGuid() && endsRunningCast)
+            owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", spellcastArgs("player", data.spellId));
     }
 
     // No impact sound of its own here: the impact kit plays its SoundID

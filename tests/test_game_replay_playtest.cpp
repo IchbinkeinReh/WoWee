@@ -72,9 +72,9 @@ TEST_CASE("a gossip is closed once", "[replay][playtest]") {
     Session s;
     spawnPlayer(s);
     int closed = 0;
-    s.handler().addonEventCallbackRef() = [&](const std::string& event, const std::vector<std::string>&) {
+    s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>&) {
         if (event == "GOSSIP_CLOSED") ++closed;
-    };
+    });
     // PlayerMenu::SendGossipMenu with no option and no quest.
     wowee::network::Packet gossip(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_MESSAGE));
     gossip.writeUInt64(kGiver);
@@ -90,6 +90,7 @@ TEST_CASE("a gossip is closed once", "[replay][playtest]") {
     s.handler().closeGossip();
     s.handler().closeGossip();
     CHECK(closed == 2);
+    s.handler().setAddonEventCallback({});
 }
 
 TEST_CASE("a landing clears FALLING whether or not its packet goes out", "[replay][playtest]") {
@@ -151,4 +152,58 @@ TEST_CASE("a swim begun while movement is held back is one", "[replay][playtest]
     s.handler().sendMovement(Opcode::MSG_MOVE_STOP_SWIM);
     CHECK_FALSE(has(s, MovementFlags::SWIMMING));
     CHECK(has(s, MovementFlags::FALLING));
+}
+
+namespace {
+
+constexpr uint32_t kFireball = 133, kProc = 31725;
+
+// Spell::SendSpellStart and SendSpellGo of the player's, with no target.
+wowee::network::Packet playerSpell(Opcode opcode, uint8_t count, uint32_t spellId, uint32_t castFlags, uint32_t time) {
+    wowee::network::Packet p(wowee::game::wireOpcode(opcode));
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt8(count);
+    p.writeUInt32(spellId);
+    p.writeUInt32(castFlags);
+    p.writeUInt32(time);
+    if (opcode == Opcode::SMSG_SPELL_GO) {
+        p.writeUInt8(0);
+        p.writeUInt8(0);
+    }
+    p.writeUInt32(0);
+    return p;
+}
+
+}  // namespace
+
+// A proc's go (cast flags 0x1) raised UNIT_SPELLCAST_STOP and SUCCEEDED for the
+// player and ended the cast that was running.
+TEST_CASE("a proc going off says nothing and ends no cast", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    s.handler().spellNameCacheRef()[kFireball].name = "Fireball";
+    s.handler().spellNameCacheRef()[kProc].name = "Proc";
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event.rfind("UNIT_SPELLCAST_S", 0) == 0 && !args.empty() && args[0] == "player") events.push_back(event);
+    });
+    s.receive(playerSpell(Opcode::SMSG_SPELL_START, 1, kFireball, 0, 3000));
+    REQUIRE(s.handler().isCasting());
+    events.clear();
+
+    s.receive(playerSpell(Opcode::SMSG_SPELL_GO, 0, kProc, 0x1, 0));
+    CHECK(events.empty());
+    CHECK(s.handler().isCasting());
+
+    // An instant of the player's own meanwhile: it succeeded, the cast goes on.
+    s.receive(playerSpell(Opcode::SMSG_SPELL_GO, 2, kProc, 0, 0));
+    CHECK(events == std::vector<std::string>{"UNIT_SPELLCAST_SUCCEEDED"});
+    CHECK(s.handler().isCasting());
+    events.clear();
+
+    s.receive(playerSpell(Opcode::SMSG_SPELL_GO, 1, kFireball, 0, 0));
+    CHECK(events == std::vector<std::string>{"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_STOP"});
+    CHECK_FALSE(s.handler().isCasting());
+    s.handler().setAddonEventCallback({});
 }
