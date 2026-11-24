@@ -6074,16 +6074,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 if (canonDistSq > syncRadiusSq && !activeCombatTarget) continue;
             }
 
-            // Use the destination position once the entity has reached its
-            // target.  During the dead-reckoning overrun window getX/Y/Z
-            // drifts past the destination at the last known velocity;
-            // using getLatest (== moveEnd while isMoving_) avoids the
-            // visible forward-drift followed by a backward snap.
-            const bool inOverrun = entity->isEntityMoving() && !entity->isActivelyMoving();
-            glm::vec3 canonical(
-                inOverrun ? entity->getLatestX() : entity->getX(),
-                inOverrun ? entity->getLatestY() : entity->getY(),
-                inOverrun ? entity->getLatestZ() : entity->getZ());
+            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             auto posIt = _creatureRenderPosCache.find(guid);
             const std::optional<glm::vec3> previousRenderPos =
@@ -6334,13 +6325,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 if (glm::dot(d, d) > pSyncRadiusSq && !activeCombatTarget) continue;
             }
 
-            // Position sync - clamp to destination during dead-reckoning
-            // overrun to avoid drift + backward snap (same as creature loop).
-            const bool inOverrun = entity->isEntityMoving() && !entity->isActivelyMoving();
-            glm::vec3 canonical(
-                inOverrun ? entity->getLatestX() : entity->getX(),
-                inOverrun ? entity->getLatestY() : entity->getY(),
-                inOverrun ? entity->getLatestZ() : entity->getZ());
+            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             auto posIt = _pCreatureRenderPosCache.find(guid);
             const std::optional<glm::vec3> previousRenderPos =

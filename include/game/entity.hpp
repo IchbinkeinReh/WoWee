@@ -260,10 +260,6 @@ public:
             return;
         }
         resetMotionExtras();
-        // Snap position if in overrun phase: the renderer showed moveEnd.
-        if (isMoving_ && moveElapsed_ >= moveDuration_) {
-            x = moveEndX_; y = moveEndY_; z = moveEndZ_;
-        }
         if (smooth && clientCurve) {
             startCurvedPath(packetPath, destO, totalDuration);
             return;
@@ -340,18 +336,6 @@ public:
         activeSpline_.emplace(std::move(keys), /*timeClosed=*/false);
         splineDurationMs_ = durationMs;
 
-        // Velocity for dead-reckoning after path completes, from the previous
-        // destination as startMoveTo takes it.
-        const float fromX = isMoving_ ? moveEndX_ : x;
-        const float fromY = isMoving_ ? moveEndY_ : y;
-        const float impliedVX = (path.back()[0] - fromX) / totalDuration;
-        const float impliedVY = (path.back()[1] - fromY) / totalDuration;
-        const float impliedVZ = (path.back()[2] - path[0][2]) / totalDuration;
-        const float alpha = 0.65f;
-        velX_ = alpha * impliedVX + (1.0f - alpha) * velX_;
-        velY_ = alpha * impliedVY + (1.0f - alpha) * velY_;
-        velZ_ = alpha * impliedVZ + (1.0f - alpha) * velZ_;
-
         moveEndX_ = path.back()[0]; moveEndY_ = path.back()[1]; moveEndZ_ = path.back()[2];
         moveDuration_ = totalDuration;
         moveElapsed_ = 0.0f;
@@ -387,31 +371,7 @@ public:
             setPosition(destX, destY, destZ, destO);
             return;
         }
-        // If we're in the dead-reckoning overrun phase, snap x/y/z back to the
-        // destination before using them as the new start.  The renderer was showing
-        // the entity at moveEnd (via getLatest) during overrun, so the new
-        // interpolation must start there to avoid a visible teleport. A unit
-        // moved on by its flags was drawn where x/y/z are, so it carries on
-        // from there.
-        snapOverrunToDestination();
         movingByFlags_ = false;
-        // Derive velocity from the displacement this packet implies.
-        // Use the previous destination (not current lerped pos) as the "from" so
-        // variable network timing doesn't inflate/shrink the implied speed.
-        float fromX = isMoving_ ? moveEndX_ : x;
-        float fromY = isMoving_ ? moveEndY_ : y;
-        float fromZ = isMoving_ ? moveEndZ_ : z;
-        float impliedVX = (destX - fromX) / durationSec;
-        float impliedVY = (destY - fromY) / durationSec;
-        float impliedVZ = (destZ - fromZ) / durationSec;
-        // Exponential moving average on velocity - 65% new sample, 35% previous.
-        // Smooths out jitter from irregular server update intervals (~200-600ms)
-        // without introducing visible lag on direction changes.
-        const float alpha = 0.65f;
-        velX_ = alpha * impliedVX + (1.0f - alpha) * velX_;
-        velY_ = alpha * impliedVY + (1.0f - alpha) * velY_;
-        velZ_ = alpha * impliedVZ + (1.0f - alpha) * velZ_;
-
         moveStartX_ = x; moveStartY_ = y; moveStartZ_ = z;
         moveEndX_ = destX; moveEndY_ = destY; moveEndZ_ = destZ;
         moveDuration_ = durationSec;
@@ -471,7 +431,6 @@ public:
         if (!fall && (speed <= 0.0f || (!horizontal && up == 0.0f))) {
             startMoveTo(px, py, pz, po, correctionSec);
         } else {
-            snapOverrunToDestination();
             usePathMode_ = false;
             activeSpline_.reset();
             resetMotionExtras();
@@ -505,9 +464,6 @@ public:
             }
             // FUN_00987b50 only takes the arc when not falling (0x1000).
             flagArcRate_ = (flags & kFalling) ? 0.0f : turn;
-            velX_ = flagSpeed_ * std::cos(flagHeading_);
-            velY_ = -flagSpeed_ * std::sin(flagHeading_);
-            velZ_ = falling_ ? -fallSpeed_ : flagClimb_;
             orientation = po;
             isMoving_ = true;
             movingByFlags_ = true;
@@ -746,9 +702,7 @@ public:
         }
     }
 
-    /// True only during the active interpolation phase (before reaching destination).
-    /// Unlike isEntityMoving(), this does NOT include the dead-reckoning overrun window,
-    /// so animations (Run/Walk) should use this to avoid "running in place" after arrival.
+    /// On its way, along a spline or moved on by its flags.
     [[nodiscard]] bool isActivelyMoving() const {
         return isMoving_ && (moveElapsed_ < moveDuration_ || movingByFlags_);
     }
@@ -805,7 +759,6 @@ protected:
     float moveEndX_ = 0, moveEndY_ = 0, moveEndZ_ = 0;
     float moveDuration_ = 0;
     float moveElapsed_ = 0;
-    float velX_ = 0, velY_ = 0, velZ_ = 0;  // Smoothed velocity for dead reckoning
     float moveSpeed_ = 0;                   // Current movement's speed; see getMoveSpeed
     // CatmullRom spline for multi-segment path movement (replaces linear pathPoints_/pathSegDists_)
     std::optional<math::CatmullRomSpline> activeSpline_;
@@ -852,14 +805,6 @@ private:
         turnRate_ = 0.0f;
         faceAlongPath_ = false;
         finalFacing_.reset();
-    }
-
-    void snapOverrunToDestination() {
-        if (isMoving_ && !movingByFlags_ && moveElapsed_ >= moveDuration_) {
-            x = moveEndX_;
-            y = moveEndY_;
-            z = moveEndZ_;
-        }
     }
 
     void faceDirection(float dx, float dy) {
@@ -985,13 +930,6 @@ private:
         activeSpline_.emplace(std::move(keys), /*timeClosed=*/false);
         splineDurationMs_ = durationMs;
 
-        const float fromX = isMoving_ ? moveEndX_ : x;
-        const float fromY = isMoving_ ? moveEndY_ : y;
-        const float alpha = 0.65f;
-        velX_ = alpha * (dest.x - fromX) / duration + (1.0f - alpha) * velX_;
-        velY_ = alpha * (dest.y - fromY) / duration + (1.0f - alpha) * velY_;
-        velZ_ = alpha * (dest.z - here.z) / duration + (1.0f - alpha) * velZ_;
-
         moveEndX_ = dest.x; moveEndY_ = dest.y; moveEndZ_ = dest.z;
         moveDuration_ = duration;
         moveElapsed_ = 0.0f;
@@ -1028,20 +966,12 @@ private:
             orientation = *finalFacing_;
             finalFacing_.reset();
         }
-        // Past the interpolation window: dead-reckon at the smoothed velocity
-        // rather than freezing in place. Cap to one extra interval so we don't
-        // drift endlessly if the entity stops sending packets.
-        float overrun = moveElapsed_ - moveDuration_;
-        if (overrun < moveDuration_) {
-            x = moveEndX_ + velX_ * overrun;
-            y = moveEndY_ + velY_ * overrun;
-            z = moveEndZ_ + velZ_ * overrun;
-        } else {
-            // Two intervals with no update - entity has probably stopped.
-            x = moveEndX_; y = moveEndY_; z = moveEndZ_;
-            velX_ = 0.0f; velY_ = 0.0f; velZ_ = 0.0f;
-            isMoving_ = false;
-        }
+        // And it stands there: a spline that is over puts its unit at its last
+        // point (0x00987b50) and carries it no further.
+        x = moveEndX_;
+        y = moveEndY_;
+        z = moveEndZ_;
+        isMoving_ = false;
     }
 
     void advanceByFlags(float deltaTime) {
