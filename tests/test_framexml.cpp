@@ -79,6 +79,16 @@ TEST_CASE("Malformed input is reported, not thrown", "[framexml][xml]") {
 
 // ── Emitter ─────────────────────────────────────────────────────────────────
 
+// The dropdown lists were UIParent's children, so under the full-screen map,
+// which hides UIParent, its menus opened unseen.
+TEST_CASE("a top-level frame with no parent has none", "[framexml][emit]") {
+    XmlNode root = parseOrFail("<Ui><Button name=\"DropDownList1\"><Frames><Frame name=\"Inner\"/></Frames></Button></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    CHECK(has(r.lua, "CreateFrame(\"Button\", \"DropDownList1\", nil)"));
+    CHECK_FALSE(has(r.lua, "UIParent"));
+    CHECK_FALSE(has(r.lua, "\"Inner\", nil)"));
+}
+
 TEST_CASE("A frame emits CreateFrame with its type and parent", "[framexml][emit]") {
     XmlNode root = parseOrFail("<Ui><Button name=\"MyButton\" parent=\"UIParent\"/></Ui>");
     const EmitResult r = emitFrameXml(root);
