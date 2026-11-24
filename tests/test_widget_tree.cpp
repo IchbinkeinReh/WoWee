@@ -3943,3 +3943,74 @@ TEST_CASE("a font string of the XML without points is on the side it is justifie
     CHECK(tree.get(text)->left == left + 60.0f);
     CHECK(tree.get(text)->bottom == tree.get(frame)->bottom + 19.0f);
 }
+
+// +0xbc, +0xbd: 0x00491680, 0x0048ea10.
+TEST_CASE("a frame's alpha is that of all that is in it", "[widgets][alpha]") {
+    WidgetTree tree;
+    Anchor a;
+    a.point = "CENTER";
+    a.relativePoint = "CENTER";
+    const auto make = [&](WidgetKind kind, uint32_t parent) {
+        const uint32_t id = tree.create(kind, parent, "");
+        tree.setWidth(id, 50.0f);
+        tree.setHeight(id, 50.0f);
+        tree.addPoint(id, a);
+        return id;
+    };
+    const uint32_t frame = make(WidgetKind::Frame, tree.rootId());
+    const uint32_t child = make(WidgetKind::Frame, frame);
+    const uint32_t icon = make(WidgetKind::Texture, child);
+    tree.get(icon)->solidColor = true;
+    tree.get(frame)->alpha = 0.5f;
+    tree.get(child)->alpha = 0.5f;
+    tree.get(icon)->alpha = 0.8f;
+    const auto drawn = [&] {
+        tree.layout(800.0f, 600.0f);
+        for (const auto* w : tree.drawOrder())
+            if (w->id == icon) return true;
+        return false;
+    };
+    REQUIRE(drawn());
+    CHECK(tree.get(icon)->drawAlpha == Catch::Approx(0.2f));
+    CHECK(tree.effectiveAlpha(*tree.get(child)) == Catch::Approx(0.25f));
+    tree.get(frame)->alpha = 0.0f;
+    CHECK_FALSE(drawn());
+    tree.get(frame)->alpha = 1.0f;
+    CHECK(drawn());
+    CHECK(tree.get(icon)->drawAlpha == Catch::Approx(0.4f));
+}
+
+TEST_CASE("the HIGHLIGHT layer is there while the mouse is on its frame", "[widgets][highlight]") {
+    WidgetTree tree;
+    Anchor a;
+    a.point = "CENTER";
+    a.relativePoint = "CENTER";
+    const uint32_t frame = tree.create(WidgetKind::Frame, tree.rootId(), "");
+    tree.setWidth(frame, 50.0f);
+    tree.setHeight(frame, 50.0f);
+    tree.addPoint(frame, a);
+    const uint32_t glow = tree.create(WidgetKind::Texture, frame, "");
+    tree.get(glow)->solidColor = true;
+    tree.get(glow)->layer = DrawLayer::Highlight;
+    const uint32_t art = tree.create(WidgetKind::Texture, frame, "");
+    tree.get(art)->solidColor = true;
+    const auto drawn = [&](uint32_t id) {
+        tree.layout(800.0f, 600.0f);
+        for (const auto* w : tree.drawOrder())
+            if (w->id == id) return true;
+        return false;
+    };
+    CHECK(drawn(art));
+    CHECK_FALSE(drawn(glow));
+    // On it, but a frame that does not take the mouse.
+    tree.setInteraction(art);
+    CHECK_FALSE(drawn(glow));
+    tree.get(frame)->mouseEnabled = true;
+    CHECK(drawn(glow));
+    tree.setInteraction(frame);
+    CHECK(drawn(glow));
+    tree.setInteraction(0);
+    CHECK_FALSE(drawn(glow));
+    tree.get(frame)->highlightLocked = true;
+    CHECK(drawn(glow));
+}

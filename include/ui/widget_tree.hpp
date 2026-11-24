@@ -209,6 +209,9 @@ struct Widget {
     float height = 0.0f;
     bool shown = true;
     float alpha = 1.0f;
+    /// What it is drawn with: its own times that of every frame it is in
+    /// (+0xbc, +0xbd; 0x00491680). Of the draw order's last making.
+    mutable float drawAlpha = 1.0f;
     /// Whether this frame takes the mouse. False by default, as in WoW, where a
     /// plain Frame is transparent to clicks until EnableMouse is called; Buttons
     /// switch it on for themselves.
@@ -1203,6 +1206,14 @@ public:
     /// 0x00489de0): a frame with no points has none, and what is placed by it
     /// has none either.
     [[nodiscard]] bool placed(uint32_t id, int depth = 0) const;
+    /// A widget's alpha times that of every frame it is in (0x0049f900).
+    [[nodiscard]] float effectiveAlpha(const Widget& w) const {
+        float alpha = w.alpha;
+        for (const Widget* p = w.parent != 0 ? get(w.parent) : nullptr; p;
+             p = p->parent != 0 ? get(p->parent) : nullptr)
+            alpha *= p->alpha;
+        return alpha;
+    }
     /// Whether a frame's attributes may be changed by anybody for the moment,
     /// its own flag or that of one it is in (0x0048ed30).
     [[nodiscard]] bool attributesAllowed(uint32_t id) const {

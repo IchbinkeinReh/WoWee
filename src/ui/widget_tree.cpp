@@ -1501,7 +1501,16 @@ uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
 }
 
 bool WidgetTree::buttonArtVisible(const Widget& w) const {
-    if (w.buttonArt == ButtonArt::None) return true;
+    if (w.buttonArt == ButtonArt::None) {
+        // The HIGHLIGHT layer of a frame is there while the mouse is on it - a
+        // frame that takes the mouse - or while a button's highlight is locked.
+        if (w.kind == WidgetKind::Frame || w.layer != DrawLayer::Highlight) return true;
+        const Widget* owner = get(w.parent);
+        if (!owner) return true;
+        const Widget* on = get(hoveredId_);
+        while (on && on->kind != WidgetKind::Frame) on = on->parent != 0 ? get(on->parent) : nullptr;
+        return owner->highlightLocked || (owner->mouseEnabled && on == owner);
+    }
 
     // The art belongs to the frame holding it, not to itself: it is the button
     // that is hovered, pressed or disabled.
@@ -1543,7 +1552,8 @@ void WidgetTree::collectDrawOrder() {
         const Widget* wp = get(id);
         if (!wp || !wp->visible) { mayBeVisible_.reset(id); continue; }
         const Widget& w = *wp;
-        if (w.alpha <= 0.001f) continue;
+        w.drawAlpha = effectiveAlpha(w);
+        if (w.drawAlpha <= 0.001f) continue;
         // Frames are containers, except when they carry a backdrop or are a
         // status bar - then the frame itself has something to paint, and it
         // paints underneath its own regions because they sit a level above it.
