@@ -3133,15 +3133,8 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         owner_.getSocket()->send(ack);
         LOG_INFO("Sent MSG_MOVE_WORLDPORT_ACK");
 
-        // Sync position immediately so the server doesn't keep stale coordinates.
-        // Not when a transport carried the player here: the client sends the
-        // acknowledgement at the end of its load (0x00403b70, 0xdc) and no
-        // movement with it, and the server already has the player on the
-        // transport, at the offset it sent.
-        if (!crossMapTransportTransfer) {
-            sendMovement(Opcode::MSG_MOVE_STOP);
-            sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
-        }
+        // And no movement with it (0x00403b70, 0xdc): the server has put the
+        // player where it said.
     }
 
     owner_.timeSinceLastPingRef() = 0.0f;

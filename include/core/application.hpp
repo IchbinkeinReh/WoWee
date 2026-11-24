@@ -557,7 +557,8 @@ private:
     static inline const std::vector<std::string> emptyStringVec_;
 
     float facingSendCooldown_ = 0.0f;        // Rate-limits MSG_MOVE_SET_FACING
-    float lastSentCanonicalYaw_ = 1000.0f;   // Sentinel - triggers first send
+    static constexpr float kFacingFromServer = 1000.0f;  // nothing sent yet: as the server set it
+    float lastSentCanonicalYaw_ = kFacingFromServer;
     bool idleYawned_ = false;
     // What the player's base animation read last frame (syncPlayerAnimation).
     struct PlayerAnimationSeen {

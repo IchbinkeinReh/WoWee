@@ -4630,7 +4630,7 @@ void Application::performLogoutToLogin() {
     if (worldLoader_) worldLoader_->resetLoadedMap();
     if (worldEntryCallbacks_) worldEntryCallbacks_->resetState();
     facingSendCooldown_ = 0.0f;
-    lastSentCanonicalYaw_ = 1000.0f;
+    lastSentCanonicalYaw_ = kFacingFromServer;
     idleYawned_ = false;
 
     playerSplineLastFrame_ = false;
@@ -5146,8 +5146,15 @@ void Application::applyServerMovementState(float deltaTime) {
     }
     if (worldEntryCallbacks_) worldEntryCallbacks_->setLastTaxiFlight(actuallyFlying);
 
-    // Sync character render position ↔ canonical WoW coords each frame
-    if (renderer && gameHandler) {
+    // Sync character render position ↔ canonical WoW coords each frame. Not
+    // between the server's word of a new world and the end of its load: there
+    // is no player in a world until then (0x00403b70 takes the object away
+    // with every other), and the place drawn is the old world's. Told of, it
+    // put the character there on the new map - whatever lay at those
+    // coordinates - for as long as the load took.
+    const bool enteringWorld = worldLoader_ && worldLoader_->isWorldEntryUnderway();
+    if (enteringWorld) lastSentCanonicalYaw_ = kFacingFromServer;
+    if (renderer && gameHandler && !enteringWorld) {
     // For position sync branching, only WMO transports use the dedicated
     // onTransport branch. M2 transports use the normal movement else branch
     // with a position-delta correction applied on top.
@@ -5615,6 +5622,8 @@ void Application::applyServerMovementState(float deltaTime) {
             static_cast<uint32_t>(game::MovementFlags::TURN_LEFT) |
             static_cast<uint32_t>(game::MovementFlags::TURN_RIGHT);
         bool keyboardTurning = (mi.flags & kTurnFlags) != 0;
+        // The facing a world is entered with is the server's own.
+        if (lastSentCanonicalYaw_ == kFacingFromServer) lastSentCanonicalYaw_ = canonicalYaw;
         if (!keyboardTurning && facingSendCooldown_ <= 0.0f) {
             float yawDiff = core::coords::normalizeAngleRad(canonicalYaw - lastSentCanonicalYaw_);
             if (std::abs(yawDiff) > glm::radians(3.0f)) {
