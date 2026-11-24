@@ -1,4 +1,5 @@
 #include "game/movement_handler.hpp"
+#include "game/mover_mode.hpp"
 #include "game/transport_route_clock.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -622,6 +623,15 @@ bool MovementHandler::restoreWorldTransferFallbackIfNearOrigin(const char* conte
 // sendMovement
 // ============================================================
 
+std::optional<uint32_t> MovementHandler::endFallTimer() {
+    std::optional<uint32_t> fellMs;
+    if (isFalling_ && wrapMsDiff(movementInfo.time, fallStartMs_) >= 0)
+        fellMs = static_cast<uint32_t>(wrapMsDiff(movementInfo.time, fallStartMs_));
+    isFalling_ = false;
+    fallStartMs_ = 0;
+    return fellMs;
+}
+
 void MovementHandler::setFlightAirborne(bool airborne) {
     const uint32_t canFly = static_cast<uint32_t>(MovementFlags::CAN_FLY);
     const uint32_t flying = static_cast<uint32_t>(MovementFlags::FLYING);
@@ -629,7 +639,7 @@ void MovementHandler::setFlightAirborne(bool airborne) {
     const bool now = (movementInfo.flags & flying) != 0;
     if (airborne == now) return;
     if (airborne) {
-        movementInfo.flags |= flying;
+        startFlying(movementInfo, endFallTimer());
         return;
     }
     // Landed. Said with a heartbeat, which carries the flags and is never
@@ -867,9 +877,12 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             // frame later. See setFlightAirborne for the landing.
             // Not from the water: a swimmer swims up (0x009898e0 keeps
             // SWIMMING), and takes off only once out of it.
+            // A fall it takes off from is over with it (0x00989890): left
+            // set, FALLING kept a mount up in the air in its fall, as it
+            // rose out of water.
             if ((movementInfo.flags & static_cast<uint32_t>(MovementFlags::CAN_FLY)) &&
                 !(movementInfo.flags & static_cast<uint32_t>(MovementFlags::SWIMMING))) {
-                movementInfo.flags |= static_cast<uint32_t>(MovementFlags::FLYING);
+                startFlying(movementInfo, endFallTimer());
             }
             break;
         case Opcode::MSG_MOVE_STOP_ASCEND:
@@ -883,21 +896,13 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             // pitch only when the flag is set, which is why a swimming
             // character looked flat to everyone else, and isSwimming() - which
             // reads this same word - answered no while the player swam.
-            movementInfo.flags |= static_cast<uint32_t>(MovementFlags::SWIMMING);
             // 0x00721210: the active mover starting to swim triggers
             // tutorial 0x1b.
             owner_.triggerTutorial(0x1b);
             // Entering water ends a fall, and nothing else would: FALL_LAND is
             // sent on touching ground and a swimmer never touches it, so a
             // jump into a lake left FALLING set with fallTime still climbing.
-            movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::FALLING);
-            isFalling_ = false;
-            fallStartMs_ = 0;
-            movementInfo.fallTime = 0;
-            movementInfo.jumpVelocity = 0.0f;
-            movementInfo.jumpSinAngle = 0.0f;
-            movementInfo.jumpCosAngle = 0.0f;
-            movementInfo.jumpXYSpeed = 0.0f;
+            startSwimming(movementInfo, endFallTimer());
             break;
         case Opcode::MSG_MOVE_STOP_SWIM:
             // 0x0098bff0: swimming, rising and sinking end together
@@ -1596,6 +1601,11 @@ void MovementHandler::handleMoveSetCollisionHeight(network::Packet& packet) {
              " counter=", counter, " height=", height);
 
     if (guid != owner_.getPlayerGuid()) return;
+    // 0x006ef860 event 0x3a -> 0x006e9600: the body's height (+0xcc) from
+    // here on. A mount's comes this way (0x0073d5d0 sets none for a player
+    // that mounts in the world: 0x006e9570 with its last argument 0), and a
+    // player's own again as it gets off.
+    if (height > 0.0f) collisionHeightGiven_ = height;
     if (!owner_.getSocket()) return;
 
     if (wireOpcode(Opcode::CMSG_MOVE_SET_COLLISION_HGT_ACK) == 0xFFFF) return;
@@ -2853,6 +2863,7 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     float orientation = packet.readFloat();
     // Leaving the world ends a click-to-move (0x00528f00 -> 0x007272c0).
     owner_.stopClickToMove();
+    forgetCollisionHeight();
     // A ride to another map is one the server said goes with the transport
     // (SMSG_TRANSFER_PENDING). Anything else - a GM teleport, a hearthstone,
     // a portal from a tram car - is a world position, and the player is

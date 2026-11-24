@@ -235,7 +235,12 @@ private:
     uint32_t shownPlayerDisplay_ = 0;
     /// An event of the player's own movement, on its animation (0x0073ed10).
     void animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, bool launchedBefore);
-    /// In the air off a ledge, long enough to be falling far.
+    /// In the air off a ledge, long enough for a fall the server is told of.
+    [[nodiscard]] bool playerOffLedge() const;
+    /// The player's collision height (+0x854), mounted or not.
+    [[nodiscard]] float playerCollisionHeight();
+    /// MOVEMENTFLAG_FALLING_FAR: half a second off a ledge, or below where a
+    /// jump began.
     [[nodiscard]] bool playerFallsFar() const;
     void render();
     void performLogoutToLogin();
@@ -543,7 +548,6 @@ private:
     // What the player's base animation read last frame (syncPlayerAnimation).
     struct PlayerAnimationSeen {
         uint32_t instanceId = 0;
-        bool leaping = false;
         bool fellFar = false;
         bool turning = false;
         bool turningLeft = false;
@@ -552,6 +556,7 @@ private:
         bool stealthed = false;
         bool autoAttacking = false;
         bool swimming = false;
+        bool onFlightPath = false;
     };
     PlayerAnimationSeen playerAnimationSeen_;
     /// The player's instance its ammunition was last hung on (0x006e8280).

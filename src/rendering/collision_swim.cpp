@@ -34,11 +34,12 @@ bool updateSwimming(Mover& m, const std::optional<float>& liquidLevel, bool canS
     const float stop = start - kSwimStopSlack;
     if (!m.swimming) {
         if (depth > start && canSwim && !risingInJump(m)) {
-            // 0x00989660: swimming, not flying, not stepping. A fall is
-            // left as it is; swimming wins over it in the step.
+            // 0x00989660: swimming, not flying, not stepping, and the fall
+            // it came in by over (0x00988490).
             m.swimming = true;
             m.flying = false;
             m.stepping = false;
+            land(m);
             return true;
         }
         return false;

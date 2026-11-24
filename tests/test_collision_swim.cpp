@@ -50,6 +50,30 @@ TEST_CASE("a unit swims past three quarters of its height and stops a 36th short
     CHECK(m.falling);
 }
 
+TEST_CASE("where a swim starts the fall it came in by is over (0x00989660 -> 0x00988490)", "[collision_swim]") {
+    Mover m;
+    startFallAt(m, kJumpSpeed);
+    m.fallMs = 1400;
+    m.fallingFar = true;
+    m.pos.z = -kPlayerHeight;
+    CHECK(updateSwimming(m, 0.0f, true, false));
+    CHECK(m.swimming);
+    CHECK_FALSE(m.falling);
+    CHECK_FALSE(m.fallingFar);
+    // The time it lasted stays (+0x80).
+    CHECK(m.fallMs == 1400u);
+}
+
+TEST_CASE("a taller body - a rider's on its mount - swims from deeper", "[collision_swim]") {
+    // A human on a charger: half of 2.031 and the mount's 1.866 (0x006d7720).
+    Mover m;
+    m.height = 2.88122f;
+    m.pos.z = 0.0f;
+    CHECK_FALSE(updateSwimming(m, 2.15f, true, false));
+    CHECK(updateSwimming(m, 2.17f, true, false));
+    CHECK(m.swimming);
+}
+
 TEST_CASE("out of the liquid altogether a swimmer stops, unless it flies", "[collision_swim]") {
     Mover m;
     m.swimming = true;

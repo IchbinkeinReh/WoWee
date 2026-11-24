@@ -1228,7 +1228,8 @@ set(WOWEE_SOURCES
     src/rendering/animation/emote_registry.cpp
     src/rendering/animation/footstep_driver.cpp
     src/rendering/animation/sfx_state_driver.cpp
-    src/rendering/animation/mount_fsm.cpp
+    src/rendering/animation/mount_motion.cpp
+    src/rendering/animation/rider_mount.cpp
     src/rendering/loading_screen.cpp
 
     # UI

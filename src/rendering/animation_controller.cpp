@@ -3,7 +3,7 @@
 #include "rendering/animation/melee_anim_chains.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/animation/emote_registry.hpp"
-#include "rendering/animation/mount_fsm.hpp"
+#include "rendering/animation/mount_motion.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera.hpp"
@@ -370,128 +370,10 @@ void AnimationController::setMounted(uint32_t mountInstId, uint32_t mountDisplay
         cameraController->setMountHeightOffset(heightOffset);
     }
 
-    if (characterRenderer && mountInstId > 0) {
-        characterRenderer->dumpAnimations(mountInstId);
-    }
+    if (characterRenderer && mountInstId > 0) characterRenderer->dumpAnimations(mountInstId);
 
-    // Discover mount animation capabilities (property-based, not hardcoded IDs)
-    LOG_DEBUG("=== Mount Animation Dump (Display ID ", mountDisplayId, ") ===");
-    if (characterRenderer) characterRenderer->dumpAnimations(mountInstId);
-
-    std::vector<pipeline::M2Sequence> sequences;
-    if (!characterRenderer || !characterRenderer->getAnimationSequences(mountInstId, sequences)) {
-        LOG_WARNING("Failed to get animation sequences for mount, using fallback IDs");
-        sequences.clear();
-    }
-
-    auto findFirst = [&](std::initializer_list<uint32_t> candidates) -> uint32_t {
-        for (uint32_t id : candidates) {
-            if (characterRenderer && characterRenderer->hasAnimation(mountInstId, id)) {
-                return id;
-            }
-        }
-        return 0;
-    };
-
-
-    // Build MountAnimSet for MountFSM
-    MountFSM::MountAnimSet mountAnims;
-    // A jump is the unit's own, played on the model it shows - the mount's
-    // while it rides: JumpStart on MSG_MOVE_JUMP (0x0073ed3f case 0xbb),
-    // Jump looping once that ends (0x0073b510 cases 0x25, 0x26), JumpEnd on
-    // landing, then the base animation (case 0x27). The ids as they are; a
-    // guess at them by length took JumpStart (two thirds of a second) for
-    // the landing on the Dreadsteed and played the take-off again on the
-    // ground. The client plays no MountSpecial for a jump, standing or not.
-    mountAnims.jumpStart = findFirst({anim::JUMP_START});
-    mountAnims.jumpLoop  = findFirst({anim::JUMP});
-    mountAnims.jumpEnd   = findFirst({anim::JUMP_END});
-    mountAnims.rearUp    = 0;
-    mountAnims.run       = findFirst({anim::RUN, anim::WALK});
-    mountAnims.stand     = findFirst({anim::STAND});
-    // Discover flight animations (flying mounts only - may all be 0 for ground mounts)
-    //
-    // A 3.3.5 flying mount has Fly for moving and Hover for staying put - or
-    // Fly for that too, when it has no Hover (the wyvern) - and RunRight and
-    // RunLeft for strafing. Those two are the bank it leans into in the air:
-    // three or four seconds long, moving nothing, and carried by fliers alone -
-    // no ground mount has them - so they are strafing in flight, not on the
-    // ground. It has nothing for climbing, diving or backing up, so those stay
-    // empty and the FSM falls back.
-    mountAnims.flyForward   = findFirst({anim::FLY_FORWARD});
-    mountAnims.flyIdle      = findFirst({anim::FLY_IDLE, anim::FLY_FORWARD});
-    mountAnims.flyLeft      = findFirst({anim::RUN_LEFT});
-    mountAnims.flyRight     = findFirst({anim::RUN_RIGHT});
-
-    // Discover idle fidget animations using proper WoW M2 metadata
-    core::Logger::getInstance().debug("Scanning for fidget animations in ", sequences.size(), " sequences");
-
-    core::Logger::getInstance().debug("=== ALL potential fidgets (no metadata filter) ===");
-    for (const auto& seq : sequences) {
-        bool isLoop = (seq.flags & 0x01) == 0;
-        bool isStationary = std::abs(seq.movingSpeed) < 0.05f;
-        bool reasonableDuration = seq.duration >= 400 && seq.duration <= 2500;
-
-        if (!isLoop && reasonableDuration && isStationary) {
-            core::Logger::getInstance().debug("  ALL: id=", seq.id,
-                " dur=", seq.duration, "ms",
-                " freq=", seq.frequency,
-                " replay=", seq.replayMin, "-", seq.replayMax,
-                " flags=0x", std::hex, seq.flags, std::dec,
-                " next=", seq.nextAnimation);
-        }
-    }
-
-    for (const auto& seq : sequences) {
-        bool isLoop = (seq.flags & 0x01) == 0;
-        bool hasFrequency = seq.frequency > 0;
-        bool hasReplay = seq.replayMax > 0;
-        bool isStationary = std::abs(seq.movingSpeed) < 0.05f;
-        bool reasonableDuration = seq.duration >= 400 && seq.duration <= 2500;
-
-        if (!isLoop && reasonableDuration && isStationary && (hasFrequency || hasReplay)) {
-            core::Logger::getInstance().debug("  Candidate: id=", seq.id,
-                " dur=", seq.duration, "ms",
-                " freq=", seq.frequency,
-                " replay=", seq.replayMin, "-", seq.replayMax,
-                " next=", seq.nextAnimation,
-                " speed=", seq.movingSpeed);
-        }
-
-        bool isDeathOrWound = (seq.id >= 5 && seq.id <= 9);
-        bool isAttackOrCombat = (seq.id >= 11 && seq.id <= 21);
-        bool isSpecial = (seq.id == 2 || seq.id == 3);
-
-        if (!isLoop && (hasFrequency || hasReplay) && isStationary && reasonableDuration &&
-            !isDeathOrWound && !isAttackOrCombat && !isSpecial) {
-            bool chainsToStand = (seq.nextAnimation == static_cast<int16_t>(mountAnims.stand)) ||
-                                 (seq.aliasNext == mountAnims.stand) ||
-                                 (seq.nextAnimation == -1);
-
-            mountAnims.fidgets.push_back(seq.id);
-            core::Logger::getInstance().debug("  >> Selected fidget: id=", seq.id,
-                (chainsToStand ? " (chains to stand)" : ""));
-        }
-    }
-
-    if (mountAnims.run == 0) mountAnims.run = mountAnims.stand;
-
-    core::Logger::getInstance().debug("Mount animation set: jumpStart=", mountAnims.jumpStart,
-        " jumpLoop=", mountAnims.jumpLoop,
-        " jumpEnd=", mountAnims.jumpEnd,
-        " rearUp=", mountAnims.rearUp,
-        " run=", mountAnims.run,
-        " stand=", mountAnims.stand,
-        " fidgets=", mountAnims.fidgets.size());
-
-    // Configure the MountFSM.
-    //
-    // What is passed here is only what was true at this moment. The FSM takes
-    // the per-frame answer as well now, and either counts - a taxi sets the
-    // mount up before it says the flight has begun, so this one is false on
-    // every flight.
     LOG_INFO("Mount configured: displayId=", mountDisplayId, " taxiFlight=", taxiFlight_);
-    mountFSM_.configure(mountAnims, taxiFlight_);
+    mountMotion_.reset();
 
     if (renderer_->getAudioCoordinator()->getMountSoundManager()) {
         bool isFlying = taxiFlight_;
@@ -508,8 +390,6 @@ void AnimationController::clearMount() {
     mountSeatAttachmentId_ = -1;
     smoothedMountSeatPos_ = glm::vec3(0.0f);
     mountSeatSmoothingInit_ = false;
-
-    mountFSM_.clear();
 
     if (auto* cameraController = renderer_->getCameraController()) {
         cameraController->setMounted(false);
@@ -636,10 +516,10 @@ void AnimationController::applyMountPositioning(float mountBob, float mountRoll,
 
         characterRenderer->setInstancePosition(characterInstanceId, smoothedMountSeatPos_);
 
+        // It hangs on the mount (0x00831630, attachment 0): pitched and
+        // rolled as that is.
         float yawRad = glm::radians(characterYaw);
-        float riderPitch = mountPitch_ * 0.35f;
-        float riderRoll = mountRoll * 0.35f;
-        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(riderRoll, -riderPitch, yawRad));
+        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(mountRoll, -mountPitch_, yawRad));
     } else {
         mountSeatSmoothingInit_ = false;
         float yawRad = glm::radians(characterYaw);
@@ -655,9 +535,22 @@ void AnimationController::applyMountPositioning(float mountBob, float mountRoll,
     }
 }
 
-// ── Mounted animation update (uses MountFSM) ────────────────────────────────
+// ── The mount each frame ────────────────────────────────────────────────────
 
-void AnimationController::updateMountedAnimation(float deltaTime) {
+void AnimationController::mountJumped() {
+    if (!isMounted()) return;
+    if (auto* sounds = renderer_->getAudioCoordinator()->getMountSoundManager()) sounds->playJumpSound();
+}
+
+void AnimationController::mountLanded() {
+    if (!isMounted()) return;
+    if (auto* sounds = renderer_->getAudioCoordinator()->getMountSoundManager()) sounds->playLandSound();
+}
+
+// What the mount plays is its rider's unit's (CharacterRenderer::
+// setRiderMount, rider_mount.hpp); here it goes where the player is, banks
+// in flight and carries its rider.
+void AnimationController::updateMount(float deltaTime) {
     auto* characterRenderer = renderer_->getCharacterRenderer();
     auto* cameraController = renderer_->getCameraController();
     uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
@@ -666,33 +559,22 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
     float characterYaw = (hasMountBodyYaw_ && !taxiFlight_) ? mountBodyYawDeg_
                                                             : renderer_->getCharacterYaw();
     hasMountBodyYaw_ = false;
-    auto& mountFSM = mountFSM_;
 
-    // Build MountFSM input
-    MountFSM::Input mountIn;
-    mountIn.moving = cameraController->isMoving();
-    mountIn.movingForward = cameraController->isMovingForward();
-    mountIn.movingBackward = cameraController->isMovingBackward();
-    mountIn.strafeLeft = cameraController->isStrafingLeft();
-    mountIn.strafeRight = cameraController->isStrafingRight();
-    mountIn.grounded = cameraController->isGrounded();
-    mountIn.jumpKeyPressed = cameraController->isJumpKeyPressed();
+    MountMotion::Input in;
+    in.moving = cameraController->isMoving();
+    in.forwardOrBack = cameraController->isMovingForward() || cameraController->isMovingBackward();
     // In the air, not allowed to be: on the ground a flying mount runs.
-    mountIn.flying = cameraController->isFlightAirborne();
-    mountIn.swimming = cameraController->isSwimming();
-    mountIn.ascending = cameraController->isAscending();
-    mountIn.descending = cameraController->isDescending();
-    mountIn.taxiFlight = taxiFlight_;
-    mountIn.deltaTime = deltaTime;
-    mountIn.characterYaw = characterYaw;
-    // Mount animation state query
+    in.flying = cameraController->isFlightAirborne();
+    in.swimming = cameraController->isSwimming();
+    in.taxiFlight = taxiFlight_;
+    in.deltaTime = deltaTime;
+    in.characterYaw = characterYaw;
+    uint32_t mountAnim = 0;
     if (mountInstanceId_ > 0 && characterRenderer) {
-        mountIn.haveMountState = characterRenderer->getAnimationState(
-            mountInstanceId_, mountIn.curMountAnim, mountIn.curMountTime, mountIn.curMountDuration);
+        in.haveAnimation = characterRenderer->getAnimationState(mountInstanceId_, mountAnim, in.animationTime,
+                                                                in.animationDuration);
     }
-
-    // Evaluate MountFSM
-    auto mountOut = mountFSM.evaluate(mountIn);
+    const MountMotion::Output out = mountMotion_.update(in);
 
     // The mount's stride follows the speed the player moves at, the rider's
     // does not move (FUN_007385c0 scales only movement animations).
@@ -702,27 +584,6 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
                                                   cameraController->getLocomotionSpeed());
         }
         characterRenderer->setLocomotionSpeed(characterInstanceId, 0.0f);
-    }
-
-    // Turning on the spot, the mount shuffles round as a unit on foot does
-    // (its own ShuffleLeft/Right), standing on the ground.
-    uint32_t shuffleAnim = 0;
-    if (turnShuffle_ != body_yaw::TurnShuffle::None && !taxiFlight_ && !mountIn.moving &&
-        mountIn.grounded && !mountIn.swimming && mountInstanceId_ > 0 && characterRenderer) {
-        const uint32_t want = turnShuffle_ == body_yaw::TurnShuffle::Left ? anim::SHUFFLE_LEFT
-                                                                         : anim::SHUFFLE_RIGHT;
-        if (characterRenderer->hasAnimation(mountInstanceId_, want)) shuffleAnim = want;
-    }
-
-    // Apply mount animation if changed
-    if (shuffleAnim != 0) {
-        if (!mountIn.haveMountState || mountIn.curMountAnim != shuffleAnim) {
-            characterRenderer->playAnimation(mountInstanceId_, shuffleAnim, true);
-        }
-    } else if (mountOut.mountAnimChanged && mountInstanceId_ > 0 && characterRenderer) {
-        characterRenderer->playAnimation(mountInstanceId_, mountOut.mountAnimId, mountOut.mountAnimLoop);
-        LOG_INFO("Mount animation ", mountOut.mountAnimId, mountOut.mountAnimLoop ? " (loop)" : " (once)",
-                 mountIn.moving ? " moving" : " standing", mountIn.grounded ? " grounded" : " airborne");
     }
 
     // The rider holds its pose (+0xb7c: Mount, or a mount aura kit's,
@@ -742,29 +603,12 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
         characterRenderer->playAnimation(characterInstanceId, riderAnim, true);
     }
 
-    // Handle mount sounds
-    auto* mountSoundMgr = renderer_->getAudioCoordinator()->getMountSoundManager();
-    if (mountOut.playJumpSound && mountSoundMgr) {
-        mountSoundMgr->playJumpSound();
-    }
-    if (mountOut.playLandSound && mountSoundMgr) {
-        mountSoundMgr->playLandSound();
-    }
-    if (mountOut.playRearUpSound && mountSoundMgr) {
-        mountSoundMgr->playRearUpSound();
-    }
-    if (mountOut.playIdleSound && mountSoundMgr) {
-        mountSoundMgr->playIdleSound();
-    }
-    if (mountOut.triggerMountJump && cameraController) {
-        cameraController->triggerMountJump();
+    if (out.playIdleSound) {
+        if (auto* sounds = renderer_->getAudioCoordinator()->getMountSoundManager()) sounds->playIdleSound();
     }
 
-    // Apply positioning (uses mountBob and mountRoll from MountFSM)
-    // For taxi flights, use external mountRoll_ set by setMountPitchRoll
-    // For ground mounts, use MountFSM's computed lean roll
-    float finalRoll = taxiFlight_ ? mountRoll_ : mountOut.mountRoll;
-    applyMountPositioning(mountOut.mountBob, finalRoll, characterYaw);
+    // On a taxi the roll is the route's (setMountPitchRoll).
+    applyMountPositioning(out.bob, taxiFlight_ ? mountRoll_ : out.roll, characterYaw);
 }
 
 // ── The player's animation ───────────────────────────────────────────────────
@@ -773,10 +617,10 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
 // event of its movement (Application, 0x0073ed10), its swings, emotes,
 // kits and wounds as they come, and what follows a one-shot by the
 // CharacterRenderer (0x0073b510). Each frame leaves only the speed its
-// movement animation plays at (0x007385c0), and the mount's driving.
+// movement animation plays at (0x007385c0), and where its mount goes.
 void AnimationController::updateCharacterAnimation() {
     if (isMounted()) {
-        updateMountedAnimation(lastDeltaTime_);
+        updateMount(lastDeltaTime_);
         return;
     }
     auto* characterRenderer = renderer_->getCharacterRenderer();

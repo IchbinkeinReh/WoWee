@@ -180,8 +180,14 @@ public:
     // falling either - treating it as falling made leaving the water register as
     // a hard landing.
     [[nodiscard]] bool isFalling() const { return !grounded && !swimming && verticalVelocity <= 0.0f; }
-    /// How long it has been off the ground: zero on it.
+    /// How long it has been off the ground: zero on it, in water and in flight.
     [[nodiscard]] float airborneSeconds() const { return airborneSeconds_; }
+    /// +0x44 0x2000, falling far, as the fall step sets it (0x007612b0): half
+    /// a second into a fall off a ledge, a ninth of a yard below where a jump
+    /// began.
+    [[nodiscard]] bool isFallingFar() const {
+        return !grounded && !swimming && !isFlightAirborne() && portMover_.falling && portMover_.fallingFar;
+    }
     /// The placed fall queued for the active mover (0x006eccf0, event 9):
     /// on its next step it starts to fall from where it is unless it stands
     /// on ground, swims, flies or is rooted.
@@ -220,7 +226,6 @@ public:
         // transport let go at a map change - a fall of 89 s sent with FALLING.
         airborneSeconds_ = 0.0f;
     }
-    [[nodiscard]] bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
     [[nodiscard]] float collisionHeight() const { return collisionHeight_; }
     /// The faces of the ground, buildings and doodads in a box, gathered as
     /// the client gathers them for the active mover (0x00783a40, flags
@@ -452,15 +457,16 @@ public:
     /// Permission to fly - a flying mount where flight is allowed, or .gm fly.
     /// Not the same as being in the air: see isFlightAirborne.
     void setFlyingActive(bool active);
-    /// The player's collision height, which decides the water deep enough to
-    /// swim in and how deep it treads (see collisionHeight_).
+    /// The player's collision height (+0x854), which decides the water deep
+    /// enough to swim in and how deep it treads (see collisionHeight_), and
+    /// how high its body is to what it moves against.
     void setCollisionHeight(float height) {
-        if (height > 0.1f && height < 50.0f) collisionHeight_ = height;
+        if (height <= 0.1f || height >= 50.0f) return;
+        collisionHeight_ = height;
+        portMover_.height = height;
     }
     [[nodiscard]] bool isFlyingActive() const { return flyingActive_; }
-    /// The collision port's body half-width (0x006e9570). The port keeps a
-    /// player's height at the client's default: 0x006e9570 sets it only for
-    /// a unit this client does not move.
+    /// The collision port's body half-width (0x006e9570).
     void setPortHalfWidth(float r) {
         if (r > 0.01f && r < 25.0f) portMover_.halfWidth = r;
     }
@@ -610,9 +616,6 @@ public:
     /// press is a press, where a key still held from before is not.
     void suppressHeldMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
-
-    // Trigger mount jump (applies vertical velocity for physics hop)
-    void triggerMountJump();
 
     // Apply server-driven knockback impulse.
     // dir: render-space 2D direction unit vector (from vcos/vsin in packet)
@@ -1294,13 +1297,6 @@ private:
     static constexpr float WOW_TURN_SPEED = 180.0f;  // Keyboard turn deg/sec
     static constexpr float WOW_GRAVITY = -19.29f;
     static constexpr float WOW_JUMP_VELOCITY = 7.96f;
-    static constexpr float MOUNT_GRAVITY = -18.0f;       // Snappy WoW-feel jump
-    static constexpr float MOUNT_JUMP_HEIGHT = 1.0f;    // Desired jump height in meters
-
-    // Computed jump velocity using vz = sqrt(2 * g * h)
-    static inline float getMountJumpVelocity() {
-        return std::sqrt(2.0f * std::abs(MOUNT_GRAVITY) * MOUNT_JUMP_HEIGHT);
-    }
 
     // Server-driven speed overrides (0 = use hardcoded default)
     float runSpeedOverride_ = 0.0f;

@@ -507,6 +507,9 @@ public:
         auto it = remotePlayerMounts_.find(guid);
         return it != remotePlayerMounts_.end() ? it->second.instanceId : 0u;
     }
+    [[nodiscard]] const std::unordered_map<uint64_t, RemotePlayerMount>& getRemotePlayerMounts() const {
+        return remotePlayerMounts_;
+    }
     const RemotePlayerMount* getRemotePlayerMount(uint64_t guid) const {
         auto it = remotePlayerMounts_.find(guid);
         return it != remotePlayerMounts_.end() ? &it->second : nullptr;
@@ -633,8 +636,6 @@ public:
         /// to the left (0x800).
         bool turning = false;
         bool turningLeft = false;
-        /// The state kit animation its mount was last given (0x0071e400).
-        std::optional<uint32_t> mountKitAnimation;
         /// +0xa38 0x200: it began a spell with AttributesEx2 0x20 - Auto
         /// Shot, Shoot - (0x007fa2e0); only the active player's is ever
         /// cleared (0x00807560).

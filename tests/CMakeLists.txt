@@ -1806,21 +1806,16 @@ target_link_libraries(test_animation_ids PRIVATE catch2_main)
 add_test(NAME animation_ids COMMAND test_animation_ids)
 register_test_target(test_animation_ids)
 
-# ── test_mount_fsm ───────────────────────────────────────────
-# The mount's jump: JumpStart, Jump and JumpEnd as the unit's own.
-add_executable(test_mount_fsm
-    test_mount_fsm.cpp
-    ${TEST_COMMON_SOURCES}
-    ${CMAKE_SOURCE_DIR}/src/rendering/animation/mount_fsm.cpp
-    ${CMAKE_SOURCE_DIR}/src/rendering/animation/animation_ids.cpp
-    ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp
-)
-target_include_directories(test_mount_fsm PRIVATE ${TEST_INCLUDE_DIRS})
-target_include_directories(test_mount_fsm SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_link_libraries(test_mount_fsm PRIVATE catch2_main)
-wowee_test_link_glm(test_mount_fsm)
-add_test(NAME mount_fsm COMMAND test_mount_fsm)
-register_test_target(test_mount_fsm)
+# ── test_rider_mount ─────────────────────────────────────────
+# What the mount under a rider plays (0x007385c0, 0x0071d6b0): its rider's
+# unit's animations - a fall into water ends swimming - and what follows its
+# one-shots (0x0073bff0).
+wowee_add_test(test_rider_mount
+    SOURCES test_rider_mount.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/animation/rider_mount.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/animation/base_animation.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/animation/mover_event.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/animation/upper_body.cpp)
 
 # ── test_animation_data ──────────────────────────────────────
 # AnimationData's fallbacks: what a model plays for an animation it lacks
@@ -3685,7 +3680,7 @@ wowee_add_test(test_mount_seat
 # ── test_mount_bank ──────────────────────────────────
 # A flying mount banks into the turn, a ground mount never (0x00719b80).
 wowee_add_test(test_mount_bank
-    SOURCES test_mount_bank.cpp ../src/rendering/animation/mount_fsm.cpp)
+    SOURCES test_mount_bank.cpp ../src/rendering/animation/mount_motion.cpp)
 
 # ── test_chat_spam_filter ────────────────────
 # The server's spam regexes mask matched runs in player chat (0x00501c70,

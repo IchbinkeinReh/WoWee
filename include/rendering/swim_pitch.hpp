@@ -6,10 +6,10 @@
 // unit swims or flies (movement flags 0x200000 | 0x2000000) and moves forward
 // or back, or while a pitch it had is still easing out. The pitch it eases
 // toward:
-//   - moving forward or back: the unit's movement pitch - for a swimmer the
-//     camera's, so the body dives where the camera looks - or 45 degrees up
-//     while ascending and 45 down while descending (the swim-up and swim-down
-//     keys), negated when moving backward;
+//   - moving forward or back: the unit's movement pitch (+0x7ac), which the
+//     camera sets only while it steers, or 45 degrees up while ascending and
+//     45 down while descending (the swim-up and swim-down keys), negated when
+//     moving backward;
 //   - strafing, or not moving forward or back: level.
 // It eases at 4 pi a second (the step clamped to the frame time held to
 // 1/90 .. 1/20 s), and snaps once within 0.01 rad. Positive is nose up.

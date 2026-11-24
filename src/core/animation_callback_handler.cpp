@@ -271,6 +271,13 @@ void AnimationCallbackHandler::setupCallbacks() {
         auto entity = gameHandler_.getEntityManager().getEntity(guid);
         const bool isCreature = entity && entity->getType() == game::ObjectType::UNIT;
         auto& activeEmotes = entitySpawner_.getCreatureActiveEmotes();
+        // Out of an emote a unit stands; a rider's mount goes on as it moves
+        // (0x0073ac30).
+        const auto stand = [cr](uint32_t instanceId) {
+            const auto* unit = cr->unitAnimationState(instanceId);
+            if (unit && unit->riding) cr->playBaseAnimation(instanceId);
+            else cr->playAnimation(instanceId, rendering::anim::STAND, true);
+        };
         if (isCreature && isState) {
             // State emotes can arrive while the creature's model is still loading.
             // Retain the raw animation so spawnOnlineCreature can apply it once the
@@ -287,12 +294,12 @@ void AnimationCallbackHandler::setupCallbacks() {
                 // resume it instead (Westfall woodworkers hammer through these).
                 if (isState) activeEmotes.erase(guid);
                 auto retained = activeEmotes.find(guid);
-                uint32_t resumeAnim = rendering::anim::STAND;
                 if (retained != activeEmotes.end() &&
                     cr->hasAnimation(emoteInstanceId, retained->second)) {
-                    resumeAnim = retained->second;
+                    cr->playAnimation(emoteInstanceId, retained->second, true);
+                } else {
+                    stand(emoteInstanceId);
                 }
-                cr->playAnimation(emoteInstanceId, resumeAnim, true);
             } else if (isState) {
                 // A state emote loops the animation its Emotes.dbc row names -
                 // STATE_DANCE is 69, the dance itself. 3.3.5 has no separate
@@ -325,7 +332,7 @@ void AnimationCallbackHandler::setupCallbacks() {
         emoteInstanceId = entitySpawner_.getPlayerInstanceId(guid);
         if (emoteInstanceId != 0) {
             if (emoteAnim == 0) {
-                cr->playAnimation(emoteInstanceId, rendering::anim::STAND, true);
+                stand(emoteInstanceId);
             } else if (isState) {
                 // Looped, as the NPC branch above does.
                 cr->playAnimation(emoteInstanceId, emoteAnim, true);

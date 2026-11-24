@@ -11,6 +11,7 @@
 // swims through a hillside.
 #include <catch_amalgamated.hpp>
 
+#include "game/mover_mode.hpp"
 #include "game/world_packets.hpp"
 
 using wowee::game::MovementFlags;
@@ -85,4 +86,41 @@ TEST_CASE("predicates do not interfere with each other", "[movementflags]") {
     CHECK(info.isFeatherFalling());
     CHECK_FALSE(info.isPlayerFlying());
     CHECK_FALSE(info.isPlayerRooted());
+}
+
+TEST_CASE("starting to swim ends a fall and a flight, and keeps how long it fell (0x00989660)", "[movementflags]") {
+    MovementInfo info = withFlags(bit(MovementFlags::FORWARD) | bit(MovementFlags::FALLING) |
+                                  bit(MovementFlags::FALLINGFAR) | bit(MovementFlags::CAN_FLY) |
+                                  bit(MovementFlags::FLYING));
+    info.jumpVelocity = -7.955547f;
+    info.jumpXYSpeed = 14.0f;
+    wowee::game::startSwimming(info, 1439u);
+    CHECK(info.flags == (bit(MovementFlags::FORWARD) | bit(MovementFlags::CAN_FLY) | bit(MovementFlags::SWIMMING)));
+    CHECK(info.fallTime == 1439u);
+    CHECK(info.jumpVelocity == 0.0f);
+    CHECK(info.jumpXYSpeed == 0.0f);
+    // Waded in: the last fall's time is left as it was.
+    info = withFlags(bit(MovementFlags::BACKWARD));
+    info.fallTime = 700;
+    wowee::game::startSwimming(info, std::nullopt);
+    CHECK(info.flags == (bit(MovementFlags::BACKWARD) | bit(MovementFlags::SWIMMING)));
+    CHECK(info.fallTime == 700u);
+}
+
+TEST_CASE("taking to the air ends a fall and a swim (0x00989890)", "[movementflags]") {
+    MovementInfo info = withFlags(bit(MovementFlags::FORWARD) | bit(MovementFlags::ASCENDING) |
+                                  bit(MovementFlags::FALLING) | bit(MovementFlags::CAN_FLY));
+    info.jumpVelocity = -9.096748f;
+    wowee::game::startFlying(info, 12u);
+    CHECK(info.flags == (bit(MovementFlags::FORWARD) | bit(MovementFlags::ASCENDING) | bit(MovementFlags::CAN_FLY) |
+                         bit(MovementFlags::FLYING)));
+    CHECK(info.fallTime == 12u);
+    CHECK(info.jumpVelocity == 0.0f);
+    info = withFlags(bit(MovementFlags::SWIMMING) | bit(MovementFlags::CAN_FLY));
+    wowee::game::startFlying(info, std::nullopt);
+    CHECK(info.flags == (bit(MovementFlags::CAN_FLY) | bit(MovementFlags::FLYING)));
+    // Not allowed to fly: nothing.
+    info = withFlags(bit(MovementFlags::FALLING));
+    wowee::game::startFlying(info, 12u);
+    CHECK(info.flags == bit(MovementFlags::FALLING));
 }

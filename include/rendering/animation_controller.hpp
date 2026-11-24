@@ -10,7 +10,7 @@
 #include "rendering/animation/sfx_state_driver.hpp"
 #include "rendering/animation/weapon_type.hpp"
 #include "rendering/animation/body_yaw.hpp"
-#include "rendering/animation/mount_fsm.hpp"
+#include "rendering/animation/mount_motion.hpp"
 
 namespace wowee {
 namespace rendering {
@@ -23,12 +23,13 @@ class Renderer;
 // The player's own unit is animated as every unit is (the CharacterRenderer's
 // unit animation, 0x007385c0 and 0x00724500); this asks it the swings and
 // emotes the player does, plays the speed its movement animation runs at,
-// and drives and seats its mount.
+// and seats it on its mount - whose animations are the unit's too
+// (CharacterRenderer::setRiderMount).
 //
 // Responsibilities:
 //   · The swing for the weapons in hand, the special attack, the ranged shot
 //   · The player's emotes
-//   · Mount discovery, animation and positioning
+//   · The mount's positioning and sounds
 //   · Footstep and SFX drivers
 // ============================================================================
 class AnimationController {
@@ -122,6 +123,10 @@ public:
     void setTaxiFlight(bool onTaxi) { taxiFlight_ = onTaxi; }
     void setMountPitchRoll(float pitch, float roll) { mountPitch_ = pitch; mountRoll_ = roll; }
     void clearMount();
+    /// The player's jump, and a jump's landing, on its mount: the mount's
+    /// sounds for them.
+    void mountJumped();
+    void mountLanded();
     [[nodiscard]] bool isMounted() const { return mountInstanceId_ != 0; }
     [[nodiscard]] uint32_t getMountInstanceId() const { return mountInstanceId_; }
 
@@ -132,8 +137,8 @@ public:
 private:
     Renderer* renderer_ = nullptr;
 
-    // ── The mount's animation ────────────────────────────────────────────
-    MountFSM mountFSM_;
+    // ── The mount's bank, bob and idle sound ─────────────────────────────
+    MountMotion mountMotion_;
     float lastDeltaTime_ = 0.0f;
 
     // ── Footstep event tracking (delegated to FootstepDriver) ────────────
@@ -147,11 +152,11 @@ private:
     WeaponLoadout weaponLoadout_;
     bool meleeOffHandTurn_ = false;
 
-    // ── Mount state (discovery + positioning need renderer) ──────────────
+    // ── Mount state (positioning needs renderer) ─────────────────────────
     uint32_t mountInstanceId_ = 0;
     float mountHeightOffset_ = 0.0f;
     float mountPitch_ = 0.0f;
-    float mountRoll_ = 0.0f;       // External roll for taxi flights (lean roll computed by MountFSM)
+    float mountRoll_ = 0.0f;       // External roll for taxi flights (the bank is MountMotion's)
     int mountSeatAttachmentId_ = -1;
     glm::vec3 smoothedMountSeatPos_ = glm::vec3(0.0f);
     bool mountSeatSmoothingInit_ = false;
@@ -166,7 +171,7 @@ private:
 
     // ── Private helpers ──────────────────────────────────────────────────
     uint32_t resolveMeleeAnimId();
-    void updateMountedAnimation(float deltaTime);
+    void updateMount(float deltaTime);
     void applyMountPositioning(float mountBob, float mountRoll, float characterYaw);
 };
 

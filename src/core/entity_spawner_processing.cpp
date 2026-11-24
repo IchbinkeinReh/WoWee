@@ -2293,16 +2293,9 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
     riderHeight = rendering::mount_seat::seatHeight(seatZ, mountScale);
     uint32_t mountInstance = cr->createInstance(modelId, pos, glm::vec3(0.0f), mountScale);
     if (mountInstance != 0) {
-        auto entity = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
-        const bool moving = entity && entity->isActivelyMoving();
-        const bool flying = creatureFlyingState_.count(guid) > 0;
-        // By pace, not the WALKING flag (FUN_00717050).
-        const bool walking = moving && entity->movesAtWalkPace();
-        uint32_t mountAnim = rendering::anim::mountLocomotion(moving, flying, walking);
-        if (!cr->hasAnimation(mountInstance, mountAnim)) {
-            mountAnim = moving ? rendering::anim::RUN : rendering::anim::STAND;
-        }
-        cr->playAnimation(mountInstance, mountAnim, true);
+        // What it plays is asked as the sync puts it under its rider
+        // (CharacterRenderer::setRiderMount, 0x0073d5d0).
+        cr->playAnimation(mountInstance, rendering::anim::STAND, true);
         cr->playAnimation(riderInstance, riderPose(guid, riderInstance), true);
         spawnMountParticleTwin(displayId, modelId, mountInstance);
         remotePlayerMounts_[guid] = {.displayId = displayId, .modelId = modelId,

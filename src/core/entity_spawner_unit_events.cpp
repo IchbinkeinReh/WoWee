@@ -685,12 +685,17 @@ float EntitySpawner::playerCollisionHeight() {
     const auto& unit = static_cast<const game::Unit&>(*entity);
     const uint16_t scaleField = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
     const uint32_t scaleBits = scaleField != 0xFFFF ? unit.getField(scaleField) : 0u;
-    if (unit.getDisplayId() == collisionHeightDisplay_ && scaleBits == collisionHeightScaleBits_) {
+    // The native display's, whatever form it is drawn in (0x006d78c0 reads
+    // +0xf8).
+    const uint16_t nativeField = game::fieldIndex(game::UF::UNIT_FIELD_NATIVEDISPLAYID);
+    const uint32_t native = nativeField != 0xFFFF ? unit.getField(nativeField) : 0u;
+    const uint32_t displayId = native != 0 ? native : unit.getDisplayId();
+    if (displayId == collisionHeightDisplay_ && scaleBits == collisionHeightScaleBits_) {
         return collisionHeight_;
     }
     auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
     auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
-    const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
+    const int32_t display = displays ? displays->findRecordById(displayId) : -1;
     if (display < 0 || !models || models->getFieldCount() <= us::kModelCollisionHeightColumn) {
         return collisionHeight_;
     }
@@ -708,7 +713,7 @@ float EntitySpawner::playerCollisionHeight() {
                                                 models->getFloat(mrow, us::kModelScaleColumn));
         if (width > 0.01f && width < 50.0f) collisionHalfWidth_ = width * 0.5f;
     }
-    collisionHeightDisplay_ = unit.getDisplayId();
+    collisionHeightDisplay_ = displayId;
     collisionHeightScaleBits_ = scaleBits;
     return collisionHeight_;
 }
@@ -723,7 +728,9 @@ float EntitySpawner::playerMountedCollisionHeight(uint32_t mountDisplayId) {
     auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
     auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
     if (!displays || !models || models->getFieldCount() <= kModelMountHeightColumn) return 0.0f;
-    const int32_t display = displays->findRecordById(unit.getDisplayId());
+    const uint16_t nativeField = game::fieldIndex(game::UF::UNIT_FIELD_NATIVEDISPLAYID);
+    const uint32_t native = nativeField != 0xFFFF ? unit.getField(nativeField) : 0u;
+    const int32_t display = displays->findRecordById(native != 0 ? native : unit.getDisplayId());
     const int32_t mountDisplay = displays->findRecordById(mountDisplayId);
     if (display < 0 || mountDisplay < 0) return 0.0f;
     const auto drow = static_cast<uint32_t>(display);
@@ -937,7 +944,8 @@ void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
             if (auto it = creatureInfo.find(unit.getEntry()); it != creatureInfo.end())
                 byModel = (it->second.typeFlags & us::kTypeFlagModelCollision) != 0;
         }
-        const float height = byModel ? modelHeight(unit) : us::kDefaultCollisionHeight;
+        float height = byModel ? modelHeight(unit) : us::kDefaultCollisionHeight;
+        if (guid == self && renderer_->getCameraController()) height = renderer_->getCameraController()->collisionHeight();
         if (!us::crossed(height, depth, lastDepth)) return;
         if (guid == mover && listenerAtCharacter) {
             player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,

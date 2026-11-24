@@ -3317,9 +3317,11 @@ void Renderer::update(float deltaTime) {
         bodyIn.halveSpine = false;  // The player's own unit takes the whole lag on SpineLow first
         const body_yaw::Result body = body_yaw::update(characterBody_, bodyIn);
         // Swimming or flying on foot, the body tilts toward where it goes
-        // (swim_pitch.hpp, 0x00719b80): the camera's pitch moving forward or
-        // back, 45 degrees with the swim-up and swim-down keys. Mounted, the
-        // mount takes the pitch (applyMountPositioning).
+        // (swim_pitch.hpp, 0x00719b80): the pitch it moves at (+0x7ac) moving
+        // forward or back - the camera's only while that steers - and 45
+        // degrees with the swim-up and swim-down keys. Mounted, the
+        // mount takes the pitch (applyMountPositioning) - swimming this one,
+        // flying the one the mount steers by.
         {
             swim_pitch::Motion motion;
             motion.forward = (moveFlags & body_yaw::kForward) != 0;
@@ -3327,14 +3329,11 @@ void Renderer::update(float deltaTime) {
             motion.strafing = (moveFlags & (body_yaw::kStrafeLeft | body_yaw::kStrafeRight)) != 0;
             motion.ascending = (moveFlags & body_yaw::kAscending) != 0 || cameraController->isSwimRising();
             motion.descending = (moveFlags & body_yaw::kDescending) != 0 || cameraController->isSwimDiving();
-            const bool swimOrFly = !mounted && !dead && !taxiFlight &&
-                                   (moveFlags & (body_yaw::kSwimming | body_yaw::kFlying)) != 0;
-            float movementPitch = 0.0f;
-            if (camera) {
-                const glm::vec3 fwd = camera->getForward();
-                const float len = glm::length(fwd);
-                if (len > 1e-4f) movementPitch = std::asin(std::clamp(fwd.z / len, -1.0f, 1.0f));
-            }
+            const bool swimOrFly = !dead && !taxiFlight &&
+                                   (moveFlags & (mounted ? body_yaw::kSwimming
+                                                         : body_yaw::kSwimming | body_yaw::kFlying)) != 0;
+            const float movementPitch = (moveFlags & body_yaw::kSwimming) != 0 ? cameraController->getSwimPitchRad()
+                                                                               : cameraController->getFlightPitchRad();
             if (swimOrFly) {
                 characterSwimPitch_ = swim_pitch::step(characterSwimPitch_,
                                                        swim_pitch::target(motion, movementPitch), deltaTime);
@@ -3342,6 +3341,8 @@ void Renderer::update(float deltaTime) {
                 characterSwimPitch_ = 0.0f;
             }
             const float tilt = swim_pitch::active(swimOrFly, motion, characterSwimPitch_) ? characterSwimPitch_ : 0.0f;
+            if (mounted && (moveFlags & body_yaw::kSwimming) != 0 && !taxiFlight)
+                animationController_->setMountPitchRoll(tilt, 0.0f);
             // Flying, it banks into a turn as well (swim_pitch::stepRoll),
             // from how fast the body's yaw turned this frame.
             const bool flyingNow = swimOrFly && (moveFlags & body_yaw::kFlying) != 0;
@@ -3489,18 +3490,22 @@ void Renderer::update(float deltaTime) {
         const bool swimming = cameraController->isSwimming();
         float intensity = 0.0f;
         bool wading = false;
+        // The depths below are those of a body of the client's own height
+        // (73/36 yards). A taller one - a rider's, with its mount under it -
+        // wades and floats that much deeper.
+        const float bodies = cameraController->collisionHeight() / (73.0f / 36.0f);
 
         if (cameraController->isMoving()) {
             if (auto waterH = waterRenderer->getWaterHeightAt(charPos.x, charPos.y)) {
                 if (swimming) {
                     // A wake only exists where the swimmer meets the surface -
                     // diving deep leaves the surface undisturbed.
-                    const float below = *waterH - charPos.z;
+                    const float below = (*waterH - charPos.z) / bodies;
                     intensity = glm::clamp(1.0f - (below - 0.6f) / 1.4f, 0.0f, 1.0f);
                 } else {
                     // Ankle-deep barely marks the water; thigh-deep throws the
                     // most, past which the character starts swimming anyway.
-                    const float depth = *waterH - charPos.z;
+                    const float depth = (*waterH - charPos.z) / bodies;
                     if (depth > 0.03f && depth < 1.8f) {
                         wading = true;
                         intensity = glm::clamp(depth / 0.6f, 0.3f, 1.0f);

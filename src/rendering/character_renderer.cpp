@@ -31,6 +31,7 @@
 #include "rendering/m2_event_sounds.hpp"
 #include "rendering/unit_model_events.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/animation/rider_mount.hpp"
 #include "core/thread_pool.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/bone_slots.hpp"
@@ -2390,6 +2391,12 @@ float sampledTime(const pipeline::M2Model& model, int sequence, float time, anim
     return anim::sampledSequenceTime(time, model.sequences[static_cast<size_t>(sequence)].duration, mode);
 }
 
+// A sequence's length in ms.
+float sequenceLength(const pipeline::M2Model& model, int sequence) {
+    if (sequence < 0 || static_cast<size_t>(sequence) >= model.sequences.size()) return 0.0f;
+    return static_cast<float>(model.sequences[static_cast<size_t>(sequence)].duration);
+}
+
 // Held on its first or last frame: its time does not run (0x00826b00's
 // speed 0) and it never ends.
 bool heldMode(anim::PlayMode mode) {
@@ -2443,8 +2450,11 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
         core::Logger::getInstance().warning("Cannot play animation: instance ", instanceId, " not found");
         return;
     }
-    // The animation of its tier the model has (0x007385c0 -> 0x007176f0).
-    animationId = tierAnimationFor(models[it->second.modelId].data, animationId, it->second.animationTier);
+    // The animation of its tier the model it shows has (0x007385c0 ->
+    // 0x007176f0): its mount's while it rides.
+    const CharacterInstance* mount = ridden(it->second);
+    animationId = tierAnimationFor(models[mount ? mount->modelId : it->second.modelId].data, animationId,
+                                   it->second.animationTier);
     // A seated passenger's body is its vehicle's where it mirrors it
     // (0x007385c0 asks 0x007487e0), else its seat's (0x007385c0,
     // 0x00724500). On the way in or out nothing else is played; in the
@@ -2491,7 +2501,79 @@ void CharacterRenderer::setUnitAnimationState(uint32_t instanceId, const upper_b
     const bool dismounted = it->second.unitAnimation && it->second.unit.riding && !unit.riding;
     it->second.unitAnimation = true;
     it->second.unit = unit;
-    if (kitChanged || dismounted) playBaseAnimation(instanceId);
+    // A mount new under it takes the base animation (0x0073d5d0).
+    const bool mounted = it->second.mountBaseDue && ridden(it->second) != nullptr;
+    if (mounted) it->second.mountBaseDue = false;
+    if (kitChanged || dismounted || mounted) playBaseAnimation(instanceId);
+}
+
+void CharacterRenderer::setRiderMount(uint32_t riderInstanceId, uint32_t mountInstanceId) {
+    auto it = instances.find(riderInstanceId);
+    if (it == instances.end() || it->second.mountInstance == mountInstanceId) return;
+    if (auto old = instances.find(it->second.mountInstance);
+        old != instances.end() && old->second.mountRider == riderInstanceId) {
+        old->second.mountRider = 0;
+    }
+    auto mit = instances.find(mountInstanceId);
+    it->second.mountInstance = mit != instances.end() ? mountInstanceId : 0;
+    it->second.mountBaseDue = it->second.mountInstance != 0;
+    if (mit != instances.end()) mit->second.mountRider = riderInstanceId;
+}
+
+CharacterRenderer::CharacterInstance* CharacterRenderer::ridden(const CharacterInstance& instance) {
+    if (instance.mountInstance == 0 || !instance.unitAnimation || !instance.unit.riding) return nullptr;
+    auto it = instances.find(instance.mountInstance);
+    return it != instances.end() ? &it->second : nullptr;
+}
+
+void CharacterRenderer::playOnMount(const CharacterInstance& rider, uint32_t animationId, bool loop) {
+    CharacterInstance* mount = ridden(rider);
+    if (!mount) return;
+    const auto& model = models[mount->modelId].data;
+    // A state kit animating the unit has the mount play its animation,
+    // whatever was asked but a death (0x0071e400).
+    const bool kit = rider.unit.kitAnim && !upper_body::isDeath(anim::animationData().behavior(animationId));
+    if (kit) {
+        animationId = *rider.unit.kitAnim;
+        loop = true;
+    } else if (!rider_mount::takes(anim::animationData(), animationId)) {
+        return;
+    }
+    if (!kit || rider.unit.kitAnimTiered) animationId = tierAnimationFor(model, animationId, rider.animationTier);
+    // What it plays (0x007173f0) goes on; a one-shot that has run out is
+    // nothing.
+    if (mount->currentSequenceIndex >= 0 && mount->currentAnimationId == animationId &&
+        (mount->animationLoop || mount->animationTime < sequenceLength(model, mount->currentSequenceIndex))) {
+        return;
+    }
+    playAnimationNow(mount->id, animationId, loop, 0);
+}
+
+bool CharacterRenderer::endMountOneShot(CharacterInstance& mount) {
+    auto it = instances.find(mount.mountRider);
+    if (it == instances.end() || ridden(it->second) != &mount) return false;
+    const CharacterInstance& rider = it->second;
+    const auto& model = models[mount.modelId].data;
+    const uint8_t tier = rider.animationTier;
+    if (rider.unit.kitAnim) {
+        playAnimationNow(mount.id,
+                         rider.unit.kitAnimTiered ? tierAnimationFor(model, *rider.unit.kitAnim, tier)
+                                                  : *rider.unit.kitAnim,
+                         true, 0);
+        return true;
+    }
+    upper_body::Unit unit = rider.unit;
+    unit.speed = mount.locomotionSpeed;
+    const auto has = [&model](uint32_t id) { return modelHasAnimation(model, id); };
+    const base_animation::Pick p =
+        rider_mount::afterOneShot(anim::animationData(), unit, mount.currentAnimationId, has,
+                                  [&](uint32_t id) { return has(tierAnimationFor(model, id, tier)); });
+    if (p.anim == base_animation::kKeep) {
+        mount.animationTime = sequenceLength(model, mount.currentSequenceIndex);
+        return true;
+    }
+    playAnimationNow(mount.id, tierAnimationFor(model, p.anim, tier), p.loop, 0);
+    return true;
 }
 
 const upper_body::Unit* CharacterRenderer::unitAnimationState(uint32_t instanceId) const {
@@ -2589,15 +2671,19 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
         if (!unit.riding) {
             upper_body::applyKitAnimation(now, d, kit);
         } else {
-            // A rider: its mount plays it (the unit's sync), and its upper
-            // body where it is an upper-body animation and not the mount's;
-            // the body holds the rider's pose.
+            // A rider: its mount plays it (playOnMount), and its upper body
+            // where it is an upper-body animation and not the mount's; the
+            // body holds the rider's pose.
             upper_body::applyRiderKitAnimation(anim::animationData(), now, d, kit);
         }
     }
 
-    // The upper body first, as 0x007385c0 plays them. Without a key bone of
-    // its own, what goes there is not played (0x00737ef0).
+    // A rider's mount first, as 0x007385c0 plays them - not for the rider's
+    // own body's end, which leaves the mount as it is (+0xa38 0x40 alone).
+    if (unit.riding && pass == upper_body::Pass::Asked && (d.toMount || unit.kitAnim))
+        playOnMount(instance, animationId, loop);
+    // Then the upper body. Without a key bone of its own, what goes there is
+    // not played (0x00737ef0).
     if (bone >= 0) {
         // In its seat, the upper body given back, or given the ride
         // animation the body plays, stands as the seat has it; a one-shot
@@ -2617,7 +2703,6 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
                                   d.upperBlend);
         }
     }
-    // What the mount plays is its own driver's.
     if (d.bodyAction != upper_body::Action::Play || d.body.anim < 0) return;
     const auto bodyAnim = static_cast<uint32_t>(d.body.anim);
     if (d.bodyFromUpper) {
@@ -2692,7 +2777,9 @@ base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& ins
         if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) playing.shown = static_cast<int32_t>(k.animationId);
     }
     upper_body::Unit unit = instance.unit;
-    unit.speed = instance.locomotionSpeed;
+    // The unit's speed (0x00987570): riding, its mount's stride is at it.
+    const CharacterInstance* mount = ridden(instance);
+    unit.speed = mount ? mount->locomotionSpeed : instance.locomotionSpeed;
     if (instance.standStateSeen >= 0) unit.standStateSeen = static_cast<uint8_t>(instance.standStateSeen);
     // 0x007224d0: no cast loop while a visual kit's animation (type 0) plays
     // (+0xfa4); the PrecastKit's StartAnimID until it has ended (+0xa38
@@ -2719,7 +2806,20 @@ void CharacterRenderer::playBaseAnimation(uint32_t instanceId) {
     const base_animation::Pick p =
         pickBaseAnimation(it->second, base_animation::Ask{.queuedAttack = it->second.queuedAttack});
     it->second.standStateSeen = it->second.unit.standState;
-    if (p.anim != base_animation::kKeep) playAskedAnimation(instanceId, p.anim, p.loop, p.flags);
+    if (p.anim == base_animation::kKeep) return;
+    playAskedAnimation(instanceId, p.anim, p.loop, p.flags);
+    // Riding, with what it is asked none of a mount's: the mount's own.
+    const CharacterInstance* mount = ridden(it->second);
+    if (!mount || rider_mount::takes(anim::animationData(), p.anim)) return;
+    const auto& model = models[mount->modelId].data;
+    const uint8_t tier = it->second.animationTier;
+    upper_body::Unit unit = it->second.unit;
+    unit.speed = mount->locomotionSpeed;
+    const auto has = [&model](uint32_t id) { return modelHasAnimation(model, id); };
+    const base_animation::Pick m =
+        rider_mount::base(anim::animationData(), unit, 0, has,
+                          [&](uint32_t id) { return has(tierAnimationFor(model, id, tier)); });
+    if (m.anim != base_animation::kKeep) playOnMount(it->second, m.anim, m.loop);
 }
 
 void CharacterRenderer::standStateChanged(uint32_t instanceId, uint8_t standState) {
@@ -3169,10 +3269,14 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                     }
                     stepEvents(eventsSequence, -1.0f, inst.animationTime);
                 } else {
-                    // One-shot animation finished: return to the caller-specified
-                    // resume anim (NPC state emote), else the loop the unit
-                    // rests in (sitting, sleeping...), else Stand, unless dead
-                    if (inst.currentAnimationId != anim::DEATH && !inst.holdsLastFrame) {
+                    // One-shot animation finished: a rider's mount plays what
+                    // follows for its rider's unit. Else return to the
+                    // caller-specified resume anim (NPC state emote), else the
+                    // loop the unit rests in (sitting, sleeping...), else
+                    // Stand, unless dead
+                    if (inst.mountRider != 0 && inst.oneShotReturnAnim == 0 && endMountOneShot(inst)) {
+                        // Played there.
+                    } else if (inst.currentAnimationId != anim::DEATH && !inst.holdsLastFrame) {
                         // Seated with its seat's upper ride animation as its
                         // whole stand, it is back in its loop: an ended
                         // one-shot has passed its start (0x007484e0).
@@ -5994,6 +6098,10 @@ void CharacterRenderer::removeInstance(uint32_t instanceId) {
     // Defer bone buffer destruction - in-flight command buffers may still
     // reference these descriptor sets.
     destroyInstanceBones(it->second, /*defer=*/true);
+
+    // A rider and its mount part with whichever goes.
+    if (auto rider = instances.find(it->second.mountRider); rider != instances.end()) rider->second.mountInstance = 0;
+    if (auto mount = instances.find(it->second.mountInstance); mount != instances.end()) mount->second.mountRider = 0;
 
     instances.erase(it);
 }

@@ -330,7 +330,7 @@ rendering::upper_body::Unit unitAnimationState(game::GameHandler& gh, EntitySpaw
     namespace ub = rendering::upper_body;
     ub::Unit u;
     u.moveFlags = moveFlags | (unit.isFallingByFlags() ? ub::kMoveFalling : 0u);
-    u.leaping = unit.isFallingByFlags();
+    u.leaping = unit.isAirborne();  // 0x00723350
     u.turningInPlace = turning;
     u.standState = unit.getStandState();
     u.mounted = unit.getMountDisplayId() != 0;
@@ -407,32 +407,6 @@ uint32_t unitChannelSpell(const game::Entity& entity) {
     return index == 0xFFFF ? 0 : entity.getField(index);
 }
 
-// The locomotion a rider's mount plays, Run or Stand where its model lacks
-// the one its movement asks.
-uint32_t mountLocomotionFor(const rendering::CharacterRenderer& cr, uint32_t mountInstance, bool moving, bool flying,
-                            bool walking) {
-    const uint32_t anim = rendering::anim::mountLocomotion(moving, flying, walking);
-    if (cr.hasAnimation(mountInstance, anim)) return anim;
-    return moving ? rendering::anim::RUN : rendering::anim::STAND;
-}
-
-// A rider's mount model (+0x98c) plays what 0x007385c0 hands it: the
-// locomotion asked, unless a state kit animates the unit - then the kit's
-// animation, put in it by the mount's tier (0x0071e400's mount slot).
-// Played on a change of either.
-void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellVisualSystem* svs,
-                             EntitySpawner::UnitBody& body, uint64_t guid, uint32_t mountInstance,
-                             uint32_t locomotion, bool locomotionAsked) {
-    std::optional<uint32_t> kit;
-    if (svs) {
-        if (const auto k = svs->unitKitAnimation(guid)) kit = k->anim;
-    }
-    const bool kitChanged = kit != body.mountKitAnimation;
-    body.mountKitAnimation = kit;
-    if (!kitChanged && !locomotionAsked) return;
-    cr.playAnimation(mountInstance, kit ? *kit : locomotion, true);
-}
-
 // A unit on the traced water's waves ("Ride the waves", Renderer::
 // updateWaveRide), drawn only: swimming, it rides them where it swims; aboard
 // a ship that rides them, it rides with the ship. `drawnAt` is where the sync
@@ -489,8 +463,11 @@ void feedUnitRipple(rendering::Renderer& renderer, EntitySpawner& spawner, uint6
 
 void syncUnitAnimation(rendering::CharacterRenderer& cr, game::GameHandler& gh, EntitySpawner& spawner,
                        rendering::SpellVisualSystem* svs, uint64_t guid, uint32_t instanceId, const game::Unit& unit,
-                       bool moving, bool swimming, bool flying, bool riding) {
+                       bool moving, bool swimming, bool flying, uint32_t mountInstance) {
     cr.setAnimationTier(instanceId, unitAnimationTier(unit));
+    // The mount under it, which plays what the unit is asked (0x007385c0).
+    cr.setRiderMount(instanceId, mountInstance);
+    const bool riding = mountInstance != 0;
     const auto& body = spawner.getUnitBodies()[guid];
     auto state = unitAnimationState(gh, spawner, guid, unit, unitBodyFlags(unit, moving, swimming, flying),
                                     body.turning,
@@ -4693,7 +4670,7 @@ void Application::applyServerMovementState(float deltaTime) {
         renderer->getCameraController()->setFlyingActive(gameHandler->canFly());
         // How deep the water must be to swim in, and how deep it treads.
         if (entitySpawner_)
-            renderer->getCameraController()->setCollisionHeight(entitySpawner_->playerCollisionHeight());
+            renderer->getCameraController()->setCollisionHeight(playerCollisionHeight());
         if (entitySpawner_)
             renderer->getCameraController()->setPortHalfWidth(entitySpawner_->playerCollisionHalfWidth());
         // And whether the player is up in it, which the camera worked out
@@ -4720,20 +4697,13 @@ void Application::applyServerMovementState(float deltaTime) {
             if (gameHandler->isMounted()) {
                 if (auto* ac = renderer->getAnimationController()) ac->setMountPitchRoll(pitchRad, 0.0f);
             }
-        } else if (gameHandler->isSwimming() && renderer->getCameraController()->isClickToMoveSteering()) {
-            // Click-to-move pitches a swimmer itself (0x0072f1f0).
-            gameHandler->setMovementPitch(renderer->getCameraController()->getSwimPitchRad());
         } else if (gameHandler->isSwimming()) {
-            // A swimmer goes where the camera looks, so its pitch is the camera's.
-            if (auto* cam = renderer->getCamera()) {
-                glm::vec3 fwd = cam->getForward();
-                float len = glm::length(fwd);
-                if (len > 1e-4f) {
-                    gameHandler->setMovementPitch(std::asin(std::clamp(fwd.z / len, -1.0f, 1.0f)));
-                }
-            }
+            // A swimmer's likewise, or as click-to-move pitches it
+            // (0x0072f1f0): what it swims at.
+            gameHandler->setMovementPitch(renderer->getCameraController()->getSwimPitchRad());
         } else if (gameHandler->isMounted()) {
-            // Reset mount pitch when not flying
+            // Level on the ground; swimming, the renderer tilts it with the
+            // body (swim_pitch).
             if (auto* ac = renderer->getAnimationController()) ac->setMountPitchRoll(0.0f, 0.0f);
         }
     }
@@ -5556,14 +5526,14 @@ void Application::applyServerMovementState(float deltaTime) {
         // Off a ledge without a jump: the client falls from the step its
         // ground went missing in (0x00762980 -> 0x00988370(0)), FALLING set
         // and the fall time counting from there. Here once the drop has
-        // lasted as long as a fall the landing is sent for (playerFallsFar),
+        // lasted as long as a fall the landing is sent for (playerOffLedge),
         // counted from when the ground went: a bump that breaks contact for
         // a frame is no fall. Not on a transport, where the client does not
         // mark a passenger standing on it as falling and the server measured
         // a lift's whole descent as one.
         // Nor while a transport carries the player to another map: it is off
         // the transport only until the transport is known there.
-        if (playerFallsFar() && !gameHandler->isOnTransport() && !gameHandler->isOnTaxiFlight() &&
+        if (playerOffLedge() && !gameHandler->isOnTransport() && !gameHandler->isOnTaxiFlight() &&
             !gameHandler->hasPendingPlayerTransportWorldTransfer()) {
             if (auto* mh = gameHandler->getMovementHandler()) {
                 const float airborne = renderer->getCameraController()->airborneSeconds();
@@ -5630,7 +5600,7 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         gameHandler->moverPossessed() ? gameHandler->playerMovementInfo() : gameHandler->getMovementInfo();
     u.moveFlags = movement.flags;
     const bool launched = (u.moveFlags & ub::kMoveFalling) != 0 && movement.jumpVelocity != 0.0f;
-    if (!launched && playerFallsFar()) u.moveFlags |= ub::kMoveFalling | kMoveFallingFar;
+    if (playerFallsFar()) u.moveFlags |= ub::kMoveFalling | kMoveFallingFar;
     u.leaping = launched || (u.moveFlags & kMoveFallingFar) != 0;
     u.standState = gameHandler->getStandState();
     u.mounted = self.getMountDisplayId() != 0;
@@ -5658,6 +5628,13 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         u.stealthed = ((self.getField(b1) >> 16) & 0x2u) != 0;
     u.walkSpeed = gameHandler->getServerWalkSpeed();
     unitSplineState(u, *gameHandler, gameHandler->getPlayerGuid(), u.moveFlags);
+    // On a flight path: along a flying spline (0x004f5290), forward as one
+    // moves a unit.
+    if (auto* ac = renderer ? renderer->getAnimationController() : nullptr; ac && ac->isMounted() && ac->isTaxiFlight()) {
+        u.splineFlying = true;
+        u.leaping = false;
+        u.moveFlags = (u.moveFlags & ~(ub::kMoveSwimOrFly | ub::kMoveFalling | kMoveFallingFar)) | 0x1u;
+    }
     // Looting (0x007222a0, 0x0071b6b0 read the loot target for the active
     // player), in combat (0x0071afb0), an auto-repeating shot (+0xa38 0x200).
     u.looting = u.canLoot = gameHandler->isLootWindowOpen();
@@ -5734,18 +5711,40 @@ void Application::playTextEmoteLocally(uint32_t textEmoteId) {
 // A drop off a ledge the player is in the air for: not a jump, not in water,
 // in flight or on a ride locked to a transport, and lasting as long as a fall
 // the landing is sent for (CameraController, MSG_MOVE_FALL_LAND).
-bool Application::playerFallsFar() const {
+bool Application::playerOffLedge() const {
     const auto* cc = renderer ? renderer->getCameraController() : nullptr;
     constexpr float kFallSeconds = 0.15f;
     return cc && !cc->isGrounded() && !cc->isSwimming() && !cc->isFlightAirborne() && !hasM2RideLock_ &&
            cc->airborneSeconds() >= kFallSeconds;
 }
 
+// The player's collision height (+0x854): what the server gave last, else
+// its model's, or its mount's under it (0x0073fcc0 -> 0x0073d5d0(1, 1) ->
+// 0x006d7720 for one made mounted).
+float Application::playerCollisionHeight() {
+    if (const auto* mh = gameHandler->getMovementHandler(); mh && mh->collisionHeightGiven())
+        return *mh->collisionHeightGiven();
+    if (auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid()); self && self->isUnit()) {
+        const uint32_t mount = static_cast<const game::Unit&>(*self).getMountDisplayId();
+        if (mount != 0) {
+            if (const float h = entitySpawner_->playerMountedCollisionHeight(mount); h > 0.0f) return h;
+        }
+    }
+    return entitySpawner_->playerCollisionHeight();
+}
+
+// MOVEMENTFLAG_FALLING_FAR as the fall step sets it (CameraController::
+// isFallingFar), which the fall's animation and its landing go by.
+bool Application::playerFallsFar() const {
+    const auto* cc = renderer ? renderer->getCameraController() : nullptr;
+    return cc && cc->isFallingFar() && !hasM2RideLock_;
+}
+
 // The player's unit, onto its instance each frame, and its base animation
-// asked again where what it reads has changed: in the air off a ledge, a
-// turn on the spot started or stopped (0x0073dab0), alive or dead, looting,
-// stealth, a melee target taken or dropped. Its movement events ask it as
-// they come (animatePlayerMovement).
+// asked again where what it reads has changed: a turn on the spot started or
+// stopped (0x0073dab0), alive or dead, looting, stealth, a melee target taken
+// or dropped, into or out of water or the air. Its movement events ask it as
+// they come (animatePlayerMovement), and falling far Fall (0x0073ad00).
 void Application::syncPlayerDisplayModel(const game::Unit& self) {
     if (!playerCharacterSpawned || !renderer || !entitySpawner_ || !gameHandler) return;
     auto* cr = renderer->getCharacterRenderer();
@@ -5807,9 +5806,10 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
     if (!cr || instanceId == 0) return;
     cr->setAnimationTier(instanceId, unitAnimationTier(self));
     const rendering::upper_body::Unit u = playerAnimationState(self);
+    // The mount under it, which plays what the player is asked (0x007385c0).
+    cr->setRiderMount(instanceId, u.riding && entitySpawner_ ? entitySpawner_->getMountInstanceId() : 0u);
     cr->setUnitAnimationState(instanceId, u);
     const PlayerAnimationSeen now{.instanceId = instanceId,
-                                  .leaping = u.leaping,
                                   .fellFar = (u.moveFlags & kMoveFallingFar) != 0,
                                   .turning = u.turningInPlace,
                                   .turningLeft = u.turningLeft,
@@ -5817,9 +5817,9 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
                                   .looting = u.looting,
                                   .stealthed = u.stealthed,
                                   .autoAttacking = u.autoAttacking,
-                                  .swimming = (u.moveFlags & rendering::upper_body::kMoveSwimOrFly) != 0};
+                                  .swimming = (u.moveFlags & rendering::upper_body::kMoveSwimOrFly) != 0,
+                                  .onFlightPath = u.splineFlying};
     const PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
-    if (u.riding) return;
     // A new instance starts on Stand. Made after the swim began, at a teleport
     // into water across maps, no movement event comes to ask again, and the
     // character stood in the water until the next one.
@@ -5827,11 +5827,13 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
         if (now.swimming) cr->playBaseAnimation(instanceId);
         return;
     }
-    const bool changed = (now.leaping && !before.leaping) || now.turning != before.turning ||
+    const bool changed = now.turning != before.turning ||
                          now.turningLeft != before.turningLeft || now.alive != before.alive ||
                          now.looting != before.looting || now.stealthed != before.stealthed ||
-                         now.autoAttacking != before.autoAttacking || now.swimming != before.swimming;
+                         now.autoAttacking != before.autoAttacking || now.swimming != before.swimming ||
+                         now.onFlightPath != before.onFlightPath;
     if (changed) cr->playBaseAnimation(instanceId);
+    if (now.fellFar && !before.fellFar && now.alive) cr->playAnimation(instanceId, rendering::anim::FALL, true);
 }
 
 // What an event of the player's own movement does to its animation: the
@@ -5847,8 +5849,10 @@ void Application::animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, b
     if (gameHandler->moverPossessed()) return;
     auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
     if (!self || !self->isUnit()) return;
-    // A mount takes what its rider is asked (its own driver).
-    if (auto* ac = renderer->getAnimationController(); ac && ac->isMounted()) return;
+    // Carried along a flight path it moves by no event of its own.
+    auto* ac = renderer->getAnimationController();
+    const bool mounted = ac && ac->isMounted();
+    if (mounted && ac->isTaxiFlight()) return;
     // The state the event leaves it in, and the speed its flags move it at
     // (CMovement::GetCurrentSpeed).
     const uint32_t flags = (gameHandler->moverPossessed() ? gameHandler->playerMovementInfo()
@@ -5862,11 +5866,15 @@ void Application::animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, b
     speeds.flight = gameHandler->getServerFlightSpeed();
     speeds.flightBack = gameHandler->getServerFlightBackSpeed();
     const float speed = game::Entity::speedForFlags(speeds, flags);
-    cr->setLocomotionSpeed(instanceId, speed);
+    // Mounted, it is the mount's stride that goes at it.
+    const uint32_t mountInstance = mounted && entitySpawner_ ? entitySpawner_->getMountInstanceId() : 0u;
+    cr->setLocomotionSpeed(mountInstance != 0 ? mountInstance : instanceId, speed);
     const bool fellFar = playerAnimationSeen_.fellFar;
     syncPlayerAnimation(static_cast<const game::Unit&>(*self));
+    if (mounted && op == game::Opcode::MSG_MOVE_JUMP) ac->mountJumped();
 
     if (op == game::Opcode::MSG_MOVE_FALL_LAND) {
+        if (mounted && launchedBefore) ac->mountLanded();
         const auto landed = rendering::landed(flagsBefore | (fellFar ? kMoveFallingFar : 0u), flags,
                                               launchedBefore, speed > speeds.walk + speeds.walk);
         switch (landed) {
@@ -5881,8 +5889,10 @@ void Application::animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, b
     }
     uint32_t current = 0;
     float time = 0.0f, duration = 0.0f;
-    const bool fallPlaying = cr->getAnimationState(instanceId, current, time, duration) &&
-                             current == rendering::anim::FALL;
+    bool fallPlaying = cr->getAnimationState(instanceId, current, time, duration) &&
+                       current == rendering::anim::FALL;
+    if (mountInstance != 0 && cr->getAnimationState(mountInstance, current, time, duration))
+        fallPlaying = fallPlaying || current == rendering::anim::FALL;  // 0x007172e0
     // In a vehicle's seat that keeps the jump's animations from it
     // (VehicleFlags 0x4000000, 0x007571c0).
     const auto& movement = gameHandler->getMovementInfo();
@@ -6080,13 +6090,13 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // as the client's GetCurrentSpeed gives it for a unit on one.
                 charRenderer->setLocomotionSpeed(
                     instanceId, isMovingNow ? entity->getMoveSpeed() : 0.0f);
-                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, renderer->getSpellVisualSystem(), guid,
-                                  instanceId, *unitPtr,
-                                  isMovingNow, _creatureSwimmingState.count(guid) > 0, _creatureFlyingState.count(guid) > 0,
-                                  creatureMount != nullptr);
                 if (creatureMount)
                     charRenderer->setLocomotionSpeed(creatureMount->instanceId,
                                                      isMovingNow ? entity->getMoveSpeed() : 0.0f);
+                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, renderer->getSpellVisualSystem(), guid,
+                                  instanceId, *unitPtr,
+                                  isMovingNow, _creatureSwimmingState.count(guid) > 0, _creatureFlyingState.count(guid) > 0,
+                                  creatureMount ? creatureMount->instanceId : 0u);
 
                 // Drive movement animation: Walk/Run/Swim (4/5/42) when moving,
                 // Stand/SwimIdle (0/41) when idle. Walk(4) selected when WALKING flag is set.
@@ -6116,12 +6126,16 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 const bool jumpHolds = !deadOrCorpse &&
                     jumpHoldsAnimation(*charRenderer, creatureMount ? creatureMount->instanceId : instanceId,
                                        *entity, isFlyingNow, locomotionAsked, jumpRefresh);
+                // A rider's mount is asked again on each movement packet that
+                // asks it (0x0073ed10), so one swimming on to the side turns
+                // to it.
                 const bool stateChanged = !jumpHolds &&
                                           (jumpRefresh ||
                                            (isMovingNow  != prevMoving)   ||
                                            (isSwimmingNow != prevSwimming) ||
                                            (isFlyingNow   != prevFlying)   ||
-                                           (isWalkingNow  != prevWalking && isMovingNow));
+                                           (isWalkingNow  != prevWalking && isMovingNow) ||
+                                           (creatureMount && locomotionAsked));
                 if (stateChanged) {
                     _creatureWasMoving[guid]   = isMovingNow;
                     _creatureWasSwimming[guid] = isSwimmingNow;
@@ -6130,34 +6144,17 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     uint32_t curAnimId = 0; float curT = 0.0f, curDur = 0.0f;
                     bool gotState = charRenderer->getAnimationState(instanceId, curAnimId, curT, curDur);
                     if (!gotState || curAnimId != rendering::anim::DEATH) {
-                        if (creatureMount) {
-                            // The unit's animations go to its mount
-                            // (0x007385c0); the rider holds its pose (+0xb7c).
-                            playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
-                                                    entitySpawner_->getUnitBodies()[guid], guid,
-                                                    creatureMount->instanceId,
-                                                    mountLocomotionFor(*charRenderer, creatureMount->instanceId,
-                                                                       isMovingNow, isFlyingNow, isWalkingNow),
-                                                    true);
-                            charRenderer->playAnimation(instanceId, entitySpawner_->riderPose(guid, instanceId),
-                                                        /*loop=*/true);
-                        } else {
-                            // What it is in now, as the client asks it on
-                            // each such change (0x0073ac30 -> 0x00724500):
-                            // the walk, run, swim or fall; its ready in a
-                            // fight; its stand state's loop; its emote
-                            // state's; the stand.
-                            charRenderer->playBaseAnimation(instanceId);
-                        }
+                        // What it is in now, as the client asks it on
+                        // each such change (0x0073ac30 -> 0x00724500):
+                        // the walk, run, swim or fall; its ready in a
+                        // fight; its stand state's loop; its emote
+                        // state's; the stand. A rider's mount plays it
+                        // (0x007385c0), the rider holds its pose (+0xb7c).
+                        charRenderer->playBaseAnimation(instanceId);
                     }
                 }
                 // A rider's seat pose outlasts emotes and state updates.
                 if (creatureMount) {
-                    playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
-                                            entitySpawner_->getUnitBodies()[guid], guid, creatureMount->instanceId,
-                                            mountLocomotionFor(*charRenderer, creatureMount->instanceId, isMovingNow,
-                                                               isFlyingNow, isWalkingNow),
-                                            false);
                     const uint32_t pose = entitySpawner_->riderPose(guid, instanceId);
                     uint32_t riderAnim = 0;
                     float riderTime = 0.0f, riderDuration = 0.0f;
@@ -6324,13 +6321,13 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // plays to - see the creature loop above.
                 const float locomotionSpeed = isMovingNow ? entity->getMoveSpeed() : 0.0f;
                 charRenderer->setLocomotionSpeed(instanceId, locomotionSpeed);
-                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, renderer->getSpellVisualSystem(), guid,
-                                  instanceId, *unitPtr,
-                                  isMovingNow, _pCreatureSwimmingState.count(guid) > 0, _pCreatureFlyingState.count(guid) > 0,
-                                  remoteMount != nullptr);
                 if (remoteMount) {
                     charRenderer->setLocomotionSpeed(remoteMount->instanceId, locomotionSpeed);
                 }
+                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, renderer->getSpellVisualSystem(), guid,
+                                  instanceId, *unitPtr,
+                                  isMovingNow, _pCreatureSwimmingState.count(guid) > 0, _pCreatureFlyingState.count(guid) > 0,
+                                  remoteMount ? remoteMount->instanceId : 0u);
 
                 // Drive movement animation (same logic as creatures)
                 const bool isSwimmingNow = _pCreatureSwimmingState.count(guid) > 0;
@@ -6358,7 +6355,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                                            (isMovingNow  != prevMoving)   ||
                                            (isSwimmingNow != prevSwimming) ||
                                            (isFlyingNow   != prevFlying)   ||
-                                           (isWalkingNow  != prevWalking && isMovingNow));
+                                           (isWalkingNow  != prevWalking && isMovingNow) ||
+                                           (remoteMount && locomotionAsked));
                 if (stateChanged) {
                     _pCreatureWasMoving[guid]   = isMovingNow;
                     _pCreatureWasSwimming[guid] = isSwimmingNow;
@@ -6367,20 +6365,9 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     uint32_t curAnimId = 0; float curT = 0.0f, curDur = 0.0f;
                     bool gotState = charRenderer->getAnimationState(instanceId, curAnimId, curT, curDur);
                     if (!gotState || curAnimId != rendering::anim::DEATH) {
-                        if (remoteMount) {
-                            // The rider keeps the mounted seat pose; locomotion
-                            // belongs to the separately rendered mount model.
-                            playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
-                                                    entitySpawner_->getUnitBodies()[guid], guid,
-                                                    remoteMount->instanceId,
-                                                    mountLocomotionFor(*charRenderer, remoteMount->instanceId,
-                                                                       isMovingNow, isFlyingNow, isWalkingNow),
-                                                    true);
-                            charRenderer->playAnimation(instanceId, mountedRiderAnim, /*loop=*/true);
-                        } else {
-                            // What it is in now (0x0073ac30 -> 0x00724500).
-                            charRenderer->playBaseAnimation(instanceId);
-                        }
+                        // What it is in now (0x0073ac30 -> 0x00724500), on
+                        // its mount where it rides (0x007385c0).
+                        charRenderer->playBaseAnimation(instanceId);
                     }
                 }
 
@@ -6389,11 +6376,6 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // rider's mount field is authoritative, so repair that pose
                 // even when their movement state did not transition this frame.
                 if (remoteMount) {
-                    playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
-                                            entitySpawner_->getUnitBodies()[guid], guid, remoteMount->instanceId,
-                                            mountLocomotionFor(*charRenderer, remoteMount->instanceId, isMovingNow,
-                                                               isFlyingNow, isWalkingNow),
-                                            false);
                     uint32_t riderAnim = 0;
                     float riderTime = 0.0f, riderDuration = 0.0f;
                     const bool haveRiderState = charRenderer->getAnimationState(

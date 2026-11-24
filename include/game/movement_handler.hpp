@@ -157,6 +157,13 @@ public:
                                    float swim, float swimBack, float flight,
                                    float flightBack, float turn, float pitch);
 
+    /// The player's collision height as the server last gave it
+    /// (SMSG_MOVE_SET_COLLISION_HGT: mounted, or off its mount again); none
+    /// since the player's object was made, when it is its model's, or its
+    /// mount's where it was made mounted (0x0073fcc0).
+    [[nodiscard]] std::optional<float> collisionHeightGiven() const { return collisionHeightGiven_; }
+    void forgetCollisionHeight() { collisionHeightGiven_.reset(); }
+
     // Movement flag queries
     [[nodiscard]] bool isPlayerRooted() const { return movementInfo.isPlayerRooted(); }
     [[nodiscard]] bool isGravityDisabled() const { return movementInfo.isGravityDisabled(); }
@@ -424,8 +431,11 @@ private:
     uint32_t monsterMovePacketsDroppedThisTick_ = 0;
 
     // Fall/jump tracking
+    /// The fall's timer stopped: how long it ran, none where it did not.
+    std::optional<uint32_t> endFallTimer();
     bool isFalling_ = false;
     uint32_t fallStartMs_ = 0;
+    std::optional<float> collisionHeightGiven_;
 
     // Heartbeat timing
     int heartbeatLogCount_ = 0;  // periodic position audit counter

@@ -47,6 +47,9 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
+#include "rendering/character_renderer.hpp"
+#include "rendering/water_renderer.hpp"
+#include "core/entity_spawner.hpp"
 #include "rendering/horizon_renderer.hpp"
 #include "rendering/terrain_manager.hpp"
 #include "rendering/terrain_renderer.hpp"
@@ -11626,6 +11629,104 @@ void LuaEngine::registerCoreAPI() {
             return 1;
         });
         lua_setglobal(L_, "__WoweeTestStreamState");
+        // __WoweeTestUnitAnim([unit]): what a unit and the mount under it play
+        // now, as one line - the animation each was asked (and the sequence
+        // of its model shown for it), its time and length in ms, where the
+        // rider and the mount are drawn, the unit's movement flags, its
+        // height, the water's surface over it, and for the player the fall's
+        // state. "riders": every other unit's there is on a mount here, one
+        // a line. For scripted runs.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            auto* renderer = core::Application::getInstance().getRenderer();
+            auto* spawner = core::Application::getInstance().getEntitySpawner();
+            auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+            if (!gh || !cr || !spawner) return 0;
+            const std::string unit = luaL_optstring(L, 1, "player");
+            if (unit == "riders") {
+                std::string all;
+                for (const auto& [riderGuid, m] : spawner->getRemotePlayerMounts()) {
+                    auto e = gh->getEntityManager().getEntity(riderGuid);
+                    if (!e) continue;
+                    uint32_t anim = 0;
+                    float t = 0.0f;
+                    float d = 0.0f;
+                    cr->getAnimationState(m.instanceId, anim, t, d);
+                    const auto slot = cr->animationSlot(m.instanceId);
+                    glm::vec3 at(0.0f);
+                    cr->getInstancePosition(m.instanceId, at);
+                    float depth = 0.0f;
+                    if (auto* water = renderer->getWaterRenderer()) {
+                        if (const auto h = water->getWaterHeightAt(at.x, at.y)) depth = *h - at.z;
+                    }
+                    char line[256];
+                    std::snprintf(line, sizeof(line),
+                                  "%llx display=%u mount anim=%u(%d) t=%.0f/%.0f flags=0x%x speed=%.2f "
+                                  "pos=%.1f,%.1f,%.2f depth=%.2f\n",
+                                  static_cast<unsigned long long>(riderGuid), m.displayId, anim,
+                                  slot ? static_cast<int>(slot->animationId) : -1, t, d, e->getReportedMoveFlags(),
+                                  e->getMoveSpeed(), e->getX(), e->getY(), e->getZ(), depth);
+                    all += line;
+                }
+                lua_pushstring(L, all.c_str());
+                return 1;
+            }
+            const uint64_t guid = wowee::addons::resolveUnitGuid(gh, unit);
+            const bool self = guid == gh->getPlayerGuid();
+            uint32_t rider = 0;
+            uint32_t mount = 0;
+            if (self) {
+                rider = renderer->getCharacterInstanceId();
+                mount = spawner->getMountInstanceId();
+            } else {
+                rider = spawner->getPlayerInstanceId(guid);
+                if (rider == 0) rider = spawner->getCreatureInstanceId(guid);
+                if (const auto* m = spawner->getRemotePlayerMount(guid)) mount = m->instanceId;
+            }
+            std::string s;
+            char buf[256];
+            const auto tell = [&](const char* name, uint32_t instance) {
+                if (instance == 0) return;
+                uint32_t anim = 0;
+                float t = 0.0f;
+                float d = 0.0f;
+                cr->getAnimationState(instance, anim, t, d);
+                const auto slot = cr->animationSlot(instance);
+                glm::vec3 pos(0.0f);
+                cr->getInstancePosition(instance, pos);
+                std::snprintf(buf, sizeof(buf), "%s anim=%u(%d) t=%.0f/%.0f z=%.2f ", name, anim,
+                              slot ? static_cast<int>(slot->animationId) : -1, t, d, pos.z);
+                s += buf;
+            };
+            tell("rider", rider);
+            tell("mount", mount);
+            if (auto e = gh->getEntityManager().getEntity(guid); e && !self) {
+                std::snprintf(buf, sizeof(buf), "flags=0x%x pos=%.2f,%.2f,%.2f speed=%.2f ", e->getReportedMoveFlags(),
+                              e->getX(), e->getY(), e->getZ(), e->getMoveSpeed());
+                s += buf;
+            }
+            if (self) {
+                const auto& mi = gh->getMovementInfo();
+                const glm::vec3 feet = renderer->getCharacterPosition();
+                std::snprintf(buf, sizeof(buf), "flags=0x%x fall=%u z=%.2f ", mi.flags, mi.fallTime, feet.z);
+                s += buf;
+                if (auto* water = renderer->getWaterRenderer()) {
+                    if (const auto h = water->getWaterHeightAt(feet.x, feet.y)) {
+                        std::snprintf(buf, sizeof(buf), "water=%.2f depth=%.2f ", *h, *h - feet.z);
+                        s += buf;
+                    }
+                }
+                if (auto* cc = renderer->getCameraController()) {
+                    std::snprintf(buf, sizeof(buf), "grounded=%d swim=%d fly=%d air=%.2f speed=%.2f colh=%.2f",
+                                  cc->isGrounded() ? 1 : 0, cc->isSwimming() ? 1 : 0, cc->isFlightAirborne() ? 1 : 0,
+                                  cc->airborneSeconds(), cc->getLocomotionSpeed(), cc->collisionHeight());
+                    s += buf;
+                }
+            }
+            lua_pushstring(L, s.c_str());
+            return 1;
+        });
+        lua_setglobal(L_, "__WoweeTestUnitAnim");
         // __WoweeTestNearestTransport([entry]): for a scripted ride, the nearest
         // transport on this map: its horizontal distance from the player,
         // its height over the player, its entry, and whether the player is

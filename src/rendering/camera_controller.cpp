@@ -170,6 +170,8 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // A flyer, and a unit with gravity disabled (MOVEMENTFLAG 0x400,
     // levitating), move by the swim-and-fly step (0x0075eda0 -> 0x00760b40).
     m.flying = isFlightAirborne() || gravityDisabled_;
+    // Taking to the air ends the fall it did it from (0x00989890).
+    if (isFlightAirborne() && m.falling) collision::land(m);
     if (m.swimming || m.flying) {
         // 0x00760b40: a plain sweep along the move in three dimensions; a
         // swimmer also against the liquid's surface turned over.
@@ -687,6 +689,14 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         portAscending_ = f.spaceHeld && !f.noAscendDescend;
 
         if (inWater) {
+        // Where it starts to swim its fall is over (0x00989660 -> 0x00988490),
+        // and with it what it fell at: a swimmer moves only as its keys move
+        // it (0x00760b40). Carried on, a fall off a pier took it yards under
+        // the surface it floats at. A flight is over too (0x00989660).
+        if (!swimming) {
+            verticalVelocity = 0.0f;
+            flightAirborne_ = false;
+        }
         swimming = true;
         jumpLocked_ = false;
         // Swim movement follows look pitch (f.forward/back), while strafe stays
@@ -872,7 +882,8 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         if (f.nowJump) jumpBufferTimer = JUMP_BUFFER_TIME;
         if (grounded) coyoteTimer = COYOTE_TIME;
 
-        bool canJump = (coyoteTimer > 0.0f) && (jumpBufferTimer > 0.0f) && !mounted_;
+        // Mounted as on foot (0x009883f0 asks nothing of a mount).
+        bool canJump = (coyoteTimer > 0.0f) && (jumpBufferTimer > 0.0f);
         if (canJump) {
             verticalVelocity = f.jumpVel;
             jumpStarted_ = true;
@@ -1776,7 +1787,7 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
         if (f.nowJump) jumpBufferTimer = JUMP_BUFFER_TIME;
         if (grounded) coyoteTimer = COYOTE_TIME;
 
-        if (coyoteTimer > 0.0f && jumpBufferTimer > 0.0f && !mounted_) {
+        if (coyoteTimer > 0.0f && jumpBufferTimer > 0.0f) {
             verticalVelocity = f.jumpVel;
             jumpStarted_ = true;
             jumpLocked_ = true;
@@ -2917,7 +2928,10 @@ void CameraController::update(float deltaTime) {
     wasFalling = !grounded && verticalVelocity <= 0.0f;
     // Counted while airborne and zeroed the moment the ground is back, so the
     // landing test above reads the length of the fall that just ended.
-    airborneSeconds_ = grounded ? 0.0f : (airborneSeconds_ + deltaTime);
+    // Nor in the water or in flight: a fall out of either starts where that
+    // ends (0x0098bff0, 0x0098c240 -> 0x00988370, fall time 0), not when the
+    // player last stood.
+    airborneSeconds_ = grounded || swimming || isFlightAirborne() ? 0.0f : (airborneSeconds_ + deltaTime);
 
     // R key is now handled above with chat safeguard (WantTextInput check)
 
@@ -3711,16 +3725,6 @@ void CameraController::clearMovementInputs() {
     turningLeftActive = false;
     turningRightActive = false;
     autoRunning = false;
-}
-
-void CameraController::triggerMountJump() {
-    // Apply physics-driven mount jump: vz = sqrt(2 * g * h)
-    // Desired height and gravity are configurable constants
-    if (grounded || coyoteTimer > 0.0f) {
-        verticalVelocity = getMountJumpVelocity();
-        grounded = false;
-        coyoteTimer = 0.0f;
-    }
 }
 
 void CameraController::applyKnockBack(float vcos, float vsin, float hspeed, float vspeed) {

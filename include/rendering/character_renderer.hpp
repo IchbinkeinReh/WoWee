@@ -116,6 +116,14 @@ public:
     /// 0x0073e840 picks, SpineLow else the head - as the client shares it
     /// (upper_body::decide); without it the body takes everything.
     void setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit);
+    /// The mount drawn under a unit (+0x98c, 0x0073d5d0), 0 for none. While
+    /// the unit rides, its mount's model is the one it shows (vtable +0xd4,
+    /// 0x006e6f80): what it is asked - its base animation, a jump, a landing -
+    /// plays on that where it is one of a mount's (0x007385c0, 0x0071d6b0),
+    /// what follows a one-shot there is the unit's (0x0073c140 -> 0x0073bff0
+    /// -> 0x0073b510), and its own body holds the rider's pose. A mount new
+    /// under it is given the unit's base animation as the unit's state comes.
+    void setRiderMount(uint32_t riderInstanceId, uint32_t mountInstanceId);
     /// The unit last given to the instance (setUnitAnimationState), none
     /// before it was given one.
     [[nodiscard]] const upper_body::Unit* unitAnimationState(uint32_t instanceId) const;
@@ -762,6 +770,11 @@ private:
         /// key bone (+0xb84; -2 until looked up).
         bool unitAnimation = false;
         upper_body::Unit unit;
+        /// setRiderMount: the mount under it, and whether that has yet to be
+        /// given its base animation; on the mount, its rider.
+        uint32_t mountInstance = 0;
+        bool mountBaseDue = false;
+        uint32_t mountRider = 0;
         int32_t upperBodyBone = -2;
         /// +0xa38 0x10000: the PrecastKit's StartAnimID asked, the cast's loop
         /// until it ends (0x0073b140, 0x007224d0); -1 for none.
@@ -952,6 +965,16 @@ private:
     int32_t upperBodyBone(CharacterInstance& instance);
     /// 0x00724500 for an instance's unit, from what it plays.
     base_animation::Pick pickBaseAnimation(CharacterInstance& instance, const base_animation::Ask& ask);
+    /// The mount a unit rides (setRiderMount with the unit riding), null for
+    /// one that does not.
+    CharacterInstance* ridden(const CharacterInstance& instance);
+    /// 0x007385c0's mount: `animationId` on the mount under `rider`, where it
+    /// is one of a mount's - a state kit's that animates the unit in its place
+    /// (0x0071e400) - and not what already plays.
+    void playOnMount(const CharacterInstance& rider, uint32_t animationId, bool loop);
+    /// 0x0073bff0: a mount's one-shot over, what follows it is its rider's.
+    /// False for an instance that is no rider's mount.
+    bool endMountOneShot(CharacterInstance& mount);
     /// 0x00737bd0: the upper body's one-shot is over - it takes up the base
     /// animation where that may go there, else follows the body again.
     void endUpperBodyOneShot(CharacterInstance& instance);
