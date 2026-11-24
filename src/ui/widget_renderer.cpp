@@ -1,4 +1,5 @@
 #include <cstring>
+#include "ui/tooltip_layout.hpp"
 #include "ui/texture_variant.hpp"
 #include "ui/interface_file.hpp"
 #include "ui/widget_renderer.hpp"
@@ -457,6 +458,19 @@ std::string withRealBreaks(const std::string& text) {
 }
 }  // namespace
 
+namespace {
+/// A tooltip line's font height: its font string's, or the tooltip's own.
+float tooltipLineSize(WidgetTree& tree, const Widget& tip, size_t i) {
+    if (i < tip.tooltipLineAnchors.size() && tip.tooltipLineAnchors[i] != 0)
+        if (const Widget* fs = tree.get(tip.tooltipLineAnchors[i]); fs && fs->fontHeight > 0.0f) return fs->fontHeight;
+    if (!tip.name.empty())
+        if (const Widget* fs = tree.findByName(tip.name + "TextLeft" + std::to_string(i == 0 ? 1 : 2));
+            fs && fs->fontHeight > 0.0f)
+            return fs->fontHeight;
+    return interfaceFontSize(tip.fontHeight);
+}
+}  // namespace
+
 void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree) {
     if (w->tooltipLines.empty()) return;
     // Only something that really is a tooltip. The flag is set by whichever
@@ -478,33 +492,22 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
         adopt(line.rightFontString, line.right, line.rc);
     }
 
-    const float size = interfaceFontSize(w->fontHeight);
-    // Each line is as tall as its rows and stands two units below the one
-    // before it, as the template's TextLeft<n> are anchored.
-    constexpr float kLineGap = 2.0f;
-    // Ten units of padding a side, which is what the tooltip backdrop's
-    // own insets come to.
-    constexpr float kPad = 10.0f;
-    // A wrapped line breaks to fit rather than setting the width, so the
-    // width comes from the lines that cannot break. Bounded either way: a
-    // tooltip of one long sentence used to stretch across the screen, and
-    // one of nothing but short lines should not force prose into a column.
-    constexpr float kMinWrap = 180.0f, kMaxWrap = 320.0f;
-    float widest = 0.0f;
-    // A picture counts toward the width, as it does when the line is
-    // drawn. Measured from the stripped text alone, a sell price came out
-    // as wide as its digits and the coins hung off the end.
+    namespace tl = tooltip_layout;
+    constexpr float kPad = tl::kPad;
+    // A line in its own font: the first is the header's (GameTooltipHeaderText),
+    // the rest the text's, as their font strings have them.
+    const auto sizeOfLine = [&](size_t i) { return tooltipLineSize(tree, *w, i); };
+    // A picture counts toward the width, as it does when the line is drawn.
     // The widest of its lines, where a line breaks: runs are added up only
-    // until a newline, or a colour change on the second line would be
-    // measured as sitting at the end of the first.
-    const auto measure = [&](const std::string& text) {
+    // until a newline.
+    const auto measure = [&](const std::string& text, float lineSize) {
         float widestLine = 0.0f;
         float total = 0.0f;
         for (const auto& run : parseMarkup(text)) {
             if (!run.texture.empty()) {
                 total += run.texWidth > 0.0f    ? run.texWidth
                        : run.texHeight > 0.0f   ? run.texHeight
-                                                : size;
+                                                : lineSize;
                 continue;
             }
             std::size_t at = 0;
@@ -512,7 +515,7 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
                 const std::size_t brk = run.text.find('\n', at);
                 const std::string piece = run.text.substr(
                     at, brk == std::string::npos ? std::string::npos : brk - at);
-                total += font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
+                total += font->CalcTextSizeA(lineSize, FLT_MAX, 0.0f, piece.c_str()).x;
                 if (brk == std::string::npos) break;
                 widestLine = std::max(widestLine, total);
                 total = 0.0f;
@@ -521,82 +524,46 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
         }
         return std::max(widestLine, total);
     };
-    for (const auto& line : w->tooltipLines) {
-        // A wrapping line does not set the width - that is what the comment
-        // above says and what the rest of this function assumes. Returning
-        // here left the whole tooltip unsized instead of skipping the line:
-        // a spell tooltip's description wraps, so the function gave up before
-        // it ever set a height, the box kept whatever size it had, and the
-        // lines past that drew below its bottom edge.
-        if (line.wrap) continue;
-        // A side whose font string is hidden keeps its row and adds no width.
-        float wide = (line.leftVisible() ? measure(line.left) : 0.0f) +
-                     (line.icon.empty() ? 0.0f : size + 2.0f);
-        if (!line.right.empty() && line.rightVisible()) {
-            // Left and right text share a line with a gap between them.
-            wide += 20.0f + measure(line.right);
-        }
-        if (wide > widest) widest = wide;
+    const float screenUnits = tree.uiScale() > 0.0f ? ImGui::GetIO().DisplaySize.x / tree.uiScale() : 0.0f;
+    std::vector<tl::Line> sized;
+    for (size_t i = 0; i < w->tooltipLines.size(); ++i) {
+        const auto& line = w->tooltipLines[i];
+        sized.push_back({.wrap = line.wrap,
+                         .leftShown = line.leftVisible(),
+                         .rightShown = !line.right.empty() && line.rightVisible(),
+                         .left = measure(line.left, sizeOfLine(i)),
+                         .right = measure(line.right, sizeOfLine(i)),
+                         .texture = line.icon.empty() ? 0.0f : sizeOfLine(i) + tl::kTextureGap * screenUnits});
     }
-    const float wrapW = std::clamp(widest > 0.0f ? widest : kMinWrap,
-                                   kMinWrap, kMaxWrap);
-
-    // What the draw must wrap at as well; see Widget::tooltipWrapWidth.
-    w->tooltipWrapWidth = wrapW;
-
-    int rows = 0;
-    for (const auto& line : w->tooltipLines) {
-        // Every line is at least one row, and wrapText does not promise that:
-        // it returns nothing at all for empty text, and nothing for a zero
-        // wrap width. A tooltip's blank separator lines are the first, and
-        // every line that does not wrap was asking it the second - so this
-        // counted 3 rows for the 8 lines of the micro button's tooltip, gave
-        // the frame a height for 3, and the other 5 were drawn out of the
-        // bottom of the box.
-        //
-        // A line that does not wrap is one row by definition; only a wrapping
-        // one has to be measured. Which is what the draw has always done -
-        // the two now count the same way.
-        // A line can carry its own breaks. Spell.dbc writes Eviscerate's
-        // description as one string with a newline before each combo point,
-        // and the draw honours those - so counting the string as one row
-        // measured six lines as one and the other five fell out of the box.
-        int n = 0;
-        std::size_t at = 0;
-        const std::string text = withRealBreaks(line.left);
-        while (at <= text.size()) {
-            std::size_t brk = text.find('\n', at);
-            std::string segment = text.substr(
-                at, brk == std::string::npos ? std::string::npos : brk - at);
-            if (!segment.empty() && segment.back() == '\r') segment.pop_back();
-
-            int rowsHere = 1;
-            if (line.wrap && !segment.empty()) {
-                rowsHere = static_cast<int>(
-                    wrapText(parseMarkup(segment), wrapW, false,
-                             [&](const std::string& piece) {
-                                 return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
-                                                            piece.c_str()).x;
-                             }).size());
-                if (rowsHere < 1) rowsHere = 1;
-            }
-            n += rowsHere;
-
-            if (brk == std::string::npos) break;
-            at = brk + 1;
+    const auto rowsAt = [&](size_t i, float width) {
+        const float lineSize = sizeOfLine(i);
+        return wrapText(parseMarkup(withRealBreaks(w->tooltipLines[i].left)), width, false, [&](const std::string& piece) {
+            return font->CalcTextSizeA(lineSize, FLT_MAX, 0.0f, piece.c_str()).x;
+        });
+    };
+    const auto room = tl::widths(sized, w->tooltipMinWidth, w->tooltipMinWidthForced, [&](size_t i, float width) {
+        float widest = 0.0f;
+        for (const auto& row : rowsAt(i, width)) {
+            float total = 0.0f;
+            for (const auto& run : row) total += measure(run.text, sizeOfLine(i));
+            widest = std::max(widest, total);
         }
-        line.lines = n > 0 ? n : 1;
-        rows += line.lines;
+        return widest;
+    });
+    float down = 0.0f;
+    for (size_t i = 0; i < w->tooltipLines.size(); ++i) {
+        auto& line = w->tooltipLines[i];
+        line.wrapAt = room.wrapAt[i];
+        line.size = sizeOfLine(i);
+        // At least one row, and as many as it has breaks of its own.
+        line.lines = std::max<int>(1, static_cast<int>(rowsAt(i, line.wrapAt).size()));
+        if (!line.leftVisible()) continue;
+        if (down > 0.0f) down += tl::kGap;
+        down += line.size * static_cast<float>(line.lines);
     }
-
-    // The floor SetMinimumWidth asked for, applied to the finished width
-    // rather than to the text box, because that is what FrameXML measures
-    // against: it compares the money frame's width to GetMinimumWidth and
-    // widens the tooltip to hold it.
-    w->width  = std::max(std::max(widest, wrapW) + kPad * 2.0f,
-                         w->tooltipMinWidth);
-    w->height = size * static_cast<float>(rows) +
-                kLineGap * static_cast<float>(w->tooltipLines.size() - 1) + kPad * 2.0f;
+    w->tooltipWrapWidth = room.lines;
+    w->width = room.lines + kPad * 2.0f + w->tooltipPadding;
+    w->height = down + kPad * 2.0f;
     if (std::getenv("WOWEE_TOOLTIP_DIAG") != nullptr) {
         // The arithmetic, printed rather than reasoned about: the caller was
         // reporting the same height whether this counted three rows or eight,
@@ -606,11 +573,9 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
         const double now = core::appTimeSeconds();
         if (now - saidAt > 0.4) {
             saidAt = now;
-            LOG_WARNING("  sizeTooltip '", w->name, "': rows=", rows,
-                        " fontHeight=", w->fontHeight, " size=", size,
-                        " -> height=", w->height,
-                        " width=", w->width, " (widest=", widest,
-                        " wrapW=", wrapW, " minW=", w->tooltipMinWidth, ")");
+            LOG_WARNING("  sizeTooltip '", w->name, "': lines=", w->tooltipLines.size(),
+                        " fontHeight=", w->fontHeight, " -> height=", w->height,
+                        " width=", w->width, " minW=", w->tooltipMinWidth, ")");
         }
     }
 
@@ -635,7 +600,7 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
             w->tooltipLineAnchors.resize(w->tooltipLines.size(), 0);
         float top = kPad;
         for (size_t i = 0; i < w->tooltipLines.size(); ++i) {
-            const float rowH = size * static_cast<float>(w->tooltipLines[i].lines);
+            const float rowH = w->tooltipLines[i].size * static_cast<float>(w->tooltipLines[i].lines);
             uint32_t& rid = w->tooltipLineAnchors[i];
             if (rid == 0) {
                 const std::string ln = w->name + "TextLeft" + std::to_string(i + 1);
@@ -653,7 +618,7 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
                 tree.setWidth(rid, std::max(w->width - kPad * 2.0f, 1.0f));
                 tree.setHeight(rid, rowH);
             }
-            top += rowH + kLineGap;
+            if (w->tooltipLines[i].leftVisible()) top += rowH + tl::kGap;
         }
     }
 }
@@ -2705,36 +2670,41 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                        w->objectType == "GameTooltip" &&
                                        !w->tooltipLines.empty();
             ImFont* tipFont = nullptr;
-            float tipSize = 0.0f, tipGap = 0.0f, tipPad = 0.0f, tipTextW = 0.0f;
+            float tipGap = 0.0f, tipPad = 0.0f, tipHeight = 0.0f;
             std::vector<int> tipRows;
-            float tipHeight = 0.0f;
+            const auto tipLineSize = [&](size_t i) {
+                const float own = w->tooltipLines[i].size;
+                return (own > 0.0f ? own : interfaceFontSize(w->fontHeight)) * ws;
+            };
+            const auto tipWrap = [&](size_t i) {
+                const auto& line = w->tooltipLines[i];
+                return !line.wrap && line.wrapAt <= 0.0f ? 0.0f
+                       : (line.wrapAt > 0.0f ? line.wrapAt : w->tooltipWrapWidth) * ws;
+            };
             if (isGameTooltip) {
                 tipFont = interfaceFaceOrDefault(w->fontFace);
-                tipSize = interfaceFontSize(w->fontHeight) * ws;
-                tipGap = 2.0f * ws;
-                tipPad = 10.0f * ws;
-                tipTextW = (x1 - x0) - tipPad * 2.0f;
+                tipGap = tooltip_layout::kGap * ws;
+                tipPad = tooltip_layout::kPad * ws;
                 tipRows.reserve(w->tooltipLines.size());
-                int rows = 0;
-                for (const auto& line : w->tooltipLines) {
+                for (size_t i = 0; i < w->tooltipLines.size(); ++i) {
+                    const auto& line = w->tooltipLines[i];
                     // As many rows as the sizing pass counted, breaks and
                     // all; only a wrapping line is re-counted at this width.
                     int n = std::max(line.lines, 1);
-                    if (line.wrap && tipFont) {
+                    if (tipWrap(i) > 0.0f && tipFont) {
                         const auto broken = wrapText(
-                            parseMarkup(line.left), tipTextW, false,
+                            parseMarkup(line.left), tipWrap(i), false,
                             [&](const std::string& piece) {
-                                return tipFont->CalcTextSizeA(
-                                    tipSize, FLT_MAX, 0.0f, piece.c_str()).x;
+                                return tipFont->CalcTextSizeA(tipLineSize(i), FLT_MAX, 0.0f, piece.c_str()).x;
                             });
-                        n = std::max(static_cast<int>(broken.empty() ? 1 : broken.size()),
-                                     line.lines);
+                        n = std::max(static_cast<int>(broken.empty() ? 1 : broken.size()), line.lines);
                     }
                     tipRows.push_back(n);
-                    rows += n;
+                    if (!line.leftVisible()) continue;
+                    if (tipHeight > 0.0f) tipHeight += tipGap;
+                    tipHeight += tipLineSize(i) * static_cast<float>(n);
                 }
-                tipHeight = tipSize * static_cast<float>(rows) +
-                            tipGap * static_cast<float>(w->tooltipLines.size() - 1) + tipPad * 2.0f;
+                tipHeight += tipPad * 2.0f;
             }
 
             // The box, grown to hold them and then moved up until it fits.
@@ -2774,12 +2744,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // round from chat.
             if (isGameTooltip) {
                 ImFont* font = tipFont;
-                const float size = tipSize;
                 const float pad = tipPad;
                 float y = boxY0 + pad;
-                const float textW = tipTextW;
-                size_t rowIdx = 0;
-                for (const auto& line : w->tooltipLines) {
+                for (size_t i = 0; i < w->tooltipLines.size(); ++i) {
+                    const auto& line = w->tooltipLines[i];
+                    const float size = tipLineSize(i);
                     float lc[4] = {line.lc[0], line.lc[1], line.lc[2], line.lc[3]};
                     float textX = x0 + pad;
                     if (!line.icon.empty()) {
@@ -2790,14 +2759,13 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                          ImVec2(line.iconUV[0], line.iconUV[2]),
                                          ImVec2(line.iconUV[1], line.iconUV[3]), packColor(tint, w->alpha));
                         }
-                        textX += size + 2.0f;
+                        textX += size + tooltip_layout::kTextureGap * screenW;
                     }
                     // A side whose font string was hidden keeps its row
                     // and shows nothing, as a hidden region does.
                     if (line.leftVisible()) {
                         drawMarkupText(dl, font, size, ImVec2(textX, y),
-                                       packColor(lc, w->alpha), w->alpha, line.left,
-                                       line.wrap ? textW : 0.0f);
+                                       packColor(lc, w->alpha), w->alpha, line.left, tipWrap(i));
                     }
                     if (!line.right.empty() && line.rightVisible()) {
                         float rc[4] = {line.rc[0], line.rc[1], line.rc[2], line.rc[3]};
@@ -2806,10 +2774,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         drawMarkupText(dl, font, size, ImVec2(x1 - pad - rw, y),
                                        packColor(rc, w->alpha), w->alpha, line.right);
                     }
-                    // As tall as the rows counted for it above, which were
-                    // counted against this same width.
-                    y += size * static_cast<float>(rowIdx < tipRows.size() ? tipRows[rowIdx] : 1) + tipGap;
-                    ++rowIdx;
+                    if (!line.leftVisible()) continue;
+                    y += size * static_cast<float>(i < tipRows.size() ? tipRows[i] : 1) + tipGap;
                 }
             }
 

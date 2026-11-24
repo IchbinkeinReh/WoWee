@@ -773,6 +773,10 @@ struct Widget {
         /// over. -1 is AddLine's own rule: shown where the side has text
         /// (0x0061fec0). A hidden side keeps its row and draws nothing.
         int8_t leftShown = -1, rightShown = -1;
+        /// Where it is broken, 0 for not at all, and its font's height - of
+        /// the sizing pass (tooltip_layout.hpp).
+        float wrapAt = 0.0f;
+        float size = 0.0f;
         [[nodiscard]] bool leftVisible() const {
             return leftShown < 0 ? !left.empty() : leftShown != 0;
         }

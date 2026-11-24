@@ -9,6 +9,7 @@
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
+#include "ui/tooltip_layout.hpp"
 #include "ui/edit_lines.hpp"
 #include "ui/interface_file.hpp"
 #include "ui/link_hit.hpp"
@@ -3059,6 +3060,16 @@ int lua_MessageFrame_SetInsertMode(lua_State* L) {
     return 0;
 }
 
+/// A tooltip line's colour, its three arguments from `arg` on; one that is no
+/// number is 0.
+static void tooltipLineColour(lua_State* L, int arg, float (&out)[4]) {
+    const auto colour = wowee::ui::tooltip_layout::lineColour(
+        lua_isnumber(L, arg) != 0, {static_cast<float>(lua_tonumber(L, arg)), static_cast<float>(lua_tonumber(L, arg + 1)),
+                                    static_cast<float>(lua_tonumber(L, arg + 2))});
+    std::copy(colour.begin(), colour.end(), out);
+    out[3] = 1.0f;
+}
+
 // ── Tooltips ───────────────────────────────────────────────────────────────
 //
 // AddLine was a name in the method list and nothing else, so every tooltip in
@@ -3069,26 +3080,8 @@ int lua_Tooltip_AddLine(lua_State* L) {
     if (!w) return 0;
     wowee::ui::Widget::TooltipLine line;
     line.left = luaL_optstring(L, 2, "");
-    // A colour that is not a number means "the default one", not an error.
-    //
-    // mailframe.lua does `AddLine(ENCLOSED_MONEY, "", 1, 1, 1)` - an empty
-    // string where the red goes. optnumber accepts a string it can convert and
-    // "" is not one, so it raised: the mail item's tooltip died on every hover,
-    // and after five the OnUpdate driving it was unhooked for the rest of the
-    // session. Nothing said so on screen; a raise inside a handler is
-    // swallowed.
-    //
-    // White rather than black, because that is what the line is meant to be -
-    // SetMoneyFrameColor is called with "white" two lines further down.
-    auto colour = [L](int arg) {
-        return lua_isnumber(L, arg) ? static_cast<float>(lua_tonumber(L, arg))
-                                    : 1.0f;
-    };
-    line.lc[0] = colour(3);
-    line.lc[1] = colour(4);
-    line.lc[2] = colour(5);
-    line.lc[3] = 1.0f;
-    line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
+    tooltipLineColour(L, 3, line.lc);
+    tooltipLineColour(L, 3, line.rc);
     // AddLine(text, r, g, b, wrapText). The sixth argument was read off the
     // call and dropped, and FrameXML passes it on every line of prose.
     line.wrap = lua_toboolean(L, 6) != 0;
@@ -3208,21 +3201,9 @@ int lua_Tooltip_AddDoubleLine(lua_State* L) {
     wowee::ui::Widget::TooltipLine line;
     line.left  = luaL_optstring(L, 2, "");
     line.right = luaL_optstring(L, 3, "");
-    // Six colours, same rule as AddLine: anything that is not a number means
-    // the default. Six arguments is six chances for the interface to pass one
-    // of them as something else, and the whole tooltip is lost to a raise.
-    auto colour = [L](int arg) {
-        return lua_isnumber(L, arg) ? static_cast<float>(lua_tonumber(L, arg))
-                                    : 1.0f;
-    };
-    line.lc[0] = colour(4);
-    line.lc[1] = colour(5);
-    line.lc[2] = colour(6);
-    line.lc[3] = 1.0f;
-    line.rc[0] = colour(7);
-    line.rc[1] = colour(8);
-    line.rc[2] = colour(9);
-    line.rc[3] = 1.0f;
+    tooltipLineColour(L, 4, line.lc);
+    tooltipLineColour(L, 7, line.rc);
+    line.wrap = lua_toboolean(L, 10) != 0;
     w->isTooltip = true;
     w->tooltipLines.push_back(std::move(line));
     return 0;
@@ -3413,11 +3394,8 @@ int lua_Tooltip_SetText(lua_State* L) {
     }
     wowee::ui::Widget::TooltipLine line;
     line.left = luaL_optstring(L, 2, "");
-    line.lc[0] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-    line.lc[1] = static_cast<float>(luaL_optnumber(L, 4, 1.0));
-    line.lc[2] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
-    line.lc[3] = 1.0f;
-    line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
+    tooltipLineColour(L, 3, line.lc);
+    tooltipLineColour(L, 3, line.rc);
     // SetText(text, r, g, b, a, textWrap) - the seventh here, since alpha sits
     // between the colour and the flag.
     line.wrap = lua_toboolean(L, 7) != 0;
@@ -13705,7 +13683,7 @@ void LuaEngine::registerCoreAPI() {
         // of blank buttons happens.
         // An edit box keeps its own text; a button shows its font string's.
         // FrameXML calls SetText on both and the widget decides which it means.
-        "function mt:SetText(text, r, g, b)\n"
+        "function mt:SetText(text, r, g, b, a, wrap)\n"
         // With OnTextSet, which the setter fires: once.
         "    if self.__isEditBox then\n"
         "        __WoweeEditSetText(self, text)\n"
@@ -13713,7 +13691,7 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         // A tooltip's SetText is its first line, not a font string's text.
         // It answers whether it took the call, so this can stop there.
-        "    if __WoweeTooltipSetText(self, text, r, g, b) then return end\n"
+        "    if __WoweeTooltipSetText(self, text, r, g, b, a, wrap) then return end\n"
         // A SimpleHTML draws the text itself, so it goes on the widget rather
         // than into a field only Lua can read.
         //

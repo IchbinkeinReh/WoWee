@@ -4305,6 +4305,10 @@ wowee_add_test(test_edit_lines
 wowee_add_test(test_texture_variant
     SOURCES test_texture_variant.cpp)
 
+# ── test_tooltip_layout ──────────────────────────────────────
+wowee_add_test(test_tooltip_layout
+    SOURCES test_tooltip_layout.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
