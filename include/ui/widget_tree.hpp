@@ -1251,6 +1251,18 @@ public:
         const Widget* w = get(id);
         return w && w->visibleChain && shownNow(id);
     }
+    /// A frame just made: shown with the frame it is in, its handlers not told
+    /// - it has none yet (0x004922f0 -> 0x004911b0).
+    void noteMade(uint32_t id) {
+        if (Widget* w = get(id); w && w->kind == WidgetKind::Frame) w->toldShown = shownNow(id);
+    }
+    /// One whose OnShow is owed until updateVisibility tells it.
+    void noteUntold(uint32_t id) {
+        if (Widget* w = get(id); w && w->kind == WidgetKind::Frame) {
+            w->toldShown = false;
+            markVisibilityPending(id);
+        }
+    }
     /// What comes up with a frame just shown (0x004918f0): the shown frames in
     /// it, in their order, and then the frame - `tell` runs the OnShow of each
     /// once it and those over it are marked up, and nothing is told twice.

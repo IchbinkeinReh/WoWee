@@ -10909,6 +10909,7 @@ static int lua_CreateFrame(lua_State* L) {
         lua_pushinteger(L, static_cast<lua_Integer>(id));
         lua_setfield(L, -2, "__wid");
         setFrameHandle(L, id);
+        if (auto* engine = engineFrom(L)) engine->frameMade(id);
 
         // Remember the table against its widget id so input dispatch can get
         // back from a hit to the frame whose scripts must run.
@@ -11090,6 +11091,7 @@ static int lua_CreateFrame(lua_State* L) {
         // frames Lua builds, and OptionsList_OnLoad builds a list of them:
         // their OnLoad is what gives each button the .text it is asked for
         // moments later.
+        if (auto* e = engineFrom(L)) e->frameLoading(widgetIdOf(L, lua_gettop(L)));
         taint::Quiet quietOnLoad;   // see callScriptOnTable
         lua_getfield(L, -1, "__scripts");
         if (lua_istable(L, -1)) {
@@ -11112,9 +11114,19 @@ static int lua_CreateFrame(lua_State* L) {
             }
         }
         lua_pop(L, 1);
+        if (auto* e = engineFrom(L)) e->frameBuilt(widgetIdOf(L, lua_gettop(L)));
     }
 
     return 1;
+}
+
+// __WoweeFireOnLoad(frame): the emitter's, with what follows the OnLoad
+// (0x00490410).
+static int lua_wowee_fireOnLoad(lua_State* L) {
+    if (auto* e = engineFrom(L)) e->frameLoading(widgetIdOf(L, 1));
+    lua_WoweeFireOnLoad(L);
+    if (auto* e = engineFrom(L)) e->frameBuilt(widgetIdOf(L, 1));
+    return 0;
 }
 
 // --- WoW Utility Functions ---
@@ -11220,6 +11232,7 @@ void LuaEngine::shutdown() {
         // path loads the interface again on a state it thought was empty.
         widgets_.reset();
         editBoxes_.clear();
+        toldOnce_ = false;
         hoverWid_ = 0;
         focusedWid_ = 0;
         draggingWid_ = 0;
@@ -11839,7 +11852,7 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeRunScriptSlot");
     setScriptErrorReporter(recordScriptError);
 
-    lua_pushcfunction(L_, lua_WoweeFireOnLoad);
+    lua_pushcfunction(L_, lua_wowee_fireOnLoad);
     lua_setglobal(L_, "__WoweeFireOnLoad");
 
     lua_pushcfunction(L_, lua_GetMouseFocus);
@@ -17141,6 +17154,16 @@ void LuaEngine::setEditFocus(uint32_t wid) {
     }
 }
 
+void LuaEngine::frameLoading(uint32_t wid) {
+    if (!toldOnce_) widgets_.noteUntold(wid);
+}
+
+void LuaEngine::frameBuilt(uint32_t wid) {
+    if (!L_ || !toldOnce_) return;
+    taint::Quiet quiet;   // as dispatchText
+    if (const auto* w = widgets_.get(wid); w && w->toldShown) callFrameScript(wid, "OnShow");
+}
+
 void LuaEngine::takeKeyboard() {
     if (!L_ || focusedWid_ != 0) return;
     const ui::Widget* top = nullptr;
@@ -18091,6 +18114,7 @@ void LuaEngine::updateVisibility() {
         w->toldShown = up;
         tellVisibility(id, up, /*shown=*/false);
     }
+    toldOnce_ = true;
 }
 
 bool LuaEngine::editBoxLeavesArrows(bool altHeld) const {

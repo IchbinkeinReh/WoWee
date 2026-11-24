@@ -426,6 +426,13 @@ private:
     /// click already.
 public:
     void clickButton(uint32_t wid, const char* button, bool down);
+    /// A frame made, and one that has handlers about to be built and built,
+    /// its OnLoad run (0x00490410): what is made in view is shown, and its
+    /// OnShow runs once it is built. The frames the interface is loaded with
+    /// are told by updateVisibility, once it is all there.
+    void frameMade(uint32_t wid) { widgets_.noteMade(wid); }
+    void frameLoading(uint32_t wid);
+    void frameBuilt(uint32_t wid);
     /// A key pressed with no edit box to have it: the box in view, the topmost
     /// one, that takes the keyboard by itself (0x009658d0).
     void takeKeyboard();
@@ -433,6 +440,7 @@ public:
     void noteEditBox(uint32_t wid) { editBoxes_.push_back(wid); }
 private:
     std::vector<uint32_t> editBoxes_;
+    bool toldOnce_ = false;
     /// Whether a button is registered for the press, or the release, of a
     /// mouse button: the left one's release where nothing is.
     bool frameTakesClick(uint32_t wid, const char* button, bool down);

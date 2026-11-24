@@ -3708,3 +3708,37 @@ TEST_CASE("a frame without points has no rect, nor has what is placed by it", "[
     CHECK(Widget().textInsetRight == 0.0f);
     CHECK(Widget::kNewMessageLines == 8);
 }
+
+TEST_CASE("a frame made in view is shown as it is made", "[widgets]") {
+    WidgetTree tree;
+    std::vector<uint32_t> told;
+    const auto tell = [&](uint32_t id) { told.push_back(id); };
+    const uint32_t parent = tree.create(WidgetKind::Frame, tree.rootId(), "Parent");
+    tree.noteMade(parent);
+    const uint32_t f = tree.create(WidgetKind::Frame, parent, "F");
+    tree.noteMade(f);
+    // Shown already: Show() is nothing new, Hide() is.
+    tree.showNow(f, tell);
+    CHECK(told.empty());
+    tree.get(f)->shown = false;
+    tree.hideNow(f, tell);
+    CHECK(told == std::vector<uint32_t>{f});
+    told.clear();
+    // In one that is hidden, it comes up with that.
+    tree.get(parent)->shown = false;
+    tree.hideNow(parent, tell);
+    told.clear();
+    const uint32_t g = tree.create(WidgetKind::Frame, parent, "G");
+    tree.noteMade(g);
+    CHECK_FALSE(tree.get(g)->toldShown);
+    tree.get(parent)->shown = true;
+    tree.showNow(parent, tell);
+    CHECK(told == std::vector<uint32_t>{g, parent});
+    // One whose handlers are owed theirs.
+    tree.noteUntold(g);
+    CHECK_FALSE(tree.get(g)->toldShown);
+    CHECK(tree.takeVisibilityPending(g) == g);
+    const uint32_t art = tree.create(WidgetKind::Texture, parent, "Art");
+    tree.noteMade(art);
+    CHECK_FALSE(tree.get(art)->toldShown);
+}
