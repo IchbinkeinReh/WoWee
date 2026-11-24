@@ -12,7 +12,9 @@
 
 #include <vector>
 
+#include "rendering/animation/animation_data.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/m2_shown_sequence.hpp"
 #include "rendering/m2_track_sampler.hpp"
 
 using wowee::pipeline::M2Sequence;
@@ -65,4 +67,65 @@ TEST_CASE("each stand state plays its loop and transitions", "[animation]") {
     STATIC_CHECK(anim::standStateAnims(6).loop == anim::SIT_CHAIR_HIGH);
     STATIC_CHECK(anim::standStateAnims(7).loop == anim::DEAD);
     STATIC_CHECK(anim::standStateAnims(8).loop == anim::KNEEL_LOOP);
+}
+
+namespace {
+
+// AnimationData's rows for Stand and the game objects' own.
+anim::AnimationDataTable doorRows() {
+    std::vector<anim::AnimationDataRecord> rows;
+    for (uint32_t i = 0; i < 160; ++i) rows.push_back({.id = i, .behavior = i});
+    const auto set = [&](uint32_t i, uint32_t flags, uint32_t fallback) {
+        rows[i].flags = flags;
+        rows[i].fallback = fallback;
+    };
+    set(0, 3, 147);
+    set(146, 16, 148);
+    set(147, 32, 146);
+    set(148, 19, 146);
+    set(149, 35, 148);
+    return anim::AnimationDataTable(std::move(rows));
+}
+
+std::vector<M2Sequence> sequencesOf(std::initializer_list<uint16_t> ids) {
+    std::vector<M2Sequence> seqs;
+    for (uint16_t id : ids) {
+        M2Sequence s = variation(0x7FFF, -1);
+        s.id = id;
+        seqs.push_back(s);
+    }
+    return seqs;
+}
+
+}  // namespace
+
+// G_Crate01.m2 and G_Barrel.m2 have Open first: as doodads they opened and shut for ever.
+TEST_CASE("a model nobody asks anything of stands", "[m2][animation]") {
+    namespace ms = wowee::rendering::m2_sequence;
+    const auto rows = doorRows();
+    auto crate = sequencesOf({148, 146, 149, 147, 0});
+    CHECK(ms::idle(rows, crate, 0).index == 4);
+    CHECK(ms::idle(rows, crate, 0).mode == anim::PlayMode::Forward);
+    // Without Stand it is Closed, and without that what stands in for it.
+    crate.pop_back();
+    CHECK(ms::idle(rows, crate, 0).index == 3);
+    crate.pop_back();
+    CHECK(ms::idle(rows, crate, 0).index == 1);
+    CHECK(ms::idle(rows, crate, 0).mode == anim::PlayMode::HoldEnd);
+    // A model with none of them plays its first.
+    CHECK(ms::idle(rows, sequencesOf({4, 5}), 0).index == 0);
+    CHECK(ms::idle(rows, {}, 0).index == -1);
+    // Any variation of Stand.
+    auto fidgets = sequencesOf({148, 0, 0});
+    fidgets[1].frequency = 0x2000;
+    fidgets[1].nextAnimation = 2;
+    fidgets[2].frequency = 0x5FFF;
+    CHECK(ms::idle(rows, fidgets, 0x1FFF).index == 1);
+    CHECK(ms::idle(rows, fidgets, 0x2000).index == 2);
+
+    M2Sequence once{};
+    once.flags = 0x21;
+    CHECK(ms::playsOnce(once));
+    once.flags = 0x20;
+    CHECK_FALSE(ms::playsOnce(once));
 }

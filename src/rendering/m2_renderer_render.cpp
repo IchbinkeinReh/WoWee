@@ -4,6 +4,7 @@
 #include "rendering/shadow_params.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_renderer_internal.h"
+#include "rendering/m2_shown_sequence.hpp"
 #include "rendering/m2_blend_mode.hpp"
 #include "core/thread_pool.hpp"
 #include "rendering/m2_model_classifier.hpp"
@@ -155,12 +156,7 @@ void fillModelPush(M2PushConstants& pc, bool sky) {
 
 void M2Renderer::seedInstanceAnimation(const M2ModelGPU& model, uint32_t modelId,
                                        M2Instance& instance) {
-        if (!model.sequences.empty()) {
-            instance.currentSequenceIndex = 0;
-            instance.idleSequenceIndex = 0;
-            instance.animDuration = static_cast<float>(model.sequences[0].duration);
-            instance.animTime = static_cast<float>(randRange(std::max(1u, model.sequences[0].duration)));
-        }
+    seedIdleSequence(model, instance);
 
     auto seedIt = boneSeedInstanceByModel_.find(modelId);
     if (seedIt != boneSeedInstanceByModel_.end()) {
@@ -193,11 +189,27 @@ void M2Renderer::seedInstanceAnimation(const M2ModelGPU& model, uint32_t modelId
 // wrapped at a fixed 3.3 s instead, and a waterfall whose scroll lasts 2.6 s
 // stood still for the difference every lap.
 void M2Renderer::seedUnanimatedSequence(const M2ModelGPU& model, M2Instance& instance) {
-    if (model.sequences.empty() || model.sequences[0].duration == 0) return;
-    instance.currentSequenceIndex = 0;
-    instance.idleSequenceIndex = 0;
-    instance.animDuration = static_cast<float>(model.sequences[0].duration);
-    instance.animTime = static_cast<float>(randRange(model.sequences[0].duration));
+    const int idle = m2_sequence::idle(anim::animationData(), model.sequences, 0).index;
+    if (idle < 0 || model.sequences[static_cast<size_t>(idle)].duration == 0) return;
+    seedIdleSequence(model, instance);
+}
+
+void M2Renderer::seedIdleSequence(const M2ModelGPU& model, M2Instance& instance) {
+    const auto idle = m2_sequence::idle(anim::animationData(), model.sequences, randRange(0x8000u));
+    if (idle.index < 0) return;
+    const uint32_t duration = model.sequences[static_cast<size_t>(idle.index)].duration;
+    instance.currentSequenceIndex = idle.index;
+    instance.idleSequenceIndex = idle.index;
+    instance.animDuration = static_cast<float>(duration);
+    instance.idlesAlone = !model.isSpellEffect;
+    if (idle.mode == anim::PlayMode::HoldStart || idle.mode == anim::PlayMode::HoldEnd) {
+        instance.animTime = idle.mode == anim::PlayMode::HoldEnd ? instance.animDuration : 0.0f;
+        instance.animSpeed = 0.0f;
+        instance.holdAtEnd = true;
+        return;
+    }
+    if (idle.mode == anim::PlayMode::Reversed) instance.animSpeed = -1.0f;
+    instance.animTime = static_cast<float>(randRange(std::max(1u, duration)));
 }
 
 uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
@@ -664,7 +676,9 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
                 }
             }
         } else if (instance.animDuration > 0.0f && instance.animTime >= instance.animDuration) {
-            if (instance.holdAtEnd) {
+            if (instance.holdAtEnd ||
+                (instance.idlesAlone && !model.sequences.empty() &&
+                 m2_sequence::playsOnce(model.sequences[static_cast<size_t>(instance.currentSequenceIndex)]))) {
                 // Stay on the last frame. A door's open sequence ends with the
                 // door open, and that is the pose the server is describing.
                 stepEvents(eventsSequence, eventsFrom, instance.animDuration);

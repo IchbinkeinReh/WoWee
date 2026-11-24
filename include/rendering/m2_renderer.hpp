@@ -366,6 +366,8 @@ struct M2Instance {
 
     // Idle variation state
     int idleSequenceIndex = 0;   // Default idle sequence index
+    /// It plays what a model plays of itself (m2_sequence::idle), nothing it was asked.
+    bool idlesAlone = false;
     bool playingVariation = false;// Currently playing a one-shot variation
     /// The sequence a one-shot hands over to when it ends, looping, in place
     /// of the idle one; -1 for the idle. A transport's model is told this by
@@ -1893,6 +1895,8 @@ private:
     void seedInstanceAnimation(const M2ModelGPU& model, uint32_t modelId,
                                M2Instance& instance);
     void seedUnanimatedSequence(const M2ModelGPU& model, M2Instance& instance);
+    /// The sequence a model plays of itself put on an instance, at a place of its own in it.
+    void seedIdleSequence(const M2ModelGPU& model, M2Instance& instance);
 
     void destroyInstanceBones(M2Instance& inst, bool defer = false);
 };
