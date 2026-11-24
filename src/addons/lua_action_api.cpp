@@ -812,6 +812,14 @@ static uint32_t macroArg(lua_State* L, game::GameHandler* gh, int idx) {
     return 0;
 }
 
+/// The macro EditMacro, DeleteMacro and PickupMacro are asked for, by index -
+/// one without a text too, as a new one is - or name; 0 for anything else.
+static uint32_t macroNamed(lua_State* L, game::GameHandler* gh) {
+    if (!lua_isnumber(L, 1)) return macroArg(L, gh, 1);
+    const int index = luaToClientInt(L, 1);
+    return index >= 1 && index <= 0x48 ? static_cast<uint32_t>(index) : 0;
+}
+
 /// A macro's texture (0x00566ac0): the icon it was given - unless that is the
 /// question mark, which asks for the icon of what the macro shows: its item's,
 /// else its spell's (the active icon while the spell's form is in effect), else
@@ -4319,7 +4327,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"EditMacro",           [](lua_State* L) -> int {
             if (!taint::allowed(L, 0xc)) return 0;   // see CreateMacro
             auto* gh = getGameHandler(L);
-            const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
+            const uint32_t id = macroNamed(L, gh);
             if (!gh || id == 0) return luaReturnNil(L);
             const char* name = luaL_optstring(L, 2, nullptr);
             const char* icon = luaL_optstring(L, 3, nullptr);
@@ -4358,7 +4366,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"DeleteMacro",         [](lua_State* L) -> int {
             if (!taint::allowed(L, 0xc)) return 0;   // see CreateMacro
             auto* gh = getGameHandler(L);
-            const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
+            const uint32_t id = macroNamed(L, gh);
             if (!gh || id == 0) return 0;
             // Which half this slot belongs to; the two do not shift into
             // each other.
@@ -4393,7 +4401,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"PickupMacro",         [](lua_State* L) -> int {
             if (!taint::allowed(L, 0xe)) return 0;   // 0x005674f0
             auto* gh = getGameHandler(L);
-            const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
+            const uint32_t id = macroNamed(L, gh);
             if (!gh || id == 0 || gh->getMacroText(id).empty()) return 0;
             setCursorType(L, CursorType::MACRO);
             s_cursorId = id;
