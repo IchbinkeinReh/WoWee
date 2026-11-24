@@ -567,6 +567,8 @@ struct M2Model {
     [[nodiscard]] bool hasDrawableContent() const {
         return isValid() || !particleEmitters.empty() || !ribbonEmitters.empty();
     }
+    /// The same of a file whose skin is not read yet.
+    [[nodiscard]] bool hasContent() const { return !vertices.empty() || hasDrawableContent(); }
 };
 
 class M2Loader {

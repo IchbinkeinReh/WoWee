@@ -70,6 +70,15 @@ TEST_CASE("an emitter-only model is drawable, an empty one is not", "[m2][doodad
     trail.ribbonEmitters.resize(1);
     CHECK(trail.hasDrawableContent());
 
+    // Asked before its skin is read: a spell's model of ribbons alone was turned down there.
+    CHECK_FALSE(empty.hasContent());
+    CHECK(smoke.hasContent());
+    CHECK(trail.hasContent());
+    M2Model skinless{};
+    skinless.vertices.resize(3);
+    CHECK_FALSE(skinless.hasDrawableContent());
+    CHECK(skinless.hasContent());
+
     M2Model mesh{};
     mesh.vertices.resize(3);
     mesh.indices = {0, 1, 2};

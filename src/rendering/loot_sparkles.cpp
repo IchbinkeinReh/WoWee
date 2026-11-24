@@ -22,7 +22,7 @@ bool LootSparkles::ensureModel(M2Renderer* m2, pipeline::AssetManager* assets) {
     const auto m2Data = assets->readFile(kLootFxPath);
     pipeline::M2Model model = m2Data.empty() ? pipeline::M2Model{} : pipeline::M2Loader::load(m2Data);
     // Particles only, so no geometry is expected.
-    if (model.particleEmitters.empty() && model.vertices.empty()) {
+    if (!model.hasContent()) {
         failed_ = true;
         LOG_WARNING("LootSparkles: ", kLootFxPath, " is missing or empty - corpses will not sparkle");
         return false;

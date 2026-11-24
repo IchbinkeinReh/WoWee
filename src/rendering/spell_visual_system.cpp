@@ -418,7 +418,7 @@ PreparedEffectModel prepareEffectModel(pipeline::AssetManager* assets, const std
     }
     prepared.model = pipeline::M2Loader::load(m2Data);
     if (prepared.model.name.empty()) prepared.model.name = modelPath;
-    if (prepared.model.vertices.empty() && prepared.model.particleEmitters.empty()) {
+    if (!prepared.model.hasContent()) {
         prepared.failure = "empty model";
         return prepared;
     }

@@ -548,7 +548,7 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
                     if (model->name.empty()) model->name = m2Path;
                     // Emitters alone are a model (hasDrawableContent): the
                     // marshes' gas clouds have no vertex.
-                    if (model->vertices.empty() && !model->hasDrawableContent()) {
+                    if (!model->hasContent()) {
                         LOG_WARNING("Creature model parsed to nothing: displayId=",
                                     s.displayId, " ", m2Path, " (", m2Data.size(), " bytes)");
                         result.permanent_failure = true;
@@ -1691,7 +1691,7 @@ void EntitySpawner::processPendingMount() {
 
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = m2Path;
-        if (model.vertices.empty() && !model.hasDrawableContent()) {
+        if (!model.hasContent()) {
             LOG_WARNING("Failed to parse mount M2: ", m2Path);
             return;
         }
@@ -2042,7 +2042,7 @@ uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec
         if (m2Data.empty()) return 0;
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = modelPath;
-        if (model.vertices.empty() && !model.hasDrawableContent()) return 0;
+        if (!model.hasContent()) return 0;
         if (model.version >= 264) {
             auto skinData = assetManager_->readFile(pipeline::skinPathForM2(modelPath));
             if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
@@ -2158,7 +2158,7 @@ bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
         if (m2Data.empty()) return false;
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = modelPath;
-        if (model.vertices.empty() && !model.hasDrawableContent()) return false;
+        if (!model.hasContent()) return false;
 
         if (model.version >= 264 && modelPath.size() >= 3) {
             std::string skinPath = pipeline::skinPathForM2(modelPath);
