@@ -9,6 +9,7 @@
 #include "addons/tooltip_setter_rules.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
+#include "game/cast_failure_names.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/spell_classification.hpp"
 #include "game/ground_target.hpp"
@@ -240,14 +241,22 @@ const char* powerTokenKey(int powerType) {
 /// This used to be English throughout, and invented lines of its own for
 /// fishing, bandages, aura states, crafting stations, tools and gathering;
 /// the original shows the same SPELL_FAILED_ text for those as for anything
-/// else. Where a result names something this client does not look up - an
-/// item class, a form, a mechanic, a custom error - the English it had is
-/// kept rather than showing an unfilled %s.
+/// else.
 std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
                                uint8_t result, int powerType, uint32_t miscArg = 0,
                                uint32_t miscArg2 = 0) {
     if (result == 0 || result == 0x1b) return {};  // SUCCESS, DONT_REPORT
-    std::string text = spellFailedText(result, powerType);
+    std::string text;
+    owner.loadSpellNameCache();
+    const auto row = owner.spellNameCacheRef().find(spellId);
+    const auto* spell = row != owner.spellNameCacheRef().end() ? &row->second : nullptr;
+    if (spell && cast_failure::hasPetText(spell->effectIds[0], spell->implicitTargetsA[0]))
+        text = interfaceString((cast_failure::spellFailedKey(result) + "_PET").c_str(), "");
+    if (text.empty()) text = spellFailedText(result, powerType);
+    const auto table = [&owner](const char* file) -> std::shared_ptr<pipeline::DBCFile> {
+        auto* am = owner.services().assetManager;
+        return am ? am->loadDBCOptional(file) : nullptr;
+    };
     auto fill = [&](const std::vector<std::string>& args) {
         text = chat_channels::luaFormat(text, args);
     };
@@ -292,6 +301,7 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
         }
         case kCastResultTotems:
         case 0x64: {  // TOTEMS, REAGENTS: the item's name, or nothing at all
+            if (miscArg == cast_failure::kNoReagentNamed) return {};
             const std::string name = itemName(miscArg);
             if (name.empty()) return {};
             fill({name});
@@ -317,9 +327,36 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
             text = interfaceString(key.c_str(), key.c_str());
             break;
         }
-        case 0x1d: case 0x1e: case 0x1f: case 0x36: case 0x5e: case 0x93: case 0xb0: {
-            const char* enUS = getSpellCastResultString(result, powerType);
-            if (enUS) text = enUS;
+        case 0x1d: case 0x1e: case 0x1f: {  // EQUIPPED_ITEM_CLASS: the realm's, or of our own refusal the spell's
+            const bool ours = miscArg == 0 && miscArg2 == 0 && spell && spell->equippedItemClass >= 0;
+            const std::string name = cast_failure::itemClassName(
+                table("ItemSubClassMask.dbc").get(), table("ItemSubClass.dbc").get(),
+                ours ? static_cast<uint32_t>(spell->equippedItemClass) : miscArg,
+                ours ? spell->equippedItemSubClassMask : miscArg2);
+            if (!name.empty()) fill({name});
+            break;
+        }
+        case 0x36: {  // NEED_EXOTIC_AMMO: a projectile's kind
+            const std::string name =
+                cast_failure::itemClassName<pipeline::DBCFile>(nullptr, table("ItemSubClass.dbc").get(), 6, 1u << (miscArg & 31u));
+            if (!name.empty()) fill({name});
+            break;
+        }
+        case 0x5e: {  // ONLY_SHAPESHIFT: the forms, or nothing at all
+            const std::string names =
+                spell ? cast_failure::formNames(table("SpellShapeshiftForm.dbc").get(), spell->stances) : std::string();
+            if (names.empty()) return {};
+            fill({names});
+            break;
+        }
+        case 0x81:  // TOO_MANY_OF_ITEM: how many of which category, in a line of its own
+            if (const auto limit = cast_failure::limitCategory(table("ItemLimitCategory.dbc").get(), miscArg))
+                return interfaceFormat("ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED_IS", "You can only carry %d %s",
+                                       {std::to_string(limit->count), limit->name});
+            break;
+        case 0x93: {  // PREVENTED_BY_MECHANIC
+            const std::string name = cast_failure::rowName(table("SpellMechanic.dbc").get(), miscArg);
+            if (!name.empty()) fill({name});
             break;
         }
         default:
@@ -2990,16 +3027,7 @@ SpellHandler::TooltipForms SpellHandler::tooltipForms(uint32_t spellId, uint64_t
     // SpellShapeshiftForm row k is form k + 1, as Stances' bit k is.
     if ((e.attrEx2 & 0x80000u) == 0) {
         auto* am = owner_.services().assetManager;
-        if (auto f = am ? am->loadDBCOptional("SpellShapeshiftForm.dbc") : nullptr; f && f->getFieldCount() > 2) {
-            const uint32_t n = std::min<uint32_t>(f->getRecordCount(), 64);
-            for (uint32_t r = 0; r < n; ++r) {
-                if (!bit(static_cast<int>(r))) continue;
-                const std::string named = f->getString(r, 2);
-                if (named.empty()) continue;
-                if (!out.names.empty()) out.names += ", ";
-                out.names += named;
-            }
-        }
+        out.names = cast_failure::formNames((am ? am->loadDBCOptional("SpellShapeshiftForm.dbc") : nullptr).get(), e.stances);
     }
     const auto player = owner_.getEntityManager().getEntity(caster ? caster : owner_.getPlayerGuid());  // the pet's for a pet action
     if (!player) return out;
@@ -4691,7 +4719,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // callback and raises the line from there (0x00808200 -> 0x007feb50,
     // 0x007fea80). Asked of here it came back empty and was never shown.
     if ((data.result == 0x37 || data.result == 0x64 || data.result == kCastResultTotems) &&
-        data.miscArg != 0 &&
+        data.miscArg != 0 && data.miscArg != cast_failure::kNoReagentNamed &&
         !(owner_.getItemInfo(data.miscArg) && owner_.getItemInfo(data.miscArg)->valid)) {
         static uint32_t failureWaits = 0;
         owner_.askItemThen(data.miscArg, "cast failure " + std::to_string(++failureWaits),
@@ -4714,11 +4742,14 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     const auto holdNowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                      std::chrono::steady_clock::now().time_since_epoch())
                                                      .count());
-    if (!failureHold_.report(data.spellId, data.result, holdNowMs)) errMsg.clear();
+    // A custom error is said as it is worded (0x007fef10), each time, and is
+    // not in the log.
+    const bool custom = data.result == 0xac;
+    if (!failureHold_.report(data.spellId, data.result, holdNowMs) && !custom) errMsg.clear();
     if (!errMsg.empty()) owner_.addUIError(errMsg);
     // And the combat log, in the words the screen was given (0x00808200 ->
     // 0x00751ad0).
-    if (!errMsg.empty() && isActiveExpansion("wotlk")) owner_.combatLogFeed().castFailed(data.spellId, errMsg);
+    if (!errMsg.empty() && !custom && isActiveExpansion("wotlk")) owner_.combatLogFeed().castFailed(data.spellId, errMsg);
 
     // On screen and nowhere else. A cast failure went to the chat log as well
     // from here and from handleCastResult both, so the fix that took it out of

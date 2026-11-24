@@ -3,6 +3,7 @@
 #include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
+#include "game/cast_failure_names.hpp"
 #include "game/combat_text_filter.hpp"
 #include "game/threat_table.hpp"
 #include "game/unit_combat.hpp"
@@ -53,23 +54,41 @@ float distanceSqTo(const MovementInfo& from, const Entity& to) {
 /// The on-screen line for the pet's failed cast, as 0x00805610 words it: its
 /// own ERR_PET_SPELL_* lines for the results it has one for, the cooldown and
 /// power lines, and otherwise the SPELL_FAILED_ text through
-/// ERR_SPELL_FAILED_S. An area (0x65) or focus object (0x66) is named from
-/// the first id after the result, as SMSG_CAST_FAILED's are, and nothing is
-/// shown when it is not known. Where the result names something not looked up
-/// here (an item class, a form, a mechanic, a custom error) the English this
-/// client had is kept rather than an unfilled %s.
+/// ERR_SPELL_FAILED_S. What that names - an area, a focus object, a kind of
+/// item, a form, a mechanic - is named from the ids after the result, as
+/// SMSG_CAST_FAILED's are (cast_failure_names.hpp), and nothing is shown when
+/// it is not known.
 std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, uint8_t result,
-                                  uint32_t miscArg) {
+                                  uint32_t miscArg, uint32_t miscArg2) {
+    const auto table = [&owner](const char* file) -> std::shared_ptr<pipeline::DBCFile> {
+        auto* am = owner.services().assetManager;
+        return am ? am->loadDBCOptional(file) : nullptr;
+    };
+    const auto named = [result](const std::string& name, const char* error = "ERR_SPELL_FAILED_S") -> std::string {
+        if (name.empty()) return {};
+        const std::string key = cast_failure::spellFailedKey(result);
+        const char* enUS = getSpellCastResultString(result);
+        const std::string text = chat_channels::luaFormat(interfaceString(key.c_str(), enUS ? enUS : "%s"), {name});
+        return chat_channels::luaFormat(interfaceString(error, "%s"), {text});
+    };
+    owner.loadSpellNameCache();
+    const auto row = owner.spellNameCacheRef().find(spellId);
+    const auto* spell = row != owner.spellNameCacheRef().end() ? &row->second : nullptr;
     switch (result) {
-        case 0x65: case 0x66: {
-            const std::string name = result == 0x65 ? owner.getAreaName(miscArg)
-                                                    : owner.getSpellFocusName(miscArg);
-            if (miscArg == 0 || name.empty()) return {};
-            const std::string key = cast_failure::spellFailedKey(result);
-            const char* enUS = getSpellCastResultString(result);
-            const std::string text = chat_channels::luaFormat(
-                interfaceString(key.c_str(), enUS ? enUS : "%s"), {name});
-            return chat_channels::luaFormat(interfaceString("ERR_SPELL_FAILED_S", "%s"), {text});
+        case 0x65: return named(miscArg != 0 ? owner.getAreaName(miscArg) : std::string());
+        case 0x66: return named(miscArg != 0 ? std::string(owner.getSpellFocusName(miscArg)) : std::string());
+        case 0x1d: case 0x1e: case 0x1f:
+            return named(cast_failure::itemClassName(table("ItemSubClassMask.dbc").get(), table("ItemSubClass.dbc").get(),
+                                                     miscArg, miscArg2));
+        case 0x5e:
+            return named(spell ? cast_failure::formNames(table("SpellShapeshiftForm.dbc").get(), spell->stances, 1)
+                               : std::string(),
+                         "ERR_SPELL_FAILED_SHAPESHIFT_FORM_S");
+        case 0x93: return named(cast_failure::rowName(table("SpellMechanic.dbc").get(), miscArg));
+        case 0xac: {  // CUSTOM_ERROR: the interface's line for its id (0x007fef10)
+            const std::string key = "SPELL_FAILED_CUSTOM_ERROR_" + std::to_string(miscArg);
+            return chat_channels::luaFormat(interfaceString("ERR_SPELL_FAILED_S", "%s"),
+                                            {interfaceString(key.c_str(), key.c_str())});
         }
         case 0x01: return interfaceString("ERR_PET_SPELL_AFFECTING_COMBAT", "Your pet is in combat");
         case 0x17: return interfaceString("ERR_PET_SPELL_DEAD", "Your pet is dead");
@@ -88,17 +107,14 @@ std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, ui
                 {"ERR_NOT_HAPPY_ENOUGH", "Your pet is not happy enough"},
                 {"ERR_OUT_OF_RUNES", "Not enough runes"}, {"ERR_OUT_OF_RUNIC_POWER", "Not enough runic power"},
             };
-            const uint8_t power = owner.getSpellData(spellId).powerType;
-            if (power < 7) return interfaceString(kOutOf[power][0], kOutOf[power][1]);
+            const int32_t power = spell ? static_cast<int32_t>(spell->powerType) : owner.getSpellData(spellId).powerType;
+            if (power == -2) return interfaceString("ERR_OUT_OF_HEALTH", "Not enough health");
+            if (power >= 0 && power < 7) return interfaceString(kOutOf[power][0], kOutOf[power][1]);
             break;
         }
         case 0x61: return interfaceString("ERR_PET_SPELL_OUT_OF_RANGE", "Your pet is out of range");
         case 0x67: return interfaceString("ERR_PET_SPELL_ROOTED", "Your pet can't move");
         case 0x6d: return interfaceString("ERR_PET_SPELL_TARGETS_DEAD", "Your pet's target is dead");
-        case 0x1d: case 0x1e: case 0x1f: case 0x5e: case 0x93: case 0xac: {
-            const char* enUS = getSpellCastResultString(result);
-            return enUS ? std::string(enUS) : std::string();
-        }
         default:
             break;
     }
@@ -1614,6 +1630,7 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         // Up to two ids after the result, read when present, as
         // SMSG_CAST_FAILED's are (0x00806c30, 0x00809af0).
         const uint32_t miscArg = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+        const uint32_t miscArg2 = packet.hasRemaining(4) ? packet.readUInt32() : 0;
         LOG_DEBUG("SMSG_PET_CAST_FAILED: spell=", spellId,
                   " reason=", static_cast<int>(reason));
         // 0x00806c30 -> 0x00804720: its global cooldown off the pet's
@@ -1623,7 +1640,7 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         // see petCastFailureMessage. This was "Spell: reason" in English, in
         // chat.
         if (reason != 0) {
-            const std::string errMsg = petCastFailureMessage(owner_, spellId, reason, miscArg);
+            const std::string errMsg = petCastFailureMessage(owner_, spellId, reason, miscArg, miscArg2);
             if (!errMsg.empty()) owner_.addUIError(errMsg);
             // And the player's line for it, where the game error has one.
             if (!errMsg.empty())
