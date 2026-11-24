@@ -378,8 +378,10 @@ std::optional<float> CameraController::portLiquidLevelAt(const glm::vec3& feet) 
             if (auto level = waterRenderer->buildingLiquidLevelAt(ref.instanceId, ref.group, feet)) return level;
         }
     }
-    // Then the ground's (0x007a0820).
-    return waterRenderer->groundLiquidLevelAt(feet, ground);
+    // Then the ground's, wherever the ground is (0x007c23f0 asks 0x007a0820
+    // without it): one put on the bed, a hand under what the height is read
+    // as there, was in no water and walked it.
+    return waterRenderer->groundLiquidLevelAt(feet, std::nullopt);
 }
 
 namespace {
