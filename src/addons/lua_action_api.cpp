@@ -1473,7 +1473,7 @@ static int lua_UseAction(lua_State* L) {
         } else if (const uint32_t itemForSpell = gh->getItemIdForSpell(action.id)) {
             gh->useItemById(itemForSpell, target);
         } else {
-            gh->castSpell(action.id, target);
+            gh->useSpell(action.id, target);  // 0x005abbc0 -> 0x0080da80
         }
     } else if (action.type == game::ActionBarSlot::ITEM && action.id != 0) {
         if (itemUseAllowed(L, gh, action.id, false)) gh->useItemById(action.id);

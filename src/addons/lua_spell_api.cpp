@@ -893,6 +893,9 @@ static int lua_CastSpellByName(lua_State* L) {
     if (!gh) return 0;
     const char* name = luaL_checkstring(L, 1);
     if (!name || !*name) return 0;
+    // "!Name" casts it whether it is on or not (0x00540310 -> 0x0080da40).
+    const bool outright = *name == '!';
+    if (outright) ++name;
 
     const uint32_t bestId = highestKnownRankByName(gh, name);
     if (bestId != 0) {
@@ -906,8 +909,11 @@ static int lua_CastSpellByName(lua_State* L) {
             target = resolveUnitGuid(gh, u);
         }
         if (target == 0 && gh->hasTarget()) target = gh->getTargetGuid();
-        // 0x00540310 -> 0x0080da40 -> 0x0080cce0, which asks the taint check.
-        if (spellCastAllowed(L, gh, bestId)) gh->castSpell(bestId, target);
+        // 0x00540310 -> 0x0080da80 -> 0x0080cce0, which asks the taint check.
+        if (spellCastAllowed(L, gh, bestId)) {
+            if (outright) gh->castSpell(bestId, target);
+            else gh->useSpell(bestId, target);
+        }
     }
     return 0;
 }
@@ -1112,9 +1118,10 @@ static int lua_CastSpell(lua_State* L) {
     // named outright rather than spelled as a zero target, which is how some of
     // the self-casts here ask.
     const bool selfCast = lua_toboolean(L, 3) != 0;
-    // 0x00541250 -> 0x0053bc40 -> 0x0080cce0, which asks the taint check.
+    // 0x00541250 -> 0x0053bc40 -> 0x0080da80 -> 0x0080cce0, which asks the
+    // taint check.
     if (id != 0 && spellCastAllowed(L, gh, id))
-        gh->castSpell(id, selfCast ? gh->getPlayerGuid() : gh->getTargetGuid());
+        gh->useSpell(id, selfCast ? gh->getPlayerGuid() : gh->getTargetGuid());
     return 0;
 }
 

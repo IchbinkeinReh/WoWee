@@ -3643,6 +3643,12 @@ public:
     /// CastShapeshiftForm (0x0053c0f0 -> 0x0080da80): the spell of that place
     /// on the bar, from 0, cast - or, in effect, taken off.
     void castStanceBarSpell(size_t index);
+    /// A spell pressed, as the action bar (0x005abbc0), the spellbook
+    /// (0x0053bc40), CastSpellByName without "!" (0x00540310) and the stance
+    /// bar press one: 0x0080da80. One in effect - of those with an icon for
+    /// it, 0x00802cb0 - is taken off, any other cast. CastSpellByID, the
+    /// tracking menu and CallCompanion cast outright (0x0080da40).
+    void useSpell(uint32_t spellId, uint64_t targetGuid);
     /// Whether a spell is current (0x00806030): IsCurrentSpell and the spell
     /// leg of IsCurrentAction (0x005aa240).
     bool isCurrentSpell(uint32_t spellId) const;

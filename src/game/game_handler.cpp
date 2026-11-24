@@ -4025,14 +4025,38 @@ std::vector<uint32_t> GameHandler::stanceBarSpells() const {
 void GameHandler::castStanceBarSpell(size_t index) {
     const auto spells = stanceBarSpells();
     if (index >= spells.size()) return;
-    const uint32_t spell = spells[index];
-    // 0x0080da80: one in effect is taken off (0x00802f80), not within 1.5 s of
-    // its cooldown beginning with secureAbilityToggle on (0x00807d40).
-    if (!isPreWotlk() && formSpellInEffect(spell)) {
-        if (!spellHandler_ || !spellHandler_->toggleHeld(spell)) cancelAura(spell);
+    useSpell(spells[index], 0);
+}
+
+void GameHandler::useSpell(uint32_t spellId, uint64_t targetGuid) {
+    const auto it = spellNameCache_.find(spellId);
+    if (isPreWotlk() || it == spellNameCache_.end() || !formSpellInEffect(spellId)) {
+        castSpell(spellId, targetGuid);
         return;
     }
-    castSpell(spell, 0);
+    // 0x00802f80 sends a companion away (CMSG_DISMISS_CRITTER) and gets the
+    // player off a mount (0x00740450): castSpell does both.
+    const auto& spell = it->second;
+    if (spell.effectIds[0] == 0x1c || spell.effectAuraIds[0] == 78) {
+        castSpell(spellId, targetGuid);
+        return;
+    }
+    // 0x0080da80: taken off, not within 1.5 s of its cooldown beginning with
+    // secureAbilityToggle on (0x00807d40) - and not cast again either way.
+    if (spellHandler_ && spellHandler_->toggleHeld(spellId)) return;
+    // 0x00802f80: not while the player is charmed, and only a spell that puts
+    // an aura on (0x007fdf20, the effects 0x0076be10 names).
+    const uint16_t charmedBy = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
+    if (auto self = getEntityManager().getEntity(playerGuid);
+        self && charmedBy != 0xFFFF &&
+        (self->getField(charmedBy) | self->getField(static_cast<uint16_t>(charmedBy + 1))) != 0)
+        return;
+    const auto appliesAura = [](uint32_t effect) {
+        return effect == 0x06 || effect == 0x23 || effect == 0x41 || effect == 0x77 || effect == 0x80 ||
+               effect == 0x81 || effect == 0x8f;
+    };
+    if (std::none_of(std::begin(spell.effectIds), std::end(spell.effectIds), appliesAura)) return;
+    cancelAura(spellId);
 }
 
 bool GameHandler::isCurrentSpell(uint32_t spellId) const {

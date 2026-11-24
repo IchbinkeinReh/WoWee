@@ -224,6 +224,46 @@ TEST_CASE("an aura's button is active while its aura is, and pages nothing", "[r
     CHECK(book.s.sent().of(Opcode::CMSG_CAST_SPELL).empty());
 }
 
+// 0x0080da80, which the action bar, the spellbook and CastSpellByName press a
+// spell through: one in effect is taken off, "!" and CastSpellByID cast it.
+TEST_CASE("a spell pressed while it is in effect is taken off", "[replay][stancebar]") {
+    Book book(2);
+    book.initialSpells({kDevotion10, kRetribution, kHolyLight});
+    auto& gh = book.s.handler();
+    const auto cancels = [&] { return book.s.sent().of(Opcode::CMSG_CANCEL_AURA).size(); };
+    const auto casts = [&] { return book.s.sent().of(Opcode::CMSG_CAST_SPELL).size(); };
+    book.aura(0, kRetribution);
+    SECTION("pressed") {
+        gh.useSpell(kRetribution, 0);
+        REQUIRE(cancels() == 1);
+        auto p = book.s.sent().of(Opcode::CMSG_CANCEL_AURA).front();
+        CHECK(p.readUInt32() == kRetribution);
+        CHECK(casts() == 0);
+    }
+    SECTION("cast outright") {
+        gh.castSpell(kRetribution, 0);
+        CHECK(cancels() == 0);
+        CHECK(casts() == 1);
+    }
+    SECTION("another is cast") {
+        gh.useSpell(kDevotion10, 0);
+        CHECK(cancels() == 0);
+        CHECK(casts() == 1);
+    }
+    SECTION("an aura with no icon for being on is cast again") {
+        book.aura(1, kHolyLight);
+        gh.useSpell(kHolyLight, Session::kPlayerGuid);
+        CHECK(cancels() == 0);
+        CHECK(casts() == 1);
+    }
+    SECTION("not while charmed") {
+        book.s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_CHARMEDBY, 0x99}}));
+        gh.useSpell(kRetribution, 0);
+        CHECK(cancels() == 0);
+        CHECK(casts() == 0);
+    }
+}
+
 // 0x00802cb0: a spell with no ActiveIconID is never in effect.
 TEST_CASE("Metamorphosis is never the active button", "[replay][stancebar]") {
     Book book(9);
