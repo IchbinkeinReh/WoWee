@@ -402,3 +402,38 @@ TEST_CASE("a flying creature flies from point to point", "[replay][taxi]") {
                       glm::vec3(drake->getLatestX(), drake->getLatestY(), drake->getLatestZ())),
                   points.back()));
 }
+
+// 0x0071ef20: none of the mover's own movement goes out while the spline's
+// flags lack 0x400, which the client sets as it ends; a charge is one as well.
+TEST_CASE("while a spline carries the player nothing of its own movement goes out", "[replay][taxi]") {
+    Session s;
+    spawn(s, 0, 0, kBorder0);
+    frames(s, 10);
+    auto* mh = s.handler().getMovementHandler();
+    const glm::vec3 at = kBorder0 + glm::vec3(20.0f, 0.0f, 0.0f);
+    s.receive(flight(11, kBorder0, {at}, 400));
+    REQUIRE(mh->onMoveSpline(Session::kPlayerGuid));
+    CHECK_FALSE(s.handler().isOnTaxiFlight());
+    mh->sendMovement(Opcode::MSG_MOVE_START_FORWARD);
+    mh->sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+    mh->sendMovement(Opcode::MSG_MOVE_STOP);
+    CHECK(s.sent().of(Opcode::MSG_MOVE_START_FORWARD).empty());
+    CHECK(s.sent().of(Opcode::MSG_MOVE_HEARTBEAT).empty());
+    CHECK(s.sent().of(Opcode::MSG_MOVE_STOP).empty());
+    for (int i = 0; i < 40 && mh->onMoveSpline(Session::kPlayerGuid); ++i) frames(s, 50);
+    frames(s, 10);
+    // Over, it is reported and the rest goes out again.
+    REQUIRE(reports(s).size() == 1);
+    CHECK(reports(s)[0].id == 11);
+    mh->sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+    CHECK(s.sent().of(Opcode::MSG_MOVE_HEARTBEAT).size() == 1);
+    // One the server sends with the mark already set holds nothing back.
+    s.receive(flight(12, at, {kBorder0}, 400, 0x42400));
+    mh->sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+    CHECK(s.sent().of(Opcode::MSG_MOVE_HEARTBEAT).size() == 2);
+    // 0x009904e0 lets swimming by.
+    s.receive(flight(13, at, {kBorder0}, 400));
+    REQUIRE(mh->onMoveSpline(Session::kPlayerGuid));
+    mh->sendMovement(Opcode::MSG_MOVE_START_SWIM);
+    CHECK(s.sent().of(Opcode::MSG_MOVE_START_SWIM).size() == 1);
+}

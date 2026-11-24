@@ -656,6 +656,15 @@ std::optional<uint32_t> MovementHandler::endFallTimer() {
     return fellMs;
 }
 
+namespace {
+/// 0x009904e0, of what is sent here: swimming begun and left, flying set. (The
+/// others of its eight are vehicle requests and cheats.)
+bool splineLetsThrough(Opcode opcode) {
+    return opcode == Opcode::MSG_MOVE_START_SWIM || opcode == Opcode::MSG_MOVE_STOP_SWIM ||
+           opcode == Opcode::CMSG_MOVE_SET_FLY || opcode == Opcode::CMSG_MOVE_SPLINE_DONE;
+}
+}  // namespace
+
 void MovementHandler::setFlightAirborne(bool airborne) {
     const uint32_t canFly = static_cast<uint32_t>(MovementFlags::CAN_FLY);
     const uint32_t flying = static_cast<uint32_t>(MovementFlags::FLYING);
@@ -724,6 +733,13 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
     const bool moverIsPlayer = mover == owner_.getPlayerGuid();
     if (mover == 0) {
         heldReason = "no unit is the active mover";
+    } else if (!isPreWotlk() && !(moverIsPlayer && onTaxiFlight_) && onMoveSpline(mover) &&
+               !splineLetsThrough(opcode)) {
+        // 0x0071ef20, for any spline the server moves the mover along - a
+        // charge, a pull, a leap into a seat: what is over is none, as the
+        // client marks it (flag 0x400, 0x006eae70 and 0x006eaf50) and then
+        // lets everything by. A flight is held below, its end included.
+        heldReason = "a spline carries the mover";
     } else if (!moverIsPlayer) {
         if (!unitHasClientControl(mover)) heldReason = "the server has not given control of the unit";
     } else if (onTaxiFlight_ && !isPreWotlk()) {
