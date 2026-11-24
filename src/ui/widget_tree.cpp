@@ -930,6 +930,17 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     generationAtLastPass_ = layoutGeneration_;
 }
 
+bool WidgetTree::shownNow(uint32_t id) const {
+    // A chain of parents is finite; one gone wrong ends here.
+    for (int depth = 0; depth < 256; ++depth) {
+        const Widget* w = get(id);
+        if (!w || !w->shown) return false;
+        if (w->parent == 0 || id == rootId_) return true;
+        id = w->parent;
+    }
+    return false;
+}
+
 void WidgetTree::markSubtreeHidden(uint32_t id) {
     const Widget* w = get(id);
     if (!w) return;

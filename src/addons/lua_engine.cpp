@@ -19491,8 +19491,10 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
             // are. frameFadeManager, frameFlashManager and AnimUpdateFrame are
             // each a CreateFrame that is never positioned and carries nothing
             // but an OnUpdate - asking whether they would be drawn stops every
-            // fade, flash and animation in the interface.
-            visible = uw->visibleChain;
+            // fade, flash and animation in the interface. And not hidden
+            // since it was laid out: the mirror timer's frame, hidden by
+            // MIRROR_TIMER_STOP with its timer let go, was asked once more.
+            visible = widgets_.runsOnUpdate(uw->id);
         } else {
             lua_getfield(L_, -1, "__visible");
             visible = lua_toboolean(L_, -1);

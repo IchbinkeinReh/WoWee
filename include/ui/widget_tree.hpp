@@ -1191,6 +1191,19 @@ public:
     /// A widget whose `visible` may differ from what the interface was last
     /// told, or whose `shownToggles` is not zero. Set wherever either changes;
     /// read by LuaEngine::updateVisibility.
+    /// Whether the frame is shown now, and every ancestor with it - by the
+    /// flags Show and Hide set, not by the last layout's visibleChain, which
+    /// knows nothing of a Hide() since.
+    [[nodiscard]] bool shownNow(uint32_t id) const;
+    /// Whether the frame's OnUpdate runs in this pass: up as the last layout
+    /// left it, and not hidden since. The client runs none for a frame the
+    /// moment Hide() has been called on it or on one it is in (its update is
+    /// taken off the list by the Hide itself), so one hidden by an event of
+    /// this frame, its state let go with it, is not asked once more.
+    [[nodiscard]] bool runsOnUpdate(uint32_t id) const {
+        const Widget* w = get(id);
+        return w && w->visibleChain && shownNow(id);
+    }
     void markVisibilityPending(uint32_t id) { if (isWidgetId(id)) visibilityPending_.set(id); }
     uint32_t takeVisibilityPending(uint32_t from) { return visibilityPending_.takeFrom(from); }
 

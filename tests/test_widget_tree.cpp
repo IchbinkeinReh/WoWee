@@ -3375,3 +3375,30 @@ TEST_CASE("Setting the scale or resizing asks for the floating chat windows", "[
     tree.useDefaultUserScale();
     REQUIRE(tree.takeFloatingChatUpdateDue());
 }
+
+// MIRROR_TIMER_STOP hides MirrorTimer1 and lets its timer go in one breath;
+// its OnUpdate ran once more that frame, on the visibility the last layout
+// left, and raised.
+TEST_CASE("A frame hidden since the last layout runs no OnUpdate", "[widget][onupdate]") {
+    WidgetTree tree;
+    const uint32_t panel = tree.create(WidgetKind::Frame, 0, "Panel");
+    const uint32_t driver = tree.create(WidgetKind::Frame, panel, "Driver");
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.runsOnUpdate(driver));
+
+    SECTION("itself") {
+        tree.get(driver)->shown = false;
+        CHECK(tree.get(driver)->visibleChain);  // the layout knows nothing of it yet
+        CHECK_FALSE(tree.runsOnUpdate(driver));
+    }
+    SECTION("with the frame it is in") {
+        tree.get(panel)->shown = false;
+        CHECK_FALSE(tree.runsOnUpdate(driver));
+        CHECK_FALSE(tree.shownNow(driver));
+    }
+    SECTION("shown again, it runs") {
+        tree.get(panel)->shown = false;
+        tree.get(panel)->shown = true;
+        CHECK(tree.runsOnUpdate(driver));
+    }
+}
