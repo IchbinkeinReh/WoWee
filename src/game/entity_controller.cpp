@@ -1663,6 +1663,14 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         owner_.addonEventCallbackRef()("UNIT_PET_EXPERIENCE", {"pet"});
     }
     applyPlayerShapeshiftForm(block);
+    // The rescan 0x0053cf10 where the player's flags, its health or its
+    // PLAYER_FLAGS decide what may be cast (0x0073c330, 0x0073f330,
+    // 0x006e0fd0): the stance bar, when a button of it changed.
+    if (block.guid == owner_.getPlayerGuid() && !isPreWotlk() &&
+        (block.fields.find(ufi.flags) != block.fields.end() || block.fields.find(ufi.health) != block.fields.end() ||
+         block.fields.find(fieldIndex(UF::PLAYER_FLAGS)) != block.fields.end()) &&
+        owner_.shapeshiftCastabilityChanged())
+        pendingEvents_.emit("UPDATE_SHAPESHIFT_USABLE", {});
     notePlayerPvpByte(block, false);
     // The pet tab redraws its stat block on these, named for the pet.
     if (petStatsChanged && owner_.addonEventCallbackRef()) {

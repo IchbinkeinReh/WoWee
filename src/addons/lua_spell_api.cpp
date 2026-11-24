@@ -1995,16 +1995,12 @@ void registerSpellLuaAPI(lua_State* L) {
         }},
                 {"CastShapeshiftForm", [](lua_State* L) -> int {
             // CastShapeshiftForm(index) (0x0053c0f0): a non-zero number or the
-            // usage line, rounded; the spell for that form slot.
+            // usage line, its fraction dropped; the spell of that place.
             const double asked = lua_isnumber(L, 1) ? lua_tonumber(L, 1) : 0.0;
             if (asked == 0.0) return luaL_error(L, "Usage: CastShapeshiftForm(index)");
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(std::lround(asked));
-            if (!gh || index < 1) return 0;
-            uint8_t classId = gh->getPlayerClass();
-            const auto forms = game::knownShapeshiftForms(classId, gh->getKnownSpells());
-            if (static_cast<size_t>(index) > forms.size()) return 0;
-            gh->castSpell(forms[static_cast<size_t>(index) - 1].spellId, 0);
+            const int index = static_cast<int>(asked);
+            if (gh && index >= 1) gh->castStanceBarSpell(static_cast<size_t>(index) - 1);
             return 0;
         }},
                 {"CancelShapeshiftForm", [](lua_State* L) -> int {
@@ -2032,25 +2028,21 @@ void registerSpellLuaAPI(lua_State* L) {
             // field is clear.
             const uint8_t formField = gh->getShapeshiftFormId();
             if (lua_toboolean(L, 1) && formField == 0) return luaReturnZero(L);
-            const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
+            const auto forms = gh->stanceBarSpells();
             std::vector<bool> active;
             active.reserve(forms.size());
-            for (const auto& form : forms) active.push_back(gh->formSpellInEffect(form.spellId));
+            for (const uint32_t form : forms) active.push_back(gh->formSpellInEffect(form));
             lua_pushnumber(L, game::activeShapeshiftIndex(active, formField));
             return 1;
         }},
                 {"GetNumShapeshiftForms", [](lua_State* L) -> int {
-            // Return count based on player class
             auto* gh = getGameHandler(L);
             if (!gh) { return luaReturnZero(L); }
-            uint8_t classId = gh->getPlayerClass();
-            // Only the forms this character has actually learned, from the
-            // one table GetShapeshiftFormInfo and CastShapeshiftForm also read.
-            // The bar walks 1..this and asks the other two about each index, so
-            // a count taken from a different list describes one form and casts
-            // another.
-            lua_pushnumber(L, static_cast<double>(
-                game::knownShapeshiftForms(classId, gh->getKnownSpells()).size()));
+            // 0x0053c0b0: the list GetShapeshiftFormInfo and CastShapeshiftForm
+            // also read. The bar walks 1..this and asks the other two about
+            // each index, so a count taken from a different list describes one
+            // form and casts another.
+            lua_pushnumber(L, static_cast<double>(gh->stanceBarSpells().size()));
             return 1;
         }},
     };

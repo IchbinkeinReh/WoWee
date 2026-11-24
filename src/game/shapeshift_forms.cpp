@@ -2,11 +2,16 @@
 
 #include "game/protocol_constants.hpp"
 
+#include <algorithm>
+#include <cstddef>
+#include <iterator>
+#include <utility>
+
 namespace wowee::game {
 namespace {
 
-// The order is the order the bar shows them, which is the order the client
-// has always shown them and the order every index refers to.
+// The forms before WotLK, whose spell tables have no stance bar columns here.
+// The order is the order the bar shows them and every index refers to.
 //
 // Dire Bear is not a row of its own. It replaces Bear Form on the same button
 // (0x005424d4 swaps the list's spell in place), so the button then holds and
@@ -60,6 +65,69 @@ std::vector<ShapeshiftForm> allShapeshiftForms(uint8_t classId) {
         case 11: return {std::begin(kDruid), std::end(kDruid)};
         default: return {};
     }
+}
+
+bool onStanceBar(const StanceBarRow& row) {
+    if ((row.attrEx2 & kAttrEx2NoStanceBar) != 0) return false;
+    if ((row.attrEx2 & kAttrEx2StanceBar) != 0) return true;
+    return std::find(std::begin(row.effectAuras), std::end(row.effectAuras), kAuraModShapeshift) !=
+           std::end(row.effectAuras);
+}
+
+int StanceBar::compare(const Entry& a, const Entry& b) {
+    // 0x0053c680.
+    if (a.row.order < 0 && b.row.order < 0) return a.spellId >= b.spellId ? 1 : -1;
+    if (a.row.order == -1) return 1;
+    if (b.row.order == -1) return -1;
+    if (a.row.order == b.row.order) return 0;
+    return a.row.order >= b.row.order ? 1 : -1;
+}
+
+void StanceBar::sort() {
+    // The client's qsort (0x0040be50) sorts up to eight this way (0x0040bdc0):
+    // the greatest, the first of equals, to the end. Two of one order - Flight
+    // Form and its swift one, both known - therefore change places each time.
+    for (size_t end = entries_.size(); end > 1; --end) {
+        size_t greatest = 0;
+        for (size_t i = 1; i < end; ++i)
+            if (compare(entries_[i], entries_[greatest]) > 0) greatest = i;
+        std::swap(entries_[greatest], entries_[end - 1]);
+    }
+}
+
+bool StanceBar::learned(uint32_t spellId, const StanceBarRow& row) {
+    if (!onStanceBar(row)) return false;
+    for (const Entry& e : entries_)
+        if (e.spellId == spellId) return false;
+    entries_.push_back({spellId, row});
+    sort();
+    return true;
+}
+
+bool StanceBar::superseded(uint32_t oldSpellId, uint32_t spellId, const StanceBarRow& row) {
+    if (!onStanceBar(row)) return false;
+    for (Entry& e : entries_) {
+        if (e.spellId != oldSpellId) continue;
+        e = {spellId, row};
+        return true;
+    }
+    return false;
+}
+
+bool StanceBar::removed(uint32_t spellId) {
+    for (size_t i = entries_.size(); i > 0; --i) {
+        if (entries_[i - 1].spellId != spellId) continue;
+        entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+        return true;
+    }
+    return false;
+}
+
+std::vector<uint32_t> StanceBar::spells() const {
+    std::vector<uint32_t> out;
+    out.reserve(entries_.size());
+    for (const Entry& e : entries_) out.push_back(e.spellId);
+    return out;
 }
 
 bool formHasPresetSpells(const ShapeshiftFormRow& row) {

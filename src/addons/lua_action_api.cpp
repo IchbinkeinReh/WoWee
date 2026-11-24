@@ -637,7 +637,12 @@ public:
     bool stealthed() override { return units_.isStealthed(); }
     bool inParty() override { return gh_.isInGroup(); }
     bool inRaid() override { return gh_.isInGroup() && game::groupIsRaid(gh_.getPartyData().groupType); }
-    int shapeshiftForm() override { return globalNumber(L_, "GetShapeshiftForm"); }
+    // [stance] and [form] (0x005eefb0) ask 0x0053d4b0 with 1: a place on the
+    // bar only while the form field is set, so no aura or presence counts.
+    int shapeshiftForm() override {
+        if (!game::isPreWotlk() && gh_.getShapeshiftFormId() == 0) return 0;
+        return globalNumber(L_, "GetShapeshiftForm");
+    }
     bool pet(std::string& name, std::string& family) override {
         if (!globalTruth(L_, "UnitExists", {"pet"})) return false;
         name = globalString(L_, "UnitName", {"pet"});
@@ -880,8 +885,8 @@ static std::string macroTexture(lua_State* L, game::GameHandler* gh, uint32_t id
         const auto spell = static_cast<uint32_t>(m->result.spell);
         const auto it = gh->spellNameCacheRef().find(spell);
         if (it != gh->spellNameCacheRef().end() && it->second.activeIconId != 0 && !m->result.petSpell) {
-            for (const auto& form : game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells())) {
-                if (form.spellId == spell && gh->formSpellInEffect(spell)) {
+            for (const uint32_t form : gh->stanceBarSpells()) {
+                if (form == spell && gh->formSpellInEffect(spell)) {
                     const std::string active = gh->getIconPath(it->second.activeIconId);
                     if (!active.empty()) return active;
                     break;

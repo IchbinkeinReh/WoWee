@@ -315,6 +315,50 @@ TEST_CASE("Dire Bear Form takes Bear Form's button", "[shapeshift]") {
     CHECK(forms[1].spellId == wowee::game::SPELL_CAT_FORM);
 }
 
+TEST_CASE("what goes on the stance bar is in the spell's row", "[shapeshift]") {
+    using wowee::game::onStanceBar;
+    using wowee::game::StanceBarRow;
+    // 0x00542470: any effect's aura 36, or AttributesEx2 0x10; never 0x2.
+    CHECK(onStanceBar(StanceBarRow{.effectAuras = {36, 0, 0}}));
+    CHECK(onStanceBar(StanceBarRow{.effectAuras = {275, 0, 36}}));
+    CHECK(onStanceBar(StanceBarRow{.effectAuras = {22, 0, 0}, .attrEx2 = 0x11}));
+    CHECK_FALSE(onStanceBar(StanceBarRow{.effectAuras = {22, 0, 0}, .attrEx2 = 0x1}));
+    CHECK_FALSE(onStanceBar(StanceBarRow{.effectAuras = {36, 31, 20}, .attrEx2 = 0x2}));
+    CHECK_FALSE(onStanceBar(StanceBarRow{.effectAuras = {22, 0, 0}, .attrEx2 = 0x12}));
+}
+
+TEST_CASE("the stance bar is sorted as 0x0053c680 compares", "[shapeshift]") {
+    using wowee::game::StanceBar;
+    using wowee::game::StanceBarRow;
+    const auto row = [](int32_t order) { return StanceBarRow{.attrEx2 = 0x10, .order = order}; };
+    using Bar = std::vector<uint32_t>;
+    StanceBar bar;
+    CHECK(bar.learned(10, row(-1)));
+    CHECK(bar.learned(11, row(7)));
+    CHECK(bar.learned(12, row(0)));
+    CHECK(bar.learned(9, row(-1)));
+    // StanceBarOrder ascending, none (-1) last and among themselves by id.
+    CHECK(bar.spells() == Bar{12, 11, 9, 10});
+    // Already there: nothing moves and nothing is said.
+    CHECK_FALSE(bar.learned(11, row(7)));
+    // In another's place, unsorted, until the next one is learned.
+    CHECK(bar.superseded(12, 13, row(8)));
+    CHECK(bar.spells() == Bar{13, 11, 9, 10});
+    CHECK_FALSE(bar.superseded(99, 14, row(1)));
+    CHECK(bar.learned(15, row(3)));
+    CHECK(bar.spells() == Bar{15, 11, 13, 9, 10});
+    CHECK(bar.removed(11));
+    CHECK_FALSE(bar.removed(11));
+    CHECK(bar.spells() == Bar{15, 13, 9, 10});
+    // Two of one order change places with each sort (0x0040bdc0).
+    StanceBar pair;
+    pair.learned(1, row(5));
+    pair.learned(2, row(5));
+    CHECK(pair.spells() == Bar{2, 1});
+    pair.learned(3, row(0));
+    CHECK(pair.spells() == Bar{3, 1, 2});
+}
+
 TEST_CASE("a stance's number keys press its own bar", "[actionbar]") {
     // ActionButtonDown takes the bonus button while the bonus bar is up; on
     // page 1 it reads page 6 + GetBonusBarOffset(). 0-based slots.

@@ -367,9 +367,8 @@ void GameHandler::predictedPowerUsability() {
     if (actions) fireAddonEvent("ACTIONBAR_UPDATE_USABLE", {});
     // The forms the same way, UPDATE_SHAPESHIFT_USABLE (0x17a).
     bool forms = false;
-    for (const auto& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
-        forms |= power_prediction::noteShort(formShortOfPower_[form.spellId],
-                                             !spellHandler_->enoughPower(form.spellId, *player));
+    for (const uint32_t form : stanceBarSpells())
+        forms |= power_prediction::noteShort(formShortOfPower_[form], !spellHandler_->enoughPower(form, *player));
     if (forms) fireAddonEvent("UPDATE_SHAPESHIFT_USABLE", {});
 }
 
@@ -383,9 +382,8 @@ bool GameHandler::shapeshiftCastabilityChanged() {
     // the bar, not once per button (0x0053cf10 sets one flag over the whole loop
     // and fires after it).
     bool changed = false;
-    for (const auto& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
-        changed |= power_prediction::noteShort(formCastable_[form.spellId],
-                                               spellHandler_->spellUsable(form.spellId, nullptr));
+    for (const uint32_t form : stanceBarSpells())
+        changed |= power_prediction::noteShort(formCastable_[form], spellHandler_->spellUsable(form, nullptr));
     return changed;
 }
 

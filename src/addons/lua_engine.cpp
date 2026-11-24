@@ -4703,9 +4703,9 @@ static int lua_Tooltip_SetShapeshift(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (!w || !gh || index < 1) return 0;
-    const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
+    const auto forms = gh->stanceBarSpells();
     if (static_cast<size_t>(index) > forms.size()) return 0;
-    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, forms[static_cast<size_t>(index) - 1].spellId, !uberTooltips(L), true)
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, forms[static_cast<size_t>(index) - 1], !uberTooltips(L), true)
                            ? 1 : 0);
     return 1;
 }

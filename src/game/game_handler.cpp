@@ -4003,8 +4003,30 @@ const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
 }
 
 bool GameHandler::formSpellInEffect(uint32_t spellId) const {
-    return formSpellActive(getPlayerAuras(), spellId,
-                           shapeshiftFormPending_ && spellAppliesAura(spellId, kAuraModShapeshift));
+    if (shapeshiftFormPending_ && spellAppliesAura(spellId, kAuraModShapeshift)) return false;
+    if (isPreWotlk()) return formSpellActive(getPlayerAuras(), spellId);
+    return unitSpellInEffect(playerGuid, spellId, getPlayerAuras());
+}
+
+std::vector<uint32_t> GameHandler::stanceBarSpells() const {
+    if (!isPreWotlk()) return spellHandler_ ? spellHandler_->stanceBarSpells() : std::vector<uint32_t>{};
+    std::vector<uint32_t> spells;
+    for (const ShapeshiftForm& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
+        spells.push_back(form.spellId);
+    return spells;
+}
+
+void GameHandler::castStanceBarSpell(size_t index) {
+    const auto spells = stanceBarSpells();
+    if (index >= spells.size()) return;
+    const uint32_t spell = spells[index];
+    // 0x0080da80: one in effect is taken off (0x00802f80), not within 1.5 s of
+    // its cooldown beginning with secureAbilityToggle on (0x00807d40).
+    if (!isPreWotlk() && formSpellInEffect(spell)) {
+        if (!spellHandler_ || !spellHandler_->toggleHeld(spell)) cancelAura(spell);
+        return;
+    }
+    castSpell(spell, 0);
 }
 
 bool GameHandler::isCurrentSpell(uint32_t spellId) const {

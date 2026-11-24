@@ -1717,6 +1717,8 @@ public:
     /// Whether a pet spell is in effect on the pet, so that its button takes
     /// it off rather than casting it and shows its ActiveIconID (0x00802cb0).
     [[nodiscard]] bool petSpellInEffect(uint32_t spellId);
+    /// The same for any unit, with its auras (0x00802cb0).
+    [[nodiscard]] bool unitSpellInEffect(uint64_t guid, uint32_t spellId, const std::vector<AuraSlot>& auras) const;
     const std::unordered_set<uint32_t>& getKnownSpells() const {
         static const std::unordered_set<uint32_t> empty;
         return spellHandler_ ? spellHandler_->getKnownSpells() : empty;
@@ -3632,8 +3634,15 @@ public:
     /// The player's object made anew: CGUnit_C's constructor (0x0073f660)
     /// starts +0x9f4 clear, so no cancel carries over to it.
     void clearShapeshiftFormPending() { shapeshiftFormPending_ = false; }
-    /// 0x00802cb0 for the player: whether a form's spell is in effect.
+    /// 0x00802cb0 for the player: whether a spell is in effect - a form, an
+    /// aura or a presence, the mount ridden, the companion out.
     bool formSpellInEffect(uint32_t spellId) const;
+    /// The stance bar's spells, in bar order (0x00be8e2c): what
+    /// GetNumShapeshiftForms counts and every index of the bar means.
+    std::vector<uint32_t> stanceBarSpells() const;
+    /// CastShapeshiftForm (0x0053c0f0 -> 0x0080da80): the spell of that place
+    /// on the bar, from 0, cast - or, in effect, taken off.
+    void castStanceBarSpell(size_t index);
     /// Whether a spell is current (0x00806030): IsCurrentSpell and the spell
     /// leg of IsCurrentAction (0x005aa240).
     bool isCurrentSpell(uint32_t spellId) const;
@@ -6170,6 +6179,9 @@ public:
         /// Spell.dbc ActiveIconID (+0x218): a spell shown as in effect,
         /// which its button turns off (0x00802cb0).
         uint32_t activeIconId = 0;
+        /// Spell.dbc StanceBarOrder (+0x25c): its place on the stance bar
+        /// (0x0053c680), -1 for last.
+        int32_t stanceBarOrder = 0;
         uint32_t spellFamily = 0;
         uint32_t spellFamilyFlags[3] = {0, 0, 0};
         // Spell.dbc Targets bitmask (SpellCastTargetFlags) - 0x10 = TARGET_FLAG_ITEM

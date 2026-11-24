@@ -3192,12 +3192,19 @@ void GameHandler::updatePossessSpell() {
 
 bool GameHandler::petSpellInEffect(uint32_t spell) {
     // 0x00802cb0 on the pet: its toggle spells, companions and mounts.
-    if (spell == 0 || petGuid_ == 0) return false;
+    if (petGuid_ == 0) return false;
+    static const std::vector<AuraSlot> kNoAuras;
+    const auto* auras = getUnitAuras(petGuid_);
+    return unitSpellInEffect(petGuid_, spell, auras ? *auras : kNoAuras);
+}
+
+bool GameHandler::unitSpellInEffect(uint64_t guid, uint32_t spell, const std::vector<AuraSlot>& auras) const {
+    if (spell == 0) return false;
     loadSpellNameCache();
     const auto it = spellNameCache_.find(spell);
     if (it == spellNameCache_.end()) return false;
-    auto petUnit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(petGuid_));
-    if (!petUnit) return false;
+    auto self = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));
+    if (!self) return false;
     pet::ToggleSpell toggle;
     toggle.id = spell;
     toggle.activeIconId = it->second.activeIconId;
@@ -3208,17 +3215,17 @@ bool GameHandler::petSpellInEffect(uint32_t spell) {
     }
     toggle.miscB0 = it->second.effectMiscValuesB[0];
     pet::ToggleUnit unit;
-    const uint64_t critter = guidFieldOf(*petUnit, UF::UNIT_FIELD_CRITTER);
+    const uint64_t critter = guidFieldOf(*self, UF::UNIT_FIELD_CRITTER);
     unit.critterEntry = static_cast<uint32_t>((critter >> 24) & 0xFFFFFFFu);  // its entry bits
-    if (const auto p = vehicleRoster_.passenger(petGuid_)) {
+    if (const auto p = vehicleRoster_.passenger(guid)) {
         if (auto v = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(p->vehicleGuid))) {
             unit.vehicleEntry = v->getEntry();
             unit.vehicleMadeByPlayer = guidFieldOf(*v, UF::UNIT_FIELD_CREATEDBY) == playerGuid;
         }
     }
-    auto* am = services_.assetManager;
-    auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
     const auto slotOf = [&](uint32_t row) -> uint32_t {
+        auto* am = services_.assetManager;
+        auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
         const int32_t r = props && props->getFieldCount() > 4 ? props->findRecordById(row) : -1;
         return r >= 0 ? props->getUInt32(static_cast<uint32_t>(r), 4) : 0u;
     };
@@ -3227,9 +3234,7 @@ bool GameHandler::petSpellInEffect(uint32_t spell) {
         if (m == spellNameCache_.end()) return {0u, 0u};
         return {m->second.effectAuraIds[0], m->second.effectMiscValues[0]};
     };
-    static const std::vector<AuraSlot> kNoAuras;
-    const auto* auras = getUnitAuras(petGuid_);
-    return pet::spellInEffectOn(toggle, unit, slotOf, auras ? *auras : kNoAuras, mountOf);
+    return pet::spellInEffectOn(toggle, unit, slotOf, auras, mountOf);
 }
 
 void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {

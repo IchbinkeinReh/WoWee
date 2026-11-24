@@ -440,6 +440,7 @@
     "EffectTriggerSpell0": 116,
     "ManaCostPercentage": 204,
     "PreventionType": 214,
+    "StanceBarOrder": 215,
     "MinFactionId": 219,
     "MinReputation": 220,
     "RequiredAuraVision": 221,
