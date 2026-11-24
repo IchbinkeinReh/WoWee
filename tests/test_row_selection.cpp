@@ -1,5 +1,6 @@
 #include <catch_amalgamated.hpp>
 
+#include "addons/header_fold.hpp"
 #include "addons/row_selection.hpp"
 
 #include <cstdint>
@@ -33,4 +34,18 @@ TEST_CASE("A list's selection goes with its row", "[addons][selection]") {
     CHECK(selected.index(heading, id) == 0);
     selected.select(heading, 0, id);
     CHECK(selected.index(heading, id) == 0);
+}
+
+TEST_CASE("folding a heading reaches what the client's does", "[fold]") {
+    using wowee::addons::FoldReach;
+    const std::vector<bool> rows = {true, false, true};
+    // 0x005d1d20
+    CHECK(wowee::addons::factionFold(rows, 1) == FoldReach::One);
+    CHECK(wowee::addons::factionFold(rows, 2) == FoldReach::All);
+    CHECK(wowee::addons::factionFold(rows, 0) == FoldReach::All);
+    CHECK(wowee::addons::factionFold(rows, 4) == FoldReach::All);
+    // 0x005ce3a0: CollapseSkillHeader(0) is the "All" button.
+    CHECK(wowee::addons::skillFold(3, 0) == FoldReach::All);
+    CHECK(wowee::addons::skillFold(3, 2) == FoldReach::One);
+    CHECK(wowee::addons::skillFold(3, 4) == FoldReach::None);
 }

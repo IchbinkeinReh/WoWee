@@ -4395,14 +4395,7 @@ void registerSocialLuaAPI(lua_State* L) {
             }
             return 0;
         }},
-                // GetFactionInfo reports every row as isHeader false, because
-                // the list it walks is flat - the client does not read each
-                // faction's parent to build categories. With no headers there
-                // is nothing to open or close, and the tab calls these from a
-                // row's click handler regardless of what the row is.
-                // Opening and closing a group. FrameXML calls these from a
-                // row's click handler regardless of what the row is, so a
-                // non-header index is ignored rather than refused.
+                // Opening and closing a group (header_fold.hpp).
                 {"ExpandFactionHeader", [](lua_State* L) -> int {
             // 0x005d2000
             if (!lua_isnumber(L, 1))

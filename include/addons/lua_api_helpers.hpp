@@ -3,6 +3,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include "addons/header_fold.hpp"
 #include "addons/macro_icon_lists.hpp"
 #include <array>
 #include <functional>
@@ -987,20 +988,6 @@ inline int pushFactionInfo(lua_State* L, game::GameHandler* gh,
     return 13;
 }
 
-/// Open or close the group at a drawn-row index. Shared because the two verbs
-/// differ only in the boolean, and because the index has to be resolved the
-/// same way both times - against the rows, which is what FrameXML counted.
-inline int factionHeaderSetCollapsed(lua_State* L, bool collapsed) {
-    auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || index < 1) return 0;
-    const auto& rows = gh->getReputationRows();
-    if (index > static_cast<int>(rows.size())) return 0;
-    const auto& row = rows[static_cast<size_t>(index) - 1];
-    if (row.isHeader) gh->setFactionCollapsed(row.factionId, collapsed);
-    return 0;
-}
-
 /// Every top-level group opened or closed at once.
 inline int allTopFactionHeadersSetCollapsed(lua_State* L, bool collapsed) {
     auto* gh = getGameHandler(L);
@@ -1009,6 +996,24 @@ inline int allTopFactionHeadersSetCollapsed(lua_State* L, bool collapsed) {
     for (const auto& row : rows)
         if (row.isHeader && !row.isChild && gh->isFactionCollapsed(row.factionId) != collapsed)
             gh->setFactionCollapsed(row.factionId, collapsed);
+    gh->fireAddonEvent("UPDATE_FACTION", {});
+    return 0;
+}
+
+/// Open or close the group at a drawn-row index. Shared because the two verbs
+/// differ only in the boolean, and because the index has to be resolved the
+/// same way both times - against the rows, which is what FrameXML counted.
+inline int factionHeaderSetCollapsed(lua_State* L, bool collapsed) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const long index = std::lround(lua_tonumber(L, 1));
+    const auto& rows = gh->getReputationRows();
+    std::vector<bool> headers;
+    headers.reserve(rows.size());
+    for (const auto& row : rows) headers.push_back(row.isHeader);
+    if (factionFold(headers, index) == FoldReach::All) return allTopFactionHeadersSetCollapsed(L, collapsed);
+    gh->setFactionCollapsed(rows[static_cast<size_t>(index) - 1].factionId, collapsed);
+    gh->fireAddonEvent("UPDATE_FACTION", {});
     return 0;
 }
 

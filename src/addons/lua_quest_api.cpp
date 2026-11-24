@@ -2446,12 +2446,21 @@ static int lua_GetNumSkillLines(lua_State* L) {
 /// which differ only in the boolean and must resolve the index the same way.
 static int skillHeaderSetCollapsed(lua_State* L, bool collapsed) {
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || index < 1) return 0;
+    if (!gh) return 0;
+    const long index = std::lround(lua_tonumber(L, 1));
     const auto rows = skillRows(gh);
-    if (index > static_cast<int>(rows.size())) return 0;
-    const auto& row = rows[static_cast<size_t>(index) - 1];
-    if (row.isHeader) gh->setSkillCategoryCollapsed(row.categoryId, collapsed);
+    switch (skillFold(rows.size(), index)) {
+        case FoldReach::None:
+            return 0;
+        case FoldReach::One:
+            gh->setSkillCategoryCollapsed(rows[static_cast<size_t>(index) - 1].categoryId, collapsed);
+            break;
+        case FoldReach::All:
+            for (const auto& row : rows)
+                if (row.isHeader) gh->setSkillCategoryCollapsed(row.categoryId, collapsed);
+            break;
+    }
+    gh->fireAddonEvent("SKILL_LINES_CHANGED", {});
     return 0;
 }
 
@@ -5375,10 +5384,7 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, gh ? gh->getAdjustedSkillPoints() : 0);
             return 1;
         }},
-                // Opening and closing a heading. The index is a position in
-                // the drawn rows, and a click on a skill row rather than a
-                // heading is ignored rather than refused - the tab calls these
-                // from the row label template whatever the row turns out to be.
+                // Opening and closing a heading (header_fold.hpp).
                 {"ExpandSkillHeader",   [](lua_State* L) -> int {
             // 0x005ce400
             if (!lua_isnumber(L, 1))
