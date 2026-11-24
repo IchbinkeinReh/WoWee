@@ -67,6 +67,25 @@ bool anchorsSpanAxis(const std::vector<Anchor>& anchors, bool xAxis) {
     return lo < 0.01f && hi > 0.99f;
 }
 
+FontStringSizing fontStringSizing(const Widget& w) {
+    const bool spansX = anchorsSpanAxis(w.anchors, true);
+    if (spansX && anchorsSpanAxis(w.anchors, false)) return FontStringSizing::Given;
+    if (w.wrapsToWidth || (!w.autoSized && w.width > 0.0f && w.height <= 0.0f)) return FontStringSizing::Paragraph;
+    // A height of its own with a width of its own, or with one between two
+    // anchored edges: `<Size x="0" y="32"/>` with TOPLEFT and RIGHT is how every
+    // options page writes its sub text. Measuring that one made it as wide as
+    // its sentence, and a string sized by its text is not wrapped.
+    if (!w.autoSized && w.height > 0.0f && (w.width > 0.0f || spansX)) return FontStringSizing::Given;
+    return FontStringSizing::Measured;
+}
+
+float fontStringWrapWidth(const Widget& w) {
+    if (w.wrapsToWidth) return w.width;
+    if (w.autoSized) return 0.0f;
+    if (w.rectW > 0.0f && anchorsSpanAxis(w.anchors, true)) return w.effScale > 0.0f ? w.rectW / w.effScale : w.rectW;
+    return w.width > 0.0f ? w.width : 0.0f;
+}
+
 DrawLayer parseDrawLayer(const std::string& rawName) {
     const std::string n = upper(rawName);
     if (n == "BACKGROUND") return DrawLayer::Background;

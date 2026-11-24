@@ -323,9 +323,8 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     // button. The entries were there and the buttons were there; the names
     // were invisible, so nothing could be read or clicked, and no setting
     // added to the schema could be reached however correctly it registered.
-    const bool spansX = anchorsSpanAxis(w->anchors, true);
-    const bool spansY = anchorsSpanAxis(w->anchors, false);
-    if (spansX && spansY) return;
+    const FontStringSizing sizing = fontStringSizing(*w);
+    if (sizing == FontStringSizing::Given) return;
 
     // A width with no height is a paragraph, not a request to be measured.
     //
@@ -339,9 +338,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     // So it drew one line out through the side of the scroll frame that
     // clips it, and everything anchored beneath it sat on top of the lines
     // that should have pushed it down.
-    const bool paragraph =
-        w->wrapsToWidth ||
-        (!w->autoSized && w->width > 0.0f && w->height <= 0.0f);
+    const bool paragraph = sizing == FontStringSizing::Paragraph;
 
     // The size the draw will use, not a flat twelve.
     //
@@ -371,12 +368,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     const bool sameMeasurement = w->measuredText == w->text &&
                                  w->measuredSize == size &&
                                  w->measuredFace == w->fontFace;
-    if (paragraph) {
-        if (sameMeasurement) return;
-    } else {
-        if (w->autoSized && sameMeasurement) return;
-        if (!w->autoSized && w->width > 0.0f && w->height > 0.0f) return;
-    }
+    if (sameMeasurement && (paragraph || w->autoSized)) return;
 
     // The face only once there is something to measure: looking it up
     // normalises the name and searches a map, and this runs over every

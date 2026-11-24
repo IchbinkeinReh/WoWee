@@ -3430,3 +3430,45 @@ TEST_CASE("A key goes to the topmost frame that has a script for it", "[widget][
     tree.get(under)->keyboardEnabled = false;
     CHECK(topKeyboardFrame(tree, anyOf({under, popup})) == 0);
 }
+
+// VideoOptionsResolutionPanelSubText: <Size x="0" y="32"/>, TOPLEFT under the
+// title and RIGHT of the panel.
+TEST_CASE("a string between two edges has their width to wrap in", "[widgets][fontstring]") {
+    using wowee::ui::FontStringSizing;
+    using wowee::ui::fontStringSizing;
+    using wowee::ui::fontStringWrapWidth;
+    Widget w;
+    w.kind = WidgetKind::FontString;
+    w.text = "Diese Optionen beeinflussen, in welcher Groesse die Grafik dargestellt wird.";
+    Anchor left, right;
+    left.point = "TOPLEFT";
+    right.point = "RIGHT";
+    w.anchors = {left, right};
+    w.height = 32.0f;
+    CHECK(fontStringSizing(w) == FontStringSizing::Given);
+    w.rectW = 762.0f;
+    w.effScale = 2.0f;
+    CHECK(fontStringWrapWidth(w) == Catch::Approx(381.0f));
+
+    // One edge alone gives no width, and a string with neither is its text's.
+    w.anchors = {left};
+    CHECK(fontStringSizing(w) == FontStringSizing::Measured);
+    CHECK(fontStringWrapWidth(w) == 0.0f);
+
+    // A declared width, with a height and without.
+    w.width = 285.0f;
+    CHECK(fontStringSizing(w) == FontStringSizing::Given);
+    CHECK(fontStringWrapWidth(w) == 285.0f);
+    w.height = 0.0f;
+    CHECK(fontStringSizing(w) == FontStringSizing::Paragraph);
+
+    // What its text once decided stays its text's.
+    Widget sized;
+    sized.kind = WidgetKind::FontString;
+    sized.width = 60.0f;
+    sized.height = 14.0f;
+    sized.autoSized = true;
+    sized.anchors = {left, right};
+    CHECK(fontStringSizing(sized) == FontStringSizing::Measured);
+    CHECK(fontStringWrapWidth(sized) == 0.0f);
+}

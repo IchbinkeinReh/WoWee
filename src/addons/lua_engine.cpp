@@ -1872,8 +1872,7 @@ double fontStringTextHeight(const wowee::ui::Widget& w) {
     // fallbacks - twelve here, twelve below, fourteen in the edit box - and a
     // label with no declared height is drawn at none of them.
     const float line = wowee::ui::interfaceFontSize(w.fontHeight);
-    const float wrapWidth =
-        (w.wrapsToWidth || (!w.autoSized && w.width > 0.0f)) ? w.width : 0.0f;
+    const float wrapWidth = wowee::ui::fontStringWrapWidth(w);
     const int lines = std::max(1, wowee::ui::interfaceTextLines(
                                       w.text, w.fontFace, w.fontHeight,
                                       wrapWidth, w.nonSpaceWrap));

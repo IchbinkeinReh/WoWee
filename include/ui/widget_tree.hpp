@@ -91,6 +91,21 @@ struct Anchor {
 /// or the reverse, is a region sized twice or not at all.
 bool anchorsSpanAxis(const std::vector<Anchor>& anchors, bool xAxis);
 
+struct Widget;
+
+/// How a font string comes by its size.
+enum class FontStringSizing : uint8_t {
+    Given,      ///< a box on both axes, from its anchors or its <Size>: wrapped in and held to
+    Paragraph,  ///< a declared width and no height: as tall as the lines in it
+    Measured,   ///< as wide as its text
+};
+FontStringSizing fontStringSizing(const Widget& w);
+
+/// The width a font string's text is broken at, in its own units; 0 for one
+/// that is as wide as its text. The width between two edges counts as much as
+/// a declared one (0x00486b20: the rect's, where it differs from +0x54).
+float fontStringWrapWidth(const Widget& w);
+
 /// A set of widget ids, one bit each, read back in ascending order.
 ///
 /// What the per-frame passes keep instead of walking every widget. Of the
