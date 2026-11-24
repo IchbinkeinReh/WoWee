@@ -10,6 +10,7 @@
 #include "mcp/schema.hpp"
 
 using namespace wowee::mcp;
+using namespace std::string_literals;
 
 namespace {
 
@@ -190,7 +191,7 @@ TEST_CASE("the schemas hold what they say", "[mcp][schema]") {
         INFO(bad);
         CHECK_FALSE(ok(bad));
     }
-    CHECK_FALSE(validate(s, json{{"guid", std::string("0x1\0", 4)}}).empty());
+    CHECK_FALSE(validate(s, json{{"guid", "0x1\0"s}}).empty());
     CHECK_FALSE(validate(s, json{{"guid", "0x1"}, {"n", std::numeric_limits<double>::infinity()}}).empty());
 }
 

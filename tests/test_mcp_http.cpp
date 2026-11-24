@@ -11,6 +11,7 @@
 #include "mcp/http_message.hpp"
 
 using namespace wowee::mcp;
+using namespace std::string_literals;
 using State = HttpRequestReader::State;
 
 namespace {
@@ -79,7 +80,7 @@ TEST_CASE("malformed heads are refused", "[mcp][http]") {
     CHECK(statusOf("GET mcp HTTP/1.1\r\n\r\n") == 400);
     CHECK(statusOf("GET http://127.0.0.1/mcp HTTP/1.1\r\n\r\n") == 400);
     CHECK(statusOf("GET /m\tcp HTTP/1.1\r\n\r\n") == 400);
-    CHECK(statusOf(std::string("GET /m\0cp HTTP/1.1\r\n\r\n", 25)) == 400);
+    CHECK(statusOf("GET /m\0cp HTTP/1.1\r\n\r\n"s) == 400);
     CHECK(statusOf("GET /mcp HTTP/2.0\r\n\r\n") == 505);
     CHECK(statusOf("GET /mcp HTTP/0.9\r\n\r\n") == 505);
     CHECK(statusOf("GET /mcp HTTP/1.1\r\nNoColon\r\n\r\n") == 400);
