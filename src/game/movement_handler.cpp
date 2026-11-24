@@ -4552,6 +4552,13 @@ bool MovementHandler::unitHasClientControl(uint64_t guid) const {
 
 void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs,
                                      uint32_t splineId) {
+    // A move of the server's ends the fall the unit is in, unless it is on one
+    // already (0x0073c8e0 -> 0x006ed7e0(0, 0) -> 0x006e9980 -> 0x00988490); a
+    // stop in any case (0x006f11b0 -> 0x006ed7e0(0, 1)). What steps the player
+    // - or what it drives - is told.
+    const uint64_t stepped = activeMover() != 0 ? activeMover() : owner_.getPlayerGuid();
+    if (guid == stepped && (!hasPath || !onMoveSpline(guid)) && owner_.fallEndsCallbackRef())
+        owner_.fallEndsCallbackRef()();
     const uint32_t now = movementClockMs();
     if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now)) {
         spline->splineId = splineId;
@@ -4599,6 +4606,9 @@ void MovementHandler::updateMoverSplineDone() {
             movementInfo.z = end.z;
         }
     }
+    // It falls from there (0x006eae70: the spline freed, then 0x0098b710) -
+    // onto the ground right under it, or from as high as the spline left it.
+    if (owner_.placedFallCallbackRef()) owner_.placedFallCallbackRef()();
     // 0x0071f210: the mover's movement block and the spline's id.
     if (owner_.getSocket()) sendMovement(Opcode::CMSG_MOVE_SPLINE_DONE, splineId);
 }

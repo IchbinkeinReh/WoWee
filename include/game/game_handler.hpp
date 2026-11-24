@@ -2165,6 +2165,11 @@ public:
     /// The placed fall queued for the player (0x006eccf0, event 9).
     using PlacedFallCallback = std::function<void()>;
     void setPlacedFallCallback(PlacedFallCallback cb) { placedFallCallback_ = std::move(cb); }
+    PlacedFallCallback& placedFallCallbackRef() { return placedFallCallback_; }
+    /// The active mover's fall is over (0x006e9980 -> 0x00988490): a spline
+    /// takes it.
+    void setFallEndsCallback(PlacedFallCallback cb) { fallEndsCallback_ = std::move(cb); }
+    PlacedFallCallback& fallEndsCallbackRef() { return fallEndsCallback_; }
     /// A vehicle unit went away (0x007576e0): its riders let go of it.
     void vehicleGone(uint64_t vehicleGuid);
     /// The camera's unit taken off its transport: the camera lets go of the
@@ -7357,6 +7362,7 @@ private:
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     OverrideLightCallback overrideLightCallback_;
     PlacedFallCallback placedFallCallback_;
+    PlacedFallCallback fallEndsCallback_;
     CameraTransportClearedCallback cameraTransportClearedCallback_;
     bool petActionsOnBonusBar_ = false;
     bool overrideBarActive_ = false;

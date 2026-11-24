@@ -188,6 +188,16 @@ public:
     /// on its next step it starts to fall from where it is unless it stands
     /// on ground, swims, flies or is rooted.
     void queuePlacedFall() { portPlacedFall_ = true; }
+    /// Whatever fall it was in is over, with no landing (0x00988490, which
+    /// clears FALLING and FALLING_FAR): a spline takes it (0x006ed7e0 ->
+    /// 0x006e9980 ahead of 0x006eb680), or it is put somewhere else. Where
+    /// and when the fall began goes with it: kept, the fall went on after a
+    /// flight as the client's curve has it from there - back up to within ten
+    /// yards of the height it had begun at, forty over the landing place.
+    void endFall();
+    /// The unit the keys move is another from here: a fall under way was the
+    /// other one's.
+    void newMover();
 
     // Call every frame while riding a transport that forces Z to a locked value
     // externally (e.g. the Deeprun Tram, which has no real floor mid-tunnel).

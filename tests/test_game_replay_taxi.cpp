@@ -5,6 +5,10 @@
 #include "core/coordinates.hpp"
 #include "game_replay.hpp"
 #include "game/movement_handler.hpp"
+#include "rendering/camera.hpp"
+#include "rendering/camera_controller.hpp"
+
+#include <imgui.h>
 
 #include <algorithm>
 #include <chrono>
@@ -501,4 +505,112 @@ TEST_CASE("a flight stays where its spline ends until the server takes the flag"
     CHECK(farthest < 40.1f);
     CHECK(closeTo(standsAt(s), landing));
     CHECK(s.handler().isOnTaxiFlight());
+}
+
+// P46: a fall the player was in as the flight's spline came (put into the air
+// at a border, on the far side of a load) went on after the flight from where
+// and when it had begun: forty yards over the landing place, and down.
+TEST_CASE("a spline ends the fall it finds the player in and begins one at its end", "[replay][taxi]") {
+    Session s;
+    spawn(s, kTaxiFlag, 1149, kBorder0);
+    int over = 0, placed = 0;
+    s.handler().setFallEndsCallback([&] { ++over; });
+    s.handler().setPlacedFallCallback([&] { ++placed; });
+    frames(s, 10);
+    s.receive(flight(101, kBorder0, {kBorder0 + glm::vec3(4.0f, 0.0f, 0.0f)}, 100));
+    CHECK(over == 1);
+    CHECK(placed == 0);
+    // One sent while another runs ends nothing more (0x006ed7e0).
+    s.receive(flight(102, kBorder0, {kBorder0 + glm::vec3(5.0f, 0.0f, 0.0f)}, 100));
+    CHECK(over == 1);
+    for (int i = 0; i < 40 && placed == 0; ++i) frames(s, 10);
+    CHECK(placed == 1);
+    CHECK(reports(s).size() == 1);
+    // A stop: over in any case, and a fall from where it stands.
+    s.receive(flight(103, kBorder0, {kBorder0 + glm::vec3(90.0f, 0.0f, 0.0f)}, 10000));
+    CHECK(over == 2);
+    s.receive(stop(104, kBorder0));
+    frames(s, 10);
+    CHECK(over == 3);
+    CHECK(placed == 2);
+    // Somebody else's says nothing of the player.
+    constexpr uint64_t kDrake = 0xF130005490000042ull;
+    s.receive(UpdateObject().create(kDrake, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    s.receive(flight(105, kBorder0, {kBorder0 + glm::vec3(4.0f, 0.0f, 0.0f)}, 20, 0x2000, kDrake));
+    frames(s, 60);
+    CHECK(over == 3);
+    CHECK(placed == 2);
+    s.handler().setFallEndsCallback({});
+    s.handler().setPlacedFallCallback({});
+}
+
+namespace {
+
+struct Walker {
+    Walker() {
+        if (!ImGui::GetCurrentContext()) context = ImGui::CreateContext();
+        controller.setFollowTarget(&at);
+    }
+    ~Walker() {
+        if (context) ImGui::DestroyContext(context);
+    }
+    void run(float seconds) {
+        for (float t = 0.0f; t < seconds; t += 0.02f) controller.update(0.02f);
+    }
+    ImGuiContext* context = nullptr;
+    wowee::rendering::Camera camera;
+    wowee::rendering::CameraController controller{&camera};
+    glm::vec3 at{0.0f};
+};
+
+}  // namespace
+
+TEST_CASE("a fall does not outlive the flight it was taken from", "[taxi][camera]") {
+    // Put into the air at the border, where it falls for a second.
+    const auto fall = [](Walker& w) {
+        w.at = glm::vec3(-4456.97f, 3447.56f, 147.191f);
+        w.controller.teleportTo(w.at);
+        w.run(1.04f);
+        REQUIRE(w.at.z < 140.0f);
+        REQUIRE(w.at.z > 120.0f);
+    };
+    const glm::vec3 landing(-5287.77f, 2327.91f, 81.878f);
+    const auto carry = [&](Walker& w) {
+        w.controller.setExternalFollow(true);
+        w.run(0.1f);
+        w.at = landing;
+        w.run(0.1f);
+        w.controller.setExternalFollow(false);
+    };
+    SECTION("taken by the spline") {
+        Walker w;
+        fall(w);
+        w.controller.endFall();
+        carry(w);
+        w.run(0.1f);
+        CHECK(w.at.z == Catch::Approx(landing.z).margin(0.01f));
+        CHECK(w.controller.isGrounded());
+        // The fall from the spline's end is its own.
+        w.controller.queuePlacedFall();
+        w.run(0.2f);
+        CHECK(w.at.z < landing.z);
+        CHECK(w.at.z > landing.z - 1.0f);
+    }
+    SECTION("put elsewhere by anything else") {
+        Walker w;
+        fall(w);
+        carry(w);
+        w.run(0.1f);
+        CHECK(w.at.z <= landing.z);
+        CHECK(w.at.z > landing.z - 1.0f);
+    }
+    SECTION("the keys moving another unit from here") {
+        Walker w;
+        fall(w);
+        w.controller.newMover();
+        w.at = landing + glm::vec3(0.0f, 0.0f, 0.0f);
+        w.run(0.1f);
+        CHECK(w.at.z <= landing.z);
+        CHECK(w.at.z > landing.z - 1.0f);
+    }
 }

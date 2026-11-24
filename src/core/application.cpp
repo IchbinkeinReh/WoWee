@@ -13,6 +13,7 @@
 #include "core/cinematic_player.hpp"
 #include "game/mount_special.hpp"
 #include "game/mover_keys.hpp"
+#include "game/game_utils.hpp"
 #include "game/mover_mode.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
@@ -1300,6 +1301,9 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         });
         gameHandler->setPlacedFallCallback([this] {
             if (renderer && renderer->getCameraController()) renderer->getCameraController()->queuePlacedFall();
+        });
+        gameHandler->setFallEndsCallback([this] {
+            if (renderer && renderer->getCameraController()) renderer->getCameraController()->endFall();
         });
         // SMSG_OVERRIDE_LIGHT into the lighting (0x007f10a0, 0x007f11a0).
         gameHandler->setOverrideLightCallback([this](uint32_t areaLight, uint32_t overrideLight, uint32_t ms) {
@@ -5047,6 +5051,7 @@ void Application::applyServerMovementState(float deltaTime) {
             // camera's character is the driven unit where it stands and
             // faces, turned with it.
             cc->clearMovementInputs();
+            cc->newMover();
             if (drivenEntity) {
                 renderer->getCharacterPosition() = core::coords::canonicalToRender(
                     glm::vec3(drivenEntity->getX(), drivenEntity->getY(), drivenEntity->getZ()));
@@ -5063,6 +5068,7 @@ void Application::applyServerMovementState(float deltaTime) {
             // target goes back to the player (0x006e2880 -> 0x005186a0) and
             // the keys move it from there.
             cc->clearMovementInputs();
+            cc->newMover();
             const auto& own = gameHandler->getMovementInfo();
             renderer->getCharacterPosition() = core::coords::canonicalToRender(glm::vec3(own.x, own.y, own.z));
             const float facing = core::coords::canonicalToCharacterYawDeg(own.orientation);
@@ -5158,7 +5164,13 @@ void Application::applyServerMovementState(float deltaTime) {
         renderer->getCameraController()->clearMovementInputs();
         // Keep clamping until terrain loads at landing position.
         // Timer only counts down once a valid floor is found.
-        if (worldEntryCallbacks_) {
+        //
+        // Before WotLK, where the flight is this client's own and ends on the
+        // node. The 3.3.5 client has nothing of the kind: the unit falls from
+        // its spline's last point (0x006eae70 -> 0x0098b710,
+        // MovementHandler::updateMoverSplineDone), and the step that does it
+        // lands it.
+        if (worldEntryCallbacks_ && game::isPreWotlk()) {
             worldEntryCallbacks_->setTaxiLandingClampTimer(2.0f);
             // Capture where the flight itself left the player, before terrain/WMO
             // streaming has a chance to move things around - this is the ground
