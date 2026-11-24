@@ -9,7 +9,6 @@
 #include "game/entity.hpp"
 #include "game/update_field_table.hpp"
 #include "game/quest_progress.hpp"
-#include "game/quest_text.hpp"
 #include "game/npc_text.hpp"
 #include <random>
 #include "game/packet_parsers.hpp"
@@ -200,85 +199,9 @@ void QuestHandler::queryAllQuestGiverStatuses() {
     owner_.getSocket()->send(packet);
 }
 
-// The readability test and the completed-line choice live in game/quest_text.hpp
-// so they can be tested without a packet; this is the name the file has always
-// called the first of them by.
-static bool isReadableQuestText(const std::string& s, size_t minLen, size_t maxLen) {
-    return questTextIsReadable(s, minLen, maxLen);
-}
-
 static bool isPlaceholderQuestTitle(const std::string& s) {
     return s.rfind("Quest #", 0) == 0;
 }
-
-static bool looksLikeQuestDescriptionText(const std::string& s) {
-    int spaces = 0;
-    int commas = 0;
-    for (unsigned char c : s) {
-        if (c == ' ') spaces++;
-        if (c == ',') commas++;
-    }
-    const int words = spaces + 1;
-    if (words > 8) return true;
-    if (commas > 0 && words > 5) return true;
-    if (s.find(". ") != std::string::npos) return true;
-    if (s.find(':') != std::string::npos && words > 5) return true;
-    return false;
-}
-
-static bool isStrongQuestTitle(const std::string& s) {
-    if (!isReadableQuestText(s, 6, 72)) return false;
-    if (looksLikeQuestDescriptionText(s)) return false;
-    unsigned char first = static_cast<unsigned char>(s.front());
-    return std::isupper(first) != 0;
-}
-
-static int scoreQuestTitle(const std::string& s) {
-    if (!isReadableQuestText(s, 4, 72)) return -1000;
-    if (looksLikeQuestDescriptionText(s)) return -1000;
-    int score = 0;
-    score += static_cast<int>(std::min<size_t>(s.size(), 32));
-    unsigned char first = static_cast<unsigned char>(s.front());
-    if (std::isupper(first)) score += 20;
-    if (std::islower(first)) score -= 20;
-    if (s.find(' ') != std::string::npos) score += 8;
-    if (s.find('.') != std::string::npos) score -= 18;
-    if (s.find('!') != std::string::npos || s.find('?') != std::string::npos) score -= 6;
-    return score;
-}
-
-static bool readCStringAt(const std::vector<uint8_t>& data, size_t start, std::string& out, size_t& nextPos) {
-    out.clear();
-    if (start >= data.size()) return false;
-    size_t i = start;
-    while (i < data.size()) {
-        uint8_t b = data[i++];
-        if (b == 0) {
-            nextPos = i;
-            return true;
-        }
-        out.push_back(static_cast<char>(b));
-    }
-    return false;
-}
-
-struct QuestQueryTextCandidate {
-    std::string title;
-    std::string objectives;
-    /// The third string: what the quest giver says, shown above the objectives
-    /// in the quest log. It was being read and thrown away - the walk to the
-    /// fifth string passes straight over it.
-    std::string description;
-    std::string completionText;
-    /// The fourth string, EndText, which names an exploration or event
-    /// objective once it is done (see questEndTexts).
-    std::string endText;
-    /// The raw third string as read from the wire, before the readability
-    /// check - a temporary probe into why the description comes back empty on
-    /// some realms even where the title and objectives read cleanly.
-    std::string debugThirdRaw;
-    int score = -1000;
-};
 
 // Expand WoW text tokens ($b line breaks etc.) in quest strings; titles are
 // single-line so their line breaks collapse to spaces instead
@@ -303,186 +226,16 @@ static std::string normalizeQuestText(std::string s, bool singleLine) {
     return s;
 }
 
-/// Whether the objective records really do begin where this string run ends.
-///
-/// The five strings are followed by the kill and item objectives, which are
-/// numbers with a shape - an entry id and a count, both inside plausible
-/// bounds. So a candidate offset can be checked rather than guessed at: read
-/// past its strings and ask whether what follows parses as the block that must
-/// follow them. Defined below, beside the parse it borrows.
-static bool questStringRunFitsObjectives(const std::vector<uint8_t>& data,
-                                         size_t stringsStart, int nStrings,
-                                         bool wotlkLayout);
-
-/// The completed line, chosen in game/quest_text.hpp and then expanded: the
-/// $b and $n tokens in it are the server's, and every other quest string on
-/// its way to the interface goes through the same normalisation.
-static std::string pickQuestCompletedLine(const std::string& endText,
-                                          const std::string& completedText) {
-    std::string chosen = questCompletedText(endText, completedText);
-    if (chosen.empty()) return {};
-    return normalizeQuestText(std::move(chosen), false);
-}
-
-static QuestQueryTextCandidate pickBestQuestQueryTexts(const std::vector<uint8_t>& data, bool classicHint) {
-    QuestQueryTextCandidate best;
-    if (data.size() <= 9) return best;
-
-    // Where the first string sits: straight after the numeric block. The
-    // WotLK count is itemized in quest_query_layout.hpp and pinned by a test
-    // that builds the block the way the server writes it.
-    //
-    // This said fifty-seven fields, which lands thirty-two bytes inside the
-    // reward block. The read there is not a string, the readability check drops
-    // it, and the scan below rescues most quests by finding the first printable
-    // run - but the scan knows a title only by looking like one, so a quest
-    // whose objectives read more like a title than its title does came out with
-    // the objectives in the title and everything after it shifted by one.
-    // Quests 1712 and 5250 in the log are both that.
-    //
-    // Classic's count is not verified the same way and is left alone; a seed
-    // that reads as nothing still falls through to the scan, which is where
-    // both of them were already being answered from.
-    std::vector<size_t> seedOffsets;
-    const size_t base = 8;
-    const size_t classicOffset = base + 40u * 4u;
-    const size_t wotlkOffset = kWotlkQuestQueryStringsOffset;
-    if (classicHint) {
-        seedOffsets.push_back(classicOffset);
-        seedOffsets.push_back(wotlkOffset);
-    } else {
-        seedOffsets.push_back(wotlkOffset);
-        seedOffsets.push_back(classicOffset);
-    }
-    for (size_t off : seedOffsets) {
-        if (off < data.size()) {
-            std::string title;
-            size_t next = off;
-            if (readCStringAt(data, off, title, next)) {
-                QuestQueryTextCandidate c;
-                c.title = normalizeQuestText(title, true);
-                c.score = scoreQuestTitle(c.title) + 20; // Prefer expected struct offsets
-                // And prefer, far above anything a scan can claim, an offset
-                // whose strings are followed by a block that reads as the
-                // objectives. That is not a preference between two guesses:
-                // the numbers after the strings have a shape, and an offset
-                // whose run ends exactly at one is the offset the server
-                // wrote. Without this a suffix of some other string could
-                // outscore a short title - "Sven's Revenge" is fourteen
-                // characters - and win the whole candidate, completed line
-                // included, which is one way that line came back empty on a
-                // quest that had one.
-                const bool wotlkSeed = (off == wotlkOffset);
-                if (questStringRunFitsObjectives(data, off, wotlkSeed ? 5 : 4,
-                                                 wotlkSeed)) {
-                    c.score += 100;
-                }
-
-                std::string s2;
-                size_t n2 = next;
-                if (readCStringAt(data, next, s2, n2) && isReadableQuestText(s2, 8, 600)) {
-                    c.objectives = normalizeQuestText(s2, false);
-                }
-
-                // The strings run Title, Objectives, Details, AreaDescription,
-                // CompletedText - read off AzerothCore's Quest::BuildQuestData,
-                // where they are written in that order after the numeric block.
-                // The fifth is what the quest log and the world map's quest
-                // list show once every objective is done, and answering it with
-                // "" left a completed quest with a blank line where "Return to
-                // Marshal Dughan" belongs.
-                //
-                // The strings after the title read Title, Objectives, Details,
-                // (AreaDescription,) CompletedText in every expansion - the
-                // order is the same for vmangos classic and AzerothCore WotLK,
-                // which the quest-reward tests pin byte for byte. Only the
-                // numeric block before them changes size, and the seed offsets
-                // above already try both, with the score picking whichever read
-                // cleanly. So the third string is the description whatever the
-                // client is, and gating it to WotLK left classic and TBC quests
-                // with a blank description panel - the one thing a universal
-                // client cannot do.
-                //
-                // Still only from the seeded offsets, never the scored scan
-                // below: that finds a title by printability alone and says
-                // nothing about what follows it. And still guarded by
-                // readability, so a wrong offset - a title matched at the other
-                // expansion's seed - yields an unreadable third string and is
-                // dropped rather than pasted onto the quest.
-                {
-                    std::string s3, s4, s5;
-                    size_t n3 = n2, n4 = n2, n5 = n2;
-                    if (readCStringAt(data, n2, s3, n3)) {
-                        c.debugThirdRaw = s3;   // probe: what the third string held
-                        // The details, above the objectives in the log.
-                        if (isReadableQuestText(s3, 8, 4096)) {
-                            c.description = normalizeQuestText(s3, false);
-                        }
-                        // The completed line sits one string later on WotLK
-                        // (past EndText) than on the earlier clients, where
-                        // EndText is the last string there is. Read both and
-                        // let questCompletedText say which one this quest
-                        // actually carries.
-                        if (readCStringAt(data, n3, s4, n4)) {
-                            readCStringAt(data, n4, s5, n5);
-                            c.completionText = pickQuestCompletedLine(s4, s5);
-                            if (isReadableQuestText(s4, 2, 600))
-                                c.endText = normalizeQuestText(s4, true);
-                        }
-                    }
-                }
-                if (c.score > best.score) best = c;
-            }
-        }
-    }
-
-    // Fallback: scan packet for best printable C-string title candidate.
-    for (size_t start = 8; start < data.size(); ++start) {
-        std::string title;
-        size_t next = start;
-        if (!readCStringAt(data, start, title, next)) continue;
-
-        QuestQueryTextCandidate c;
-        c.title = normalizeQuestText(title, true);
-        c.score = scoreQuestTitle(c.title);
-        if (c.score < 0) continue;
-
-        std::string s2, s3;
-        size_t n2 = next, n3 = next;
-        size_t afterObj = next;
-        if (readCStringAt(data, next, s2, n2)) {
-            if (isReadableQuestText(s2, 8, 600)) { c.objectives = normalizeQuestText(s2, false); afterObj = n2; }
-            else if (readCStringAt(data, n2, s3, n3) && isReadableQuestText(s3, 8, 600)) { c.objectives = normalizeQuestText(s3, false); afterObj = n3; }
-        }
-        // The fallback found the title by its printable content, so whatever
-        // follows is the same run the seeded path reads - Objectives, Details,
-        // AreaDescription, CompletedText - only reached without knowing the size
-        // of the numeric block ahead of it. AzerothCore's block is larger than
-        // either seed above (its reward/reputation arrays push the strings past
-        // the WotLK seed), so on a live 3.3.5 realm this scan is what wins, and
-        // it used to stop at the objectives and leave every quest's description
-        // panel blank while title and objectives came through fine - the exact
-        // shape the logs showed. Read the description and completed line here
-        // too, anchored to the end of the objectives string and guarded the
-        // same way, so the winner carries a description whichever path wins.
-        if (!c.objectives.empty()) {
-            std::string d3, d4, d5;
-            size_t m3 = afterObj, m4 = afterObj, m5 = afterObj;
-            if (readCStringAt(data, afterObj, d3, m3)) {
-                if (c.debugThirdRaw.empty()) c.debugThirdRaw = d3;
-                if (isReadableQuestText(d3, 8, 4096)) c.description = normalizeQuestText(d3, false);
-                if (readCStringAt(data, m3, d4, m4)) {
-                    readCStringAt(data, m4, d5, m5);
-                    c.completionText = pickQuestCompletedLine(d4, d5);
-                    if (isReadableQuestText(d4, 2, 600))
-                        c.endText = normalizeQuestText(d4, true);
-                }
-            }
-        }
-        if (c.score > best.score) best = c;
-    }
-
-    return best;
+/// The quest's strings out of its query answer, with the log's line breaks in.
+/// Where they are is the layout's; none is looked at to decide what it is.
+static QuestQueryTexts questQueryTexts(const std::vector<uint8_t>& data, uint8_t questLogStride) {
+    QuestQueryTexts texts = readQuestQueryTexts(data, questLogStride);
+    texts.title = normalizeQuestText(std::move(texts.title), true);
+    texts.objectives = normalizeQuestText(std::move(texts.objectives), false);
+    texts.description = normalizeQuestText(std::move(texts.description), false);
+    texts.endText = normalizeQuestText(std::move(texts.endText), true);
+    texts.completedText = normalizeQuestText(std::move(texts.completedText), false);
+    return texts;
 }
 
 struct QuestQueryObjectives {
@@ -623,24 +376,10 @@ static QuestQueryObjectives tryParseQuestObjectivesAt(const std::vector<uint8_t>
     return out;
 }
 
-static bool questStringRunFitsObjectives(const std::vector<uint8_t>& data,
-                                         size_t stringsStart, int nStrings,
-                                         bool wotlkLayout) {
-    return tryParseQuestObjectivesAt(data, stringsStart, nStrings, wotlkLayout).valid;
-}
-
 static QuestQueryObjectives extractQuestQueryObjectives(const std::vector<uint8_t>& data,
                                                          uint8_t questLogStride) {
-    if (data.size() < 16) return {};
-
-    const size_t base = 8;
-    // Fixed-width fields between questMethod and the first localized string.
-    // These counts come directly from each expansion's query response serializer.
-    if (questLogStride >= 5)
-        return tryParseQuestObjectivesAt(data, base + 63u * 4u, 5, true);  // WotLK
-    if (questLogStride == 4)
-        return tryParseQuestObjectivesAt(data, base + 41u * 4u, 4, false); // TBC
-    return tryParseQuestObjectivesAt(data, base + 37u * 4u, 4, false);     // Classic/Turtle
+    return tryParseQuestObjectivesAt(data, questQueryStringsOffset(questLogStride),
+                                     questQueryStringCount(questLogStride), questLogStride >= 5);
 }
 
 // Quest log reward extraction lives in QuestQueryRewardsParser
@@ -1203,7 +942,6 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
 
         const uint8_t questLogStride = owner_.getPacketParsers()
                                            ? owner_.getPacketParsers()->questLogStride() : 5;
-        const bool isClassicLayout = questLogStride <= 4;
 
         // questLevel is the third field (after questId + questMethod) in every
         // expansion's SMSG_QUEST_QUERY_RESPONSE; -1 = player-scaling (WotLK)
@@ -1226,41 +964,16 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             }
         }
 
-        const QuestQueryTextCandidate parsed = pickBestQuestQueryTexts(packet.getData(), isClassicLayout);
+        const QuestQueryTexts texts = questQueryTexts(packet.getData(), questLogStride);
         const QuestQueryObjectives objs = extractQuestQueryObjectives(packet.getData(), questLogStride);
-        // What the text and objective parses actually found, at warning so it
-        // survives the default log. Two reports meet here: a blank description
-        // panel, and no objectives shown on screen or in the log. The text
-        // parse feeds the description; the objective parse feeds the leader
-        // boards the watch frame and log draw. Naming both - the description's
-        // raw third string, and how many kill and item objectives came out
-        // valid - says which parse missed on this realm. One line per query.
-        int objKills = 0, objItems = 0;
-        if (objs.valid) {
-            for (const auto& k : objs.kills)
-                if (k.npcOrGoId != 0 || k.required > 0) ++objKills;
-            for (const auto& it : objs.items)
-                if (it.itemId != 0 || it.required > 0) ++objItems;
-        }
-        // At debug now. This was raised to warning for two reports - a blank
-        // description panel and no objectives on screen - and both are answered:
-        // the string block starts sixty-five fields in, not fifty-seven, and a
-        // session's worth of quests now parse with a real title, real
-        // objectives and a real description every time. Kept, because it is the
-        // thing that showed the fault, and one WOWEE_LOG_LEVEL=debug away.
-        LOG_DEBUG("Quest text parse: id=", questId,
-                    " classicLayout=", isClassicLayout ? "yes" : "no",
-                    " title=\"", parsed.title.substr(0, 40),
-                    "\" (", parsed.title.size(), " ch) objectives=",
-                    parsed.objectives.size(), "ch description=",
-                    parsed.description.size(), "ch completion=",
-                    parsed.completionText.size(), "ch score=", parsed.score,
-                    " thirdRaw(", parsed.debugThirdRaw.size(), ")=\"",
-                    parsed.debugThirdRaw.substr(0, 50), "\"",
-                    " objParse: valid=", objs.valid ? 1 : 0,
-                    " kills=", objKills, " items=", objItems);
+        // Named here because a blank log panel is either a short answer or an
+        // empty string, and only this says which.
+        LOG_DEBUG("Quest text parse: id=", questId, " stride=", static_cast<int>(questLogStride),
+                  " valid=", texts.valid, " title=\"", texts.title, "\" objectives=",
+                  texts.objectives.size(), "ch description=", texts.description.size(),
+                  "ch objParse valid=", objs.valid);
         const QuestQueryRewardsData rwds = QuestQueryRewardsParser::parse(packet.getData(), questLogStride);
-        if (!parsed.endText.empty()) questEndTexts()[questId] = parsed.endText;
+        if (!texts.endText.empty()) questEndTexts()[questId] = texts.endText;
         {
             // QuestInfo (+0x14, the sixth word in WotLK's layout).
             QueriedQuest& known = queriedQuests_[questId];
@@ -1268,16 +981,12 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 known.type = network::wire::loadLE32(packet.getData(), 20);
             if (questLogStride >= 5 && packet.getData().size() >= 28)
                 known.suggestedPlayers = network::wire::loadLE32(packet.getData(), 24);
-            if (!parsed.title.empty()) known.title = parsed.title;
+            if (!texts.title.empty()) known.title = texts.title;
             // The cache record a quest link's tooltip reads (0x00622960),
             // whether or not the quest is in the log.
             QuestLogEntry& rec = known.record;
             rec.questId = questId;
-            rec.title = parsed.title;
-            rec.objectives = parsed.objectives;
-            rec.description = parsed.description;
-            rec.completionText = parsed.completionText;
-            rec.endText = parsed.endText;
+            applyQuestQueryTexts(rec, texts);
             if (questLevel != 0) rec.level = questLevel;
             if (objs.valid) {
                 for (int i = 0; i < 4; ++i) {
@@ -1308,28 +1017,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             if (questLevel != 0) q.level = questLevel;
             if (zoneOrSort != 0) q.zoneOrSort = zoneOrSort;
 
-            const int existingScore = scoreQuestTitle(q.title);
-            const bool parsedStrong = isStrongQuestTitle(parsed.title);
-            const bool parsedLongEnough = parsed.title.size() >= 6;
-            const bool notShorterThanExisting =
-                isPlaceholderQuestTitle(q.title) || q.title.empty() || parsed.title.size() + 2 >= q.title.size();
-            const bool shouldReplaceTitle =
-                parsed.score > -1000 &&
-                parsedStrong &&
-                parsedLongEnough &&
-                notShorterThanExisting &&
-                (isPlaceholderQuestTitle(q.title) || q.title.empty() || parsed.score >= existingScore + 12);
-
-            if (shouldReplaceTitle && !parsed.title.empty()) {
-                q.title = parsed.title;
-            }
-            if (!parsed.objectives.empty() &&
-                (q.objectives.empty() || q.objectives.size() < 16)) {
-                q.objectives = parsed.objectives;
-            }
-            if (!parsed.completionText.empty()) q.completionText = parsed.completionText;
-            if (!parsed.description.empty()) q.description = parsed.description;
-            if (!parsed.endText.empty()) q.endText = parsed.endText;
+            applyQuestQueryTexts(q, texts);
 
             // Store structured kill/item objectives for later kill-count restoration.
             if (objs.valid) {

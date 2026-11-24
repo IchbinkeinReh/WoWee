@@ -19,6 +19,7 @@
 #include "game/quest_poi_icons.hpp"
 #include "game/quest_poi_blobs.hpp"
 #include "game/quest_rewards.hpp"
+#include "game/quest_text.hpp"
 #include "game/glyph_socket.hpp"
 #include "game/interface_text.hpp"
 #include "game/spell_mods.hpp"
@@ -5148,35 +5149,10 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetQuestLogQuestText",    lua_GetQuestLogQuestText},
-                // GetQuestLogCompletionText(index) → what to do now it is done.
-                //
-                // An empty string rather than nothing when there is none,
-                // because the world map hovers a finished quest's pin and
-                // writes AddLine("- "..GetQuestLogCompletionText(i)) without
-                // checking. Concatenating nil raises, so the pin would have
-                // taken the map down; an empty string draws a bare dash.
-                //
-                // The world map's quest list puts this straight into the row's
-                // objectives line for any quest that is complete, so answering
-                // "" left the row blank where "Return to Marshal Dughan"
-                // belongs. It is the fifth string in SMSG_QUEST_QUERY_RESPONSE
-                // and was being walked past.
-                //
-                // A quest whose server sent no such line falls back to its own
-                // objectives sentence rather than to nothing. Both callers put
-                // this string on screen unconditionally - the tracker as the
-                // one line under a completed quest's title, the world map in
-                // the pin's tooltip - so an empty answer is a bare dash where a
-                // sentence belongs, which is what completed quests in the
-                // tracker looked like.
-                //
-                // The objectives sentence and not a phrase of this client's
-                // own: "Bring Mor'Ladim's Skull to Sven Yorgen." says where to
-                // take it, which is what this line is for, and it is the
-                // server's own words. A stand-in reading "Quest completed" was
-                // tried and is wrong - the tracker draws this line for any
-                // quest with nothing countable in it, complete or not, so that
-                // phrase announced completion on quests that were still open.
+                // GetQuestLogCompletionText(index) → what to do now it is done
+                // (0x005e06d0, quest_text.hpp): nothing without the quest,
+                // else always a string - the world map hovers a finished
+                // quest's pin and concatenates it unchecked.
                 {"GetQuestLogCompletionText", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const game::GameHandler::QuestLogEntry* q = nullptr;
@@ -5186,33 +5162,8 @@ void registerQuestLuaAPI(lua_State* L) {
                 q = selectedLogEntry(gh);
             }
             if (!q) return 0;   // 0x005e06d0: no quest, nothing
-            if (!q->completionText.empty()) {
-                lua_pushstring(L, q->completionText.c_str());
-                return 1;
-            }
-            // Only where the interface actually draws this line: a quest the
-            // server has called complete, or one whose objective list is empty,
-            // which the tracker reads as complete itself - it asks
-            // "numObjectives == 0" of this very count. Anything else keeps the
-            // empty answer the API promises.
-            const int objectives = game::questObjectiveCount(*q);
-            const bool drawnAsComplete = q->complete || objectives == 0;
-            if (!drawnAsComplete) { lua_pushstring(L, ""); return 1; }
-
-            // Said once per quest that lands here, because two different
-            // things put a quest in this branch and only the log can tell them
-            // apart: the server calling it complete, or this client having no
-            // countable objective for it - which the tracker then reads as
-            // complete on its own, marker and all, whether or not it is.
-            static std::set<uint32_t> announced;
-            if (announced.insert(q->questId).second) {
-                LOG_WARNING("Quest ", q->questId, " (", q->title, ") is drawn as "
-                            "complete with no completed line of its own: complete=",
-                            q->complete, " objectives=", objectives,
-                            " - falling back to its objectives text, '",
-                            q->objectives, "'");
-            }
-            lua_pushstring(L, q->objectives.c_str());
+            lua_pushstring(L, forPlayer(L, game::questCompletionText(
+                q->questFlags, q->completionText, q->objectives)).c_str());
             return 1;
         }},
                 // The words on a book or a plaque, which this client parses out

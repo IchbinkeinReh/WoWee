@@ -2713,6 +2713,7 @@ add_executable(test_quest_query_layout test_quest_query_layout.cpp)
 target_include_directories(test_quest_query_layout PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_quest_query_layout SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
 target_link_libraries(test_quest_query_layout PRIVATE catch2_main)
+wowee_test_link_glm(test_quest_query_layout)
 add_test(NAME quest_query_layout COMMAND test_quest_query_layout)
 register_test_target(test_quest_query_layout)
 

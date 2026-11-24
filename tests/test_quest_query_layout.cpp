@@ -10,6 +10,7 @@
 // the server rather than remembered.
 #include <catch_amalgamated.hpp>
 
+#include "game/quest_handler.hpp"
 #include "game/quest_query_layout.hpp"
 
 #include <cstdint>
@@ -139,4 +140,100 @@ TEST_CASE("the title is the first string after it", "[quest][layout]") {
         CHECK(wrong < game::kWotlkQuestQueryStringsOffset);
         CHECK(cStringAt(b.bytes, wrong).empty());
     }
+}
+
+namespace {
+
+/// The earlier clients' blocks: only their lengths differ.
+Body buildNumericBlock(size_t fields) {
+    Body b;
+    b.u32(10086);
+    b.u32(2);
+    while (b.bytes.size() < fields * 4) b.u32(0);
+    return b;
+}
+
+void objectiveRecords(Body& b, size_t words) {
+    for (size_t i = 0; i < words; ++i) b.u32(0);
+    for (int i = 0; i < 4; ++i) b.str("");
+}
+
+// Quest 10086, whose title is two sentences to anything that reads it as prose
+// and whose description ends in one that reads like a title.
+const char* const kTitle = "Ich arbeite... f\xc3\xbcr die Horde!";
+const char* const kObjectives = "Besorgt 20 Kalynastachel.";
+const char* const kDetails =
+    "Macht Euch n\xc3\xbctzlich, $n. Wenn Ihr alles habt, kommt zur\xc3\xbc"
+    "ck zu mir und holt Euch eine fette Belohnung ab!";
+
+}  // namespace
+
+TEST_CASE("a title is the string at its place, however it reads", "[quest][layout]") {
+    Body b = buildNumericBlock(65);
+    b.str(kTitle);
+    b.str(kObjectives);
+    b.str(kDetails);
+    b.str("");
+    b.str("Kehrt zu Megzeg Knaxkn\xc3\xb6""chel zur\xc3\xbc""ck.");
+    objectiveRecords(b, 28);
+
+    const auto texts = game::readQuestQueryTexts(b.bytes, 5);
+    REQUIRE(texts.valid);
+    CHECK(texts.title == kTitle);
+    CHECK(texts.objectives == kObjectives);
+    CHECK(texts.description == kDetails);
+    CHECK(texts.endText.empty());
+    CHECK(texts.completedText == "Kehrt zu Megzeg Knaxkn\xc3\xb6""chel zur\xc3\xbc""ck.");
+}
+
+TEST_CASE("the earlier clients' four strings are found the same way", "[quest][layout]") {
+    const uint8_t stride = GENERATE(uint8_t{3}, uint8_t{4});
+    Body b = buildNumericBlock(stride == 4 ? 43 : 39);
+    b.str(kTitle);
+    b.str(kObjectives);
+    b.str(kDetails);
+    b.str("Horde ausgekundschaftet");
+    objectiveRecords(b, 16);
+
+    const auto texts = game::readQuestQueryTexts(b.bytes, stride);
+    REQUIRE(texts.valid);
+    CHECK(texts.title == kTitle);
+    CHECK(texts.objectives == kObjectives);
+    CHECK(texts.description == kDetails);
+    CHECK(texts.endText == "Horde ausgekundschaftet");
+    CHECK(texts.completedText.empty());
+}
+
+TEST_CASE("the answer names the quest whatever it was called before", "[quest][layout]") {
+    // Titles that a reading of the words turned down: short, an umlaut first,
+    // a colon, shorter than the one already there.
+    for (const char* title : {"Rumpf", "\xc3\x96l", "\xc3\x9c""berf\xc3\xa4llig",
+                              "Jagd: Der Kopf des gro\xc3\x9f""en alten B\xc3\xa4ren", kTitle}) {
+        Body b = buildNumericBlock(65);
+        b.str(title);
+        b.str("");
+        b.str(kDetails);
+        b.str("");
+        b.str("");
+        objectiveRecords(b, 28);
+
+        game::QuestHandler::QuestLogEntry entry;
+        entry.title = "Euch eine fette Belohnung ab! Und noch viel mehr";
+        entry.objectives = "Etwas Falsches, das hier schon stand.";
+        game::applyQuestQueryTexts(entry, game::readQuestQueryTexts(b.bytes, 5));
+        CHECK(entry.title == title);
+        CHECK(entry.objectives.empty());
+        CHECK(entry.description == kDetails);
+    }
+}
+
+TEST_CASE("an answer too short for its strings changes nothing", "[quest][layout]") {
+    Body b = buildNumericBlock(65);
+    b.str(kTitle);
+    const auto texts = game::readQuestQueryTexts(b.bytes, 5);
+    CHECK_FALSE(texts.valid);
+    game::QuestHandler::QuestLogEntry entry;
+    entry.title = "Quest #10086";
+    game::applyQuestQueryTexts(entry, texts);
+    CHECK(entry.title == "Quest #10086");
 }
