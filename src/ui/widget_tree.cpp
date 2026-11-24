@@ -1589,15 +1589,32 @@ void WidgetTree::collectDrawOrder() {
     // A cooldown's shade is in ARTWORK of its own frame (0x005ebd20, layer 2),
     // which is over everything the button under it owns; a slider's grip is a
     // region in OVERLAY.
-    auto sortLevel = [](const Widget* w) {
-        return ((w->isStatusBar && !w->barTexture.empty()) || w->isEditBox || w->isCooldown || paintsThumb(*w))
-                   ? w->effLevel + 1
-                   : w->effLevel;
+    //
+    // Whatever else a frame paints of its own - a backdrop, a message frame's
+    // lines - is under its regions, and over all its parent's: a region is
+    // drawn with the frame it belongs to, and a child frame is a level above
+    // the whole of its parent. A model is drawn with its frame's ARTWORK,
+    // after the regions there (0x00960240, 0x0095f340: 0x00490840 for the
+    // layer's own, then the model's in layer 2). Sorted at the frame's level
+    // and not one in, both came among the parent's regions: the dressing
+    // room's figure stood behind the picture its window has in OVERLAY.
+    auto special = [](const Widget* w) {
+        return (w->isStatusBar && !w->barTexture.empty()) || w->isEditBox || w->isCooldown || paintsThumb(*w);
     };
-    auto sortLayer = [](const Widget* w) {
+    auto sortLevel = [](const Widget* w) {
+        return w->kind == WidgetKind::Frame ? w->effLevel + 1 : w->effLevel;
+    };
+    auto sortLayer = [&](const Widget* w) {
         if (w->isEditBox || w->isCooldown) return layerRank(DrawLayer::Artwork);
         if (paintsThumb(*w)) return layerRank(DrawLayer::Overlay);
-        return layerRank((w->isStatusBar && !w->barTexture.empty()) ? w->barLayer : w->layer);
+        if (special(w)) return layerRank(w->barLayer);
+        if (w->kind != WidgetKind::Frame) return layerRank(w->layer);
+        return layerRank(w->externalTexture != 0 ? DrawLayer::Artwork : DrawLayer::Background);
+    };
+    // Before the layer's regions, among them, or after them.
+    auto sortPart = [&](const Widget* w) {
+        if (w->kind != WidgetKind::Frame || special(w)) return 1;
+        return w->externalTexture != 0 ? 2 : 0;
     };
     std::sort(drawOrder_.begin(), drawOrder_.end(),
               [&](const Widget* a, const Widget* b) {
@@ -1607,6 +1624,8 @@ void WidgetTree::collectDrawOrder() {
                   if (va != vb) return va < vb;
                   const int la = sortLayer(a), lb = sortLayer(b);
                   if (la != lb) return la < lb;
+                  const int pa = sortPart(a), pb = sortPart(b);
+                  if (pa != pb) return pa < pb;
                   if (a->subLevel != b->subLevel) return a->subLevel < b->subLevel;
                   // Ties resolve by creation order, so a region added later sits
                   // on top of one added earlier - the same rule the real client

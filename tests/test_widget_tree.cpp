@@ -2015,6 +2015,57 @@ TEST_CASE("The wheel finds a frame that took the wheel and not the mouse",
     CHECK(tree.wheelFramesAt(50.0f, 50.0f) == std::vector<uint32_t>{inner, scroll});
 }
 
+// P36: a frame is a level above the whole of its parent, so what it paints
+// itself is over its parent's regions, OVERLAY among them; a model goes with
+// its frame's ARTWORK, after the regions there (0x00960240).
+TEST_CASE("What a child frame paints is over its parent's regions", "[widget][draworder]") {
+    WidgetTree tree;
+    const auto frame = [&](uint32_t parent, const char* name) {
+        const uint32_t id = tree.create(WidgetKind::Frame, parent, name);
+        tree.get(id)->width = 100.0f;
+        tree.get(id)->height = 100.0f;
+        tree.addPoint(id, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 0.0f});
+        return id;
+    };
+    const auto region = [&](uint32_t parent, const char* name, DrawLayer layer) {
+        const uint32_t id = tree.create(WidgetKind::Texture, parent, name);
+        tree.get(id)->width = 100.0f;
+        tree.get(id)->height = 100.0f;
+        tree.get(id)->layer = layer;
+        tree.get(id)->texturePath = "DressUpBackground-BloodElf1";
+        tree.addPoint(id, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 0.0f});
+        return id;
+    };
+    const uint32_t window = frame(tree.root(), "Window");
+    const uint32_t model = frame(window, "Model");
+    const uint32_t box = frame(window, "Box");
+    tree.get(model)->externalTexture = 1;
+    tree.get(box)->hasBackdrop = true;
+    const uint32_t picture = region(window, "Picture", DrawLayer::Overlay);
+    const uint32_t under = region(model, "Under", DrawLayer::Background);
+    const uint32_t beside = region(model, "Beside", DrawLayer::Artwork);
+    const uint32_t over = region(model, "Over", DrawLayer::Overlay);
+    const uint32_t inBox = region(box, "InBox", DrawLayer::Background);
+    const uint32_t button = frame(model, "Button");
+    const uint32_t art = region(button, "Art", DrawLayer::Background);
+    tree.layout(kScreenW, kScreenH);
+    const auto at = [&](uint32_t id) {
+        const auto& order = tree.drawOrder();
+        for (size_t i = 0; i < order.size(); ++i)
+            if (order[i]->id == id) return static_cast<int>(i);
+        return -1;
+    };
+    REQUIRE(at(model) >= 0);
+    REQUIRE(at(box) >= 0);
+    CHECK(at(picture) < at(model));
+    CHECK(at(picture) < at(box));
+    CHECK(at(under) < at(model));
+    CHECK(at(beside) < at(model));
+    CHECK(at(model) < at(over));
+    CHECK(at(model) < at(art));
+    CHECK(at(box) < at(inBox));
+}
+
 // A measurement taken between two moves.
 //
 // Rects used to be answered only from the once-a-frame pass, so a frame
