@@ -7,9 +7,11 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <chrono>
 #include <cstdint>
 #include "audio/eax_reverb.hpp"
 #include "audio/play_limit.hpp"
+#include "audio/sound_slots.hpp"
 #include "audio/voice_priority.hpp"
 #include "audio/world_sound_hold.hpp"
 
@@ -237,13 +239,27 @@ private:
         PlayLimit limit = PlayLimit::None;  // the counted type it was played as
         int priority = voice_priority::kDefault;  // FMOD's: lower is more important
         float volume = 1.0f;          // what it was asked to play at
-        bool virtualVoice = false;    // playing on silent, without a real voice
+        bool virtualVoice = false;    // playing on silent, without a real voice: out of the mix
+        uint64_t virtualFrom = 0;     // the frame it was at then
+        std::chrono::steady_clock::time_point virtualSince{};
         bool spatial = false;         // a 3D sound: heard less with distance
         float minDistance = 1.0f;     // a 3D sound's full-volume reach
         Channel channel = Channel::Own;
         uint64_t serial = 0;          // the order it started in
     };
     std::vector<ActiveSound> activeSounds_;
+    SoundSlots soundSlots_;  ///< where a handle's sound is in it
+    [[nodiscard]] const ActiveSound* findSound(uint32_t id) const;
+    [[nodiscard]] ActiveSound* findSound(uint32_t id);
+    /// Whether it plays, heard or on silent.
+    [[nodiscard]] bool goesOn(const ActiveSound& active) const;
+    /// The frame one on silent is at now, nothing once it is over.
+    [[nodiscard]] std::optional<uint64_t> virtualCursor(const ActiveSound& active) const;
+    void makeVirtual(ActiveSound& active);
+    void makeReal(ActiveSound& active);
+    std::atomic<uint32_t> badSamples_{0};  ///< mixed samples that were no numbers, since the last frame
+    /// Let go of, its place taken by the last.
+    void removeSound(size_t slot);
     /// How many of a counted type are still playing - one that has ended is
     /// not, though update() has yet to take it away (0x004c62b0 counts it
     /// off as it ends).
@@ -252,11 +268,14 @@ private:
     /// (audio/sound_distance.hpp), once a frame.
     void cullByDistance();
     /// Gives the real voices to the most important sounds playing and
-    /// silences the rest (audio/voice_priority.hpp), each frame and as a
-    /// sound starts.
+    /// silences the rest (audio/voice_priority.hpp), each frame - not as each
+    /// sound starts: in a crowd that was every sound sorted again for each
+    /// that started.
     void assignVoices();
-    /// The sound just tracked: its priority, volume and reach, then the
-    /// voices given out again.
+    uint32_t realVoices_ = voice_priority::kDefaultRealVoices;  ///< those there are for the list
+    uint32_t voicesInUse_ = 0;  ///< given out, and taken by the starts since
+    /// The sound just tracked: its handle, priority, volume and reach, and
+    /// the voice it starts with, if any.
     void noteStarted(int priority, float volume, Channel channel, bool spatial, float minDistance);
     int maxRealVoices_ = voice_priority::kDefaultRealVoices;
     uint64_t nextSerial_ = 1;

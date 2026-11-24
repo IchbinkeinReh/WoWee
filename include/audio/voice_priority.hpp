@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
+#include <optional>
 #include <vector>
 
 namespace wowee::audio::voice_priority {
@@ -49,6 +50,30 @@ inline std::vector<bool> heard(const std::vector<Voice>& voices, uint32_t real) 
     std::vector<bool> out(voices.size(), false);
     for (size_t i = 0; i < order.size() && i < real; ++i) out[order[i]] = true;
     return out;
+}
+
+/// Whether a sound that starts is heard at once: on a voice still free. Past
+/// the last one it starts silent, as FMOD's does, until the voices are given
+/// out again (System::update, once a frame).
+constexpr bool startsHeard(uint32_t voicesInUse, uint32_t real) { return voicesInUse < real; }
+
+/// Whether a sound a handle was given for is still to be had by it: held for
+/// the world's sound, paused out past its cutoff - it waits there for the
+/// listener - or going on. Paused was taken for over, and a unit's loop out of
+/// reach was started again each frame, its first copy left with no one to
+/// stop it.
+constexpr bool stillGoing(bool held, bool pausedOutOfReach, bool goesOn) {
+    return held || pausedOutOfReach || goesOn;
+}
+
+/// The frame a sound on silent is at, `elapsed` frames after it was at
+/// `cursor`: round again where it loops, nothing where it has run out.
+inline std::optional<uint64_t> virtualCursor(uint64_t cursor, uint64_t elapsed, uint64_t length, bool loops) {
+    if (length == 0) return std::nullopt;
+    const uint64_t at = cursor + elapsed;
+    if (loops) return at % length;
+    if (at >= length) return std::nullopt;
+    return at;
 }
 
 /// How loud a 3D sound reaches the listener, the engine's inverse model:

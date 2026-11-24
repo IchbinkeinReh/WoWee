@@ -1,5 +1,7 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "audio/audio_engine.hpp"
+#include "audio/finite_audio.hpp"
+#include "audio/sound_key.hpp"
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/sound_distance.hpp"
@@ -14,6 +16,7 @@
 #include <memory>
 #include <shared_mutex>
 #include <unordered_map>
+#include <utility>
 
 namespace wowee {
 namespace audio {
@@ -82,27 +85,7 @@ static std::unordered_map<uint64_t, DecodedWavCacheEntry> gDecodedWavCache;
 // (main thread, async loaders, animation callbacks).
 static std::shared_mutex gDecodedWavCacheMutex;
 
-static uint64_t makeWavCacheKey(const std::vector<uint8_t>& wavData) {
-    // FNV-1a over the first 256 bytes + last 256 bytes + total size.
-    // Full-content hash would be correct but slow for large files; sampling the
-    // edges catches virtually all distinct files while keeping cost O(1).
-    constexpr uint64_t FNV_OFFSET = 14695981039346656037ull;
-    constexpr uint64_t FNV_PRIME  = 1099511628211ull;
-    uint64_t h = FNV_OFFSET;
-    auto mix = [&](uint8_t b) { h ^= b; h *= FNV_PRIME; };
-
-    const size_t sz = wavData.size();
-    const size_t head = std::min(sz, size_t(256));
-    for (size_t i = 0; i < head; ++i) mix(wavData[i]);
-    if (sz > 256) {
-        const size_t tail_start = sz > 512 ? sz - 256 : 256;
-        for (size_t i = tail_start; i < sz; ++i) mix(wavData[i]);
-    }
-    // Mix in the total size so files with identical head/tail but different
-    // lengths still produce different keys.
-    for (int s = 0; s < 8; ++s) mix(static_cast<uint8_t>(sz >> (s * 8)));
-    return h;
-}
+static uint64_t makeWavCacheKey(const std::vector<uint8_t>& wavData) { return sound_key::of(wavData); }
 
 static bool decodeWavCached(const std::vector<uint8_t>& wavData, DecodedWavCacheEntry& out) {
     if (wavData.empty()) return false;
@@ -222,6 +205,9 @@ void reverbProcess(ma_node* node, const float** in, ma_uint32* inFrames, float**
     const ma_uint32 frames = std::min(*inFrames, *outFrames);
     std::memcpy(out[0], in[0], static_cast<size_t>(frames) * self->channels * sizeof(float));
     *outFrames = frames;
+    // One sample that is no number would stay in the reverb's lines for good,
+    // and everything on this channel with it.
+    (void)finite_audio::silenceBad(out[0], static_cast<size_t>(frames) * self->channels);
     if (self->dirty.load(std::memory_order_acquire) && self->mutex->try_lock()) {
         self->dirty.store(false, std::memory_order_relaxed);
         self->on = *self->enabled;
@@ -421,6 +407,7 @@ void AudioEngine::shutdown() {
         std::free(buffer);
     }
     activeSounds_.clear();
+    soundSlots_.clear();
 
     if (effectsGroup_) {
         ma_sound_group_uninit(effectsGroup_);
@@ -468,6 +455,7 @@ void AudioEngine::setSuspended(bool suspended) {
 
 
 void AudioEngine::setListenerPosition(const glm::vec3& position) {
+    if (!finite_audio::place(position)) return;
     listenerPosition_ = position;
     if (engine_) {
         ma_engine_listener_set_position(engine_, 0, position.x, position.y, position.z);
@@ -475,6 +463,7 @@ void AudioEngine::setListenerPosition(const glm::vec3& position) {
 }
 
 void AudioEngine::setListenerOrientation(const glm::vec3& forward, const glm::vec3& up) {
+    if (!finite_audio::place(forward) || !finite_audio::place(up)) return;
     listenerForward_ = forward;
     listenerUp_ = up;
     if (engine_) {
@@ -616,27 +605,80 @@ uint32_t AudioEngine::playSound2DStoppable(const std::vector<uint8_t>& wavData, 
     return id;
 }
 
+const AudioEngine::ActiveSound* AudioEngine::findSound(uint32_t id) const {
+    const auto slot = soundSlots_.find(id);
+    return slot ? &activeSounds_[*slot] : nullptr;
+}
+
+AudioEngine::ActiveSound* AudioEngine::findSound(uint32_t id) {
+    const auto slot = soundSlots_.find(id);
+    return slot ? &activeSounds_[*slot] : nullptr;
+}
+
+void AudioEngine::removeSound(size_t slot) {
+    ActiveSound& gone = activeSounds_[slot];
+    ma_sound_uninit(gone.sound);
+    std::free(gone.sound);
+    ma_audio_buffer* buffer = static_cast<ma_audio_buffer*>(gone.buffer);
+    ma_audio_buffer_uninit(buffer);
+    std::free(buffer);
+    soundSlots_.removed(gone.id, slot, activeSounds_.back().id, activeSounds_.size() - 1);
+    if (slot + 1 != activeSounds_.size()) gone = std::move(activeSounds_.back());
+    activeSounds_.pop_back();
+}
+
 bool AudioEngine::isSoundPlaying(uint32_t handle) const {
-    if (handle == 0) return false;
-    for (const auto& active : activeSounds_)
-        if (active.id == handle) return active.held || ma_sound_is_playing(active.sound) == MA_TRUE;
-    // Taken away by update(), so it ended.
-    return false;
+    // One update() took away has ended.
+    const ActiveSound* active = findSound(handle);
+    return active && voice_priority::stillGoing(active->held, active->culled, goesOn(*active));
+}
+
+bool AudioEngine::goesOn(const ActiveSound& active) const {
+    if (!active.virtualVoice) return ma_sound_is_playing(active.sound) == MA_TRUE;
+    return virtualCursor(active).has_value();
+}
+
+std::optional<uint64_t> AudioEngine::virtualCursor(const ActiveSound& active) const {
+    ma_uint64 length = 0;
+    ma_uint32 rate = 0;
+    if (ma_sound_get_length_in_pcm_frames(active.sound, &length) != MA_SUCCESS ||
+        ma_sound_get_data_format(active.sound, nullptr, nullptr, &rate, nullptr, 0) != MA_SUCCESS)
+        return std::nullopt;
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - active.virtualSince).count();
+    const double frames = seconds * rate * std::max(ma_sound_get_pitch(active.sound), 0.0f);
+    return voice_priority::virtualCursor(active.virtualFrom, static_cast<uint64_t>(std::max(frames, 0.0)), length,
+                                         ma_sound_is_looping(active.sound) == MA_TRUE);
+}
+
+// Out of the mix, its clock running on (FMOD's virtual voice): the engine mixed
+// every sound it had at no volume, and a crowd's hundreds cost the audio
+// thread as much as if they were heard.
+void AudioEngine::makeVirtual(ActiveSound& active) {
+    ma_uint64 cursor = 0;
+    (void)ma_sound_get_cursor_in_pcm_frames(active.sound, &cursor);
+    active.virtualFrom = cursor;
+    active.virtualSince = std::chrono::steady_clock::now();
+    active.virtualVoice = true;
+    ma_sound_stop(active.sound);
+}
+
+void AudioEngine::makeReal(ActiveSound& active) {
+    const auto cursor = virtualCursor(active);
+    active.virtualVoice = false;
+    // Run out on silent: it has stopped, and update() takes it away.
+    if (!cursor) return;
+    (void)ma_sound_seek_to_pcm_frame(active.sound, *cursor);
+    ma_sound_set_volume(active.sound, active.volume);
+    ma_sound_start(active.sound);
 }
 
 void AudioEngine::stopSound(uint32_t id) {
     if (id == 0) return;
-    for (auto it = activeSounds_.begin(); it != activeSounds_.end(); ++it) {
-        if (it->id == id) {
-            ma_sound_stop(it->sound);
-            ma_sound_uninit(it->sound);
-            std::free(it->sound);
-            ma_audio_buffer* buffer = static_cast<ma_audio_buffer*>(it->buffer);
-            ma_audio_buffer_uninit(buffer);
-            std::free(buffer);
-            activeSounds_.erase(it);
-            return;
-        }
+    if (const auto slot = soundSlots_.find(id)) {
+        ma_sound_stop(activeSounds_[*slot].sound);
+        removeSound(*slot);
+        return;
     }
 }
 
@@ -664,7 +706,7 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
                               float volume, float pitch, float maxDistance, float minDistance, Channel channel,
                               PlayLimit limit, int priority, uint32_t* outHandle) {
     if (outHandle) *outHandle = 0;
-    if (!initialized_ || !engine_ || wavData.empty()) return false;
+    if (!initialized_ || !engine_ || wavData.empty() || !finite_audio::place(position)) return false;
     if (masterVolume_ <= 0.0f) return false;
     // Past its cutoff it is not heard, so not played (audio/sound_distance.hpp).
     if (!sound_distance::heard(position, listenerPosition_, maxDistance)) return false;
@@ -766,7 +808,7 @@ bool AudioEngine::playSound3D(const std::string& mpqPath, const glm::vec3& posit
 uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                                          float volume, float maxDistance, float minDistance,
                                          float fadeInSeconds, Channel channel, int priority) {
-    if (!initialized_ || !engine_ || wavData.empty()) return 0;
+    if (!initialized_ || !engine_ || wavData.empty() || !finite_audio::place(position)) return 0;
     if (masterVolume_ <= 0.0f) return 0;
 
     DecodedWavCacheEntry decoded;
@@ -820,53 +862,36 @@ uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, co
 }
 
 void AudioEngine::setSoundPosition(uint32_t id, const glm::vec3& position) {
-    if (id == 0) return;
-    for (auto& active : activeSounds_) {
-        if (active.id == id) {
-            ma_sound_set_position(active.sound, position.x, position.y, position.z);
-            return;
-        }
-    }
+    const ActiveSound* active = finite_audio::place(position) ? findSound(id) : nullptr;
+    if (active) ma_sound_set_position(active->sound, position.x, position.y, position.z);
 }
 
 void AudioEngine::setSoundVolume(uint32_t id, float volume) {
-    if (id == 0) return;
-    for (auto& active : activeSounds_) {
-        if (active.id == id) {
-            // One without a real voice keeps it for when it gets one back.
-            active.volume = volume;
-            if (!active.virtualVoice) ma_sound_set_volume(active.sound, volume);
-            return;
-        }
-    }
+    ActiveSound* active = findSound(id);
+    if (!active) return;
+    active->volume = volume;
+    ma_sound_set_volume(active->sound, volume);
 }
 
 void AudioEngine::setSoundPitch(uint32_t id, float pitch) {
-    if (id == 0) return;
-    for (auto& active : activeSounds_) {
-        if (active.id == id) {
-            ma_sound_set_pitch(active.sound, pitch);
-            return;
-        }
-    }
+    if (const ActiveSound* active = findSound(id)) ma_sound_set_pitch(active->sound, pitch);
 }
 
 void AudioEngine::stopSoundWithFade(uint32_t id, float seconds) {
     if (id == 0) return;
-    for (auto& active : activeSounds_) {
-        if (active.id == id) {
-            // One still waiting for the hold's end, or paused out of range,
-            // is not heard: gone now.
-            if (active.held || active.culled) {
-                stopSound(id);
-                return;
-            }
-            // update() takes it away once it has stopped playing.
-            ma_sound_stop_with_fade_in_milliseconds(
-                active.sound, static_cast<ma_uint64>(std::max(seconds, 0.0f) * 1000.0f));
-            active.id = 0;
+    if (ActiveSound* active = findSound(id)) {
+        // One still waiting for the hold's end, paused out of range or without
+        // a voice is not heard: gone now.
+        if (active->held || active->culled || active->virtualVoice) {
+            stopSound(id);
             return;
         }
+        // update() takes it away once it has stopped playing.
+        ma_sound_stop_with_fade_in_milliseconds(
+            active->sound, static_cast<ma_uint64>(std::max(seconds, 0.0f) * 1000.0f));
+        active->id = 0;
+        soundSlots_.forget(id);
+        return;
     }
 }
 
@@ -1083,19 +1108,19 @@ void AudioEngine::update(float deltaTime) {
     }
     cullByDistance();
     assignVoices();
+    if (const uint32_t bad = badSamples_.exchange(0, std::memory_order_relaxed); bad != 0) {
+        static core::LogBudget badBudget(5, "AudioEngine: samples that are no numbers");
+        if (badBudget.take())
+            LOG_WARNING("AudioEngine: ", bad, " mixed samples were no numbers and were silenced (", activeSounds_.size(),
+                        " sounds, ", activeStreams_.size(), " streams)");
+    }
 
     // Clean up finished sounds - swap-and-pop avoids the O(N) shift that
     // vector::erase does for each removal (and the ref-count atomics in
     // ActiveSound's shared_ptr made that shift noticeably more expensive).
     for (size_t i = 0; i < activeSounds_.size(); ) {
-        if (!activeSounds_[i].held && !activeSounds_[i].culled && !ma_sound_is_playing(activeSounds_[i].sound)) {
-            ma_sound_uninit(activeSounds_[i].sound);
-            std::free(activeSounds_[i].sound);
-            ma_audio_buffer* buffer = static_cast<ma_audio_buffer*>(activeSounds_[i].buffer);
-            ma_audio_buffer_uninit(buffer);
-            std::free(buffer);
-            activeSounds_[i] = std::move(activeSounds_.back());
-            activeSounds_.pop_back();
+        if (!activeSounds_[i].held && !activeSounds_[i].culled && !goesOn(activeSounds_[i])) {
+            removeSound(i);
         } else {
             ++i;
         }
@@ -1136,7 +1161,7 @@ uint32_t AudioEngine::playingOf(PlayLimit limit) const {
     if (limit == PlayLimit::None) return 0;
     uint32_t playing = 0;
     for (const auto& active : activeSounds_) {
-        if (active.limit == limit && ma_sound_is_playing(active.sound)) ++playing;
+        if (active.limit == limit && goesOn(active)) ++playing;
     }
     return playing;
 }
@@ -1150,7 +1175,7 @@ void AudioEngine::cullByDistance() {
         if (!heard) {
             // A looping one pauses where it is; one played once, or one
             // already let go to fade, is over.
-            ma_sound_stop(active.sound);
+            if (!std::exchange(active.virtualVoice, false)) ma_sound_stop(active.sound);
             active.culled = active.id != 0 && ma_sound_is_looping(active.sound) == MA_TRUE;
         } else {
             ma_sound_start(active.sound);
@@ -1167,7 +1192,15 @@ void AudioEngine::noteStarted(int priority, float volume, Channel channel, bool 
     active.spatial = spatial;
     active.minDistance = minDistance;
     active.serial = nextSerial_++;
-    assignVoices();
+    soundSlots_.added(active.id, activeSounds_.size() - 1);
+    if (active.held || active.culled) return;
+    if (voice_priority::startsHeard(voicesInUse_, realVoices_)) {
+        ++voicesInUse_;
+        return;
+    }
+    makeVirtual(active);
+    // One kept over a crowd has its voice now.
+    if (priority < voice_priority::kDefault) assignVoices();
 }
 
 void AudioEngine::assignVoices() {
@@ -1177,7 +1210,7 @@ void AudioEngine::assignVoices() {
     playing.reserve(activeSounds_.size());
     for (size_t i = 0; i < activeSounds_.size(); ++i) {
         const ActiveSound& active = activeSounds_[i];
-        if (!active.held && !active.culled && ma_sound_is_playing(active.sound)) playing.push_back(i);
+        if (!active.held && !active.culled && goesOn(active)) playing.push_back(i);
     }
     // The music and the zone's streams hold real voices of their own.
     int reserved = musicSound_ && ma_sound_is_playing(musicSound_) ? 1 : 0;
@@ -1185,6 +1218,8 @@ void AudioEngine::assignVoices() {
         if (!stream.held && stream.sound && ma_sound_is_playing(stream.sound)) ++reserved;
     }
     const auto real = static_cast<uint32_t>(std::max(0, maxRealVoices_ - reserved));
+    realVoices_ = real;
+    voicesInUse_ = static_cast<uint32_t>(std::min<size_t>(playing.size(), real));
     std::vector<bool> heard(activeSounds_.size(), true);
     if (playing.size() > real) {
         std::sort(playing.begin(), playing.end(),
@@ -1206,13 +1241,8 @@ void AudioEngine::assignVoices() {
     }
     for (size_t i = 0; i < activeSounds_.size(); ++i) {
         ActiveSound& active = activeSounds_[i];
-        if (heard[i] && active.virtualVoice) {
-            ma_sound_set_volume(active.sound, active.volume);
-            active.virtualVoice = false;
-        } else if (!heard[i] && !active.virtualVoice) {
-            ma_sound_set_volume(active.sound, 0.0f);
-            active.virtualVoice = true;
-        }
+        if (heard[i] && active.virtualVoice) makeReal(active);
+        else if (!heard[i] && !active.virtualVoice) makeVirtual(active);
     }
 }
 
@@ -1223,6 +1253,9 @@ void AudioEngine::deviceDataCallback(ma_device* device, void* out, const void* i
     ma_engine_read_pcm_frames(engine, out, frames, nullptr);
 
     AudioEngine& self = instance();
+    if (const uint32_t bad = finite_audio::silenceBad(static_cast<float*>(out),
+                                                      static_cast<size_t>(frames) * ma_engine_get_channels(engine)))
+        self.badSamples_.fetch_add(bad, std::memory_order_relaxed);
     if (!self.capturing_.load(std::memory_order_acquire)) return;
     auto* ring = static_cast<ma_pcm_rb*>(self.captureRing_);
     const ma_uint32 channels = ma_engine_get_channels(engine);

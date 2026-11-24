@@ -1,7 +1,15 @@
 // Which sounds are heard past the real voices (audio/voice_priority.hpp).
 #include <catch_amalgamated.hpp>
 
+#include "audio/finite_audio.hpp"
+#include "audio/sound_key.hpp"
+#include "audio/sound_slots.hpp"
 #include "audio/voice_priority.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <vector>
 
 namespace vp = wowee::audio::voice_priority;
 
@@ -35,4 +43,86 @@ TEST_CASE("a 3D sound's reach by distance", "[audio]") {
     CHECK(vp::distanceGain(2.0f, 5.0f, 40.0f) == 1.0f);
     CHECK(vp::distanceGain(10.0f, 5.0f, 40.0f) == 0.5f);
     CHECK(vp::distanceGain(50.0f, 5.0f, 40.0f) == 0.0f);
+}
+
+TEST_CASE("a sound starts heard while a voice is free", "[voice_priority]") {
+    CHECK(vp::startsHeard(0, 32));
+    CHECK(vp::startsHeard(31, 32));
+    CHECK_FALSE(vp::startsHeard(32, 32));
+    CHECK_FALSE(vp::startsHeard(0, 0));
+}
+
+TEST_CASE("a handle's sound is found wherever the list has it", "[voice_priority]") {
+    // Sounds come and go as the engine takes them away: the last in the place
+    // of the one gone.
+    std::vector<uint32_t> list;
+    wowee::audio::SoundSlots slots;
+    const auto add = [&](uint32_t id) {
+        list.push_back(id);
+        slots.added(id, list.size() - 1);
+    };
+    const auto remove = [&](size_t at) {
+        slots.removed(list[at], at, list.back(), list.size() - 1);
+        list[at] = list.back();
+        list.pop_back();
+    };
+    for (uint32_t id = 1; id <= 40; ++id) add(id % 4 == 0 ? 0 : id);  // some without a handle
+    for (const size_t at : {size_t{39}, size_t{0}, size_t{5}, size_t{36}, size_t{11}, size_t{0}}) remove(at);
+    add(100);
+    size_t known = 0;
+    for (uint32_t id = 1; id <= 100; ++id) {
+        const auto slot = slots.find(id);
+        const auto at = std::find(list.begin(), list.end(), id);
+        REQUIRE(slot.has_value() == (at != list.end()));
+        if (!slot) continue;
+        ++known;
+        CHECK(list[*slot] == id);
+    }
+    CHECK(known > 20);
+    CHECK_FALSE(slots.find(0));
+    slots.forget(100);
+    CHECK_FALSE(slots.find(100));
+}
+
+TEST_CASE("a sound on silent runs on by the clock", "[voice_priority]") {
+    CHECK(vp::virtualCursor(100, 50, 1000, false) == 150);
+    CHECK_FALSE(vp::virtualCursor(100, 900, 1000, false));
+    CHECK(vp::virtualCursor(100, 950, 1000, true) == 50);
+    CHECK(vp::virtualCursor(0, 10500, 1000, true) == 500);
+    CHECK_FALSE(vp::virtualCursor(0, 0, 0, true));
+}
+
+TEST_CASE("what is no number is silence, and no place", "[audio]") {
+    namespace fa = wowee::audio::finite_audio;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    std::vector<float> mix = {0.5f, nan, -0.25f, inf, -inf, 1.0f};
+    CHECK(fa::silenceBad(mix.data(), mix.size()) == 3);
+    CHECK(mix == std::vector<float>{0.5f, 0.0f, -0.25f, 0.0f, 0.0f, 1.0f});
+    CHECK(fa::silenceBad(mix.data(), mix.size()) == 0);
+    CHECK(fa::place(glm::vec3(1, 2, 3)));
+    CHECK_FALSE(fa::place(glm::vec3(1, nan, 3)));
+    CHECK_FALSE(fa::place(glm::vec3(inf, 0, 0)));
+}
+
+TEST_CASE("two sounds that differ only within are two", "[audio]") {
+    // The cache of decoded sounds went by the first and the last 256 bytes and
+    // the size: two of a length, quiet at both ends, were one.
+    std::vector<uint8_t> a(40000, 0), b(40000, 0);
+    for (size_t i = 12000; i < 28000; ++i) {
+        a[i] = static_cast<uint8_t>(i);
+        b[i] = static_cast<uint8_t>(i * 7);
+    }
+    CHECK(wowee::audio::sound_key::of(a) != wowee::audio::sound_key::of(b));
+    CHECK(wowee::audio::sound_key::of(a) == wowee::audio::sound_key::of(std::vector<uint8_t>(a)));
+    b = a;
+    b.push_back(0);
+    CHECK(wowee::audio::sound_key::of(a) != wowee::audio::sound_key::of(b));
+}
+
+TEST_CASE("a loop paused out of reach is still the one its handle is for", "[voice_priority]") {
+    CHECK(vp::stillGoing(false, true, false));
+    CHECK(vp::stillGoing(true, false, false));
+    CHECK(vp::stillGoing(false, false, true));
+    CHECK_FALSE(vp::stillGoing(false, false, false));
 }
