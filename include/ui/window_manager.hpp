@@ -66,9 +66,6 @@ public:
     static constexpr float kForcedReleaseSec = 360.0f;
 
 
-    bool vendorBagsOpened_ = false;
-    bool guildBankBagsOpened_ = false;
-
     // Barber shop
     struct BarberStyleOption {
         uint32_t entryId = 0;       // BarberShopStyle.dbc ID sent to the server

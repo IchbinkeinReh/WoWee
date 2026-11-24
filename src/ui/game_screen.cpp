@@ -366,35 +366,6 @@ void GameScreen::applyCameraControlSettings() {
     core::gamepad().setStickDeadzone(settingsPanel_.pendingGamepadDeadzone);
 }
 
-namespace {
-
-/// Put the bags up, for a vendor or the guild bank.
-///
-/// Not OpenAllBags: that one toggles, and its reopen path hides every open bag
-/// before showing them all again. ContainerFrame_GenerateFrame indexes its bag
-/// list by a counter ContainerFrame_OnHide maintains, and this client runs
-/// OnHide at the end of the frame rather than from Hide, so the count is stale
-/// for the whole sequence and the reopened bags write themselves over one
-/// index. The anchor pass then had one name where three belonged, and every
-/// bag but the first kept the position its XML gave it - the same one. Walking
-/// up to a vendor with bags already open stacked them.
-///
-/// OpenBackpack and OpenBag are the interface's own openers and no-op on a bag
-/// that is already showing, so nothing is hidden and the list stays whole.
-/// This is what FrameXML's own merchant frame does with the backpack.
-///
-/// The bag *keybind* still goes through OpenAllBags, deliberately: that one is
-/// a toggle and the player is asking it to toggle. It is still exposed to the
-/// same fault, which goes away when OnHide runs from Hide.
-constexpr const char* kOpenBagsCommand =
-    "OpenBackpack() for i = 1, 4 do OpenBag(i) end";
-
-void openBagsForTrading(game::GameHandler& gameHandler) {
-    gameHandler.runInterfaceCommand(kOpenBagsCommand);
-}
-
-}  // namespace
-
 void GameScreen::render(game::GameHandler& gameHandler) {
     // Apply before any Begin() calls so a scale change cannot alter style
     // metrics halfway through an ImGui frame.
@@ -816,27 +787,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
 
     // Set vendor mode before rendering inventory
     inventoryScreen.setGameHandler(&gameHandler);
-
-    // Auto-open bags once when vendor window first opens
-    if (gameHandler.isVendorWindowOpen()) {
-        if (!windowManager_.vendorBagsOpened_) {
-            windowManager_.vendorBagsOpened_ = true;
-            openBagsForTrading(gameHandler);
-        }
-    } else {
-        windowManager_.vendorBagsOpened_ = false;
-    }
-
-    // Auto-open bags once when the guild bank first opens, so items can be
-    // right-clicked to deposit into the vault.
-    if (gameHandler.isGuildBankOpen()) {
-        if (!windowManager_.guildBankBagsOpened_) {
-            windowManager_.guildBankBagsOpened_ = true;
-            openBagsForTrading(gameHandler);
-        }
-    } else {
-        windowManager_.guildBankBagsOpened_ = false;
-    }
 
     inventoryScreen.setGameHandler(&gameHandler);
     // Item-target cursor (sharpening stone / oil awaiting the item it applies to)
