@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/macro_list.hpp"
+#include "game/pet_action.hpp"
 #include "game/achievement_tracking.hpp"
 #include "game/npc_interaction.hpp"
 #include "game/tutorials.hpp"
@@ -3713,6 +3714,10 @@ public:
     /// (0x005ab800 with 0x005d3240), the offset is 5 (0x005a83c0) and the
     /// page reads 1 (0x005a7fd0).
     bool petActionsOnBonusBar() const { return petActionsOnBonusBar_; }
+    /// PetHasActionBar() (0x005d3720).
+    [[nodiscard]] bool petHasActionBar() const;
+    /// Whether a pet belongs to a hunter (0x0071b630).
+    [[nodiscard]] bool isHuntersPet(const Unit& pet) const;
     /// The override bar (DAT_00c1e5a0 0x4, 0x005abb40): PLAYER_FIELD_BYTES2's
     /// low word names an OverrideSpellData row - an aura of type 332 sets it -
     /// and while that row names a spell its ten fill slots 121..130, 131 and
@@ -5863,6 +5868,7 @@ public:
     /// (0x005d6550); the pet SMSG_PET_SPELLS names moves to its front, a
     /// list of its own when it is not on it, and none empties it (0x005d6900).
     void setActivePet(uint64_t guid) {
+        if (guid != petGuid_) petPossessed_ = false;   // 0x005d6900
         if (guid == 0) {
             petGuidList_.clear();
         } else if (auto it = std::find(petGuidList_.begin(), petGuidList_.end(), guid); it != petGuidList_.end()) {
@@ -7312,7 +7318,9 @@ private:
     uint32_t overrideSpellsId_ = 0;
     std::optional<OverrideSpellRow> overrideSpellRow_;
     uint32_t possessSpellId_ = 0;
+    bool petPossessed_ = false;   ///< possessed since it became the pet (0xc234d8)
     void setPossessSpell(uint32_t spellId);
+    [[nodiscard]] pet::PetBarContext petBarContext() const;
 
     // Taxi / Flight Paths
     std::unordered_map<uint64_t, bool> taxiNpcHasRoutes_;  // guid -> has new/available routes

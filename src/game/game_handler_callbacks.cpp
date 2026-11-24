@@ -3145,7 +3145,41 @@ uint64_t guidFieldOf(const Entity& e, UF low) {
 }
 }  // namespace
 
+bool GameHandler::isHuntersPet(const Unit& pet) const {
+    const uint16_t number = fieldIndex(UF::UNIT_FIELD_PETNUMBER);
+    if (number == 0xFFFF || pet.getField(number) == 0) return false;
+    const auto owner = getEntityManager().getEntity(guidFieldOf(pet, UF::UNIT_FIELD_CREATEDBY));
+    if (!owner || !owner->isUnit()) return false;
+    const uint16_t bytes = fieldIndex(UF::UNIT_FIELD_BYTES_0);
+    return bytes != 0xFFFF && ((owner->getField(bytes) >> 8) & 0xFFu) == static_cast<uint32_t>(Class::HUNTER);
+}
+
+pet::PetBarContext GameHandler::petBarContext() const {
+    pet::PetBarContext c;
+    c.pet = petGuid_;
+    const auto entity = petGuid_ != 0 ? getEntityManager().getEntity(petGuid_) : nullptr;
+    const auto* unit = entity && entity->isUnit() ? static_cast<const Unit*>(entity.get()) : nullptr;
+    c.possessed = petPossessed_;
+    c.possessSpell = possessSpellId_;
+    if (!unit) return c;
+    c.inView = true;
+    c.health = unit->getHealth();
+    const auto& templates = getCreatureInfoCache();
+    if (const auto it = templates.find(unit->getEntry()); it != templates.end()) c.creatureTypeFlags = it->second.typeFlags;
+    const auto passenger = vehicleRoster_.passenger(playerGuid);
+    c.playersVehicle = passenger && passenger->vehicleGuid == petGuid_;
+    if (const auto* seat = vehicleRoster_.seatOf(playerGuid)) {
+        c.seatKnown = true;
+        c.seatAbilityDisplay = static_cast<uint32_t>(seat->vehicleAbilityDisplay);
+    }
+    c.huntersPet = isHuntersPet(*unit);
+    return c;
+}
+
+bool GameHandler::petHasActionBar() const { return pet::petHasActionBar(petBarContext(), petActionsOnBonusBar_); }
+
 void GameHandler::setPossessSpell(uint32_t spellId) {
+    if (spellId != 0) petPossessed_ = true;   // 0x005d30e0, 0x005d62a0
     if (possessSpellId_ == spellId) return;
     possessSpellId_ = spellId;
     fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});  // event 0xb4

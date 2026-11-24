@@ -4446,10 +4446,8 @@ void GameHandler::updatePetActionBar() {
     if (player && farsightIdx != 0xFFFF) {
         const uint64_t farsight = (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(farsightIdx + 1))) << 32) |
                                   player->getField(farsightIdx);
-        auto pet = petGuid_ ? std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(petGuid_)) : nullptr;
-        // 0x005d35b0: the pet is there and alive.
         const auto passenger = vehicleRoster_.passenger(playerGuid);
-        on = vehicle::petActionsOnBonusBar(farsight, petGuid_, pet && pet->getHealth() > 0,
+        on = vehicle::petActionsOnBonusBar(farsight, petGuid_, pet::petHasActions(petBarContext()),
                                            passenger && passenger->vehicleGuid == petGuid_,
                                            vehicleRoster_.seatOf(playerGuid));
     }

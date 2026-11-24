@@ -1877,12 +1877,8 @@ static int lua_UnitCharacterPoints(lua_State* L) {
 }
 
 static int lua_PetHasActionBar(lua_State* L) {
-    // 0x005d3720 -> 0x005d35b0: a living pet in view, and not while the
-    // vehicle bar has the bars (DAT_00c1e5a0 bit 0).
     auto* gh = getGameHandler(L);
-    const auto pet = gh && gh->hasPet() ? gh->getEntityManager().getEntity(gh->getPetGuid()) : nullptr;
-    const auto* unit = pet && pet->isUnit() ? static_cast<const game::Unit*>(pet.get()) : nullptr;
-    luaPushOneOrNil(L, unit && unit->getHealth() > 0 && !gh->isInVehicle());
+    luaPushOneOrNil(L, gh && gh->petHasActionBar());
     return 1;
 }
 static int lua_PetCanBeDismissed(lua_State* L) {

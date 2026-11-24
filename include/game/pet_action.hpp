@@ -269,6 +269,38 @@ struct DismissContext {
     return DismissAction::PetAction;
 }
 
+/// What 0x005d35b0 and 0x007226b0 ask of the pet.
+struct PetBarContext {
+    uint64_t pet = 0;                ///< the first of the pet guids (DAT_00c23500)
+    bool inView = false;
+    uint32_t health = 0;
+    uint32_t creatureTypeFlags = 0;  ///< its template's (+0x964 +0xc)
+    bool playersVehicle = false;     ///< the player sits in it
+    bool seatKnown = false;          ///< a VehicleSeat row for that seat
+    uint32_t seatAbilityDisplay = 0; ///< its VehicleAbilityDisplay (+0xa4)
+    bool possessed = false;          ///< possessed by a spell since it became the pet (0xc234d8)
+    uint32_t possessSpell = 0;       ///< 0xc234e0
+    bool huntersPet = false;         ///< 0x0071b630
+};
+
+/// Whether the pet has actions to show (0x005d35b0), on its own bar or on the
+/// player's: one out of view does.
+[[nodiscard]] constexpr bool petHasActions(const PetBarContext& c) {
+    if (c.pet == 0) return false;
+    if (!c.inView) return true;
+    if ((c.creatureTypeFlags & 0x2000u) != 0) return false;
+    if (c.playersVehicle && c.seatKnown && c.seatAbilityDisplay == 0) return false;
+    if (c.health < 1) return false;
+    // One possessed whose spell has gone, and which is no hunter's.
+    return !(c.possessed && c.possessSpell == 0 && !c.huntersPet);
+}
+
+/// PetHasActionBar() (0x005d3720): they are shown on a bar of the pet's own,
+/// so not while they are on the player's (0xc1e5a0 bit 0, 0x005d4ad0).
+[[nodiscard]] constexpr bool petHasActionBar(const PetBarContext& c, bool onBonusBar) {
+    return !onBonusBar && petHasActions(c);
+}
+
 /// One of the player's auras as 0x005d62a0 reads it.
 struct PossessAura {
     uint32_t spellId = 0;

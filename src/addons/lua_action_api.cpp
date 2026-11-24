@@ -409,24 +409,7 @@ using game::pet::petSlotSpell;
 /// addons/lua_api_helpers.hpp, which is where the other cross-file pet answers
 /// live; the definition stays here, beside the pet bindings that started it.
 bool hunterPetOf(game::GameHandler* gh, const game::Unit* pet) {
-    if (!gh || !pet) return false;
-    const uint16_t number = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
-    if (number == 0xFFFF || pet->getField(number) == 0) return false;
-    // The creator guid's high half lives one index above the low half.
-    const uint16_t by = game::fieldIndex(game::UF::UNIT_FIELD_CREATEDBY);
-    if (by == 0xFFFF) return false;
-    const uint64_t creator =
-        pet->getField(by)
-        | (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(by + 1))) << 32);
-    uint8_t classId = 0;
-    if (auto owner = gh->getEntityManager().getEntity(creator)) {
-        const uint32_t bytes0 =
-            owner->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
-        classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
-    }
-    if (classId == 0 && creator == gh->getPlayerGuid()) classId = gh->getPlayerClass();
-    if (classId == 0) classId = gh->lookupPlayerClass(creator);
-    return classId == 3;   // hunter
+    return gh && pet && gh->isHuntersPet(*pet);
 }
 /// The global naming a pet command's or stance's icon (0x005a97f0:
 /// "PET_%s_TEXTURE"), nothing for anything else.

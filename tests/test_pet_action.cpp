@@ -415,3 +415,52 @@ TEST_CASE("pet spellbook leaves out hidden spells", "[pet]") {
     REQUIRE_FALSE(petSpellInBook(0x80, 0x0));      // hidden on the client
     REQUIRE_FALSE(petSpellInBook(0x0, 0x8000));
 }
+
+// 0x005d3720, 0x005d35b0, 0x007226b0.
+TEST_CASE("the pet's bar is not shown beside the bar its actions are on", "[pet]") {
+    namespace gp = wowee::game::pet;
+    gp::PetBarContext chair;
+    chair.pet = 0xF1300088270003D1ull;
+    chair.inView = true;
+    chair.health = 100;
+    chair.playersVehicle = true;
+    chair.seatKnown = true;
+    chair.seatAbilityDisplay = 1;
+    // The seat's actions are on the player's bar, and nowhere else.
+    CHECK(gp::petHasActions(chair));
+    CHECK_FALSE(gp::petHasActionBar(chair, true));
+    CHECK(gp::petHasActionBar(chair, false));
+    // A seat that shows none, whatever it is.
+    chair.seatAbilityDisplay = 0;
+    CHECK_FALSE(gp::petHasActions(chair));
+    // With no row for the seat, or one that is another's, it has its own.
+    chair.seatKnown = false;
+    CHECK(gp::petHasActions(chair));
+    chair.seatKnown = true;
+    chair.playersVehicle = false;
+    CHECK(gp::petHasActions(chair));
+}
+
+TEST_CASE("a pet has a bar while it lives and is let", "[pet]") {
+    namespace gp = wowee::game::pet;
+    gp::PetBarContext imp;
+    CHECK_FALSE(gp::petHasActions(imp));   // none
+    imp.pet = 0xF140000C9B00D6E3ull;
+    CHECK(gp::petHasActions(imp));         // out of view it is not asked
+    imp.inView = true;
+    CHECK_FALSE(gp::petHasActions(imp));   // dead
+    imp.health = 1;
+    CHECK(gp::petHasActions(imp));
+    imp.creatureTypeFlags = 0x2000;
+    CHECK_FALSE(gp::petHasActions(imp));
+    imp.creatureTypeFlags = 0x1000;
+    CHECK(gp::petHasActions(imp));
+    // Possessed: while the spell lasts; after it only a hunter's.
+    imp.possessed = true;
+    imp.possessSpell = 605;
+    CHECK(gp::petHasActions(imp));
+    imp.possessSpell = 0;
+    CHECK_FALSE(gp::petHasActions(imp));
+    imp.huntersPet = true;
+    CHECK(gp::petHasActions(imp));
+}
