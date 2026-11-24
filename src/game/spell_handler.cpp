@@ -1,4 +1,5 @@
 #include "game/spell_handler.hpp"
+#include "game/removed_spell.hpp"
 #include "game/combat_text_filter.hpp"
 #include "game/spell_book_tabs.hpp"
 #include "game/unit_combat.hpp"
@@ -5964,6 +5965,14 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
     const size_t minSz = classicSpellId ? 2u : 4u;
     if (packet.getRemainingSize() < minSz) return;
     uint32_t spellId = classicSpellId ? packet.readUInt16() : packet.readUInt32();
+    // Whether it is a companion, while the lists, made from the book, have it.
+    const auto inCompanions = [&] {
+        for (const bool mounts : {false, true})
+            for (const auto& c : owner_.getCompanions(mounts))
+                if (c.spellId == spellId) return true;
+        return false;
+    };
+    const bool companion = knownSpells_.count(spellId) != 0 && inCompanions();
     knownSpells_.erase(spellId);
     markInterruptMasksDirty();
     noteBookRemoved(spellId);  // 0x0053fad0
@@ -5974,16 +5983,10 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
     // crafting refresh called the callback without testing it, and a null one
     // throws rather than doing nothing.
     if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("SPELLS_CHANGED", {});
-        // Off the stance bar's list (0x0053fda8 -> event 0x178).
-        if (isStanceBarSpell(owner_.getPlayerClass(), spellId)) {
-            owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
-        }
-        // The mirror of COMPANION_LEARNED on the other side of this file. The
-        // mounts and critters list is built from the spellbook, so losing a
-        // spell can take one off it, and the pet tab refreshes on this and on
-        // nothing else.
-        owner_.addonEventCallbackRef()("COMPANION_UNLEARNED", {});
+        const bool left = !owner_.getCompanions(false).empty() || !owner_.getCompanions(true).empty();
+        for (const std::string& event :
+             removedSpellEvents(isStanceBarSpell(owner_.getPlayerClass(), spellId), companion, left))
+            owner_.addonEventCallbackRef()(event, {});
         // A crafting window's recipes are the spells that just changed, and
         // it refreshes on its own event rather than on that one.
         if (craftingWindowOpen_) owner_.addonEventCallbackRef()("TRADE_SKILL_UPDATE", {});

@@ -1,6 +1,8 @@
-// What a unit's stats give it by the combat game tables (game/stat_tables.hpp).
+// What a unit's stats give it by the combat game tables (game/stat_tables.hpp),
+// and what the interface hears of a spell gone (game/removed_spell.hpp).
 #include <catch_amalgamated.hpp>
 
+#include "game/removed_spell.hpp"
 #include "game/stat_tables.hpp"
 
 using namespace wowee::game;
@@ -68,4 +70,14 @@ TEST_CASE("a pet's health is what its creature's template makes of it", "[stat_t
     CHECK(templateModifier(false, true, 0.85f) == Catch::Approx(0.85));
     CHECK(templateModifier(true, true, 0.85f) == 1.0);
     CHECK(templateModifier(false, false, 0.85f) == 0.0);
+}
+
+// 0x0053fad0.
+TEST_CASE("only a companion's spell unlearns a companion", "[removed_spell]") {
+    using Events = std::vector<std::string>;
+    CHECK(removedSpellEvents(false, false, true) == Events{"SPELLS_CHANGED"});
+    CHECK(removedSpellEvents(true, false, false) == Events{"UPDATE_SHAPESHIFT_FORMS", "SPELLS_CHANGED"});
+    CHECK(removedSpellEvents(false, true, true) == Events{"COMPANION_UPDATE", "COMPANION_UNLEARNED", "SPELLS_CHANGED"});
+    // The last of them.
+    CHECK(removedSpellEvents(false, true, false) == Events{"COMPANION_UNLEARNED", "SPELLS_CHANGED"});
 }

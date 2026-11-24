@@ -1372,6 +1372,22 @@ TEST_CASE("a unit's tooltip hears of its name and of its skin", "[replay][toolti
     s.handler().setUnitTooltipCallback(nullptr);
 }
 
+// 0x0053fad0.
+TEST_CASE("a spell removed unlearns no companion", "[replay][companion]") {
+    Session s;
+    spawnPlayer(s);
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback(
+        [&](const std::string& name, const std::vector<std::string>&) { events.push_back(name); });
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_REMOVED_SPELL));
+    p.writeUInt32(133);
+    s.receive(p);
+    s.handler().setAddonEventCallback({});
+    CHECK(std::count(events.begin(), events.end(), "SPELLS_CHANGED") == 1);
+    CHECK(std::count(events.begin(), events.end(), "COMPANION_UNLEARNED") == 0);
+    CHECK(std::count(events.begin(), events.end(), "COMPANION_UPDATE") == 0);
+}
+
 // The creature cache's row: +0x34, +0x38.
 TEST_CASE("a creature's template says what it makes of health and power", "[replay][creature]") {
     Session s;
