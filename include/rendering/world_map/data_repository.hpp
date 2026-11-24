@@ -5,6 +5,7 @@
 
 #include "rendering/world_map/world_map_types.hpp"
 #include <unordered_map>
+#include <optional>
 #include <string>
 #include <vector>
 #include <array>
@@ -48,6 +49,26 @@ public:
     [[nodiscard]] const std::vector<POI>& poiMarkers() const { return poiMarkers_; }
 
     [[nodiscard]] const std::unordered_map<uint32_t, uint32_t>& exploreFlagByAreaId() const { return exploreFlagByAreaId_; }
+    /// AreaTable's ExplorationLevel for an area there is a row of.
+    [[nodiscard]] std::optional<int32_t> explorationLevel(uint32_t areaId) const {
+        auto it = explorationLevelByAreaId_.find(areaId);
+        if (it == explorationLevelByAreaId_.end()) return std::nullopt;
+        return it->second;
+    }
+    /// Where a place is shown (0x00543920, WorldMapTransforms): its own map
+    /// and place, or another continent's. In the wire's axes.
+    struct Place {
+        uint32_t mapId = 0;
+        float x = 0.0f, y = 0.0f;
+    };
+    [[nodiscard]] Place shownPlace(uint32_t mapId, float wireX, float wireY) const;
+    /// WorldMapContinent's ContinentOffset and Scale for a map, and whether it
+    /// is on the Azeroth map at all (Outland's is not).
+    struct WorldContinent {
+        uint32_t mapId = 0;
+        float offsetX = 0.0f, offsetY = 0.0f, scale = 0.0f;
+    };
+    [[nodiscard]] const std::vector<WorldContinent>& worldContinents() const { return worldContinents_; }
     [[nodiscard]] const std::unordered_map<uint32_t, std::string>& areaNameByAreaId() const { return areaNameByAreaId_; }
     /// The map an AreaTable row is on, or 0 if unknown.
     [[nodiscard]] uint32_t mapIdForArea(uint32_t areaId) const {
@@ -104,6 +125,8 @@ private:
     std::vector<CosmicMapEntry> cosmicMaps_;
     std::vector<CosmicMapEntry> azerothRegions_;
     std::unordered_map<uint32_t, uint32_t> exploreFlagByAreaId_;
+    std::unordered_map<uint32_t, int32_t> explorationLevelByAreaId_;
+    std::vector<WorldContinent> worldContinents_;
     std::unordered_map<uint32_t, std::string> areaNameByAreaId_;
     std::unordered_map<uint32_t, uint32_t> mapIdByAreaId_;
     int cosmicIdx_ = -1;

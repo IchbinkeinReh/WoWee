@@ -5,6 +5,7 @@
 #include "rendering/world_map/map_resolver.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
+#include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "core/application.hpp"
 #include "game/expansion_profile.hpp"
@@ -24,6 +25,7 @@ void DataRepository::clear() {
     cosmicMaps_.clear();
     azerothRegions_.clear();
     exploreFlagByAreaId_.clear();
+    explorationLevelByAreaId_.clear();
     areaNameByAreaId_.clear();
     areaIdToZoneIdx_.clear();
     zmpZoneBounds_.clear();
@@ -137,6 +139,8 @@ void DataRepository::loadZones(const std::string& mapName,
             const uint32_t exploreFlag = areaDbc->getUInt32(i, atL ? (*atL)["ExploreFlag"] : 3);
             const uint32_t parentArea = areaDbc->getUInt32(i, parentField);
             if (areaId != 0) exploreFlagByAreaId[areaId] = exploreFlag;
+            // ExplorationLevel (+0x28 of the client's row).
+            if (areaId != 0 && fieldCount > 11) explorationLevelByAreaId_[areaId] = areaDbc->getInt32(i, 10);
             if (areaId != 0)
                 mapIdByAreaId_[areaId] = areaDbc->getUInt32(i, atL ? (*atL)["MapID"] : 1);
             if (parentArea != 0) childBitsByParent[parentArea].push_back(exploreFlag);
@@ -465,6 +469,14 @@ int DataRepository::dungeonMapForChunk(uint32_t mapId, uint32_t wmoId, float z) 
     return found;
 }
 
+DataRepository::Place DataRepository::shownPlace(uint32_t mapId, float wireX, float wireY) const {
+    for (const MapTransform& tr : mapTransforms_) {
+        if (tr.sourceMapId == mapId && tr.minX < wireX && wireX <= tr.maxX && tr.minY <= wireY && wireY < tr.maxY)
+            return {tr.targetMapId, wireX + tr.offsetX, wireY + tr.offsetY};
+    }
+    return {mapId, wireX, wireY};
+}
+
 glm::vec3 DataRepository::transformRenderPosition(
     uint32_t sourceMapId, const glm::vec3& renderPos) const {
     if (currentMapId_ < 0 || sourceMapId == static_cast<uint32_t>(currentMapId_)) {
@@ -641,6 +653,8 @@ void DataRepository::loadPOIs(pipeline::AssetManager& assetManager) {
     const uint32_t colZ          = poiL ? (*poiL)["Z"]           : 14;
     const uint32_t colMap        = poiL ? (*poiL)["ContinentID"] : 15;
     const uint32_t colFlags      = poiL ? (*poiL)["Flags"]       : 16;
+    const uint32_t colArea       = poiL ? (*poiL)["AreaID"]      : 17;
+    const uint32_t colState      = poiL ? poiL->tryField("WorldStateID") : 52;
     const uint32_t colName       = poiL ? (*poiL)["Name"]        : 18;
 
     const uint32_t fieldCount = poiDbc->getFieldCount();
@@ -656,14 +670,21 @@ void DataRepository::loadPOIs(pipeline::AssetManager& assetManager) {
         poi.importance = poiDbc->getUInt32(i, colImportance);
         poi.iconType = poiDbc->getUInt32(i, colIcon);
         poi.factionId = poiDbc->getUInt32(i, colFaction);
-        poi.wowX = poiDbc->getFloat(i, colX);
-        poi.wowY = poiDbc->getFloat(i, colY);
-        poi.wowZ = poiDbc->getFloat(i, colZ);
+        // The file's axes are the wire's. Taken as canonical, every point's
+        // two were exchanged: Bloodhoof at 85/3 of Mulgore's map.
+        const glm::vec3 place = core::coords::serverToCanonical(
+            glm::vec3(poiDbc->getFloat(i, colX), poiDbc->getFloat(i, colY), poiDbc->getFloat(i, colZ)));
+        poi.wowX = place.x;
+        poi.wowY = place.y;
+        poi.wowZ = place.z;
         poi.mapId = poiDbc->getUInt32(i, colMap);
         // A layout that carries no Flags column reads as no flags, which costs
         // the interface's battle-map pin test (lua_system_api.cpp) and nothing
         // else - the map itself draws these pins without asking the flag.
         poi.flags = colFlags < fieldCount ? poiDbc->getUInt32(i, colFlags) : 0;
+        poi.areaId = colArea < fieldCount ? poiDbc->getUInt32(i, colArea) : 0;
+        poi.worldStateId = colState < fieldCount ? poiDbc->getUInt32(i, colState) : 0;
+        for (uint32_t k = 0; k < 9 && colIcon + k < fieldCount; ++k) poi.icons[k] = poiDbc->getInt32(i, colIcon + k);
         poi.name = poiDbc->getString(i, colName);
 
         if (poi.name.empty()) continue;
@@ -713,6 +734,7 @@ void DataRepository::buildCosmicView(int /*expLevel*/) {
 
 void DataRepository::buildAzerothView(pipeline::AssetManager& assetManager) {
     azerothRegions_.clear();
+    worldContinents_.clear();
 
     // The continents on the Azeroth map are where WorldMapContinent puts them
     // (0x00547eb0): each row's grid bounds (Left, Right, Top, Bottom, +8..+0x14)
@@ -728,6 +750,11 @@ void DataRepository::buildAzerothView(pipeline::AssetManager& assetManager) {
     if (!wmc || !wmc->isLoaded() || wmc->getFieldCount() < 14 || !wma || !wma->isLoaded()) {
         LOG_WARNING("DataRepository: WorldMapContinent.dbc missing - no continents on the Azeroth map");
         return;
+    }
+    for (uint32_t r = 0; r < wmc->getRecordCount(); ++r) {
+        if (wmc->getUInt32(r, 13) == 0) continue;
+        worldContinents_.push_back({.mapId = wmc->getUInt32(r, 1), .offsetX = wmc->getFloat(r, 6),
+                                    .offsetY = wmc->getFloat(r, 7), .scale = wmc->getFloat(r, 8)});
     }
     for (uint32_t i = 0; i < wma->getRecordCount(); ++i) {
         if (wma->getUInt32(i, 2) != 0) continue;   // a continent's own row: AreaID 0

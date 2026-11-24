@@ -7,6 +7,7 @@
 #include "rendering/world_map/exploration_state.hpp"
 #include "rendering/world_map/zone_metadata.hpp"
 #include "rendering/world_map/coordinate_projection.hpp"
+#include "rendering/world_map/landmark_rules.hpp"
 #include "core/coordinates.hpp"
 #include "rendering/world_map/map_resolver.hpp"
 #include "rendering/world_map/overlay_renderer.hpp"
@@ -1051,31 +1052,72 @@ WorldMapFacade::PoiFrame WorldMapFacade::currentPoiFrame() const {
     return frame;
 }
 
-std::vector<WorldMapFacade::Landmark> WorldMapFacade::currentLandmarks() const {
+std::optional<glm::vec2> WorldMapFacade::mapPointOf(uint32_t mapId, float wireX, float wireY) const {
+    const auto& data = impl_->data;
+    const ViewLevel level = impl_->viewState.currentLevel();
+    const DataRepository::Place place = data.shownPlace(mapId, wireX, wireY);
+    glm::vec2 uv(0.0f);
+    if (level == ViewLevel::WORLD) {
+        const auto& continents = data.worldContinents();
+        const auto it = std::find_if(continents.begin(), continents.end(),
+                                     [&place](const auto& c) { return c.mapId == place.mapId; });
+        if (it == continents.end()) return std::nullopt;
+        const LandmarkPoint p = landmarkOnWorld(it->offsetX, it->offsetY, it->scale, place.x, place.y);
+        uv = glm::vec2(p.x, p.y);
+    } else {
+        const int idx = impl_->viewState.currentZoneIdx();
+        const auto& zones = data.zones();
+        if (level == ViewLevel::COSMIC || idx < 0 || idx >= static_cast<int>(zones.size())) return std::nullopt;
+        const Zone& zone = zones[static_cast<size_t>(idx)];
+        const bool isContinent = (zone.areaID == 0);
+        if (isContinent ? place.mapId != zone.displayMapID && place.mapId != zone.mapID
+                        : mapId != zone.mapID && place.mapId != zone.mapID)
+            return std::nullopt;
+        // The bounds of a zone shown on another continent are moved there with
+        // its places. A render position has the wire's axes.
+        uv = renderPosToMapUV(glm::vec3(place.x, place.y, 0.0f), zone.bounds, isContinent);
+    }
+    // Outside the map it is on some other part of the continent, and a pin
+    // clamped to the edge is worse than no pin.
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) return std::nullopt;
+    return uv;
+}
+
+std::vector<WorldMapFacade::Landmark> WorldMapFacade::currentLandmarks(
+    const std::function<uint32_t(uint32_t)>& worldState) const {
+    const auto& data = impl_->data;
+    const ViewLevel level = impl_->viewState.currentLevel();
+    if (level == ViewLevel::COSMIC) return {};
     const int idx = impl_->viewState.currentZoneIdx();
-    const auto& zones = impl_->data.zones();
-    if (idx < 0 || idx >= static_cast<int>(zones.size())) return {};
-    const Zone& zone = zones[static_cast<size_t>(idx)];
-    const bool isContinent = (zone.areaID == 0);
+    const auto& zones = data.zones();
+    const bool haveZone = idx >= 0 && idx < static_cast<int>(zones.size());
+    if (level != ViewLevel::WORLD && !haveZone) return {};
+    const LandmarkMap map = level == ViewLevel::WORLD ? LandmarkMap::World
+                            : zones[static_cast<size_t>(idx)].areaID == 0 ? LandmarkMap::Continent
+                                                                           : LandmarkMap::Zone;
 
     std::vector<Landmark> out;
-    for (const POI& poi : impl_->data.poiMarkers()) {
-        if (poi.mapId != zone.mapID) continue;
-        // The POI carries canonical WoW coordinates and the projection wants
-        // render space, which is the same swap every other caller makes.
-        const glm::vec2 uv = renderPosToMapUV(
-            core::coords::canonicalToRender(glm::vec3(poi.wowX, poi.wowY, poi.wowZ)),
-            zone.bounds, isContinent);
-        // Outside the map it is on some other part of the continent, and a pin
-        // clamped to the edge is worse than no pin.
-        if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) continue;
+    for (const POI& poi : data.poiMarkers()) {
+        const bool ownArea = map != LandmarkMap::World && zones[static_cast<size_t>(idx)].areaID == poi.areaId &&
+                             zones[static_cast<size_t>(idx)].mapID == poi.mapId;
+        if (!landmarkOnMap(poi.flags, map, ownArea)) continue;
+        const uint32_t state = poi.worldStateId != 0 && worldState ? worldState(poi.worldStateId) : 0u;
+        if (!landmarkStateSet(poi.worldStateId, state)) continue;
+        const auto& bits = data.exploreFlagByAreaId();
+        const auto bit = bits.find(poi.areaId);
+        if (!landmarkKnown(poi.areaId, data.explorationLevel(poi.areaId),
+                           bit != bits.end() && impl_->exploration.bitSet(bit->second)))
+            continue;
+        const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(poi.wowX, poi.wowY, poi.wowZ));
+        const auto uv = mapPointOf(poi.mapId, wire.x, wire.y);
+        if (!uv) continue;
         Landmark mark;
         mark.name = poi.name;
         mark.description = poi.description;
-        mark.iconType = poi.iconType;
+        mark.icon = landmarkIcon(poi.flags, map, poi.icons, poi.worldStateId, state);
         mark.flags = poi.flags;
-        mark.x = uv.x;
-        mark.y = uv.y;
+        mark.x = uv->x;
+        mark.y = uv->y;
         out.push_back(std::move(mark));
     }
     return out;

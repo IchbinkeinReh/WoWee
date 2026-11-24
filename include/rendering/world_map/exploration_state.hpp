@@ -32,6 +32,8 @@ public:
                 uint32_t playerZoneId = 0);
 
     [[nodiscard]] const std::unordered_set<int>& exploredZones() const { return exploredZones_; }
+    /// Whether the player has explored the area with this AreaBit.
+    [[nodiscard]] bool bitSet(uint32_t bitIndex) const { return isBitSet(bitIndex); }
     [[nodiscard]] const std::unordered_set<int>& exploredOverlays() const { return exploredOverlays_; }
 
     /// Returns true if the explored overlay set changed since last update.

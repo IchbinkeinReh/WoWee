@@ -1274,8 +1274,11 @@ void GameScreen::renderMinimapPois(const MinimapFrame& frame, game::GameHandler&
                 AreaPoiRow r;
                 r.importance = static_cast<int32_t>(dbc->getUInt32(row, cols[0]));
                 for (uint32_t i = 0; i < 9; ++i) r.icons[i] = static_cast<int32_t>(dbc->getUInt32(row, cols[1] + i));
-                r.x = dbc->getFloat(row, cols[2]);
-                r.y = dbc->getFloat(row, cols[3]);
+                // The file's axes are the wire's, as a gossip point's are.
+                const glm::vec3 place = core::coords::serverToCanonical(
+                    glm::vec3(dbc->getFloat(row, cols[2]), dbc->getFloat(row, cols[3]), 0.0f));
+                r.x = place.x;
+                r.y = place.y;
                 r.map = dbc->getUInt32(row, cols[4]);
                 r.flags = dbc->getUInt32(row, cols[5]);
                 r.worldState = dbc->getUInt32(row, cols[6]);
@@ -1308,16 +1311,9 @@ void GameScreen::renderMinimapPois(const MinimapFrame& frame, game::GameHandler&
         points.push_back({Kind::Area, r.x, r.y, r.importance, icon, r.flags, r.name});
     }
     // The last gossip point, until it lapses or is reached.
-    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-    const auto& gossip = gameHandler.getGossipPois();
-    for (auto it = gossip.rbegin(); it != gossip.rend(); ++it) {
-        if (it->questObjectiveIndex != -2) continue;
-        if (nowMs - it->receivedMs < 480000u && it->receivedMs != gossipPoiReachedMs_) {
-            points.push_back({Kind::Gossip, it->x, it->y, static_cast<int32_t>(it->data),
-                              static_cast<int>(it->icon), it->flags, it->name});
-        }
-        break;
+    if (const auto* g = gameHandler.gossipPoint()) {
+        points.push_back({Kind::Gossip, g->x, g->y, static_cast<int32_t>(g->data), static_cast<int>(g->icon),
+                          g->flags, g->name});
     }
     float corpseX = 0.0f, corpseY = 0.0f;
     if (gameHandler.isPlayerGhost() && gameHandler.getCorpseCanonicalPos(corpseX, corpseY)) {
@@ -1339,9 +1335,7 @@ void GameScreen::renderMinimapPois(const MinimapFrame& frame, game::GameHandler&
         const float yards = frame.mapRadius > 0.0f ? offsetLen / frame.mapRadius * frame.view.viewRadius : 0.0f;
         if (p.kind == Kind::Gossip && yards < 10.0f) {
             // Arrived: the point is let go (0x007f5ba0).
-            for (auto it = gossip.rbegin(); it != gossip.rend(); ++it) {
-                if (it->questObjectiveIndex == -2) { gossipPoiReachedMs_ = it->receivedMs; break; }
-            }
+            gameHandler.dropGossipPoint();
             continue;
         }
         if (offsetLen <= frame.mapRadius * mb::kBlipReach) {

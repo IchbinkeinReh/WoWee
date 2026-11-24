@@ -1510,19 +1510,39 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             }
             return out;
         };
-        luaSvc.getMapLandmarks = [r = renderer.get()]() {
+        luaSvc.getMapLandmarks = [this, r = renderer.get()]() {
             std::vector<addons::LuaServices::MapLandmark> out;
             auto* wmap = r ? r->getWorldMap() : nullptr;
             if (!wmap) return out;
-            for (const auto& l : wmap->currentLandmarks()) {
+            const auto worldState = [this](uint32_t id) -> uint32_t {
+                if (!gameHandler) return 0u;
+                const auto& states = gameHandler->getWorldStates();
+                const auto it = states.find(id);
+                return it != states.end() ? it->second : 0u;
+            };
+            for (const auto& l : wmap->currentLandmarks(worldState)) {
                 addons::LuaServices::MapLandmark m;
                 m.name = l.name;
                 m.description = l.description;
-                m.icon = static_cast<int>(l.iconType);
+                m.icon = static_cast<int>(l.icon);
                 m.x = l.x;
                 m.y = l.y;
                 m.flags = l.flags;
                 out.push_back(std::move(m));
+            }
+            // The gossip point after them (0x00546310 -> 0x007f3be0), with
+            // its icon whatever the map.
+            if (const auto* g = gameHandler ? gameHandler->gossipPoint() : nullptr) {
+                const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(g->x, g->y, 0.0f));
+                if (const auto uv = wmap->mapPointOf(gameHandler->getCurrentMapId(), wire.x, wire.y)) {
+                    addons::LuaServices::MapLandmark m;
+                    m.name = g->name;
+                    m.icon = static_cast<int>(g->icon);
+                    m.x = uv->x;
+                    m.y = uv->y;
+                    m.flags = g->flags;
+                    out.push_back(std::move(m));
+                }
             }
             return out;
         };

@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 #include <memory>
@@ -119,7 +120,7 @@ public:
     struct Landmark {
         std::string name;
         std::string description;
-        uint32_t iconType = 0;
+        int32_t icon = 0;
         float x = 0.0f, y = 0.0f;
         /// AreaPOI's flag word, carried through so the interface can ask the
         /// one question about it that is its own: whether the pin is drawn on a
@@ -128,7 +129,12 @@ public:
     };
     /// The POIs on the shown map. Only those belonging to it, and only those
     /// that project inside it.
-    [[nodiscard]] std::vector<Landmark> currentLandmarks() const;
+    /// `worldState` answers a world state's value, 0 for one not set.
+    [[nodiscard]] std::vector<Landmark> currentLandmarks(
+        const std::function<uint32_t(uint32_t)>& worldState) const;
+    /// A place, in the wire's axes, on the shown map in its [0,1] space, where
+    /// it is on it (0x00544140); the points and SMSG_GOSSIP_POI's alike.
+    [[nodiscard]] std::optional<glm::vec2> mapPointOf(uint32_t mapId, float wireX, float wireY) const;
 
 
     /// The zone under a point on the map being shown, in [0,1] map space, or

@@ -356,8 +356,6 @@ private:
     void renderMinimapBattlegroundPositions(const MinimapFrame& frame,
                                             game::GameHandler& gameHandler);
     void renderMinimapPois(const MinimapFrame& frame, game::GameHandler& gameHandler);
-    /// The gossip point the player has walked to, by when it came: let go.
-    uint64_t gossipPoiReachedMs_ = 0;
     void renderMinimapPlayerArrow(const MinimapFrame& frame, uint8_t alpha);
 
     /// The wheel and the ctrl+click, when this client owns the ring.

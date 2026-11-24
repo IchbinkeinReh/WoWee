@@ -4,6 +4,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -174,6 +175,9 @@ struct POI {
     /// 0x200 becomes GetMapLandmarkInfo's seventh value - see
     /// minimap_blips.hpp for the POI bits that have names.
     uint32_t flags = 0;
+    uint32_t areaId = 0;        ///< Shown once this area is explored
+    uint32_t worldStateId = 0;  ///< Shown while this state is set, its icon the state's
+    std::array<int32_t, 9> icons{};
     std::string name;
     std::string description;
 };

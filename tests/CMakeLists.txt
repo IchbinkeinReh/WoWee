@@ -1939,6 +1939,12 @@ wowee_add_test(test_world_map_coordinate_projection
     SOURCES test_world_map_coordinate_projection.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/world_map/coordinate_projection.cpp)
 
+# ── test_landmark_rules ───────────────────────────────────────
+# Which of AreaPOI's points a map lists, with which icon, and where Azeroth's
+# map has them. Header-only.
+wowee_add_test(test_landmark_rules
+    SOURCES test_landmark_rules.cpp)
+
 # ── test_world_map_map_resolver ───────────────────────────────
 wowee_add_test(test_world_map_map_resolver
     SOURCES test_world_map_map_resolver.cpp
