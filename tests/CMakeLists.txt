@@ -4559,6 +4559,7 @@ wowee_add_test(test_mcp_http
 wowee_add_test(test_mcp_rpc
     SOURCES test_mcp_rpc.cpp
             ${CMAKE_SOURCE_DIR}/src/mcp/json_rpc.cpp
+            ${CMAKE_SOURCE_DIR}/src/mcp/lua_error.cpp
             ${CMAKE_SOURCE_DIR}/src/mcp/redact.cpp
             ${CMAKE_SOURCE_DIR}/src/mcp/schema.cpp)
 wowee_add_test(test_mcp_guard

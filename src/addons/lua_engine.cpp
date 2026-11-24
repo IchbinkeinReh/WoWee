@@ -9493,36 +9493,28 @@ int lua_ColorSelect_GetColorRGB(lua_State* L) {
 /// after the whole of SetCopper, which is the order the interface is written
 /// for.
 ///
-/// The queue is a Lua table rather than a list of widget pointers so that a
-/// frame going away between the set and the drain is Lua's problem rather than
-/// a dangling read. Same reason __WoweeOnUpdateFrames is a table.
-static void queueTextChanged(lua_State* L, int frameIndex) {
-    const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
-    lua_getglobal(L, "__WoweePendingTextChanged");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
-    const int n = static_cast<int>(lua_objlen(L, -1));
-    lua_pushvalue(L, abs);
-    lua_rawseti(L, -2, n + 1);
-    lua_pop(L, 1);
+/// Once, at the box's next update while it is shown, however often the text
+/// was set meanwhile (ui/text_changes.hpp).
+///
+/// `userInput` is what the handler is told: Insert() counts as the player's
+/// (0x00975e10 hands 0x00965960 a 0), SetText and SetNumber do not.
+static void queueTextChanged(lua_State* L, int frameIndex, bool userInput) {
+    const auto* w = widgetOf(L, frameIndex);
+    auto* engine = engineFrom(L);
+    if (w && engine) engine->noteTextChanged(w->id, userInput);
 }
 
-/// An edit box keeps its own text, so SetText on one is not the font string's.
-/// FrameXML uses the same name for both and the widget decides which it means.
-int lua_EditBox_SetText(lua_State* L) {
-    auto* w = widgetOf(L, 1);
-    if (!w) return 0;
-    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetText(\"text\")", usageName(L, 1));   // 0x00975e80
-    w->editText = luaL_optstring(L, 2, "");
-    w->cursorPos = w->editText.size();
-    // The text no longer came from the history, so the arrows start again from
-    // the newest line rather than resuming from the middle of a walk.
-    w->editHistoryPos = -1;
-    // OnTextSet is the counterpart to OnTextChanged for a text set from code,
-    // and nothing fired it. The chat box declares it and runs
-    // ChatEdit_ParseText, which is what reads a leading /w or /g and switches
-    // the box's channel - so a message put into the box by anything but typing
-    // went out on whatever channel was already selected.
-    //
+static bool insertEditText(wowee::ui::Widget& w, const std::string& add);
+
+/// SetText's and SetNumber's own (0x00966580): the highlight goes, and the
+/// text only when it is another one - put in as if typed, within the box's
+/// limits - with OnTextSet at once and OnTextChanged after the script.
+static void setEditText(lua_State* L, wowee::ui::Widget& w, const std::string& text) {
+    w.hasSelection = false;
+    if (text == w.editText) return;
+    w.editText.clear();
+    w.cursorPos = 0;
+    insertEditText(w, text);
     // Guarded, because a handler is free to set the text again and this is
     // called from inside one. The only handler in this interface does not, but
     // an addon's may, and a Lua loop that feeds itself takes the process with
@@ -19386,24 +19378,8 @@ void LuaEngine::drainPendingTextChanged() {
 
 void LuaEngine::noteTextChanged(uint32_t wid, bool userInput) { textChanges_.note(wid, userInput); }
 
-    for (int i = 1; i <= count; ++i) {
-        lua_rawgeti(L_, -1, i);
-        if (lua_istable(L_, -1)) {
-            // The caret first. Setting text moves it to the end, which in WoW
-            // is a cursor change, and ScrollingEdit_OnCursorChanged is the only
-            // thing that ever sets self.cursorOffset - which
-            // ScrollingEdit_OnTextChanged then negates. Firing the text change
-            // without the cursor change reaches `-nil` on the first code-set
-            // text in every multi-line box: the mail body, the macro editor,
-            // the guild information pane.
-            if (const auto* w = widgetOf(L_, lua_gettop(L_))) {
-                fireCursorChanged(w->id);
-            }
-            callScriptOnTable(L_, lua_gettop(L_), "OnTextChanged", 0);
-        }
-        lua_pop(L_, 1);
-    }
-    lua_pop(L_, 1);
+void LuaEngine::settleTextChanged(uint32_t wid) {
+    if (const auto userInput = textChanges_.takeOf(wid)) fireTextChanged(wid, *userInput);
 }
 
 void LuaEngine::dispatchOnUpdate(float elapsed) {
@@ -19843,7 +19819,8 @@ namespace {
 ///
 /// Written by hand rather than through debug.traceback because the debug
 /// library is deliberately not opened.
-int luaTracebackHandler(lua_State* L) {
+/// The error at 1, with the stack folded into it.
+static void foldStackIn(lua_State* L) {
     const char* msg = lua_tostring(L, 1);
     std::string out = msg ? msg : "(error)";
     for (int level = 1; level < 12; ++level) {
@@ -19856,7 +19833,18 @@ int luaTracebackHandler(lua_State* L) {
         if (ar.name) { out += " in "; out += ar.name; }
     }
     lua_pushstring(L, out.c_str());
-    lua_replace(L, 1);   // the message, with the stack folded into it
+    lua_replace(L, 1);
+}
+
+/// query()'s: told to nobody else.
+static int queryTracebackHandler(lua_State* L) {
+    foldStackIn(L);
+    lua_settop(L, 1);
+    return 1;
+}
+
+int luaTracebackHandler(lua_State* L) {
+    foldStackIn(L);
     // Then what every other script call does with a message: the interface's
     // handler gets it, and its return is what the dispatch reports. Without
     // this leg, an error in a frame script - the commonest kind - went to the
@@ -20039,7 +20027,7 @@ bool LuaEngine::evaluateBoolean(const std::string& expression) {
 }
 
 bool LuaEngine::query(const std::string& code, const std::function<void(lua_State*, int)>& read,
-                      std::string& error) {
+                      std::string& error, bool traced) {
     if (!L_) {
         error = "no interface";
         return false;
@@ -20051,13 +20039,15 @@ bool LuaEngine::query(const std::string& code, const std::function<void(lua_Stat
     BudgetGuard guard(L_, 2000);
     // Without the interface's own error handler: a question of the host's that
     // goes wrong is no script error of anybody's.
-    if (luaL_loadbuffer(L_, code.c_str(), code.size(), "=query") != 0 || lua_pcall(L_, 0, 1, 0) != 0) {
+    if (traced) lua_pushcfunction(L_, queryTracebackHandler);
+    const int handler = traced ? base + 1 : 0;
+    if (luaL_loadbuffer(L_, code.c_str(), code.size(), "=query") != 0 || lua_pcall(L_, 0, 1, handler) != 0) {
         const char* e = lua_tostring(L_, -1);
         error = e ? e : "(unknown error)";
         lua_settop(L_, base);
         return false;
     }
-    if (read) read(L_, base + 1);
+    if (read) read(L_, lua_gettop(L_));
     lua_settop(L_, base);
     return true;
 }

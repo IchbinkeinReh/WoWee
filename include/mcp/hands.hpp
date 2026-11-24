@@ -36,6 +36,13 @@ struct Aftermath {
 /// aftermath beside it.
 Script::Fn finishWith(ToolContext& context, Aftermath after, std::function<json()> value);
 
+/// The script errors the client's log tells of since a line, in parts
+/// (lua_error.hpp); the first `most`.
+json luaErrorsSince(ToolContext& context, uint64_t logSeq, size_t most);
+
+/// Waits for the loading screen to be gone, `seconds` at most.
+Script::Fn worldShown(ToolContext& context, double seconds);
+
 /// Fails the call while an edit box or a dialog of the client's own takes the
 /// keys: what is pressed would be typed.
 Script::Fn wantKeysFree(ToolContext& context);

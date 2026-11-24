@@ -58,8 +58,10 @@ public:
     /// Run a chunk for the one value it returns, which `read` is given the
     /// stack index of. The host's own question, run as nobody's code: it
     /// neither taints nor is tainted, and an error in it is the caller's and
-    /// not the interface's. Two seconds at most.
-    bool query(const std::string& code, const std::function<void(lua_State*, int)>& read, std::string& error);
+    /// not the interface's. Two seconds at most. `traced`: the error with the
+    /// stack it was raised on, as a frame script's has it.
+    bool query(const std::string& code, const std::function<void(lua_State*, int)>& read, std::string& error,
+               bool traced = false);
 
     /// Error from the last executeFile/executeString that returned false.
     /// Lets a caller loading many files report them together rather than

@@ -5,11 +5,13 @@
 #include <string>
 
 #include "addons/addon_manager.hpp"
+#include "addons/lua_engine.hpp"
 #include "core/application.hpp"
 #include "core/window.hpp"
 #include "game/game_handler.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/hands.hpp"
+#include "mcp/lua_error.hpp"
 #include "mcp/lua_json.hpp"
 #include "mcp/schema.hpp"
 #include "mcp/tool_context.hpp"
@@ -35,6 +37,7 @@ void enterWorld(ToolContext& context, const json& args, Script& script) {
                                      : Script::Step::Again;
     });
     script.then(Script::seconds(2.0));
+    script.then(worldShown(context, timeout));
     script.then(finishWith(context, after, [&context] {
         json out = {{"client", clientState(context)}, {"pos", vec3Json(playerAt(context))}};
         if (auto* gh = context.app.getGameHandler()) {
@@ -62,14 +65,28 @@ void quit(ToolContext& context, const json& args, Script& script) {
 
 json runLua(ToolContext& context, const json& args) {
     auto* manager = context.app.getAddonManager();
-    if (!manager) throw ToolError("the interface is not loaded");
+    auto* engine = manager ? manager->getLuaEngine() : nullptr;
+    if (!engine || !engine->isInitialized()) throw ToolError("the interface is not loaded");
     const std::string code = args["code"].get<std::string>();
     if (args.value("as_macro", false)) {
         // As /run has it: insecure code, and errors to the interface.
-        manager->runScript(code);
-        return {{"ran", true}};
+        const uint64_t before = context.log.last();
+        const bool ran = manager->runScript(code);
+        json out = {{"ran", ran}};
+        if (json errors = luaErrorsSince(context, before, 10); !errors.empty()) out["errors"] = std::move(errors);
+        return out;
     }
-    return {{"value", queryLua(context, code)}};
+    json value;
+    std::string error;
+    const bool ok = engine->query(
+        code,
+        [&value](lua_State* L, int index) {
+            int budget = 4000;
+            value = luaToJson(L, index, 0, budget);
+        },
+        error, true);
+    if (!ok) throw ToolError(json{{"error", luaErrorJson(parseLuaError(error))}});
+    return {{"value", std::move(value)}};
 }
 
 }  // namespace
@@ -87,7 +104,7 @@ void addClientTools(Toolbox& box) {
                             Tool::Where::Anywhere));
     Tool lua = lookTool("lua",
                         "Run Lua in the interface (the server was started with --mcp-lua): a chunk whose one value is "
-                        "returned, or, as_macro, as /run does.",
+                        "returned, or, as_macro, as /run does. An error comes in parts: source, line, message, stack.",
                         object({required("code", text("a chunk; `return ...` for a value", 8000)),
                                 optional("as_macro", flag("as /run"))}),
                         runLua);

@@ -1477,6 +1477,7 @@ if(NOT ANDROID AND NOT IOS)
         src/mcp/image_encode.cpp
         src/mcp/input_driver.cpp
         src/mcp/json_rpc.cpp
+        src/mcp/lua_error.cpp
         src/mcp/lua_json.cpp
         src/mcp/main_queue.cpp
         src/mcp/options.cpp

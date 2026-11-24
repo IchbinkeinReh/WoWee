@@ -37,7 +37,8 @@ Tool lookTool(std::string name, std::string description, json schema,
             try {
                 return s.done(look(context, args));
             } catch (const ToolError& e) {
-                return s.fail(e.what());
+                s.failed = true;
+                return s.done(e.value());
             }
         });
     };
