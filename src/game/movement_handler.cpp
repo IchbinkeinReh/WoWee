@@ -2812,6 +2812,8 @@ void MovementHandler::sendTeleportAck(const TeleportAckGate::Ack& pending) {
     // (0x007413f0, 0xC7: 0x005f95e0, 0x005fbbc0): a stop and a heartbeat sent
     // here told of a mover that was running on.
     LOG_WARNING("Sent MSG_MOVE_TELEPORT_ACK counter=", pending.counter);
+    // The same event asks the base animation again (0x007413f0 -> 0x0073ed10, 0xC7).
+    moverEvent(Opcode::MSG_MOVE_TELEPORT_ACK, movementInfo.flags, false);
 }
 
 // SMSG_TRANSFER_PENDING: the client's handler is 0x00401480.

@@ -10,6 +10,7 @@
 
 #include <array>
 #include <utility>
+#include <vector>
 
 using replay::Session;
 using replay::UpdateObject;
@@ -481,7 +482,16 @@ TEST_CASE("a teleport is answered with its acknowledgement alone", "[replay][pla
     p.writeFloat(10.0f);
     p.writeFloat(1.0f);
     p.writeUInt32(0);   // fall time
+    // And it is an event of the mover's, which asks for the base animation: teleported out of
+    // a fall onto the ground, the character went on falling on the spot (playtest T50).
+    std::vector<Opcode> events;
+    s.handler().setMoverEventCallback([&](Opcode op, uint32_t flags, bool) {
+        if (op == Opcode::MSG_MOVE_TELEPORT_ACK) CHECK((flags & static_cast<uint32_t>(MovementFlags::FORWARD)) == 0);
+        events.push_back(op);
+    });
     s.receive(p);
+    CHECK(events == std::vector<Opcode>{Opcode::MSG_MOVE_TELEPORT_ACK});
+    s.handler().setMoverEventCallback({});
     CHECK(count(Opcode::MSG_MOVE_TELEPORT_ACK) == 1);
     CHECK(count(Opcode::MSG_MOVE_STOP) == stops);
     CHECK(count(Opcode::MSG_MOVE_HEARTBEAT) == beats);
