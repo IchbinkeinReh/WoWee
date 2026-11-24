@@ -408,7 +408,7 @@ struct Emitter {
         }
 
         if (const std::string* file = node.attr("file")) {
-            line(var + ":SetTexture(" + quote(*file) + ")");
+            line(var + ":SetTexture(" + quote(*file) + ", nil, nil, \"xml\")");
         }
         if (const std::string* mode = node.attr("alphaMode")) {
             if (isTexture) line(var + ":SetBlendMode(" + quote(*mode) + ")");

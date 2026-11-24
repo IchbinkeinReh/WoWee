@@ -4293,6 +4293,10 @@ wowee_add_test(test_cooldown_sweep
     SOURCES test_cooldown_sweep.cpp
             ${CMAKE_SOURCE_DIR}/src/ui/widget_tree.cpp)
 
+# ── test_interface_file ──────────────────────────────────────
+wowee_add_test(test_interface_file
+    SOURCES test_interface_file.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

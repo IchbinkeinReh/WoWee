@@ -1,4 +1,5 @@
 #include <cstring>
+#include "ui/interface_file.hpp"
 #include "ui/widget_renderer.hpp"
 #include "ui/texture_variants.hpp"
 #include "ui/text_markup.hpp"
@@ -140,28 +141,7 @@ std::vector<uint8_t> WidgetRenderer::readTextureFile(const std::string& path,
                                                      std::string& resolvedOut) {
     if (!assets_ || path.empty()) return {};
 
-    // Addons write "Interface\\Foo\\Bar" without the extension as often as with
-    // it, and the real client accepts both.
-    std::string resolved = path;
-    auto endsWith = [&resolved](const char* ext) {
-        if (resolved.size() <= 4) return false;
-        const size_t at = resolved.size() - 4;
-        for (size_t i = 0; i < 4; ++i) {
-            if (std::tolower(static_cast<unsigned char>(resolved[at + i])) != ext[i]) {
-                return false;
-            }
-        }
-        return true;
-    };
-    // .tga means .blp. Blizzard's own markup still names 33 files that way -
-    // the world map's quest icons and small frame edges, the login screen's
-    // rating art - and no .tga has shipped in the archives since long before
-    // 3.3.5. The real client accepts the name and loads the BLP beside it;
-    // taking the extension at its word left every one of those blank, which
-    // looks exactly like art nobody meant to draw.
-    if (endsWith(".tga")) resolved.replace(resolved.size() - 4, 4, ".blp");
-    else if (!endsWith(".blp")) resolved += ".blp";
-
+    std::string resolved = textureFileOf(path);
     auto data = assets_->readFile(resolved);
     if (data.empty()) {
         // The interface is WotLK's; the assets are whichever expansion this

@@ -425,7 +425,7 @@ TEST_CASE("$parent expands against the frame that owns the region",
         "</Layer></Layers></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, "CreateTexture(\"FooFrameBg\", \"BACKGROUND\", true)"));
-    REQUIRE(has(r.lua, "SetTexture(\"Interface\\\\Foo\")"));
+    REQUIRE(has(r.lua, "SetTexture(\"Interface\\\\Foo\""));
     REQUIRE(has(r.lua, "__WoweeXmlSetAllPoints("));
 }
 
@@ -454,7 +454,7 @@ TEST_CASE("a texture's colour is its image, or the tint of its file", "[framexml
         "</Layer></Layers></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
     CHECK(has(r.lua, ":SetTexture(0.000000, 0.000000, 0.000000, 1.000000)"));
-    CHECK(has(r.lua, ":SetTexture(\"Interface\\\\Foo\")"));
+    CHECK(has(r.lua, ":SetTexture(\"Interface\\\\Foo\""));
     CHECK(has(r.lua, ":SetVertexColor(1.000000, 0.000000, 0.000000, 1.000000)"));
     CHECK_FALSE(has(r.lua, ":SetVertexColor(0.000000, 0.000000, 0.000000"));
     CHECK(has(r.lua, ":SetTextColor(0.000000, 1.000000, 0.000000, 1.000000)"));
@@ -919,7 +919,7 @@ TEST_CASE("A virtual Texture becomes a template a region can inherit",
         "</Layer></Layers></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, "__WoweeTemplates[\"DialogButtonNormalTexture\"] = function(self)"));
-    REQUIRE(has(r.lua, "self:SetTexture(\"Interface\\\\Up\")"));
+    REQUIRE(has(r.lua, "self:SetTexture(\"Interface\\\\Up\""));
     REQUIRE(has(r.lua, "__WoweeTemplates[\"DialogButtonNormalTexture\"](__w[2])"));
 }
 

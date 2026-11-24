@@ -9,6 +9,7 @@
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
+#include "ui/interface_file.hpp"
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
@@ -674,6 +675,8 @@ static int lua_Frame_GetID(lua_State* L) {
 // __wid handle into the C++ widget tree that holds its geometry and its art.
 // Without that the methods below were a table of no-ops: an addon could call
 // SetTexture all day and nothing existed to draw.
+
+int lua_Frame_IsDragging(lua_State* L);
 
 namespace {
 
@@ -7522,10 +7525,39 @@ int lua_Region_GetAlpha(lua_State* L) {
     return 1;
 }
 
-// SetTexture takes either a path or a colour, and addons use both freely.
+/// Whether a file of the interface can be had; where there are no files to ask,
+/// it can. Asked once for each name.
+static bool interfaceFileThere(lua_State* L, const std::string& file) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    auto* assets = gh ? gh->services().assetManager : nullptr;
+    if (!assets || !assets->isInitialized()) return true;
+    static std::unordered_map<std::string, bool> known;
+    const auto [it, first] = known.try_emplace(file, true);
+    if (first) it->second = assets->fileExists(file);
+    return it->second;
+}
+/// A texture's file, or the folder the older clients have it in.
+static bool textureFileThere(lua_State* L, const std::string& name) {
+    std::string file = wowee::ui::textureFileOf(name);
+    for (char& c : file) c = c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (interfaceFileThere(L, file)) return true;
+    const size_t at = file.find("gossipframe\\");
+    return at != std::string::npos && interfaceFileThere(L, file.replace(at, 12, "gossip\\"));
+}
+
+// SetTexture (0x0048c6f0) takes either a path or a colour, and addons use both
+// freely: 1, or nil for a file that cannot be had, and then the texture is as it
+// was (0x004859e0). `tile` repeats the image both ways. What the XML names and
+// cannot have is plain green (0x00485f40): the emitter says so by "xml".
 int lua_Texture_SetTexture(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
     if (!w) return 0;
+    const bool named = lua_isstring(L, 2) && !lua_isnumber(L, 2) && lua_tostring(L, 2)[0] != '\0';
+    const bool missing = named && !textureFileThere(L, lua_tostring(L, 2));
+    if (missing && !(lua_gettop(L) >= 5 && lua_isstring(L, 5))) {
+        lua_pushnil(L);
+        return 1;
+    }
     w->emblemMask = false;  // a texture of its own replaces a TabardModel's emblem
     w->portraitDisc = false;  // and an ordinary one replaces a round portrait
     if (w->isUnitPortrait) {  // or a unit's face
@@ -7539,11 +7571,21 @@ int lua_Texture_SetTexture(lua_State* L) {
         w->solid[1] = static_cast<float>(luaL_optnumber(L, 3, 0.0));
         w->solid[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
         w->solid[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+    } else if (missing) {
+        LOG_WARNING("Texture of the XML not found: ", lua_tostring(L, 2));
+        w->solidColor = true;
+        w->texturePath.clear();
+        w->solid[0] = w->solid[2] = 0.0f;
+        w->solid[1] = w->solid[3] = 1.0f;
     } else {
+        // The file it has is left as it is (0x004b53a0), tiled or not.
+        const std::string path = luaL_optstring(L, 2, "");
+        if (path != w->texturePath) w->horizTile = w->vertTile = lua_toboolean(L, 3) != 0;
         w->solidColor = false;
-        w->texturePath = luaL_optstring(L, 2, "");
+        w->texturePath = path;
     }
-    return 0;
+    lua_pushnumber(L, 1.0);
+    return 1;
 }
 // SetPortraitToTexture(texture or "name", "file") (0x00516970): the texture
 // object, or the one of that name; a table that is no object, or an object
@@ -8040,6 +8082,16 @@ int lua_FontString_SetFont(lua_State* L) {
         return luaL_error(L, "ERROR: %s:SetFont(): invalid fontHeight: %f, height must be > 0", who,
                           static_cast<double>(height));
     if (lua_tostring(L, 2)[0] == '\0') return 0;
+    // 0x0048d5b0 -> 0x00483750: nil for a face that cannot be had, and the font
+    // is as it was. An addon's own is taken at its word.
+    {
+        std::string face = lua_tostring(L, 2);
+        for (char& c : face) c = c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (face.rfind("interface\\addons\\", 0) != 0 && !interfaceFileThere(L, face)) {
+            lua_pushnil(L);
+            return 1;
+        }
+    }
     if (auto* m = widgetToRemeasure(L, 1)) {
         if (lua_isstring(L, 2)) m->fontFace = lua_tostring(L, 2);
         // The flags argument, where "OUTLINE" and "THICKOUTLINE" arrive.
@@ -8434,6 +8486,11 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     set("GetBottom", lua_Region_GetBottom);
     set("GetTop", lua_Region_GetTop);
     set("GetRect", lua_Region_GetRect);
+    // Every region has these (0x00ac1480).
+    set("IsProtected", lua_Frame_IsProtected);
+    set("CanChangeProtectedState", lua_Frame_CanChangeProtectedState);
+    set("IsDragging", lua_Frame_IsDragging);
+    set("IsMouseOver", lua_Region_IsMouseOver);
     set("GetPoint", lua_Region_GetPoint);
     set("GetObjectType", lua_Region_GetObjectType);
     set("IsObjectType", lua_Region_IsObjectType);
@@ -8488,6 +8545,7 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("GetFont", lua_FontString_GetFont);
         set("SetFont", lua_FontString_SetFont);
         set("SetTextHeight", lua_FontString_SetTextHeight);
+        set("SetAlphaGradient", lua_FontString_SetAlphaGradient);
         set("GetTextColor", lua_FontString_GetTextColor);
         set("SetText", lua_FontString_SetText);
         set("SetFormattedText", lua_FontString_SetFormattedText);
