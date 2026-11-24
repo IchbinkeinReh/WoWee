@@ -1217,6 +1217,18 @@ void WMORenderer::setInstanceIsTransport(uint32_t instanceId, bool isTransport) 
     instances[idxIt->second].isTransport = isTransport;
 }
 
+bool WMORenderer::instanceHasFace(uint32_t instanceId, uint32_t owner, const glm::vec3& at) const {
+    const auto found = std::find_if(instances.begin(), instances.end(),
+                                    [&](const auto& instance) { return instance.id == instanceId; });
+    if (found == instances.end()) return false;
+    const auto model = loadedModels.find(found->modelId);
+    // As gatherCollisionFacets makes it: the file's number over the group's.
+    if (model == loadedModels.end() || ((model->second.wmoId << 12) & ~0xfffu) != (owner & ~0xfffu)) return false;
+    constexpr float kEdge = 0.1f;
+    return glm::all(glm::greaterThanEqual(at, found->worldBoundsMin - kEdge)) &&
+           glm::all(glm::lessThanEqual(at, found->worldBoundsMax + kEdge));
+}
+
 std::optional<glm::mat4> WMORenderer::getInstanceModelMatrix(uint32_t instanceId) const {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return std::nullopt;

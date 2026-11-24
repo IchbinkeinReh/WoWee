@@ -200,6 +200,9 @@ public:
     void setInstanceHidden(uint32_t instanceId, bool hidden);
     /// The instance's placement, null where there is no such instance.
     [[nodiscard]] std::optional<glm::mat4> getInstanceModelMatrix(uint32_t instanceId) const;
+    /// Whether a face of this owner (gatherCollisionFacets) at this place
+    /// may be the instance's: of its file, and within its bounds.
+    [[nodiscard]] bool instanceHasFace(uint32_t instanceId, uint32_t owner, const glm::vec3& at) const;
     /// The game object highlight (0x00743c70 records the object's GUID; the
     /// WMO whose GUID it is gets the light's ambient added into c29 by
     /// 0x007964a0 / 0x007a8430). One at a time: clear, then set.

@@ -73,6 +73,7 @@ bool holds(ToolContext& context, const json& args, const Aftermath& since) {
         auto* renderer = context.app.getRenderer();
         auto* cc = renderer ? renderer->getCameraController() : nullptr;
         if (!gh) return false;
+        if (until == "loaded") return inWorld(context) && !context.app.loadingScreenUp();
         const auto target = gh->getEntityManager().getEntity(gh->getTargetGuid());
         const auto targetDead = [&] {
             return target && target->getType() != game::ObjectType::GAMEOBJECT &&
@@ -127,7 +128,8 @@ void addWaitTools(Toolbox& box) {
     t.info = {
         .name = "wait",
         .description = "Wait for one thing, or for the time given: an event of the interface, a frame shown or gone, a "
-                       "text on the screen, a chat line, a state of the client or the character.",
+                       "text on the screen, a chat line, a state of the client or the character (`loaded`: in the "
+                       "world, and the loading screen gone).",
         .inputSchema = object(
             {optional("timeout", number("seconds at most, 10 by default", 0.05, 300)),
              optional("event", text("an event's name", 64)), optional("window", text("a frame that is to be shown", 96)),
@@ -137,7 +139,7 @@ void addWaitTools(Toolbox& box) {
              optional("client", choice("", {"login", "char_select", "entering_world", "in_world", "dead", "ghost"})),
              optional("until", choice("", {"target_dead", "no_target", "in_combat", "out_of_combat", "not_casting",
                                            "standing", "grounded", "swimming", "mounted", "dismounted",
-                                           "full_health"}))}),
+                                           "full_health", "loaded"}))}),
         .readOnly = true};
     t.where = Tool::Where::Anywhere;
     t.patienceOf = [](const json& a) { return a.value("timeout", 10.0) + 10.0; };

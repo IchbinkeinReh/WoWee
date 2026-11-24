@@ -62,9 +62,33 @@ std::optional<Hit> castRay(const std::vector<Facet>& facets, const glm::vec3& or
         if (v < -1e-5f || u + v > 1.0f + 1e-5f) continue;
         const float t = glm::dot(e2, q) * inverse;
         if (t < 0.0f || t > reach || (best && t >= best->distance)) continue;
-        best = Hit{.distance = t, .normal = f.n, .kind = f.kind};
+        best = Hit{.distance = t, .normal = f.n, .kind = f.kind, .owner = f.owner};
     }
     return best;
+}
+
+std::optional<Hit> castLine(const std::function<std::optional<std::vector<Facet>>(const glm::vec3& lo,
+                                                                                  const glm::vec3& hi)>& gather,
+                            const glm::vec3& from, const glm::vec3& to, float* known) {
+    constexpr float kStretch = 15.0f;
+    constexpr float kAside = 0.25f;
+    const float length = glm::length(to - from);
+    if (known) *known = 0.0f;
+    if (length < 1e-4f) return std::nullopt;
+    const glm::vec3 along = (to - from) / length;
+    for (float gone = 0.0f; gone < length; gone += kStretch) {
+        const float end = std::min(gone + kStretch, length);
+        const glm::vec3 a = from + along * gone;
+        const glm::vec3 b = from + along * end;
+        const auto facets = gather(glm::min(a, b) - kAside, glm::max(a, b) + kAside);
+        if (!facets) return std::nullopt;
+        if (known) *known = end;
+        if (auto hit = castRay(*facets, a, along, end - gone)) {
+            hit->distance += gone;
+            return hit;
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<Ground> groundAt(const std::vector<Facet>& facets, float x, float y, float feet, float climb) {
@@ -73,7 +97,7 @@ std::optional<Ground> groundAt(const std::vector<Facet>& facets, float x, float 
         if (f.n.z <= 0.05f) continue;
         const auto z = heightOn(f, x, y);
         if (!z) continue;
-        const Ground g{.z = *z, .slopeDegrees = slopeOf(f), .kind = f.kind};
+        const Ground g{.z = *z, .slopeDegrees = slopeOf(f), .kind = f.kind, .owner = f.owner};
         if (better(g, best, feet, climb)) best = g;
     }
     return best;
@@ -102,7 +126,7 @@ Grid groundGrid(const std::vector<Facet>& facets, const glm::vec3& middle, float
                 const glm::vec2 p = grid.place(row, col);
                 const auto z = heightOn(f, p.x, p.y);
                 if (!z) continue;
-                const Ground g{.z = *z, .slopeDegrees = slopeOf(f), .kind = f.kind};
+                const Ground g{.z = *z, .slopeDegrees = slopeOf(f), .kind = f.kind, .owner = f.owner};
                 auto& best = grid.points[static_cast<size_t>(row) * static_cast<size_t>(grid.side) +
                                          static_cast<size_t>(col)];
                 if (better(g, best, middle.z, climb)) best = g;
@@ -129,6 +153,8 @@ Way wayAlong(const std::vector<Facet>& facets, const glm::vec3& feet, const glm:
                 way.clear = gone + hit->distance;
                 way.why = Way::Why::Wall;
                 way.kind = hit->kind;
+                way.owner = hit->owner;
+                way.at = from + glm::vec3(0.0f, 0.0f, height) + along * hit->distance;
                 return way;
             }
         }
@@ -143,6 +169,8 @@ Way wayAlong(const std::vector<Facet>& facets, const glm::vec3& feet, const glm:
             way.clear = gone;
             way.why = Way::Why::Wall;
             way.kind = ground->kind;
+            way.owner = ground->owner;
+            way.at = glm::vec3(to.x, to.y, ground->z);
             return way;
         }
         if (ground->z - z > 0.35f && std::cos(ground->slopeDegrees / kDegrees) < kWalkable) {

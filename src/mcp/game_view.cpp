@@ -14,7 +14,9 @@
 #include "game/game_handler.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/quest_giver_status.hpp"
+#include "game/transport_manager.hpp"
 #include "mcp/tool_context.hpp"
+#include "mcp/world_probe.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/renderer.hpp"
 #include "ui/framexml_takeover.hpp"
@@ -133,8 +135,36 @@ float playerFacing(ToolContext& context) {
         core::coords::characterYawDegToCanonical(renderer->getCharacterYaw()));
 }
 
-glm::vec3 entityAt(const game::Entity& entity) {
+namespace {
+
+/// The transport an entity is, null where it is none.
+const game::ActiveTransport* transportOf(ToolContext& context, const game::Entity& entity) {
+    if (entity.getType() != game::ObjectType::GAMEOBJECT) return nullptr;
+    auto* gh = context.app.getGameHandler();
+    auto* manager = gh ? gh->getTransportManager() : nullptr;
+    return manager ? manager->getTransport(entity.getGuid()) : nullptr;
+}
+
+}  // namespace
+
+glm::vec3 entityAt(ToolContext& context, const game::Entity& entity) {
+    if (const auto* transport = transportOf(context, entity)) {
+        return core::coords::canonicalToServer(transport->position);
+    }
     return core::coords::canonicalToServer(glm::vec3(entity.getX(), entity.getY(), entity.getZ()));
+}
+
+json faceOwnerJson(ToolContext& context, rendering::collision::Facet::Kind kind, uint32_t owner, const glm::vec3& at) {
+    using Kind = rendering::collision::Facet::Kind;
+    json out = {{"of", probe::kindName(kind)}};
+    if (kind != Kind::Building && kind != Kind::Doodad) return out;
+    const uint64_t guid = context.app.gameObjectOfFace(kind == Kind::Building, owner, at);
+    if (guid == 0) return out;
+    out["of"] = "object";
+    out["guid"] = guidText(guid);
+    auto* gh = context.app.getGameHandler();
+    if (const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr) out["name"] = entityName(context, *e);
+    return out;
 }
 
 float turnTo(const glm::vec3& from, float facing, const glm::vec3& at) {
@@ -219,7 +249,7 @@ std::optional<glm::vec2> clickPointOf(ToolContext& context, uint64_t guid, uint6
     if (!gh || !window) return std::nullopt;
     const auto entity = gh->getEntityManager().getEntity(guid);
     if (!entity) return std::nullopt;
-    glm::vec3 centre = entityAt(*entity);
+    glm::vec3 centre = entityAt(context, *entity);
     float radius = 1.0f;
     if (!context.app.getRenderBoundsForGuid(guid, centre, radius)) centre.z += 1.0f;
     radius = std::clamp(radius, 0.2f, 4.0f);
@@ -274,7 +304,7 @@ std::string entityName(ToolContext& context, const game::Entity& entity) {
 bool inLineOfSight(ToolContext& context, const game::Entity& entity) {
     auto* renderer = context.app.getRenderer();
     if (!renderer) return false;
-    glm::vec3 centre = entityAt(entity);
+    glm::vec3 centre = entityAt(context, entity);
     float radius = 0.0f;
     if (!context.app.getRenderBoundsForGuid(entity.getGuid(), centre, radius)) centre.z += 1.0f;
     const glm::vec3 eyes = playerAt(context) + glm::vec3(0.0f, 0.0f, 1.8f);
@@ -286,7 +316,7 @@ bool inLineOfSight(ToolContext& context, const game::Entity& entity) {
 
 json entityJson(ToolContext& context, const game::Entity& entity, bool detail) {
     auto* gh = context.app.getGameHandler();
-    const glm::vec3 at = entityAt(entity);
+    const glm::vec3 at = entityAt(context, entity);
     const glm::vec3 me = playerAt(context);
     json out = {{"guid", guidText(entity.getGuid())},
                 {"type", typeName(entity.getType())},
@@ -352,6 +382,13 @@ json entityJson(ToolContext& context, const game::Entity& entity, bool detail) {
         const auto pointer = gh->gameObjectPointer(entity.getGuid());
         out["usable"] = pointer.interactive;
         if (const auto* info = gh->getCachedGameObjectInfo(g.getEntry())) out["kind"] = objectKind(info->type);
+        if (const auto* transport = transportOf(context, entity)) {
+            json t = {{"spawned_at", vec3Json(core::coords::canonicalToServer(
+                                         glm::vec3(entity.getX(), entity.getY(), entity.getZ())))}};
+            if (!transport->onThisMap) t["on_another_map"] = true;
+            if (gh->getMovementInfo().transportGuid == entity.getGuid()) t["player_aboard"] = true;
+            out["transport"] = std::move(t);
+        }
         if (detail) {
             out["entry"] = g.getEntry();
             out["display"] = g.getDisplayId();
@@ -393,7 +430,7 @@ std::shared_ptr<game::Entity> findEntity(ToolContext& context, const json& args)
         if (!entity || guid == gh->getPlayerGuid()) continue;
         const std::string name = lower(entityName(context, *entity));
         if (name.empty() || name.find(wanted) == std::string::npos) continue;
-        float d = glm::length(entityAt(*entity) - me);
+        float d = glm::length(entityAt(context, *entity) - me);
         // The whole name before a part of one, the living before the dead.
         if (name != wanted) d += 1000.0f;
         if (entity->getType() == game::ObjectType::UNIT &&

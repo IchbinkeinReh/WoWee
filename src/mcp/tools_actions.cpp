@@ -67,7 +67,7 @@ json entityActions(ToolContext& context, double radius) {
     const glm::vec3 me = playerAt(context);
     for (const auto& [guid, e] : gh->getEntityManager().getEntities()) {
         if (!e || guid == gh->getPlayerGuid()) continue;
-        const float d = glm::length(entityAt(*e) - me);
+        const float d = glm::length(entityAt(context, *e) - me);
         if (d <= radius) sorted.emplace_back(d, e);
     }
     std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });

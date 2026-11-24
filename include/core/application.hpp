@@ -174,6 +174,13 @@ public:
     // Render bounds lookup (for click targeting / selection) - delegates to EntitySpawner
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
     [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
+    /// The game object a collision face belongs to, by the face's owner
+    /// (collision::Facet::owner) and a place on it; 0 for the world's own.
+    /// `building`: a map object's face, not a model's.
+    [[nodiscard]] uint64_t gameObjectOfFace(bool building, uint32_t owner, const glm::vec3& at) const;
+    /// A loading screen is drawn over the world: the entry's, until the world
+    /// settles behind it, or a difficulty change's.
+    [[nodiscard]] bool loadingScreenUp() const { return settleScreen_ || difficultyLoadingScreen_; }
     /// Where a world ray first meets the triangles a unit's model draws
     /// (CharacterRenderer::rayHitInstance); none for a unit without one.
     [[nodiscard]] std::optional<float> rayHitUnit(uint64_t guid, const glm::vec3& origin,

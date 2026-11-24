@@ -6,6 +6,7 @@
 // alike. On faces alone, so that it can be tried without a world.
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -21,6 +22,7 @@ struct Hit {
     float distance = 0.0f;
     glm::vec3 normal{0.0f, 0.0f, 1.0f};
     Facet::Kind kind = Facet::Kind::None;
+    uint32_t owner = 0;  ///< Facet::owner
 };
 
 /// The first face a ray runs into from its front, as a motion does.
@@ -28,10 +30,18 @@ struct Hit {
 std::optional<Hit> castRay(const std::vector<Facet>& facets, const glm::vec3& origin, const glm::vec3& direction,
                            float reach);
 
+/// The same for a line of any length, its faces asked for a stretch at a time:
+/// `gather` has those that reach into a box, and nothing where the world is not
+/// loaded - which ends the line; `known` is how far it was looked at.
+std::optional<Hit> castLine(const std::function<std::optional<std::vector<Facet>>(const glm::vec3& lo,
+                                                                                  const glm::vec3& hi)>& gather,
+                            const glm::vec3& from, const glm::vec3& to, float* known = nullptr);
+
 struct Ground {
     float z = 0.0f;
     float slopeDegrees = 0.0f;
     Facet::Kind kind = Facet::Kind::None;
+    uint32_t owner = 0;
 };
 
 /// The faces looking up over a point of the plane: the one to stand on for
@@ -64,6 +74,8 @@ struct Way {
     float clear = 0.0f;
     enum class Why { Reach, Wall, Drop, Steep } why = Why::Reach;
     Facet::Kind kind = Facet::Kind::None;
+    uint32_t owner = 0;
+    glm::vec3 at{0.0f};  ///< where the wall is
 };
 Way wayAlong(const std::vector<Facet>& facets, const glm::vec3& feet, const glm::vec2& direction, float reach,
              float drop);

@@ -8713,6 +8713,10 @@ bool Application::gameObjectDrawsNothing(uint64_t guid) const {
     return entitySpawner_ && entitySpawner_->gameObjectDrawsNothing(guid);
 }
 
+uint64_t Application::gameObjectOfFace(bool building, uint32_t owner, const glm::vec3& at) const {
+    return entitySpawner_ ? entitySpawner_->gameObjectOfFace(building, owner, at) : 0;
+}
+
 std::optional<float> Application::rayHitUnit(uint64_t guid, const glm::vec3& origin, const glm::vec3& direction,
                                              float maxDistance) const {
     if (!entitySpawner_) return std::nullopt;

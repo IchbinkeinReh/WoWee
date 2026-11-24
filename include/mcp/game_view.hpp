@@ -12,6 +12,8 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
+#include "rendering/collision_facets.hpp"
+
 namespace wowee::core { class Application; }
 namespace wowee::game { class Entity; class GameHandler; }
 
@@ -31,7 +33,13 @@ json vec3Json(const glm::vec3& v);
 /// +x and counter-clockwise - the server's orientation.
 glm::vec3 playerAt(ToolContext& context);
 float playerFacing(ToolContext& context);
-glm::vec3 entityAt(const game::Entity& entity);
+/// Where an entity is now: a transport where its model is on its way, which
+/// its entity is not told of.
+glm::vec3 entityAt(ToolContext& context, const game::Entity& entity);
+/// What a face of the world's collision is of (probe::Hit, Ground and Way have
+/// its kind and owner): "ground", "building", "doodad", or "object" with the
+/// game object's guid and name.
+json faceOwnerJson(ToolContext& context, rendering::collision::Facet::Kind kind, uint32_t owner, const glm::vec3& at);
 /// A direction from the player, in degrees clockwise from where it faces:
 /// 0 ahead, 90 to the right, -90 to the left.
 double bearingTo(ToolContext& context, const glm::vec3& at);

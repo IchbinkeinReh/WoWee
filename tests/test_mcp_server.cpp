@@ -505,6 +505,59 @@ TEST_CASE("how far one can go", "[mcp][probe]") {
     CHECK(edge.clear == Catch::Approx(10.0f).margin(1.1));
 }
 
+// A game object's face - a lift's, a door's - is told by its owner.
+TEST_CASE("a face says whose it is", "[mcp][probe]") {
+    auto world = plain();
+    const size_t before = world.size();
+    wall(world, -10, 10);
+    for (size_t i = before; i < world.size(); ++i) {
+        world[i].kind = Facet::Kind::Doodad;
+        world[i].owner = 42;
+    }
+    const auto hit = probe::castRay(world, {0, 0, 1}, {1, 0, 0}, 20);
+    REQUIRE(hit);
+    CHECK(hit->owner == 42);
+    const auto way = probe::wayAlong(world, {0, 0, 0}, {1, 0}, 20, 5);
+    CHECK(way.owner == 42);
+    CHECK(way.at.x == Catch::Approx(5.0f).margin(0.01));
+    quad(world, {-5, -5, 0.2f}, {5, -5, 0.2f}, {5, 5, 0.2f}, {-5, 5, 0.2f}, Facet::Kind::Building);
+    world[world.size() - 1].owner = world[world.size() - 2].owner = 7;
+    CHECK(probe::groundAt(world, 0, 0, 0.5f, 1.0f)->owner == 7);
+    const auto grid = probe::groundGrid(world, {0, 0, 0}, 4, 2, 100);
+    CHECK(grid.at(2, 2)->owner == 7);
+}
+
+TEST_CASE("a long line is looked at a stretch at a time", "[mcp][probe]") {
+    auto world = plain();
+    wall(world, -10, 10);
+    int asked = 0;
+    float most = 0.0f;
+    const auto all = [&](const glm::vec3& lo, const glm::vec3& hi) -> std::optional<std::vector<Facet>> {
+        ++asked;
+        most = std::max(most, hi.x - lo.x);
+        return world;
+    };
+    float known = 0.0f;
+    // Forty yards off: in the third stretch.
+    const auto hit = probe::castLine(all, {-35, 0, 1}, {60, 0, 1}, &known);
+    REQUIRE(hit);
+    CHECK(hit->distance == Catch::Approx(40.0f));
+    CHECK(asked == 3);
+    CHECK(most < 16.0f);
+    // One that meets nothing is looked at to its end.
+    CHECK_FALSE(probe::castLine(all, {-35, 15, 1}, {60, 15, 1}, &known));
+    CHECK(known == Catch::Approx(95.0f));
+    // Where the world is not loaded it ends, and says so.
+    const auto half = [&](const glm::vec3& lo, const glm::vec3&) -> std::optional<std::vector<Facet>> {
+        if (lo.x > -10.0f) return std::nullopt;
+        return world;
+    };
+    CHECK_FALSE(probe::castLine(half, {-35, 0, 1}, {60, 0, 1}, &known));
+    CHECK(known == Catch::Approx(30.0f));
+    CHECK_FALSE(probe::castLine(all, {0, 0, 1}, {0, 0, 1}, &known));
+    CHECK(known == 0.0f);
+}
+
 TEST_CASE("a way goes round what is in the way", "[mcp][walk]") {
     auto world = plain();
     wall(world, -10, 10);

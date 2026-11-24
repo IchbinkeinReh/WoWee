@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/window.hpp"
 #include "game/character.hpp"
+#include "game/entity.hpp"
 #include "game/game_handler.hpp"
 #include "game/zone_area.hpp"
 #include "mcp/game_view.hpp"
@@ -164,6 +165,9 @@ json stateOf(ToolContext& context, const json& args) {
         return out;
     }
     if (!inWorld(context)) return out;
+    // In the world for the realm, and behind a loading screen for the player:
+    // nothing of it can be seen, pointed at or walked on yet.
+    out["loading"] = app.loadingScreenUp();
 
     auto* renderer = app.getRenderer();
     const auto& mi = gh->getMovementInfo();
@@ -180,6 +184,16 @@ json stateOf(ToolContext& context, const json& args) {
     std::snprintf(go, sizeof(go), ".go xyz %.3f %.3f %.3f %u %.4f", me.x, me.y, me.z, gh->getCurrentMapId(),
                   playerFacing(context));
     place["go"] = go;
+    if (mi.transportGuid != 0) {
+        json aboard = {{"guid", guidText(mi.transportGuid)},
+                       {"offset", json::array({rounded(mi.transportX, 2), rounded(mi.transportY, 2),
+                                               rounded(mi.transportZ, 2)})}};
+        if (const auto e = gh->getEntityManager().getEntity(mi.transportGuid)) {
+            aboard["name"] = entityName(context, *e);
+            aboard["pos"] = vec3Json(entityAt(context, *e));
+        }
+        place["transport"] = std::move(aboard);
+    }
     if (auto* water = renderer ? renderer->getWaterRenderer() : nullptr) {
         if (const auto h = water->getWaterHeightAt(me.x, me.y)) place["water_over_feet"] = rounded(*h - me.z, 2);
     }
@@ -247,7 +261,8 @@ json serverInfo(ToolContext& context, const json& args) {
 
 void addStateTools(Toolbox& box) {
     box.push_back(lookTool("state",
-                           "Overview of the client and the player: login / char select / in world / dead, position "
+                           "Overview of the client and the player: login / char select / in world / dead, whether a "
+                           "loading screen is up, the transport it is on, position "
                            "(.gps coordinates), facing, zone, speed and movement flags, camera, clock and weather, "
                            "health, power, casting, auras, target, fps, recent errors, and the cursors of the logs.",
                            schema::object({}), stateOf, Tool::Where::Anywhere));

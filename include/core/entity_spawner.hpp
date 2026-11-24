@@ -200,6 +200,8 @@ public:
     /// A game object whose model is loaded and draws nothing (M2Renderer::
     /// instanceDrawsNothing). False while there is no model yet.
     [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
+    /// The game object a collision face belongs to (Application's).
+    [[nodiscard]] uint64_t gameObjectOfFace(bool building, uint32_t owner, const glm::vec3& at) const;
     /// Where a world ray first meets the triangles a unit's model draws
     /// (CharacterRenderer::rayHitInstance); none for a unit without one.
     [[nodiscard]] std::optional<float> rayHitUnit(uint64_t guid, const glm::vec3& origin,
