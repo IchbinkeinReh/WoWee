@@ -237,4 +237,12 @@ inline float justifyOffset(const char* justifyH, float boxWidth, float lineWidth
     return 0.0f;
 }
 
+/// How tall a string is as it is placed in its box: its lines, the last one
+/// among them though it be empty - a break at the end begins a line, and the
+/// string is measured with it (WidgetRenderer::sizeFontStringWidget). One line
+/// that is not being broken to fit is as tall as its letters.
+[[nodiscard]] inline float placedHeight(std::size_t lines, float lineHeight, float letters, bool brokenToFit) {
+    return brokenToFit || lines > 1 ? lineHeight * static_cast<float>(lines) : letters;
+}
+
 }  // namespace wowee::ui

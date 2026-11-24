@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+using wowee::ui::placedHeight;
 using wowee::ui::WrapRun;
 using wowee::ui::wrapText;
 
@@ -275,4 +276,22 @@ TEST_CASE("a box with no width has nothing to justify in", "[wrap][justify]") {
     // An auto-sized label is as wide as its text and starts where it is put.
     CHECK(justifyOffset("CENTER", 0.0f, 112.0f) == 0.0f);
     CHECK(justifyOffset("RIGHT", 0.0f, 112.0f) == 0.0f);
+}
+
+// The dashes beside the world map's objectives ("-|n"): no width, set at the
+// bottom of a box two lines tall, and drawn in the second of them.
+TEST_CASE("a break at the end is a line of the string's height", "[textwrap]") {
+    const auto lines = [](const std::string& text) {
+        std::vector<WrapRun> runs(1);
+        runs[0].text = text;
+        return wrapText(runs, 0.0f, false, [](const std::string& piece) { return 7.0f * static_cast<float>(piece.size()); }).size();
+    };
+    REQUIRE(lines("-\n") == 2);
+    REQUIRE(lines("-") == 1);
+    // As tall as it is measured, 1.2 a line, whatever its letters come to.
+    CHECK(placedHeight(lines("-\n"), 14.4f, 12.0f, false) == Catch::Approx(28.8f));
+    CHECK(placedHeight(lines("-\n-\n"), 14.4f, 24.0f, false) == Catch::Approx(43.2f));
+    // A single line keeps the height of its letters, unless it is broken to fit.
+    CHECK(placedHeight(1, 14.4f, 12.0f, false) == Catch::Approx(12.0f));
+    CHECK(placedHeight(1, 14.4f, 12.0f, true) == Catch::Approx(14.4f));
 }

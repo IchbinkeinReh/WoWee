@@ -3459,10 +3459,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                                    piece.c_str()).x;
                     }, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                 w->wrappedLines = static_cast<int>(lines.size());
-                if (wrapW > 0.0f) {
-                    extent.x = wrapW;
-                    extent.y = size * 1.2f * static_cast<float>(lines.size());
-                }
+                if (wrapW > 0.0f) extent.x = wrapW;
+                // Measured by its letters alone, a string with a break at its
+                // end was one line shorter here than its box, and one set at
+                // the bottom a line too low (the world map's dashes).
+                extent.y = placedHeight(lines.size(), size * 1.2f, extent.y, wrapW > 0.0f);
             } else {
                 w->wrappedLines = 1;
             }
