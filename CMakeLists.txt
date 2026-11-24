@@ -857,6 +857,7 @@ set(WOWEE_SOURCES
     src/game/chat_handler.cpp
     src/game/chat_spam_filter.cpp
     src/game/interface_text.cpp
+    src/game/chr_names.cpp
     src/game/text_tokens.cpp
     src/game/text_tokens_subject.cpp
     src/game/movement_handler.cpp

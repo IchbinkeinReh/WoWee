@@ -1,134 +1,159 @@
 #include "game/text_tokens.hpp"
 
-#include "game/character.hpp"
-
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
-#include <vector>
 
 namespace wowee {
 namespace game {
 
+namespace {
+
+// __strlwr in the C locale: the ASCII letters alone.
+std::string lowered(std::string s) {
+    for (char& c : s) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return s;
+}
+
+void skipSpaces(const std::string& text, size_t& at) {
+    while (at < text.size() && text[at] == ' ') ++at;
+}
+
+/// `text` from `from` to `to`, without the spaces it ends with.
+void appendPart(std::string& out, const std::string& text, size_t from, size_t to) {
+    while (to > from && text[to - 1] == ' ') --to;
+    if (to > from) out.append(text, from, to - from);
+}
+
+/// 0x00576cd0: `male : female ;` from `at`, and where a third part is there
+/// the word whose gender decides - c the class's, r the race's. Left at the
+/// semicolon; nothing is taken where a colon or it is missing.
+void chooseByGender(std::string& out, const std::string& text, size_t& at, const TextSubject& subject) {
+    skipSpaces(text, at);
+    const size_t colon = at < text.size() ? text.find(':', at) : std::string::npos;
+    if (colon == std::string::npos) return;
+    const size_t end = text.find(';', colon);
+    if (end == std::string::npos) return;
+    size_t third = text.find(':', colon + 1);
+    Gender gender = subject.gender;
+    if (third != std::string::npos && third + 1 < end) {
+        switch (text[third + 1]) {
+            case 'C': case 'c': gender = subject.classGender.value_or(subject.gender); break;
+            case 'R': case 'r': gender = subject.raceGender.value_or(subject.gender); break;
+            default: break;
+        }
+    } else {
+        third = std::string::npos;
+    }
+    if (gender == Gender::MALE) {
+        appendPart(out, text, at, colon);
+    } else {
+        size_t from = colon + 1;
+        skipSpaces(text, from);
+        appendPart(out, text, from, third != std::string::npos ? third : end);
+    }
+    at = end;
+}
+
+uint32_t stateOf(const TextSubject& subject, int32_t id) {
+    return subject.worldState ? subject.worldState(id) : 0u;
+}
+
+std::string durationOf(const TextSubject& subject, char unit, int count) {
+    return subject.duration ? subject.duration(unit, count) : std::to_string(count);
+}
+
+/// 0x00578f20: the token at `at`, just past its '$'. False where it is none.
+bool resolveToken(std::string& out, const std::string& text, size_t& at, const TextSubject& subject) {
+    const size_t numberAt = at;
+    while (at < text.size() && text[at] >= '0' && text[at] <= '9') ++at;
+    const int32_t number =
+        static_cast<int32_t>(std::strtol(text.substr(numberAt, at - numberAt).c_str(), nullptr, 10));
+    const char code = at < text.size() ? text[at] : '\0';
+    switch (code) {
+        case 'A': case 'a':
+            // The description of the spell the text goes with; these go with none.
+            break;
+        case 'B': case 'b': out += '\n'; break;
+        case 'C': out += subject.className; break;
+        case 'c': out += lowered(subject.className); break;
+        case 'R': out += subject.raceName; break;
+        case 'r': out += lowered(subject.raceName); break;
+        case 'N': case 'n': out += subject.name; break;
+        case 'D': case 'd': {
+            // A world state's minutes, as a duration.
+            const double v = static_cast<int32_t>(stateOf(subject, -number));
+            if (v > 1440.0) {
+                out += durationOf(subject, 'D', static_cast<int>(std::lround((v - 1.0) / 1440.0 + 1.0)));
+            } else if (v > 60.0) {
+                out += durationOf(subject, 'H',
+                                  static_cast<int>(std::lround(v / 60.0 + (std::fmod(v, 60.0) >= 30.0 ? 1.0 : 0.0))));
+            } else {
+                out += durationOf(subject, 'M', static_cast<int>(std::lround(v)));
+            }
+            break;
+        }
+        case 'E': case 'e': out += std::to_string(static_cast<int32_t>(stateOf(subject, -number))); break;
+        case 'W': case 'w': out += std::to_string(static_cast<int32_t>(stateOf(subject, number))); break;
+        case 'K': case 'k': {
+            // The time until what a world state says (0x00576e50).
+            const int64_t left = std::max<int64_t>(0, static_cast<int64_t>(stateOf(subject, number)) - subject.serverTime);
+            char buf[32];
+            if (left / 3600 < 1) {
+                std::snprintf(buf, sizeof(buf), "%02d:%02d", static_cast<int>(left % 3600 / 60),
+                              static_cast<int>(left % 60));
+            } else {
+                std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", static_cast<int>(left / 3600),
+                              static_cast<int>(left % 3600 / 60), static_cast<int>(left % 60));
+            }
+            out += buf;
+            break;
+        }
+        case 'G': case 'g':
+        case 'T': case 't':
+            // $t is a rank of honour where the player has one, else the
+            // text's own choice; nobody has one in this expansion.
+            ++at;
+            chooseByGender(out, text, at, subject);
+            break;
+        default:
+            return false;
+    }
+    if (at < text.size()) ++at;
+    return true;
+}
+
+}  // namespace
+
 std::string resolveTextTokens(const std::string& text, const TextSubject& subject) {
-    // Fast path: the vast majority of chat messages contain no $ tokens, so
-    // skip the gender/character lookup, the vector allocations below, and the
-    // unconditional string copy. Returning `text` still constructs the result,
-    // but the caller's by-value receiver was going to do that either way.
-    if (text.find('$') == std::string::npos) {
-        return text;
+    // The vast majority of chat messages contain no $ tokens.
+    if (text.find('$') == std::string::npos) return text;
+
+    // 0x00579590: what is no token leaves its '$' and goes on behind it.
+    std::string result;
+    result.reserve(text.size() + 32);
+    size_t at = 0;
+    while (at < text.size()) {
+        const size_t dollar = text.find('$', at);
+        if (dollar == std::string::npos) break;
+        result.append(text, at, dollar - at);
+        at = dollar + 1;
+        if (!resolveToken(result, text, at, subject)) result += '$';
     }
-
-    const Gender gender = subject.gender;
-    const std::string& playerName = subject.name;
-    const Pronouns pronouns = Pronouns::forGender(gender);
-
-    std::string result = text;
-
-    // Helper to trim whitespace
-    auto trimStr = [](std::string& s) {
-        const char* ws = " \t\n\r";
-        size_t start = s.find_first_not_of(ws);
-        if (start == std::string::npos) { s.clear(); return; }
-        size_t end = s.find_last_not_of(ws);
-        s = s.substr(start, end - start + 1);
-    };
-
-    // Replace $g/$G placeholders first.
-    size_t pos = 0;
-    while ((pos = result.find('$', pos)) != std::string::npos) {
-        if (pos + 1 >= result.length()) break;
-        char marker = result[pos + 1];
-        if (marker != 'g' && marker != 'G') { pos++; continue; }
-
-        size_t endPos = result.find(';', pos);
-        if (endPos == std::string::npos) { pos += 2; continue; }
-
-        std::string placeholder = result.substr(pos + 2, endPos - pos - 2);
-
-        // Split by colons
-        std::vector<std::string> parts;
-        size_t start = 0;
-        size_t colonPos;
-        while ((colonPos = placeholder.find(':', start)) != std::string::npos) {
-            std::string part = placeholder.substr(start, colonPos - start);
-            trimStr(part);
-            parts.push_back(part);
-            start = colonPos + 1;
-        }
-        // Add the last part
-        std::string lastPart = placeholder.substr(start);
-        trimStr(lastPart);
-        parts.push_back(lastPart);
-
-        // Select appropriate text based on gender
-        std::string replacement;
-        if (parts.size() >= 3) {
-            switch (gender) {
-                case Gender::MALE:      replacement = parts[0]; break;
-                case Gender::FEMALE:    replacement = parts[1]; break;
-                case Gender::NONBINARY: replacement = parts[2]; break;
-            }
-        } else if (parts.size() >= 2) {
-            switch (gender) {
-                case Gender::MALE:   replacement = parts[0]; break;
-                case Gender::FEMALE: replacement = parts[1]; break;
-                case Gender::NONBINARY:
-                    replacement = parts[0].length() <= parts[1].length() ? parts[0] : parts[1];
-                    break;
-            }
-        } else {
-            pos = endPos + 1;
-            continue;
-        }
-
-        result.replace(pos, endPos - pos + 1, replacement);
-        pos += replacement.length();
-    }
-
-    const std::string& className = subject.className;
-    const std::string& raceName = subject.raceName;
-
-    // Replace simple placeholders.
-    // $n/$N = player name, $c/$C = class name, $r/$R = race name
-    // $p = subject pronoun (he/she/they)
-    // $o = object pronoun (him/her/them)
-    // $s = possessive adjective (his/her/their)
-    // $S = possessive pronoun (his/hers/theirs)
-    // $b/$B = line break
-    pos = 0;
-    while ((pos = result.find('$', pos)) != std::string::npos) {
-        if (pos + 1 >= result.length()) break;
-
-        char code = result[pos + 1];
-        std::string replacement;
-        switch (code) {
-            case 'n': case 'N': replacement = playerName; break;
-            case 'c': case 'C': replacement = className; break;
-            case 'r': case 'R': replacement = raceName; break;
-            case 'p': replacement = pronouns.subject; break;
-            case 'o': replacement = pronouns.object; break;
-            case 's': replacement = pronouns.possessive; break;
-            case 'S': replacement = pronouns.possessiveP; break;
-            case 'b': case 'B': replacement = "\n"; break;
-            case 'g': case 'G': pos++; continue;
-            default: pos++; continue;
-        }
-
-        result.replace(pos, 2, replacement);
-        pos += replacement.length();
-    }
+    if (at < text.size()) result.append(text, at, std::string::npos);
 
     // WoW markup linebreak token.
-    pos = 0;
-    while ((pos = result.find("|n", pos)) != std::string::npos) {
-        result.replace(pos, 2, "\n");
-        pos += 1;
+    for (const char* mark : {"|n", "|N"}) {
+        size_t pos = 0;
+        while ((pos = result.find(mark, pos)) != std::string::npos) {
+            result.replace(pos, 2, "\n");
+            pos += 1;
+        }
     }
-    pos = 0;
-    while ((pos = result.find("|N", pos)) != std::string::npos) {
-        result.replace(pos, 2, "\n");
-        pos += 1;
-    }
-
     return result;
 }
 

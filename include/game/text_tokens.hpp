@@ -13,6 +13,9 @@
  * and it cannot reach into the UI to do it.
  */
 
+#include <cstdint>
+#include <functional>
+#include <optional>
 #include <string>
 
 #include "game/character.hpp"
@@ -27,21 +30,38 @@ class GameHandler;
 /// exercised without a client attached to it.
 struct TextSubject {
     std::string name = "Adventurer";
+    /// In the client's language and the reader's gender (chr_names.hpp).
     std::string className = "Adventurer";
     std::string raceName = "Unknown";
     Gender gender = Gender::NONBINARY;
+    /// The gender those two words are in, which a phrase may go by instead
+    /// ($g male : female : c;): the reader's where unset.
+    std::optional<Gender> classGender, raceGender;
+    /// A world state's value, for the texts that count something; a count of
+    /// days, hours or minutes ('D', 'H', 'M') in the client's words
+    /// (INT_GENERAL_DURATION_*); and the server's time.
+    std::function<uint32_t(int32_t)> worldState;
+    std::function<std::string(char, int)> duration;
+    int64_t serverTime = 0;
 };
 
 /// The substitution itself.
 std::string resolveTextTokens(const std::string& text, const TextSubject& subject);
 
+/// A character's class and race put into a subject whose gender is set: their
+/// words in the client's language.
+void nameForSubject(GameHandler& gameHandler, TextSubject& subject, uint8_t classId, uint8_t raceId);
+
 /// The logged-in character, as the substitution sees them.
 TextSubject textSubjectFor(GameHandler& gameHandler);
 
-/// Fill in the $-tokens in a piece of server text for the logged-in character.
+/// Fill in the $-tokens in a piece of server text for the logged-in character,
+/// as the client's parser does (0x00579590 -> 0x00578f20).
 ///
-/// $n/$N name, $c/$C class, $r/$R race, $b/$B a line break, $p/$o/$s/$S the
-/// pronouns, and $gmale:female; - or male:female:neutral; - choosing by gender.
+/// $n/$N name, $C class, $R race - in small letters as $c and $r - $b/$B a
+/// line break, $gmale:female; choosing by gender (with :c or :r behind it, the
+/// class's or the race's word's), $<n>w, e, d and k a world state's value, its
+/// negative's, a duration and a time left. Any other '$' stays.
 /// A `|n` is a line break too. Text with no '$' in it comes straight back.
 std::string resolveTextTokens(const std::string& text, GameHandler& gameHandler);
 

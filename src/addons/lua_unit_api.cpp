@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/shapeshift_forms.hpp"
 #include "game/battleground_flag.hpp"
+#include "game/chr_names.hpp"
 #include "game/game_utils.hpp"
 #include "game/grey_triviality.hpp"
 #include "game/bg_score_defs.hpp"
@@ -329,37 +330,14 @@ static int pushDeathState(lua_State* L, bool askDead, bool askGhost) {
 }
 static int lua_UnitIsDead(lua_State* L) { return pushDeathState(L, true, false); }
 
-/// A ChrRaces or ChrClasses name as the client answers it (0x00715970,
-/// 0x007159e0): the localized name in the unit's gender - Name_female or
-/// Name_male, seventeen and thirty-four after Name - the other where that
-/// one is empty, and the plain Name where both are. Empty where the file or
-/// its layout is not to hand.
-static std::string chrRowName(game::GameHandler* gh, const char* file, const char* layoutName,
-                              uint32_t id, int gender) {
-    auto* am = gh ? gh->services().assetManager : nullptr;
-    const auto* layouts = pipeline::getActiveDBCLayout();
-    const auto* layout = layouts ? layouts->getLayout(layoutName) : nullptr;
-    const uint32_t nameF = layout ? layout->tryField("Name") : 0xFFFFFFFFu;
-    auto dbc = am && am->isInitialized() ? am->loadDBCOptional(file) : nullptr;
-    if (!dbc || !dbc->isLoaded() || nameF == 0xFFFFFFFFu || nameF + 34 >= dbc->getFieldCount()) return {};
-    const int32_t row = dbc->findRecordById(id);
-    if (row < 0) return {};
-    const auto r = static_cast<uint32_t>(row);
-    std::string fem = dbc->getString(r, nameF + 17);
-    std::string male = dbc->getString(r, nameF + 34);
-    std::string name = gender == 1 ? (!fem.empty() ? fem : male)
-                     : gender == 0 ? (!male.empty() ? male : fem) : std::string();
-    return !name.empty() ? name : dbc->getString(r, nameF);
-}
-
 std::string localizedRaceName(game::GameHandler* gh, uint32_t raceId, int gender) {
-    std::string name = chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, gender);
+    std::string name = game::chrRaceName(gh ? gh->services().assetManager : nullptr, raceId, gender).name;
     if (name.empty() && raceId > 0 && raceId < 12) name = kLuaRaces[raceId];
     return name;
 }
 
 std::string localizedClassName(game::GameHandler* gh, uint32_t classId, int gender) {
-    std::string name = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId, gender);
+    std::string name = game::chrClassName(gh ? gh->services().assetManager : nullptr, classId, gender).name;
     if (name.empty() && classId < 12) name = kLuaClasses[classId];
     return name;
 }
@@ -409,8 +387,8 @@ static int pushUnitClass(lua_State* L, bool base) {
         return 2;
     }
     // Gendered (0x007159e0) or the row's own name (+0x10).
-    const std::string localized = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId,
-                                             base ? 2 : (unitIsFemale(gh, uidStr) ? 1 : 0));
+    const std::string localized =
+        game::chrClassName(gh->services().assetManager, classId, base ? 2 : (unitIsFemale(gh, uidStr) ? 1 : 0)).name;
     lua_pushstring(L, !localized.empty() ? localized.c_str() : kLuaClasses[classId]);
     lua_pushstring(L, token);
     return 2;
@@ -1349,7 +1327,7 @@ static int lua_UnitRace(lua_State* L) {
         lua_pushnil(L);
         return 2;
     }
-    const std::string localized = chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, unitIsFemale(gh, uid) ? 1 : 0);
+    const std::string localized = game::chrRaceName(gh->services().assetManager, raceId, unitIsFemale(gh, uid) ? 1 : 0).name;
     lua_pushstring(L, !localized.empty() ? localized.c_str() : kLuaRaces[raceId]);
     lua_pushstring(L, kLuaRaceFileNames[raceId]);   // spliced into asset paths
     return 2;

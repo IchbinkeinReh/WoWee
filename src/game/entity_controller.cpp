@@ -5,6 +5,7 @@
 #include "core/env_flag.hpp"
 #include "game/game_handler.hpp"
 #include "game/protocol_constants.hpp"
+#include "game/text_tokens.hpp"
 #include "game/game_utils.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/entity.hpp"
@@ -4886,12 +4887,7 @@ void EntityController::handlePageTextQueryResponse(network::Packet& packet) {
         return;
     }
 
-    std::string playerName;
-    if (auto entity = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
-        if (auto unit = std::dynamic_pointer_cast<Unit>(entity))
-            playerName = unit->getName();
-    }
-    data.text = normalizeWowTextTokens(data.text, playerName);
+    data.text = resolveTextTokens(data.text, owner_);
 
     // Append page if not already collected
     bool alreadyHave = false;

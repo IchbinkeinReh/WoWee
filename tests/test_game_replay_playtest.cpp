@@ -18,6 +18,8 @@ constexpr uint64_t kGiver = 0xF130000BEC00150Eull;
 
 void spawnPlayer(Session& s) {
     s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}, {UF::UNIT_FIELD_LEVEL, 9}});
+    // Not at the map's origin, from where no movement is sent.
+    s.handler().setPosition(-356.4f, -2337.2f, -8.7f);
 }
 
 // PlayerMenu::SendQuestGiverQuestDetails, with nothing rewarded.

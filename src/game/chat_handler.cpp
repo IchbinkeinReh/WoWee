@@ -1449,19 +1449,20 @@ TextSubject ChatHandler::monsterLineSubject(const MessageChatData& data) {
         }
         // Class, race and gender come with the name query's answer. Unknown,
         // they stay neutral rather than borrowing the reader's.
-        if (const uint8_t cls = owner_.lookupPlayerClass(data.receiverGuid)) {
-            subject.className = getClassName(static_cast<Class>(cls));
-        }
-        if (const uint8_t race = owner_.lookupPlayerRace(data.receiverGuid)) {
-            subject.raceName = getRaceName(static_cast<Race>(race));
-        }
         const uint8_t gender = owner_.lookupPlayerGender(data.receiverGuid);
         if (gender == 0) subject.gender = Gender::MALE;
         else if (gender == 1) subject.gender = Gender::FEMALE;
-    } else if (!data.receiverName.empty()) {
-        subject.name = data.receiverName;
-    } else if (const std::string& name = owner_.lookupName(data.receiverGuid); !name.empty()) {
-        subject.name = name;
+        nameForSubject(owner_, subject, owner_.lookupPlayerClass(data.receiverGuid),
+                       owner_.lookupPlayerRace(data.receiverGuid));
+    } else {
+        // Anything but a player is its name for a class and a race too
+        // (0x0072aab0, 0x0072aa70 -> 0x0072a000).
+        if (!data.receiverName.empty()) {
+            subject.name = data.receiverName;
+        } else if (const std::string& name = owner_.lookupName(data.receiverGuid); !name.empty()) {
+            subject.name = name;
+        }
+        subject.className = subject.raceName = subject.name;
     }
     return subject;
 }
