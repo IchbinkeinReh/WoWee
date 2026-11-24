@@ -64,3 +64,20 @@ TEST_CASE("a cast or impact kit's animation, once; the wounds as wounds", "[kit_
     CHECK(ka::onKitPlayed(data, {.type = 1}, 0).kind == Kind::None);
     CHECK(ka::onKitPlayed(data, {.type = ka::kTypeState, .anim = kSpellCastDirected}, 0).kind == Kind::None);
 }
+
+// The player's abilities were a special of our own over their kit's: a kick a sword's
+// swing, or a blow of the shield where one was worn.
+TEST_CASE("a special attack is the one for what is held (0x007385c0)", "[kit_animation]") {
+    CHECK(ka::specialAttack(57, 0, true, false, false) == 57u);
+    CHECK(ka::specialAttack(57, 0, true, true, false) == 58u);
+    CHECK(ka::specialAttack(58, 0, true, false, true) == 57u);
+    CHECK(ka::specialAttack(58, 0, true, true, true) == 57u);
+    CHECK(ka::specialAttack(57, 0, false, false, false) == 118u);
+    CHECK(ka::specialAttack(57, 0, false, false, true) == 57u);
+    // Asked as it is.
+    CHECK(ka::specialAttack(57, 0x2, true, true, false) == 57u);
+    CHECK(ka::specialAttack(57, 0x8, false, false, false) == 57u);
+    // Any other: Kick, Attack1H.
+    CHECK(ka::specialAttack(95, 0, true, true, false) == 95u);
+    CHECK(ka::specialAttack(17, 0, false, false, false) == 17u);
+}

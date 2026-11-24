@@ -64,6 +64,18 @@ struct Action {
 /// by its tier), 0x10 -> 0x8, 0x100 -> 0x20.
 [[nodiscard]] uint32_t askFlags(uint32_t kitFlags);
 
+/// Special1H and Special2H (57, 58) asked of a unit are the special for what it
+/// holds (0x007385c0), unless asked with 0x2 or 0x8: SpecialUnarmed (118) with
+/// nothing in either hand, Special2H with a two-handed weapon and nothing in the
+/// other, else Special1H.
+[[nodiscard]] constexpr uint32_t specialAttack(uint32_t anim, uint32_t askFlags, bool mainHeld, bool mainTwoHanded,
+                                               bool offHeld) {
+    constexpr uint32_t kSpecial1H = 57, kSpecial2H = 58, kSpecialUnarmed = 118;
+    if ((askFlags & 0xau) != 0 || (anim != kSpecial1H && anim != kSpecial2H)) return anim;
+    if (!mainHeld && !offHeld) return kSpecialUnarmed;
+    return mainTwoHanded && !offHeld ? kSpecial2H : kSpecial1H;
+}
+
 /// 0x0073b140 for a kit played on a unit showing `shown` (0x00717260).
 [[nodiscard]] Action onKitPlayed(const anim::AnimationDataTable& data, const KitPlay& kit, int32_t shown);
 

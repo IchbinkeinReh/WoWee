@@ -9,6 +9,7 @@
 #include "game/visible_item_fields.hpp"   // visibleItemEntryField
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
+#include "rendering/animation/kit_animation.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/m2_event_sounds.hpp"
 #include "rendering/melee_sound.hpp"
@@ -196,6 +197,14 @@ void EntitySpawner::onMeleeHit(const game::AttackerStateUpdateData& data) {
     // exertion, by its slot's chance.
     if (const auto attacker = entities.getEntity(hit.attacker); attacker && attacker->isUnit()) {
         const auto& unit = static_cast<const game::Unit&>(*attacker);
+        rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+        const uint32_t instance = unitAnimationInstance(hit.attacker);
+        if (cr && instance != 0 && unit.getHealth() > 0 && (hit.hitInfo & ms::kHitNoAnimation) == 0 &&
+            hit.meleeSpellId == 0) {
+            cr->playAnimation(instance,
+                              ms::swingAnimation((hit.hitInfo & ms::kHitOffhand) != 0, heldItem(unit, 0), heldItem(unit, 1)),
+                              false);
+        }
         if (ms::exertsOnArrival(hit, unit.getHealth() > 0)) playUnitSlot(unit, ms::exertionSlot(hit), false, nullptr);
     }
     // Units gone from the world take what was kept of them along.
@@ -408,6 +417,15 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
         // Its injury, by its slot's chance.
         playUnitSlot(static_cast<const game::Unit&>(*target), *slot, false, nullptr);
     }
+}
+
+uint32_t EntitySpawner::heldSpecialAttack(uint32_t renderInstanceId, uint32_t anim, uint32_t askFlags) const {
+    const uint64_t guid = unitGuidForInstance(renderInstanceId);
+    const auto entity = guid != 0 ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
+    if (!entity || !entity->isUnit()) return anim;
+    const auto main = heldItem(*entity, 0);
+    return rendering::kit_animation::specialAttack(anim, askFlags, main.has_value(), ms::twoHanded(main),
+                                                   heldItem(*entity, 1).has_value());
 }
 
 uint32_t EntitySpawner::unitAnimationInstance(uint64_t guid) const {

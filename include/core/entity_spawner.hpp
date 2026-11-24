@@ -461,6 +461,9 @@ public:
     /// (rendering/melee_sound.hpp).
     void onMeleeHit(const game::AttackerStateUpdateData& data);
     void onMeleeAttackStop(uint64_t attacker);
+    /// What a kit's animation is on the unit an instance draws, by what it holds
+    /// (kit_animation::specialAttack).
+    [[nodiscard]] uint32_t heldSpecialAttack(uint32_t renderInstanceId, uint32_t anim, uint32_t askFlags) const;
     /// The character instance a unit's animations play on, the player's too; 0 for none.
     [[nodiscard]] uint32_t unitAnimationInstance(uint64_t guid) const;
     /// A spell missing a target (SMSG_SPELL_GO): a parry's or block's

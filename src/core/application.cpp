@@ -3892,13 +3892,19 @@ void Application::connectSpellVisualHooks() {
         svs->setKitAnimationSink([this](const rendering::SpellVisualSystem::KitAnimationPlay& play) {
             auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
             if (!cr) return;
-            cr->playKitAnimation(play.renderInstanceId,
-                                 {.type = play.type,
-                                  .startAnim = play.startAnim,
-                                  .anim = play.anim,
-                                  .kitFlags = play.kitFlags,
-                                  .castTime = play.castTime,
-                                  .castKitAnim = play.castKitAnim});
+            rendering::kit_animation::KitPlay kit{.type = play.type,
+                                                  .startAnim = play.startAnim,
+                                                  .anim = play.anim,
+                                                  .kitFlags = play.kitFlags,
+                                                  .castTime = play.castTime,
+                                                  .castKitAnim = play.castKitAnim};
+            const uint32_t asked = rendering::kit_animation::askFlags(kit.kitFlags);
+            for (int32_t* anim : {&kit.startAnim, &kit.anim}) {
+                if (*anim >= 0 && entitySpawner_)
+                    *anim = static_cast<int32_t>(
+                        entitySpawner_->heldSpecialAttack(play.renderInstanceId, static_cast<uint32_t>(*anim), asked));
+            }
+            cr->playKitAnimation(play.renderInstanceId, kit);
         });
         svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
             return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
