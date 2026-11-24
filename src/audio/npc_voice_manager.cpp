@@ -1,3 +1,4 @@
+#include "audio/sound_names.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
@@ -428,6 +429,7 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
         sample.flags = it->second.flags;
     }
     sample.data = assetManager_->readFile(path);
+    sound_names::note(sample.data, path);
 
     if (sample.data.empty()) {
         LOG_WARNING("NPC voice: Failed to load sound data from ", path);

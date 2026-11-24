@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/screen_recorder.hpp"
 #include "game/guild_emblem.hpp"
 #include <optional>
 
@@ -178,13 +179,17 @@ public:
     void startRecording();
     void stopRecording();
     void toggleRecording();
+    /// Where the recording in progress, or the last one, is written; and how
+    /// the last one ended.
+    [[nodiscard]] const std::string& recordingPath() const { return recordingPath_; }
+    [[nodiscard]] const core::ScreenRecorder::Stats& recordingStats() const { return recordingStats_; }
 
 private:
     void applyCameraControlSettings();
     /// Say in the chat why a recording stopped by itself, if one did.
     void reportRecordingFailure();
-    /// Where the recording in progress, or the last one, is being written.
     std::string recordingPath_;
+    core::ScreenRecorder::Stats recordingStats_;
 
     // Injected UI services (Section 3.5 Phase B - replaces getInstance() calls)
     UIServices services_;

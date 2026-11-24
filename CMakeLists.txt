@@ -1496,6 +1496,7 @@ if(NOT ANDROID AND NOT IOS)
         src/mcp/tools_move.cpp
         src/mcp/tools_point.cpp
         src/mcp/tools_shot.cpp
+        src/mcp/tools_sound.cpp
         src/mcp/tools_state.cpp
         src/mcp/tools_terrain.cpp
         src/mcp/tools_ui.cpp

@@ -88,6 +88,7 @@ Server::Server(core::Application& app, const Options& options)
     addCharacterTools(tools_);
     addLogTools(tools_);
     addShotTools(tools_);
+    addSoundTools(tools_);
     addActionsTool(tools_);
     addMoveTools(tools_);
     addPointTools(tools_);

@@ -7,6 +7,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "game/game_handler.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "audio/sound_names.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/advanced_kit.hpp"
@@ -149,6 +150,7 @@ void AudioCallbackHandler::setupCallbacks() {
             // play the server asks for reaches 0x004c6a40 with no params struct at all
             // and the client sets no reach of its own on one (audio/sound_entry.hpp).
             auto data = assetManager_.readFile(entry->path);
+            audio::sound_names::note(data, entry->path);
             if (data.empty()) {
                 LOG_WARNING("AudioCallbackHandler: no clip behind SoundEntries ", soundId, " (", entry->path, ")");
                 return;

@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "audio/sound_names.hpp"
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
 
@@ -44,6 +45,7 @@ bool loadSampleFile(const std::string& path, Sample& sample,
     try {
         sample.data = assets->readFile(path);
         if (!sample.data.empty()) {
+            sound_names::note(sample.data, path);
             sample.loaded = true;
             return true;
         }

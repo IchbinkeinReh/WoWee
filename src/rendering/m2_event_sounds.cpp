@@ -4,6 +4,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "audio/sound_names.hpp"
 #include "audio/advanced_kit.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
@@ -47,8 +48,10 @@ const M2EventSounds::Kit* M2EventSounds::kit(uint32_t soundId, pipeline::AssetMa
             for (uint32_t f = 0; f < 10; ++f) {
                 const std::string name = dbc->getString(row, 3 + f);
                 if (name.empty()) continue;
-                auto data = assets->readFile(dir.empty() ? name : dir + "\\" + name);
+                const std::string path = dir.empty() ? name : dir + "\\" + name;
+                auto data = assets->readFile(path);
                 if (data.empty()) continue;
+                audio::sound_names::note(data, path);
                 loaded.files.push_back(std::move(data));
                 loaded.frequency.push_back(dbc->getUInt32(row, 13 + f));
             }

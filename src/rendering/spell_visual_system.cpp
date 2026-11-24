@@ -21,6 +21,7 @@
 #include "core/application.hpp"
 #include "core/logger.hpp"
 #include "core/weapon_attachment.hpp"
+#include "audio/sound_names.hpp"
 #include "audio/advanced_kit.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
@@ -1477,7 +1478,10 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
             std::array<std::string, 10> files;
             for (uint32_t f = 0; f < files.size(); ++f) files[f] = dbc->getString(row, 3 + f);
             const std::string path = spell_missile::soundEntryFile(dbc->getString(row, 23), files);
-            if (!path.empty()) loaded.data = cachedAssetManager_->readFile(path);
+            if (!path.empty()) {
+                loaded.data = cachedAssetManager_->readFile(path);
+                audio::sound_names::note(loaded.data, path);
+            }
             const float volume = dbc->getFloat(row, 24);
             if (volume > 0.0f) loaded.volume = volume;
             if (dbc->getFieldCount() > 27) {

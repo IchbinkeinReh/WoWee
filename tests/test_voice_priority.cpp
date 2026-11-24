@@ -3,6 +3,7 @@
 
 #include "audio/finite_audio.hpp"
 #include "audio/sound_key.hpp"
+#include "audio/sound_names.hpp"
 #include "audio/sound_slots.hpp"
 #include "audio/voice_priority.hpp"
 
@@ -118,6 +119,20 @@ TEST_CASE("two sounds that differ only within are two", "[audio]") {
     b = a;
     b.push_back(0);
     CHECK(wowee::audio::sound_key::of(a) != wowee::audio::sound_key::of(b));
+}
+
+// A play is handed bytes: whose they are is what was noted as they were read.
+TEST_CASE("a sound is known by its bytes", "[audio]") {
+    namespace sn = wowee::audio::sound_names;
+    const std::vector<uint8_t> step(3000, 1), wind(3000, 2);
+    sn::note(step, "Sound\\Character\\Footsteps\\a.wav");
+    sn::note({}, "nothing.wav");
+    sn::note(wind, "");
+    CHECK(sn::of(wowee::audio::sound_key::of(step)) == "Sound\\Character\\Footsteps\\a.wav");
+    CHECK(sn::of(wowee::audio::sound_key::of(wind)).empty());
+    // The first name it was read by.
+    sn::note(step, "other.wav");
+    CHECK(sn::of(wowee::audio::sound_key::of(step)) == "Sound\\Character\\Footsteps\\a.wav");
 }
 
 TEST_CASE("a loop paused out of reach is still the one its handle is for", "[voice_priority]") {

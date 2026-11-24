@@ -2,6 +2,7 @@
 #include "audio/audio_engine.hpp"
 #include "audio/finite_audio.hpp"
 #include "audio/sound_key.hpp"
+#include "audio/sound_names.hpp"
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/sound_distance.hpp"
@@ -77,6 +78,7 @@ struct DecodedWavCacheEntry {
     ma_uint32 sampleRate = 0;
     ma_uint64 frames = 0;
     std::shared_ptr<std::vector<uint8_t>> pcmData;
+    uint64_t key = 0;
 };
 
 static std::unordered_map<uint64_t, DecodedWavCacheEntry> gDecodedWavCache;
@@ -142,6 +144,7 @@ static bool decodeWavCached(const std::vector<uint8_t>& wavData, DecodedWavCache
     entry.sampleRate = sampleRate;
     entry.frames = framesRead;
     entry.pcmData = pcmData;
+    entry.key = key;
     // Evict oldest half when cache grows too large. 256 entries ≈ 50-100 MB of decoded
     // PCM data depending on file lengths; halving keeps memory bounded while retaining
     // recently-heard sounds (footsteps, UI clicks, combat hits) for instant replay.
@@ -552,7 +555,7 @@ bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume,
     }
     activeSounds_.push_back(
         {sound.release(), audioBuffer.release(), decoded.pcmData, handle, false, 0.0f, false, limit});
-    noteStarted(priority, volume, channel, false, 0.0f);
+    noteStarted(priority, volume, channel, false, 0.0f, decoded.key);
 
     return true;
 }
@@ -601,7 +604,7 @@ uint32_t AudioEngine::playSound2DStoppable(const std::vector<uint8_t>& wavData, 
     uint32_t id = nextSoundId_++;
     if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
     activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, id, held});
-    noteStarted(voice_priority::kDefault, volume, Channel::Own, false, 0.0f);
+    noteStarted(voice_priority::kDefault, volume, Channel::Own, false, 0.0f, decoded.key);
     return id;
 }
 
@@ -695,6 +698,7 @@ bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pi
         return false;
     }
     auto data = assetManager_->readFile(mpqPath);
+    sound_names::note(data, mpqPath);
     if (data.empty()) {
         LOG_WARNING("AudioEngine::playSound2D: failed to load '", mpqPath, "'");
         return false;
@@ -786,7 +790,7 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
     }
     activeSounds_.push_back(
         {sound.release(), audioBuffer.release(), decoded.pcmData, handle, false, maxDistance, false, limit});
-    noteStarted(priority, volume, channel, true, std::max(minDistance, 0.0f));
+    noteStarted(priority, volume, channel, true, std::max(minDistance, 0.0f), decoded.key);
 
     return true;
 }
@@ -798,6 +802,7 @@ bool AudioEngine::playSound3D(const std::string& mpqPath, const glm::vec3& posit
         return false;
     }
     auto data = assetManager_->readFile(mpqPath);
+    sound_names::note(data, mpqPath);
     if (data.empty()) {
         LOG_WARNING("AudioEngine::playSound3D: failed to load '", mpqPath, "'");
         return false;
@@ -857,7 +862,7 @@ uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, co
     if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
     activeSounds_.push_back(
         {sound.release(), audioBuffer.release(), decoded.pcmData, id, held, maxDistance, culled});
-    noteStarted(priority, volume, channel, true, std::max(minDistance, 0.0f));
+    noteStarted(priority, volume, channel, true, std::max(minDistance, 0.0f), decoded.key);
     return id;
 }
 
@@ -1184,8 +1189,10 @@ void AudioEngine::cullByDistance() {
     }
 }
 
-void AudioEngine::noteStarted(int priority, float volume, Channel channel, bool spatial, float minDistance) {
+void AudioEngine::noteStarted(int priority, float volume, Channel channel, bool spatial, float minDistance,
+                              uint64_t key) {
     ActiveSound& active = activeSounds_.back();
+    active.key = key;
     active.priority = priority;
     active.volume = volume;
     active.channel = channel;
@@ -1193,14 +1200,92 @@ void AudioEngine::noteStarted(int priority, float volume, Channel channel, bool 
     active.minDistance = minDistance;
     active.serial = nextSerial_++;
     soundSlots_.added(active.id, activeSounds_.size() - 1);
+    Begun& begun = begun_[begunNext_++ % begun_.size()];
+    begun = {.key = key, .spatial = spatial, .heard = false,
+             .loops = ma_sound_is_looping(active.sound) == MA_TRUE, .volume = volume, .priority = priority,
+             .at = std::chrono::steady_clock::now()};
+    if (spatial) {
+        const ma_vec3f p = ma_sound_get_position(active.sound);
+        begun.position = {p.x, p.y, p.z};
+    }
     if (active.held || active.culled) return;
     if (voice_priority::startsHeard(voicesInUse_, realVoices_)) {
+        begun.heard = true;
         ++voicesInUse_;
         return;
     }
     makeVirtual(active);
     // One kept over a crowd has its voice now.
     if (priority < voice_priority::kDefault) assignVoices();
+}
+
+std::vector<AudioEngine::Shown> AudioEngine::playing() const {
+    std::vector<Shown> out;
+    if (!initialized_) return out;
+    const auto times = [](const ma_sound* sound, Shown& shown) {
+        ma_uint64 cursor = 0, length = 0;
+        ma_uint32 rate = 0;
+        if (ma_sound_get_data_format(sound, nullptr, nullptr, &rate, nullptr, 0) != MA_SUCCESS || rate == 0) return;
+        if (ma_sound_get_cursor_in_pcm_frames(sound, &cursor) == MA_SUCCESS)
+            shown.seconds = static_cast<double>(cursor) / rate;
+        if (ma_sound_get_length_in_pcm_frames(sound, &length) == MA_SUCCESS)
+            shown.length = static_cast<double>(length) / rate;
+    };
+    for (const auto& active : activeSounds_) {
+        if (!voice_priority::stillGoing(active.held, active.culled, goesOn(active))) continue;
+        Shown shown;
+        shown.name = sound_names::of(active.key);
+        shown.spatial = active.spatial;
+        shown.volume = active.volume;
+        shown.loops = ma_sound_is_looping(active.sound) == MA_TRUE;
+        shown.priority = active.priority;
+        shown.heard = !active.held && !active.culled && !active.virtualVoice;
+        shown.why = active.held ? "loading screen" : active.culled ? "out of reach" : active.virtualVoice ? "no voice" : "";
+        if (active.spatial) {
+            const ma_vec3f p = ma_sound_get_position(active.sound);
+            shown.position = {p.x, p.y, p.z};
+            shown.distance = glm::length(shown.position - listenerPosition_);
+        }
+        times(active.sound, shown);
+        out.push_back(std::move(shown));
+    }
+    const auto streamed = [&](const ma_sound* sound, const std::vector<uint8_t>* data, bool held, const char* kind) {
+        if (!sound || !data || (!held && ma_sound_is_playing(sound) != MA_TRUE)) return;
+        Shown shown;
+        shown.name = sound_names::of(sound_key::of(*data));
+        shown.kind = kind;
+        shown.volume = ma_sound_get_volume(sound);
+        shown.loops = ma_sound_is_looping(sound) == MA_TRUE;
+        shown.heard = !held;
+        shown.why = held ? "loading screen" : "";
+        times(sound, shown);
+        out.push_back(std::move(shown));
+    };
+    for (const auto& stream : activeStreams_) streamed(stream.sound, stream.data.get(), stream.held, "stream");
+    streamed(musicSound_, musicData_.get(), false, "music");
+    return out;
+}
+
+std::vector<AudioEngine::Shown> AudioEngine::recent(double seconds) const {
+    std::vector<Shown> out;
+    const auto now = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < begun_.size() && i < begunNext_; ++i) {
+        const Begun& begun = begun_[(begunNext_ - 1 - i) % begun_.size()];
+        const double ago = std::chrono::duration<double>(now - begun.at).count();
+        if (ago > seconds) break;
+        Shown shown;
+        shown.name = sound_names::of(begun.key);
+        shown.spatial = begun.spatial;
+        shown.position = begun.position;
+        if (begun.spatial) shown.distance = glm::length(begun.position - listenerPosition_);
+        shown.volume = begun.volume;
+        shown.priority = begun.priority;
+        shown.loops = begun.loops;
+        shown.heard = begun.heard;
+        shown.ago = ago;
+        out.push_back(std::move(shown));
+    }
+    return out;
 }
 
 void AudioEngine::assignVoices() {

@@ -2,6 +2,7 @@
 #include "core/cinematic_player.hpp"
 
 #include "addons/lua_api_registrations.hpp"
+#include "audio/sound_names.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/audio_engine.hpp"
 #include "core/logger.hpp"
@@ -152,8 +153,10 @@ uint32_t CinematicPlayer::playKit(uint32_t soundId) {
         for (; pick + 1 < names.size() && roll >= weights[pick]; ++pick) roll -= weights[pick];
     }
     const std::string dir = dbc->getString(row, 23);
-    auto data = assets_.readFile(dir.empty() ? names[pick] : dir + "\\" + names[pick]);
+    const std::string file = dir.empty() ? names[pick] : dir + "\\" + names[pick];
+    auto data = assets_.readFile(file);
     if (data.empty()) return 0;
+    audio::sound_names::note(data, file);
     const float volume = dbc->getFloat(row, 24);
     return audio::AudioEngine::instance().playStream(
         std::make_shared<const std::vector<uint8_t>>(std::move(data)), volume > 0.0f ? volume : 1.0f, false);
