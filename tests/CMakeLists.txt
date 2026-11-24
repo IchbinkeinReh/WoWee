@@ -3853,6 +3853,7 @@ if(NOT ANDROID)
     target_sources(test_game_replay PRIVATE test_game_replay_playtest.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_quests.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_macros.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_owner.cpp)
     register_test_target(test_game_replay)
 endif()
 

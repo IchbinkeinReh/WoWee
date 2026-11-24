@@ -17,6 +17,7 @@
 #include "game/opcode_table.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/gate.hpp"
+#include "mcp/owner_guid.hpp"
 #include "mcp/send_guard.hpp"
 #include "mcp/token_file.hpp"
 #include "rendering/renderer.hpp"
@@ -293,7 +294,7 @@ bool Server::sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload) 
         guard.belongsToOtherPlayer = [gh](uint64_t guid) {
             const auto e = gh->getEntityManager().getEntity(guid);
             if (!e) return false;
-            const uint64_t owner = game::unitSummonedByGuid(*e);
+            const uint64_t owner = ownerGuid(*e);
             return owner != 0 && owner != gh->getPlayerGuid() && isPlayerGuid(owner);
         };
     }
