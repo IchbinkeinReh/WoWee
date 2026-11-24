@@ -191,6 +191,10 @@ struct WorldMapFacade::Impl {
     void switchToWorldView();
     void showWorldView();
     void showCosmicView();
+    /// The floor selected of a zone: its DungeonMap row, -1 for none.
+    int shownFloorRow(const Zone& zone) const {
+        return dungeonLevelAreaId == zone.wmaID ? dungeonLevelRowId : zone.defaultDungeonFloorRowId;
+    }
     const std::vector<MapContinent>& continents();
     int indexOfArea(uint32_t wmaId) const;
     void renderImGuiOverlay(const glm::vec3& playerRenderPos,
@@ -590,6 +594,11 @@ void WorldMapFacade::Impl::recenter(const glm::vec3& playerRenderPos) {
                 ? d.data.dungeonMapForChunk(z.mapID, d.playerWmoId, displayPlayerRenderPos.z) : -1;
             d.dungeonLevelAreaId = z.wmaID;
             d.dungeonLevelRowId = row > 0 ? row : -1;
+            // Away from its floors, what is drawn by floors alone is shown on
+            // the zone it is in (0x00547170).
+            const int parent = row < 0 && !z.ownRectangle && z.parentWorldMapID != 0
+                                   ? d.indexOfArea(z.parentWorldMapID) : -1;
+            if (parent >= 0) d.showIndex(parent, ViewLevel::ZONE);
         }
     }
     // The view has only now become the player's zone, and the interface
@@ -1096,7 +1105,8 @@ std::optional<glm::vec2> WorldMapFacade::mapPointOf(uint32_t mapId, float wireX,
             return std::nullopt;
         // The bounds of a zone shown on another continent are moved there with
         // its places. A render position has the wire's axes.
-        uv = renderPosToMapUV(glm::vec3(place.x, place.y, 0.0f), zone.bounds, isContinent);
+        uv = renderPosToMapUV(glm::vec3(place.x, place.y, 0.0f),
+                              isContinent ? zone.bounds : shownBounds(zone, impl_->shownFloorRow(zone)), isContinent);
     }
     // Outside the map it is on some other part of the continent, and a pin
     // clamped to the edge is worse than no pin.

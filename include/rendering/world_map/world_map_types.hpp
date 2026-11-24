@@ -101,6 +101,7 @@ struct DungeonFloor {
     /// ZoomOut lands when it is called from a floor (0x00546a90, and the row's
     /// own field seven). Zero on the rows that name no area.
     uint32_t worldMapAreaId = 0;
+    ZoneBounds bounds;        ///< Its rectangle, in WorldMapArea's terms.
 };
 
 // ── Zone (from WorldMapArea.dbc) ─────────────────────────────
@@ -111,6 +112,9 @@ struct Zone {
     uint32_t areaID = 0;         // 0 = continent level
     std::string areaName;        // texture folder name (from DBC)
     ZoneBounds bounds;
+    /// WorldMapArea has a rectangle for it. One drawn by floors alone has its
+    /// first floor's in `bounds` (Dalaran).
+    bool ownRectangle = true;
     /// The map this row is drawn on - its own map unless WorldMapArea moves it
     /// to another continent (see worldMapDisplayMap).
     uint32_t displayMapID = 0;

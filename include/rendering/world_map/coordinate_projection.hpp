@@ -61,8 +61,8 @@ int findZoneForPlayer(const std::vector<Zone>& zones,
 /// Index of the zone with this AreaID, or -1. Exact, no geometry.
 int findZoneByAreaId(const std::vector<Zone>& zones, uint32_t areaId);
 
-/// Test if a zone spatially belongs to a given continent.
-/// Uses parentWorldMapID when available, falls back to overlap heuristic.
+/// Whether a zone is one of a continent's: shown on its map (0x00547eb0),
+/// whatever parent it names - Dalaran's is the zone below it.
 bool zoneBelongsToContinent(const std::vector<Zone>& zones,
                              int zoneIdx, int contIdx);
 
@@ -71,6 +71,14 @@ bool isRootContinent(const std::vector<Zone>& zones, int idx);
 
 /// Check whether the zone at idx is a leaf continent (parentWorldMapID != 0, areaID == 0).
 bool isLeafContinent(const std::vector<Zone>& zones, int idx);
+
+/// What a zone's map spans with a floor selected: the floor's rectangle, else
+/// the zone's own (0x00544140).
+inline const ZoneBounds& shownBounds(const Zone& zone, int floorRowId) {
+    for (const DungeonFloor& floor : zone.dungeonFloors)
+        if (floorRowId > 0 && static_cast<int>(floor.rowId) == floorRowId) return floor.bounds;
+    return zone.bounds;
+}
 
 /// Where one piece of an explored-area overlay goes on the 1024 by 768 map,
 /// and how much of its file it is.

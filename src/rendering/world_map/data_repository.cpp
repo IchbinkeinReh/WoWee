@@ -348,7 +348,9 @@ void DataRepository::loadZones(const std::string& mapName,
                 if (dungeonDbc->getUInt32(i, 1) != z.mapID) continue;
                 z.dungeonFloors.push_back({dungeonDbc->getUInt32(i, 0),
                                            dungeonDbc->getUInt32(i, 2),
-                                           areaField ? dungeonDbc->getUInt32(i, areaField) : 0u});
+                                           areaField ? dungeonDbc->getUInt32(i, areaField) : 0u,
+                                           {dungeonDbc->getFloat(i, 6), dungeonDbc->getFloat(i, 5),
+                                            dungeonDbc->getFloat(i, 4), dungeonDbc->getFloat(i, 3)}});
             }
             std::sort(z.dungeonFloors.begin(), z.dungeonFloors.end(),
                       [](const DungeonFloor& a, const DungeonFloor& b) {
@@ -390,15 +392,10 @@ void DataRepository::loadZones(const std::string& mapName,
         for (auto& z : zones_) {
             if (z.areaID == 0 || z.dungeonFloor == 0) continue;
             if (!noRectangle(z)) continue;
-            for (uint32_t i = 0; i < dungeonDbc->getRecordCount(); ++i) {
-                if (dungeonDbc->getUInt32(i, 1) != z.mapID ||
-                    dungeonDbc->getUInt32(i, 2) != z.dungeonFloor) {
-                    continue;
-                }
-                z.bounds.locLeft   = dungeonDbc->getFloat(i, 6);
-                z.bounds.locRight  = dungeonDbc->getFloat(i, 5);
-                z.bounds.locTop    = dungeonDbc->getFloat(i, 4);
-                z.bounds.locBottom = dungeonDbc->getFloat(i, 3);
+            z.ownRectangle = false;
+            for (const DungeonFloor& floor : z.dungeonFloors) {
+                if (floor.floorIndex != z.dungeonFloor) continue;
+                z.bounds = floor.bounds;
                 break;
             }
         }

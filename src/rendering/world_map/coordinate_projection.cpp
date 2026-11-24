@@ -222,49 +222,13 @@ int findZoneForPlayer(const std::vector<Zone>& zones,
 
 // ── Zone–continent relationship ──────────────────────────────
 
-bool zoneBelongsToContinent(const std::vector<Zone>& zones,
-                             int zoneIdx, int contIdx) {
+bool zoneBelongsToContinent(const std::vector<Zone>& zones, int zoneIdx, int contIdx) {
     if (zoneIdx < 0 || zoneIdx >= static_cast<int>(zones.size())) return false;
     if (contIdx < 0 || contIdx >= static_cast<int>(zones.size())) return false;
-
-    const auto& z = zones[zoneIdx];
-    const auto& cont = zones[contIdx];
-    if (z.areaID == 0) return false;
-
-    // Prefer explicit parent link if available
-    if (z.parentWorldMapID != 0 && cont.wmaID != 0)
-        return z.parentWorldMapID == cont.wmaID;
-
-    // Fallback: spatial overlap heuristic
-    auto rectMinX = [](const Zone& a) { return std::min(a.bounds.locLeft, a.bounds.locRight); };
-    auto rectMaxX = [](const Zone& a) { return std::max(a.bounds.locLeft, a.bounds.locRight); };
-    auto rectMinY = [](const Zone& a) { return std::min(a.bounds.locTop, a.bounds.locBottom); };
-    auto rectMaxY = [](const Zone& a) { return std::max(a.bounds.locTop, a.bounds.locBottom); };
-
-    float zMinX = rectMinX(z), zMaxX = rectMaxX(z);
-    float zMinY = rectMinY(z), zMaxY = rectMaxY(z);
-    if ((zMaxX - zMinX) < 0.001f || (zMaxY - zMinY) < 0.001f) return false;
-
-    int bestContIdx = -1;
-    float bestOverlap = 0.0f;
-    for (int i = 0; i < static_cast<int>(zones.size()); i++) {
-        const auto& c = zones[i];
-        if (c.areaID != 0) continue;
-        float cMinX = rectMinX(c), cMaxX = rectMaxX(c);
-        float cMinY = rectMinY(c), cMaxY = rectMaxY(c);
-        if ((cMaxX - cMinX) < 0.001f || (cMaxY - cMinY) < 0.001f) continue;
-
-        float ox = std::max(0.0f, std::min(zMaxX, cMaxX) - std::max(zMinX, cMinX));
-        float oy = std::max(0.0f, std::min(zMaxY, cMaxY) - std::max(zMinY, cMinY));
-        float overlap = ox * oy;
-        if (overlap > bestOverlap) { bestOverlap = overlap; bestContIdx = i; }
-    }
-    if (bestContIdx >= 0) return bestContIdx == contIdx;
-
-    float centerX = (z.bounds.locLeft + z.bounds.locRight) * 0.5f;
-    float centerY = (z.bounds.locTop + z.bounds.locBottom) * 0.5f;
-    return centerX >= rectMinX(cont) && centerX <= rectMaxX(cont) &&
-           centerY >= rectMinY(cont) && centerY <= rectMaxY(cont);
+    const Zone& zone = zones[static_cast<size_t>(zoneIdx)];
+    const Zone& continent = zones[static_cast<size_t>(contIdx)];
+    return zone.areaID != 0 && continent.areaID == 0 && continent.wmaID != 0 &&
+           zone.displayMapID == continent.mapID;
 }
 
 // ── Overlay layout ───────────────────────────────────────────

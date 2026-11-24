@@ -86,22 +86,29 @@ TEST_CASE("renderPosToMapUV: continent applies vertical offset", "[world_map][co
 
 // ── zoneBelongsToContinent ───────────────────────────────────
 
-TEST_CASE("zoneBelongsToContinent: parent match", "[world_map][coordinate_projection]") {
+// Dalaran, whose parent is the zone below it, opened the continent.
+TEST_CASE("a zone is its continent's by the map it is shown on", "[world_map][coordinate_projection]") {
     std::vector<Zone> zones;
-    // Continent at index 0
-    zones.push_back(makeZone(1, 0, 5000.0f, -5000.0f, 5000.0f, -5000.0f, 0, 0, "EK"));
-    // Zone at index 1: parentWorldMapID matches continent's wmaID
-    zones.push_back(makeZone(2, 100, 1000.0f, -1000.0f, 1000.0f, -1000.0f, 0, 1, "Elwynn"));
-
-    REQUIRE(zoneBelongsToContinent(zones, 1, 0) == true);
+    zones.push_back(makeZone(485, 0, 9217.0f, -8534.0f, 10593.0f, -1240.0f, 571, 0, "Northrend"));
+    zones.push_back(makeZone(510, 2817, 1443.0f, -1279.0f, 6502.0f, 4687.0f, 571, 0, "CrystalsongForest"));
+    zones.push_back(makeZone(504, 4395, 0.0f, 0.0f, 0.0f, 0.0f, 571, 510, "Dalaran"));
+    zones.push_back(makeZone(30, 12, 1535.0f, -1935.0f, -7939.0f, -10254.0f, 0, 0, "Elwynn"));
+    zones[0].mapID = zones[1].mapID = zones[2].mapID = 571;
+    CHECK(zoneBelongsToContinent(zones, 1, 0));
+    CHECK(zoneBelongsToContinent(zones, 2, 0));
+    CHECK_FALSE(zoneBelongsToContinent(zones, 3, 0));
+    CHECK_FALSE(zoneBelongsToContinent(zones, 0, 0));
+    CHECK_FALSE(zoneBelongsToContinent(zones, 2, 1));
 }
 
-TEST_CASE("zoneBelongsToContinent: no relation", "[world_map][coordinate_projection]") {
-    std::vector<Zone> zones;
-    zones.push_back(makeZone(1, 0, 5000.0f, -5000.0f, 5000.0f, -5000.0f, 0, 0, "EK"));
-    zones.push_back(makeZone(99, 100, 1000.0f, -1000.0f, 1000.0f, -1000.0f, 0, 50, "Far"));
-
-    REQUIRE(zoneBelongsToContinent(zones, 1, 0) == false);
+TEST_CASE("a floor's map spans the floor", "[world_map][coordinate_projection]") {
+    Zone dalaran = makeZone(504, 4395, 1052.5f, 222.5f, 6066.7f, 5513.3f, 571, 510, "Dalaran");
+    dalaran.dungeonFloors = {{27, 1, 504, {1052.5f, 222.5f, 6066.7f, 5513.3f}},
+                             {26, 2, 504, {915.9f, 352.6f, 5975.3f, 5599.9f}}};
+    CHECK(shownBounds(dalaran, 27).locLeft == 1052.5f);
+    CHECK(shownBounds(dalaran, 26).locLeft == 915.9f);
+    CHECK(shownBounds(dalaran, 26).locBottom == 5599.9f);
+    CHECK(shownBounds(dalaran, -1).locLeft == 1052.5f);
 }
 
 TEST_CASE("zoneBelongsToContinent: out of bounds returns false", "[world_map][coordinate_projection]") {
