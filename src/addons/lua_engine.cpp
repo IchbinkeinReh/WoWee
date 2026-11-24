@@ -1,4 +1,5 @@
 #include "addons/lua_engine.hpp"
+#include "addons/lua_arg_guard.hpp"
 #include "addons/lua_std_libs.hpp"
 #include "addons/missing_api_rule.hpp"
 #include "addons/binding_lookup.hpp"
@@ -11146,7 +11147,10 @@ bool LuaEngine::initialize() {
     registerCoreAPI();
     registerEventAPI();
 
-    if (!game::isPreWotlk()) dropForeignGlobals(L_);
+    if (!game::isPreWotlk()) {
+        dropForeignGlobals(L_);
+        guardArguments(L_, argGuards());
+    }
 
     // Last, so every bootstrap block above reads a _G that answers honestly.
     installMissingApiFallback();

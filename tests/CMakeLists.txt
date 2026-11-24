@@ -656,6 +656,7 @@ register_test_target(test_green_range)
 add_executable(test_lua_std_libs
     test_lua_std_libs.cpp
     ${CMAKE_SOURCE_DIR}/src/addons/lua_std_libs.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_arg_guard.cpp
 )
 target_include_directories(test_lua_std_libs PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_lua_std_libs SYSTEM PRIVATE

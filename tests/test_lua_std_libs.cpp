@@ -9,6 +9,7 @@ extern "C" {
 #include "lualib.h"
 }
 
+#include "addons/lua_arg_guard.hpp"
 #include "addons/lua_std_libs.hpp"
 #include "addons/missing_api_rule.hpp"
 
@@ -155,4 +156,45 @@ TEST_CASE("the functions of other clients are taken out", "[lua]") {
     // The client's own stay.
     for (const char* kept : {"GetSpellInfo", "IsPassiveSpell"})
         CHECK(s.run(std::string("return type(") + kept + ")") == "function");
+}
+
+TEST_CASE("the getters raise their usage lines", "[lua]") {
+    State s;
+    s.run("UnitName = function(...) return 'called', ... end "
+          "GetContainerItemInfo = function(...) return 'called', ... end "
+          "GetLFDChoiceOrder = function(...) return 'called', select('#', ...) end "
+          "GetItemInfo = function(...) return 'called', ... end");
+    wowee::addons::guardArguments(s.L, wowee::addons::argGuards());
+    const auto raises = [&s](const std::string& call, const std::string& line) {
+        const std::string got = s.run("return " + call);
+        return got.find(line) != std::string::npos && got.rfind("error: ", 0) == 0;
+    };
+    CHECK(raises("UnitName()", "Usage: UnitName(\"unit\")"));
+    CHECK(raises("UnitName({})", "Usage: UnitName(\"unit\")"));
+    CHECK(s.run("return UnitName('player')") == "called player");
+    // Every argument asked for, and what goes past them handed on.
+    CHECK(raises("GetContainerItemInfo(0)", "Usage: GetContainerItemInfo(index, slot)"));
+    CHECK(raises("GetContainerItemInfo('bag', 1)", "Usage: GetContainerItemInfo(index, slot)"));
+    CHECK(s.run("return GetContainerItemInfo(0, '3', nil, 4)") == "called 0 3 nil 4");
+    // A table or nothing.
+    CHECK(raises("GetLFDChoiceOrder(1)", "Usage: GetLFDChoiceOrder([table])"));
+    CHECK(s.run("return GetLFDChoiceOrder()") == "called 0");
+    CHECK(s.run("return GetLFDChoiceOrder({})") == "called 1");
+    CHECK(raises("GetItemInfo()", "Usage: GetItemInfo(itemID|\"name\"|\"itemlink\")"));
+    CHECK(s.run("return GetItemInfo(25)") == "called 25");
+    // An error names the line that called.
+    CHECK(s.run("return UnitName()").find(":1:") != std::string::npos);
+    CHECK(s.run("return type(UnitHealth)") == "nil");   // not there, not made
+}
+
+TEST_CASE("the usage lines are whole", "[lua]") {
+    std::set<std::string> names;
+    for (const auto& guard : wowee::addons::argGuards()) {
+        CHECK(names.insert(guard.name).second);
+        const std::string arguments = guard.arguments;
+        CHECK_FALSE(arguments.empty());
+        CHECK(arguments.find_first_not_of("nsto") == std::string::npos);
+        CHECK(std::string(guard.usage).rfind("Usage: ", 0) == 0);
+    }
+    CHECK(names.size() > 100);
 }
