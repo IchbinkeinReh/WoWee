@@ -1678,9 +1678,9 @@ void SocialHandler::queryServerTime(bool announce) {
     LOG_INFO("Requested server time");
 }
 
-void SocialHandler::requestPlayedTime() {
+void SocialHandler::requestPlayedTime(bool forChat) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    auto packet = RequestPlayedTimePacket::build(true);
+    auto packet = RequestPlayedTimePacket::build(forChat);
     owner_.getSocket()->send(packet);
     LOG_INFO("Requested played time");
 }

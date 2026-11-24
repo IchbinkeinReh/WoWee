@@ -6,6 +6,8 @@
 #include "game/quest_objectives.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -162,4 +164,28 @@ TEST_CASE("item objectives are counted off the bags and leave out the quest's ow
     REQUIRE(lines.size() == 1);
     CHECK(lines[0].text.find("1/1") != std::string::npos);
     CHECK(lines[0].finished);
+}
+
+// Not a quest's, but of the same kind: what the client asks by itself. The time
+// played went to the chat at every press of the character window's key.
+TEST_CASE("the time played is asked for quietly as the player is made", "[replay][played]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    auto sent = s.sent().of(Opcode::CMSG_PLAYED_TIME);
+    REQUIRE(sent.size() == 1);
+    REQUIRE(sent[0].getData().size() == 1);
+    CHECK(sent[0].getData()[0] == 0);
+
+    s.handler().requestPlayedTime();   // RequestTimePlayed
+    sent = s.sent().of(Opcode::CMSG_PLAYED_TIME);
+    REQUIRE(sent.size() == 2);
+    CHECK(sent[1].getData()[0] == 1);
+}
+
+// In the 12340 interface RequestTimePlayed is /played's alone (chatframe.lua).
+TEST_CASE("no key asks for the time played", "[replay][played]") {
+    std::ifstream in(std::string(WOWEE_SOURCE_DIR) + "/src/ui/game_screen.cpp");
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    REQUIRE(text.size() > 1000);
+    CHECK(text.find("requestPlayedTime") == std::string::npos);
 }

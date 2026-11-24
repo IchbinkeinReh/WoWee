@@ -2102,8 +2102,8 @@ uint32_t GameHandler::getSecondsUntilDailyReset() const {
     return socialHandler_ ? socialHandler_->getSecondsUntilDailyReset() : 0u;
 }
 
-void GameHandler::requestPlayedTime() {
-    if (socialHandler_) socialHandler_->requestPlayedTime();
+void GameHandler::requestPlayedTime(bool forChat) {
+    if (socialHandler_) socialHandler_->requestPlayedTime(forChat);
 }
 
 void GameHandler::queryWho(const std::string& playerName) {

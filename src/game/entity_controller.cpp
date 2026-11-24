@@ -2699,6 +2699,10 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         // The active player made: 0x006e6150 -> 0x00528010 -> 0x005cb900,
         // the guild rights asked for with PLAYER_GUILDID now known.
         owner_.onPlayerEnteredWorldGuild();
+        // The time played, asked for quietly (0x006e6b40): what is refundable
+        // and what an item says of it count from the answer. The earlier
+        // clients' answer has no byte that keeps it from the chat.
+        if (!isPreWotlk()) owner_.requestPlayedTime(false);
         // ...and, from the unit's own creation (0x0072e3a0 -> 0x006d66e0),
         // PVPQUEUE_ANYWHERE_UPDATE_AVAILABLE (event 0x26f): the battleground
         // queue can be asked about from anywhere again.

@@ -1843,16 +1843,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
         }
 
         if (!textFocus) {
-            // Toggle character screen (C) and inventory/bags (I)
-            if (KeybindingManager::getInstance().isActionPressed(KeybindingManager::Action::TOGGLE_CHARACTER_SCREEN)) {
-                // The route table in application.cpp calls ToggleCharacter for
-                // this key. Calling it here as well was the whole of a bug
-                // reported three times: IsKeyPressed does not consume, so both
-                // sites saw the same press and toggled in the same frame -
-                // open, then shut, and nothing on screen.
-                if (gameHandler.isConnected()) gameHandler.requestPlayedTime();
-            }
-
+            // Inventory/bags (I). The character screen (C) is the route table's
+            // in application.cpp alone, as TOGGLECHARACTER0 in bindings.xml is
+            // a ToggleCharacter and nothing more.
             if (KeybindingManager::getInstance().isActionPressed(KeybindingManager::Action::TOGGLE_INVENTORY)) {
                 // ToggleAllBags is a later addition and is not in this
                 // FrameXML, so this key did nothing at all once the bags were

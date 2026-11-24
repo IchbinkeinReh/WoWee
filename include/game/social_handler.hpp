@@ -91,7 +91,9 @@ public:
     /// Counted down from when the answer arrived rather than stored raw, since
     /// the reply is asked for once and read for the rest of the session.
     [[nodiscard]] uint32_t getSecondsUntilDailyReset() const;
-    void requestPlayedTime();
+    /// CMSG_PLAYED_TIME: for the chat (/played) or, as the player's unit is
+    /// made, to know it only (0x006e6b40 sends the byte as 0).
+    void requestPlayedTime(bool forChat);
     void queryWho(const std::string& playerName = "");
     [[nodiscard]] uint32_t getTotalTimePlayed() const { return totalTimePlayed_; }
     /// The played time now (0x006cf440): the last SMSG_PLAYED_TIME total plus

@@ -856,7 +856,7 @@ public:
     void sendZoneUpdate(uint32_t zoneId);
     /// Seconds until the daily quest reset, or 0 if the server has not said.
     uint32_t getSecondsUntilDailyReset() const;
-    void requestPlayedTime();
+    void requestPlayedTime(bool forChat = true);
     void queryWho(const std::string& playerName = "");
     uint32_t getTotalTimePlayed() const;
     /// 0x006cf440: played time now, -1 before SMSG_PLAYED_TIME has come.
