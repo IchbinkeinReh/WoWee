@@ -189,3 +189,22 @@ TEST_CASE("a unit parries with what it holds (0x0073b050)", "[melee_landing]") {
     CHECK(ms::parryAnimation(weapon(13), true, true) == 20u);
     CHECK_FALSE(ms::parryAnimation(weapon(2), true, false).has_value());
 }
+
+// A creature or another player swung whatever its model had, a one-handed swing first;
+// the player's hands took turns.
+TEST_CASE("a unit swings with the weapon of the hand that swings (0x00755130)", "[melee_sound]") {
+    const auto weapon = [](uint32_t subClass) { return ms::Item{ms::kClassWeapon, subClass, -1, 0}; };
+    const ms::Item shield{ms::kClassArmor, 6, -1, 0};
+    CHECK(ms::swingAnimation(false, std::nullopt, std::nullopt) == 16u);
+    CHECK(ms::swingAnimation(false, weapon(7), shield) == 17u);
+    CHECK(ms::swingAnimation(false, weapon(8), std::nullopt) == 18u);
+    CHECK(ms::swingAnimation(false, weapon(8), weapon(8)) == 17u);
+    CHECK(ms::swingAnimation(false, weapon(6), std::nullopt) == 19u);
+    CHECK(ms::swingAnimation(false, weapon(10), std::nullopt) == 19u);
+    CHECK(ms::swingAnimation(false, weapon(15), std::nullopt) == 85u);
+    CHECK(ms::swingAnimation(false, weapon(13), weapon(13)) == 16u);
+    CHECK(ms::swingAnimation(true, weapon(7), weapon(7)) == 87u);
+    CHECK(ms::swingAnimation(true, weapon(7), weapon(15)) == 88u);
+    CHECK(ms::swingAnimation(true, std::nullopt, std::nullopt) == 117u);
+    CHECK(ms::swingAnimation(true, weapon(7), shield) == 117u);
+}

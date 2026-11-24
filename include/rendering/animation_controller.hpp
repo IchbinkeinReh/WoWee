@@ -7,7 +7,6 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include "rendering/animation/footstep_driver.hpp"
-#include "rendering/animation/weapon_type.hpp"
 #include "rendering/animation/body_yaw.hpp"
 #include "rendering/animation/mount_motion.hpp"
 
@@ -68,20 +67,6 @@ public:
     // ── Combat ─────────────────────────────────────────────────────────────
     void resetCombatVisualState();
 
-    // ── Melee combat ───────────────────────────────────────────────────────
-    void triggerMeleeSwing();
-    /// inventoryType: WoW inventory type (0=unarmed, 13=1H, 17=2H, 21=main-hand, …)
-    /// is2HLoose: true for polearms/staves (use ATTACK_2H_LOOSE instead of ATTACK_2H)
-    /// isFist/isDagger describe the main hand; offHandIsFist/offHandIsDagger
-    /// describe the off-hand weapon, which picks the off-hand swing.
-    void setEquippedWeaponType(uint32_t inventoryType, bool is2HLoose = false,
-                               bool isFist = false, bool isDagger = false,
-                               bool hasOffHand = false, bool hasShield = false,
-                               bool offHandIsFist = false,
-                               bool offHandIsDagger = false);
-    /// Play a special attack animation for a melee ability (spellId → SPECIAL_1H/2H/SHIELD_BASH/WHIRLWIND)
-    void triggerSpecialAttack(uint32_t spellId);
-
     // ── Turning on the spot ──────────────────────────────────────────────
     /// The shuffle the player's body yaw asks for this frame (Renderer,
     /// body_yaw::turnShuffle), played by the locomotion while standing.
@@ -91,11 +76,6 @@ public:
     /// body yaw, lagging the facing and shuffled after it as a standing
     /// unit's is - the mount is the unit's model (0x0073dab0).
     void setMountBodyYaw(float degrees) { mountBodyYawDeg_ = degrees; hasMountBodyYaw_ = true; }
-
-    // ── Ranged combat ──────────────────────────────────────────────────────
-    void setEquippedRangedType(RangedWeaponType type);
-    /// Trigger a ranged shot animation (Auto Shot, Shoot, Throw)
-    void triggerRangedShot();
 
     // ── Stand state ────────────────────────────────────────────────────────
     // WoW UnitStandStateType constants
@@ -140,11 +120,6 @@ private:
 
     // ── SFX transition state (delegated to SfxStateDriver) ───────────────
 
-    // ── Melee combat (needs renderer for sequence queries) ───────────────
-    uint32_t meleeAnimId_ = 0;
-    WeaponLoadout weaponLoadout_;
-    bool meleeOffHandTurn_ = false;
-
     // ── Mount state (positioning needs renderer) ─────────────────────────
     uint32_t mountInstanceId_ = 0;
     float mountHeightOffset_ = 0.0f;
@@ -163,7 +138,6 @@ private:
     bool hasMountBodyYaw_ = false;
 
     // ── Private helpers ──────────────────────────────────────────────────
-    uint32_t resolveMeleeAnimId();
     void updateMount(float deltaTime);
     void applyMountPositioning(float mountBob, float mountRoll, float characterYaw);
 };

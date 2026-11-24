@@ -192,7 +192,8 @@ void EntitySpawner::onMeleeHit(const game::AttackerStateUpdateData& data) {
     }
     settleKeptMeleeHit(hit.attacker);
     pendingMeleeHits_[hit.attacker] = hit;
-    // 0x00755130: the attacker's exertion, by its slot's chance.
+    // 0x00755130: the attacker's swing, by the weapon that swings, and its
+    // exertion, by its slot's chance.
     if (const auto attacker = entities.getEntity(hit.attacker); attacker && attacker->isUnit()) {
         const auto& unit = static_cast<const game::Unit&>(*attacker);
         if (ms::exertsOnArrival(hit, unit.getHealth() > 0)) playUnitSlot(unit, ms::exertionSlot(hit), false, nullptr);

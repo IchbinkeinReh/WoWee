@@ -2065,11 +2065,6 @@ public:
     using GhostStateCallback = std::function<void(bool isGhost)>;
     void setGhostStateCallback(GhostStateCallback cb) { ghostStateCallback_ = std::move(cb); }
 
-    // Melee swing callback (for driving animation/SFX)
-    // spellId: 0 = regular auto-attack swing, non-zero = melee ability (special attack)
-    using MeleeSwingCallback = std::function<void(uint32_t spellId)>;
-    void setMeleeSwingCallback(MeleeSwingCallback cb) { meleeSwingCallback_ = std::move(cb); }
-
     // Snap the character to face the camera's current look direction and return the
     // resulting canonical orientation. Used by fishing so the bobber lands in front of
     // where the player is looking: while standing still the character yaw does not track
@@ -2167,10 +2162,6 @@ public:
     using UnitMoveFlagsCallback =
         std::function<void(uint64_t guid, uint32_t moveFlags, uint32_t mask)>;
     void setUnitMoveFlagsCallback(UnitMoveFlagsCallback cb) { unitMoveFlagsCallback_ = std::move(cb); }
-
-    // NPC swing callback (plays attack animation on NPC)
-    using NpcSwingCallback = std::function<void(uint64_t guid)>;
-    void setNpcSwingCallback(NpcSwingCallback cb) { npcSwingCallback_ = std::move(cb); }
 
     /// A melee hit the victim bleeds from (0x00755e40 -> 0x00755380): who was
     /// hit, by whom, and whether the blow crushed (HITINFO 0x8000).
@@ -5925,25 +5916,17 @@ public:
     auto& itemLootCallbackRef() { return itemLootCallback_; }
     auto& knockBackCallbackRef() { return knockBackCallback_; }
     auto& moverEventCallbackRef() { return moverEventCallback_; }
-    auto& meleeSwingCallbackRef() { return meleeSwingCallback_; }
     auto& spellCastBeginCallbackRef() { return spellCastBeginCallback_; }
     auto& unitAttackSwingCallbackRef() { return unitAttackSwingCallback_; }
     auto& meleeHitCallbackRef() { return meleeHitCallback_; }
     auto& attackStopCallbackRef() { return attackStopCallback_; }
     auto& spellMissCallbackRef() { return spellMissCallback_; }
-    void suppressNextMeleeSwingAnim() { suppressMeleeSwingAnim_ = true; }
-    bool consumeSuppressMeleeSwingAnim() {
-        bool v = suppressMeleeSwingAnim_;
-        suppressMeleeSwingAnim_ = false;
-        return v;
-    }
     auto& mountCallbackRef() { return mountCallback_; }
     auto& npcDeathCallbackRef() { return npcDeathCallback_; }
     auto& unitDiedCallbackRef() { return unitDiedCallback_; }
     auto& npcFarewellCallbackRef() { return npcFarewellCallback_; }
     auto& npcGreetingCallbackRef() { return npcGreetingCallback_; }
     auto& npcRespawnCallbackRef() { return npcRespawnCallback_; }
-    auto& npcSwingCallbackRef() { return npcSwingCallback_; }
     auto& npcVendorCallbackRef() { return npcVendorCallback_; }
     auto& openLfgCallbackRef() { return openLfgCallback_; }
     auto& otherPlayerLevelUpCallbackRef() { return otherPlayerLevelUpCallback_; }
@@ -7671,7 +7654,6 @@ private:
     AppearanceChangedCallback appearanceChangedCallback_;
     PlayerModelRebuildCallback playerModelRebuildCallback_;
     GhostStateCallback ghostStateCallback_;
-    MeleeSwingCallback meleeSwingCallback_;
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
     UnitAmmoCallback unitAmmoCallback_;
@@ -7680,13 +7662,11 @@ private:
     AttackStopCallback attackStopCallback_;
     SpellMissCallback spellMissCallback_;
     TextEmoteGateCallback textEmoteGateCallback_;
-    bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler
     SpellCastAnimCallback spellCastAnimCallback_;
     SpellCastFailedCallback spellCastFailedCallback_;
     UnitJumpCallback unitJumpCallback_;
     UnitMoveFlagsCallback unitMoveFlagsCallback_;
-    NpcSwingCallback npcSwingCallback_;
     BloodSpurtCallback bloodSpurtCallback_;
     NpcGreetingCallback npcGreetingCallback_;
     NpcFarewellCallback npcFarewellCallback_;

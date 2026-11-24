@@ -1032,17 +1032,6 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         lastMeleeSwingMs_ = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
-        // Skip melee animation if a ranged shot was just triggered from
-        // SMSG_SPELL_GO (Auto Shot / Shoot / Throw).  The ranged animation
-        // is already playing; firing the melee callback here would override it.
-        if (owner_.consumeSuppressMeleeSwingAnim()) {
-            LOG_DEBUG("Suppressed melee swing anim - ranged shot already triggered");
-        } else {
-            if (owner_.meleeSwingCallbackRef()) owner_.meleeSwingCallbackRef()(0);
-        }
-    }
-    if (!isPlayerAttacker && owner_.npcSwingCallbackRef()) {
-        owner_.npcSwingCallbackRef()(data.attackerGuid);
     }
     // Its voice as the hit arrives, and its victim's as it lands, are their
     // sound slots', played with the swing's sounds (rendering/melee_sound.hpp).

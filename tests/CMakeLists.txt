@@ -3248,13 +3248,6 @@ wowee_add_test(test_race_gender_suffix
     SOURCES test_race_gender_suffix.cpp
             ${TEST_COMMON_SOURCES})
 
-# ── test_melee_anim_chains ───────────────────────────────────
-# The attack animation fallback chains, which were written out twice - in the
-# controller that plays them and in the probe that reports what a model can do.
-wowee_add_test(test_melee_anim_chains
-    SOURCES test_melee_anim_chains.cpp
-            ${TEST_COMMON_SOURCES})
-
 # ── test_sample_pick ─────────────────────────────────────────
 # Which of a sound bank's samples to play. Three banks wrote out the same
 # loop, and its one rule - choose among the loaded ones - is a one-character

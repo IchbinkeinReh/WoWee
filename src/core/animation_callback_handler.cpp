@@ -1,4 +1,3 @@
-#include "rendering/animation/melee_anim_chains.hpp"
 #include "core/animation_callback_handler.hpp"
 #include "core/appearance_composer.hpp"
 #include "core/entity_spawner.hpp"
@@ -90,29 +89,6 @@ void AnimationCallbackHandler::setupCallbacks() {
                 cr->playAnimation(instanceId, rendering::anim::RISE, false);
             else
                 cr->playAnimation(instanceId, rendering::anim::STAND, true);
-        }
-    });
-
-    // NPC/player swing callback (online mode) - play attack animation
-    // Probes the model for the best available attack animation:
-    //   ATTACK_1H(17) → ATTACK_2H(18) → ATTACK_2H_LOOSE(19) → ATTACK_UNARMED(16)
-    gameHandler_.setNpcSwingCallback([this](uint64_t guid) {
-        if (!renderer_.getCharacterRenderer()) return;
-        uint32_t instanceId = entitySpawner_.getCreatureInstanceId(guid);
-        if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
-        if (instanceId != 0) {
-            auto* cr = renderer_.getCharacterRenderer();
-            const auto attackAnims =
-                rendering::anim::meleeAnimChain(rendering::anim::MeleeChain::Generic);
-            bool played = false;
-            for (uint32_t anim : attackAnims) {
-                if (cr->hasAnimation(instanceId, anim)) {
-                    cr->playAnimation(instanceId, anim, false);
-                    played = true;
-                    break;
-                }
-            }
-            if (!played) cr->playAnimation(instanceId, rendering::anim::ATTACK_UNARMED, false);
         }
     });
 

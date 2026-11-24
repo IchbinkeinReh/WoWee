@@ -4310,18 +4310,6 @@ void Application::connectWorldHooks() {
         gameHandler->setMoverEventCallback([this](game::Opcode op, uint32_t flagsBefore, bool launchedBefore) {
             animatePlayerMovement(op, flagsBefore, launchedBefore);
         });
-        gameHandler->setMeleeSwingCallback([this](uint32_t spellId) {
-            if (renderer) {
-                // Ranged auto-attack spells: Auto Shot (75), Shoot (5019), Throw (2764)
-                if (game::spellclass::isRangedWeaponAutoAttack(spellId)) {
-                    if (auto* ac = renderer->getAnimationController()) ac->triggerRangedShot();
-                } else if (spellId != 0) {
-                    if (auto* ac = renderer->getAnimationController()) ac->triggerSpecialAttack(spellId);
-                } else {
-                    if (auto* ac = renderer->getAnimationController()) ac->triggerMeleeSwing();
-                }
-            }
-        });
         // The player's casts set its sheath state (0x007fa2e0): a
         // ranged spell such as Auto Shot draws the ranged weapon.
         gameHandler->setSpellCastBeginCallback([this](uint64_t caster, uint32_t spellId) {

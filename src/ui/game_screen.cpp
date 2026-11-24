@@ -819,52 +819,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         updateCharacterTextures(dressed);
         playerTabardDesigner_ = tabardDesigner;
         if (appearanceComposer_) appearanceComposer_->loadEquippedWeapons();
-        // Update renderer weapon type for animation selection
-        auto* r = services_.renderer;
-        if (r) {
-            const auto& mh = gameHandler.getInventory().getEquipSlot(game::EquipSlot::MAIN_HAND);
-            const auto& oh = gameHandler.getInventory().getEquipSlot(game::EquipSlot::OFF_HAND);
-            if (mh.empty()) {
-                if (auto* ac = r->getAnimationController()) ac->setEquippedWeaponType(0, false);
-            } else {
-                // Polearms and staves use ATTACK_2H_LOOSE instead of ATTACK_2H
-                bool is2HLoose = (mh.item.subclassName == "Polearm" || mh.item.subclassName == "Staff");
-                bool isFist = (mh.item.subclassName == "Fist Weapon");
-                bool isDagger = (mh.item.subclassName == "Dagger");
-                bool hasOffHand = !oh.empty() &&
-                    game::isOffHandWeaponInventoryType(oh.item.inventoryType);
-                bool hasShield = !oh.empty() && oh.item.inventoryType == game::InvType::SHIELD;
-                bool offHandIsFist = hasOffHand && oh.item.subclassName == "Fist Weapon";
-                bool offHandIsDagger = hasOffHand && oh.item.subclassName == "Dagger";
-                if (auto* ac = r->getAnimationController()) ac->setEquippedWeaponType(mh.item.inventoryType, is2HLoose, isFist, isDagger, hasOffHand, hasShield, offHandIsFist, offHandIsDagger);
-            }
-            // Detect ranged weapon type from RANGED slot
-            const auto& rangedSlot = gameHandler.getInventory().getEquipSlot(game::EquipSlot::RANGED);
-            if (rangedSlot.empty()) {
-                if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::NONE);
-            } else if (rangedSlot.item.inventoryType == game::InvType::RANGED_BOW) {
-                // subclassName distinguishes Bow vs Crossbow
-                if (rangedSlot.item.subclassName == "Crossbow") {
-                    if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::CROSSBOW);
-                } else {
-                    if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::BOW);
-                }
-            } else if (rangedSlot.item.inventoryType == game::InvType::RANGED_GUN) {
-                // That inventory type is guns, crossbows and wands together, so
-                // the subclass is what tells them apart - as it already does for
-                // a crossbow above. Without this a wand was shouldered and fired
-                // like a rifle.
-                if (rangedSlot.item.subclassName == "Wand") {
-                    if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::WAND);
-                } else if (auto* ac = r->getAnimationController()) {
-                    ac->setEquippedRangedType(rendering::RangedWeaponType::GUN);
-                }
-            } else if (rangedSlot.item.inventoryType == game::InvType::THROWN) {
-                if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::THROWN);
-            } else {
-                if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::NONE);
-            }
-        }
     }
 
     // The ghost's opacity and the selection circle
