@@ -1,6 +1,7 @@
 #pragma once
 
 #include "network/packet.hpp"
+#include "game/melee_landing.hpp"
 #include "game/item_text.hpp"
 #include "game/opcodes.hpp"
 #include "game/character.hpp"
@@ -2403,6 +2404,16 @@ struct AttackerStateUpdateData {
     /// 0x007512b0's bits 0x10000 and 0x20000.
     [[nodiscard]] bool isGlancing() const { return (hitInfo & 0x10000) != 0; }
     [[nodiscard]] bool isCrushing() const { return (hitInfo & 0x20000) != 0; }
+    [[nodiscard]] melee_landing::Blow blow() const {
+        return {.attacker = attackerGuid,
+                .target = targetGuid,
+                .hitInfo = hitInfo,
+                .damage = totalDamage,
+                .victimState = victimState,
+                .meleeSpellId = meleeSpellId,
+                .blocked = blocked,
+                .school = subDamages.empty() ? 0 : static_cast<int32_t>(subDamages.front().schoolMask)};
+    }
 };
 
 class AttackerStateUpdateParser {

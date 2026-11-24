@@ -714,3 +714,108 @@ TEST_CASE("the movement is on the transport the player is on", "[replay][playtes
     CHECK_FALSE(has(s, MovementFlags::ONTRANSPORT));
     CHECK(has(s, MovementFlags::FORWARD));
 }
+
+namespace {
+
+constexpr uint64_t kWolf = 0xF130000BEC001510ull, kPet = 0xF140000BEC001511ull;
+
+void spawnFoes(Session& s) {
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kWolf, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    s.receive(UpdateObject().create(kPet, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100},
+                                     {UF::UNIT_FIELD_MAXHEALTH, 100},
+                                     {UF::UNIT_FIELD_CREATEDBY, static_cast<uint32_t>(Session::kPlayerGuid)}}));
+}
+
+// Unit::SendAttackStateUpdate.
+wowee::network::Packet swing(uint64_t attacker, uint64_t target, uint32_t hitInfo, uint32_t damage, uint8_t state,
+                             uint32_t absorbed = 0, uint32_t blocked = 0) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ATTACKERSTATEUPDATE));
+    p.writeUInt32(hitInfo);
+    p.writePackedGuid(attacker);
+    p.writePackedGuid(target);
+    p.writeUInt32(damage);
+    p.writeUInt32(0);
+    p.writeUInt8(1);
+    p.writeUInt32(1);
+    p.writeFloat(static_cast<float>(damage));
+    p.writeUInt32(damage);
+    if ((hitInfo & 0x60u) != 0) p.writeUInt32(absorbed);
+    p.writeUInt8(state);
+    p.writeUInt32(0);
+    p.writeUInt32(0);
+    if ((hitInfo & 0x2000u) != 0) p.writeUInt32(blocked);
+    return p;
+}
+
+// Unit::SendSpellNonMeleeDamageLog.
+wowee::network::Packet spellHit(uint64_t caster, uint64_t target, uint32_t spellId, uint32_t damage, uint32_t absorbed,
+                                uint32_t resisted, uint32_t blocked, uint32_t flags) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_SPELLNONMELEEDAMAGELOG));
+    p.writePackedGuid(target);
+    p.writePackedGuid(caster);
+    p.writeUInt32(spellId);
+    p.writeUInt32(damage);
+    p.writeUInt32(0);
+    p.writeUInt8(4);
+    p.writeUInt32(absorbed);
+    p.writeUInt32(resisted);
+    p.writeUInt8(0);
+    p.writeUInt8(0);
+    p.writeUInt32(blocked);
+    p.writeUInt32(flags);
+    p.writeUInt8(0);
+    return p;
+}
+
+std::vector<wowee::game::CombatTextEntry::Type> floaters(Session& s) {
+    std::vector<wowee::game::CombatTextEntry::Type> types;
+    for (const auto& entry : s.handler().getCombatText()) types.push_back(entry.type);
+    s.handler().clearCombatText();
+    return types;
+}
+
+}  // namespace
+
+// The numbers, the portrait's word and the blood came as the packet did, up to half
+// a second before the blow, with a word of their own for what was blocked or absorbed
+// of it; a pet's numbers never.
+TEST_CASE("a blow shows what it did as it is settled", "[replay][playtest]") {
+    using T = wowee::game::CombatTextEntry;
+    using Types = std::vector<T::Type>;
+    Session s;
+    spawnFoes(s);
+    s.handler().setTarget(kWolf);
+    std::vector<wowee::game::AttackerStateUpdateData> kept;
+    int words = 0, spurts = 0;
+    s.handler().setMeleeHitCallback([&](const wowee::game::AttackerStateUpdateData& d) { kept.push_back(d); });
+    s.handler().setBloodSpurtCallback([&](uint64_t victim, uint64_t, bool) { spurts += victim == kWolf; });
+    s.handler().setAddonEventValuesCallback(
+        [&](const std::string& event, const std::vector<wowee::game::combat_log::Arg>&) { words += event == "UNIT_COMBAT"; });
+    s.receive(swing(Session::kPlayerGuid, kWolf, 0x2042, 30, 1, 12, 5));
+    REQUIRE(kept.size() == 1);
+    CHECK(floaters(s).empty());
+    CHECK(words == 0);
+    CHECK(spurts == 0);
+    auto* combat = s.handler().getCombatHandler();
+    combat->settleMeleeBlow(kept[0].blow());
+    CHECK(floaters(s) == Types{T::MELEE_DAMAGE});
+    CHECK(words == 1);
+    combat->bleedFromMeleeBlow(kept[0].blow());
+    CHECK(spurts == 1);
+    // The pet's.
+    s.receive(swing(kPet, kWolf, 0x202, 7, 1));
+    combat->settleMeleeBlow(kept[1].blow());
+    CHECK(floaters(s) == Types{T::CRIT_DAMAGE});
+    CHECK(words == 2);
+    // Another's is said and shows none.
+    s.receive(swing(0xF130000BEC001599ull, kWolf, 0x2, 7, 1));
+    combat->settleMeleeBlow(kept[2].blow());
+    CHECK(floaters(s).empty());
+    CHECK(words == 3);
+    s.handler().setMeleeHitCallback({});
+    s.handler().setBloodSpurtCallback({});
+    s.handler().setAddonEventValuesCallback({});
+}

@@ -999,21 +999,21 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if ((data.hitInfo & 0x800000u) != 0) owner_.addPredictedPower(data.attackerGuid, 1, data.rageGained);
     // Then the combat log, whoever fought.
     owner_.combatLogFeed().swing(data);
-    // UNIT_COMBAT for the victim, whoever fought (0x00755a60 -> 0x005133b0):
-    // the action by its state, the total, the first sub-damage's school.
-    owner_.fireUnitCombat(data.targetGuid, unit_combat::meleeAction(data.victimState), data.totalDamage,
-                          data.subDamages.empty() ? 0 : static_cast<int32_t>(data.subDamages.front().schoolMask),
-                          data.hitInfo);
-
     bool isPlayerAttacker = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
     // 0x00756800 case 0x14a: any attacker's swing draws its melee weapons.
     if (data.attackerGuid != 0 && owner_.unitAttackSwingCallbackRef()) {
         owner_.unitAttackSwingCallbackRef()(data.attackerGuid);
     }
-    // Its sounds, whoever fought: kept on the attacker for its model's
-    // swing and landing events (rendering/melee_sound.hpp).
-    if (owner_.meleeHitCallbackRef()) owner_.meleeHitCallbackRef()(data);
+    // Kept on the attacker for its model's events (game/melee_landing.hpp),
+    // which settle it and land it.
+    if (owner_.meleeHitCallbackRef()) {
+        owner_.meleeHitCallbackRef()(data);
+    } else {
+        const melee_landing::Blow blow = data.blow();
+        settleMeleeBlow(blow);
+        bleedFromMeleeBlow(blow);
+    }
     if (!isPlayerAttacker && !isPlayerTarget) return;  // Not our combat
 
     // 0x006d4ad0: the player's swing came off.
@@ -1052,72 +1052,25 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         autoTargetAttacker(data.attackerGuid);
     }
 
-    // 0x007512b0's order: a hit (1) or a block (5) that did damage, then a
-    // miss, a full absorb, a full resist, and the victim's state.
-    uint32_t totalAbsorbed = 0, totalResisted = 0;
-    for (const auto& sub : data.subDamages) {
-        totalAbsorbed += sub.absorbed;
-        totalResisted += sub.resisted;
-    }
-    if ((data.victimState == 1 || data.victimState == 5) && data.totalDamage != 0) {
-        CombatTextEntry::Type type;
-        if (data.isCrit())
-            type = CombatTextEntry::CRIT_DAMAGE;
-        else if (data.isCrushing())
-            type = CombatTextEntry::CRUSHING;
-        else if (data.isGlancing())
-            type = CombatTextEntry::GLANCING;
-        else
-            type = CombatTextEntry::MELEE_DAMAGE;
-        addCombatText(type, data.totalDamage, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-        if (data.blocked > 0)
-            addCombatText(CombatTextEntry::BLOCK, static_cast<int32_t>(data.blocked), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-        if (totalAbsorbed > 0)
-            addCombatText(CombatTextEntry::ABSORB, static_cast<int32_t>(totalAbsorbed), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-        if (totalResisted > 0)
-            addCombatText(CombatTextEntry::RESIST, static_cast<int32_t>(totalResisted), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.isMiss()) {
-        addCombatText(CombatTextEntry::MISS, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if ((data.hitInfo & 0x20u) != 0) {
-        addCombatText(CombatTextEntry::ABSORB, static_cast<int32_t>(totalAbsorbed), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if ((data.hitInfo & 0x80u) != 0) {
-        addCombatText(CombatTextEntry::RESIST, static_cast<int32_t>(totalResisted), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 2) {
-        addCombatText(CombatTextEntry::DODGE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 3) {
-        addCombatText(CombatTextEntry::PARRY, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 5) {
-        addCombatText(CombatTextEntry::BLOCK, static_cast<int32_t>(data.blocked), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 6) {
-        addCombatText(CombatTextEntry::EVADE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 7) {
-        addCombatText(CombatTextEntry::IMMUNE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 8) {
-        addCombatText(CombatTextEntry::DEFLECT, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    }
+bool CombatHandler::combatTextOurs(uint64_t src, uint64_t dst) const {
+    const uint64_t player = owner_.getPlayerGuid();
+    return src == player || dst == player ||
+           floaterSourceOf(src, false) != static_cast<int>(FloaterSource::Other);
+}
 
-    // 0x00755e40: a victim not yet lootable bleeds from a blow that reached it
-    // (HITINFO 0x2) and did damage (or carried 0x1000000), where it was hit
-    // (victim state 1) or the hit interrupted it (4).
-    if (owner_.bloodSpurtCallbackRef() && (data.hitInfo & 0x2u) != 0 &&
-        (data.totalDamage != 0 || (data.hitInfo & 0x1000000u) != 0) &&
-        (data.victimState == 1 || data.victimState == 4)) {
-        auto victim = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(data.targetGuid));
-        if (victim && (victim->getDynamicFlags() & 0x1u) == 0)
-            owner_.bloodSpurtCallbackRef()(data.targetGuid, data.attackerGuid, (data.hitInfo & 0x8000u) != 0);
-    }
+void CombatHandler::settleMeleeBlow(const melee_landing::Blow& blow) {
+    if (!melee_landing::said(blow)) return;
+    const bool onPlayer = blow.target == owner_.getPlayerGuid();
+    if (const auto type = melee_landing::text(blow, onPlayer); type && combatTextOurs(blow.attacker, blow.target))
+        addCombatText(*type, blow.damage, 0, blow.attacker == owner_.getPlayerGuid(), 0, blow.attacker, blow.target);
+    owner_.fireUnitCombat(blow.target, unit_combat::meleeAction(blow.victimState), blow.damage, blow.school, blow.hitInfo);
+}
 
-    // Fire hit reaction animation on the victim
-    if (owner_.hitReactionCallbackRef() && !data.isMiss()) {
-        using HR = GameHandler::HitReaction;
-        HR reaction = HR::WOUND;
-        if (data.victimState == 2) reaction = HR::DODGE;
-        else if (data.victimState == 3) reaction = HR::PARRY;
-        else if (data.victimState == 5) reaction = HR::BLOCK;
-        else if (data.isCrit()) reaction = HR::CRIT_WOUND;
-        owner_.hitReactionCallbackRef()(data.targetGuid, reaction);
-    }
-
+void CombatHandler::bleedFromMeleeBlow(const melee_landing::Blow& blow) {
+    if (!owner_.bloodSpurtCallbackRef() || !melee_landing::bleeds(blow)) return;
+    const auto victim = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(blow.target));
+    if (victim && (victim->getDynamicFlags() & UNIT_DYNFLAG_LOOTABLE) == 0)
+        owner_.bloodSpurtCallbackRef()(blow.target, blow.attacker, (blow.hitInfo & melee_landing::kCrushing) != 0);
 }
 
 void CombatHandler::handleSpellDamageLog(network::Packet& packet) {

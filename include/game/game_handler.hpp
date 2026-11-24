@@ -2163,10 +2163,6 @@ public:
     using NpcSwingCallback = std::function<void(uint64_t guid)>;
     void setNpcSwingCallback(NpcSwingCallback cb) { npcSwingCallback_ = std::move(cb); }
 
-    // Hit reaction callback - triggers victim animation (dodge, block, wound, crit wound)
-    enum class HitReaction : uint8_t { WOUND, CRIT_WOUND, DODGE, PARRY, BLOCK, SHIELD_BLOCK };
-    using HitReactionCallback = std::function<void(uint64_t victimGuid, HitReaction reaction)>;
-    void setHitReactionCallback(HitReactionCallback cb) { hitReactionCallback_ = std::move(cb); }
     /// A melee hit the victim bleeds from (0x00755e40 -> 0x00755380): who was
     /// hit, by whom, and whether the blow crushed (HITINFO 0x8000).
     using BloodSpurtCallback = std::function<void(uint64_t victimGuid, uint64_t attackerGuid, bool crushing)>;
@@ -5915,7 +5911,6 @@ public:
     auto& gameObjectStateCallbackRef() { return gameObjectStateCallback_; }
     auto& ghostStateCallbackRef() { return ghostStateCallback_; }
     auto& hearthstonePreloadCallbackRef() { return hearthstonePreloadCallback_; }
-    auto& hitReactionCallbackRef() { return hitReactionCallback_; }
     auto& itemLootCallbackRef() { return itemLootCallback_; }
     auto& knockBackCallbackRef() { return knockBackCallback_; }
     auto& moverEventCallbackRef() { return moverEventCallback_; }
@@ -7682,7 +7677,6 @@ private:
     UnitJumpCallback unitJumpCallback_;
     UnitMoveFlagsCallback unitMoveFlagsCallback_;
     NpcSwingCallback npcSwingCallback_;
-    HitReactionCallback hitReactionCallback_;
     BloodSpurtCallback bloodSpurtCallback_;
     NpcGreetingCallback npcGreetingCallback_;
     NpcFarewellCallback npcFarewellCallback_;
