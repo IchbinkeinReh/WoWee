@@ -1583,7 +1583,7 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             if (!wmap || !gameHandler) return false;
             const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(x, y, z));
-            const auto uv = wmap->mapPointOf(gameHandler->getCurrentMapId(), wire.x, wire.y);
+            const auto uv = wmap->mapPointOf(gameHandler->getCurrentMapId(), wire.x, wire.y, wire.z);
             if (!uv) return false;
             u = uv->x;
             v = uv->y;

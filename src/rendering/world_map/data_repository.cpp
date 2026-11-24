@@ -1,6 +1,7 @@
 // data_repository.cpp - DBC data loading, ZMP pixel map, and zone/POI/overlay storage.
 // Extracted from WorldMap::loadZonesFromDBC, loadPOIData, buildCosmicView
 // (Phase 5 of refactoring plan).
+#include "rendering/world_map/coordinate_projection.hpp"
 #include "rendering/world_map/data_repository.hpp"
 #include "rendering/world_map/map_resolver.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -330,7 +331,7 @@ void DataRepository::loadZones(const std::string& mapName,
     }
 
     // DungeonMap.dbc is one row per floor of a map: ID, MapID, FloorIndex,
-    // MinX, MaxX, MinY, MaxY. The rows belong to the map rather than to the
+    // MinY, MaxY, MinX, MaxX. The rows belong to the map rather than to the
     // area, and the client's floor count matches them on the WorldMapArea
     // row's own map id (0x00546190) - which is what answers two floors for
     // every Northrend zone, one for the Eastern Kingdoms, and none at all for
@@ -349,8 +350,8 @@ void DataRepository::loadZones(const std::string& mapName,
                 z.dungeonFloors.push_back({dungeonDbc->getUInt32(i, 0),
                                            dungeonDbc->getUInt32(i, 2),
                                            areaField ? dungeonDbc->getUInt32(i, areaField) : 0u,
-                                           {dungeonDbc->getFloat(i, 6), dungeonDbc->getFloat(i, 5),
-                                            dungeonDbc->getFloat(i, 4), dungeonDbc->getFloat(i, 3)}});
+                                           floorRectangle(dungeonDbc->getFloat(i, 3), dungeonDbc->getFloat(i, 4),
+                                                          dungeonDbc->getFloat(i, 5), dungeonDbc->getFloat(i, 6))});
             }
             std::sort(z.dungeonFloors.begin(), z.dungeonFloors.end(),
                       [](const DungeonFloor& a, const DungeonFloor& b) {

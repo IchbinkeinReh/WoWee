@@ -1080,7 +1080,8 @@ WorldMapFacade::PoiFrame WorldMapFacade::currentPoiFrame() const {
     return frame;
 }
 
-std::optional<glm::vec2> WorldMapFacade::mapPointOf(uint32_t mapId, float wireX, float wireY) const {
+std::optional<glm::vec2> WorldMapFacade::mapPointOf(uint32_t mapId, float wireX, float wireY,
+                                                    std::optional<float> height) const {
     const auto& data = impl_->data;
     const ViewLevel level = impl_->viewState.currentLevel();
     const DataRepository::Place place = data.shownPlace(mapId, wireX, wireY);
@@ -1101,6 +1102,13 @@ std::optional<glm::vec2> WorldMapFacade::mapPointOf(uint32_t mapId, float wireX,
         if (isContinent ? place.mapId != zone.displayMapID && place.mapId != zone.mapID
                         : mapId != zone.mapID && place.mapId != zone.mapID)
             return std::nullopt;
+        // Its floor by the building the player is in (0x005439e0 with
+        // DAT_00bd0814) and its own height.
+        if (!isContinent && height) {
+            const int floor =
+                impl_->playerWmoId != 0 ? data.dungeonMapForChunk(mapId, impl_->playerWmoId, *height) : -1;
+            if (!onShownFloor(impl_->shownFloorRow(zone), floor)) return std::nullopt;
+        }
         // The bounds of a zone shown on another continent are moved there with
         // its places. A render position has the wire's axes.
         uv = renderPosToMapUV(glm::vec3(place.x, place.y, 0.0f),

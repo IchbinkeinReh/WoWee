@@ -133,8 +133,10 @@ public:
     [[nodiscard]] std::vector<Landmark> currentLandmarks(
         const std::function<uint32_t(uint32_t)>& worldState) const;
     /// A place, in the wire's axes, on the shown map in its [0,1] space, where
-    /// it is on it (0x00544140); the points and SMSG_GOSSIP_POI's alike.
-    [[nodiscard]] std::optional<glm::vec2> mapPointOf(uint32_t mapId, float wireX, float wireY) const;
+    /// it is on it (0x00544140); the points and SMSG_GOSSIP_POI's alike. With its
+    /// height, only on the floor the map shows.
+    [[nodiscard]] std::optional<glm::vec2> mapPointOf(uint32_t mapId, float wireX, float wireY,
+                                                      std::optional<float> height = std::nullopt) const;
 
 
     /// The zone under a point on the map being shown, in [0,1] map space, or

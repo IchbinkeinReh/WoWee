@@ -112,6 +112,22 @@ TEST_CASE("a floor's map spans the floor", "[world_map][coordinate_projection]")
     CHECK(shownBounds(dalaran, -1).locLeft == 1052.5f);
 }
 
+// Dalaran's player was off its map: the columns were taken for X, X, Y, Y.
+TEST_CASE("a floor's rectangle is its row's", "[world_map][coordinate_projection]") {
+    const ZoneBounds streets = floorRectangle(222.495f, 1052.51f, 5513.33f, 6066.67f);
+    const glm::vec2 uv = renderPosToMapUV(glm::vec3(5804.0f, 624.0f, 647.8f), streets, false);
+    CHECK(uv.x == Catch::Approx(0.516f).margin(0.001f));
+    CHECK(uv.y == Catch::Approx(0.475f).margin(0.001f));
+}
+
+TEST_CASE("with a floor selected a unit on another is off the map", "[world_map][coordinate_projection]") {
+    CHECK(onShownFloor(27, 27));
+    CHECK_FALSE(onShownFloor(27, 26));
+    CHECK_FALSE(onShownFloor(27, -1));
+    CHECK(onShownFloor(-1, 27));
+    CHECK(onShownFloor(0, -1));
+}
+
 // On a zone's map the player, the party, a corpse and the quests' places were
 // at the continent's fraction of it.
 TEST_CASE("what is on a zone's map is placed by the zone's rectangle", "[world_map][coordinate_projection]") {
