@@ -1,4 +1,6 @@
 #include "ui/interface_fonts.hpp"
+#include "ui/edit_lines.hpp"
+#include "ui/widget_tree.hpp"
 
 #include <imgui.h>
 #include <cfloat>
@@ -145,6 +147,52 @@ std::string interfaceFittedText(const std::string& text, const std::string& font
                                 int lines, bool wordWrap, bool nonSpaceWrap) {
     return interfaceFittedText(text, interfaceFaceOrDefault(fontFace), interfaceFontSize(fontHeight), width, lines,
                                wordWrap, nonSpaceWrap);
+}
+
+float editTextWidth(const Widget& box, const std::string& piece) {
+    std::string letters;
+    for (const auto& run : parseMarkup(piece)) letters += run.text;
+    return interfaceTextWidth(letters, box.fontFace, box.fontHeight);
+}
+
+const std::vector<size_t>& editBoxLines(const Widget& box) {
+    if (!box.editMultiLine) {
+        box.editStarts.assign(1, 0);
+        box.editStartsWidth = -1.0f;
+        return box.editStarts;
+    }
+    const float scale = box.effScale > 0.0f ? box.effScale : 1.0f;
+    const float width =
+        (box.rectW > 0.0f ? box.rectW / scale : box.width) - box.textInsetLeft - box.textInsetRight;
+    const float size = interfaceFontSize(box.fontHeight);
+    if (box.editStartsText != box.editText || box.editStartsWidth != width || box.editStartsSize != size ||
+        box.editStartsFace != box.fontFace) {
+        box.editStarts = editLines(box.editText, std::max(width, 0.0f),
+                                   [&box](const std::string& piece) { return editTextWidth(box, piece); });
+        box.editStartsText = box.editText;
+        box.editStartsWidth = width;
+        box.editStartsSize = size;
+        box.editStartsFace = box.fontFace;
+    }
+    return box.editStarts;
+}
+
+float editBoxHeight(const Widget& box) {
+    return box.textInsetTop + box.textInsetBottom +
+           textHeight(editBoxLines(box).size(), interfaceFontSize(box.fontHeight), box.lineSpacing);
+}
+
+size_t editBoxPlaceAt(const Widget& box, float x, float y) {
+    const auto& starts = editBoxLines(box);
+    const float scale = box.effScale > 0.0f ? box.effScale : 1.0f;
+    const float down = (box.bottom + box.rectH - y) / scale - box.textInsetTop;
+    const float pitch = interfaceFontSize(box.fontHeight) + box.lineSpacing;
+    const size_t line = !box.editMultiLine || down <= 0.0f || pitch <= 0.0f
+                            ? 0
+                            : std::min(starts.size() - 1, static_cast<size_t>(down / pitch));
+    const std::string shown = box.editPassword ? std::string(box.editText.size(), '*') : box.editText;
+    return editPlaceIn(shown, starts, line, (x - box.left) / scale - box.textInsetLeft,
+                       [&box](const std::string& piece) { return editTextWidth(box, piece); });
 }
 
 float fontEmSizeScale(const void* ttfData, size_t byteCount) {

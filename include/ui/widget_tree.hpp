@@ -544,6 +544,11 @@ struct Widget {
     bool  editFocused = false;
     bool  editNumeric = false;
     bool  editMultiLine = false;
+    /// Where its lines start in its text (edit_lines.hpp), and what that was
+    /// worked out from.
+    mutable std::vector<size_t> editStarts{0};
+    mutable std::string editStartsText, editStartsFace;
+    mutable float editStartsWidth = -1.0f, editStartsSize = -1.0f;
     int   editMaxLetters = 0;   ///< Zero is no limit, which is WoW's default.
     /// SetMaxBytes / <FontString bytes="">: the most bytes the text may hold,
     /// kept as the client keeps it (+0x2c4) - one under the number given,

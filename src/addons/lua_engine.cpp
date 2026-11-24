@@ -9,6 +9,7 @@
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
+#include "ui/edit_lines.hpp"
 #include "ui/interface_file.hpp"
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
@@ -11369,6 +11370,7 @@ void LuaEngine::shutdown() {
         attributesAllowed_.clear();
         changedTooltipUnits_.clear();
         cooldowns_.clear();
+        editDragWid_ = 0;
         toldOnce_ = false;
         hoverWid_ = 0;
         focusedWid_ = 0;
@@ -16660,21 +16662,54 @@ void LuaEngine::callFrameScript3(uint32_t wid, const char* script,
 /// So the first character typed into the mail body, the macro editor or the
 /// guild information box raised there, before anything was drawn.
 ///
-/// y is negative going down and is the only value the interface reads besides
-/// the height: it scrolls the frame to keep the caret's line in view. Measured
-/// in lines rather than in laid-out pixels, because a line is what the caret
-/// moves by and the box has one height for all of them.
+/// y is negative going down: the caret's line, from the first (0x00964a90).
 void LuaEngine::fireCursorChanged(uint32_t wid) {
     const auto* w = widgets_.get(wid);
     if (!w || !w->isEditBox) return;
-    const size_t upTo = std::min(w->cursorPos, w->editText.size());
-    size_t line = 0;
-    for (size_t i = 0; i < upTo; ++i) {
-        if (w->editText[i] == '\n') ++line;
-    }
+    fitEditBox(wid);
+    const auto& starts = wowee::ui::editBoxLines(*w);
+    const size_t at = std::min(w->cursorPos, w->editText.size());
+    const size_t line = wowee::ui::editLineOf(starts, at);
     const double lineH = wowee::ui::interfaceFontSize(w->fontHeight);
-    callFrameScript4Numbers(wid, "OnCursorChanged", 0.0,
-                            -static_cast<double>(line) * lineH, 0.0, lineH);
+    const double across = w->editPassword ? 0.0
+                                          : static_cast<double>(wowee::ui::editTextWidth(
+                                                *w, w->editText.substr(starts[line], at - starts[line])));
+    callFrameScript4Numbers(wid, "OnCursorChanged", across,
+                            -static_cast<double>(line) * (lineH + static_cast<double>(w->lineSpacing)), 0.0, lineH);
+}
+
+void LuaEngine::pressInEditBox(uint32_t wid, float x, float y) {
+    // 0x00967cd0: the caret where it was pressed, and the highlight begun there.
+    auto* w = widgets_.get(wid);
+    if (!w || w->rectW <= 0.0f) return;
+    w->cursorPos = wowee::ui::editBoxPlaceAt(*w, x, y);
+    w->hasSelection = false;
+    editDragWid_ = wid;
+    editDragFrom_ = w->cursorPos;
+    fireCursorChanged(wid);
+}
+
+void LuaEngine::dragInEditBox(float x, float y) {
+    auto* w = widgets_.get(editDragWid_);
+    if (!w || editDragWid_ != focusedWid_ || !w->visible) {
+        editDragWid_ = 0;
+        return;
+    }
+    const size_t at = wowee::ui::editBoxPlaceAt(*w, x, y);
+    if (at == w->cursorPos) return;
+    w->cursorPos = at;
+    w->selStart = std::min(at, editDragFrom_);
+    w->selEnd = std::max(at, editDragFrom_);
+    w->hasSelection = w->selEnd > w->selStart;
+    fireCursorChanged(editDragWid_);
+}
+
+void LuaEngine::fitEditBox(uint32_t wid) {
+    // 0x00966710: as tall as its text, between its insets.
+    const auto* w = widgets_.get(wid);
+    if (!w || !w->isEditBox || !w->editMultiLine) return;
+    const float height = wowee::ui::editBoxHeight(*w);
+    if (std::abs(w->height - height) > 0.01f) widgets_.setHeight(wid, height);
 }
 
 void LuaEngine::fireTextChanged(uint32_t wid, bool userInput) {
@@ -17971,8 +18006,8 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
             if (w->editMultiLine) {
                 const size_t caret = std::min(w->cursorPos, len);
                 bool moved = false;
-                const size_t target = ui::caretLineMove(
-                    w->editText, caret, sdlKeycode == kUp ? -1 : 1, moved);
+                const size_t target = ui::editLineMove(w->editText, ui::editBoxLines(*w), caret,
+                                                       sdlKeycode == kUp ? -1 : 1, moved);
                 const ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
                 const bool selected = sel.active && sel.stop > sel.start && sel.stop <= len;
                 if (!moved) {
@@ -18799,6 +18834,12 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
         }
     }
 
+    // An edit box's highlight follows it too, from where it was pressed.
+    if (editDragWid_ != 0) {
+        if (buttonDown_[0]) dragInEditBox(x, y);
+        else editDragWid_ = 0;
+    }
+
     // A slider follows the cursor for as long as it is held, which is the only
     // widget where what happens between press and release is the point. The
     // frame keeps the grab even when the cursor leaves it, because letting go
@@ -18927,7 +18968,11 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                 for (uint32_t id = hit; id != 0;) {
                     const auto* cand = widgets_.get(id);
                     if (!cand) break;
-                    if (cand->isEditBox && cand->visible) { setEditFocus(id); break; }
+                    if (cand->isEditBox && cand->visible) {
+                        setEditFocus(id);
+                        pressInEditBox(id, x, y);
+                        break;
+                    }
                     id = cand->parent;
                 }
             }
@@ -19476,6 +19521,8 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     taint::Quiet quiet;
 
     drainPendingTextChanged();
+    for (const uint32_t id : editBoxes_)
+        if (const auto* w = widgets_.get(id); w && w->editMultiLine && w->visibleChain) fitEditBox(id);
     advanceCooldowns();
     advanceWheelGlide(elapsed);
     tickTooltipFades(L_, elapsed);

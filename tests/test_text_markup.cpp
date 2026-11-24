@@ -453,21 +453,6 @@ TEST_CASE("Home and End stop at the caret's own line", "[text_markup][editbox]")
     CHECK(wowee::ui::caretLineEnd(t, 7) == 8);
 }
 
-TEST_CASE("Up and Down in a multi-line box keep the column", "[text_markup][editbox]") {
-    // 0x00964550: as far into the next line as into this one, never past
-    // its end; nothing above the first line or below the last.
-    const std::string t = "abcd\nx\nwxyz";
-    bool moved = false;
-    CHECK(wowee::ui::caretLineMove(t, 3, 1, moved) == 6);   // "abc|d" -> "x|"
-    CHECK(moved);
-    CHECK(wowee::ui::caretLineMove(t, 6, 1, moved) == 8);   // "x|" -> "w|xyz"
-    CHECK(wowee::ui::caretLineMove(t, 10, -1, moved) == 6);
-    CHECK(wowee::ui::caretLineMove(t, 2, -1, moved) == 2);
-    CHECK_FALSE(moved);
-    CHECK(wowee::ui::caretLineMove(t, 11, 1, moved) == 11);
-    CHECK_FALSE(moved);
-}
-
 TEST_CASE("Word deletes take the spaces and one word", "[text_markup][editbox]") {
     // 0x00963b60 back, 0x00963a10 forward.
     const std::string t = "one two  three";

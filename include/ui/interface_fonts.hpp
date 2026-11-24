@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct ImFont;
 
@@ -59,6 +60,17 @@ std::string interfaceFittedText(const std::string& text, ImFont* font, float siz
                                 bool wordWrap, bool nonSpaceWrap, float indent = 0.0f);
 std::string interfaceFittedText(const std::string& text, const std::string& fontFace, float fontHeight, float width,
                                 int lines, bool wordWrap, bool nonSpaceWrap);
+
+struct Widget;
+/// Where an edit box's lines start in its text (edit_lines.hpp): one line of it
+/// that is not multi-line, whatever its width. Kept on the widget.
+const std::vector<size_t>& editBoxLines(const Widget& box);
+/// How wide a piece of an edit box's text is drawn, in its own units.
+float editTextWidth(const Widget& box, const std::string& piece);
+/// How tall a multi-line box is (0x00966710): its lines between its insets.
+float editBoxHeight(const Widget& box);
+/// The place in the box's text at (x, y), the tree's coordinates.
+size_t editBoxPlaceAt(const Widget& box, float x, float y);
 
 /// The face a widget draws in, resolved the way the renderer resolves it: its
 /// own, then the interface default, then whatever is current.

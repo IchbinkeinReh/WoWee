@@ -454,6 +454,13 @@ private:
     /// Cooldown frames whose time is up flash, and hide once they have
     /// (0x005ec8f0).
     void advanceCooldowns();
+    /// A multi-line edit box takes the height of its text.
+    void fitEditBox(uint32_t wid);
+    /// The mouse pressed in an edit box, and moved while it is held.
+    void pressInEditBox(uint32_t wid, float x, float y);
+    void dragInEditBox(float x, float y);
+    uint32_t editDragWid_ = 0;
+    size_t editDragFrom_ = 0;
     std::vector<uint32_t> cooldowns_;
     std::set<uint64_t> changedTooltipUnits_;
     std::vector<uint32_t> editBoxes_;

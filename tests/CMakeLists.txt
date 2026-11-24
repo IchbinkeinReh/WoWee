@@ -4297,6 +4297,10 @@ wowee_add_test(test_cooldown_sweep
 wowee_add_test(test_interface_file
     SOURCES test_interface_file.cpp)
 
+# ── test_edit_lines ──────────────────────────────────────────
+wowee_add_test(test_edit_lines
+    SOURCES test_edit_lines.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
