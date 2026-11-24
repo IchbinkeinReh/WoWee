@@ -1047,8 +1047,6 @@ private:
     // Server waypoint scripts hold work/chop emotes for many seconds. Locomotion
     // temporarily overrides them, then the idle transition restores this loop.
     std::unordered_map<uint64_t, uint32_t> creatureActiveEmotes_;
-    std::unordered_map<uint64_t, bool> creatureWasStealthed_;
-    uint32_t stealthSyncFrameCounter_ = 0;  // throttles syncCreatureStealthVisuals()
     std::unordered_map<uint64_t, float> creatureAppliedScale_;  // guid → scale the instance was given
     // A creature's particle effects. The character renderer draws no
     // particles, so a creature whose model has emitters gets a particles-only
@@ -1182,7 +1180,6 @@ private:
     std::unordered_map<uint32_t, AmmoShown> ammoShown_;
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;
 
-    void syncCreatureStealthVisuals();
 
     // --- Creature async loads ---
     struct PreparedCreatureModel {

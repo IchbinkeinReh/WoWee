@@ -2010,7 +2010,6 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             if (!wasGhost && nowGhost) {
                 owner_.releasedSpiritRef() = true;
                 LOG_INFO("Player entered ghost form (PLAYER_FLAGS)");
-                if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
                 // 0x006df710: the ghost flag coming on triggers tutorial 0x18,
                 // and asks where the corpse lies (0x00524a30).
                 if (!isCreate) {
@@ -2031,7 +2030,6 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 owner_.forgetDeathRelease();
                 if (!isCreate) pendingEvents_.emit("PLAYER_UNGHOST", {});
                 if (owner_.refreshCorpsePlace()) pendingEvents_.emit("CORPSE_OUT_OF_RANGE", {});
-                if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(false);
             }
             // Which unit's flags, because that is the only thing the
             // handlers do with it: TargetFrame compares arg1 against its
@@ -2753,13 +2751,11 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
             owner_.releasedSpiritRef() = true;
             owner_.playerDeadRef() = true;
             LOG_INFO("Player logged in as ghost (PLAYER_FLAGS)");
-            if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
         } else if (unit->getHealth() > 0 && (owner_.playerDeadRef() || owner_.releasedSpiritRef()) &&
                    ((unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0 || playerFeigningDeath_)) {
             // A death is over where the player's new object has health and is
             // no ghost's: brought back between the maps (0x0073d530 asks the
             // health, whatever the object before it had).
-            if (owner_.releasedSpiritRef() && owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(false);
             owner_.playerDeadRef() = false;
             owner_.releasedSpiritRef() = false;
             owner_.selfResAvailableRef() = false;

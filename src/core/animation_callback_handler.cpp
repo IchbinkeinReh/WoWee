@@ -389,15 +389,6 @@ void AnimationCallbackHandler::setupCallbacks() {
         if (isChannel || (svs && svs->castAnimations(spell).animates())) cr->playBaseAnimation(instanceId);
     });
 
-    // Ghost state callback - make player semi-transparent when in spirit form
-    gameHandler_.setGhostStateCallback([this](bool isGhost) {
-        auto* cr = renderer_.getCharacterRenderer();
-        if (!cr) return;
-        uint32_t charInstId = renderer_.getCharacterInstanceId();
-        if (charInstId == 0) return;
-        cr->setInstanceOpacity(charInstId, isGhost ? 0.5f : 1.0f);
-    });
-
     // The player's stand state as the server has it (SMSG_STANDSTATE_UPDATE,
     // 0x0073f540 -> 0x0073f060): sat down, laid down, knelt or got up from
     // the state its animation was given for.

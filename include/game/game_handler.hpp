@@ -2082,9 +2082,6 @@ public:
     using PlayerModelRebuildCallback = std::function<void()>;
     void setPlayerModelRebuildCallback(PlayerModelRebuildCallback cb) { playerModelRebuildCallback_ = std::move(cb); }
 
-    // Ghost state callback - fired when player enters or leaves ghost (spirit) form
-    using GhostStateCallback = std::function<void(bool isGhost)>;
-    void setGhostStateCallback(GhostStateCallback cb) { ghostStateCallback_ = std::move(cb); }
 
     // Snap the character to face the camera's current look direction and return the
     // resulting canonical orientation. Used by fishing so the bobber lands in front of
@@ -5950,7 +5947,6 @@ public:
     auto& gameObjectMoveCallbackRef() { return gameObjectMoveCallback_; }
     auto& gameObjectSpawnCallbackRef() { return gameObjectSpawnCallback_; }
     auto& gameObjectStateCallbackRef() { return gameObjectStateCallback_; }
-    auto& ghostStateCallbackRef() { return ghostStateCallback_; }
     auto& hearthstonePreloadCallbackRef() { return hearthstonePreloadCallback_; }
     auto& itemLootCallbackRef() { return itemLootCallback_; }
     auto& knockBackCallbackRef() { return knockBackCallback_; }
@@ -7705,7 +7701,6 @@ private:
     DifficultyLoadingScreenCallback difficultyLoadingScreenCallback_;
     AppearanceChangedCallback appearanceChangedCallback_;
     PlayerModelRebuildCallback playerModelRebuildCallback_;
-    GhostStateCallback ghostStateCallback_;
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
     UnitAmmoCallback unitAmmoCallback_;

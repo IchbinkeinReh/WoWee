@@ -1052,7 +1052,6 @@ void GameHandler::registerCoreOpcodes() {
     };
     dispatchTable_[Opcode::SMSG_FORCED_DEATH_UPDATE] = [this](network::Packet& packet) {
         playerDead_ = true;
-        if (ghostStateCallback_) ghostStateCallback_(false);
         // The stamp first, then the event: 0x006e0000.c:2497 runs the death
         // decision and only then the routine that says the words, and the
         // interface's PLAYER_DEAD handler asks GetReleaseTimeRemaining to
