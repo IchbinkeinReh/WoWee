@@ -1899,6 +1899,13 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             // isCreate rather than from this cache is also what stops a
             // reconnect from comparing against the previous session's flags.
             const uint32_t prev = isCreate ? 0u : last.value;
+            // Away and busy are the server's as they change (0x006e0fd0: 0x00bcefec, and
+            // the field's own bit 4).
+            constexpr uint32_t PLAYER_FLAGS_AWAY_BITS = 0x0000800e;
+            if (!isCreate && last.known && ((prev ^ val) & PLAYER_FLAGS_AWAY_BITS) != 0) {
+                owner_.afkStatusRef() = (val & 0x2u) != 0;
+                owner_.dndStatusRef() = (val & 0x4u) != 0;
+            }
             constexpr uint32_t PLAYER_FLAGS_TAXI_BENCHMARK = 0x00020000;
             constexpr uint32_t PLAYER_FLAGS_XP_GAIN_OFF    = 0x02000000;
             constexpr uint32_t PLAYER_FLAGS_LOW_LEVEL_RAID = 0x00010000;

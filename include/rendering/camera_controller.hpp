@@ -313,6 +313,8 @@ public:
         }
     }
     [[nodiscard]] bool isBarberShopView() const { return barberView_; }
+    /// Sits where X would: one of five idle minutes (0x0052af40).
+    void sitDown() { sitDownAsked_ = true; }
     [[nodiscard]] bool isOnTaxi() const { return externalFollow_; }
     [[nodiscard]] const glm::vec3* getFollowTarget() const { return followTarget; }
     /// The followed unit stands over ground that has not streamed in, so it is
@@ -1282,6 +1284,7 @@ private:
     /// FALLING made to say what the step did.
     void tellFall();
     StandUpCallback standUpCallback_;
+    bool sitDownAsked_ = false;
     SitDownCallback sitDownCallback_;
 
     // Movement speeds

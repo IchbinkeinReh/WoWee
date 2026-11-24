@@ -1,5 +1,7 @@
 #include "core/input.hpp"
 
+#include "core/app_clock.hpp"
+
 namespace wowee {
 namespace core {
 
@@ -39,6 +41,16 @@ void Input::update() {
 
     // Calculate mouse delta
     mouseDelta = mousePosition - previousMousePosition;
+
+    if (currentKeyState != previousKeyState || currentMouseState != previousMouseState ||
+        mousePosition != previousMousePosition)
+        noteHardwareEvent();
+}
+
+void Input::noteHardwareEvent() { lastHardwareEvent_ = appTimeSeconds(); }
+
+uint32_t Input::idleMs() const {
+    return static_cast<uint32_t>((appTimeSeconds() - lastHardwareEvent_) * 1000.0);
 }
 
 void Input::setVirtualKey(SDL_Scancode key, bool held) {

@@ -2277,6 +2277,18 @@ void GameHandler::forfeitDuel() {
     if (socialHandler_) socialHandler_->forfeitDuel();
 }
 
+void GameHandler::clearAfkMoving() {
+    if (afkStatus_ && addons::storedCVarValue("autoClearAFK", "1") != "0") toggleAfk();
+}
+
+void GameHandler::logoutIdle() {
+    if (isLoggingOut()) return;
+    addSystemChatMessage(interfaceString(
+        "IDLE_MESSAGE", "You have been inactive for some time and will be logged out of the game. If you wish to "
+                        "remain logged in, hit the cancel button."));
+    requestLogout();
+}
+
 void GameHandler::toggleAfk(const std::string& message) {
     if (chatHandler_) chatHandler_->toggleAfk(message);
 }

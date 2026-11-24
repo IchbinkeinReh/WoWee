@@ -117,6 +117,7 @@
 #include "ui/ui_services.hpp"
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
+#include "game/idle_steps.hpp"
 #include "game/spell_handler.hpp"
 #include "game/chat_handler.hpp"
 #include "game/faction_hostility.hpp"
@@ -2580,6 +2581,10 @@ void Application::run() {
 #ifndef WOWEE_MOBILE
             if (mcp_ && mcp_->filterEvent(event)) continue;
 #endif
+            if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_MOUSE_WHEEL ||
+                event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || event.type == SDL_EVENT_FINGER_DOWN ||
+                event.type == SDL_EVENT_FINGER_MOTION)
+                Input::getInstance().noteHardwareEvent();
             // Sound in Background. Off in the real client and off here: losing
             // focus silences the client rather than playing on behind whatever
             // the player switched to. Read at the moment focus changes, so
@@ -3663,6 +3668,8 @@ void Application::setState(AppState newState) {
 
     LOG_INFO("State transition: ", static_cast<int>(state), " -> ", static_cast<int>(newState));
     state = newState;
+    // The idle minutes of a character count from its entering the world.
+    Input::getInstance().noteHardwareEvent();
 
     // Handle state transitions
     switch (newState) {
@@ -5236,6 +5243,19 @@ void Application::applyServerMovementState(float deltaTime) {
         if (auto* cam = renderer->getCameraController()) {
             cam->setBarberShopView(gameHandler && gameHandler->isBarberShopOpen() &&
                                    cam->isSeatedInChair());
+            if (gameHandler && gameHandler->isInWorld()) {
+                const auto idle = game::idleSteps({.idleMs = Input::getInstance().idleMs(),
+                                                   .standing = gameHandler->getStandState() == 0,
+                                                   .fighting = gameHandler->playerFights(),
+                                                   .mounted = gameHandler->isMounted(),
+                                                   .walking = gameHandler->clickToMoveUnderWay(),
+                                                   .onTaxi = onTaxi,
+                                                   .away = gameHandler->isAfk(),
+                                                   .loggingOut = gameHandler->isLoggingOut()});
+                if (idle.sit) cam->sitDown();
+                if (idle.away) gameHandler->toggleAfk();
+                if (idle.logout) gameHandler->logoutIdle();
+            }
         }
     }
     if (renderer && renderer->getTerrainManager()) {

@@ -2534,7 +2534,8 @@ void CameraController::update(float deltaTime) {
     const bool xKey = !uiWantsKeyboard && input.isKeyPressed(SDL_SCANCODE_X);
     bool xDown = xKey || (!uiWantsKeyboard && held(kControlDescend));
     const bool sitStandPress = (xKey && !xKeyWasDown) || std::exchange(bindingSitStand_, false);
-    if (sitStandPress && !isFlightAirborne()) {
+    const bool idleSit = std::exchange(sitDownAsked_, false) && !sitting;
+    if ((sitStandPress || idleSit) && !isFlightAirborne()) {
         const bool moving = nowForward || nowBackward || nowStrafeLeft || nowStrafeRight ||
                             nowTurnLeft || nowTurnRight;
         if (sitting) sitting = false;

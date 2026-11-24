@@ -4,6 +4,7 @@
 
 #include "game_replay.hpp"
 #include "game/combat_handler.hpp"
+#include "game/idle_steps.hpp"
 #include "game/movement_handler.hpp"
 #include "game/quest_handler.hpp"
 #include "game/spell_handler.hpp"
@@ -1074,4 +1075,64 @@ TEST_CASE("what a worldport lost is asked for again", "[replay][playtest]") {
     CHECK(names() == 2);
     CHECK(gh.getCachedPlayerName(kStranger) == "Midai");
     gh.setWorldEntryCallback({});
+}
+
+// 0x0052af40: nothing of it was there.
+TEST_CASE("five idle minutes sit down and go away, thirty log out", "[replay][playtest]") {
+    using wowee::game::IdlePlayer;
+    using wowee::game::idleSteps;
+    IdlePlayer p{.idleMs = 299999, .standing = true};
+    CHECK_FALSE(idleSteps(p).sit);
+    CHECK_FALSE(idleSteps(p).away);
+    p.idleMs = 300000;
+    CHECK(idleSteps(p).sit);
+    CHECK(idleSteps(p).away);
+    CHECK_FALSE(idleSteps(p).logout);
+    for (bool IdlePlayer::*no : {&IdlePlayer::fighting, &IdlePlayer::mounted, &IdlePlayer::walking}) {
+        IdlePlayer q = p;
+        q.*no = true;
+        CHECK_FALSE(idleSteps(q).sit);
+        CHECK(idleSteps(q).away);
+    }
+    IdlePlayer seated = p;
+    seated.standing = false;
+    CHECK_FALSE(idleSteps(seated).sit);
+    for (bool IdlePlayer::*no : {&IdlePlayer::onTaxi, &IdlePlayer::away}) {
+        IdlePlayer q = p;
+        q.*no = true;
+        CHECK(idleSteps(q).sit);
+        CHECK_FALSE(idleSteps(q).away);
+    }
+    p.idleMs = 1800000;
+    CHECK(idleSteps(p).logout);
+    CHECK_FALSE(idleSteps(p).sit);
+    p.loggingOut = true;
+    CHECK_FALSE(idleSteps(p).logout);
+}
+
+TEST_CASE("away ends with a step, and is the server's", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::PLAYER_FLAGS, 0}});
+    auto& gh = s.handler();
+    const auto said = [&] { return s.sent().of(Opcode::CMSG_MESSAGECHAT).size(); };
+    gh.toggleAfk();
+    REQUIRE(gh.isAfk());
+    const size_t before = said();
+    s.handler().sendMovement(Opcode::MSG_MOVE_JUMP);
+    CHECK(gh.isAfk());
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_FORWARD);
+    CHECK_FALSE(gh.isAfk());
+    CHECK(said() == before + 1);
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_STRAFE_LEFT);
+    CHECK(said() == before + 1);
+
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0x2}}));
+    CHECK(gh.isAfk());
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0x4}}));
+    CHECK_FALSE(gh.isAfk());
+    CHECK(gh.isDnd());
+
+    gh.logoutIdle();
+    gh.logoutIdle();
+    CHECK(s.sent().of(Opcode::CMSG_LOGOUT_REQUEST).size() == 1);
 }

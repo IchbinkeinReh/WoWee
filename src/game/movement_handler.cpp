@@ -668,6 +668,15 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         return;
     }
 
+    // The keys that move and turn end being away (0x005fae70, 0x005fafb0, 0x005fb0b0,
+    // 0x005face0; a vehicle's, 0x0056b5c0).
+    if (!owner_.clickToMoveUnderWay() &&
+        (opcode == Opcode::MSG_MOVE_START_FORWARD || opcode == Opcode::MSG_MOVE_START_BACKWARD ||
+         opcode == Opcode::MSG_MOVE_START_STRAFE_LEFT || opcode == Opcode::MSG_MOVE_START_STRAFE_RIGHT ||
+         opcode == Opcode::MSG_MOVE_START_TURN_LEFT || opcode == Opcode::MSG_MOVE_START_TURN_RIGHT ||
+         opcode == Opcode::MSG_MOVE_START_ASCEND || opcode == Opcode::MSG_MOVE_START_DESCEND))
+        owner_.clearAfkMoving();
+
     // Into the air before rising in it: the take-off's CMSG_MOVE_SET_FLY, and
     // the controls looked at again after it (0x007413f0 -> 0x005fbbc0). Not
     // from the water: a swimmer swims up (0x009898e0 keeps SWIMMING).

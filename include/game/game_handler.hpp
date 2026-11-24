@@ -1384,6 +1384,10 @@ public:
     void toggleAfk(const std::string& message = "");
     void toggleDnd(const std::string& message = "");
     bool isAfk() const { return afkStatus_; }
+    /// The player moves: no longer away, where autoClearAFK says so (0x006d52d0).
+    void clearAfkMoving();
+    /// Thirty minutes without a key or the mouse: IDLE_MESSAGE, and out (0x0052af40).
+    void logoutIdle();
     bool isDnd() const { return dndStatus_; }
     void replyToLastWhisper(const std::string& message);
     std::string getLastWhisperSender() const {
@@ -3275,6 +3279,8 @@ public:
     bool autoInteractOn() const;
     /// 0x00721f50: the player alive, the active mover, and autoInteract on.
     bool clickToMoveAllowed() const;
+    /// 0x00721f90.
+    bool clickToMoveUnderWay() const { return ctm_.kind != click_to_move::Kind::None; }
     /// 0x00721f90: a click-to-move under way for the player.
     bool isClickToMoving() const;
     /// 0x007272c0: given up or done; the mover stops moving forward. With
