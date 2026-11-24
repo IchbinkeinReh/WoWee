@@ -2791,6 +2791,11 @@ void GameHandler::ensureAchievementCategoriesLoaded() {
         // exist. Kept both ways round because the panel walks it backwards to
         // list a finished chain and forwards to find the step still open.
         const uint32_t supercedes = dbc->getUInt32(i, 3);
+        achievementRows_.push_back({.id = id,
+                                    .faction = getAchievementFaction(id),
+                                    .previous = supercedes,
+                                    .category = category,
+                                    .flags = getAchievementFlags(id)});
         if (supercedes != 0) {
             achievementSupercedes_[id] = supercedes;
             achievementSupercededBy_[supercedes] = id;

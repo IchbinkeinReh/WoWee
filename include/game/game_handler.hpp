@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/achievement_list.hpp"
 #include "game/macro_list.hpp"
 #include "game/achievement_tracking.hpp"
 #include "game/npc_interaction.hpp"
@@ -4387,6 +4388,8 @@ public:
     /// "Expert Cook" behind "Journeyman Cook". The achievement panel walks it
     /// backwards to build a completed chain and forwards to find the step in
     /// progress, so both directions are kept.
+    /// Achievement.dbc in its own order (ensureAchievementCategoriesLoaded).
+    const std::vector<AchievementRow>& getAchievementRows() const { return achievementRows_; }
     uint32_t getAchievementSupercedes(uint32_t achievementId) const {
         auto it = achievementSupercedes_.find(achievementId);
         return it != achievementSupercedes_.end() ? it->second : 0u;
@@ -7521,6 +7524,7 @@ private:
     std::unordered_map<uint32_t, AchievementCategoryInfo> achievementCategoryInfo_;
     std::vector<uint32_t> achievementCategoryOrder_;
     std::vector<uint32_t> statisticCategoryOrder_;
+    std::vector<AchievementRow> achievementRows_;
     std::unordered_map<uint32_t, uint32_t> achievementSupercedes_;
     std::unordered_map<uint32_t, uint32_t> achievementSupercededBy_;
     bool achievementCategoriesLoaded_ = false;
