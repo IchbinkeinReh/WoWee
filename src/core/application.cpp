@@ -226,8 +226,8 @@ const game::ActiveTransport* unitRideOf(game::GameHandler& gh, uint64_t guid) {
 
 float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
                    EntitySpawner::UnitBody& body, float facing, uint32_t moveFlags,
-                   float deltaTime, bool snap, bool mayShuffle, const game::ActiveTransport* ride = nullptr,
-                   uint64_t rideGuid = 0) {
+                   float deltaTime, bool snap, bool mayShuffle, uint32_t mountInstance,
+                   const game::ActiveTransport* ride = nullptr, uint64_t rideGuid = 0) {
     namespace by = rendering::body_yaw;
     if (body.instanceId != instanceId) {
         body = {};
@@ -257,22 +257,25 @@ float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
     in.hasHead = body.hasHead;
     in.halveSpine = true;
     const by::Result r = by::update(body.state, in);
-    cr.setInstanceTorsoYaw(instanceId, r.spineYaw, r.headYaw);
+    // On a mount the spine keeps its pose (+0x98c), the head looks on.
+    cr.setInstanceTorsoYaw(instanceId, mountInstance != 0 ? 0.0f : r.spineYaw, r.headYaw);
 
+    // The model it shows, its mount's where it rides (vtable +0xd4), shuffles.
+    const uint32_t shown = mountInstance != 0 ? mountInstance : instanceId;
     const by::TurnShuffle want = by::turnShuffle(moveFlags, r.step, mayShuffle);
     body.turning = want != by::TurnShuffle::None;
     body.turningLeft = want == by::TurnShuffle::Left;
     uint32_t wantAnim = want == by::TurnShuffle::Left  ? rendering::anim::SHUFFLE_LEFT
                       : want == by::TurnShuffle::Right ? rendering::anim::SHUFFLE_RIGHT : 0;
-    if (wantAnim != 0 && !cr.hasAnimation(instanceId, wantAnim)) wantAnim = 0;
+    if (wantAnim != 0 && !cr.hasAnimation(shown, wantAnim)) wantAnim = 0;
     uint32_t cur = 0;
     float curTime = 0.0f, curDuration = 0.0f;
-    if (cr.getAnimationState(instanceId, cur, curTime, curDuration)) {
+    if (cr.getAnimationState(shown, cur, curTime, curDuration)) {
         const bool shuffling = cur == rendering::anim::SHUFFLE_LEFT || cur == rendering::anim::SHUFFLE_RIGHT;
         if (wantAnim != 0 && cur != wantAnim && (cur == rendering::anim::STAND || shuffling)) {
-            cr.playAnimation(instanceId, wantAnim, /*loop=*/true);
+            cr.playAnimation(shown, wantAnim, /*loop=*/true);
         } else if (wantAnim == 0 && shuffling) {
-            cr.playAnimation(instanceId, rendering::anim::STAND, /*loop=*/true);
+            cr.playAnimation(shown, rendering::anim::STAND, /*loop=*/true);
         }
     }
     return body.state.body;
@@ -418,7 +421,7 @@ uint32_t unitChannelSpell(const game::Entity& entity) {
 // placed its model (on a mount, the rider up on the saddle); nothing is
 // written back.
 void feedUnitWaveRide(rendering::Renderer& renderer, EntitySpawner& spawner, uint64_t guid, uint32_t instanceId,
-                      const game::Unit& unit, const glm::vec3& drawnAt, bool dead) {
+                      const game::Unit& unit, const glm::vec3& feet, bool dead) {
     auto* gh = Application::getInstance().getGameHandler();
     if (dead || !gh) return;
     constexpr uint32_t kSwimming = static_cast<uint32_t>(game::MovementFlags::SWIMMING);
@@ -427,10 +430,8 @@ void feedUnitWaveRide(rendering::Renderer& renderer, EntitySpawner& spawner, uin
     const auto& attachments = gh->transportAttachmentsRef();
     const auto attached = attachments.find(guid);
     const uint64_t transportGuid = attached != attachments.end() ? attached->second.transportGuid : 0;
-    // A rider's mount stands under it, where the water's depth is taken.
     const auto* mount = spawner.getRemotePlayerMount(guid);
-    const glm::vec3 ground = mount ? drawnAt - glm::vec3(0.0f, 0.0f, mount->riderHeight) : drawnAt;
-    renderer.rideWavesUnit(guid, instanceId, mount ? mount->instanceId : 0u, ground, swimming, transportGuid);
+    renderer.rideWavesUnit(guid, instanceId, mount ? mount->instanceId : 0u, feet, swimming, transportGuid);
 }
 
 // Another unit's animation tier and what 0x007385c0 reads of it, onto its
@@ -440,7 +441,9 @@ void feedUnitWaveRide(rendering::Renderer& renderer, EntitySpawner& spawner, uin
 // yards (rendering::SwimEffects::kUnitRippleRange): at 60 a swimmer across a
 // lake or a canal left the water still. Over the traced water, whose sprite
 // ripples are not drawn, the unit disturbs the traced surface as the
-// character does there (Renderer::unitInRtWater), to the same range.
+// character does there (Renderer::unitInRtWater), to the same range. A rider's
+// are its mount's, at the mount's feet: at its own, up on the seat, a mount
+// wading left the water still.
 void feedUnitRipple(rendering::Renderer& renderer, EntitySpawner& spawner, uint64_t guid, uint32_t instanceId,
                     const game::Unit& unit, const glm::vec3& feet, bool moving, bool dead, float deltaTime) {
     // The ride on the waves first: it wants every unit in the sync, not only
@@ -472,6 +475,7 @@ void syncUnitAnimation(rendering::CharacterRenderer& cr, game::GameHandler& gh, 
     cr.setAnimationTier(instanceId, unitAnimationTier(unit));
     // The mount under it, which plays what the unit is asked (0x007385c0).
     cr.setRiderMount(instanceId, mountInstance);
+    cr.setRiderSeat(instanceId, mountInstance);
     const bool riding = mountInstance != 0;
     const auto& body = spawner.getUnitBodies()[guid];
     auto state = unitAnimationState(gh, spawner, guid, unit, unitBodyFlags(unit, moving, swimming, flying),
@@ -6157,8 +6161,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // the renderer to the correct destination via the spline packet.
                 posIt->second = renderPos;
 
-                feedUnitRipple(*renderer, *entitySpawner_, guid, instanceId, *unitPtr, renderPos, isMovingNow && !deadOrCorpse,
-                               deadOrCorpse, deltaTime);
+                feedUnitRipple(*renderer, *entitySpawner_, guid, instanceId, *unitPtr, creatureMountPos,
+                               isMovingNow && !deadOrCorpse, deadOrCorpse, deltaTime);
 
                 // The speed its movement animation plays to: the spline's,
                 // as the client's GetCurrentSpeed gives it for a unit on one.
@@ -6243,9 +6247,10 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 bodyYaw = turnUnitBody(*charRenderer, instanceId, entitySpawner_->getUnitBodies()[guid],
                                        bodyYaw,
                                        unitBodyFlags(*entity, isMovingNow, isSwimmingNow, isFlyingNow),
-                                       deltaTime, deadOrCorpse || creatureMount != nullptr,
-                                       !jumpHolds && !isMovingNow && !deadOrCorpse && !creatureMount &&
+                                       deltaTime, deadOrCorpse,
+                                       !jumpHolds && !isMovingNow && !deadOrCorpse &&
                                            unitPtr->getStandState() == 0,
+                                       creatureMount ? creatureMount->instanceId : 0u,
                                        unitRideOf(*gameHandler, guid), unitRideGuidOf(*gameHandler, guid));
             }
             // Tilted by its pitch while it swims or flies forward or back
@@ -6388,8 +6393,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     }
                 }
                 posIt->second = renderPos;
-                feedUnitRipple(*renderer, *entitySpawner_, guid, instanceId, *unitPtr, renderPos, isMovingNow && !deadOrCorpse,
-                               deadOrCorpse, deltaTime);
+                feedUnitRipple(*renderer, *entitySpawner_, guid, instanceId, *unitPtr, mountRenderPos,
+                               isMovingNow && !deadOrCorpse, deadOrCorpse, deltaTime);
 
                 // The speed the player's (or its mount's) movement animation
                 // plays to - see the creature loop above.
@@ -6466,9 +6471,10 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 bodyYaw = turnUnitBody(*charRenderer, instanceId, entitySpawner_->getUnitBodies()[guid],
                                        bodyYaw,
                                        unitBodyFlags(*entity, isMovingNow, isSwimmingNow, isFlyingNow),
-                                       deltaTime, deadOrCorpse || remoteMount != nullptr,
-                                       !jumpHolds && !isMovingNow && !deadOrCorpse && !remoteMount &&
+                                       deltaTime, deadOrCorpse,
+                                       !jumpHolds && !isMovingNow && !deadOrCorpse &&
                                            unitPtr->getStandState() == 0,
+                                       remoteMount ? remoteMount->instanceId : 0u,
                                        unitRideOf(*gameHandler, guid), unitRideGuidOf(*gameHandler, guid));
             }
             const float unitTilt = unitSwimTilt(*gameHandler, *entity, guid,

@@ -3612,8 +3612,34 @@ void CharacterRenderer::setInstanceSeat(uint32_t instanceId, uint32_t parentInst
     auto& instance = it->second;
     if (instance.seatParent != parentInstanceId) instance.mirrorsSeatParent = false;
     instance.seatParent = parentInstanceId;
+    instance.seatIsMount = false;
     instance.seatAttachment = attachmentId;
     instance.seatPose = pose;
+}
+
+void CharacterRenderer::setRiderSeat(uint32_t riderInstanceId, uint32_t mountInstanceId) {
+    auto it = instances.find(riderInstanceId);
+    if (it == instances.end()) return;
+    auto& rider = it->second;
+    if (mountInstanceId == 0) {
+        if (rider.seatIsMount) clearInstanceSeat(riderInstanceId);
+        return;
+    }
+    if (rider.seatParent != 0 && !rider.seatIsMount) return;  // in a vehicle's seat
+    // A model without the mount's own attachment has a rider's place in one
+    // of these, as the player's mount is probed (AnimationController).
+    int32_t attachment = -1;
+    for (const uint32_t id : {0u, 5u, 6u, 7u, 8u}) {
+        if (!modelAttachmentPosition(mountInstanceId, id)) continue;
+        attachment = static_cast<int32_t>(id);
+        break;
+    }
+    if (attachment < 0) return;
+    rider.seatParent = mountInstanceId;
+    rider.seatIsMount = true;
+    rider.seatAttachment = attachment;
+    rider.seatPose = {};
+    rider.seatPose.passengerScale = rider.scale;
 }
 
 void CharacterRenderer::clearInstanceSeat(uint32_t instanceId) {
@@ -3622,6 +3648,7 @@ void CharacterRenderer::clearInstanceSeat(uint32_t instanceId) {
     auto& instance = it->second;
     if (instance.seatParent == 0) return;
     instance.seatParent = 0;
+    instance.seatIsMount = false;
     instance.seatAttachment = -1;
     instance.seatAnimationHeld = false;
     instance.mirrorsSeatParent = false;
@@ -3789,6 +3816,7 @@ void CharacterRenderer::placeSeatedInstances() {
         if (inst.seatParent == 0 && !inst.seatFlight) continue;
         if (inst.seatParent != 0 && instances.find(inst.seatParent) == instances.end()) {
             inst.seatParent = 0;
+            inst.seatIsMount = false;
             inst.seatAnimationHeld = false;
             inst.mirrorsSeatParent = false;
             inst.hasOverrideModelMatrix = false;

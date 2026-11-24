@@ -194,7 +194,7 @@ public:
     /// Whether the instance is hung on a seat (setInstanceSeat).
     [[nodiscard]] bool isInstanceSeated(uint32_t instanceId) const {
         auto it = instances.find(instanceId);
-        return it != instances.end() && it->second.seatParent != 0;
+        return it != instances.end() && it->second.seatParent != 0 && !it->second.seatIsMount;
     }
     /// What the arms' animations reached since the last call: bit 0 the
     /// left arm's event, 1 the right's; bit 2 the left's end, 3 the right's.
@@ -353,6 +353,11 @@ public:
     void setInstanceSeat(uint32_t instanceId, uint32_t parentInstanceId, int32_t attachmentId,
                          const vehicle_seat::PassengerPose& pose);
     void clearInstanceSeat(uint32_t instanceId);
+    /// Another unit on its mount: hung on the mount's seat attachment, at its
+    /// own size (0x0073d5d0: 0x00831630(mount, 0) under 0x004e26f0(1 / the
+    /// mount display's scale)), so it goes with the seat as the mount moves
+    /// it. 0 takes it off.
+    void setRiderSeat(uint32_t riderInstanceId, uint32_t mountInstanceId);
     /// The passenger flies into or out of its seat instead of sitting in it
     /// (0x0074a7f0 states 1, 2, 4, 5); a flight with no end flies to the
     /// seat setInstanceSeat gave it. Nothing ends it.
@@ -900,6 +905,7 @@ private:
         /// setInstanceSeat: the instance it is hung on, 0 for none, at which
         /// of its attachments (-1 its own matrix) and how.
         uint32_t seatParent = 0;
+        bool seatIsMount = false;  ///< setRiderSeat
         int32_t seatAttachment = -1;
         vehicle_seat::PassengerPose seatPose;
         /// setInstanceSeatFlight.
