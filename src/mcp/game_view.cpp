@@ -15,6 +15,7 @@
 #include "game/protocol_constants.hpp"
 #include "game/quest_giver_status.hpp"
 #include "game/transport_manager.hpp"
+#include "mcp/object_kind.hpp"
 #include "mcp/tool_context.hpp"
 #include "mcp/world_probe.hpp"
 #include "rendering/camera.hpp"
@@ -87,16 +88,6 @@ const char* questMark(game::QuestGiverStatus status) {
         case S::LOW_LEVEL_REWARD_REP: return "?";
         default: return nullptr;
     }
-}
-
-const char* objectKind(uint32_t type) {
-    constexpr std::array<const char*, 36> kNames = {
-        "door", "button", "questgiver", "chest", "binder", "generic", "trap", "chair", "spell_focus", "text",
-        "goober", "transport", "area_damage", "camera", "map_object", "mo_transport", "duel_arbiter", "fishing_bobber",
-        "ritual", "mailbox", "guard_post", "spellcaster", "meeting_stone", "flag_stand", "fishing_hole", "flag_drop",
-        "mini_game", "lottery", "capture_point", "aura_generator", "dungeon_difficulty", "barber_chair",
-        "destructible", "guild_bank", "trapdoor", "?"};
-    return kNames[std::min<size_t>(type, kNames.size() - 1)];
 }
 
 }  // namespace
