@@ -1363,6 +1363,7 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         "  local store = rawget(UIParent, '__attributes')\n"
         "  if not store then store = {}; rawset(UIParent, '__attributes', store) end\n"
         "  for name, value in pairs(defaults) do\n"
+        "    name = string.lower(name)\n"
         "    if store[name] == nil then store[name] = value end\n"
         "  end\n"
         "end\n");

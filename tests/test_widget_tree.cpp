@@ -3765,3 +3765,15 @@ TEST_CASE("a model frame shows its creature once it is known", "[widgets]") {
     CHECK(w.shownDisplay(displayOf) == 0);
     CHECK(asked == 3);
 }
+
+TEST_CASE("attributes may be changed for the moment in a frame that allows it", "[widgets]") {
+    WidgetTree tree;
+    const uint32_t header = tree.create(WidgetKind::Frame, tree.rootId(), "Header");
+    const uint32_t child = tree.create(WidgetKind::Frame, header, "Child");
+    const uint32_t other = tree.create(WidgetKind::Frame, tree.rootId(), "Other");
+    CHECK_FALSE(tree.attributesAllowed(child));
+    tree.get(header)->attributesAllowed = true;
+    CHECK(tree.attributesAllowed(header));
+    CHECK(tree.attributesAllowed(child));
+    CHECK_FALSE(tree.attributesAllowed(other));
+}

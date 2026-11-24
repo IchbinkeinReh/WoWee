@@ -444,6 +444,8 @@ struct Widget {
     enum class ButtonState : uint8_t { Disabled, Normal, Pushed };
     bool pushed = false;
     bool stateLocked = false;
+    /// AllowAttributeChanges (+0xb4 0x8000).
+    bool attributesAllowed = false;
     bool inClick = false;
     /// When it was last clicked, for a double click; 0 after one.
     double lastClickAt = 0.0;
@@ -1146,6 +1148,13 @@ public:
     /// 0x00489de0): a frame with no points has none, and what is placed by it
     /// has none either.
     [[nodiscard]] bool placed(uint32_t id, int depth = 0) const;
+    /// Whether a frame's attributes may be changed by anybody for the moment,
+    /// its own flag or that of one it is in (0x0048ed30).
+    [[nodiscard]] bool attributesAllowed(uint32_t id) const {
+        for (const Widget* w = get(id); w; w = w->parent != 0 ? get(w->parent) : nullptr)
+            if (w->attributesAllowed) return true;
+        return false;
+    }
     /// SetParent: the points stay where they are - by the region that was the
     /// parent, where they were set by the parent (0x004911b0 leaves them).
     void pinPoints(uint32_t id);

@@ -439,10 +439,13 @@ public:
     /// A key pressed with no edit box to have it: the box in view, the topmost
     /// one, that takes the keyboard by itself (0x009658d0).
     void takeKeyboard();
+    /// A frame whose attributes anybody may change until the next update.
+    void noteAttributesAllowed(uint32_t wid);
     /// An edit box made.
     void noteEditBox(uint32_t wid) { editBoxes_.push_back(wid); }
 private:
     std::vector<uint32_t> editBoxes_;
+    std::vector<uint32_t> attributesAllowed_;
     bool toldOnce_ = false;
     /// Whether a button is registered for the press, or the release, of a
     /// mouse button: the left one's release where nothing is.

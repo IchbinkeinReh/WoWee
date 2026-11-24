@@ -1,4 +1,5 @@
 #include "addons/lua_engine.hpp"
+#include "addons/frame_attributes.hpp"
 #include "addons/frame_handle.hpp"
 #include "addons/lua_arg_guard.hpp"
 #include "addons/lua_std_libs.hpp"
@@ -922,12 +923,19 @@ static int lua_Frame_CanChangeProtectedState(lua_State* L) {
     pushFlag(L, !(w && w->protectedFrame && taint::combatLockdown()));
     return 1;
 }
-// CanChangeAttribute() -> whether SetAttribute would be let through, asked
-// without the refusal being reported.
-static int lua_Frame_CanChangeAttribute(lua_State* L) {
+/// Whether SetAttribute is let through (0x0049f610): where the frame may be
+/// changed, or where changes of its attributes, or of those of one it is in, are
+/// allowed for the moment (0x0048ed30).
+static bool attributeChangeAllowed(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
     const auto* w = widgetOf(L, 1);
-    pushFlag(L, !(w && w->protectedFrame && taint::current() != 0 &&
-                  taint::combatLockdown()));
+    if (!w || !w->protectedFrame || taint::current() == 0 || !taint::combatLockdown()) return true;
+    return tree && tree->attributesAllowed(w->id);
+}
+// CanChangeAttribute() -> whether SetAttribute would be let through, asked
+// without the refusal being reported (0x0049f260).
+static int lua_Frame_CanChangeAttribute(lua_State* L) {
+    pushFlag(L, attributeChangeAllowed(L));
     return 1;
 }
 
@@ -939,9 +947,11 @@ static int lua_Frame_CanChangeAttribute(lua_State* L) {
 // an addon having configured the button out of combat. OnAttributeChanged
 // then runs as any script does, under whoever set it.
 static int lua_Frame_SetAttribute(lua_State* L) {
-    if (!protectedFrameAllows(L)) return 0;
-    lua_settop(L, 3);
-    if (!lua_istable(L, 1) || !lua_isstring(L, 2)) {
+    if (!attributeChangeAllowed(L)) {
+        taint::reportRefusal(L, taint::Refusal::BlockedInCombat);
+        return 0;
+    }
+    if (!lua_istable(L, 1) || !lua_isstring(L, 2) || lua_isnone(L, 3)) {
         const char* who = "<unnamed>";
         if (lua_istable(L, 1)) {
             lua_getfield(L, 1, "__name");
@@ -949,26 +959,18 @@ static int lua_Frame_SetAttribute(lua_State* L) {
         }
         return luaL_error(L, "Usage: %s:SetAttribute(\"name\", value)", who);
     }
-    lua_settaintof(L, 3, 0);
-    taint::Quiet quiet;
-    lua_getfield(L, 1, "__attributes");
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        lua_newtable(L);
-        lua_pushvalue(L, -1);
-        lua_setfield(L, 1, "__attributes");
-    }
-    lua_pushvalue(L, 2);
+    lua_settop(L, 3);
+    const std::string name = lua_tostring(L, 2);
     lua_pushvalue(L, 3);
-    lua_rawset(L, -3);
-    lua_pop(L, 1);
+    storeFrameAttribute(L, 1, name.c_str());
+    taint::Quiet quiet;
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
         lua_getfield(L, -1, "OnAttributeChanged");
         if (lua_isfunction(L, -1)) {
-            lua_pushvalue(L, 1);
-            lua_pushvalue(L, 2);
-            lua_pushvalue(L, 3);
+            // 0x0048ec10: all of it fresh and secure, so that the handler runs
+            // as whoever set it, whoever changes the attribute.
+            pushAttributeChange(L, 1, name.c_str(), 3);
             if (pcallScript(L, "OnAttributeChanged", 3, 0) != 0)
                 recordScriptError(L, "OnAttributeChanged");
         } else {
@@ -976,6 +978,22 @@ static int lua_Frame_SetAttribute(lua_State* L) {
         }
     }
     lua_pop(L, 1);
+    return 0;
+}
+
+static int lua_Frame_GetAttribute(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const auto* w = widgetOf(L, 1);
+    return getFrameAttribute(L, w && !w->name.empty() ? w->name.c_str() : "<unnamed>");
+}
+
+// AllowAttributeChanges() (0x0049f210): secure code lets anybody set the
+// attributes of the frame and of those in it, until the next update.
+static int lua_Frame_AllowAttributeChanges(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w || taint::current() != 0) return 0;
+    w->attributesAllowed = true;
+    if (auto* e = engineFrom(L)) e->noteAttributesAllowed(w->id);
     return 0;
 }
 
@@ -11232,6 +11250,7 @@ void LuaEngine::shutdown() {
         // path loads the interface again on a state it thought was empty.
         widgets_.reset();
         editBoxes_.clear();
+        attributesAllowed_.clear();
         toldOnce_ = false;
         hoverWid_ = 0;
         focusedWid_ = 0;
@@ -12024,6 +12043,8 @@ void LuaEngine::registerCoreAPI() {
         {"SetScript",       lua_Frame_SetScript},
         {"HookScript",      lua_Frame_HookScript},
         {"SetAttribute",    lua_Frame_SetAttribute},
+        {"GetAttribute",    lua_Frame_GetAttribute},
+        {"AllowAttributeChanges", lua_Frame_AllowAttributeChanges},
         {"Click",           lua_Frame_Click},
         {"SetID",           lua_Frame_SetID},
         {"IsProtected",     lua_Frame_IsProtected},
@@ -13540,35 +13561,6 @@ void LuaEngine::registerCoreAPI() {
         "    local ok, out = pcall(string.format, fmt, ...)\n"
         "    self:SetText(ok and out or fmt)\n"
         "end\n"
-        // The three-argument form names one attribute in pieces, and falls
-        // back to the bare name when no piece-specific value was set - which
-        // is how every action button works. ActionButton_OnLoad sets "type",
-        // and the secure code asks for it as prefix "", name "type", suffix
-        // "1", because the suffix for LeftButton is "1". Without the fallback
-        // the lookup was for "type1", found nothing, and the click ran no
-        // handler at all: the button was hit, and no spell was cast.
-        // A '*' stands in for either piece, and both have to be tried.
-        //
-        // SecureUnitButton_OnLoad sets "*type1" and "*type2" - the asterisk
-        // meaning "whatever modifier is held". Asking for prefix "", name
-        // "type", suffix "1" looked for "type1", then for "type", and found
-        // neither, so clicking a unit frame ran no handler at all: the player
-        // frame did not target and right-clicking it opened no menu. Both
-        // symptoms, one missing lookup.
-        //
-        // The order is the client's: most specific first, the bare name last.
-        "function mt:GetAttribute(a, b, c)\n"
-        "    if not self.__attributes then return nil end\n"
-        "    if b == nil then return self.__attributes[a] end\n"
-        "    local at = self.__attributes\n"
-        "    local p, s = a or '', c or ''\n"
-        "    local v = at[p .. b .. s]\n"
-        "    if v == nil then v = at['*' .. b .. s] end\n"
-        "    if v == nil then v = at[p .. b .. '*'] end\n"
-        "    if v == nil then v = at['*' .. b .. '*'] end\n"
-        "    if v == nil then v = at[b] end\n"
-        "    return v\n"
-        "end\n"
         // A scroll frame's content frame.
         // Nothing to scroll until the tree has been laid out, and zero is the
         // honest answer then. ScrollFrame_OnScrollRangeChanged compares the
@@ -13685,7 +13677,7 @@ void LuaEngine::registerCoreAPI() {
     bootstrap(
         "__WoweeWidgetMethods = {\n"
         "AddDoubleLine=1,AddHistoryLine=1,AddLine=1,AddMessage=1,AddTexture=1,\n"
-        "AddToAutoHide=1,AllowAttributeChanges=1,Animate=1,\n"
+        "AddToAutoHide=1,Animate=1,\n"
         "CallMethod=1,ChildUpdate=1,Clear=1,ClearAllPoints=1,\n"
         "ClearBinding=1,ClearBindings=1,ClearFocus=1,ClearHistory=1,ClearLines=1,\n"
         "ClearModel=1,CreateFontString=1,CreatePlayerArrowFrame=1,\n"
@@ -19318,7 +19310,14 @@ void LuaEngine::settleTextChanged(uint32_t wid) {
     if (const auto userInput = textChanges_.takeOf(wid)) fireTextChanged(wid, *userInput);
 }
 
+void LuaEngine::noteAttributesAllowed(uint32_t wid) { attributesAllowed_.push_back(wid); }
+
 void LuaEngine::dispatchOnUpdate(float elapsed) {
+    // 0x00495320: the attributes allowed to be changed for the moment are not
+    // any more.
+    for (const uint32_t id : std::exchange(attributesAllowed_, {}))
+        if (auto* w = widgets_.get(id)) w->attributesAllowed = false;
+
     // Asked for by the check, and answered here because only this side can ask
     // the interface anything.
     if (ui::frameXmlTakeProbeRequest()) runInterfaceProbe();
