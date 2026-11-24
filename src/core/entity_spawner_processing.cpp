@@ -2062,6 +2062,7 @@ uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec
     const uint32_t instanceId = cr->createInstance(modelId, renderPos, glm::vec3(0.0f, 0.0f, renderYaw),
                                                    scale * creatureDisplayScale(displayId));
     if (instanceId == 0) return 0;
+    cr->setInstanceDisplayAlpha(instanceId, displayAlpha(displayId));
     applyHumanoidInstanceOverrides(instanceId, modelId, displayId);
     normalizeHumanoidClothingGeosets(instanceId, modelId, displayId);
     return instanceId;

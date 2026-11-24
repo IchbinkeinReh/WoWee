@@ -1,4 +1,5 @@
 #include "core/entity_spawner.hpp"
+#include "rendering/unit_alpha.hpp"
 #include "core/asset_prefetch.hpp"
 #include "core/character_component.hpp"
 #include "core/item_attachments.hpp"
@@ -1460,6 +1461,9 @@ void EntitySpawner::buildCreatureDisplayLookups() {
                 const float displayScale = cdi->getFloat(i, scaleField);
                 if (displayScale > 0.0f) data.displayScale = displayScale;
             }
+            // Column 5 in every version of the file.
+            constexpr uint32_t kAlphaField = 5;
+            if (kAlphaField < cdi->getFieldCount()) data.modelAlpha = cdi->getUInt32(i, kAlphaField);
             const uint32_t pcField = cdiL ? (*cdiL)["ParticleColorID"] : 0xFFFFFFFFu;
             if (pcField != 0xFFFFFFFFu && pcField < cdi->getFieldCount()) {
                 data.particleColorId = cdi->getUInt32(i, pcField);
@@ -2829,6 +2833,11 @@ float EntitySpawner::creatureModelScale(uint32_t displayId) const {
     return it != modelIdToScale_.end() ? it->second : 1.0f;
 }
 
+float EntitySpawner::displayAlpha(uint32_t displayId) const {
+    auto it = displayDataMap_.find(displayId);
+    return it != displayDataMap_.end() ? rendering::unit_alpha::ofDisplay(it->second.modelAlpha) : 1.0f;
+}
+
 float EntitySpawner::creatureDisplayScale(uint32_t displayId) const {
     auto it = displayDataMap_.find(displayId);
     return it != displayDataMap_.end() ? it->second.displayScale : 1.0f;
@@ -3262,6 +3271,7 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
 
     // Track instance
     creatureInstances_[guid] = instanceId;
+    charRenderer->setInstanceDisplayAlpha(instanceId, displayAlpha(displayId));
     // 0x00730100: a unit whose model has come in is announced to the
     // interface - UNIT_PORTRAIT_UPDATE then UNIT_MODEL_CHANGED (0x00512b50 ->
     // 0x00618110 with 3), for each token naming it - so a portrait asked for

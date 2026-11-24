@@ -876,6 +876,8 @@ private:
         /// CreatureDisplayInfo.ParticleColorID: the ParticleColor record that
         /// recolours the model's emitters naming slot 11, 12 or 13.
         uint32_t particleColorId = 0;
+        /// CreatureDisplayInfo.CreatureModelAlpha, of 255.
+        uint32_t modelAlpha = 255;
     };
 
     /// CreatureModelData.ModelScale for a model id, the second half of the
@@ -888,6 +890,8 @@ private:
     /// asking this with one silently answered 1.0 for every creature there
     /// has ever been. 306 displays want 1.25 and two want 2.0.
     float creatureModelScale(uint32_t displayId) const;
+    /// The display's share of its model (unit_alpha.hpp).
+    float displayAlpha(uint32_t displayId) const;
 
     /// CreatureDisplayInfo.CreatureModelScale for a display id, or 1.0 where
     /// the display is unknown - an unknown display is already drawn at the

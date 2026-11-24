@@ -300,6 +300,9 @@ public:
     void setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond);
     void startFadeIn(uint32_t instanceId, float durationSeconds);
     void setInstanceOpacity(uint32_t instanceId, float opacity);
+    /// The unit's display's share of its model (unit_alpha::ofDisplay), under
+    /// any spell kit's; its weapons take it too.
+    void setInstanceDisplayAlpha(uint32_t instanceId, float alpha);
     /// The mouseover highlight on one instance, off on every other.
     void setHighlightedInstance(uint32_t instanceId);
     /// How much of the model the camera's closeness leaves (0x00737390), on
@@ -844,8 +847,9 @@ private:
 
         // Opacity (for fade-in)
         float opacity = 1.0f;
-        /// A spell kit's alpha (setInstanceKitAlpha), multiplying opacity.
+        /// Its display's alpha and a spell kit's (unit_alpha.hpp), multiplying opacity.
         float kitAlpha = 1.0f;
+        float displayAlpha = 1.0f;  ///< the display's alone (setInstanceDisplayAlpha)
         float cameraAlpha = 1.0f;  ///< the camera's closeness (0x004f8660 -> 0x00737390)
         float kitAlphaFrom = 1.0f;
         float kitAlphaTo = 1.0f;

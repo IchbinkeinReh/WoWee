@@ -10,6 +10,7 @@
 #include "core/weapon_attachment.hpp"
 #include "game/spell_target_kind.hpp"
 #include "rendering/spell_kit.hpp"
+#include "rendering/unit_alpha.hpp"
 
 #include <glm/glm.hpp>
 
@@ -377,4 +378,16 @@ TEST_CASE("SPELL_GO's ImpactAreaKit waits the way at the spell's speed (0x0080e1
     // No speed, or no caster to measure from: at once.
     CHECK_FALSE(sk::areaImpactDelayMs(0.0f, glm::vec3(0.0f), place).has_value());
     CHECK_FALSE(sk::areaImpactDelayMs(20.0f, std::nullopt, place).has_value());
+}
+
+// CreatureDisplayInfo's CreatureModelAlpha was read by nothing (playtest T82).
+TEST_CASE("a unit's alpha is its display's, times a kit's", "[spell_kit]") {
+    namespace ua = wowee::rendering::unit_alpha;
+    CHECK(ua::ofDisplay(255) == Catch::Approx(1.0f));
+    CHECK(ua::ofDisplay(102) == Catch::Approx(0.4f));
+    CHECK(ua::ofDisplay(0) == 0.0f);
+    CHECK(ua::target(ua::ofDisplay(128), 0.5f) == Catch::Approx(0.25098f));
+    CHECK(ua::atOnce(0.5f, 0.5001f, 2.0f));
+    CHECK(ua::atOnce(1.0f, 0.5f, 0.0f));
+    CHECK_FALSE(ua::atOnce(1.0f, 0.5f, 0.5f));
 }
