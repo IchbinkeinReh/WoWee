@@ -760,7 +760,8 @@ bool WidgetTree::placed(uint32_t id, int depth) const {
     if (w->anchors.empty()) {
         // What the client places itself: the art and the text of a frame, a
         // scroll frame's child, a tooltip.
-        const bool bySelf = w->kind == WidgetKind::Frame && !w->isTooltip && !(parent && parent->scrollChild == id);
+        const bool bySelf = w->needsPoint || (w->kind == WidgetKind::Frame && !w->isTooltip &&
+                                              !(parent && parent->scrollChild == id));
         return !bySelf && placed(w->parent, depth + 1);
     }
     return std::all_of(w->anchors.begin(), w->anchors.end(), [&](const Anchor& a) {
@@ -1133,6 +1134,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     const bool unanchoredFrame = (w->kind == WidgetKind::Frame) &&
                                  w->anchors.empty() && id != rootId_ &&
                                  !isScrollChild;
+    const bool nowhere = unanchoredFrame || (w->needsPoint && w->anchors.empty());
     // Two questions, and they are not the same one. Running is shown with
     // every ancestor shown; drawing additionally needs somewhere to be drawn.
     // Inherited from the parent's chain rather than its `visible`, or a child
@@ -1149,7 +1151,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // anchored child of an unanchored frame has nowhere to be either, because
     // the thing it is anchored to has no position. Deriving this from the
     // chain instead put those children back on screen.
-    setVisible(*w, w->shown && (!parent || parent->visible) && !unanchoredFrame);
+    setVisible(*w, w->shown && (!parent || parent->visible) && !nowhere);
     // Every pass and not only on the change, so the draw order cannot lose a
     // widget whose flag was written some other way - a test sets it directly.
     if (w->visible) mayBeVisible_.set(id);
@@ -1339,6 +1341,12 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     } else {
         solveAxis(cx, w->width * es,  pLeft,   pW, w->left,   w->rectW);
         solveAxis(cy, w->height * es, pBottom, pH, w->bottom, w->rectH);
+        // A font string without points is loaded onto the side it is justified
+        // to, or the middle (0x004836d0).
+        if (w->kind == WidgetKind::FontString && w->anchors.empty()) {
+            if (w->justifyH == "LEFT") w->left = pLeft;
+            else if (w->justifyH == "RIGHT") w->left = pLeft + pW - w->rectW;
+        }
         // A button's art fills the button on any axis its anchors left open.
         //
         // The rule above covers art that says nothing at all about where it

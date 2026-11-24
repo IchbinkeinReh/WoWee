@@ -300,7 +300,7 @@ struct Emitter {
         line(var + " = " + parentVar +
              (isTexture ? ":CreateTexture(" : ":CreateFontString(") +
              nameArg(rawName, parentName, nameVar.empty() ? parentVar : nameVar) +
-             ", " + quote(layerName) + ")");
+             ", " + quote(layerName) + ", true)");
 
         emitParentKey(node, var, parentVar);
         emitRegionProperties(node, var, parentVar, parentName, isTexture);

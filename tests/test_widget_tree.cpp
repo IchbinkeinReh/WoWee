@@ -3882,3 +3882,64 @@ TEST_CASE("a model turns to the side its facing grows or falls", "[widgets][mode
     CHECK(w.modelTurn == 0);
     CHECK(w.modelTurnSerial == 3);
 }
+
+// 0x004a2010, 0x004a2240: no points but a template's.
+TEST_CASE("a region a script makes is nowhere without a point", "[widgets][points]") {
+    WidgetTree tree;
+    const uint32_t frame = tree.create(WidgetKind::Frame, tree.rootId(), "Holder");
+    tree.setWidth(frame, 100.0f);
+    tree.setHeight(frame, 50.0f);
+    Anchor a;
+    a.point = "CENTER";
+    a.relativePoint = "CENTER";
+    tree.addPoint(frame, a);
+    const uint32_t made = tree.create(WidgetKind::Texture, frame, "Made");
+    const uint32_t declared = tree.create(WidgetKind::Texture, frame, "Declared");
+    const uint32_t under = tree.create(WidgetKind::Texture, frame, "Under");
+    tree.get(made)->needsPoint = true;
+    tree.get(under)->needsPoint = true;
+    Anchor b;
+    b.point = "TOPLEFT";
+    b.relativePoint = "TOPLEFT";
+    b.relativeTo = made;
+    tree.addPoint(under, b);
+    tree.layout(800.0f, 600.0f);
+    CHECK_FALSE(tree.placed(made));
+    CHECK_FALSE(tree.get(made)->visible);
+    CHECK(tree.get(made)->visibleChain);
+    // What hangs on it is nowhere either.
+    CHECK_FALSE(tree.placed(under));
+    CHECK(tree.placed(declared));
+    CHECK(tree.get(declared)->visible);
+    CHECK(tree.get(declared)->rectW == 100.0f);
+    tree.addPoint(made, a);
+    tree.layout(800.0f, 600.0f);
+    CHECK(tree.placed(made));
+    CHECK(tree.placed(under));
+    CHECK(tree.get(made)->visible);
+}
+
+// 0x004836d0.
+TEST_CASE("a font string of the XML without points is on the side it is justified to", "[widgets][points]") {
+    WidgetTree tree;
+    const uint32_t frame = tree.create(WidgetKind::Frame, tree.rootId(), "Holder");
+    tree.setWidth(frame, 100.0f);
+    tree.setHeight(frame, 50.0f);
+    Anchor a;
+    a.point = "CENTER";
+    a.relativePoint = "CENTER";
+    tree.addPoint(frame, a);
+    const uint32_t text = tree.create(WidgetKind::FontString, frame, "Text");
+    tree.get(text)->width = 40.0f;
+    tree.get(text)->height = 12.0f;
+    tree.layout(800.0f, 600.0f);
+    const float left = tree.get(frame)->left;
+    CHECK(tree.get(text)->left == left + 30.0f);
+    tree.get(text)->justifyH = "LEFT";
+    tree.layout(800.0f, 600.0f);
+    CHECK(tree.get(text)->left == left);
+    tree.get(text)->justifyH = "RIGHT";
+    tree.layout(800.0f, 600.0f);
+    CHECK(tree.get(text)->left == left + 60.0f);
+    CHECK(tree.get(text)->bottom == tree.get(frame)->bottom + 19.0f);
+}

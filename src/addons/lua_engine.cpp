@@ -2261,7 +2261,8 @@ uint32_t makeTooltipLineString(lua_State* L, uint32_t tooltipId, std::size_t lin
     lua_pushvalue(L, tipIdx);
     lua_pushstring(L, name.c_str());
     lua_pushstring(L, "ARTWORK");
-    if (lua_pcall(L, 3, 1, 0) != 0 || !lua_istable(L, -1)) {
+    lua_pushboolean(L, 1);
+    if (lua_pcall(L, 4, 1, 0) != 0 || !lua_istable(L, -1)) {
         LOG_WARNING("tooltip line ", name, ": ", lua_isstring(L, -1) ? lua_tostring(L, -1) : "not made");
         lua_settop(L, top);
         return 0;
@@ -10002,7 +10003,10 @@ static int setColorRole(lua_State* L, wowee::ui::Widget::ColorRole role) {
         lua_replace(L, 2);
     }
     const uint32_t rid = widgetIdOf(L, 2);
-    if (auto* region = tree->get(rid)) region->colorRole = role;
+    if (auto* region = tree->get(rid)) {
+        region->colorRole = role;
+        region->needsPoint = false;   // the picker places it
+    }
     if (auto* picker = widgetOf(L, 1)) picker->pickerRegion[static_cast<int>(role)] = rid;
     return 0;
 }
@@ -10074,8 +10078,9 @@ int lua_Slider_SetThumbTexture(lua_State* L) {
     } else if (lua_istable(L, 2)) {
         auto* tree = wowee::addons::getWidgetTree(L);
         const uint32_t tid = widgetIdOf(L, 2);
-        const auto* t = tree ? tree->get(tid) : nullptr;
+        auto* t = tree ? tree->get(tid) : nullptr;
         if (t) {
+            t->needsPoint = false;   // the slider places it
             w->thumbTexture = t->texturePath;
             // Kept as a region too, not just a file path. It is the thing
             // FrameXML shows and hides by name - ScrollFrame_OnScrollRangeChanged
@@ -10143,7 +10148,10 @@ int lua_StatusBar_SetStatusBarTexture(lua_State* L) {
         // Takes a path or an existing texture object, and addons use both.
         if (lua_isstring(L, 2)) w->barTexture = lua_tostring(L, 2);
         else if (lua_istable(L, 2)) {
-            if (auto* tex = widgetOf(L, 2)) w->barTexture = tex->texturePath;
+            if (auto* tex = widgetOf(L, 2)) {
+                w->barTexture = tex->texturePath;
+                tex->needsPoint = false;   // the bar places it
+            }
             // The object itself is the bar's from here on.
             taint::Quiet quiet;
             lua_pushvalue(L, 2);
@@ -10566,7 +10574,12 @@ static int lua_Minimap_SetPlayerTextureWidth(lua_State* L) {
 /// object, which is nearly always what an addon passes ("GameFontNormal").
 /// Neither by that name is the client's "Couldn't find inherited node".
 /// The region is on top of the stack.
+///
+/// One a script makes without a node has no points until it is given them; the
+/// XML's own, for which true stands in the template's place, has them.
 static int applyRegionTemplate(lua_State* L, int nameIndex, bool fontString, const char* method) {
+    if (!lua_isboolean(L, nameIndex) || !lua_toboolean(L, nameIndex))
+        if (auto* w = widgetOf(L, lua_gettop(L))) w->needsPoint = true;
     if (!lua_isstring(L, nameIndex)) return 0;
     const std::string inherits = lua_tostring(L, nameIndex);
     if (inherits.empty()) return 0;
@@ -10578,6 +10591,7 @@ static int applyRegionTemplate(lua_State* L, int nameIndex, bool fontString, con
             lua_pushvalue(L, region);
             lua_call(L, 1, 0);
             lua_pop(L, 1);
+            if (auto* w = widgetOf(L, region)) w->needsPoint = false;
             return 0;
         }
         lua_pop(L, 1);
@@ -13591,7 +13605,7 @@ void LuaEngine::registerCoreAPI() {
         // 0x009715d0: nil until it has one.
         "    if not __WoweeBarHasTexture(self) then return nil end\n"
         "    if not self.__barTexture then\n"
-        "        self.__barTexture = self:CreateTexture(nil, 'ARTWORK')\n"
+        "        self.__barTexture = self:CreateTexture(nil, 'ARTWORK', true)\n"
         "    end\n"
         "    return self.__barTexture\n"
         "end\n"

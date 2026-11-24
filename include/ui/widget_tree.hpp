@@ -300,6 +300,12 @@ struct Widget {
     float highlightColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float disabledColor[4]  = {0.5f, 0.5f, 0.5f, 1.0f};
 
+    /// A texture or a font string a script made, of no template: without a
+    /// point of its own it is nowhere (0x00489230). One the XML declares, or a
+    /// template, is given its points as it is loaded (0x004830e0, 0x004836d0),
+    /// which the layout does for any other without them.
+    bool needsPoint = false;
+
     float scale = 1.0f;
     float effScale = 1.0f;
     bool dragLeft = false;

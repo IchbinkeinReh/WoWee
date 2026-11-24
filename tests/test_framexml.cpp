@@ -424,7 +424,7 @@ TEST_CASE("$parent expands against the frame that owns the region",
         "<Texture name=\"$parentBg\" file=\"Interface\\Foo\" setAllPoints=\"true\"/>"
         "</Layer></Layers></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
-    REQUIRE(has(r.lua, "CreateTexture(\"FooFrameBg\", \"BACKGROUND\")"));
+    REQUIRE(has(r.lua, "CreateTexture(\"FooFrameBg\", \"BACKGROUND\", true)"));
     REQUIRE(has(r.lua, "SetTexture(\"Interface\\\\Foo\")"));
     REQUIRE(has(r.lua, "__WoweeXmlSetAllPoints("));
 }
