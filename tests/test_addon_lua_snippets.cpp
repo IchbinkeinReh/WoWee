@@ -334,3 +334,16 @@ TEST_CASE("bit.band, bor and bxor take any number of values", "[addonlua]") {
     });
     CHECK(got == "17681 5 3 6 2147483649 255 4294967295 16 69");
 }
+
+// The Sound and Effects pages are among the removed ones (kRemovedCategories),
+// so no text may send the player to them.
+TEST_CASE("the options' headings name no page that was removed", "[lua][options]") {
+    const std::string removed = wowee::addons::kRemovedControlsLua;
+    const std::string panel = wowee::addons::kWoweeOptionsPanelLua;
+    REQUIRE(removed.find("\"AudioOptionsSoundPanel\"") != std::string::npos);
+    REQUIRE(removed.find("\"VideoOptionsEffectsPanel\"") != std::string::npos);
+    for (const char* named : {"game's Sound panel", "Soundfenster", "Resolution and Effects", "Auflösung und Effekte"}) {
+        CAPTURE(named);
+        CHECK(panel.find(named) == std::string::npos);
+    }
+}

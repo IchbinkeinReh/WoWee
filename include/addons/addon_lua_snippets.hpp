@@ -1070,16 +1070,16 @@ InterfaceOptions_AddCategory(root)
 if VideoOptionsFrame then
     addHostHeading(VideoOptionsFrame,
         say("This client's own graphics settings, under the headings below. "
-        .. "The game's own Resolution and Effects panels are above.",
+        .. "The game's own Resolution panel is above.",
         "Die eigenen Grafikeinstellungen dieses Clients, unter den Überschriften "
-        .. "unten. Die Fenster des Spiels für Auflösung und Effekte stehen darüber."))
+        .. "unten. Das Fenster des Spiels für die Auflösung steht darüber."))
 end
 if AudioOptionsFrame then
     addHostHeading(AudioOptionsFrame,
-        say("This client's own sound settings. The game's Sound panel above "
-        .. "carries the master, music, ambience and effects volumes.",
-        "Die eigenen Soundeinstellungen dieses Clients. Das Soundfenster des "
-        .. "Spiels darüber hat die Gesamt-, Musik-, Umgebungs- und Effektlautstärke."))
+        say("This client's own sound settings, under the headings below: the "
+        .. "master, music, ambience and effects volumes with the rest.",
+        "Die eigenen Soundeinstellungen dieses Clients, unter den Überschriften "
+        .. "unten: Gesamt-, Musik-, Umgebungs- und Effektlautstärke und alles Übrige."))
 end
 
 -- Backwards, because a nested category is inserted directly after its parent:
