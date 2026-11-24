@@ -6,6 +6,8 @@
 #include "pipeline/m2_asset_loader.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "rendering/camera.hpp"
+#include "rendering/figure_camera.hpp"
+#include "rendering/portrait_camera.hpp"
 #include "rendering/imgui_texture.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
@@ -89,6 +91,7 @@ bool ModelFrameView::setModel(const std::string& path, const std::string& iconTe
         return false;
     }
     cameras_ = model.cameras;
+    boxMiddle_ = (model.vertexBoxMin + model.vertexBoxMax) * 0.5f;
     for (const auto& seq : model.sequences) sequenceDurations_.emplace_back(seq.id, seq.duration);
     // ReplaceIconTexture's texture in the model's type-14 slots.
     if (!iconTexture.empty()) {
@@ -111,24 +114,33 @@ bool ModelFrameView::setModel(const std::string& path, const std::string& iconTe
 
 void ModelFrameView::setFrame(float widthDdc, float heightDdc, const model_frame::Pose& pose,
                               float ddcScreenHeight, int camera, int sequence, int sequenceTimeMs,
-                              uint32_t sequenceSerial) {
+                              uint32_t sequenceSerial, const model_frame::Pose* came) {
     if (!m2_ || !camera_ || instanceId_ == 0 || widthDdc <= 0.0f || heightDdc <= 0.0f) return;
     const auto& cams = cameras_;
-    if (camera >= 0 && static_cast<size_t>(camera) < cams.size()) {
+    if (const bool own = camera >= 0 && static_cast<size_t>(camera) < cams.size(); own || came) {
         // 0x004bf0c0: through the model's own camera, its position and
         // target (0x004c1290 7, 8) and its field of view, on the frame's
         // shape. The model stands at its pose.
-        const auto& cam = cams[static_cast<size_t>(camera)];
+        pipeline::M2Camera cam;
+        if (own) {
+            cam = cams[static_cast<size_t>(camera)];
+        } else {
+            const auto held = figure_camera::asItComes(cams, boxMiddle_);
+            cam.positionBase = held.eye;
+            cam.targetBase = held.target;
+            cam.fov = held.diagonalFov;
+        }
         const glm::mat4 model = model_frame::modelMatrix(pose, ddcScreenHeight);
         m2_->setInstanceTransform(instanceId_, model);
-        const glm::vec3 eye = glm::vec3(model * glm::vec4(cam.positionBase, 1.0f));
-        const glm::vec3 target = glm::vec3(model * glm::vec4(cam.targetBase, 1.0f));
+        const glm::mat4 cameraAt = own ? model : model_frame::modelMatrix(*came, ddcScreenHeight);
+        const glm::vec3 eye = glm::vec3(cameraAt * glm::vec4(cam.positionBase, 1.0f));
+        const glm::vec3 target = glm::vec3(cameraAt * glm::vec4(cam.targetBase, 1.0f));
         camera_->setPosition(eye);
         camera_->setLookDirection(target - eye, glm::vec3(0.0f, 0.0f, 1.0f));
         const float aspect = widthDdc / heightDdc;
         // The camera's diagonal field of view, made vertical for the frame.
         const float diag = cam.fov > 0.0f && cam.fov < 3.1f ? cam.fov : 0.7f;
-        const float vfov = 2.0f * std::atan(std::tan(diag * 0.5f) / std::sqrt(1.0f + aspect * aspect));
+        const float vfov = portrait_camera::verticalFov(diag, aspect);
         const float nearClip = cam.nearClip > 0.0f ? cam.nearClip : 0.1f;
         const float farClip = cam.farClip > nearClip ? cam.farClip : 1000.0f;
         glm::mat4 proj = glm::perspectiveRH_ZO(vfov, aspect, nearClip, farClip);

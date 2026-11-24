@@ -821,6 +821,32 @@ struct Widget {
     /// (0x005977e0), which puts it all back.
     bool undressed = false;
 
+    /// What a model frame shows: whichever it was told last. A PlayerModel
+    /// keeps the unit or the creature through its hiding (+0x368, +0x378).
+    enum class ModelSource : uint8_t { None, File, Unit, Creature };
+    ModelSource modelSource = ModelSource::None;
+    /// The unit a PlayerModel shows a copy of (+0x368), by guid.
+    uint64_t modelUnit = 0;
+    /// The file of the model a unit or a creature is shown by.
+    std::string modelShown;
+    /// SetPosition and SetModelScale as the model came, where its camera stays
+    /// (rendering/figure_camera.hpp).
+    float modelCameAt[3] = {0.0f, 0.0f, 0.0f};
+    float modelCameScale = 1.0f;
+    /// The way SetRotation last turned it (0x005970f0), counted.
+    int modelTurn = 0;
+    uint32_t modelTurnSerial = 0;
+    /// A PlayerModel or one made from it.
+    [[nodiscard]] bool isPlayerModel() const {
+        return objectType == "PlayerModel" || objectType == "DressUpModel" || objectType == "TabardModel";
+    }
+    /// SetRotation: an absolute facing, and the way there.
+    void turnModelTo(float facing) {
+        modelTurn = facing > modelFacing ? 1 : facing < modelFacing ? -1 : 0;
+        ++modelTurnSerial;
+        modelFacing = facing;
+    }
+
     /// A creature this model frame has been told to show, by display id. Set
     /// by whichever binding decides - the stable's paperdoll is told a slot
     /// and resolves it - and read by the render loop, which is where the
@@ -1516,6 +1542,20 @@ public:
     /// The model frames given a model file, for the frame loop to draw.
     void setModelFile(uint32_t id, const std::string& file);
     [[nodiscard]] const std::set<uint32_t>& modelFileFrames() const { return modelFileFrames_; }
+    /// The model frames that show a unit or a creature.
+    [[nodiscard]] const std::set<uint32_t>& unitModelFrames() const { return unitModelFrames_; }
+    /// A PlayerModel is to show a copy of a unit (0x005977e0): what was tried
+    /// on it or taken off goes with its old one.
+    void showModelUnit(uint32_t id, uint64_t guid);
+    /// RefreshUnit, Dress: its unit again, where it has one.
+    void refreshModelUnit(uint32_t id);
+    /// A creature, by its entry (0x00597960); none with 0.
+    void showModelCreature(uint32_t id, uint32_t entry);
+    /// ClearModel (0x00960620): nothing, for now.
+    void clearModel(uint32_t id);
+    /// A model frame comes into view: its unit or its creature anew
+    /// (0x00597870). It goes: no model (0x00597210).
+    void modelFrameVisible(uint32_t id, bool visible);
     /// Every texture claimed for this unit, or an empty list.
     [[nodiscard]] const std::vector<uint32_t>& portraitsFor(const std::string& unit) const;
     /// Every claim there is a texture for.
@@ -1712,6 +1752,10 @@ private:
     std::map<std::string, std::vector<uint32_t>> portraitsByUnit_;
     std::map<uint32_t, std::string> portraitUnitOf_;
     std::set<uint32_t> modelFileFrames_;
+    std::set<uint32_t> unitModelFrames_;
+    /// What the frame shows is another: its own frames' list follows, and for
+    /// a PlayerModel the camera it comes with (0x005974a0).
+    void setModelSource(Widget& w, Widget::ModelSource source);
     uint32_t hoveredId_ = 0;
     /// Tooltips that have been given an owner, so the check is over a handful
     /// of frames rather than every widget in the tree.

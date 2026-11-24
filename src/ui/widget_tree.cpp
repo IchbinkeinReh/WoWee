@@ -119,6 +119,7 @@ void WidgetTree::reset() {
     portraitsByUnit_.clear();
     portraitUnitOf_.clear();
     modelFileFrames_.clear();
+    unitModelFrames_.clear();
     // Every one of these names a widget by id, and the ids are about to mean
     // something else. A drag or a focus held across the reset would be held on
     // whatever frame the new load happens to give that number to.
@@ -283,16 +284,70 @@ void WidgetTree::followCursorTooltips(float x, float y) {
     }
 }
 
+void WidgetTree::setModelSource(Widget& w, Widget::ModelSource source) {
+    using Source = Widget::ModelSource;
+    w.modelSource = source;
+    w.modelShown.clear();
+    if (source != Source::File) {
+        w.modelFile.clear();
+        modelFileFrames_.erase(w.id);
+    }
+    if (source == Source::Unit || source == Source::Creature) unitModelFrames_.insert(w.id);
+    else unitModelFrames_.erase(w.id);
+    w.externalTexture = 0;
+    if (!w.isPlayerModel()) return;
+    w.modelCamera = -1;
+    std::copy(std::begin(w.modelPosition), std::end(w.modelPosition), std::begin(w.modelCameAt));
+    w.modelCameScale = w.modelScale;
+}
+
 void WidgetTree::setModelFile(uint32_t id, const std::string& file) {
     auto* w = get(id);
     if (!w) return;
-    w->modelFile = file;
     if (file.empty()) {
-        modelFileFrames_.erase(id);
-        w->externalTexture = 0;
-    } else {
-        modelFileFrames_.insert(id);
+        clearModel(id);
+        return;
     }
+    setModelSource(*w, Widget::ModelSource::File);
+    w->modelFile = file;
+    modelFileFrames_.insert(id);
+}
+
+void WidgetTree::showModelUnit(uint32_t id, uint64_t guid) {
+    auto* w = get(id);
+    if (!w || !w->isPlayerModel()) return;
+    w->modelUnit = guid;
+    w->setModelCreature(0);
+    w->tryOnItems.clear();
+    w->undressed = false;
+    setModelSource(*w, Widget::ModelSource::Unit);
+}
+
+void WidgetTree::refreshModelUnit(uint32_t id) {
+    if (const auto* w = get(id); w && w->modelUnit != 0) showModelUnit(id, w->modelUnit);
+}
+
+void WidgetTree::showModelCreature(uint32_t id, uint32_t entry) {
+    auto* w = get(id);
+    if (!w || !w->isPlayerModel()) return;
+    w->modelUnit = 0;
+    w->setModelCreature(entry);
+    setModelSource(*w, entry != 0 ? Widget::ModelSource::Creature : Widget::ModelSource::None);
+}
+
+void WidgetTree::clearModel(uint32_t id) {
+    if (auto* w = get(id)) setModelSource(*w, Widget::ModelSource::None);
+}
+
+void WidgetTree::modelFrameVisible(uint32_t id, bool visible) {
+    auto* w = get(id);
+    if (!w || !w->isPlayerModel()) return;
+    if (!visible) {
+        clearModel(id);
+        return;
+    }
+    if (w->modelUnit != 0) showModelUnit(id, w->modelUnit);
+    else if (w->modelCreature != 0) setModelSource(*w, Widget::ModelSource::Creature);
 }
 
 void WidgetTree::setPortraitUnit(uint32_t id, const std::string& unit) {

@@ -458,48 +458,26 @@ private:
     ui::portrait_claims::Pool facePool_;
     std::vector<std::unique_ptr<ui::UnitPortrait>> faceViews_;
     std::vector<std::string> facePictures_;
-    /// The dressing room's figure, and its frame. The player plus whatever
-    /// has been tried on, which is the paperdoll with an overlay.
-    ui::UnitPortrait dressUpModel_;
-    uint32_t dressUpWidgetId_ = 0;
-    /// The auction house's own dressing room, which is a second frame with a
-    /// second try-on list rather than the same one reused.
-    ui::UnitPortrait auctionDressUpModel_;
-    uint32_t auctionDressUpWidgetId_ = 0;
-    /// The tabard designer's TabardModel: the player in the design.
-    ui::UnitPortrait tabardModel_;
-    uint32_t tabardModelWidgetId_ = 0;
-    /// Each dressing room's facing as last applied, as the paperdoll's.
-    float dressUpFacing_ = 0.0f;
-    float auctionDressUpFacing_ = 0.0f;
-    float tabardFacing_ = 0.0f;
-    /// The pet tab's figure. A creature by display id, like its portrait.
-    ui::UnitPortrait petModel_;
-    uint32_t petModelWidgetId_ = 0;
-    /// The stable's preview, which shows whichever slot the window selected
-    /// rather than the pet that is out.
-    ui::UnitPortrait stableModel_;
-    uint32_t stableModelWidgetId_ = 0;
-    /// The mount or critter the companion tab has selected.
-    ui::UnitPortrait companionModel_;
-    uint32_t companionModelWidgetId_ = 0;
-    /// The inspect window's figure, and the frame it is drawn into. Whole
-    /// body at the paperdoll's size, because that is what it is: someone
-    /// else's paperdoll.
-    ui::UnitPortrait inspectModel_;
-    uint32_t inspectModelWidgetId_ = 0;
-
-    /// The paperdoll's model view, and the frame it is drawn into. A second
-    /// offscreen pass rather than a shared one: the portrait shows the face
-    /// and this shows the whole figure, and they are on screen together.
-    ui::UnitPortrait paperdollModel_;
+    /// The model frames that show a unit or a creature, by widget id: each has
+    /// a view of its own, and keeps what it shows while its unit is out of
+    /// sight.
+    struct UnitFigure {
+        std::unique_ptr<ui::UnitPortrait> view;
+        ui::UnitLook look;
+        uint64_t shown = 0;   ///< the frame it was drawn in last
+    };
+    std::unordered_map<uint32_t, UnitFigure> unitFigures_;
+    uint64_t unitFigureFrame_ = 0;
+    void drawUnitModels(ui::WidgetTree& widgets, float screenW, float screenH, float deltaTime);
+    /// What a unit looks like now, as it is in the world; nothing where it is
+    /// not there.
+    ui::UnitLook unitLook(uint64_t guid);
+    /// What a creature's display looks like.
+    const ui::UnitLook& displayLook(uint32_t displayId);
+    std::unordered_map<uint32_t, ui::UnitLook> displayLooks_;
     /// The model frames showing a model file (Model:SetModel), by widget id:
     /// each drawn through its own view (rendering/model_frame_view.hpp).
     std::unordered_map<uint32_t, std::unique_ptr<rendering::ModelFrameView>> modelFrameViews_;
-    /// The facing already applied to the paperdoll, so only the change since
-    /// last frame is turned.
-    float paperdollFacing_ = 0.0f;
-    uint32_t paperdollWidgetId_ = 0;
     bool addonsLoaded_ = false;
     std::unique_ptr<game::ExpansionRegistry> expansionRegistry_;
     // Empty means assets follow the active protocol profile. "legacy" selects

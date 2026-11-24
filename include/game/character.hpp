@@ -89,6 +89,7 @@ struct EquipmentItem {
     uint32_t enchantment;       // Enchantment/effect ID
 
     [[nodiscard]] bool isEmpty() const { return displayModel == 0; }
+    friend bool operator==(const EquipmentItem&, const EquipmentItem&) = default;
 };
 
 /**

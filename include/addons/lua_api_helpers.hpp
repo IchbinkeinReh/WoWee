@@ -620,6 +620,16 @@ inline wowee::ui::WidgetTree* getWidgetTree(lua_State* L) {
     return t;
 }
 
+/// The widget of a frame or region a binding was called on (its first
+/// argument), 0 where there is none.
+inline uint32_t calledWidget(lua_State* L) {
+    if (!lua_istable(L, 1)) return 0;
+    lua_getfield(L, 1, "__wid");
+    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    return id;
+}
+
 // ---- Retrieve LuaServices pointer stored in Lua registry ----
 inline LuaServices* getLuaServices(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_services");
@@ -785,6 +795,10 @@ inline std::optional<uint64_t> unitAsked(game::GameHandler* gh, std::string_view
     if (!gh || text.empty()) return std::nullopt;
     return unit_token::resolve(text, UnitWorld{gh});
 }
+
+/// A model frame in view takes the alpha of the display of the unit it shows
+/// (0x005975e0: CGUnit +0xe8, CreatureDisplayInfo's of 255).
+void takeUnitAlpha(game::GameHandler* gh, ui::Widget& frame);
 
 /// The unit, 0 for none.
 inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {

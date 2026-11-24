@@ -1345,7 +1345,8 @@ int lua_Model_SetFacing(lua_State* L) {
 // pair that refuses a call without a number.
 int lua_Model_SetRotation(lua_State* L) {
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: SetRotation(rotation (in radians))");   // 0x00597a10
-    return lua_Model_SetFacing(L);
+    if (auto* w = widgetOf(L, 1)) w->turnModelTo(static_cast<float>(lua_tonumber(L, 2)));
+    return 0;
 }
 /// Model:SetFacing(facing) (0x009606e0): a number, or the usage line.
 static int lua_Model_SetFacingMethod(lua_State* L) {
@@ -1367,15 +1368,17 @@ int lua_Model_SetModel(lua_State* L) {
     if (auto* tree = getWidgetTree(L)) tree->setModelFile(w->id, lua_tostring(L, 2));
     return 0;
 }
+// 0x009605d0: the model's file; with none nothing is pushed, and what answers
+// is what the call has on top - the frame itself.
 int lua_Model_GetModel(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     if (w && !w->modelFile.empty()) lua_pushstring(L, w->modelFile.c_str());
-    else lua_pushnil(L);
+    else if (w && !w->modelShown.empty()) lua_pushstring(L, w->modelShown.c_str());
     return 1;
 }
 int lua_Model_ClearModel(lua_State* L) {
     if (auto* w = widgetOf(L, 1))
-        if (auto* tree = getWidgetTree(L)) tree->setModelFile(w->id, std::string());
+        if (auto* tree = getWidgetTree(L)) tree->clearModel(w->id);
     return 0;
 }
 // 0x00960660: the three numbers as given, into +0x31c.
@@ -5339,15 +5342,18 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     // which then drew across the rotate arrows and sized the frame to fit one
     // line of text instead of the figure.
     if (w && w->objectType != "GameTooltip") {
-        // Model:SetUnit("unit") (0x005978e0): a unit that resolves has the
-        // figure built from it again (0x005977e0), as Dress does; nothing is
-        // returned either way.
+        // Model:SetUnit("unit") (0x005978e0): a unit that resolves is shown, a
+        // copy of it as it is in the world (0x005977e0); nothing is returned
+        // either way.
+        if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: SetUnit(\"unit\")");
         auto* gh = wowee::addons::getGameHandler(L);
-        std::string unit = luaL_optstring(L, 2, "");
+        auto* tree = wowee::addons::getWidgetTree(L);
+        std::string unit = lua_tostring(L, 2);
         for (char& c : unit) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (gh && !unit.empty() && wowee::addons::resolveUnitGuid(gh, unit) != 0) {
-            w->tryOnItems.clear();
-            w->undressed = false;
+        const uint64_t guid = gh && !unit.empty() ? wowee::addons::resolveUnitGuid(gh, unit) : 0;
+        if (tree && guid != 0) {
+            tree->showModelUnit(w->id, guid);
+            wowee::addons::takeUnitAlpha(gh, *w);
         }
         return 0;
     }
@@ -12582,10 +12588,6 @@ void LuaEngine::registerCoreAPI() {
         // alternative was a third copy of that parser.
         "function mt:TryOn(link) __WoweeTryOn(self, link) end\n"
         "function mt:Undress() __WoweeUndress(self) end\n"
-        // SetUnit and RefreshUnit are what a model frame is told to show. The
-        // frame is driven by name from the render loop - the paperdoll, the
-        // inspect window and the dressing room each have their own - so what
-        // these have to do is answer rather than raise.
         // Model:SetCreature(entry) - what a companion, a stabled pet or
         // any other creature preview is told to show. Written onto the frame
         // and built by the render loop, which is where the offscreen views
@@ -18095,6 +18097,11 @@ void LuaEngine::frameHidden(uint32_t id) {
 
 void LuaEngine::tellVisibility(uint32_t id, bool up, bool shown) {
     if (auto* button = widgets_.get(id); button && !up) button->mouseButtonState(false);   // 0x0096f410
+    if (auto* model = widgets_.get(id); model && model->isPlayerModel()) {
+        widgets_.modelFrameVisible(id, up);
+        if (up && model->modelSource == ui::Widget::ModelSource::Unit)
+            wowee::addons::takeUnitAlpha(wowee::addons::getGameHandler(L_), *model);
+    }
     callFrameScript(id, up ? "OnShow" : "OnHide");
     const auto* w = widgets_.get(id);
     if (!w || !w->isEditBox) return;

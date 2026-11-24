@@ -974,9 +974,7 @@ static int lua_WoweeSetModelCreature(lua_State* L) {
     lua_getfield(L, 1, "__wid");
     const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
     lua_pop(L, 1);
-    if (auto* w = tree->get(id)) {
-        w->setModelCreature(static_cast<uint32_t>(lua_tointeger(L, 2)));
-    }
+    tree->showModelCreature(id, static_cast<uint32_t>(lua_tointeger(L, 2)));
     return 0;
 }
 
@@ -984,24 +982,26 @@ static int lua_WoweeSetModelCreature(lua_State* L) {
 /// hands, what was tried on included. Dress (0x00597ed0) and RefreshUnit
 /// (0x00597b00) build the figure from its unit again (0x005977e0), which takes
 /// off what was tried on and puts back what Undress removed.
-static int setModelDressed(lua_State* L, bool undressed) {
+/// __WoweeUndress(frame).
+static int lua_WoweeUndress(lua_State* L) {
     auto* tree = getWidgetTree(L);
-    if (!tree || !lua_istable(L, 1)) return 0;
-    lua_getfield(L, 1, "__wid");
-    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
-    lua_pop(L, 1);
-    if (auto* w = tree->get(id)) {
+    if (auto* w = tree ? tree->get(calledWidget(L)) : nullptr) {
         w->tryOnItems.clear();
-        w->undressed = undressed;
+        w->undressed = true;
     }
     return 0;
 }
 
-/// __WoweeUndress(frame).
-static int lua_WoweeUndress(lua_State* L) { return setModelDressed(L, true); }
-
 /// __WoweeRedress(frame).
-static int lua_WoweeRedress(lua_State* L) { return setModelDressed(L, false); }
+static int lua_WoweeRedress(lua_State* L) {
+    auto* tree = getWidgetTree(L);
+    if (!tree) return 0;
+    const uint32_t id = calledWidget(L);
+    tree->refreshModelUnit(id);
+    if (auto* w = tree->get(id); w && w->modelSource == ui::Widget::ModelSource::Unit)
+        takeUnitAlpha(getGameHandler(L), *w);
+    return 0;
+}
 
 // IsDressableItem(item) (0x00517530): an item that goes on a slot, or one
 // whose spell teaches (effect 36) a spell whose first effect makes (24) such

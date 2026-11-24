@@ -4,6 +4,7 @@
 #include <optional>
 #include "core/character_geosets.hpp"
 #include "core/preview_dressing.hpp"
+#include "rendering/figure_camera.hpp"
 
 #include "game/character.hpp"
 #include <glm/glm.hpp>
@@ -18,7 +19,7 @@
 #include <vector>
 
 namespace wowee {
-namespace pipeline { class AssetManager; struct M2Model; }
+namespace pipeline { class AssetManager; struct M2Model; struct M2Camera; }
 namespace rendering {
 
 class CharacterRenderer;
@@ -99,6 +100,12 @@ public:
     /// still faces another, and the portrait shows a profile. This sets both
     /// together and zooms to the face.
     void setPortraitFraming();
+    /// Looks at the model as a model frame does (figure_camera.hpp): through
+    /// the model's camera `index`, which goes with it, or - -1, or one it has
+    /// not - the one it came with, the model standing under it as `pose` says.
+    void setFigureFraming(int index, const figure_camera::Pose& pose);
+    /// Plays an animation of the model, where it has it.
+    void playModelAnimation(uint32_t animationId, bool loop);
     /// How far back from the model's portrait camera to stand, along its own
     /// line: portrait_camera::kStillHeadroom for a still picture, more for a
     /// live one. Applied by the next framing.
@@ -161,8 +168,12 @@ private:
     // Load the race's glue scene (Stormwind for humans, Orgrimmar for orcs, ...) as a backdrop.
     void loadRacialBackdrop(game::Race race);
     void applyPreviewView();
-    /// The model's portrait camera (camera 0), if it has one.
-    void readPortraitCamera(const pipeline::M2Model& model, bool playerModel);
+    /// The model's cameras: the one for its portrait (type 0, or the client's
+    /// stand-in), and all of them for a model frame.
+    void readModelCameras(const pipeline::M2Model& model, bool playerModel);
+    /// Through a camera placed in the model's space, standing back along its
+    /// own line by `headroom`.
+    void lookThrough(const figure_camera::Camera& camera, float headroom);
 
     pipeline::AssetManager* assetManager_ = nullptr;
     VkContext* vkCtx_ = nullptr;
@@ -226,10 +237,14 @@ private:
     /// its own, and one preview is shared by players and creatures, so the
     /// creature's has to be handed back or the next player portrait wears it.
     float defaultFovDegrees_ = 0.0f;
-    glm::vec3 portraitCameraPos_{0.0f};
-    glm::vec3 portraitCameraTarget_{0.0f};
-    /// Diagonal, radians; 0 keeps the preview's own.
-    float portraitCameraFov_ = 0.0f;
+    figure_camera::Camera portraitCamera_;
+    /// All of the model's, and the middle of its box, for a model frame.
+    std::vector<pipeline::M2Camera> modelCameras_;
+    glm::vec3 modelBoxMiddle_{0.0f};
+    /// setFigureFraming was the last framing asked for, with this.
+    bool figureFraming_ = false;
+    int figureCamera_ = -1;
+    figure_camera::Pose figurePose_;
     /// The camera belongs to a player model, which the character screens
     /// frame by its bounds; only a portrait looks through it.
     bool portraitCameraOnPlayer_ = false;

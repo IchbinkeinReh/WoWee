@@ -2670,16 +2670,6 @@ static int lua_GetInventoryItemCooldown(lua_State* L) {
     return 3;
 }
 
-/// The texture argument's widget, 0 where there is none. widgetIdOf lives in
-/// lua_engine.cpp and is not declared anywhere this file can see it.
-static uint32_t portraitWidget(lua_State* L) {
-    if (!lua_istable(L, 1)) return 0;
-    lua_getfield(L, 1, "__wid");
-    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
-    lua_pop(L, 1);
-    return id;
-}
-
 /// A portrait texture with a file in it, "" to leave it empty, and no unit's
 /// face.
 static void portraitFile(wowee::ui::WidgetTree* tree, uint32_t id, const std::string& file, bool disc = false) {
@@ -2731,13 +2721,40 @@ static std::string displayPortraitIcon(game::GameHandler* gh, uint32_t displayId
     return it != icons.end() ? it->second : std::string();
 }
 
+/// CreatureDisplayInfo.CreatureModelAlpha (+0x14), of 255.
+static uint32_t displayModelAlpha(game::GameHandler* gh, uint32_t displayId) {
+    static std::unordered_map<uint32_t, uint32_t> alphas;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh->services().assetManager;
+        if (!am || !am->isInitialized()) return 255;
+        loaded = true;
+        constexpr uint32_t kAlpha = 5;
+        auto dbc = am->loadDBC("CreatureDisplayInfo.dbc");
+        if (dbc && dbc->isLoaded() && kAlpha < dbc->getFieldCount()) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                if (const uint32_t alpha = dbc->getUInt32(i, kAlpha); alpha < 255) alphas[dbc->getUInt32(i, 0)] = alpha;
+        }
+    }
+    const auto it = alphas.find(displayId);
+    return it != alphas.end() ? it->second : 255;
+}
+
+void takeUnitAlpha(game::GameHandler* gh, ui::Widget& frame) {
+    if (!gh || !frame.visible) return;
+    const auto entity = gh->getEntityManager().getEntity(frame.modelUnit);
+    if (!entity || !entity->isUnit()) return;
+    const uint32_t display = std::static_pointer_cast<game::Unit>(entity)->getDisplayId();
+    frame.alpha = static_cast<float>(displayModelAlpha(gh, display)) / 255.0f;
+}
+
 /// SetLootPortrait(texture) (0x00588f00): the face of whoever the open loot is
 /// from (0x00bfa8d8) on the texture, and 1; with no such unit the texture is
 /// emptied (0x00481520) and nil.
 static int lua_SetLootPortrait(lua_State* L) {
     auto* tree = getWidgetTree(L);
     auto* gh = getGameHandler(L);
-    const uint32_t id = portraitWidget(L);
+    const uint32_t id = calledWidget(L);
     if (!tree || id == 0) { lua_pushnil(L); return 1; }
     const uint64_t guid = gh && gh->isLootWindowOpen() ? gh->getCurrentLoot().lootGuid : 0;
     if (guid != 0 && gh->getEntityManager().getEntity(guid)) {
@@ -2765,7 +2782,7 @@ static int lua_SetLootPortrait(lua_State* L) {
 static int lua_SetPortraitTexture(lua_State* L) {
     auto* tree = getWidgetTree(L);
     auto* gh = getGameHandler(L);
-    const uint32_t id = portraitWidget(L);
+    const uint32_t id = calledWidget(L);
     if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: SetPortraitTexture(texture, \"unit\")");
     if (!tree || id == 0) return 0;
     std::string unit(lua_tostring(L, 2));
@@ -2781,9 +2798,9 @@ static int lua_SetPortraitTexture(lua_State* L) {
             portraitFile(tree, id, std::string());
             return answer(false);
         }
-        if (entity && entity->getType() == game::ObjectType::UNIT) {
-            const auto creature = std::static_pointer_cast<game::Unit>(entity);
-            if (const std::string icon = displayPortraitIcon(gh, creature->getDisplayId()); !icon.empty()) {
+        if (entity) {
+            const auto shown = std::static_pointer_cast<game::Unit>(entity);
+            if (const std::string icon = displayPortraitIcon(gh, shown->getDisplayId()); !icon.empty()) {
                 portraitFile(tree, id, "Interface\\Icons\\" + icon, /*disc=*/true);
                 return answer(true);
             }

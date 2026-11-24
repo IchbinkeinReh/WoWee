@@ -3777,3 +3777,108 @@ TEST_CASE("attributes may be changed for the moment in a frame that allows it", 
     CHECK(tree.attributesAllowed(child));
     CHECK_FALSE(tree.attributesAllowed(other));
 }
+
+// CharacterModelBase.cpp: 0x005977e0, 0x00597960, 0x00597870, 0x00597210.
+TEST_CASE("a model frame shows what it was told last", "[widgets][model]") {
+    using Source = Widget::ModelSource;
+    WidgetTree tree;
+    const uint32_t id = tree.create(WidgetKind::Frame, tree.rootId(), "Any");
+    auto& w = *tree.get(id);
+    // A frame that is no PlayerModel takes neither.
+    tree.showModelUnit(id, 5);
+    tree.showModelCreature(id, 4613);
+    CHECK(w.modelSource == Source::None);
+    CHECK(tree.unitModelFrames().empty());
+
+    w.objectType = "PlayerModel";
+    tree.showModelUnit(id, 5);
+    CHECK(w.modelSource == Source::Unit);
+    CHECK(w.modelUnit == 5);
+    CHECK(tree.unitModelFrames().count(id) == 1);
+    tree.showModelCreature(id, 4613);
+    CHECK(w.modelSource == Source::Creature);
+    CHECK(w.modelUnit == 0);
+    CHECK(w.modelCreature == 4613);
+    tree.setModelFile(id, "Creature/Wolf/Wolf.m2");
+    CHECK(w.modelSource == Source::File);
+    CHECK(tree.unitModelFrames().empty());
+    CHECK(tree.modelFileFrames().count(id) == 1);
+    tree.showModelUnit(id, 6);
+    CHECK(w.modelFile.empty());
+    CHECK(tree.modelFileFrames().empty());
+    CHECK(w.modelCreature == 0);
+    tree.showModelCreature(id, 0);
+    CHECK(w.modelSource == Source::None);
+}
+
+TEST_CASE("a model frame's unit is there again as it is shown again", "[widgets][model]") {
+    using Source = Widget::ModelSource;
+    WidgetTree tree;
+    const uint32_t id = tree.create(WidgetKind::Frame, tree.rootId(), "Any");
+    auto& w = *tree.get(id);
+    w.objectType = "DressUpModel";
+    tree.showModelUnit(id, 5);
+    w.tryOnItems.push_back({.displayInfoId = 1, .inventoryType = 5});
+    w.undressed = true;
+    tree.modelFrameVisible(id, false);
+    CHECK(w.modelSource == Source::None);
+    CHECK(w.modelUnit == 5);
+    tree.modelFrameVisible(id, true);
+    CHECK(w.modelSource == Source::Unit);
+    CHECK(w.tryOnItems.empty());
+    CHECK_FALSE(w.undressed);
+    // ClearModel is until then.
+    tree.clearModel(id);
+    CHECK(w.modelSource == Source::None);
+    tree.refreshModelUnit(id);
+    CHECK(w.modelSource == Source::Unit);
+    tree.showModelCreature(id, 4613);
+    tree.modelFrameVisible(id, false);
+    tree.modelFrameVisible(id, true);
+    CHECK(w.modelSource == Source::Creature);
+    // RefreshUnit of one with no unit leaves what there is.
+    tree.refreshModelUnit(id);
+    CHECK(w.modelSource == Source::Creature);
+    tree.showModelCreature(id, 0);
+    tree.modelFrameVisible(id, true);
+    CHECK(w.modelSource == Source::None);
+}
+
+TEST_CASE("a model comes to its frame as that stands then", "[widgets][model]") {
+    WidgetTree tree;
+    const uint32_t id = tree.create(WidgetKind::Frame, tree.rootId(), "Any");
+    auto& w = *tree.get(id);
+    w.objectType = "PlayerModel";
+    w.modelPosition[0] = 1.0f;
+    w.modelScale = 2.0f;
+    w.modelCamera = 0;
+    tree.showModelUnit(id, 5);
+    CHECK(w.modelCamera == -1);
+    CHECK(w.modelCameAt[0] == 1.0f);
+    CHECK(w.modelCameScale == 2.0f);
+    // SetCamera after holds until another comes.
+    w.modelCamera = 0;
+    w.modelPosition[0] = 3.0f;
+    CHECK(w.modelCameAt[0] == 1.0f);
+    tree.refreshModelUnit(id);
+    CHECK(w.modelCamera == -1);
+    CHECK(w.modelCameAt[0] == 3.0f);
+    // A Model keeps the camera it was given.
+    w.objectType = "Model";
+    w.modelCamera = 0;
+    tree.setModelFile(id, "Creature/Wolf/Wolf.m2");
+    CHECK(w.modelCamera == 0);
+}
+
+// 0x005970f0: the way SetRotation turns it.
+TEST_CASE("a model turns to the side its facing grows or falls", "[widgets][model]") {
+    Widget w;
+    w.turnModelTo(0.61f);
+    CHECK(w.modelTurn == 1);
+    CHECK(w.modelFacing == 0.61f);
+    w.turnModelTo(0.5f);
+    CHECK(w.modelTurn == -1);
+    w.turnModelTo(0.5f);
+    CHECK(w.modelTurn == 0);
+    CHECK(w.modelTurnSerial == 3);
+}

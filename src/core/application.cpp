@@ -3467,14 +3467,8 @@ void Application::shutdownPortraits() {
     for (auto& face : faceViews_)
         if (face) face->shutdown(renderer.get());
     facePictures_.assign(facePictures_.size(), std::string());
-    inspectModel_.shutdown(renderer.get());
-    dressUpModel_.shutdown(renderer.get());
-    auctionDressUpModel_.shutdown(renderer.get());
-    tabardModel_.shutdown(renderer.get());
-    petModel_.shutdown(renderer.get());
-    stableModel_.shutdown(renderer.get());
-    companionModel_.shutdown(renderer.get());
-    paperdollModel_.shutdown(renderer.get());
+    for (auto& [id, figure] : unitFigures_)
+        if (figure.view) figure.view->shutdown(renderer.get());
 }
 
 void Application::handleDeviceLoss(rendering::VkContext& vk) {
@@ -7365,9 +7359,17 @@ void Application::render() {
                         pose.facing = frame->modelFacing;
                         pose.modelScale = frame->modelScale;
                         pose.effectiveScale = frame->effScale;
+                        // A PlayerModel's camera stays where the model came.
+                        std::optional<rendering::model_frame::Pose> came;
+                        if (frame->isPlayerModel() && frame->modelCamera < 0) {
+                            came = pose;
+                            came->position = glm::vec3(frame->modelCameAt[0], frame->modelCameAt[1], frame->modelCameAt[2]);
+                            came->facing = 0.0f;
+                            came->modelScale = frame->modelCameScale;
+                        }
                         view->setFrame(frame->rectW * ddcPerUnit, frame->rectH * ddcPerUnit, pose, ddcH,
                                        frame->modelCamera, frame->modelSequence, frame->modelSequenceTime,
-                                       frame->modelSequenceSerial);
+                                       frame->modelSequenceSerial, came ? &*came : nullptr);
                         rendering::ModelFrameView::Light light;
                         light.enabled = frame->modelLightEnabled;
                         light.omni = frame->modelLightOmni;
@@ -7405,273 +7407,7 @@ void Application::render() {
             });
 
             runRenderStage("addonWidgets/paperdoll", [&] {
-                // The paperdoll's figure, on the same terms as the portrait:
-                // rendered only while a frame is there to show it, and told to
-                // the widget every frame because the render target is rebuilt
-                // whenever the model is.
-                ui::Widget* doll = paperdollWidgetId_
-                    ? widgets.get(paperdollWidgetId_) : nullptr;
-                if (!doll || doll->name != "CharacterModelFrame") {
-                    doll = widgets.findByName("CharacterModelFrame");
-                    paperdollWidgetId_ = doll ? doll->id : 0;
-                }
-                if (doll && doll->visible) {
-                    sizeFor(paperdollModel_, doll);
-                    paperdollModel_.setFraming(ui::UnitPortrait::Framing::FullBody);
-                    // The rotate buttons keep their own running total and set
-                    // it as an absolute facing, so the turn to apply is the
-                    // change since last frame.
-                    if (doll->modelFacing != paperdollFacing_) {
-                        paperdollModel_.rotate(doll->modelFacing - paperdollFacing_);
-                        paperdollFacing_ = doll->modelFacing;
-                    }
-                    paperdollModel_.update(*gameHandler, assetManager.get(),
-                                           renderer.get(), io.DeltaTime);
-                    doll->externalTexture = paperdollModel_.textureId();
-                } else if (doll) {
-                    doll->externalTexture = 0;
-                }
-
-                // The dressing room. The player as they are, plus whatever
-                // has been tried on - which is the player's own paperdoll with
-                // an overlay, so it is built from the same character record.
-                //
-                // Two of them: the auction house has a dressing room of its
-                // own, with its own try-on list, and a view each rather than a
-                // shared one because sharing would let whichever drew last
-                // decide what the other showed.
-                struct DressUp {
-                    const char* name;
-                    ui::UnitPortrait* model;
-                    uint32_t* widgetId;
-                    float* facing;
-                };
-                // NOLINTBEGIN(modernize-use-designated-initializers) - a table
-                // whose columns are its field names, with the struct in view
-                // directly above.
-                const DressUp kDressUps[] = {
-                    {"DressUpModel",        &dressUpModel_,        &dressUpWidgetId_,        &dressUpFacing_},
-                    {"AuctionDressUpModel", &auctionDressUpModel_, &auctionDressUpWidgetId_, &auctionDressUpFacing_},
-                    // The tabard designer's, the player in the design being
-                    // made (0x004ec1c0 paints it on the player's component).
-                    {"TabardModel",         &tabardModel_,         &tabardModelWidgetId_,    &tabardFacing_},
-                };
-                // NOLINTEND(modernize-use-designated-initializers)
-                for (const DressUp& room : kDressUps) {
-                    ui::Widget* dressUp = *room.widgetId
-                        ? widgets.get(*room.widgetId) : nullptr;
-                    if (!dressUp || dressUp->name != room.name) {
-                        dressUp = widgets.findByName(room.name);
-                        *room.widgetId = dressUp ? dressUp->id : 0;
-                    }
-                    bool shown = false;
-                    if (dressUp && dressUp->visible) {
-                        const game::Character* self = nullptr;
-                        for (const auto& c : gameHandler->getCharacters()) {
-                            if (c.guid == gameHandler->getPlayerGuid()) { self = &c; break; }
-                        }
-                        if (self) {
-                            // What they are wearing, with a tried-on piece
-                            // standing in for the slot it belongs to. Replaced
-                            // rather than appended: wearing two chests is
-                            // wearing the second.
-                            //
-                            // Now rather than at login, and from the same place
-                            // the portrait beside it reads: the character list
-                            // holds the equipment SMSG_CHAR_ENUM described and
-                            // is never updated, so a dressing room built from it
-                            // showed the gear worn at the select screen under
-                            // whatever was being tried on.
-                            std::vector<game::EquipmentItem> worn;
-                            {
-                                std::array<uint32_t, 19> displayIds{};
-                                std::array<uint8_t, 19> invTypes{};
-                                if (gameHandler->getOtherPlayerEquipment(
-                                        self->guid, displayIds, invTypes)) {
-                                    for (size_t slot = 0; slot < displayIds.size(); ++slot) {
-                                        if (displayIds[slot] == 0) continue;
-                                        worn.push_back({.displayModel = displayIds[slot],
-                                                        .inventoryType = invTypes[slot],
-                                                        .enchantment = 0u});
-                                    }
-                                }
-                                if (worn.empty()) worn = self->equipment;
-                            }
-                            // Undress empties the figure; what is tried on
-                            // after goes onto it bare.
-                            if (dressUp->undressed) worn.clear();
-                            for (const auto& tried : dressUp->tryOnItems) {
-                                bool replaced = false;
-                                for (auto& item : worn) {
-                                    if (item.inventoryType != tried.inventoryType) continue;
-                                    item.displayModel = tried.displayInfoId;
-                                    replaced = true;
-                                    break;
-                                }
-                                if (!replaced) {
-                                    worn.push_back({.displayModel = tried.displayInfoId,
-                                                    .inventoryType = tried.inventoryType,
-                                                    .enchantment = 0u});
-                                }
-                            }
-                            const uint8_t gender =
-                                (self->gender == game::Gender::FEMALE ||
-                                 (self->gender == game::Gender::NONBINARY &&
-                                  self->useFemaleModel)) ? 1 : 0;
-                            sizeFor(*room.model, dressUp);
-                            room.model->setFraming(ui::UnitPortrait::Framing::FullBody);
-                            // Turned by SetRotation as the paperdoll is.
-                            if (dressUp->modelFacing != *room.facing) {
-                                room.model->rotate(dressUp->modelFacing - *room.facing);
-                                *room.facing = dressUp->modelFacing;
-                            }
-                            // The guild tabard's design (0x006db510), or the
-                            // designer's while it is open (0x004ec1c0).
-                            room.model->setGuildEmblem(gameHandler->getPlayerTabardEmblem());
-                            room.model->setTabardDesigner(gameHandler->getTabardVendorGuid() != 0);
-                            room.model->setUnitClass(static_cast<uint8_t>(self->characterClass));
-                            shown = room.model->updatePlayer(
-                                static_cast<uint8_t>(self->race), gender,
-                                self->appearanceBytes, self->facialFeatures, worn,
-                                assetManager.get(), renderer.get(), io.DeltaTime);
-                        }
-                    }
-                    if (dressUp) {
-                        dressUp->externalTexture = shown ? room.model->textureId() : 0;
-                    }
-                }
-
-                // Frames that have been *told* which creature to show, rather
-                // than frames that can work it out. The stable's paperdoll is
-                // told a slot and the companion preview a mount or critter, and
-                // in both cases only the binding knows which - so the id is
-                // written onto the frame and this builds whatever it finds.
-                struct CreatureModel {
-                    const char* name;
-                    ui::UnitPortrait* model;
-                    uint32_t* widgetId;
-                };
-                // NOLINTBEGIN(modernize-use-designated-initializers) - a table
-                // whose columns are its field names, with the struct in view
-                // directly above.
-                const CreatureModel kCreatureModels[] = {
-                    {"PetStableModel",      &stableModel_,    &stableModelWidgetId_},
-                    {"CompanionModelFrame", &companionModel_, &companionModelWidgetId_},
-                };
-                // NOLINTEND(modernize-use-designated-initializers)
-                for (const CreatureModel& cm : kCreatureModels) {
-                    ui::Widget* frame = *cm.widgetId ? widgets.get(*cm.widgetId) : nullptr;
-                    if (!frame || frame->name != cm.name) {
-                        frame = widgets.findByName(cm.name);
-                        *cm.widgetId = frame ? frame->id : 0;
-                    }
-                    bool shown = false;
-                    // The creature may not have been known as it was named.
-                    if (frame && frame->visible && entitySpawner_ &&
-                        frame->shownDisplay([this](uint32_t entry) {
-                            return gameHandler->getCreatureDisplayIdForEntry(entry);
-                        }) != 0) {
-                        const std::string modelPath =
-                            entitySpawner_->getModelPathForDisplayId(frame->modelDisplayId);
-                        if (!modelPath.empty()) {
-                            sizeFor(*cm.model, frame);
-                            cm.model->setFraming(ui::UnitPortrait::Framing::FullBody);
-                            shown = cm.model->updateCreature(
-                                modelPath,
-                                entitySpawner_->getCreatureSkinPaths(
-                                    frame->modelDisplayId, modelPath),
-                                assetManager.get(), renderer.get(), io.DeltaTime);
-                        }
-                    }
-                    if (frame) {
-                        frame->externalTexture = shown ? cm.model->textureId() : 0;
-                    }
-                }
-
-                // The pet tab's figure: the pet at full length, from the same
-                // display id its portrait is drawn from.
-                {
-                    ui::Widget* petModel = petModelWidgetId_
-                        ? widgets.get(petModelWidgetId_) : nullptr;
-                    if (!petModel || petModel->name != "PetModelFrame") {
-                        petModel = widgets.findByName("PetModelFrame");
-                        petModelWidgetId_ = petModel ? petModel->id : 0;
-                    }
-                    bool shown = false;
-                    if (petModel && petModel->visible) {
-                        std::string modelPath;
-                        uint32_t petDisplayId = 0;
-                        if (const uint64_t petGuid = gameHandler->getPetGuid()) {
-                            if (game::Unit* u = gameHandler->getUnitByGuid(petGuid)) {
-                                petDisplayId = u->getDisplayId();
-                                if (petDisplayId != 0 && entitySpawner_) {
-                                    modelPath =
-                                        entitySpawner_->getModelPathForDisplayId(petDisplayId);
-                                }
-                            }
-                        }
-                        if (!modelPath.empty()) {
-                            sizeFor(petModel_, petModel);
-                            petModel_.setFraming(ui::UnitPortrait::Framing::FullBody);
-                            shown = petModel_.updateCreature(
-                                modelPath,
-                                entitySpawner_->getCreatureSkinPaths(petDisplayId, modelPath),
-                                assetManager.get(), renderer.get(), io.DeltaTime);
-                        }
-                    }
-                    if (petModel) {
-                        petModel->externalTexture = shown ? petModel_.textureId() : 0;
-                    }
-                }
-
-                // The inspect window's figure, on the same terms as the
-                // paperdoll's - a whole model rather than a face, and only
-                // while the frame is up. Whoever was inspected rather than
-                // whoever is targeted: the interface keeps showing the player
-                // it was opened on while the target moves on, and the inspect
-                // result is where that guid already lives.
-                {
-                    ui::Widget* inspectModel = inspectModelWidgetId_
-                        ? widgets.get(inspectModelWidgetId_) : nullptr;
-                    if (!inspectModel || inspectModel->name != "InspectModelFrame") {
-                        inspectModel = widgets.findByName("InspectModelFrame");
-                        inspectModelWidgetId_ = inspectModel ? inspectModel->id : 0;
-                    }
-                    bool shown = false;
-                    if (inspectModel && inspectModel->visible) {
-                        const auto* result = gameHandler->getInspectResult();
-                        uint8_t race = 0, gender = 0, facial = 0;
-                        uint32_t appearance = 0;
-                        if (result && result->guid != 0 &&
-                            gameHandler->getPlayerAppearance(result->guid, race, gender,
-                                                             appearance, facial)) {
-                            std::vector<game::EquipmentItem> worn;
-                            std::array<uint32_t, 19> displayIds{};
-                            std::array<uint8_t, 19> invTypes{};
-                            if (gameHandler->getOtherPlayerEquipment(result->guid, displayIds,
-                                                                     invTypes)) {
-                                for (size_t slot = 0; slot < displayIds.size(); ++slot) {
-                                    if (displayIds[slot] == 0) continue;
-                                    worn.push_back({.displayModel = displayIds[slot],
-                                                    .inventoryType = invTypes[slot],
-                                                    .enchantment = 0u});
-                                }
-                            }
-                            sizeFor(inspectModel_, inspectModel);
-                            inspectModel_.setFraming(ui::UnitPortrait::Framing::FullBody);
-                            inspectModel_.setGuildEmblem(
-                                gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(result->guid)));
-                            inspectModel_.setUnitClass(gameHandler->lookupPlayerClass(result->guid));
-                            shown = inspectModel_.updatePlayer(
-                                race, gender, appearance, facial, worn,
-                                assetManager.get(), renderer.get(), io.DeltaTime);
-                        }
-                    }
-                    if (inspectModel) {
-                        inspectModel->externalTexture = shown ? inspectModel_.textureId() : 0;
-                    }
-                }
-
+                drawUnitModels(widgets, io.DisplaySize.x, io.DisplaySize.y, io.DeltaTime);
             });
             runRenderStage("addonWidgets/portrait", [&] {
                 // A portrait is a still picture, drawn once (0x00619580),
@@ -7681,15 +7417,15 @@ void Application::render() {
                 unitPortrait_.setAnimated(animatedPortraits);
                 if (portrait) {
                     sizeFor(unitPortrait_, portrait);
-                    unitPortrait_.update(*gameHandler, assetManager.get(),
-                                         renderer.get(), io.DeltaTime);
+                    const bool drawn = unitPortrait_.show(unitLook(gameHandler->getPlayerGuid()), assetManager.get(),
+                                                          renderer.get(), io.DeltaTime);
                     // Assigned every frame including when it is zero. Keeping
                     // the last good handle instead would leave the widget
                     // pointing at a descriptor set that has been destroyed -
                     // the render target is torn down whenever the model is
                     // rebuilt - and drawing from that is a use-after-free
                     // rather than a stale picture.
-                    portrait->externalTexture = unitPortrait_.textureId();
+                    portrait->externalTexture = drawn ? unitPortrait_.textureId() : 0;
                 }
 
                 // Every texture SetPortraitTexture was told to fill with the
@@ -7746,7 +7482,6 @@ void Application::render() {
 
                     // Draws it, and answers whether the picture is that unit's.
                     const auto draw = [&]() -> bool {
-                        bool built = false;
                         face.portrait->setFraming(ui::UnitPortrait::Framing::Face);
                         face.portrait->setAnimated(animatedPortraits);
                         // Sized for the circle it is drawn into rather than for the
@@ -7754,103 +7489,8 @@ void Application::render() {
                         // may draw later wants: the client's are 64 (0x00619580).
                         face.portrait->setTargetSize(128, 128);
                         sizeFor(*face.portrait, widgets.get(claimed.front()));
-
-                        // A player first, because a player has a display id too and
-                        // it is the wrong thing to draw them from: it names the
-                        // naked race model, with none of their skin, face or hair.
-                        // The world already reads all three off their update
-                        // fields, and now so does this.
-                        uint8_t race = 0, gender = 0, facial = 0;
-                        uint32_t appearance = 0;
-                        if (face.guid != 0 &&
-                            gameHandler->getPlayerAppearance(face.guid, race, gender,
-                                                             appearance, facial)) {
-                            // What they are visibly wearing, where it is known.
-                            // Empty means the item queries have not come back, and
-                            // the portrait leaves the model dressed as it was
-                            // rather than stripping it.
-                            // A real player composites their own skin; no bake.
-                            face.portrait->setBakedSkin("");
-                            // Their class: a death knight's eyes glow (0x004ed900).
-                            face.portrait->setUnitClass(gameHandler->lookupPlayerClass(face.guid));
-                            // Their guild tabard's design (0x006db510).
-                            face.portrait->setGuildEmblem(
-                                gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(face.guid)));
-                            std::vector<game::EquipmentItem> worn;
-                            std::array<uint32_t, 19> displayIds{};
-                            std::array<uint8_t, 19> invTypes{};
-                            if (gameHandler->getOtherPlayerEquipment(face.guid, displayIds,
-                                                                     invTypes)) {
-                                for (size_t slot = 0; slot < displayIds.size(); ++slot) {
-                                    if (displayIds[slot] == 0) continue;
-                                    worn.push_back({.displayModel = displayIds[slot],
-                                                    .inventoryType = invTypes[slot],
-                                                    .enchantment = 0u});
-                                }
-                            }
-                            // Whether a model actually loaded, not whether one was
-                            // asked for. A failed load leaves the view holding the
-                            // last unit's face, and a frame that has just changed
-                            // unit would go on showing it.
-                            built = face.portrait->updatePlayer(
-                                race, gender, appearance, facial, worn,
-                                assetManager.get(), renderer.get(), io.DeltaTime);
-                        } else {
-                            uint32_t displayId = 0;
-                            if (face.guid != 0) {
-                                // A unit, not any entity: the display id lives on
-                                // Unit and on GameObject, and a targeted game
-                                // object has no portrait to put one in.
-                                if (game::Unit* u = gameHandler->getUnitByGuid(face.guid)) {
-                                    displayId = u->getDisplayId();
-                                }
-                            }
-                            // A humanoid NPC - a guard, a questgiver, an innkeeper -
-                            // is drawn the way a character is, from a race and the
-                            // same skin, face and hair choices a player has.
-                            // CreatureDisplayInfo leaves the skin fields empty for
-                            // these, so loading one as a creature gives a shape with
-                            // nothing on it. Tried first for that reason.
-                            uint8_t nRace = 0, nSex = 0, nFacial = 0;
-                            uint32_t nBytes = 0;
-                            if (displayId != 0 && entitySpawner_ &&
-                                entitySpawner_->getHumanoidAppearance(displayId, nRace, nSex,
-                                                                      nBytes, nFacial)) {
-                                // Dressed, from the same row. A questgiver's helm
-                                // and shoulders are most of what a portrait framed
-                                // on the head can show of them.
-                                std::vector<game::EquipmentItem> npcWorn;
-                                for (const auto& [did, invType] :
-                                         entitySpawner_->getHumanoidEquipment(displayId)) {
-                                    npcWorn.push_back({.displayModel = did, .inventoryType = invType,
-                                                       .enchantment = 0u});
-                                }
-                                // The bake, where there is one - nearly always.
-                                // It is the whole appearance already composited,
-                                // armour included, which is the half this client
-                                // cannot build for an NPC. The equipment above
-                                // still matters: it decides the geosets, and the
-                                // bake only paints what they draw.
-                                face.portrait->setBakedSkin(
-                                    entitySpawner_->getHumanoidBakePath(displayId));
-                                face.portrait->setGuildEmblem(std::nullopt);
-                                face.portrait->setUnitClass(0);
-                                built = face.portrait->updatePlayer(
-                                    nRace, nSex, nBytes, nFacial, npcWorn,
-                                    assetManager.get(), renderer.get(), io.DeltaTime);
-                            }
-                            std::string modelPath;
-                            if (!built && displayId != 0 && entitySpawner_) {
-                                modelPath = entitySpawner_->getModelPathForDisplayId(displayId);
-                            }
-                            if (!modelPath.empty()) {
-                                built = face.portrait->updateCreature(
-                                    modelPath,
-                                    entitySpawner_->getCreatureSkinPaths(displayId, modelPath),
-                                    assetManager.get(), renderer.get(), io.DeltaTime);
-                            }
-                        }
-                        return built;
+                        return face.portrait->show(unitLook(face.guid), assetManager.get(), renderer.get(),
+                                                   io.DeltaTime);
                     };
                     // A unit gone out of sight keeps the picture taken of it.
                     if (there) facePictures_[*view] = draw() ? claim : std::string();

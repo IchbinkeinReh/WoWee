@@ -2403,17 +2403,16 @@ static int lua_SetPetStablePaperdoll(lua_State* L) {
     lua_getfield(L, 1, "__wid");
     const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
     lua_pop(L, 1);
-    auto* w = tree->get(id);
-    if (!w) return 0;
+    if (!tree->get(id)) return 0;
 
     // The selected index, counted as ClickStablePet counts it: 0 the pet that
     // is out, then the stable slots. Its model is its creature template's;
     // one the creature cache does not hold yet is asked for, and the found
     // answer raises PET_STABLE_UPDATE_PAPERDOLL (0x005a1530 -> 0x005a0ea0).
-    w->setModelCreature(0);
+    tree->showModelCreature(id, 0);
     if (const auto* pet = stablePetAt(gh, selectedStableIndex(gh))) {
         if (gh->getCreatureInfoCache().count(pet->entry)) {
-            w->setModelCreature(pet->entry);
+            tree->showModelCreature(id, pet->entry);
         } else {
             gh->askEntryThen(false, pet->entry, "stable paperdoll", [gh](bool found) {
                 if (found) gh->fireAddonEvent("PET_STABLE_UPDATE_PAPERDOLL", {});

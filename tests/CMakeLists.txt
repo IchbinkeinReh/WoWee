@@ -4283,6 +4283,10 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# ── test_unit_look ───────────────────────────────────────────
+wowee_add_test(test_unit_look
+    SOURCES test_unit_look.cpp)
+
 # ── test_portrait_claims ─────────────────────────────────────
 # Whose face a portrait texture shows (0x006113e0), and the views that draw
 # them. Header-only.

@@ -774,6 +774,7 @@ endif()
 set(WOWEE_SOURCES
     # Core
     src/core/application.cpp
+    src/core/application_unit_models.cpp
     src/core/stall_report.cpp
     src/core/pointer_speed.cpp
     src/core/screen_recorder.cpp

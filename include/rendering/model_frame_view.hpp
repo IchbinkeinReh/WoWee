@@ -101,9 +101,12 @@ public:
     void setFog(const Fog& fog) { fog_ = fog; }
     /// The pose, projection and animation: `sequence` (-1 the model's own)
     /// started at `sequenceTimeMs` each time `sequenceSerial` changes
-    /// (SetSequence, SetSequenceTime: 0x0095f5e0, 0x0095f610).
+    /// (SetSequence, SetSequenceTime: 0x0095f5e0, 0x0095f610). `came` is how a
+    /// PlayerModel stood as its model came, for the camera that stays there
+    /// (figure_camera.hpp).
     void setFrame(float widthDdc, float heightDdc, const model_frame::Pose& pose, float ddcScreenHeight,
-                  int camera, int sequence, int sequenceTimeMs = 0, uint32_t sequenceSerial = 0);
+                  int camera, int sequence, int sequenceTimeMs = 0, uint32_t sequenceSerial = 0,
+                  const model_frame::Pose* came = nullptr);
     void update(float deltaTime);
     /// Records the draw; Renderer calls it outside the scene's passes.
     void compositePass(VkCommandBuffer cmd, uint32_t frameIndex);
@@ -136,6 +139,7 @@ private:
     VkDescriptorSet imguiTexture_ = VK_NULL_HANDLE;
     std::string modelPath_;
     std::vector<pipeline::M2Camera> cameras_;  ///< the model's, for SetCamera
+    glm::vec3 boxMiddle_{0.0f};
     uint32_t modelId_ = 0;
     uint32_t instanceId_ = 0;
     int sequence_ = -1;
