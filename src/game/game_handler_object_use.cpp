@@ -166,8 +166,8 @@ const go_use::LockRow* GameHandler::gameObjectLock(const GameObjectFacts& f) con
     return it != rows.end() ? &it->second : nullptr;
 }
 
-std::pair<std::string, uint32_t> GameHandler::chestLockCursor(const GameObject& go,
-                                                              const GameObjectQueryResponseData* info) const {
+std::pair<std::string, uint32_t> GameHandler::lockCursor(const GameObject& go,
+                                                         const GameObjectQueryResponseData* info) const {
     const auto* lock = gameObjectLock(gameObjectFacts(go, info));
     if (!lock || lock->index[0] == 0) return {};
     auto* am = services_.assetManager;
@@ -501,6 +501,14 @@ bool GameHandler::isPlayersBobber(const GameObject& go) const {
     const uint64_t channel =
         (static_cast<uint64_t>(me->getField(static_cast<uint16_t>(ch + 1))) << 32) | me->getField(ch);
     return channel == go.getGuid();
+}
+
+bool GameHandler::gameObjectUseAllowed(uint64_t guid) {
+    const auto entity = getEntityManager().getEntity(guid);
+    if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return false;
+    const auto& go = static_cast<const GameObject&>(*entity);
+    std::string arg;
+    return gameObjectRefusal(go, gameObjectFacts(go, getCachedGameObjectInfo(go.getEntry())), arg) == 0;
 }
 
 GameHandler::GameObjectPointer GameHandler::gameObjectPointer(uint64_t guid) {

@@ -149,6 +149,32 @@ std::string GameHandler::unitCursorArt(uint64_t guid) {
     return ui::cursorPathForKind(kind);
 }
 
+std::string GameHandler::gameObjectCursorArt(uint64_t guid) {
+    // 0x0070ce10: none of one that takes no click (the type handler's +0x18).
+    const auto entity = getEntityManager().getEntity(guid);
+    if (!entity || entity->getType() != ObjectType::GAMEOBJECT || !gameObjectPointer(guid).interactive) return {};
+    const auto& go = static_cast<const GameObject&>(*entity);
+    const auto* info = getCachedGameObjectInfo(go.getEntry());
+    const bool usable = gameObjectUseAllowed(guid);
+    // The template's IconName, a kind of the table's or a picture of that
+    // name (0x0070cec0).
+    if (info && !info->iconName.empty()) {
+        const std::string art = (usable ? "" : "Unable") + info->iconName;
+        if (const int kind = ui::cursorKindForArt(art); kind != ui::kCursorKindNone) return ui::cursorPathForKind(kind);
+        return "Interface\\Cursor\\" + art + ".blp";
+    }
+    const uint32_t type = gameObjectFacts(go, info).type;
+    if (const int own = unit_pointer::objectCursor(type, static_cast<uint8_t>(getQuestGiverStatus(guid)), usable); own != 0)
+        return ui::cursorPathForKind(own);
+    // 0x0070f9b0: its lock's LockType CursorName, "Unable" before it where it
+    // cannot be used but for LockType 1, and only a name the table has; else
+    // Interact.
+    const auto [name, lockType] = lockCursor(go, info);
+    if (!name.empty())
+        return ui::cursorPathForKind(ui::cursorKindForArt(!usable && lockType != 1 ? "Unable" + name : name));
+    return ui::cursorPathForKind(usable ? 5 : 5 + unit_pointer::kUnable);
+}
+
 unit_pointer::Click GameHandler::unitClick(uint64_t guid) {
     namespace up = unit_pointer;
     const auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));

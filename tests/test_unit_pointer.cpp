@@ -140,3 +140,15 @@ TEST_CASE("a right click on a unit", "[pointer]") {
         CHECK(click(a) == Click::Nothing);
     }
 }
+
+TEST_CASE("a game object's own cursor", "[pointer]") {
+    CHECK(objectCursor(9, 0, true) == 7);
+    CHECK(objectCursor(9, 0, false) == 33);
+    CHECK(objectCursor(19, 0, true) == 15);
+    CHECK(objectCursor(19, 0, false) == 41);
+    CHECK(objectCursor(34, 0, false) == 29);
+    CHECK(objectCursor(2, 8, true) == 23);
+    CHECK(objectCursor(2, 10, false) == 51);
+    CHECK(objectCursor(2, 1, false) == 0);
+    for (const uint32_t type : {0u, 3u, 7u, 10u, 17u}) CHECK(objectCursor(type, 8, false) == 0);
+}

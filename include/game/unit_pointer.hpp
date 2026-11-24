@@ -105,6 +105,21 @@ struct CursorAsk {
     return 0;
 }
 
+/// The cursor a type of game object has of its own (its handler's +0x14): a quest
+/// giver's by its status, a text's, a mailbox's, a guild bank's; 0 for the rest, which
+/// go by their lock (0x0070f9b0).
+[[nodiscard]] constexpr int objectCursor(uint32_t goType, uint8_t questStatus, bool usable) {
+    int kind = 0;
+    switch (goType) {
+        case 2: kind = questCursor(questStatus); break;
+        case 9: kind = 7; break;
+        case 19: kind = 15; break;
+        case 34: kind = 3; break;
+        default: break;
+    }
+    return kind == 0 || usable ? kind : kind + kUnable;
+}
+
 struct ClickAsk {
     Player player;
     bool playerAlive = true;     ///< UNIT_FIELD_HEALTH above 0 (a ghost has some)

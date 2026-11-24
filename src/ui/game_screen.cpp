@@ -1048,31 +1048,6 @@ std::string scriptCursorPath() {
     return cursorPathForKind(kind);
 }
 
-/// Which cursor a game object wears, by its GameObjectType.
-///
-/// The numbers are 3.3.5's own: 0 door, 1 button, 2 questgiver, 3 chest,
-/// 7 chair, 17 fishing node, 19 mailbox, 20 auction house. Anything else is
-/// something to interact with, which is what the hand with the gear says.
-const char* objectCursorPath(uint32_t goType) {
-    switch (goType) {
-        case 2:  return "Interface\\Cursor\\Quest.blp";
-        case 9:  return "Interface\\Cursor\\Inspect.blp";   // text: a book or plaque
-        case 17: return "Interface\\Cursor\\Fishing.blp";
-        case 19: return "Interface\\Cursor\\Mail.blp";
-        case 34: return "Interface\\Cursor\\Buy.blp";       // guild bank
-        default: return "Interface\\Cursor\\Interact.blp";
-    }
-}
-
-/// The cursor's "can't" art for one that has it: Attack.blp becomes
-/// UnableAttack.blp, as the client puts "Unable" before the name.
-std::string unableCursorPath(const char* path) {
-    std::string out = path;
-    const size_t slash = out.rfind('\\');
-    out.insert(slash == std::string::npos ? 0 : slash + 1, "Unable");
-    return out;
-}
-
 namespace {
 
 /// A unit's PvP flags as FUN_00729740 reads them: byte 1 of
@@ -1206,43 +1181,9 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
     auto entity = gameHandler.getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
 
-    auto go = std::static_pointer_cast<game::GameObject>(entity);
-    const auto* info = gameHandler.getCachedGameObjectInfo(go->getEntry());
-    if (usable) {
-        // The art with "can't" on it when a click would be refused: the player
-        // is dead (the client's CanUse says no outright), or too far away for
-        // the use to go - the same ten yards the click itself allows.
-        const auto& me = gameHandler.getMovementInfo();
-        const float dx = entity->getX() - me.x, dy = entity->getY() - me.y,
-                    dz = entity->getZ() - me.z;
-        constexpr float kUseDistance = 10.0f;
-        const bool cannotUse = gameHandler.isPlayerDead() ||
-                               dx * dx + dy * dy + dz * dz > kUseDistance * kUseDistance;
-        std::string cursorPath;
-        if (info && !info->iconName.empty()) {
-            // 0x0070ce10 / 0x0070cec0: the template's IconName, "Unable"
-            // before it when the object cannot be used.
-            cursorPath = std::string("Interface\\Cursor\\") + (cannotUse ? "Unable" : "") + info->iconName + ".blp";
-        } else if (info && info->type == 3) {
-            // 0x0070f9b0, a chest: its lock's LockType CursorName - "Unable"
-            // before it when it cannot be used, but for LockType 1 - and only
-            // a name the cursor table has; with no LockType cursor, Interact
-            // (5) or UnableInteract (0x1f).
-            const auto [name, lockType] = gameHandler.chestLockCursor(*go, info);
-            if (!name.empty()) {
-                const std::string art = (cannotUse && lockType != 1) ? "Unable" + name : name;
-                const int kind = ui::cursorKindForArt(art);
-                if (kind == kCursorKindNone) return false;
-                cursorPath = cursorPathForKind(kind);
-            } else {
-                cursorPath = cursorPathForKind(cannotUse ? 0x1f : 5);
-            }
-        } else {
-            cursorPath = cannotUse ? unableCursorPath(objectCursorPath(info ? info->type : 0u))
-                                   : std::string(objectCursorPath(info ? info->type : 0u));
-        }
-        VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window,
-                                            cursorPath.c_str());
+    const std::string cursorPath = usable ? gameHandler.gameObjectCursorArt(guid) : std::string();
+    if (!cursorPath.empty()) {
+        VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window, cursorPath.c_str());
         if (!tex) return false;
         drawCursorTexture(tex);
     }

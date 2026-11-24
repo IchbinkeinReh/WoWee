@@ -1579,11 +1579,11 @@ public:
     std::optional<GroundTargetAim> aimGroundTarget(std::optional<ground_target::Place> place);
     void cancelAura(uint32_t spellId);
     void cancelOpenStableAuras();
-    /// A chest's cursor from its lock (0x0070f9b0): the LockType.dbc row its
-    /// Lock.dbc row's first Index names, that row's CursorName and its id.
-    /// Empty when the lock has no such row or the row no cursor.
-    std::pair<std::string, uint32_t> chestLockCursor(const GameObject& go,
-                                                     const GameObjectQueryResponseData* info) const;
+    /// A game object's lock's LockType CursorName and id; empty without.
+    std::pair<std::string, uint32_t> lockCursor(const GameObject& go, const GameObjectQueryResponseData* info) const;
+    /// The picture of the cursor over a game object (0x0070ce10), empty for the
+    /// pointer as it is.
+    std::string gameObjectCursorArt(uint64_t guid);
     /// 0x00725bf0's ring: the player's charm, else its summon, and the
     /// milliseconds since its UNIT_FIELD_TARGET was written, while that is
     /// under a second.
@@ -3195,6 +3195,9 @@ public:
         bool interactive = false;
     };
     GameObjectPointer gameObjectPointer(uint64_t guid);
+    /// Whether the object may be used now (its type handler's +0x1c, asked
+    /// without a word).
+    bool gameObjectUseAllowed(uint64_t guid);
     void activateSpiritHealer(uint64_t npcGuid);
     bool isLootWindowOpen() const;
     /// Starting to move, turning or jumping lets go of the loot (0x0072e5d0
