@@ -10,6 +10,19 @@
 namespace wowee {
 namespace game {
 
+/// The part of its turn rate a mover turns at, and of its pitch rate it
+/// pitches at (0x00987820): three quarters while it also moves, falls, rises
+/// or sinks (0xc0100f), but the whole of it with flags2 0x8 and 0x10. What
+/// everyone else sees it turn by (Entity::startMoveByFlags).
+inline constexpr uint32_t kMovingTurnFlags = 0xc0100fu;
+inline constexpr float kMovingTurnShare = 3.0f / 4.0f;
+[[nodiscard]] inline constexpr float turnShare(uint32_t flags, uint16_t flags2) {
+    return (flags & kMovingTurnFlags) != 0 && (flags2 & 0x8) == 0 ? kMovingTurnShare : 1.0f;
+}
+[[nodiscard]] inline constexpr float pitchShare(uint32_t flags, uint16_t flags2) {
+    return (flags & kMovingTurnFlags) != 0 && (flags2 & 0x10) == 0 ? kMovingTurnShare : 1.0f;
+}
+
 /// What ends a fall (0x00988490: FALLING and FALLING_FAR off), the time it
 /// lasted kept as after one (+0x80). `fellMs` is how long it fell, none where
 /// it did not. A root that came while it fell (0x100000, rootMover) holds it

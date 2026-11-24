@@ -2326,10 +2326,12 @@ void CameraController::update(float deltaTime) {
 
     // Keyboard turning updates camera yaw (character follows yaw in renderer).
     // Use server turn rate (rad/s) when set; otherwise fall back to WOW_TURN_SPEED (deg/s).
-    const float activeTurnSpeedDeg = (turnRateOverride_ > 0.0f && turnRateOverride_ < 20.0f
+    const float turnSpeedDeg = (turnRateOverride_ > 0.0f && turnRateOverride_ < 20.0f
                                        && !std::isnan(turnRateOverride_))
                                          ? glm::degrees(turnRateOverride_)
                                          : WOW_TURN_SPEED;
+    // Slower while it moves as well (0x00987820).
+    const float activeTurnSpeedDeg = turnSpeedDeg * (moverState_.turnShare ? moverState_.turnShare() : 1.0f);
     // A driver's keys turn the vehicle alone; its camera follows the vehicle
     // camera's chased facing (0x00604490, 0x0075a1c0).
     //
@@ -2370,7 +2372,8 @@ void CameraController::update(float deltaTime) {
                                 !moverHeld_ && (swimming || isFlightAirborne());
     nowPitchKeys_ = pitchKeysPitch ? pitchKeys : 0;
     if (pitchKeysPitch) {
-        const float pitched = float(pitchKeys) * 180.0f * deltaTime;
+        const float pitched = float(pitchKeys) * 180.0f * (moverState_.pitchShare ? moverState_.pitchShare() : 1.0f) *
+                              deltaTime;
         pitch = glm::clamp(pitch + pitched, pitchLimitMinDeg_, pitchLimitMaxDeg_);
         if (isFlightAirborne())
             flightPitchDeg_ = glm::clamp(flightPitchDeg_ + pitched, -90.0f, 90.0f);

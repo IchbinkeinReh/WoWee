@@ -11,6 +11,7 @@
 #include "core/world_settle.hpp"
 #include "core/cinematic_player.hpp"
 #include "game/mount_special.hpp"
+#include "game/mover_mode.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
 #include "core/frame_pacer.hpp"
@@ -4200,6 +4201,16 @@ void Application::connectWorldHooks() {
             const game::JumpKey does = game::jumpKey(in);
             if (does == game::JumpKey::MountSpecial) gameHandler->mountSpecial();
             return does == game::JumpKey::Jump;
+        };
+        state.turnShare = [this]() {
+            if (!gameHandler) return 1.0f;
+            const auto& move = gameHandler->getMovementInfo();
+            return game::turnShare(move.flags, move.flags2);
+        };
+        state.pitchShare = [this]() {
+            if (!gameHandler) return 1.0f;
+            const auto& move = gameHandler->getMovementInfo();
+            return game::pitchShare(move.flags, move.flags2);
         };
         cc->setMoverStateHooks(std::move(state));
         // The player sitting down or getting up: the request to the server,

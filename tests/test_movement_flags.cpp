@@ -16,6 +16,8 @@
 
 using wowee::game::MovementFlags;
 using wowee::game::MovementInfo;
+using wowee::game::pitchShare;
+using wowee::game::turnShare;
 
 namespace {
 
@@ -227,6 +229,20 @@ TEST_CASE("our own jump goes where the wire's facing points", "[movementflags]")
     const auto west = wowee::game::ownJumpBlock(info, 2.5f, 7.0f, 4.5f);
     CHECK(west.dirX == Catch::Approx(0.0f).margin(1e-6));
     CHECK(west.dirY == Catch::Approx(1.0f));
+}
+
+TEST_CASE("a mover turns at three quarters of its rate while it moves (0x00987820)", "[movementflags]") {
+    CHECK(turnShare(0, 0) == 1.0f);
+    CHECK(turnShare(0x10, 0) == 1.0f);  // turning on the spot
+    for (const uint32_t moving : {0x1u, 0x2u, 0x4u, 0x8u, 0x1000u, 0x400000u, 0x800000u}) {
+        CHECK(turnShare(moving | 0x10, 0) == 0.75f);
+        CHECK(turnShare(moving | 0x10, 0x8) == 1.0f);
+        CHECK(turnShare(moving | 0x10, 0x10) == 0.75f);
+        CHECK(pitchShare(moving | 0x40, 0) == 0.75f);
+        CHECK(pitchShare(moving | 0x40, 0x10) == 1.0f);
+    }
+    // Swimming and walking slow no turn by themselves.
+    CHECK(turnShare(0x200000 | 0x100 | 0x20, 0) == 1.0f);
 }
 
 TEST_CASE("landing from flight is level and falls from there (0x0098c240)", "[movementflags]") {
