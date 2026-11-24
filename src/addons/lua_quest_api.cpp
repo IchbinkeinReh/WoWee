@@ -1320,12 +1320,10 @@ static game::QuestPoiQuestState questPoiState(game::GameHandler* gh,
     }
     if (q->failed) return st;
 
-    bool anyKill = false, anyItem = false, onlyStartItem = true;
+    bool anyKill = false, onlyStartItem = true;
     for (const auto& kill : q->killObjectives) anyKill = anyKill || kill.npcOrGoId != 0;
     for (const auto& item : q->itemObjectives) {
-        if (item.itemId == 0) continue;
-        anyItem = true;
-        if (item.itemId != q->sourceItemId || item.required > 1) onlyStartItem = false;
+        if (game::isListedItemObjective(*q, item)) onlyStartItem = false;
     }
     const bool special = (q->questFlags & 6u) != 0;
     const bool noRep = q->repObjectiveFaction == 0 && q->repObjectiveFaction2 == 0;
@@ -1334,9 +1332,7 @@ static game::QuestPoiQuestState questPoiState(game::GameHandler* gh,
                       q->rewardMoney >= 0;
     // 0x005e0ea0(index, 1): a quest with no requirement at all is never
     // "complete" here, however the log has it.
-    const bool nothingRequired = !special && noRep && q->rewardMoney == 0 && !anyKill &&
-                                 !anyItem && q->playersSlain == 0;
-    st.complete = q->complete && !nothingRequired;
+    st.complete = q->complete && !game::questRequiresNothing(*q);
 
     if (q->complete) {
         st.objectiveMask = 0xffffffffu;
@@ -1354,9 +1350,7 @@ static game::QuestPoiQuestState questPoiState(game::GameHandler* gh,
     for (size_t i = 0; i < q->itemObjectives.size(); ++i) {
         const auto& item = q->itemObjectives[i];
         if (item.itemId == 0) continue;
-        uint32_t have = 0;
-        if (auto it = q->itemCounts.find(item.itemId); it != q->itemCounts.end()) have = it->second;
-        if (have < item.required) mask |= 1u << (i + 4);
+        if (gh->countItemInBags(item.itemId) < item.required) mask |= 1u << (i + 4);
     }
     for (size_t i = 0; i < q->objectiveSourceItems.size(); ++i) {
         const uint32_t source = q->objectiveSourceItems[i];

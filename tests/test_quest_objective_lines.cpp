@@ -69,3 +69,30 @@ TEST_CASE("a quest link's requirement lines are worded without progress", "[ques
     CHECK(questTooltipRequirementCount(bare, true) == 1);
     CHECK(questTooltipRequirementLine(bare, 0, true, look) == "Talk to Rhinag.");
 }
+
+TEST_CASE("the item the giver handed over has no line", "[quest][objective]") {
+    // Quest 10120: Orion's report (28024), wanted once and the quest's own.
+    GameHandler::QuestLogEntry q;
+    q.objectives = "Bringt Orions Bericht.";
+    q.sourceItemId = 28024;
+    q.itemObjectives[0] = {28024, 1};
+    CHECK(questObjectiveCount(q) == 0);
+    // Met, there is the sentence instead.
+    q.complete = true;
+    CHECK(questObjectiveCount(q) == 1);
+
+    // Wanted more than once it is an objective, and so is any other item.
+    q.itemObjectives[0].required = 2;
+    CHECK(questObjectiveCount(q) == 1);
+    q.itemObjectives[1] = {600, 4};
+    CHECK(questObjectiveCount(q) == 2);
+}
+
+TEST_CASE("a quest that requires nothing has no line when complete", "[quest][objective]") {
+    GameHandler::QuestLogEntry q;
+    q.objectives = "Sprecht mit Thrall.";
+    q.complete = true;
+    CHECK(questObjectiveCount(q) == 0);
+    q.questFlags = 2;
+    CHECK(questObjectiveCount(q) == 1);
+}

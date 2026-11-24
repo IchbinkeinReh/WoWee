@@ -3,6 +3,7 @@
 
 #include "game_replay.hpp"
 #include "game/quest_handler.hpp"
+#include "game/quest_objectives.hpp"
 
 #include <algorithm>
 #include <string>
@@ -130,4 +131,35 @@ TEST_CASE("any word of a quest's slot is news to the interface", "[replay][quest
         CHECK(questOf(s, 9387) == nullptr);
     }
     s.handler().setAddonEventCallback(nullptr);
+}
+
+// Quest 10120 in the bags as the server leaves it: the report handed over, the
+// slot complete. And an ordinary item of a complete quest, counted all the same.
+TEST_CASE("item objectives are counted off the bags and leave out the quest's own", "[replay][quest]") {
+    constexpr uint64_t kItem = 0x4000000000000099ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 10120}}));
+    s.receive(questAnswer(10120, "wotlk", 28024, 28024, 1));
+    s.receive(UpdateObject().create(kItem, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 28024}, {UF::ITEM_FIELD_STACK_COUNT, 1}}));
+    const uint16_t pack = wowee::game::fieldIndex(UF::PLAYER_FIELD_PACK_SLOT_1);
+    // Complete before the bags are known to hold it.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 1, 5), 1}}));
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid,
+                                      {{pack, static_cast<uint32_t>(kItem)},
+                                       {static_cast<uint16_t>(pack + 1), static_cast<uint32_t>(kItem >> 32)}}));
+    REQUIRE(questOf(s, 10120));
+    REQUIRE(s.handler().countItemInBags(28024) == 1);
+    auto lines = wowee::game::questObjectives(s.handler(), *questOf(s, 10120));
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].text == "Besorgt 20 Kalynastachel.");
+    CHECK(lines[0].finished);
+    CHECK(wowee::game::questObjectiveCount(*questOf(s, 10120)) == 1);
+
+    s.receive(questAnswer(10120, "wotlk", 0, 28024, 1));
+    lines = wowee::game::questObjectives(s.handler(), *questOf(s, 10120));
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].text.find("1/1") != std::string::npos);
+    CHECK(lines[0].finished);
 }
