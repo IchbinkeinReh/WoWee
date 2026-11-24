@@ -274,10 +274,17 @@ ToolAnswer Server::call(const std::string& name, const json& arguments) {
 }
 
 bool Server::sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload) {
-    if (!context_.origin.isServer()) return true;
     const auto* table = game::getActiveOpcodeTable();
     const auto logical = table ? table->fromWire(wireOpcode) : std::nullopt;
     const char* name = logical ? game::OpcodeTable::logicalToName(*logical) : nullptr;
+    // Whom the realm has selected, whoever's doing it was; the game's thread
+    // is the only one that selects.
+    const auto selection = name ? selectionOf(name, payload) : std::nullopt;
+    const auto goes = [&] {
+        if (selection) context_.selectedOnRealm = *selection;
+        return true;
+    };
+    if (!context_.origin.isServer()) return goes();
     if (!name) return true;
     // What is sent from another thread is held to the rules without asking
     // the game, which is this one's: no name is its own there.
@@ -285,6 +292,7 @@ bool Server::sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload) 
     GuardContext guard;
     guard.allow = options_.allow;
     guard.wotlkWire = game::isActiveExpansion("wotlk");
+    guard.selectedOnRealm = context_.selectedOnRealm;
     if (gh) {
         guard.ownGuid = gh->getPlayerGuid();
         guard.targetGuid = gh->getTargetGuid();
@@ -297,7 +305,7 @@ bool Server::sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload) 
         };
     }
     const Verdict verdict = judgeSend(name, payload, guard);
-    if (verdict.allowed()) return true;
+    if (verdict.allowed()) return goes();
     context_.refusals.push({.what = name, .why = verdict.why, .at = context_.now});
     // A line each would be a line a frame for what is sent every frame.
     if (++sendRefusals_ <= 20) LOG_WARNING("MCP server: not sent: ", name, " - ", verdict.why);

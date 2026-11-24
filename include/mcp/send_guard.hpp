@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -35,6 +36,9 @@ struct GuardContext {
     bool wotlkWire = true;
     /// Who is selected, which is whom a game master's command is about.
     uint64_t targetGuid = 0;
+    /// The last CMSG_SET_SELECTION that went out: whom the realm has selected,
+    /// which is somebody still where the client let go without saying so.
+    uint64_t selectedOnRealm = 0;
     /// Whether a guid is another player's pet, totem or guardian.
     std::function<bool(uint64_t)> belongsToOtherPlayer;
 };
@@ -66,10 +70,14 @@ bool isPlayerGuid(uint64_t guid);
 /// among them. `text` begins with '.' or '!'.
 Verdict judgeGmCommand(std::string_view text, const GuardContext& context);
 
-/// Whether a game master's command is about a player and answers "player not
-/// found" with a creature selected (.learn, .levelup, .modify money): the
+/// Whether a game master's command only tells (.npc info, .gps, .lookup ...):
+/// the only kind given with anything selected but the character itself. Every
+/// other is about whoever is selected, where it names nobody, and the
 /// character itself is selected for it.
-bool gmCommandWantsPlayer(std::string_view text);
+bool gmCommandOnlyTells(std::string_view text);
+
+/// Whom a CMSG_SET_SELECTION selects, where the packet is one.
+std::optional<uint64_t> selectionOf(std::string_view opcode, std::span<const uint8_t> payload);
 
 /// Whether text given to the chat box may be entered: the slash commands that
 /// run Lua are --mcp-lua's, and those that end the session have tools of their

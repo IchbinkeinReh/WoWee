@@ -324,25 +324,88 @@ TEST_CASE("no command is given with another player selected", "[mcp][gm]") {
     CHECK_FALSE(gives(".die", c));
     c.targetGuid = kMe;
     CHECK(gives(".revive", c));
-    c.targetGuid = kWolf;
-    CHECK(gives(".die", c));
 }
 
-// The realm answers "player not found" to these with a creature selected.
-TEST_CASE("the commands that want a player are about the character", "[mcp][gm]") {
-    for (const char* command : {".learn 6603", ".LEARN all", ".unlearn 6603", ".levelup", ".maxskill", ".cooldown",
-                                ".revive", ".additem 6948", ".quest add 783", ".save", ".combatstop",
-                                ".modify money 100", ".mod honor 5", "!learn 1"}) {
+// K5: .aura with a creature selected went to the creature. Whoever is selected
+// - here, or on the realm, which may have kept what the client let go - a
+// command that does something is the character's own or not given.
+TEST_CASE("no command that does something is given with anything else selected", "[mcp][gm]") {
+    const std::vector<std::string> acts = {
+        ".aura 5782", ".unaura all", ".die", ".revive", ".dismount", ".demorph", ".combatstop", ".maxskill",
+        ".cooldown", ".levelup", ".respawn", ".save", ".learn 6603", ".LEARN all", ".unlearn 6603", ".additem 6948",
+        ".morph 1", ".go xyz 1 2 3", ".tele Orgrimmar", ".gm on", ".gm fly on", ".modify hp 100", ".mod speed 5",
+        ".modify money 1", ".quest add 783", ".cast 133", ".cast self 133", ".cast back 133", ".instance unbind all",
+        "!aura 5782"};
+    const std::vector<std::string> tells = {".npc info", ".npc near", ".gobject info", ".gobject near 5",
+                                            ".gobj target", ".gps", ".lookup item Linen", ".distance", ".help",
+                                            ".help aura", ".commands", ".server info"};
+    GuardContext c = context();
+    const auto judged = [&](const std::string& command) {
+        // The same by its packet, as a macro or an addon would send it.
+        Bytes whisper;
+        whisper.u32(7).u32(0);
+        for (const char ch : c.ownName) whisper.u8(static_cast<uint8_t>(ch));
+        whisper.u8(0);
+        for (const char ch : command) whisper.u8(static_cast<uint8_t>(ch));
+        whisper.u8(0);
+        const bool sent = judgeSend("CMSG_MESSAGECHAT", whisper.b, c).allowed();
+        CHECK(sent == judgeGmCommand(command, c).allowed());
+        return sent;
+    };
+    const auto select = [&](uint64_t here, uint64_t onRealm) {
+        c.targetGuid = here;
+        c.selectedOnRealm = onRealm;
+    };
+    for (const auto& command : acts) {
         INFO(command);
-        CHECK(gmCommandWantsPlayer(command));
-        CHECK(gives(command));
+        CHECK_FALSE(gmCommandOnlyTells(command));
+        for (const uint64_t other : {kWolf, kOthersPet, kOther, uint64_t{0xF150006D50000003ULL}}) {
+            select(other, other);
+            CHECK_FALSE(judged(command));
+            select(0, other);
+            CHECK_FALSE(judged(command));
+            select(kMe, other);
+            CHECK_FALSE(judged(command));
+            select(other, kMe);
+            CHECK_FALSE(judged(command));
+        }
+        for (const uint64_t own : {uint64_t{0}, kMe}) {
+            select(own, own);
+            CHECK(judged(command));
+            select(own, 0);
+            CHECK(judged(command));
+        }
     }
-    // And these are about whatever is selected.
-    for (const char* command : {".die", ".aura 12345", ".unaura all", ".morph 1", ".modify hp 100", ".modify speed 5",
-                                ".npc info", ".gps", ".respawn", ".go xyz 1 2 3", ".", ". "}) {
+    for (const auto& command : tells) {
         INFO(command);
-        CHECK_FALSE(gmCommandWantsPlayer(command));
+        CHECK(gmCommandOnlyTells(command));
+        select(kWolf, kWolf);
+        CHECK(judged(command));
+        select(kOther, 0);
+        CHECK_FALSE(judged(command));
+        select(0, kOther);
+        CHECK_FALSE(judged(command));
+        select(0, 0);
+        CHECK(judged(command));
     }
+    // What only looks like telling.
+    select(kWolf, kWolf);
+    for (const char* command : {".npc add 1", ".npc delete", ".gobject delete 1", ".gobject add 1", ".npc", ".gobject",
+                                ".", ". "}) {
+        INFO(command);
+        CHECK_FALSE(judgeGmCommand(command, c).allowed());
+    }
+}
+
+TEST_CASE("whom a selection selects is read off its packet", "[mcp][gm]") {
+    CHECK(selectionOf("CMSG_SET_SELECTION", Bytes().u64(kWolf).b) == kWolf);
+    CHECK(selectionOf("CMSG_SET_SELECTION", Bytes().u64(0).b) == uint64_t{0});
+    CHECK_FALSE(selectionOf("CMSG_ATTACKSWING", Bytes().u64(kWolf).b).has_value());
+    // One that cannot be read is somebody's.
+    const auto cut = selectionOf("CMSG_SET_SELECTION", Bytes().u32(1).b);
+    REQUIRE(cut.has_value());
+    CHECK(*cut != 0);
+    CHECK(*cut != kMe);
 }
 
 TEST_CASE("what is typed into the chat box", "[mcp][guard]") {

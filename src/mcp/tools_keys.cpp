@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "core/application.hpp"
@@ -39,6 +40,7 @@ GuardContext guardOf(ToolContext& context) {
     g.ownGuid = gh->getPlayerGuid();
     if (const auto* c = gh->getActiveCharacter()) g.ownName = c->name;
     g.targetGuid = gh->getTargetGuid();
+    g.selectedOnRealm = context.selectedOnRealm;
     g.allow = context.options.allow;
     return g;
 }
@@ -157,22 +159,26 @@ void gm(ToolContext& context, const json& args, Script& script) {
     const std::string command = args["command"].get<std::string>();
     GuardContext guard = guardOf(context);
     if (command.empty() || command[0] != '.') return failNow(script, "a game master's command begins with .");
-    // Whom it is about is who is selected: the character, where a command
-    // wants one and a creature would make it fail.
-    const bool onSelf = args.value("on", std::string(gmCommandWantsPlayer(command) ? "self" : "target")) == "self";
-    if (onSelf) guard.targetGuid = guard.ownGuid;
+    // Whom it is about is who is selected: the character, but for a command
+    // that only tells.
+    const bool onSelf = args.value("on", std::string(gmCommandOnlyTells(command) ? "target" : "self")) == "self";
+    if (onSelf) guard.targetGuid = guard.selectedOnRealm = guard.ownGuid;
     if (const Verdict v = judgeGmCommand(command, guard); !v.allowed()) {
         context.refusals.push({.what = command.substr(0, 40), .why = v.why, .at = context.now});
         return failNow(script, v.why);
     }
     if (guard.ownName.empty()) return failNow(script, "the character's name is not known");
-    auto selected = std::make_shared<uint64_t>(0);
+    auto selected = std::make_shared<std::optional<uint64_t>>();
     script.then([&context, onSelf, selected](Script&) {
         auto* gh = context.app.getGameHandler();
         if (!onSelf || !gh || gh->getTargetGuid() == gh->getPlayerGuid()) return Script::Step::Next;
+        // With nothing selected - here and on the realm - it is the
+        // character's own anyway.
+        if (gh->getTargetGuid() == 0 && context.selectedOnRealm == 0) return Script::Step::Next;
         *selected = gh->getTargetGuid();
-        // With nothing selected it is the character's own anyway.
-        if (*selected != 0) gh->targetUnit(gh->getPlayerGuid());
+        // The realm is told before the command: the selection's packet goes
+        // out here, the whisper's after it.
+        gh->targetUnit(gh->getPlayerGuid());
         return Script::Step::Next;
     });
     // A whisper to oneself, which the realm takes a command out of. It is no
@@ -204,10 +210,9 @@ void gm(ToolContext& context, const json& args, Script& script) {
         auto* gh = context.app.getGameHandler();
         // Back to what was selected, where it is still there and nothing else
         // has been selected since.
-        if (gh && *selected != 0 && gh->getTargetGuid() == gh->getPlayerGuid() &&
-            gh->getEntityManager().getEntity(*selected)) {
-            gh->targetUnit(*selected);
-        }
+        if (!gh || !*selected || gh->getTargetGuid() != gh->getPlayerGuid()) return Script::Step::Next;
+        if (**selected == 0) gh->clearTarget();
+        else if (gh->getEntityManager().getEntity(**selected)) gh->targetUnit(**selected);
         return Script::Step::Next;
     });
     script.then(finishWith(context, after, [&context, onSelf] {
@@ -414,9 +419,10 @@ void addKeyTools(Toolbox& box) {
     box.push_back(handsTool("gm",
                             "A game master's command for the own character, whispered to itself: .revive, .gps, "
                             ".go xyz, .tele, .gm on/off, .modify ..., .additem id. Only a list of harmless ones "
-                            "(docs/MCP_SERVER.md), and never on another player. Commands that want a player (.learn, "
-                            ".levelup, .modify money ...) are given with the character selected, and what was selected "
-                            "is selected again after. A dialog may be open.",
+                            "(docs/MCP_SERVER.md), and never on anybody else: but for those that only tell (.npc info, "
+                            ".gps, .lookup ...) they are given with the character selected, and what was selected is "
+                            "selected again after; on=target with anything else selected is refused. A dialog may be "
+                            "open.",
                             object({required("command", text("beginning with a dot", 200)),
                                     optional("on", choice("whom it is about", {"self", "target"})),
                                     optional("settle", number("seconds to wait for the answer", 0, 15))}),

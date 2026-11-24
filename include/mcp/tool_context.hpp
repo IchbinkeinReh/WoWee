@@ -2,6 +2,7 @@
 
 // What the tools of the MCP server have to hand.
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -66,6 +67,8 @@ struct ToolContext {
     RingLog<EventLine> chat{1000};
     RingLog<EventLine> combat{2000};
     RingLog<RefusedLine> refusals{200};
+    /// The last CMSG_SET_SELECTION let out (GuardContext::selectedOnRealm).
+    std::atomic<uint64_t> selectedOnRealm{0};
     FrameGrab grab;
     /// Seconds since the server started, as the lines above have it.
     double now = 0.0;
