@@ -527,6 +527,10 @@ public:
     [[nodiscard]] std::optional<bool> reachAnswer(uint32_t spellId, uint64_t caster, uint64_t unit) const;
     /// 0x00801650 with no unit: the spell's reach from the caster.
     [[nodiscard]] std::optional<unit_target::Range> spellRange(uint32_t spellId, uint64_t caster) const;
+    /// The range GetSpellInfo states (0x00540a30): none of a melee row's
+    /// (0x007ff380), else spellRange's, a ranged row's minimum its own
+    /// (0x007ff3c0, 0x007ff400).
+    [[nodiscard]] std::optional<unit_target::Range> statedRange(uint32_t spellId, uint64_t caster) const;
     /// 0x00802c30 -> 0x00801650 at a unit: the reach from the caster, the
     /// friendly row where the caster may help the unit (0x007293d0), else by
     /// the spell (0x007fe1b0). Zero both for a spell with no row or no caster.

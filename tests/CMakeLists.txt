@@ -4318,6 +4318,10 @@ target_link_libraries(test_lua_numbers PRIVATE catch2_main lua51)
 add_test(NAME lua_numbers COMMAND test_lua_numbers)
 register_test_target(test_lua_numbers)
 
+# ── test_spell_call ──────────────────────────────────────────
+wowee_add_test(test_spell_call
+    SOURCES test_spell_call.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

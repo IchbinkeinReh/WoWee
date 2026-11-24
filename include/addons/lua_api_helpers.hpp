@@ -3,6 +3,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include "addons/spell_call.hpp"
 #include "addons/macro_icon_lists.hpp"
 #include "addons/unit_token.hpp"
 #include <array>
@@ -1343,48 +1344,62 @@ bool macroShownState(lua_State* L, game::GameHandler* gh, uint32_t macroId, Macr
 /// cast of its use spell. `worn` for one already equipped, which is used.
 bool itemUseAllowed(lua_State* L, game::GameHandler* gh, uint32_t itemId, bool worn);
 
-inline uint32_t spellIdForCall(lua_State* L, game::GameHandler* gh) {
-    if (!gh) return 0;
-    // A book beside a number is a slot. A book beside a *name* is not a form
-    // the client has, but falling through to the name lookup is free and
-    // beats raising out of a caller that only wanted an icon.
-    if (!lua_isnoneornil(L, 2) && lua_isnumber(L, 1)) {
-        const int slot = static_cast<int>(lua_tonumber(L, 1));
-        // 0x00540670: a slot is one of 1024, or "<function>(): Invalid spell
-        // slot" with the running function's name.
-        if (slot < 1 || slot > 1024) {
-            lua_Debug ar;
-            const char* fn = "?";
-            if (lua_getstack(L, 0, &ar) && lua_getinfo(L, "n", &ar) && ar.name) fn = ar.name;
-            luaL_error(L, "%s(): Invalid spell slot", fn);
-            return 0;
-        }
-        // The pet book is a list of its own, not a tab in the player's.
-        // Resolving a pet slot through the player's tabs answers with one of
-        // the player's own spells - a wrong answer that looks like a right
-        // one, which is worse than none. "pet" in any case (0x0076e780).
-        const char* book = lua_tostring(L, 2);
-        const auto isPet = [](const char* b) {
-            const char* want = "pet";
-            for (; *b && *want; ++b, ++want)
-                if (std::tolower(static_cast<unsigned char>(*b)) != *want) return false;
-            return *b == '\0' && *want == '\0';
-        };
-        if (book && isPet(book)) {
-            const auto pet = gh->getPetBookSpells();
-            if (slot < 1 || slot > static_cast<int>(pet.size())) return 0;
-            return pet[static_cast<size_t>(slot - 1)];
-        }
-        return spellIdForBookSlot(gh, slot);
+/// The spell a spell function's arguments name.
+struct SpellArgs {
+    bool named = false;   ///< false: no spell of a book, and the function answers nothing
+    uint32_t spell = 0;   ///< 0 for an empty place in the book
+    bool pet = false;     ///< the pet's book
+    int next = 2;         ///< the argument after
+};
+
+/// 0x00540670. A place is one of 1024, the book "pet" in any case (0x0076e780)
+/// or else the player's.
+inline SpellArgs spellArgs(lua_State* L, game::GameHandler* gh, bool takesId = false, bool takesName = true) {
+    SpellArgs out;
+    if (!gh) return out;
+    const bool text2 = lua_isstring(L, 2) != 0;
+    const SpellCall call =
+        spellCallOf(lua_gettop(L), lua_isnumber(L, 1) != 0, lua_isstring(L, 1) != 0, text2,
+                    text2 && lua_type(L, 1) == LUA_TSTRING && unitAsked(gh, lua_tostring(L, 2)).has_value(), takesId, takesName);
+    const double number = lua_isnumber(L, 1) ? lua_tonumber(L, 1) : 0.0;
+    if (call == SpellCall::None || (call == SpellCall::Slot && !(number >= 1.0 && number < 1025.0))) {
+        lua_Debug ar;
+        const char* fn = "?";
+        if (lua_getstack(L, 0, &ar) && lua_getinfo(L, "n", &ar) && ar.name) fn = ar.name;
+        luaL_error(L, "%s(): Invalid spell slot", fn);
+        return out;
     }
-    if (lua_isnumber(L, 1)) return static_cast<uint32_t>(lua_tonumber(L, 1));
-    const char* name = lua_tostring(L, 1);
-    if (!name || !*name) return 0;
-    // 0x00540670 -> 0x00540200: the name list's answer - the highest rank,
-    // "Name(Rank)" for one, never a spell hidden from the book. The first
-    // known spell whose name matched was a rank picked by the set's order,
-    // and for "Metamorphose" as likely the talent's teaching spell 59672.
-    return gh->spellByName(name);
+    switch (call) {
+        case SpellCall::Id:
+            out.named = true;
+            out.spell = static_cast<uint32_t>(static_cast<int64_t>(number));
+            break;
+        case SpellCall::Slot: {
+            const int slot = static_cast<int>(number);
+            std::string book = lua_tostring(L, 2);
+            toLowerInPlace(book);
+            out.named = true;
+            out.next = 3;
+            out.pet = book == "pet";
+            if (out.pet) {
+                const auto spells = gh->getPetBookSpells();
+                if (slot <= static_cast<int>(spells.size())) out.spell = spells[static_cast<size_t>(slot - 1)];
+            } else {
+                out.spell = spellIdForBookSlot(gh, slot);
+            }
+            break;
+        }
+        case SpellCall::NameRank:
+            out.next = 3;
+            out.spell = gh->bookSpellByName(lua_tostring(L, 1), lua_tostring(L, 2), &out.pet);
+            out.named = out.spell != 0;
+            break;
+        default:
+            out.spell = gh->bookSpellByName(lua_tostring(L, 1), {}, &out.pet);
+            out.named = out.spell != 0;
+            break;
+    }
+    return out;
 }
 
 inline uint64_t containerSlotGuid(game::GameHandler* gh, int bag, int slot) {

@@ -573,6 +573,9 @@ public:
         return spellIconPathResolver_ ? spellIconPathResolver_(spellId) : std::string{};
     }
 
+    /// The picture a spell is shown with: weapon_icon.hpp.
+    [[nodiscard]] std::string getShownSpellIcon(uint32_t spellId) const;
+
     // The same SpellIcon.dbc, reached by icon id rather than through a spell.
     // SkillLine.dbc names an icon directly, so a spellbook tab has one without
     // any spell standing between it and the picture.
@@ -1722,6 +1725,10 @@ public:
     /// the book, no recipe), then the pet's book; `pet` says which. 0 for
     /// none.
     [[nodiscard]] uint32_t spellByName(std::string_view text, bool* pet = nullptr) const;
+    /// The one a spell function's arguments name (0x00540670): by `rank`, or
+    /// with none as spellByName; 0 as well for one that has no place in the
+    /// player's book or the pet's (0x0053b4e0).
+    [[nodiscard]] uint32_t bookSpellByName(std::string_view name, std::string_view rank, bool* pet) const;
     /// Whether a spell the player knows has a place in the spellbook
     /// (0x00542030): spell_rank::inPlayerBook and not a companion or mount.
     /// A spell this client has no row of keeps its place.

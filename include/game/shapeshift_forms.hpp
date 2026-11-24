@@ -74,6 +74,8 @@ struct ShapeshiftFormRow {
     /// CreatureType (+0x10): what the form makes its unit, 0 for unchanged
     /// (0x0071f300).
     uint32_t creatureType = 0;
+    /// The attack's icon in it (+0x14, 0x005a84d0), 0 for the weapon's.
+    uint32_t attackIcon = 0;
     /// CombatRoundTime (+0x18): the form's swing, which a power cost of
     /// Attributes 0x400 adds a hundredth of (0x008012f0).
     uint32_t combatRoundTime = 0;

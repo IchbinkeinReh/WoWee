@@ -1,4 +1,5 @@
 #include "core/app_clock.hpp"
+#include "game/weapon_icon.hpp"
 #include "game/mail_text.hpp"
 #include "game/ground_target.hpp"
 #include <array>
@@ -6085,27 +6086,74 @@ std::vector<uint32_t> GameHandler::getPetBookSpells() const {
     return book;
 }
 
-uint32_t GameHandler::spellByName(std::string_view text, bool* pet) const {
-    loadSpellNameCache();
-    const auto candidate = [this](uint32_t id) {
-        const auto it = spellNameCache_.find(id);
-        const uint32_t level = it != spellNameCache_.end() ? it->second.spellLevel : 0;
-        return spell_rank::Candidate{id, getSpellName(id), getSpellRank(id), level};
+/// `pick` among the player's spells in the name list, then among the pet's.
+template <typename Pick>
+static uint32_t namedSpell(const GameHandler& gh, bool* pet, Pick&& pick) {
+    const auto& cache = gh.spellNameCacheRef();
+    const auto candidate = [&](uint32_t id) {
+        const auto it = cache.find(id);
+        const uint32_t level = it != cache.end() ? it->second.spellLevel : 0;
+        return spell_rank::Candidate{id, gh.getSpellName(id), gh.getSpellRank(id), level};
     };
     std::vector<spell_rank::Candidate> known;
-    known.reserve(getKnownSpells().size());
-    for (const uint32_t id : getKnownSpells()) {
-        const auto it = spellNameCache_.find(id);
-        if (it != spellNameCache_.end() && !spell_rank::inNameList(it->second.attr)) continue;
+    known.reserve(gh.getKnownSpells().size());
+    for (const uint32_t id : gh.getKnownSpells()) {
+        const auto it = cache.find(id);
+        if (it != cache.end() && !spell_rank::inNameList(it->second.attr)) continue;
         known.push_back(candidate(id));
     }
     if (pet) *pet = false;
-    if (const uint32_t id = spell_rank::spellByName(known, text)) return id;
+    if (const uint32_t id = pick(known)) return id;
     known.clear();
-    for (const uint32_t id : getPetBookSpells()) known.push_back(candidate(id));
-    const uint32_t id = spell_rank::spellByName(known, text);
+    for (const uint32_t id : gh.getPetBookSpells()) known.push_back(candidate(id));
+    const uint32_t id = pick(known);
     if (pet) *pet = id != 0;
     return id;
+}
+
+uint32_t GameHandler::spellByName(std::string_view text, bool* pet) const {
+    loadSpellNameCache();
+    return namedSpell(*this, pet, [&](const auto& known) { return spell_rank::spellByName(known, text); });
+}
+
+uint32_t GameHandler::bookSpellByName(std::string_view name, std::string_view rank, bool* pet) const {
+    loadSpellNameCache();
+    bool ofPet = false;
+    const uint32_t id = namedSpell(*this, &ofPet, [&](const auto& known) {
+        return rank.empty() ? spell_rank::spellByName(known, name) : spell_rank::spellByNameAndRank(known, name, rank);
+    });
+    if (pet) *pet = ofPet;
+    return id != 0 && !ofPet && !spellInPlayerBook(id) ? 0 : id;
+}
+
+std::string GameHandler::getShownSpellIcon(uint32_t spellId) const {
+    loadSpellNameCache();
+    const std::string own = getSpellIconPath(spellId);
+    const auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return own;
+    const SpellIcon kind = spellIconOf(it->second.effectIds[0], it->second.attr, it->second.attrEx2);
+    if (kind == SpellIcon::Own) return own;
+    uint32_t subClass = 0;
+    const auto worn = [&](EquipSlot at) -> std::string {
+        const ItemSlot& slot = getInventory().getEquipSlot(at);
+        if (slot.empty()) return {};
+        const auto* info = getItemInfo(slot.item.itemId);
+        if (info && info->valid) subClass = info->subClass;
+        return getItemIconPath(info && info->displayInfoId != 0 ? info->displayInfoId : slot.item.displayInfoId);
+    };
+    const auto entity = getEntityManager().getEntity(getPlayerGuid());
+    const auto* player = entity && entity->isUnit() ? static_cast<const Unit*>(entity.get()) : nullptr;
+    const uint16_t flags2At = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+    const uint32_t flags = player ? player->getUnitFlags() : 0;
+    const uint32_t flags2 = player && flags2At != 0xFFFF ? player->getField(flags2At) : 0;
+    if (kind == SpellIcon::Ranged) {
+        const std::string weapon = worn(EquipSlot::RANGED);
+        const std::string icon = rangedIcon((flags2 & 0x400u) != 0, subClass, weapon);
+        return icon.empty() ? own : icon;
+    }
+    const ShapeshiftFormRow* form = getShapeshiftFormId() != 0 ? shapeshiftFormRow(getShapeshiftFormId()) : nullptr;
+    return attackIcon(form && form->attackIcon != 0 ? getIconPath(form->attackIcon) : std::string(),
+                      (flags & 0x200000u) != 0, worn(EquipSlot::MAIN_HAND));
 }
 
 bool GameHandler::spellInPlayerBook(uint32_t spellId) const {

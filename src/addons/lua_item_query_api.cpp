@@ -86,21 +86,9 @@ bool spellKnownToClient(game::GameHandler* gh, uint32_t spellId) {
     return gh->spellNameCacheRef().count(spellId) != 0;
 }
 
-/// The spell the book arguments name (0x00540670): a place in a book, or
-/// a name - its highest rank known - or an id.
-uint32_t spellArg(lua_State* L, game::GameHandler* gh) {
-    if (!gh) return 0;
-    if (lua_isstring(L, 1) && !lua_isnumber(L, 1)) return highestKnownRankByName(gh, lua_tostring(L, 1));
-    return spellIdForCall(L, gh);
-}
-
-/// Who casts a spell of the book an argument names: the pet for "pet".
-uint64_t bookCaster(lua_State* L, game::GameHandler* gh) {
-    if (lua_isnumber(L, 1) && !lua_isnoneornil(L, 2)) {
-        const char* book = lua_tostring(L, 2);
-        if (book && std::string(book) == "pet") return gh->getPetGuid();
-    }
-    return gh->getPlayerGuid();
+/// Who casts a spell of the book an argument names.
+uint64_t bookCaster(game::GameHandler* gh, const SpellArgs& args) {
+    return args.pet ? gh->getPetGuid() : gh->getPlayerGuid();
 }
 
 /// IsUsableItem(item) (0x0051c450) → usable, noMana. Carried (0x00754d00)
@@ -284,13 +272,6 @@ int pushReach(lua_State* L, game::GameHandler* gh, uint32_t spellId, uint64_t ca
     return 1;
 }
 
-/// The unit an argument names (0x0060abf0); none where it is not a string.
-std::optional<uint64_t> unitArg(lua_State* L, game::GameHandler* gh, int idx) {
-    const char* s = lua_tostring(L, idx);
-    if (!s) return std::nullopt;
-    return resolveUnitGuid(gh, s);
-}
-
 /// IsItemInRange(item, unit) (0x0051c9c0): the use spell's reach to the
 /// unit.
 int isItemInRange(lua_State* L) {
@@ -318,18 +299,19 @@ int isQuestLogSpecialItemInRange(lua_State* L) {
 int isSpellInRange(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return luaReturnNil(L);
-    const uint32_t spellId = spellArg(L, gh);
-    const int unitIdx = lua_isnumber(L, 1) && !lua_isnoneornil(L, 2) ? 3 : 2;
-    const auto unit = unitArg(L, gh, unitIdx);
-    if (spellId == 0 || !unit) return luaReturnNil(L);
-    return pushReach(L, gh, spellId, bookCaster(L, gh), *unit);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const auto unit = unitAskedOrTarget(L, gh, args.next);   // none is the target
+    if (args.spell == 0 || !unit || game::unit_target::askedNoUnit(*unit)) return luaReturnNil(L);
+    return pushReach(L, gh, args.spell, bookCaster(gh, args), *unit);
 }
 
 /// SpellHasRange(index, "bookType") or (name) (0x00541af0).
 int spellHasRange(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t spellId = spellArg(L, gh);
-    if (spellId != 0 && hasReach(gh, spellId, bookCaster(L, gh))) lua_pushnumber(L, 1);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    if (args.spell != 0 && hasReach(gh, args.spell, bookCaster(gh, args))) lua_pushnumber(L, 1);
     else lua_pushnil(L);
     return 1;
 }
@@ -349,7 +331,9 @@ int itemAimedAt(lua_State* L) {
 template <uint32_t Kind>
 int spellAimedAt(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t spell = spellArg(L, gh);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const uint32_t spell = args.spell;
     if (spellKnownToClient(gh, spell) && gh->getSpellTargetKind(spell) == Kind) lua_pushnumber(L, 1);
     else lua_pushnil(L);
     return 1;
@@ -358,7 +342,9 @@ int spellAimedAt(lua_State* L) {
 /// IsAttackSpell (0x00541420): its first effect is ATTACK (78).
 int isAttackSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t spell = spellArg(L, gh);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const uint32_t spell = args.spell;
     if (spellKnownToClient(gh, spell) && gh->spellNameCacheRef().at(spell).effectIds[0] == 78) lua_pushnumber(L, 1);
     else lua_pushnil(L);
     return 1;
@@ -367,7 +353,9 @@ int isAttackSpell(lua_State* L) {
 /// IsConsumableSpell (0x005419f0): it has a reagent.
 int isConsumableSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t spell = spellArg(L, gh);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const uint32_t spell = args.spell;
     bool yes = false;
     if (spellKnownToClient(gh, spell)) {
         for (const auto& r : gh->spellNameCacheRef().at(spell).reagents)
@@ -381,8 +369,9 @@ int isConsumableSpell(lua_State* L) {
 /// carried pay for, the fewest of any; 0 with none.
 int getSpellCount(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t spell = spellArg(L, gh);
-    if (spell == 0) return 0;
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const uint32_t spell = args.spell;
     int32_t casts = 0x7fffffff;
     if (spellKnownToClient(gh, spell) && gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
         for (const auto& r : gh->spellNameCacheRef().at(spell).reagents) {
@@ -399,11 +388,13 @@ int getSpellCount(lua_State* L) {
 /// noMana: 0x0080b5d0 for the book's caster, then the power.
 int isUsableSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t spell = spellArg(L, gh);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const uint32_t spell = args.spell;
     auto* sh = gh ? gh->getSpellHandler() : nullptr;
     bool usable = false, noMana = false;
     if (sh && spellKnownToClient(gh, spell)) {
-        const uint64_t casterGuid = bookCaster(L, gh);
+        const uint64_t casterGuid = bookCaster(gh, args);
         const auto caster = gh->getEntityManager().getEntity(casterGuid);
         if (caster && caster->isUnit()) {
             // The pet's own reading of 0x0080b5d0 is not modelled; its power

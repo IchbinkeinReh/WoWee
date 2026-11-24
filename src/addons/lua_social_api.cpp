@@ -1904,27 +1904,12 @@ static int lua_GetGuildEventInfo(lua_State* L) {
 
 namespace {
 
-/// The pet spell a name refers to, or zero. Named rather than numbered because
-/// the autocast slash commands pass what the player typed.
-uint32_t petSpellByName(game::GameHandler* gh, const char* name) {
-    if (!gh || !name || !*name) return 0;
-    std::string want(name);
-    toLowerInPlace(want);
-    for (uint32_t id : gh->getPetSpells()) {
-        std::string have = gh->getSpellName(id);
-        toLowerInPlace(have);
-        if (have == want) return id;
-    }
-    return 0;
-}
-
-/// Put a pet spell's autocast into a definite state.
-int setPetAutocastByName(lua_State* L, bool on) {
+/// A spell of the pet's book (0x005410e0 ...) put into a state, or toggled.
+int setPetAutocast(lua_State* L, int state) {
     auto* gh = getGameHandler(L);
-    const uint32_t id = petSpellByName(gh, luaL_optstring(L, 1, ""));
-    if (gh && id != 0 && gh->isPetSpellAutocast(id) != on) {
-        gh->togglePetSpellAutocast(id);
-    }
+    const SpellArgs args = spellArgs(L, gh);
+    if (args.pet && args.spell != 0 && (state < 0 || gh->isPetSpellAutocast(args.spell) != (state != 0)))
+        gh->togglePetSpellAutocast(args.spell);
     return 0;
 }
 
@@ -5421,26 +5406,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // (kind 2) before it toggles anything.
                 {"EnableSpellAutocast",  [](lua_State* L) -> int {
             if (!taint::allowed(L, 2)) return 0;
-            return setPetAutocastByName(L, true);
+            return setPetAutocast(L, 1);
         }},
                 {"DisableSpellAutocast", [](lua_State* L) -> int {
             if (!taint::allowed(L, 2)) return 0;
-            return setPetAutocastByName(L, false);
+            return setPetAutocast(L, 0);
         }},
-                // ToggleSpellAutocast(spell, bookType) - asked in two shapes.
-                //
-                // The spellbook passes a book *slot* and the book it belongs
-                // to; /petautocasttoggle passes a name. Only the name was
-                // handled, so right-clicking a pet spell in the spellbook
-                // looked up a pet spell called "12" and toggled nothing at all.
                 {"ToggleSpellAutocast",  [](lua_State* L) -> int {
             if (!taint::allowed(L, 2)) return 0;
-            auto* gh = getGameHandler(L);
-            const uint32_t id = (!lua_isnoneornil(L, 2) && lua_isnumber(L, 1))
-                ? spellIdForCall(L, gh)
-                : petSpellByName(gh, luaL_optstring(L, 1, ""));
-            if (gh && id != 0) gh->togglePetSpellAutocast(id);
-            return 0;
+            return setPetAutocast(L, -1);
         }},
                 // The four chat-window list editors moved to
                 // lua_system_api.cpp, beside the chat window store they write

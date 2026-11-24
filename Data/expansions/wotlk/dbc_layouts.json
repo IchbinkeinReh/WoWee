@@ -545,6 +545,7 @@
     "MinRange": 2
   },
   "SpellShapeshiftForm": {
+    "AttackIconID": 21,
     "BonusActionBar": 1,
     "CombatRoundTime": 22,
     "CreatureDisplayID0": 23,

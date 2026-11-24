@@ -77,20 +77,21 @@ struct Candidate {
     return inNameList(attributes) && (attributesEx4 & 0x8000u) == 0;
 }
 
-/// The spell a name stands for (0x00540200 -> 0x0053f5e0): the whole text
-/// as a name, every rank of it, the highest numbered one (a rank with no
-/// number by its SpellLevel, as 0x00541df0 files it); failing that, the
-/// text before "(" as the name and the text inside up to ")" as the rank,
-/// matched as written. Of spells with the same number, the highest id - a
+/// The spell of a name and a rank (0x0053f5e0): the rank matched as written, or
+/// with none the highest numbered one (a rank with no number by its SpellLevel,
+/// as 0x00541df0 files it). Of spells with the same number, the highest id - a
 /// choice that does not change from one run to the next. 0 for none.
 /// `known` holds only what is in the name list (inNameList).
-[[nodiscard]] inline uint32_t spellByName(const std::vector<Candidate>& known, std::string_view text) {
-    if (!text.empty() && text.front() == '!') text.remove_prefix(1);
-    if (text.empty()) return 0;
+[[nodiscard]] inline uint32_t spellByNameAndRank(const std::vector<Candidate>& known, std::string_view name,
+                                                 std::string_view rank) {
     uint32_t best = 0;
     uint32_t bestRank = 0;
     for (const Candidate& c : known) {
-        if (compareNoCase(c.name, text) != 0) continue;
+        if (name.empty() || compareNoCase(c.name, name) != 0) continue;
+        if (!rank.empty()) {
+            if (compareNoCase(c.rank, rank) == 0) return c.id;
+            continue;
+        }
         uint32_t r = rankNumber(c.rank);
         if (r == 0) r = c.level;
         if (best == 0 || r > bestRank || (r == bestRank && c.id > best)) {
@@ -98,17 +99,22 @@ struct Candidate {
             bestRank = r;
         }
     }
-    if (best != 0) return best;
+    return best;
+}
+
+/// The spell a text stands for (0x00540200): the whole text as a name; failing
+/// that, the text before "(" as the name and the text inside up to ")" as the
+/// rank.
+[[nodiscard]] inline uint32_t spellByName(const std::vector<Candidate>& known, std::string_view text) {
+    if (!text.empty() && text.front() == '!') text.remove_prefix(1);
+    if (const uint32_t id = spellByNameAndRank(known, text, {})) return id;
     const size_t open = text.find('(');
     if (open == std::string_view::npos) return 0;
     std::string_view name = text.substr(0, open);
     while (!name.empty() && name.back() == ' ') name.remove_suffix(1);
     std::string_view rank = text.substr(open + 1);
     if (const size_t close = rank.find(')'); close != std::string_view::npos) rank = rank.substr(0, close);
-    for (const Candidate& c : known) {
-        if (compareNoCase(c.name, name) == 0 && compareNoCase(c.rank, rank) == 0) return c.id;
-    }
-    return 0;
+    return spellByNameAndRank(known, name, rank);
 }
 
 /// The spellbook's order (0x0053c8b0) within one tab: by name, then by the

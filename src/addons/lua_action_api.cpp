@@ -988,7 +988,7 @@ static int lua_GetActionTexture(lua_State* L) {
         return 1;
     }
     if (action.type == game::ActionBarSlot::SPELL) {
-        std::string icon = gh->getSpellIconPath(action.id);
+        std::string icon = gh->getShownSpellIcon(action.id);
         if (!icon.empty()) {
             lua_pushstring(L, icon.c_str());
             return 1;
@@ -1726,7 +1726,7 @@ static void pickupSlotAction(lua_State* L, game::GameHandler* gh, int slot,
     cursorItemSlot() = {};
     // And on the pointer, or the drag reads as not having started.
     if (action.kind == Kind::Spell) {
-        wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(action.id));
+        wowee::ui::frameXmlSetCursorItem(gh->getShownSpellIcon(action.id));
     } else if (action.kind == Kind::Item) {
         const auto* info = gh->getItemInfo(action.id);
         wowee::ui::frameXmlSetCursorItem(info ? gh->getItemIconPath(info->displayInfoId) : std::string());
@@ -1842,7 +1842,9 @@ static int lua_PickupSpell(lua_State* L) {
     // Through the shared resolver, so the book is read as well as the slot:
     // dragging a pet spell out of the book picked up whichever of the player's
     // spells sat at that index.
-    const uint32_t picked = spellIdForCall(L, gh);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const uint32_t picked = args.spell;
     // The cursor is put down first, whatever the slot holds (0x00519280(1,1)
     // before anything else). The same spell already held is the drop, with
     // the book's own sound after the cursor's; a different one held is only
@@ -1857,8 +1859,7 @@ static int lua_PickupSpell(lua_State* L) {
     // Out of the pet's book the cursor holds the pet's action for the spell,
     // its entry in the pet's spell list (0x005d3410 -> 0x00520a80): the spell,
     // type 1, and the autocast bits SMSG_PET_SPELLS gave it.
-    if (const char* book = lua_isnumber(L, 1) && !lua_isnoneornil(L, 2) ? lua_tostring(L, 2) : nullptr;
-        book && std::string(book) == "pet") {
+    if (args.pet) {
         const uint32_t state = 0x01u | (gh->isPetSpellAutocastable(picked) ? 0x80u : 0u) |
                                (gh->isPetSpellAutocast(picked) ? 0x40u : 0u);
         setCursorType(L, CursorType::PET_ACTION);
@@ -1872,7 +1873,7 @@ static int lua_PickupSpell(lua_State* L) {
     // On the pointer as well as in the state, the way every other pickup here
     // does it. Dragging a spell out of the book carried nothing visible, so
     // the drag read as not having started.
-    wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(s_cursorId));
+    wowee::ui::frameXmlSetCursorItem(gh->getShownSpellIcon(s_cursorId));
     spellBookIconSound(L, true);
     return 0;
 }

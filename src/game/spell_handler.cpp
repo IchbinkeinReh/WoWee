@@ -3221,6 +3221,16 @@ std::optional<unit_target::Range> SpellHandler::spellRange(uint32_t spellId, uin
     return spellReach(spellId, *caster, nullptr, owner_.getSpellTargetKind(spellId) == 1);
 }
 
+std::optional<unit_target::Range> SpellHandler::statedRange(uint32_t spellId, uint64_t casterGuid) const {
+    auto range = spellRange(spellId, casterGuid);
+    if (!range) return range;
+    const auto& e = owner_.spellNameCacheRef().at(spellId);
+    if (e.hasRangeRow && (e.rangeFlags & 1u) != 0) return unit_target::Range{};
+    if (e.hasRangeRow && (e.rangeFlags & 2u) != 0)
+        range->min = std::max(0.0f, e.rangeMin[owner_.getSpellTargetKind(spellId) == 1 ? 1 : 0]) + 5.0f;
+    return range;
+}
+
 SpellHandler::TooltipCost SpellHandler::tooltipCost(uint32_t spellId, uint64_t caster) const {
     TooltipCost out;
     loadSpellNameCache();

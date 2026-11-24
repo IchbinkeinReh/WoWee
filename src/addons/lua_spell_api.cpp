@@ -1077,12 +1077,10 @@ static int lua_GetSpellBookItemName(lua_State* L) {
 /// GetSpellName(slot, bookType) → name, rank.
 static int lua_GetSpellName(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // Through spellIdForCall, which reads the book as well as the slot. The
-    // spellbook passes SpellBookFrame.bookType to every one of these, and
-    // resolving a pet slot through the player's tabs names one of the player's
-    // own spells - the wrong answer wearing the shape of a right one.
     // 0x005407f0: name and rank, or nil, nil for a slot or spell not known.
-    const uint32_t id = spellIdForCall(L, gh);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const uint32_t id = args.spell;
     if (id == 0) { lua_pushnil(L); lua_pushnil(L); return 2; }
     const std::string& name = gh->getSpellName(id);
     lua_pushstring(L, name.c_str());
@@ -1098,7 +1096,7 @@ static int lua_CastSpell(lua_State* L) {
     // Same resolver, and here it decides what is cast: clicking a pet spell
     // resolved through the player's tabs cast whichever of the player's spells
     // sat at that index.
-    const uint32_t id = spellIdForCall(L, gh);
+    const uint32_t id = spellArgs(L, gh, false, false).spell;
     // The third argument is the ALT-click of spellbookframe.lua's
     // IsModifiedClick("SELFCAST") branch.  0x00541250 takes the target off the
     // client's own pair (DAT_00bd07b0/b4, the pair that elsewhere is looked up
@@ -1128,13 +1126,10 @@ static int lua_CastSpell(lua_State* L) {
 /// interruptibility.
 static int lua_IsPassiveSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { luaPushOneOrNil(L, 0); return 1; }
-    // Both forms: IsPassiveSpell(spellId) and IsPassiveSpell(slot, bookType),
-    // which is the one the spellbook uses - and reading a slot as an id
-    // answered for whichever spell happens to carry the number 1, 2 or 3.
-    // The result decides whether a spell is drawn as castable at all.
-    const uint32_t id = spellIdForCall(L, gh);
-    luaPushOneOrNil(L, gh->isSpellPassive(id) ? 1 : 0);
+    // 0x00541340: a place in a book or a name, and no spell's number.
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    luaPushOneOrNil(L, args.spell != 0 && gh->isSpellPassive(args.spell) ? 1 : 0);
     return 1;
 }
 
@@ -1145,7 +1140,9 @@ static int lua_IsPassiveSpell(lua_State* L) {
 // (aura 36) while the player is in that form.
 static int lua_IsSelectedSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t id = spellIdForCall(L, gh);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const uint32_t id = args.pet ? 0 : args.spell;
     bool selected = false;
     if (gh && id != 0) {
         gh->loadSpellNameCache();
@@ -1178,13 +1175,11 @@ static int lua_IsSelectedSpell(lua_State* L) {
 // player's book.
 static int lua_GetSpellAutocast(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t id = spellIdForCall(L, gh);
-    const char* book = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
-    const bool pet = (book[0] == 'p' || book[0] == 'P') && (book[1] == 'e' || book[1] == 'E') &&
-                     (book[2] == 't' || book[2] == 'T') && book[3] == '\0';
-    const bool castable = gh && pet && id != 0 && gh->isPetSpellAutocastable(id);
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    const bool castable = args.pet && args.spell != 0 && gh->isPetSpellAutocastable(args.spell);
     luaPushOneOrNil(L, castable ? 1 : 0);
-    luaPushOneOrNil(L, castable && gh->isPetSpellAutocast(id) ? 1 : 0);
+    luaPushOneOrNil(L, castable && gh->isPetSpellAutocast(args.spell) ? 1 : 0);
     return 2;
 }
 /// GetKnownSlotFromHighestRankSlot(slot) → the slot actually known: a slot
@@ -1238,23 +1233,15 @@ static int lua_UpdateSpells(lua_State* L) {
 
 static int lua_GetSpellCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // Three values on this path too, like every other. The cooldown frame does
-    // `start > 0 and duration > 0 and enable > 0`, and `and` short-circuits, so
-    // a missing third value is only ever reached when the first two say a
-    // cooldown is running - which this path cannot say, because it answers
-    // zero. Safe by accident rather than by design, and the next person to give
-    // this branch a real start time would have found out the hard way.
     if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 1); return 3; }
-    // A name, an id, or a book slot with the book beside it - the spellbook
-    // asks in the last of those three.
-    const uint32_t spellId = spellIdForCall(L, gh);
-    const char* book = !lua_isnoneornil(L, 2) && lua_isnumber(L, 1) ? lua_tostring(L, 2) : nullptr;
     // 0x00540e80: the player's history, or the pet's for the pet's book
     // (0x00809000) - the start and length of what runs longest of the
     // spell's cooldown, its category's and its global cooldown, in seconds,
     // and whether it is enabled (not held until an event).
-    if (!book || std::string(book) != "pet") return pushHistoryCooldown(L, gh->playerSpellCooldown(spellId));
-    return pushHistoryCooldown(L, gh->petSpellCooldown(spellId));
+    const SpellArgs args = spellArgs(L, gh, true);
+    if (!args.named) return 0;
+    if (!args.pet) return pushHistoryCooldown(L, gh->playerSpellCooldown(args.spell));
+    return pushHistoryCooldown(L, gh->petSpellCooldown(args.spell));
 }
 
 // TargetUnit(unit, exactMatch) - set current target.
@@ -1598,74 +1585,48 @@ static int lua_SetRaidTarget(lua_State* L) {
     return 0;
 }
 
-// --- GetSpellInfo / GetSpellTexture ---
-// GetSpellInfo(spellIdOrName) -> name, rank, icon, castTime, minRange, maxRange, spellId
+// GetSpellInfo(spell) (0x00540a30): name, rank, icon, cost, isFunnel, powerType,
+// castTime, minRange, maxRange - as its caster (the pet for the pet's book) has
+// it. The cost is over the power's divisor (rage and runic power in tenths), and
+// a spell that costs something each second - Health Funnel - shows that instead,
+// with isFunnel true (0x007ff100). The power type is signed: -2 is health.
 static int lua_GetSpellInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
-
-    uint32_t spellId = 0;
-    if (lua_isnumber(L, 1)) {
-        spellId = static_cast<uint32_t>(lua_tonumber(L, 1));
-    } else if (lua_isstring(L, 1)) {
-        const char* name = lua_tostring(L, 1);
-        if (!name || !*name) { return luaReturnNil(L); }
-        spellId = highestKnownRankByName(gh, name);
-    }
-
-    if (spellId == 0) { return luaReturnNil(L); }
-    std::string name = gh->getSpellName(spellId);
-    if (name.empty()) { return luaReturnNil(L); }
-
+    const SpellArgs args = spellArgs(L, gh, true);
+    if (!args.named || args.spell == 0) return 0;
+    const std::string name = gh->getSpellName(args.spell);
+    if (name.empty()) return 0;
     lua_pushstring(L, name.c_str());                        // 1: name
-    const std::string& rank = gh->getSpellRank(spellId);
-    lua_pushstring(L, rank.c_str());                        // 2: rank
-    std::string iconPath = gh->getSpellIconPath(spellId);
-    if (!iconPath.empty()) lua_pushstring(L, iconPath.c_str());
-    else lua_pushnil(L);                                     // 3: icon texture path
-    // The client's order, which this did not follow.
-    //
-    //   name, rank, icon, cost, isFunnel, powerType, castTime, minRange, maxRange
-    //
-    // Seven values were returned and only the first three were in the right
-    // places. Everything asking for a cost got a cast time in milliseconds,
-    // everything asking for a cast time got the spell id - so a spell read as
-    // taking several thousand seconds to cast - and the two ranges were nil.
-    // The interface unpacks all nine in one line in multicastactionbarframe,
-    // and any addon reading a spell does the same.
-    //
-    // The cost is over the power's divisor (rage and runic power in tenths),
-    // and a spell that costs something each second - Health Funnel - shows
-    // that instead, with isFunnel true (0x00540a30, 0x007ff100). The power
-    // type is signed: -2 is health.
-    auto spellData = gh->getSpellData(spellId);
-    const int32_t powerType = static_cast<int8_t>(spellData.powerType);
-    const uint32_t divisor = powerType >= 0 && powerType < 7 ? kPowerDivisors[powerType] : 1;
-    const uint32_t perSecond = spellData.manaPerSecond / divisor;
-    const bool funnel = perSecond >= 1;
-    lua_pushnumber(L, funnel ? perSecond : spellData.manaCost / divisor);  // 4: cost
-    lua_pushboolean(L, funnel ? 1 : 0);                      // 5: isFunnel
-    lua_pushnumber(L, powerType);                            // 6: powerType
+    lua_pushstring(L, gh->getSpellRank(args.spell).c_str());  // 2: rank
+    if (const std::string icon = gh->getShownSpellIcon(args.spell); !icon.empty()) lua_pushstring(L, icon.c_str());
+    else lua_pushstring(L, "");                              // 3: icon
+    auto* sh = gh->getSpellHandler();
+    const uint64_t caster = args.pet ? gh->getPetGuid() : gh->getPlayerGuid();
+    const auto cost = sh ? sh->tooltipCost(args.spell, caster) : game::SpellHandler::TooltipCost{};
+    const int32_t divisor =
+        cost.powerType >= 0 && cost.powerType < 7 ? static_cast<int32_t>(kPowerDivisors[cost.powerType]) : 1;
+    const int32_t perSecond = cost.perSecond / divisor;
+    lua_pushnumber(L, perSecond >= 1 ? perSecond : cost.cost / divisor);  // 4: cost
+    lua_pushboolean(L, perSecond >= 1 ? 1 : 0);              // 5: isFunnel
+    lua_pushnumber(L, cost.powerType);                       // 6: powerType
     // 7: castTime (ms), 0 for a passive spell (Attributes 0x40).
-    constexpr uint32_t kAttrPassive = 0x40;
-    const auto& spells = gh->spellNameCacheRef();
-    const auto row = spells.find(spellId);
-    const bool passive = row != spells.end() && (row->second.attr & kAttrPassive);
-    lua_pushnumber(L, passive ? 0 : spellData.castTimeMs);
-    lua_pushnumber(L, spellData.minRange);                   // 8: minRange (yards)
-    lua_pushnumber(L, spellData.maxRange);                   // 9: maxRange (yards)
+    const auto unit = gh->getEntityManager().getEntity(caster);
+    lua_pushnumber(L, sh && unit && !gh->isSpellPassive(args.spell) ? sh->castTimeMs(args.spell, *unit) : 0);
+    const auto range = sh ? sh->statedRange(args.spell, caster) : std::nullopt;
+    if (!range) return 7;
+    lua_pushnumber(L, range->min);                           // 8: minRange (yards)
+    lua_pushnumber(L, range->max);                           // 9: maxRange (yards)
     return 9;
 }
 
-// GetSpellTexture(spellIdOrName) -> icon texture path string
+// GetSpellTexture(spell) (0x00540d70)
 static int lua_GetSpellTexture(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
-
-    const uint32_t spellId = spellIdForCall(L, gh);
-    if (spellId == 0) { return luaReturnNil(L); }
-    std::string iconPath = gh->getSpellIconPath(spellId);
-    if (!iconPath.empty()) lua_pushstring(L, iconPath.c_str());
+    const SpellArgs args = spellArgs(L, gh);
+    if (!args.named) return 0;
+    if (const std::string icon = gh->getShownSpellIcon(args.spell); !icon.empty()) lua_pushstring(L, icon.c_str());
     else lua_pushnil(L);
     return 1;
 }
@@ -1697,9 +1658,10 @@ static int lua_GetSpellLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
 
-    const uint32_t spellId = spellIdForCall(L, gh);
-    if (spellId == 0) { return luaReturnNil(L); }
-    std::string name = gh->getSpellName(spellId);
+    const SpellArgs args = spellArgs(L, gh, true);
+    if (!args.named) return 0;
+    const uint32_t spellId = args.spell;
+    std::string name = spellId != 0 ? gh->getSpellName(spellId) : std::string();
     // A spell with Attributes 0x80 and 0x100 both has no link (0x005408e0).
     const auto& cache = gh->spellNameCacheRef();
     const auto it = cache.find(spellId);
@@ -1986,23 +1948,21 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"ToggleSheath",        lua_ToggleSheath},
                 {"GetRaidTargetIndex",  lua_GetRaidTargetIndex},
                 {"SetRaidTarget",       lua_SetRaidTarget},
+                // IsCurrentSpell(spell) (0x00541500 -> 0x00806030).
                 {"IsCurrentSpell", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-            // 0x00541500 -> 0x00806030 (GameHandler::isCurrentSpell).
-            luaPushOneOrNil(L, gh && gh->isCurrentSpell(spellId) ? 1 : 0);
+            const SpellArgs args = spellArgs(L, gh, true);
+            if (!args.named) return 0;
+            luaPushOneOrNil(L, args.spell != 0 && gh->isCurrentSpell(args.spell) ? 1 : 0);
             return 1;
         }},
-                // IsAutoRepeatSpell(spell [, book]) (0x005415d0): 1 when the
+                // IsAutoRepeatSpell(spell) (0x005415d0): 1 when the player's
                 // spell is the repeating one running (0x007fe130), else nil.
                 {"IsAutoRepeatSpell", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const uint32_t spellId = gh ? spellIdForCall(L, gh) : 0;
-            if (spellId != 0 && spellId == gh->autoRepeatSpellId()) {
-                lua_pushnumber(L, 1);
-                return 1;
-            }
-            lua_pushnil(L);
+            const SpellArgs args = spellArgs(L, gh);
+            if (!args.named) return 0;
+            luaPushOneOrNil(L, !args.pet && args.spell != 0 && args.spell == gh->autoRepeatSpellId() ? 1 : 0);
             return 1;
         }},
                 {"CastShapeshiftForm", [](lua_State* L) -> int {

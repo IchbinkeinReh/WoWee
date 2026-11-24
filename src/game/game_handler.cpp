@@ -3976,6 +3976,8 @@ const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
                 if (flagsField < dbc->getFieldCount()) r.flags = dbc->getUInt32(row, flagsField);
                 if (creatureTypeField < dbc->getFieldCount()) r.creatureType = dbc->getUInt32(row, creatureTypeField);
                 if (roundField < dbc->getFieldCount()) r.combatRoundTime = dbc->getUInt32(row, roundField);
+                if (const uint32_t f = layout ? layout->tryField("AttackIconID") : 0xFFFFFFFFu; f < dbc->getFieldCount())
+                    r.attackIcon = dbc->getUInt32(row, f);
                 if (presetField != 0xFFFFFFFFu && presetField + 8 <= dbc->getFieldCount()) {
                     for (uint32_t i = 0; i < 8; ++i) r.presetSpells[i] = dbc->getUInt32(row, presetField + i);
                 }
