@@ -4614,14 +4614,7 @@ void Application::fireInterfaceLeaving() {
         // UNIT_FIELD_FLAGS, event 0x99, then 0x00528c30). Nothing else ends
         // the fight for an interface on its way out, so an addon that locked
         // itself on PLAYER_REGEN_DISABLED saved its state still locked.
-        if (gameHandler) {
-            const uint16_t flagsIdx = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
-            auto player = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
-            if (player && flagsIdx != 0xFFFF &&
-                (player->getField(flagsIdx) & game::UNIT_FLAG_IN_COMBAT) != 0) {
-                addonManager_->fireEvent("PLAYER_REGEN_ENABLED");
-            }
-        }
+        if (gameHandler && gameHandler->playerFights()) addonManager_->fireEvent("PLAYER_REGEN_ENABLED");
         // 0x00528c30 ends with INSTANCE_LOCK_STOP (0x279), which closes a
         // pending instance-bind prompt, then PLAYER_LEAVING_WORLD (0x100).
         addonManager_->fireEvent("INSTANCE_LOCK_STOP");
@@ -6813,14 +6806,7 @@ void Application::update(float deltaTime) {
             // PLAYER_ENTERING_WORLD, UNIT_FLAG_IN_COMBAT is event 0x98 and
             // +0x124c cleared) - the other half of what fireInterfaceLeaving
             // says on the way out.
-            if (gameHandler) {
-                const uint16_t flagsIdx = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
-                auto player = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
-                if (player && flagsIdx != 0xFFFF &&
-                    (player->getField(flagsIdx) & game::UNIT_FLAG_IN_COMBAT) != 0) {
-                    addonManager_->fireEvent("PLAYER_REGEN_DISABLED");
-                }
-            }
+            if (gameHandler) gameHandler->sayFightOnEntry();
             // Then the player's vehicle seat, said again (0x00749ed0).
             if (entitySpawner_) entitySpawner_->refirePlayerSeatEvents();
             addons::LuaEngine::setUiSoundsSuppressed(false);

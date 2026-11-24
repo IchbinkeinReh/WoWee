@@ -3676,6 +3676,10 @@ public:
     /// focus and remembered units go unless they are of the group.
     /// PLAYER_LEAVING_WORLD with it on a worldport.
     void onLeaveWorld(bool worldport);
+    /// The player's UNIT_FLAG_IN_COMBAT, and the interface told of a fight the
+    /// player comes into the world in (0x00528010, event 0x98).
+    [[nodiscard]] bool playerFights() const;
+    void sayFightOnEntry();
     /// The object the player has a window open with (0xbd07a8), set as one
     /// opens (0x0051fce0): the one before is let go first (0x00518d50 ->
     /// 0x00512e60, a game object's CLOSE, and the window open with it

@@ -661,3 +661,29 @@ TEST_CASE("a split's count is four bytes", "[replay][playtest]") {
     CHECK(data[3] == 23);
     CHECK((data[4] | data[5] << 8 | data[6] << 16 | data[7] << 24) == 300);
 }
+
+// A worldport in a fight left the interface in it: the player that comes back has
+// no flags before its own to see the fight end by.
+TEST_CASE("a fight is over as the world is left", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}, {UF::UNIT_FIELD_FLAGS, 0x80008}});
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>&) {
+        if (event.rfind("PLAYER_REGEN", 0) == 0 || event == "PLAYER_LEAVING_WORLD" || event == "INSTANCE_LOCK_STOP")
+            events.push_back(event);
+    });
+    using Heard = std::vector<std::string>;
+    s.handler().onLeaveWorld(/*worldport=*/true);
+    CHECK(events == Heard{"PLAYER_REGEN_ENABLED", "INSTANCE_LOCK_STOP", "PLAYER_LEAVING_WORLD"});
+    events.clear();
+    s.handler().sayFightOnEntry();
+    CHECK(events == Heard{"PLAYER_REGEN_DISABLED"});
+    events.clear();
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0x8}}));
+    CHECK(events == Heard{"PLAYER_REGEN_ENABLED"});
+    events.clear();
+    s.handler().onLeaveWorld(/*worldport=*/true);
+    s.handler().sayFightOnEntry();
+    CHECK(events == Heard{"INSTANCE_LOCK_STOP", "PLAYER_LEAVING_WORLD"});
+    s.handler().setAddonEventCallback({});
+}

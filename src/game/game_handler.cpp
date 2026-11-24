@@ -4267,12 +4267,27 @@ void GameHandler::tickCapturePointWarning() {
     }
 }
 
+bool GameHandler::playerFights() const {
+    const uint16_t flags = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    const auto player = getEntityManager().getEntity(playerGuid);
+    return player && flags != 0xFFFF && (player->getField(flags) & UNIT_FLAG_IN_COMBAT) != 0;
+}
+
+void GameHandler::sayFightOnEntry() {
+    if (playerFights()) fireAddonEvent("PLAYER_REGEN_DISABLED", {});
+}
+
 void GameHandler::onLeaveWorld(bool worldport) {
     // CGGameUI's leaving of the world (0x00528c30). The client reaches it from
     // the player object's end (0x006e78d0 -> 0x006e5090), so on every
     // worldport - 0x00403b70 destroys every object - and at logout through
     // 0x00528f00. In its order, what wowee has of it:
     //
+    // A player in a fight is first told it is over (0x006e5090: the player's
+    // UNIT_FLAG_IN_COMBAT, 0x00524600(1) and only then 0x00528c30): the object
+    // that comes back has no flags before its own to see it end by, and the
+    // interface stayed locked in the fight.
+    if (worldport && playerFights()) fireAddonEvent("PLAYER_REGEN_ENABLED", {});
     // The three mirror timers stop, each said by name (0x00513ea0).
     for (size_t i = 0; i < 3; ++i) {
         mirrorTimers_[i] = MirrorTimer{};
@@ -4327,9 +4342,13 @@ void GameHandler::onLeaveWorld(bool worldport) {
     // A level grant offered and not yet answered (0xbd08b8, kept by
     // 0x00513fd0 from SMSG_PROPOSE_LEVEL_GRANT) is forgotten with them.
     levelGrantMentorGuid_ = 0;
-    // PLAYER_LEAVING_WORLD (event 0x100). At logout the interface is taken
-    // down with it before this runs (Application::unloadInterface).
-    if (worldport) fireAddonEvent("PLAYER_LEAVING_WORLD", {});
+    // INSTANCE_LOCK_STOP (0x279) and PLAYER_LEAVING_WORLD (0x100). At logout
+    // the interface is taken down with them before this runs
+    // (Application::unloadInterface).
+    if (worldport) {
+        fireAddonEvent("INSTANCE_LOCK_STOP", {});
+        fireAddonEvent("PLAYER_LEAVING_WORLD", {});
+    }
 }
 
 void GameHandler::updatePetActionBar() {

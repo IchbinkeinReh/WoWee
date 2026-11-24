@@ -1491,6 +1491,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         addonManager_->fireEvent("UPDATE_CHAT_WINDOWS");
         addonManager_->fireEvent("PLAYER_LOGIN");
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+        if (gameHandler_) gameHandler_->sayFightOnEntry();
         // What the login said about reputation, said again to an interface that
         // was not there to hear it. The client is already listening when
         // SMSG_INITIALIZE_FACTIONS (0x005d2e30) and the player's watched-faction
@@ -1505,6 +1506,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     } else if (addonManager_ && app_.addonsLoaded_) {
         // Subsequent world entries (e.g. teleport, instance entry)
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+        if (gameHandler_) gameHandler_->sayFightOnEntry();
         // A transfer resends SMSG_INITIALIZE_FACTIONS ahead of the player
         // object, so its UPDATE_FACTION found UnitLevel("player") at 0 and put
         // the experience bar back over the max-level bar. The client's own
