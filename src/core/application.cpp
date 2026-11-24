@@ -5933,9 +5933,10 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
     const PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
     // A new instance starts on Stand. Made after the swim began, at a teleport
     // into water across maps, no movement event comes to ask again, and the
-    // character stood in the water until the next one.
+    // character stood in the water until the next one. Nor for one built anew in
+    // a chair, at the barber's: it stood on it.
     if (before.instanceId != instanceId) {
-        if (now.swimming) cr->playBaseAnimation(instanceId);
+        if (now.swimming || u.standState != 0) cr->playBaseAnimation(instanceId);
         return;
     }
     const bool changed = now.turning != before.turning ||
