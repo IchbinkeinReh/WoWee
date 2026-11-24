@@ -115,6 +115,21 @@ MemoryMonitor::HeapUse MemoryMonitor::heapUse() {
 MemoryMonitor::ProcessMemory MemoryMonitor::processMemory() {
     ProcessMemory pm;
 #ifdef _WIN32
+    // PROCESS_MEMORY_COUNTERS_EX2, which Windows has from 10 22H2 on and the
+    // headers here do not.
+    struct {
+        PROCESS_MEMORY_COUNTERS_EX ex;
+        SIZE_T privateWorkingSetSize;
+        ULONG64 sharedCommitUsage;
+    } c2{};
+    c2.ex.cb = sizeof(c2);
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&c2), sizeof(c2))) {
+        pm.residentBytes = c2.ex.WorkingSetSize;
+        pm.privateBytes = c2.ex.PrivateUsage;
+        pm.residentPrivateBytes = c2.privateWorkingSetSize;
+        pm.residentSharedBytes = pm.residentBytes - std::min<uint64_t>(pm.residentBytes, c2.privateWorkingSetSize);
+        return pm;
+    }
     PROCESS_MEMORY_COUNTERS_EX c{};
     c.cb = sizeof(c);
     if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&c), sizeof(c))) {

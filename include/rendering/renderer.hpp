@@ -874,6 +874,10 @@ public:
     /// The /mem report. `extra`: owners the renderer cannot see (the Lua
     /// state, the audio caches), listed with the world's.
     [[nodiscard]] std::vector<std::string> memoryReport(const std::vector<MemoryEntry>& extra = {}) const;
+    /// The same as entries: the process, its heaps, Vulkan's, every owner.
+    [[nodiscard]] std::vector<MemoryEntry> memoryOwners(const std::vector<MemoryEntry>& extra = {}) const;
+    [[nodiscard]] std::vector<MemoryEntry> memoryOfWorld(const std::vector<MemoryEntry>& extra) const;
+    [[nodiscard]] std::vector<MemoryEntry> memoryOfRt() const;
     /// The memory in use and to spare now (rt_memory_guard.hpp). Overridden
     /// for testing by WOWEE_FAKE_GPU_FREE_MB (the graphics budget left),
     /// WOWEE_FAKE_AVAIL_MB (the system's available RAM) and WOWEE_FAKE_UNIFIED.

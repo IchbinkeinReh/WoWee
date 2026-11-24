@@ -52,6 +52,11 @@ public:
     struct ProcessMemory {
         uint64_t residentBytes = 0;
         uint64_t privateBytes = 0;
+        /// Of the resident ones, those that are this process's alone, and
+        /// those that are pages of files mapped (the archives'), which the
+        /// system takes back when it wants them. 0 both where unknown.
+        uint64_t residentPrivateBytes = 0;
+        uint64_t residentSharedBytes = 0;
     };
     [[nodiscard]] static ProcessMemory processMemory();
 

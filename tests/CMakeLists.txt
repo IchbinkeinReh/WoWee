@@ -896,6 +896,12 @@ wowee_add_test(test_tooltip_line_strings SOURCES
     ${CMAKE_SOURCE_DIR}/src/ui/widget_tree.cpp
 )
 
+# ── test_memory_growth ──────────────────────────────────────
+# Which owners of memory keep growing from one map change to the next.
+wowee_add_test(test_memory_growth SOURCES
+    test_memory_growth.cpp
+)
+
 # ── test_row_selection ──────────────────────────────────────
 # What a list's selection is of, rather than where it was.
 wowee_add_test(test_row_selection SOURCES

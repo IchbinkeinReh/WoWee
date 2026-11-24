@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/memory_growth.hpp"
 #include "core/window.hpp"
 #include "game/opcodes.hpp"
 #include <chrono>
@@ -208,6 +209,13 @@ public:
 
     // Entity spawner access
     EntitySpawner* getEntitySpawner() { return entitySpawner_.get(); }
+    /// The memory's owners the renderer cannot see (the Lua state, the audio
+    /// caches, the spawner's), for /mem and logMemory.
+    [[nodiscard]] std::vector<rendering::MemoryEntry> memoryExtras(bool collectLuaFirst);
+    /// What holds memory at a point of a map change, to the log: every owner
+    /// of some size and how much it grew since the first and the last time at
+    /// this point.
+    void logMemory(const char* stage, const std::string& what);
 
     // Appearance composer access
     AppearanceComposer* getAppearanceComposer() { return appearanceComposer_.get(); }
@@ -325,6 +333,7 @@ private:
     /// What the interface hears as the world is taken out from under it
     /// (0x00528f00), on logout, on quitting and on ReloadUI alike.
     void fireInterfaceLeaving();
+    rendering::MemoryGrowth memoryGrowth_;
     /// Records how long one named stage of a frame took.
     ///
     /// The per-stage timings only ever spoke up above 50ms, which says which

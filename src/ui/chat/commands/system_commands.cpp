@@ -425,31 +425,10 @@ public:
                 LOG_WARNING("/mem: allocator dumped to ", path.empty() ? std::string("(failed)") : path);
             }
         }
-        std::vector<rendering::MemoryEntry> extra;
-        if (auto* addons = ctx.services.addonManager) {
-            if (auto* engine = addons->getLuaEngine(); engine && engine->getState()) {
-                lua_State* L = engine->getState();
-                // "/mem gc": a full collection first, so the figure is what the
-                // state holds rather than what it has not yet collected.
-                if (ctx.args.find("gc") != std::string::npos) lua_gc(L, LUA_GCCOLLECT, 0);
-                const uint64_t kb = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNT, 0));
-                const uint64_t rest = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNTB, 0));
-                extra.push_back({"Lua state", 0, kb * 1024 + rest});
-            }
-        }
-        {
-            const auto wav = audio::AudioEngine::decodedCacheStats();
-            char name[192];
-            std::snprintf(name, sizeof(name), "Decoded sounds (%zu)", wav.sounds);
-            extra.push_back({name, 0, wav.bytes});
-            if (auto* coord = ctx.services.audioCoordinator) {
-                if (auto* music = coord->getMusicManager()) {
-                    std::snprintf(name, sizeof(name), "Music files kept (%zu)", music->cachedMusicCount());
-                    extra.push_back({name, 0, music->cachedMusicBytes()});
-                }
-            }
-        }
-        if (auto* spawner = core::Application::getInstance().getEntitySpawner()) spawner->memoryReport(extra);
+        // "/mem gc": a full collection first, so the figure is what the Lua
+        // state holds rather than what it has not yet collected.
+        const auto extra =
+            core::Application::getInstance().memoryExtras(ctx.args.find("gc") != std::string::npos);
         for (const std::string& line : renderer->memoryReport(extra)) {
             ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(line));
             LOG_WARNING("/mem: ", line);

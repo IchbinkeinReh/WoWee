@@ -4636,6 +4636,39 @@ void Application::processDeferredLeaveWorld() {
     performLeaveWorld(to);
 }
 
+std::vector<rendering::MemoryEntry> Application::memoryExtras(bool collectLuaFirst) {
+    std::vector<rendering::MemoryEntry> extra;
+    char name[192];
+    if (addonManager_) {
+        if (auto* engine = addonManager_->getLuaEngine(); engine && engine->getState()) {
+            lua_State* L = engine->getState();
+            if (collectLuaFirst) lua_gc(L, LUA_GCCOLLECT, 0);
+            const uint64_t kb = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNT, 0));
+            const uint64_t rest = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNTB, 0));
+            extra.push_back({"Lua state", 0, kb * 1024 + rest});
+        }
+    }
+    const auto wav = audio::AudioEngine::decodedCacheStats();
+    std::snprintf(name, sizeof(name), "Decoded sounds (%zu)", wav.sounds);
+    extra.push_back({name, 0, wav.bytes});
+    if (audioCoordinator_) {
+        if (auto* music = audioCoordinator_->getMusicManager()) {
+            std::snprintf(name, sizeof(name), "Music files kept (%zu)", music->cachedMusicCount());
+            extra.push_back({name, 0, music->cachedMusicBytes()});
+        }
+    }
+    if (entitySpawner_) entitySpawner_->memoryReport(extra);
+    return extra;
+}
+
+void Application::logMemory(const char* stage, const std::string& what) {
+    if (!renderer) return;
+    const auto lines = memoryGrowth_.note(stage, renderer->memoryOwners(memoryExtras(false)));
+    LOG_WARNING("Memory, ", what, " (entities ",
+                gameHandler ? gameHandler->getEntityManager().getEntities().size() : size_t{0}, "):");
+    for (const std::string& line : lines) LOG_WARNING("Memory [", stage, "]: ", line);
+}
+
 void Application::fireInterfaceLeaving() {
     // The camera's distance and pitch, kept for the next time the world is
     // entered (0x005ff320 writes cameraSavedDistance and cameraSavedPitch).

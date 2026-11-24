@@ -783,6 +783,10 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     bool hasRendererData = renderer_ && (renderer_->getWMORenderer() || renderer_->getM2Renderer());
     if (loadedMapId_ != 0xFFFFFFFF || hasRendererData) {
         LOG_WARNING("Map change: cleaning up old map ", loadedMapId_, " before loading map ", mapId);
+        // What the old map came to, and what is left of it once it is gone:
+        // the memory log of every map change, behind the loading screen.
+        const std::string changeName = std::to_string(static_cast<int32_t>(loadedMapId_)) + " -> " + std::to_string(mapId);
+        app_.logMemory("before", "map " + changeName + ", before the old one is cleared");
         // A world rebuilt on the same map (a far move was, before such moves
         // were taken as the client takes them, relocateOnLoadedMap) is to
         // the server nothing that left: what it shows the whole map - Undercity's
@@ -879,6 +883,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
 
         // Force player character re-spawn on new map
         app_.playerCharacterSpawned = false;
+        app_.logMemory("cleared", "map " + changeName + ", the old one cleared");
     }
 
     // Resolve map folder name from Map.dbc (authoritative for world/instance maps).

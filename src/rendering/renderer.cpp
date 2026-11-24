@@ -7586,14 +7586,80 @@ void Renderer::rtMemoryGuard() {
     }
 }
 
+std::vector<MemoryEntry> Renderer::memoryOfWorld(const std::vector<MemoryEntry>& extra) const {
+    // Everything that is not the ray tracing's, by owner.
+    std::vector<MemoryEntry> world;
+    char buf[256];
+    auto mb = [](uint64_t b) { return double(b) / (1024.0 * 1024.0); };
+    if (terrainRenderer) terrainRenderer->memoryReport(world);
+    if (terrainManager) terrainManager->memoryReport(world);
+    if (m2Renderer) m2Renderer->memoryReport(world);
+    if (wmoRenderer) wmoRenderer->memoryReport(world);
+    if (characterRenderer) characterRenderer->memoryReport(world);
+    if (cachedAssetManager) {
+        const auto cs = cachedAssetManager->cacheStats();
+        std::snprintf(buf, sizeof(buf), "File cache (%zu files, budget %.0f MB, %zu hits / %zu reads)", cs.fileCount,
+                      mb(cs.fileBudget), cs.fileHits, cs.fileHits + cs.fileMisses);
+        world.push_back({buf, 0, cs.fileBytes});
+        std::snprintf(buf, sizeof(buf), "DBC tables (%zu)", cs.dbcCount);
+        world.push_back({buf, 0, cs.dbcBytes});
+    }
+    if (vkCtx) {
+        const auto us = vkCtx->uploadStats();
+        std::snprintf(buf, sizeof(buf), "Upload staging (%zu buffers, %zu batches in flight, %zu deferred frees)",
+                      us.stagingBuffers, us.batchesInFlight, us.deferredCleanups);
+        world.push_back({buf, us.stagingBytes, 0});
+    }
+    world.insert(world.end(), extra.begin(), extra.end());
+    return world;
+}
+
+std::vector<MemoryEntry> Renderer::memoryOfRt() const {
+    std::vector<MemoryEntry> owners;
+    if (rtScene_) rtScene_->memoryReport(owners);
+    if (rtLighting_) rtLighting_->memoryReport(owners);
+    owners.push_back({"RT hit textures, copies kept by the textures", 0, VkTexture::rtDetailBytes()});
+    return owners;
+}
+
+std::vector<MemoryEntry> Renderer::memoryOwners(const std::vector<MemoryEntry>& extra) const {
+    std::vector<MemoryEntry> out;
+    const auto pm = core::MemoryMonitor::processMemory();
+    out.push_back({"Process, private", 0, pm.privateBytes});
+    out.push_back({"Process, resident", 0, pm.residentBytes});
+    out.push_back({"Process, resident and its own", 0, pm.residentPrivateBytes});
+    out.push_back({"Process, resident pages of mapped files", 0, pm.residentSharedBytes});
+    const auto heap = core::MemoryMonitor::heapUse();
+    out.push_back({"Heaps, given out", 0, heap.allocatedBytes});
+    out.push_back({"Heaps, held", 0, heap.committedBytes});
+    if (vkCtx && vkCtx->getAllocator()) {
+        const VkPhysicalDeviceMemoryProperties* props = nullptr;
+        vmaGetMemoryProperties(vkCtx->getAllocator(), &props);
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+        vmaGetHeapBudgets(vkCtx->getAllocator(), budgets);
+        for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h) {
+            const std::string name = "Vulkan heap " + std::to_string(h);
+            out.push_back({name + ", allocations", budgets[h].statistics.allocationBytes, 0});
+            out.push_back({name + ", blocks", budgets[h].statistics.blockBytes, 0});
+            out.push_back({name + ", the process as the driver counts it", budgets[h].usage, 0});
+        }
+    }
+    for (auto& e : memoryOfWorld(extra)) out.push_back(std::move(e));
+    for (auto& e : memoryOfRt()) out.push_back(std::move(e));
+    return out;
+}
+
 std::vector<std::string> Renderer::memoryReport(const std::vector<MemoryEntry>& extra) const {
     std::vector<std::string> lines;
     char buf[256];
     auto mb = [](uint64_t b) { return double(b) / (1024.0 * 1024.0); };
     const auto pm = core::MemoryMonitor::processMemory();
     const auto& mon = core::MemoryMonitor::getInstance();
-    std::snprintf(buf, sizeof(buf), "Process: resident %.0f MB, private %.0f MB; system %.0f of %.0f MB available",
-                  mb(pm.residentBytes), mb(pm.privateBytes), mb(mon.getAvailableRAM()), mb(mon.getTotalRAM()));
+    std::snprintf(buf, sizeof(buf),
+                  "Process: resident %.0f MB (its own %.0f, pages of mapped files %.0f), private %.0f MB; system %.0f "
+                  "of %.0f MB available",
+                  mb(pm.residentBytes), mb(pm.residentPrivateBytes), mb(pm.residentSharedBytes), mb(pm.privateBytes),
+                  mb(mon.getAvailableRAM()), mb(mon.getTotalRAM()));
     lines.emplace_back(buf);
     if (const auto heap = core::MemoryMonitor::heapUse(); heap.heaps != 0) {
         std::snprintf(buf, sizeof(buf),
@@ -7620,28 +7686,7 @@ std::vector<std::string> Renderer::memoryReport(const std::vector<MemoryEntry>& 
             lines.emplace_back(buf);
         }
     }
-    // Everything else that holds memory, by owner.
-    std::vector<MemoryEntry> world;
-    if (terrainRenderer) terrainRenderer->memoryReport(world);
-    if (terrainManager) terrainManager->memoryReport(world);
-    if (m2Renderer) m2Renderer->memoryReport(world);
-    if (wmoRenderer) wmoRenderer->memoryReport(world);
-    if (characterRenderer) characterRenderer->memoryReport(world);
-    if (cachedAssetManager) {
-        const auto cs = cachedAssetManager->cacheStats();
-        std::snprintf(buf, sizeof(buf), "File cache (%zu files, budget %.0f MB, %zu hits / %zu reads)", cs.fileCount,
-                      mb(cs.fileBudget), cs.fileHits, cs.fileHits + cs.fileMisses);
-        world.push_back({buf, 0, cs.fileBytes});
-        std::snprintf(buf, sizeof(buf), "DBC tables (%zu)", cs.dbcCount);
-        world.push_back({buf, 0, cs.dbcBytes});
-    }
-    if (vkCtx) {
-        const auto us = vkCtx->uploadStats();
-        std::snprintf(buf, sizeof(buf), "Upload staging (%zu buffers, %zu batches in flight, %zu deferred frees)",
-                      us.stagingBuffers, us.batchesInFlight, us.deferredCleanups);
-        world.push_back({buf, us.stagingBytes, 0});
-    }
-    world.insert(world.end(), extra.begin(), extra.end());
+    const std::vector<MemoryEntry> world = memoryOfWorld(extra);
     uint64_t worldGpu = 0, worldCpu = 0;
     for (const auto& e : world) {
         worldGpu += e.gpuBytes;
@@ -7653,10 +7698,7 @@ std::vector<std::string> Renderer::memoryReport(const std::vector<MemoryEntry>& 
     std::snprintf(buf, sizeof(buf), "World and caches in all: GPU %.0f MB, CPU %.0f MB", mb(worldGpu), mb(worldCpu));
     lines.emplace_back(buf);
 
-    std::vector<MemoryEntry> owners;
-    if (rtScene_) rtScene_->memoryReport(owners);
-    if (rtLighting_) rtLighting_->memoryReport(owners);
-    owners.push_back({"RT hit textures, copies kept by the textures", 0, VkTexture::rtDetailBytes()});
+    const std::vector<MemoryEntry> owners = memoryOfRt();
     uint64_t gpuSum = 0, cpuSum = 0;
     for (const auto& e : owners) {
         gpuSum += e.gpuBytes;
