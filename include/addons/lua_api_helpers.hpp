@@ -690,7 +690,13 @@ struct UnitWorld {
     uint64_t player() const { return gh->getPlayerGuid(); }
     uint64_t target() const { return gh->getTargetGuid(); }
     uint64_t focus() const { return gh->getFocusGuid(); }
-    uint64_t mouseover() const { return gh->getMouseoverGuid(); }
+    /// What is under the mouse where that is a unit, or a member of the group
+    /// out of sight (0x00512a30).
+    uint64_t mouseover() const {
+        const uint64_t guid = gh->getMouseoverGuid();
+        const auto e = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+        return (e && e->isUnit()) || (!e && guid != player() && petsKnown(guid)) ? guid : 0;
+    }
     uint64_t pet() const { return gh->petUnitGuid(); }
     /// The player's vehicle: its transport while it sits (state 3), else none
     /// (0x004f6250).
