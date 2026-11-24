@@ -672,6 +672,8 @@ private:
         uint32_t soundHandle = 0;
         bool soundAsked = false;
         std::vector<KitModelInstance> models;
+        /// Its kit's models (by their place in it) that are still loading.
+        std::vector<size_t> loading;
     };
     struct UnitAuraKits {
         std::unordered_map<uint32_t, uint32_t> slots;  // aura slot → its spell
@@ -1057,9 +1059,16 @@ private:
     /// Play a kit's models (0x00745230) of the given type on a unit or at a
     /// place: a state kit's returned, held until removed; the others into
     /// activeSpellVisuals_, once or (precast) for the cast.
+    /// One whose model is still loading goes on as it is there: a state kit's
+    /// are named in `loading` for the holder to ask for, the others wait here.
     std::vector<KitModelInstance> playKitModels(const KitRecord& kit, spell_kit::KitType type,
                                                 uint32_t renderInstanceId, const glm::vec3& position,
-                                                const glm::vec3* place, uint32_t castTimeMs = 0);
+                                                const glm::vec3* place, uint32_t castTimeMs = 0,
+                                                std::vector<size_t>* loading = nullptr);
+    /// One of them: what it came to, and for a state kit the instance held.
+    EffectModelState playKitModel(const KitModel& model, uint32_t kitFlags, spell_kit::KitType type,
+                                  uint32_t renderInstanceId, const glm::vec3& position, const glm::vec3* place,
+                                  uint32_t castTimeMs, std::vector<KitModelInstance>& held);
 
     /// A one-shot or precast kit model just put on: its animation and
     /// lifetime as its kit's callback has them (0x00744870, 0x007435a0).
@@ -1236,13 +1245,12 @@ private:
     uint32_t acquireEffectModel(const std::string& modelPath);
     /// Upload the effect models whose worker has finished, a few a frame.
     void finishEffectModelLoads();
-    /// The effects put on a unit whose model is still loading.
-    struct UnitEffectWaiting {
-        uint32_t effectNameId = 0;
-        uint32_t renderInstanceId = 0;
-        int32_t attachment = 0;
+    /// The effects whose model is still loading, each played as it is there.
+    struct EffectWaiting {
+        std::string modelPath;
+        std::function<void()> play;
     };
-    EffectWait<UnitEffectWaiting> unitEffectsWaiting_;
+    EffectWait<EffectWaiting> effectsWaiting_;
     [[nodiscard]] EffectModelState effectModelState(const std::string& modelPath);
     /// Upload a prepared model (a PreparedEffectModel, private to the .cpp);
     /// false, and the model remembered as failed, when it cannot be.
