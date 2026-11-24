@@ -217,3 +217,35 @@ TEST_CASE("an implausible point count is refused", "[splinebody]") {
     SplineBlockData out;
     CHECK_FALSE(parseMonsterMoveSplineBodyVanilla(packet, out, 0, glm::vec3(0.0f)));
 }
+
+// A flyer's points were read as packed offsets (playtest T92).
+TEST_CASE("a flying or smooth spline's points are whole, any other's packed", "[splinebody]") {
+    constexpr uint32_t kFlying = 0x2000, kSmooth = 0x40000, kCyclic = 0x80000, kEnterCycle = 0x100000;
+    for (const uint32_t flags : {kFlying, kSmooth, kFlying | kSmooth, kFlying | kCyclic}) {
+        Writer w;
+        w.u32(4200);
+        w.u32(3);
+        for (float v : {10.0f, 20.0f, 30.0f, 400.0f, 500.0f, 600.0f, 7.0f, 8.0f, 9.0f}) w.f32(v);
+        wowee::network::Packet packet(0, w.bytes);
+        SplineBlockData out;
+        REQUIRE(parseMonsterMoveSplineBody(packet, out, flags, glm::vec3(0.0f), false, SplineFlagSet::Wotlk));
+        REQUIRE(out.waypoints.size() == 2);
+        CHECK(out.waypoints[0] == glm::vec3(10.0f, 20.0f, 30.0f));
+        CHECK(out.waypoints[1] == glm::vec3(400.0f, 500.0f, 600.0f));
+        CHECK(out.destination == glm::vec3(7.0f, 8.0f, 9.0f));
+        CHECK_FALSE(packet.hasRemaining(1));
+    }
+    for (const uint32_t flags : {0u, kCyclic, kEnterCycle}) {
+        Writer w;
+        w.u32(4200);
+        w.u32(2);
+        for (float v : {10.0f, 20.0f, 30.0f}) w.f32(v);
+        w.u32(0);
+        wowee::network::Packet packet(0, w.bytes);
+        SplineBlockData out;
+        REQUIRE(parseMonsterMoveSplineBody(packet, out, flags, glm::vec3(0.0f), false, SplineFlagSet::Wotlk));
+        CHECK(out.destination == glm::vec3(10.0f, 20.0f, 30.0f));
+        REQUIRE(out.waypoints.size() == 1);
+        CHECK(out.waypoints[0] == glm::vec3(5.0f, 10.0f, 15.0f));
+    }
+}

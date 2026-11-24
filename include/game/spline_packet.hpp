@@ -99,7 +99,8 @@ namespace SplineFlagWotlk {
     constexpr uint32_t FROZEN          = 0x00400000;
     constexpr uint32_t ORIENT_INVERSED = 0x08000000;
 
-    constexpr uint32_t UNCOMPRESSED_MASK = CATMULLROM | CYCLIC | ENTER_CYCLE;
+    // Every point a float3 (0x0073c8e0: 0x42000); the cyclic flags alone do not.
+    constexpr uint32_t UNCOMPRESSED_MASK = FLYING | CATMULLROM;
 } // namespace SplineFlagWotlk
 
 [[nodiscard]] constexpr bool isPreWotlkSplineWalking(uint32_t splineFlags) {
