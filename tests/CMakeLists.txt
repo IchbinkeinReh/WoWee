@@ -641,6 +641,21 @@ endif()
 add_test(NAME stream_time COMMAND test_stream_time)
 register_test_target(test_stream_time)
 
+# ── test_frame_handle ────────────────────────────────────────
+add_executable(test_frame_handle
+    test_frame_handle.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_frame_handle.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_std_libs.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_taint.cpp
+    ${TEST_COMMON_SOURCES}
+)
+target_include_directories(test_frame_handle PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_frame_handle SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_frame_handle PRIVATE catch2_main lua51)
+add_test(NAME frame_handle COMMAND test_frame_handle)
+register_test_target(test_frame_handle)
+
 # ── test_green_range ─────────────────────────────────────────
 add_executable(test_green_range
     test_green_range.cpp

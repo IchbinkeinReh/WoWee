@@ -1310,6 +1310,7 @@ set(WOWEE_SOURCES
     src/addons/lua_engine.cpp
     src/addons/lua_std_libs.cpp
     src/addons/lua_arg_guard.cpp
+    src/addons/lua_frame_handle.cpp
     src/addons/lua_handler_globals.cpp
     src/addons/lua_taint.cpp
     src/addons/lua_unit_api.cpp

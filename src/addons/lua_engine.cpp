@@ -1,4 +1,5 @@
 #include "addons/lua_engine.hpp"
+#include "addons/frame_handle.hpp"
 #include "addons/lua_arg_guard.hpp"
 #include "addons/lua_std_libs.hpp"
 #include "addons/missing_api_rule.hpp"
@@ -686,8 +687,15 @@ uint32_t widgetIdOf(lua_State* L, int index) {
     // own secure OnClick insecure from its first self:GetAttribute.
     taint::Quiet quiet;
     lua_getfield(L, index, "__wid");
-    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
+    uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
     lua_pop(L, 1);
+    if (id == 0) {
+        // A table with the handle of one (a region's method called on it, or a
+        // frame given as an argument).
+        lua_rawgeti(L, index, 0);
+        if (lua_islightuserdata(L, -1)) id = widgetOfHandle(lua_touserdata(L, -1));
+        lua_pop(L, 1);
+    }
     return id;
 }
 
@@ -2336,6 +2344,7 @@ std::vector<lua_CFunction>& tooltipMethodTargets() {
 }
 
 int tooltipMethodTrampoline(lua_State* L) {
+    takeSelfByHandle(L);
     const auto at = static_cast<std::size_t>(lua_tointeger(L, lua_upvalueindex(1)));
     const auto& targets = tooltipMethodTargets();
     if (at >= targets.size()) return 0;
@@ -8337,9 +8346,21 @@ int lua_FontString_CanNonSpaceWrap(lua_State* L) {
     return 1;
 }
 
+/// The methods of a texture, a font string or a title region: one table for
+/// each kind, as the client's types have theirs, and what getmetatable(region)
+/// .__index is - addons hook a kind's methods there, and put their own in.
 void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
+    taint::Quiet quiet;   // the client's, whoever is the first to make one
+    const char* kind = isTexture ? "wowee_texture_mt" : isFontString ? "wowee_fontstring_mt" : "wowee_region_mt";
+    lua_getfield(L, LUA_REGISTRYINDEX, kind);
+    if (lua_istable(L, -1)) {
+        lua_setmetatable(L, -2);
+        return;
+    }
+    lua_pop(L, 1);
+    lua_newtable(L);
     auto set = [&](const char* name, lua_CFunction fn) {
-        lua_pushcfunction(L, fn);
+        pushMethodByHandle(L, fn);
         lua_setfield(L, -2, name);
     };
     set("GetName", lua_Region_GetName);
@@ -8385,14 +8406,16 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     set("GetNumPoints", lua_Region_GetNumPoints);
     // A region may animate itself - the achievement banner's glow and shine
     // are textures with an animIn of their own. These live on the frame
-    // metatable as Lua functions; a region keeps its methods on itself, so
-    // they are copied off the globals the animation bootstrap published. Absent
-    // before the bootstrap has run, which is only true of regions built during
-    // engine start-up, and those declare no animations.
+    // metatable as Lua functions, and are copied off the globals the animation
+    // bootstrap published.
     for (const char* name : {"CreateAnimationGroup", "StopAnimating", "GetAnimationGroups"}) {
         lua_getglobal(L, (std::string("__Wowee") + name).c_str());
-        if (lua_isfunction(L, -1)) lua_setfield(L, -2, name);
-        else                       lua_pop(L, 1);
+        if (lua_isfunction(L, -1)) {
+            makeMethodByHandle(L);
+            lua_setfield(L, -2, name);
+        } else {
+            lua_pop(L, 1);
+        }
     }
     set("GetScale", lua_Region_GetScale);
     set("SetScale", lua_Region_SetScale);
@@ -8467,20 +8490,17 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     // The same enumerated set the frame metatable uses, and for the same
     // reason: a region carries data fields beside its methods, and answering
     // both with a no-op makes a field that was never set look present.
-    // Built once and shared. This used to compile a fresh chunk for every
-    // region created, which over a FrameXML load is thousands of compiles of
-    // the same three lines.
-    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_region_mt");
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        luaL_dostring(L,
-            "local known = __WoweeWidgetMethods or {} "
-            "return { __index = function(_, k) "
-            "  if type(k)=='string' and known[k] then return function() end end "
-            "end }");
-        lua_pushvalue(L, -1);
-        lua_setfield(L, LUA_REGISTRYINDEX, "wowee_region_mt");
-    }
+    luaL_dostring(L,
+        "local known = __WoweeWidgetMethods or {} "
+        "return { __index = function(_, k) "
+        "  if type(k)=='string' and known[k] then return function() end end "
+        "end }");
+    lua_setmetatable(L, -2);
+    lua_newtable(L);
+    lua_insert(L, -2);
+    lua_setfield(L, -2, "__index");
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, kind);
     lua_setmetatable(L, -2);
 }
 
@@ -10456,6 +10476,7 @@ static int lua_Frame_CreateTitleRegion(lua_State* L) {
     if (auto* f = tree->get(parent)) f->titleRegion = id;
     lua_pushinteger(L, static_cast<lua_Integer>(id));
     lua_setfield(L, -2, "__wid");
+    setFrameHandle(L, id);
     lua_pushvalue(L, 1);
     lua_setfield(L, -2, "__parent");
     installRegionMethods(L, /*isTexture=*/false, /*isFontString=*/false);
@@ -10572,6 +10593,7 @@ static int lua_Frame_CreateTexture(lua_State* L) {
         }
         lua_pushinteger(L, static_cast<lua_Integer>(id));
         lua_setfield(L, -2, "__wid");
+        setFrameHandle(L, id);
     }
     // A region's parent, which is the frame it was created on.
     //
@@ -10608,6 +10630,7 @@ static int lua_Frame_CreateFontString(lua_State* L) {
         }
         lua_pushinteger(L, static_cast<lua_Integer>(id));
         lua_setfield(L, -2, "__wid");
+        setFrameHandle(L, id);
     }
     // A region's parent, which is the frame it was created on.
     //
@@ -10879,6 +10902,7 @@ static int lua_CreateFrame(lua_State* L) {
         }
         lua_pushinteger(L, static_cast<lua_Integer>(id));
         lua_setfield(L, -2, "__wid");
+        setFrameHandle(L, id);
 
         // Remember the table against its widget id so input dispatch can get
         // back from a hit to the frame whose scripts must run.
@@ -11152,6 +11176,12 @@ bool LuaEngine::initialize() {
         guardArguments(L_, argGuards());
     }
 
+    // The frames' methods written in Lua, called on a table with a frame's
+    // handle as the others are.
+    lua_getglobal(L_, "__WoweeFrameMT");
+    makeMethodsByHandle(L_);
+    lua_pop(L_, 1);
+
     // Last, so every bootstrap block above reads a _G that answers honestly.
     installMissingApiFallback();
 
@@ -11269,6 +11299,7 @@ static bool isSimpleHtmlFontGetter(lua_CFunction fn) {
     return std::find(std::begin(kGetters), std::end(kGetters), fn) != std::end(kGetters);
 }
 static int simpleHtmlFontMethodTrampoline(lua_State* L) {
+    takeSelfByHandle(L);
     const lua_CFunction fn = lua_tocfunction(L, lua_upvalueindex(1));
     const auto* w = widgetOf(L, 1);
     if (!w || !w->isSimpleHtml || lua_type(L, 2) != LUA_TSTRING) return fn(L);
@@ -12396,7 +12427,7 @@ void LuaEngine::registerCoreAPI() {
             lua_pushcfunction(L_, fn);
             lua_pushcclosure(L_, simpleHtmlFontMethodTrampoline, 1);
         } else {
-            lua_pushcfunction(L_, fn);
+            pushMethodByHandle(L_, fn);
         }
     };
     auto applyFrameMethods = [&]() {
@@ -12461,10 +12492,10 @@ void LuaEngine::registerCoreAPI() {
         "function mt:AddFontStrings(l, r)\n"
         "    local function ok(fs) return type(fs) == 'table' and fs.GetObjectType and fs:GetObjectType() == 'FontString' end\n"
         "    if type(l) ~= 'table' or type(r) ~= 'table' then\n"
-        "        error(('Usage: %s:AddFontStrings(leftstring, rightstring)'):format(self:GetName() or '<unnamed>'), 2)\n"
+        "        error(('Usage: %s:AddFontStrings(leftstring, rightstring)'):format(self:GetName() or '<unnamed>'), 3)\n"
         "    end\n"
         "    if not ok(l) or not ok(r) then\n"
-        "        error(('%s:AddFontStrings(): Wrong object type, expected fontstring'):format(self:GetName() or '<unnamed>'), 2)\n"
+        "        error(('%s:AddFontStrings(): Wrong object type, expected fontstring'):format(self:GetName() or '<unnamed>'), 3)\n"
         "    end\n"
         "    local lr, lg, lb = l:GetTextColor()\n"
         "    local rr, rg, rb = r:GetTextColor()\n"
@@ -13161,7 +13192,7 @@ void LuaEngine::registerCoreAPI() {
         "    local who = tostring(self.GetName and self:GetName() or '<unnamed>')\n"
         "    if type(inherits) == 'string' and inherits ~= '' then\n"
         "        if not (__WoweeAnimGroupTemplates and __WoweeAnimGroupTemplates[inherits]) then\n"
-        "            error(('%s:CreateAnimationGroup(): Couldn\\'t find inherited node \"%s\"'):format(who, inherits), 2)\n"
+        "            error(('%s:CreateAnimationGroup(): Couldn\\'t find inherited node \"%s\"'):format(who, inherits), 3)\n"
         "        end\n"
         "    end\n"
         "    local g = setmetatable({parent = self, name = name, animations = {}}, groupMeta)\n"
