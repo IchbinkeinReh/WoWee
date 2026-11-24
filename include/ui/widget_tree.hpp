@@ -276,6 +276,12 @@ struct Widget {
     /// of the region across and up, then an offset in its units): the
     /// region's art is drawn turned by it while the group plays.
     float animRadians = 0.0f;
+    /// What the playing Scale animations size it by, and about where: a point
+    /// of its rect and an offset. Drawn alone: its own scale and its anchors
+    /// are as they were.
+    float animScaleX = 1.0f, animScaleY = 1.0f;
+    float animScaleFx = 0.5f, animScaleFy = 0.5f;
+    float animScaleOx = 0.0f, animScaleOy = 0.0f;
     float animOriginFx = 0.5f, animOriginFy = 0.5f;
     float animOriginX = 0.0f, animOriginY = 0.0f;
 

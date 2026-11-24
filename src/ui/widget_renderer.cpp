@@ -2653,10 +2653,23 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             }
         }
 
-        const float x0 = w->left * s;
-        const float y0 = screenH - (w->bottom + w->rectH) * s;
-        const float x1 = (w->left + w->rectW) * s;
-        const float y1 = screenH - w->bottom * s;
+        float x0 = w->left * s;
+        float y0 = screenH - (w->bottom + w->rectH) * s;
+        float x1 = (w->left + w->rectW) * s;
+        float y1 = screenH - w->bottom * s;
+        // Sized by what animations play on it and on what it is in, each about
+        // its own origin.
+        float animSize = 1.0f;
+        for (const Widget* a = w; a; a = a->parent ? tree.get(a->parent) : nullptr) {
+            if (a->animScaleX == 1.0f && a->animScaleY == 1.0f) continue;
+            const float px = (a->left + a->animScaleFx * a->rectW + a->animScaleOx) * s;
+            const float py = screenH - (a->bottom + a->animScaleFy * a->rectH + a->animScaleOy) * s;
+            x0 = px + (x0 - px) * a->animScaleX;
+            x1 = px + (x1 - px) * a->animScaleX;
+            y0 = py + (y0 - py) * a->animScaleY;
+            y1 = py + (y1 - py) * a->animScaleY;
+            animSize *= a->animScaleY;
+        }
 
         // Pixels per unit for what is drawn *inside* this widget: the
         // interface's scale, and the frame's own scale on top of it.
@@ -2674,7 +2687,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
         // string is centred in its box - was lifted clear of that box and over
         // the heading above it. The quest title sat on its own objectives and
         // "Description" sat on its own first line.
-        const float ws = s * (w->effScale > 0.0f ? w->effScale : 1.0f);
+        const float ws = s * (w->effScale > 0.0f ? w->effScale : 1.0f) * animSize;
 
         if (w->kind == WidgetKind::Frame) {
             // Whatever the client rendered for it, under its own regions -

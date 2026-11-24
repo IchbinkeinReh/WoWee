@@ -72,6 +72,7 @@
 #include "addons/toc_parser.hpp"
 #include "ui/layout_cache.hpp"
 #include "rendering/minimap_art.hpp"
+#include "addons/animation_lua.hpp"
 #include "addons/button_label_lua.hpp"
 #include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -8607,6 +8608,21 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
 /// Not a WoW function: it is how the animation system, which is written in Lua,
 /// reaches the one thing it cannot do from there. Displacing the anchors would
 /// leave the movement behind after the animation stopped.
+/// __WoweeSetAnimScale(region, x, y, point, ox, oy): what the playing Scale
+/// animations size the region by, and about which point.
+int lua_wowee_setAnimScale(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) {
+        w->animScaleX = static_cast<float>(luaL_optnumber(L, 2, 1.0));
+        w->animScaleY = static_cast<float>(luaL_optnumber(L, 3, 1.0));
+        const auto at = wowee::ui::resolveAnchorPoint(luaL_optstring(L, 4, "CENTER"));
+        w->animScaleFx = at.fx;
+        w->animScaleFy = at.fy;
+        w->animScaleOx = static_cast<float>(luaL_optnumber(L, 5, 0.0));
+        w->animScaleOy = static_cast<float>(luaL_optnumber(L, 6, 0.0));
+    }
+    return 0;
+}
+
 /// __WoweeSetAnimRotation(region, radians, point, x, y): what the playing
 /// Rotation animations turn the region by, and about which point.
 int lua_wowee_setAnimRotation(lua_State* L) {
@@ -11960,6 +11976,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeSetAnimOffset");
     lua_pushcfunction(L_, lua_wowee_setAnimRotation);
     lua_setglobal(L_, "__WoweeSetAnimRotation");
+    lua_pushcfunction(L_, lua_wowee_setAnimScale);
+    lua_setglobal(L_, "__WoweeSetAnimScale");
 
     // The script slots the animation system keeps its scripts in, and runs
     // them through one at a time - see lua_handler_globals.hpp.
@@ -12703,9 +12721,9 @@ void LuaEngine::registerCoreAPI() {
     // frame that declared one got the missing-API fallback and every call on
     // the group returned nil. FrameXML animates the tutorial pointer and the
     // alert frames this way, and addons use it far more.
+    bootstrap(kAnimationShowLua);
     bootstrap(
         "local mt = __WoweeFrameMT\n"
-        "__WoweePlayingAnimations = {}\n"
         "local playing = __WoweePlayingAnimations\n"
 
         // The usage errors the client's animation methods raise (0x004a51a0 and
@@ -13174,10 +13192,6 @@ void LuaEngine::registerCoreAPI() {
         "    return top\n"
         "end\n"
         "function groupMeta:IsPaused() return self.paused == true end\n"
-        // The frame's alpha at the moment Play is called is what an Alpha
-        // animation's change is relative to. Captured here rather than at
-        // creation, because a group replayed later starts from wherever the
-        // frame is then.
         // Play (0x004a6ea0 -> 0x0049a8f0): a group already playing is left as
         // it is; a paused one carries on from where it was, its current
         // order's animations playing again; a stopped one starts from its
@@ -13198,7 +13212,6 @@ void LuaEngine::registerCoreAPI() {
         "    self.curOrder = nil\n"
         "    self.elapsed = 0\n"
         "    self.done = nil\n"
-        "    self.baseAlpha = self.parent and self.parent:GetAlpha() or 1\n"
         "    for _, a in ipairs(self.animations) do a.elapsed = 0 a.progress = 0 a.finished = nil a.state = 0 end\n"
         "    playing[self] = true\n"
         "    __WoweeAnimStartOrder(self, nil)\n"
@@ -13225,14 +13238,8 @@ void LuaEngine::registerCoreAPI() {
         "    self.done = nil\n"
         "    self.pendingFinish = nil\n"
         "    playing[self] = nil\n"
-        // Put back what the animations moved, or a stopped group leaves the
-        // frame transparent or displaced with nothing to restore it.
-        "    if self.parent then\n"
-        "        if self.baseAlpha then self.parent:SetAlpha(self.baseAlpha) end\n"
-        "        __WoweeSetAnimOffset(self.parent, 0, 0)\n"
-        "        __WoweeSetAnimRotation(self.parent, 0)\n"
-        "    end\n"
         "    __WoweeRunScriptSlot(self, 'OnStop', requested and true or false)\n"
+        "    __WoweeAnimGiveBack(self)\n"
         "end\n"
         // Finish asks a playing group to stop at the end of the loop it is
         // in (the pending-finish flag, +0x88 bit 2, 0x004a7090); a group
@@ -13249,6 +13256,7 @@ void LuaEngine::registerCoreAPI() {
         "    for _, a in ipairs(g.animations) do a.state = 0 end\n"
         "    playing[g] = nil\n"
         "    __WoweeRunScriptSlot(g, 'OnFinished')\n"
+        "    __WoweeAnimGiveBack(g)\n"
         "end\n"
         // GetLoopState (0x004a7240, the table at 0x00a440bc): which way the
         // group is playing, NONE when it is not.
@@ -13414,8 +13422,9 @@ void LuaEngine::registerCoreAPI() {
         "            local cur = g.curOrder or 1\n"
         "            local orderRunning = false\n"
         "            local dx, dy = g.initialX or 0, g.initialY or 0\n"
-        "            local alpha = g.baseAlpha or 1\n"
+        "            local change\n"
         "            local rad, rotAnim = 0, nil\n"
+        "            local sx, sy, scaleAnim = 1, 1, nil\n"
         "            for _, a in ipairs(g.animations) do\n"
         "                local o = a.order or 1\n"
         "                local started\n"
@@ -13457,11 +13466,7 @@ void LuaEngine::registerCoreAPI() {
         "                if started and a.progress then\n"
         "                    local pr = __WoweeAnimEase(a.smoothing, a.progress)\n"
         "                    if a.kind == 'Alpha' then\n"
-        "                        if a.fromAlpha and a.toAlpha then\n"
-        "                            alpha = a.fromAlpha + (a.toAlpha - a.fromAlpha) * pr\n"
-        "                        elseif a.change then\n"
-        "                            alpha = (g.baseAlpha or 1) + a.change * pr\n"
-        "                        end\n"
+        "                        change = (change or 0) + (a.change or 0) * pr\n"
         "                    elseif a.kind == 'Translation' then\n"
         "                        dx = dx + (a.offsetX or 0) * pr\n"
         "                        dy = dy + (a.offsetY or 0) * pr\n"
@@ -13472,18 +13477,16 @@ void LuaEngine::registerCoreAPI() {
         "                        local px, py = pathOffset(a, pr)\n"
         "                        dx, dy = dx + px, dy + py\n"
         "                    elseif a.kind == 'Scale' then\n"
-        "                        local sx = a.scaleX\n"
-        "                        if sx and g.parent then g.parent:SetScale(1 + (sx - 1) * pr) end\n"
+        "                        sx = sx * (1 + ((a.scaleX or 1) - 1) * pr)\n"
+        "                        sy = sy * (1 + ((a.scaleY or 1) - 1) * pr)\n"
+        "                        scaleAnim = a\n"
         "                    end\n"
         "                end\n"
         "            end\n"
         "            if g.parent then\n"
-        "                if alpha < 0 then alpha = 0 elseif alpha > 1 then alpha = 1 end\n"
-        "                g.parent:SetAlpha(alpha)\n"
-        "                __WoweeSetAnimOffset(g.parent, dx, dy)\n"
-        "                if rotAnim then\n"
-        "                    __WoweeSetAnimRotation(g.parent, rad, rotAnim.originPoint or 'CENTER', rotAnim.originX or 0, rotAnim.originY or 0)\n"
-        "                end\n"
+        "                g.dx, g.dy, g.rad, g.rotAnim = dx, dy, rad, rotAnim\n"
+        "                g.sx, g.sy, g.scaleAnim, g.alphaChange = sx, sy, scaleAnim, change\n"
+        "                __WoweeShowAnimation(g.parent)\n"
         "            end\n"
         "            if not orderRunning then\n"
         "                local nxt = nextOrder(orders, cur, g.reversed)\n"

@@ -23,6 +23,7 @@ extern "C" {
 #include <utility>
 
 #include "addons/addon_lua_snippets.hpp"
+#include "addons/animation_lua.hpp"
 #include "addons/button_label_lua.hpp"
 
 namespace {
@@ -306,4 +307,68 @@ TEST_CASE("the NOT_IN_LFG notice follows the client's locale once it is known", 
         });
         CHECK(got == "own");
     }
+}
+
+// What playing animation groups make of a region, and that it is given back
+// (0x0049b470, 0x00488980).
+namespace {
+constexpr const char* kAnimationStandIns = R"LUA(
+shown = {}
+function __WoweeSetAnimOffset(p, x, y) shown.x, shown.y = x, y end
+function __WoweeSetAnimRotation(p, r, at) shown.r, shown.rAt = r, at end
+function __WoweeSetAnimScale(p, x, y, at) shown.sx, shown.sy, shown.sAt = x, y, at end
+region = { alpha = 0.8 }
+function region:GetAlpha() return self.alpha end
+function region:SetAlpha(a) self.alpha = a end
+function group(t)
+    local g = { parent = region, isPlaying = true, dx = 0, dy = 0, rad = 0, sx = 1, sy = 1 }
+    for k, v in pairs(t) do g[k] = v end
+    __WoweePlayingAnimations[g] = true
+    return g
+end
+function finish(g)
+    __WoweePlayingAnimations[g] = nil
+    g.isPlaying = false
+    __WoweeAnimGiveBack(g)
+end
+function state()
+    return shown.x .. ' ' .. shown.y .. ' ' .. shown.r .. ' ' .. shown.sx .. ' ' .. shown.sy .. ' ' .. region.alpha
+end
+)LUA";
+std::string animated(const char* script) {
+    return runChunks({{wowee::addons::kAnimationShowLua, "animation"}, {kAnimationStandIns, "stand-ins"}, {script, "script"}});
+}
+}  // namespace
+
+TEST_CASE("an animation's region is given back as it was", "[animation]") {
+    CHECK(animated("local g = group{dx = 5, dy = 60, rad = 1.5, sx = 2, sy = 0.5, alphaChange = -0.3} "
+                   "__WoweeShowAnimation(region) return state()") == "5 60 1.5 2 0.5 0.5");
+    CHECK(animated("local g = group{dx = 5, dy = 60, rad = 1.5, sx = 2, sy = 0.5, alphaChange = -0.3} "
+                   "__WoweeShowAnimation(region) finish(g) return state()") == "0 0 0 1 1 0.8");
+    // What a script made of its alpha meanwhile goes with it.
+    CHECK(animated("local g = group{alphaChange = -0.3} __WoweeShowAnimation(region) region:SetAlpha(0.1) "
+                   "finish(g) return state()") == "0 0 0 1 1 0.8");
+    // A group without an Alpha animation leaves the alpha alone.
+    CHECK(animated("local g = group{dx = 1} __WoweeShowAnimation(region) region:SetAlpha(0.25) "
+                   "__WoweeShowAnimation(region) finish(g) return state()") == "0 0 0 1 1 0.25");
+    // Clamped, and between nothing and all.
+    CHECK(animated("local g = group{alphaChange = -2} __WoweeShowAnimation(region) return state()") == "0 0 0 1 1 0");
+    CHECK(animated("local g = group{alphaChange = 2} __WoweeShowAnimation(region) return state()") == "0 0 0 1 1 1");
+}
+
+TEST_CASE("two groups on a region play together", "[animation]") {
+    CHECK(animated("local a, b = group{dx = 5, alphaChange = -0.5}, group{dx = 3, dy = 2, sx = 2} "
+                   "__WoweeShowAnimation(region) return state()") == "8 2 0 2 1 0.3");
+    // One ends: the other goes on, and the alpha it began with is kept for it.
+    CHECK(animated("local a, b = group{dx = 5, alphaChange = -0.5}, group{dx = 3, dy = 2, alphaChange = -0.25} "
+                   "__WoweeShowAnimation(region) finish(a) local one = state() finish(b) "
+                   "return one .. ' then ' .. state()") == "3 2 0 1 1 0.55 then 0 0 0 1 1 0.8");
+    // Another region's is no matter of this one.
+    CHECK(animated("local a, b = group{dx = 5}, group{dx = 3, alphaChange = -0.5} b.parent = {} "
+                   "__WoweeShowAnimation(region) return state()") == "5 0 0 1 1 0.8");
+    // One played again by its own script is not given back.
+    CHECK(animated("local a = group{dx = 5} __WoweeShowAnimation(region) __WoweeAnimGiveBack(a) return state()") ==
+          "5 0 0 1 1 0.8");
+    CHECK(animated("local a = group{rad = 1, rotAnim = {originPoint = 'TOP'}, scaleAnim = {originPoint = 'LEFT'}} "
+                   "__WoweeShowAnimation(region) return shown.rAt .. ' ' .. shown.sAt") == "TOP LEFT");
 }
