@@ -82,18 +82,18 @@ TEST_CASE("a model of emitters alone loads as any other does", "[m2]") {
     // member.
     alignas(wowee::pipeline::AssetManager) static std::byte raw[sizeof(wowee::pipeline::AssetManager)];
     auto& assets = *reinterpret_cast<wowee::pipeline::AssetManager*>(raw);
-    files["Spells\Enchantments\MongooseGlow_High.m2"] = emitterModel(3);
-    files["Creature\Empty.m2"] = emitterModel(0);
+    files["Spells\\Enchantments\\MongooseGlow_High.m2"] = emitterModel(3);
+    files["Creature\\Empty.m2"] = emitterModel(0);
 
     M2Model glow{};
-    REQUIRE(wowee::pipeline::loadM2WithSkin(assets, "Spells\Enchantments\MongooseGlow_High.m2", glow));
+    REQUIRE(wowee::pipeline::loadM2WithSkin(assets, "Spells\\Enchantments\\MongooseGlow_High.m2", glow));
     CHECK(glow.particleEmitters.size() == 3);
     CHECK(glow.vertices.empty());
     M2Model again{};
-    CHECK(wowee::pipeline::loadM2WithAllAnimations(assets, "Spells\Enchantments\MongooseGlow_High.m2", again));
+    CHECK(wowee::pipeline::loadM2WithAllAnimations(assets, "Spells\\Enchantments\\MongooseGlow_High.m2", again));
     M2Model none{};
-    CHECK_FALSE(wowee::pipeline::loadM2WithSkin(assets, "Creature\Empty.m2", none));
-    CHECK_FALSE(wowee::pipeline::loadM2WithSkin(assets, "Creature\Missing.m2", none));
+    CHECK_FALSE(wowee::pipeline::loadM2WithSkin(assets, "Creature\\Empty.m2", none));
+    CHECK_FALSE(wowee::pipeline::loadM2WithSkin(assets, "Creature\\Missing.m2", none));
 }
 
 TEST_CASE("nothing that draws a unit or its items asks for a vertex", "[m2]") {
