@@ -1520,6 +1520,11 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             std::vector<addons::LuaServices::MapLandmark> out;
             auto* wmap = r ? r->getWorldMap() : nullptr;
             if (!wmap) return out;
+            // Shown or not: what has been explored was the map's only once it
+            // had been drawn.
+            if (gameHandler)
+                wmap->setServerExplorationMask(gameHandler->getPlayerExploredZoneMasks(),
+                                               gameHandler->hasPlayerExploredZoneMasks());
             const auto worldState = [this](uint32_t id) -> uint32_t {
                 if (!gameHandler) return 0u;
                 const auto& states = gameHandler->getWorldStates();

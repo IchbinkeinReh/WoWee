@@ -3,6 +3,7 @@
 // (Phase 5 of refactoring plan). SRP - all DBC parsing lives here.
 #pragma once
 
+#include "rendering/world_map/continent_list.hpp"
 #include "rendering/world_map/world_map_types.hpp"
 #include <unordered_map>
 #include <optional>
@@ -20,6 +21,9 @@ class DataRepository {
 public:
     /// Load all zone data from DBC files for the given map name.
     void loadZones(const std::string& mapName, pipeline::AssetManager& assetManager);
+
+    /// The continents and their zones, whichever map is loaded.
+    const std::vector<MapContinent>& continents(pipeline::AssetManager& assetManager);
 
     /// Load area POI markers from AreaPOI.dbc.
     void loadPOIs(pipeline::AssetManager& assetManager);
@@ -135,6 +139,8 @@ private:
     Entrance entrance_;
     bool cosmicEnabled_ = true;
     bool poisLoaded_ = false;
+    bool continentsLoaded_ = false;
+    std::vector<MapContinent> continents_;
 
     // ZMP pixel map: 128x128 grid of AreaTable IDs for continent-level hover
     std::array<uint32_t, 128 * 128> zmpGrid_{};

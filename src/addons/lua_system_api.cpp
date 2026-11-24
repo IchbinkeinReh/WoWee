@@ -3403,11 +3403,8 @@ static int lua_SetMapZoom(lua_State* L) {
     // bounds.
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetMapZoom(continentIndex [,zoneIndex])");
     {
-        int continents = 4;
-        if (auto* svc = getLuaServices(L); svc && svc->getMapContinentNames) {
-            const auto names = svc->getMapContinentNames();
-            if (!names.empty()) continents = static_cast<int>(names.size());
-        }
+        auto* svc = getLuaServices(L);
+        const int continents = svc && svc->getMapContinentNames ? static_cast<int>(svc->getMapContinentNames().size()) : 0;
         const auto asked = static_cast<int>(lua_tonumber(L, 1));
         if (asked < -1 || asked > continents)
             return luaL_error(L, "Usage: SetMapZoom(continentIndex [,zoneIndex]) .. requested continent out of bounds");
@@ -3437,23 +3434,13 @@ static int lua_SetMapZoom(lua_State* L) {
     return 0;
 }
 
-// GetMapContinents() → "Kalimdor", "Eastern Kingdoms", ...
+// GetMapContinents() (0x00544b20): the continents' names
 static int lua_GetMapContinents(lua_State* L) {
-    if (auto* svc = getLuaServices(L)) {
-        if (svc->getMapContinentNames) {
-            const auto names = svc->getMapContinentNames();
-            if (!names.empty() &&
-                lua_checkstack(L, static_cast<int>(names.size()))) {
-                for (const auto& n : names) lua_pushstring(L, n.c_str());
-                return static_cast<int>(names.size());
-            }
-        }
-    }
-    lua_pushstring(L, "Kalimdor");
-    lua_pushstring(L, "Eastern Kingdoms");
-    lua_pushstring(L, "Outland");
-    lua_pushstring(L, "Northrend");
-    return 4;
+    auto* svc = getLuaServices(L);
+    const auto names = svc && svc->getMapContinentNames ? svc->getMapContinentNames() : std::vector<std::string>();
+    if (!lua_checkstack(L, static_cast<int>(names.size()) + 1)) return 0;
+    for (const auto& name : names) lua_pushstring(L, name.c_str());
+    return static_cast<int>(names.size());
 }
 
 // GetMapZones(continent) → the zones on that continent, in dropdown order

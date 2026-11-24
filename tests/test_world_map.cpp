@@ -1,6 +1,7 @@
 // Tests for WorldMap data structures and coordinate math
 // Updated to use new modular types from world_map_types.hpp
 #include <catch_amalgamated.hpp>
+#include "rendering/world_map/continent_list.hpp"
 #include "rendering/world_map/world_map_types.hpp"
 
 #include <glm/glm.hpp>
@@ -477,4 +478,62 @@ TEST_CASE("Zone label with Neutral faction omits tag", "[world_map]") {
     TestZoneMeta meta{55, 60, TestFaction::Neutral};
     std::string label = formatZoneLabel("Moonglade", &meta);
     REQUIRE(label == "Moonglade (55-60)");
+}
+
+// GetMapContinents answered four English names, GetMapZones the loaded map's
+// zones and nobody else's, and the cosmic map was number 0.
+TEST_CASE("the map's continents and zones are the files'", "[world_map]") {
+    using namespace wowee::rendering::world_map;
+    const std::vector<MapAreaRow> rows = {
+        {4, 1, 14, 1},   {13, 1, 0, 1},  {14, 0, 0, 0},     {23, 0, 139, 0}, {27, 0, 1, 0},
+        {38, 0, 38, 0},  {464, 530, 3524, 1}, {462, 530, 3430, 0}, {466, 530, 0, 530}, {443, 489, 3277, 489},
+    };
+    const auto mapName = [](uint32_t id) -> std::string {
+        return id == 1 ? "Kalimdor" : id == 0 ? "\xC3\x96stliche K\xC3\xB6nigreiche" : "Scherbenwelt";
+    };
+    const auto areaName = [](uint32_t id) -> std::string {
+        switch (id) {
+            case 14: return "Durotar";
+            case 139: return "\xC3\x96stliche Pestl\xC3\xA4nder";
+            case 1: return "Dun Morogh";
+            case 38: return "Loch Modan";
+            case 3524: return "Azurmythosinsel";
+            case 3430: return "Tirisfal";
+            default: return "Kriegshymnenschlucht";
+        }
+    };
+    const auto list = mapContinents(rows, mapName, areaName);
+    REQUIRE(list.size() == 3);
+    CHECK(list[0].name == "Kalimdor");
+    CHECK(list[1].name == mapName(0));
+    CHECK(list[2].name == "Scherbenwelt");
+    // A zone counts where it is shown.
+    REQUIRE(list[0].zones.size() == 2);
+    CHECK(list[0].zones[0].wmaId == 464);
+    CHECK(list[0].zones[1].wmaId == 4);
+    // An umlaut is sorted as its letter (0x0076eab0).
+    REQUIRE(list[1].zones.size() == 4);
+    CHECK(list[1].zones[0].wmaId == 27);
+    CHECK(list[1].zones[1].wmaId == 38);
+    CHECK(list[1].zones[2].wmaId == 23);
+    CHECK(list[1].zones[3].wmaId == 462);
+    CHECK(list[2].zones.empty());
+
+    CHECK(shownContinent(ViewLevel::COSMIC, 1, list) == -1);
+    CHECK(shownContinent(ViewLevel::WORLD, 1, list) == 0);
+    CHECK(shownContinent(ViewLevel::CONTINENT, 0, list) == 2);
+    CHECK(shownContinent(ViewLevel::ZONE, 530, list) == 3);
+    CHECK(shownContinent(ViewLevel::ZONE, std::nullopt, list) == -1);
+}
+
+TEST_CASE("names are in order without case or accents", "[world_map]") {
+    using wowee::game::compareCaseless;
+    CHECK(compareCaseless("abc", "ABD") < 0);
+    CHECK(compareCaseless("\xC3\x96l", "Pol") < 0);
+    CHECK(compareCaseless("\xC3\xB6l", "Ok") > 0);
+    CHECK(compareCaseless("Stra\xC3\x9F" "e", "Strasse") != 0);
+    CHECK(compareCaseless("Stra\xC3\x9F" "e", "Strassf") < 0);
+    CHECK(compareCaseless("Stra\xC3\x9F" "e", "Strassd") > 0);
+    CHECK(compareCaseless("Tal", "Tal") == 0);
+    CHECK(compareCaseless("Tal", "Tale") < 0);
 }

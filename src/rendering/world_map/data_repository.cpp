@@ -39,6 +39,51 @@ void DataRepository::clear() {
     poisLoaded_ = false;
 }
 
+namespace {
+
+/// DisplayMapID is -1 on an ordinary row, so 0 is the Eastern Kingdoms -
+/// unless the file has no -1 at all, which is a file without the column.
+bool hasMinusOne(const pipeline::DBCFile& areas, uint32_t displayField) {
+    for (uint32_t i = 0; i < areas.getRecordCount(); ++i)
+        if (areas.getUInt32(i, displayField) == UINT32_MAX) return true;
+    return false;
+}
+
+}  // namespace
+
+const std::vector<MapContinent>& DataRepository::continents(pipeline::AssetManager& assetManager) {
+    if (continentsLoaded_) return continents_;
+    auto areas = assetManager.loadDBC("WorldMapArea.dbc");
+    auto maps = assetManager.loadDBC("Map.dbc");
+    auto names = assetManager.loadDBC("AreaTable.dbc");
+    if (!areas || !areas->isLoaded() || !maps || !maps->isLoaded() || !names || !names->isLoaded())
+        return continents_;
+    continentsLoaded_ = true;
+
+    const auto* layout = pipeline::getActiveDBCLayout();
+    const auto* wmaL = layout ? layout->getLayout("WorldMapArea") : nullptr;
+    const uint32_t displayField = wmaL ? (*wmaL)["DisplayMapID"] : 8;
+    const bool minusOne = hasMinusOne(*areas, displayField);
+    std::vector<MapAreaRow> rows;
+    for (uint32_t i = 0; i < areas->getRecordCount(); ++i) {
+        MapAreaRow row;
+        row.id = areas->getUInt32(i, wmaL ? (*wmaL)["ID"] : 0);
+        row.mapId = areas->getUInt32(i, wmaL ? (*wmaL)["MapID"] : 1);
+        row.areaId = areas->getUInt32(i, wmaL ? (*wmaL)["AreaID"] : 2);
+        row.shownMapId = worldMapDisplayMap(row.mapId, areas->getUInt32(i, displayField), minusOne);
+        rows.push_back(row);
+    }
+    const auto text = [](const pipeline::DBCFile& dbc, uint32_t id, uint32_t field) {
+        const int32_t row = dbc.findRecordById(id);
+        return row >= 0 && field < dbc.getFieldCount() ? dbc.getString(static_cast<uint32_t>(row), field)
+                                                       : std::string();
+    };
+    continents_ = mapContinents(
+        rows, [&](uint32_t id) { return text(*maps, id, mapDbcNameField(maps->getFieldCount())); },
+        [&](uint32_t id) { return text(*names, id, 11); });
+    return continents_;
+}
+
 // --------------------------------------------------------
 // DBC zone loading (moved from WorldMap::loadZonesFromDBC)
 // --------------------------------------------------------
@@ -161,15 +206,10 @@ void DataRepository::loadZones(const std::string& mapName,
 
     const auto* wmaL = activeLayout ? activeLayout->getLayout("WorldMapArea") : nullptr;
     const uint32_t displayField = wmaL ? (*wmaL)["DisplayMapID"] : 8;
-    // DisplayMapID is -1 on an ordinary row, so 0 is the Eastern Kingdoms -
-    // unless the file has no -1 at all, which is a file without the column.
     // Taken as written, the -1 was a map id of its own: it named the "World"
     // view, and opening the map anywhere but on a moved zone loaded that, an
     // empty map, and stayed there.
-    bool displayHasMinusOne = false;
-    for (uint32_t i = 0; i < wmaDbc->getRecordCount() && !displayHasMinusOne; i++) {
-        displayHasMinusOne = wmaDbc->getUInt32(i, displayField) == UINT32_MAX;
-    }
+    const bool displayHasMinusOne = hasMinusOne(*wmaDbc, displayField);
     const uint32_t floorField = [&] {
         const uint32_t f = wmaL ? wmaL->tryField("DefaultDungeonFloor") : UINT32_MAX;
         return f != UINT32_MAX ? f : 9u;
