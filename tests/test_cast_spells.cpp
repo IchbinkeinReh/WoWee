@@ -3,6 +3,7 @@
 #include "game/cast_checks.hpp"
 #include "game/ground_target.hpp"
 #include "game/power_prediction.hpp"
+#include "game/shown_cast.hpp"
 #include "game/spell_unit_target.hpp"
 
 #include <string>
@@ -914,11 +915,30 @@ TEST_CASE("a spell pressed during a cast is sent, as 0x0080cce0 has it", "[cast_
     CHECK(dropsPendingPress(true, false, 0x4u));
     CHECK(dropsPendingPress(true, false, 0x400u));
     CHECK_FALSE(dropsPendingPress(true, false, 0x10u));
-    // The server's SPELL_IN_PROGRESS for the press leaves the running cast
-    // (0x00809af0 fails the pending cast its count names).
-    CHECK_FALSE(failureEndsRunningCast(true, kSpellInProgress, true));
-    CHECK_FALSE(failureEndsRunningCast(true, kSpellInProgress, false));
-    CHECK_FALSE(failureEndsRunningCast(true, kNotReady, false));
-    CHECK(failureEndsRunningCast(true, kNotReady, true));
-    CHECK(failureEndsRunningCast(false, kSpellInProgress, false));
+}
+
+TEST_CASE("the cast a unit shows is ended by its count and its spell", "[cast_spells]") {
+    constexpr uint64_t kUnit = 7;
+    ShownCasts casts;
+    CHECK_FALSE(casts.isShown(kUnit, 0, 0));
+    casts.castStarted(kUnit, 4, 133);
+    // The same spell pressed again and refused, and another spell gone off.
+    CHECK_FALSE(casts.isShown(kUnit, 5, 133));
+    CHECK_FALSE(casts.isShown(kUnit, 4, 116));
+    CHECK_FALSE(casts.isShown(8, 4, 133));
+    CHECK(casts.isShown(kUnit, 4, 133));
+    // No channel's update is the cast's end, and no cast's end the channel's.
+    casts.channelEnded(kUnit);
+    CHECK(casts.isShown(kUnit, 4, 133));
+    casts.channelStarted(kUnit, 5740);
+    CHECK_FALSE(casts.isShown(kUnit, 4, 133));
+    CHECK_FALSE(casts.isShown(kUnit, 0, 0));
+    casts.castEnded(kUnit);
+    REQUIRE(casts.of(kUnit));
+    CHECK(casts.of(kUnit)->channel == 5740);
+    casts.channelEnded(kUnit);
+    CHECK(casts.of(kUnit) == nullptr);
+    casts.castStarted(kUnit, 6, 133);
+    casts.castEnded(kUnit);
+    CHECK_FALSE(casts.isShown(kUnit, 6, 133));
 }

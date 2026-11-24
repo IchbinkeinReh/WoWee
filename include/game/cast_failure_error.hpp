@@ -182,6 +182,9 @@ constexpr std::string_view gameError(uint8_t result, const SpellRow& spell) {
 /// tells the frames watching the cast.
 enum class CastEvent { Failed, FailedQuiet, Interrupted, Succeeded };
 
+/// The "it went off" sentinel 0x0080e1b0 ends a cast with.
+constexpr uint8_t kWentOff = 0xbb;
+
 constexpr CastEvent castEvent(uint8_t result) {
     switch (result) {
     case 0x18:  // SPELL_FAILED_CHARMED
@@ -191,7 +194,7 @@ constexpr CastEvent castEvent(uint8_t result) {
     case 0x28:  // SPELL_FAILED_INTERRUPTED
     case 0x29:  // SPELL_FAILED_INTERRUPTED_COMBAT
         return CastEvent::Interrupted;
-    case 0xbb:  // the "it went off" sentinel, past the end of the name table
+    case kWentOff:  // past the end of the name table
         return CastEvent::Succeeded;
     default:
         return CastEvent::Failed;

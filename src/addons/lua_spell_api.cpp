@@ -786,8 +786,10 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
     uint64_t castGuid = 0;
 
     if (uidStr == "player") {
-        isCasting = gh->isCasting();
-        isChannel = gh->isChanneling();
+        // Eating and drinking are auras, no channel: neither has a bar.
+        const auto* ownCast = gh->getSpellHandler();
+        isCasting = ownCast && ownCast->hasCastOrChannel();
+        isChannel = ownCast && ownCast->hasChannel();
         spellId = gh->getCurrentCastSpellId();
         timeTotal = gh->getCastTimeTotal();
         timeRemaining = gh->getCastTimeRemaining();
@@ -805,7 +807,9 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
         castGuid = guid;
     }
 
-    if (!isCasting) { return 0; }
+    // Nothing once its time is over (0x00611df0: now - +0xa7c < 0), though the
+    // cast is the unit's until a packet ends it.
+    if (!isCasting || timeRemaining <= 0.0f) { return 0; }
 
     // UnitCastingInfo: only returns for non-channel casts
     // UnitChannelInfo: only returns for channels
@@ -865,7 +869,8 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
     if (!wantChannel) {
         // castID, the cast's count byte (+0xa5c).
         const auto* sh = gh->getSpellHandler();
-        lua_pushnumber(L, uidStr == "player" && sh ? sh->runningCastCount() : 0);
+        const auto* shown = sh ? sh->shownCasts().of(castGuid) : nullptr;
+        lua_pushnumber(L, shown ? shown->count : 0);
     }
     // notInterruptible: the unit's own answer (0x0071ab20), the same for
     // the player's cast.
@@ -1858,8 +1863,9 @@ void registerSpellLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             // 1 when a cast was stopped, nil when there was none - the next
             // step of ToggleGameMenu runs only on nil.
-            const bool casting = gh && gh->isCasting();
-            if (gh) gh->cancelCast();
+            // A channel is none (0x007ffde0 reads the cast's spell, +0xa60).
+            const bool casting = gh && gh->getSpellHandler() && gh->getSpellHandler()->hasOwnCast();
+            if (casting) gh->cancelCast();
             // With no cast, a repeating shot is what stops: the client sends
             // CMSG_CANCEL_AUTO_REPEAT_SPELL and answers 1 (0x00807560(1)).
             const bool repeating = gh && !casting && gh->isAutoRepeating();

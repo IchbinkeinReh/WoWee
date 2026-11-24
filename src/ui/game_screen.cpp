@@ -1703,7 +1703,8 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             // an item still stuck to the pointer.
             st.holdingItem           = inventoryScreen.isHoldingItem() ||
                                        !frameXmlCursorItem().empty();
-            st.casting               = gameHandler.isCasting();
+            // A channel is no cast to stop, and neither is a meal (0x007ffde0).
+            st.casting               = gameHandler.getSpellHandler() && gameHandler.getSpellHandler()->hasOwnCast();
             st.spellTargeting        = gameHandler.isGroundTargeting() || gameHandler.isUnitTargeting();
             st.lootOpen              = gameHandler.isLootWindowOpen();
             st.gossipOpen            = gameHandler.isGossipWindowOpen();

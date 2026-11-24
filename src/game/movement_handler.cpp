@@ -777,7 +777,7 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
     // cancels, with CMSG_CANCEL_CAST, only those whose spell's InterruptFlags
     // (Spell.dbc word 31) has 0x1; a cast without it keeps going while the
     // player moves. Food/water restoration still ends when the player gets up.
-    if (owner_.isCasting() && (!owner_.isChanneling() || owner_.isRestoring())) {
+    if (owner_.getSpellHandler()) {
         const bool isPositionalMove =
             opcode == Opcode::MSG_MOVE_START_FORWARD  ||
             opcode == Opcode::MSG_MOVE_START_BACKWARD ||
@@ -785,15 +785,8 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             opcode == Opcode::MSG_MOVE_START_STRAFE_RIGHT ||
             opcode == Opcode::MSG_MOVE_JUMP;
         if (isPositionalMove) {
-            bool cancel = owner_.isRestoring();
-            if (!cancel) {
-                // 0x00806620
-                owner_.loadSpellNameCache();
-                const auto it = owner_.spellNameCacheRef().find(owner_.getCurrentCastSpellId());
-                cancel = it != owner_.spellNameCacheRef().end() &&
-                         (it->second.interruptFlags & 0x1u) != 0;
-            }
-            if (cancel) owner_.cancelCast();
+            if (owner_.isRestoring()) owner_.cancelCast();
+            else owner_.getSpellHandler()->cancelCastsOnMove();  // 0x00806620
         }
     }
     // A move key, autorun, both mouse buttons or a jump (0x005fbe10,

@@ -444,22 +444,6 @@ struct Usable {
     return samePending && (notReady || (attributes & 0x404u) != 0);
 }
 
-/// 0x007fecc0 as a spell goes off: the caster's running cast ends with it
-/// (UNIT_SPELLCAST_STOP) where it is the same spell's and the go no pending
-/// one (cast flags 0x1). A channel runs on past its own go, and any other cast
-/// past another spell's.
-[[nodiscard]] constexpr bool goEndsRunningCast(bool pendingGo, bool casting, bool channel, uint32_t runningSpell,
-                                               uint32_t goneSpell) {
-    return !pendingGo && casting && !channel && runningSpell == goneSpell;
-}
-
-/// 0x00809af0 fails the pending cast its count names (0x008051d0), not the
-/// running one: a spell sent during a cast and refused SPELL_IN_PROGRESS, or
-/// any other spell's failure, leaves the running cast as it was.
-[[nodiscard]] constexpr bool failureEndsRunningCast(bool casting, uint8_t result, bool sameSpell) {
-    return !casting || (result != kSpellInProgress && sameSpell);
-}
-
 /// 0x00805010: the pending cast takes the shared counter DAT_00d397d5, made
 /// 1 when it is 0, and then steps it on. The counts sent run 1..255 and wrap
 /// back to 1 - never 0. CMSG_USE_ITEM carries the same byte (0x0080b2ad

@@ -778,66 +778,92 @@ void SpellHandler::handleNotifyDestLocSpellCast(network::Packet& packet) {
 SpellHandler::SpellHandler(GameHandler& owner)
     : owner_(owner) {}
 
-// The four values the client raises any UNIT_SPELLCAST_* event with:
-//   unit, spell name, rank, cast id
-//
-// Every one of these was fired as the unit and the spell id alone, which put
-// the id where the name belongs and left the cast id absent. Two things went
-// wrong with that.
-//
-// The cast bar takes its own cast id from UnitCastingInfo - which answers the
-// spell id for it - and then, on STOP, compares `select(4, ...)` against it
-// before finishing the bar. That argument was nil, so the comparison was false
-// every time and the branch that flashes the bar, fills it and clears
-// self.casting never ran. UNIT_SPELLCAST_FAILED and _INTERRUPTED check the
-// same argument the same way.
-//
-// And CastRandomManager_OnEvent reads `local unit, name, rank = ...` then calls
-// strlower on both, so a /castsequence or /castrandom macro raised on a nil
-// rank the first time any spell of the player's succeeded.
-//
-// The cast id is the spell id here, which is what UnitCastingInfo reports, so
-// the two agree. It is not what the server calls a cast id - this client does
-// not keep the counter - but nothing compares it to anything else.
-//
-// What this client really fires for 324-335 comes from one dispatcher,
-// 0x0060bf60(token*, byte, castRecord*, baseId), called with 0x144 (START),
-// 0x145 (STOP), 0x149 (DELAYED), 0x14b (CHANNEL_START) and a computed id at
-// 007f0000.c:12174; it fires event(id, "%s%s%s%d", token, record+0x220,
-// record+0x224, b) - so (unit, spell name, rank, a byte read off the unit at
-// its guid+4, e.g. unaff_EBX+0x24 at 00800000.c:4500, and a different field for
-// other object kinds) - and when the cast record is null it does not fire the
-// four: it calls 0x0060bf10 instead and fires the token **alone**. That second
-// form is what the shipped handlers expect for a spell with no client-side
-// record - chatframe.lua:729 and :913 bail on `if (not name)` for exactly that.
-// That byte is the unit's cast counter; the fourth here is the spell id
-// instead, which is what UnitCastingInfo answers as the cast id, so the cast
-// bar's comparison of the two holds. A fifth (the spell id) is a later
-// expansion's, and the "%s%s%s%d" has none.
-std::vector<std::string> SpellHandler::spellcastArgs(const std::string& unitId,
-                                                     uint32_t spellId) const {
-    const std::string& name = owner_.getSpellName(spellId);
-    const std::string& rank = owner_.getSpellRank(spellId);
-    // A name that is not cached yet would be empty, and an empty string is a
-    // string - which is what the readers want. Nil would raise in strlower.
-    return {unitId, name, rank, std::to_string(spellId)};
+// What 0x0060bf60(token, count, record, event) raises each UNIT_SPELLCAST_*
+// event with, "%s%s%s%d": the unit, the spell's name, its rank and the cast's
+// count. The cast bar keeps UnitCastingInfo's castID - the same count - from
+// START, and takes a STOP, FAILED or INTERRUPTED only with that number
+// (castingbarframe.lua:94,123,145). This was the spell's id, so the bar of a
+// cast that was interrupted filled up and flashed as if it had gone off.
+std::vector<std::string> SpellHandler::spellcastArgs(const std::string& unitId, uint32_t spellId,
+                                                     uint8_t castCount) const {
+    return {unitId, owner_.getSpellName(spellId), owner_.getSpellRank(spellId), std::to_string(castCount)};
 }
 
 // Every packet that ends a cast raises its event through 0x007fecc0, which
 // picks it by the reason byte rather than by which packet arrived - see
-// cast_failure::castEvent.  Until now this choice existed nowhere: a refusal
-// of a spell already running (SPELL_IN_PROGRESS) was reported here as plain
-// FAILED with a STOP, which is what CastingBarFrame registers, so the bar of
-// the cast still running came down even though the client leaves it up (its
-// event for that reason is FAILED_QUIET, which that frame does not register).
-void SpellHandler::raiseCastFailureEvents(const std::string& unitId, uint32_t spellId,
-                                          uint8_t reason, bool firingStop) const {
-    if (!owner_.addonEventCallbackRef()) return;
-    const std::string event(cast_failure::castEventName(cast_failure::castEvent(reason)));
-    owner_.addonEventCallbackRef()(event, spellcastArgs(unitId, spellId));
-    // The stop is not part of that event: 0x007fecc0 fires it only when the
-    // cast count and spell the packet carries are the shown cast's own.
-    if (firingStop) owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", spellcastArgs(unitId, spellId));
+// cast_failure::castEvent - and follows it with the stop only where the count
+// and the spell are the shown cast's own: a press refused SPELL_IN_PROGRESS
+// has a count of its own and leaves the bar, a channel ends by its update.
+bool SpellHandler::raiseCastEnd(uint64_t caster, uint8_t castCount, uint32_t spellId, uint8_t reason) {
+    if (caster == 0) return false;
+    loadSpellNameCache();
+    if (owner_.spellNameCacheRef().find(spellId) == owner_.spellNameCacheRef().end()) return false;
+    // Before WotLK a failure carries no count, and the running spell refused
+    // for running is told from it by the reason alone.
+    const bool counted = !isPreWotlk();
+    const bool shown = (counted || reason != cast_check::kSpellInProgress) &&
+                       (counted ? shownCasts_.isShown(caster, castCount, spellId)
+                                : shownCasts_.of(caster) && spellId != 0 && shownCasts_.of(caster)->spell == spellId);
+    const auto raise = [&](const std::string& event) {
+        for (const auto& unitId : owner_.unitTokensForGuid(caster))
+            owner_.fireAddonEvent(event, spellcastArgs(unitId, spellId, castCount));
+    };
+    raise(std::string(cast_failure::castEventName(cast_failure::castEvent(reason))));
+    if (!shown) return false;
+    // 0x00726200.
+    shownCasts_.castEnded(caster);
+    if (caster == owner_.getPlayerGuid()) {
+        if (!castIsChannel_) {
+            casting_ = false;
+            currentCastSpellId_ = 0;
+            castTimeRemaining_ = 0.0f;
+            castTimeTotal_ = 0.0f;
+        }
+    } else {
+        if (const auto it = unitCastStates_.find(caster); it != unitCastStates_.end() && !it->second.isChannel)
+            unitCastStates_.erase(it);
+        if (cast_failure::castEvent(reason) != cast_failure::CastEvent::Succeeded) noteUnitCastEnd(caster, false);
+    }
+    raise("UNIT_SPELLCAST_STOP");
+    return true;
+}
+
+bool SpellHandler::hasOwnCast() const {
+    if (casting_ && !castIsChannel_) return true;
+    const auto* sent = owner_.castVisuals().state(owner_.getPlayerGuid());
+    return sent && sent->spellId != 0;
+}
+
+void SpellHandler::endOwnCast(uint8_t castCount, uint32_t spellId, uint8_t reason) {
+    // 0x00806200: the server is told of a cast with a cast time or on the
+    // next swing (Attributes 0x404); the cast ends (0x007fecc0, 0x008054f0).
+    const uint64_t me = owner_.getPlayerGuid();
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto player = owner_.getEntityManager().getEntity(me);
+    const bool told = (casting_ && !castIsChannel_ && currentCastSpellId_ == spellId) ||
+                      (it != owner_.spellNameCacheRef().end() && (it->second.attr & 0x404u) != 0) ||
+                      (player && castTimeMs(spellId, *player) > 0);
+    if (told && owner_.getState() == WorldState::IN_WORLD && owner_.getSocket())
+        owner_.getSocket()->send(CancelCastPacket::build(spellId, castCount, !isPreWotlk()));
+    forgetPendingSwing(spellId);
+    owner_.castVisualEnded(me, castCount, spellId);
+    castEnded(me, castCount, spellId);
+    dropHeldMissile(me, castCount);
+    raiseCastEnd(me, castCount, spellId, reason);
+    pendingCastEnded(castCount);
+}
+
+void SpellHandler::cancelCastsOnMove() {
+    if (casting_ && castIsChannel_) return;
+    loadSpellNameCache();
+    const auto breaks = [&](uint32_t spellId) {
+        const auto it = owner_.spellNameCacheRef().find(spellId);
+        return it != owner_.spellNameCacheRef().end() && (it->second.interruptFlags & 0x1u) != 0;
+    };
+    if (casting_ ? breaks(currentCastSpellId_) : hasOwnCast() &&
+                   breaks(owner_.castVisuals().state(owner_.getPlayerGuid())->spellId))
+        cancelCast(kCancelInterrupted);
 }
 
 void SpellHandler::requestPetName(uint64_t petGuid) {
@@ -3986,7 +4012,7 @@ void SpellHandler::cancelChannelOnTurn() {
     owner_.getSocket()->send(packet);
 }
 
-void SpellHandler::cancelCast() {
+void SpellHandler::cancelCast(uint8_t reason) {
     if (restorationActive_) {
         const uint32_t auraSpell = restorationSpellId_;
         cancelAura(auraSpell);
@@ -3995,33 +4021,30 @@ void SpellHandler::cancelCast() {
         LOG_INFO("Cancelled restoration aura: spellId=", auraSpell);
         return;
     }
-    if (!casting_) return;
-    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
-        currentCastSpellId_ != 0) {
-        auto packet = CancelCastPacket::build(currentCastSpellId_, runningCastCount_, !isPreWotlk());
-        owner_.getSocket()->send(packet);
+    if (!casting_) {
+        // Sent and not started yet.
+        const auto* sent = owner_.castVisuals().state(owner_.getPlayerGuid());
+        if (sent && sent->spellId != 0) {
+            const uint8_t count = sent->castCount;
+            const uint32_t spellId = sent->spellId;
+            endOwnCast(count, spellId, reason);
+        }
+        return;
     }
-    // 0x00806200 on the running cast: it ends (0x007fecc0).
-    if (currentCastSpellId_ != 0)
-        owner_.castVisualEnded(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
-    const uint8_t cancelledCount = runningCastCount_;
-    if (currentCastSpellId_ != 0) castEnded(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
-    if (currentCastSpellId_ != 0) dropHeldMissile(owner_.getPlayerGuid(), runningCastCount_);
-    casting_ = false;
-    castIsChannel_ = false;
-    currentCastSpellId_ = 0;
-    castTimeRemaining_ = 0.0f;
+    if (castIsChannel_) return;
+    const uint8_t count = runningCastCount_;
+    const uint32_t spellId = currentCastSpellId_;
     craftQueueSpellId_ = 0;
     craftQueueRemaining_ = 0;
-    if (owner_.addonEventCallbackRef())
-        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", {"player"});
+    if (spellId != 0) endOwnCast(count, spellId, reason);
+    casting_ = false;
+    currentCastSpellId_ = 0;
+    castTimeRemaining_ = 0.0f;
     // Remove lingering precast visual effects
     if (auto* renderer = owner_.services().renderer) {
         if (auto* svs = renderer->getSpellVisualSystem())
             svs->cancelAllPrecastVisuals();
     }
-    // 0x00806200 -> 0x008054f0.
-    pendingCastEnded(cancelledCount);
 }
 
 void SpellHandler::setPendingSwing(const PendingSwing& swing) {
@@ -4047,12 +4070,7 @@ void SpellHandler::cancelPendingCasts(uint32_t attributeMask) {
     };
     if (pendingSwing_.spellId != 0 && (attributesOf(pendingSwing_.spellId) & attributeMask) != 0) {
         const PendingSwing swing = pendingSwing_;
-        setPendingSwing(PendingSwing{});
-        if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
-            auto packet = CancelCastPacket::build(swing.spellId, swing.castCount, !isPreWotlk());
-            owner_.getSocket()->send(packet);
-        }
-        owner_.castVisualEnded(owner_.getPlayerGuid(), swing.castCount, swing.spellId);
+        endOwnCast(swing.castCount, swing.spellId, kCancelDontReport);
     }
     // The running cast, which has a cast time; a channel is not in the list.
     if (casting_ && !castIsChannel_ && !restorationActive_ && currentCastSpellId_ != 0 &&
@@ -4612,7 +4630,6 @@ void SpellHandler::updateTimers(float dt) {
 
 void SpellHandler::stopRestorationPresentation() {
     if (!restorationActive_) return;
-    const uint32_t stoppedSpell = restorationSpellId_;
     if (owner_.spellCastAnimCallbackRef()) {
         owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, true,
                                           SpellCastType::OMNI);
@@ -4621,10 +4638,6 @@ void SpellHandler::stopRestorationPresentation() {
     restorationSpellId_ = 0;
     restorationTimeRemaining_ = 0.0f;
     restorationTimeTotal_ = 0.0f;
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_CHANNEL_STOP",
-                                       {"player", std::to_string(stoppedSpell)});
-    }
 }
 
 void SpellHandler::refreshRestorationFromPlayerAuras() {
@@ -4685,10 +4698,6 @@ void SpellHandler::refreshRestorationFromPlayerAuras() {
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), true, true,
                                               SpellCastType::OMNI);
-        }
-        if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("UNIT_SPELLCAST_CHANNEL_START",
-                                           {"player", std::to_string(spellId)});
         }
     }
 }
@@ -4804,26 +4813,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     if (owner_.isAutoRepeating() && data.result != 0x1b && data.spellId == owner_.autoRepeatSpellId())
         owner_.stopAutoRepeat(true);
 
-    // 0x00809af0 fails the pending cast the count names (0x008051d0), not
-    // whatever is casting: a spell sent during a cast and refused
-    // SPELL_IN_PROGRESS leaves the running cast as it was.
-    const bool otherCast =
-        !cast_check::failureEndsRunningCast(casting_, data.result, data.spellId == currentCastSpellId_);
-    if (!otherCast) {
-        casting_ = false;
-        castIsChannel_ = false;
-        currentCastSpellId_ = 0;
-        castTimeRemaining_ = 0.0f;
-        craftQueueSpellId_ = 0;
-        craftQueueRemaining_ = 0;
-        // Remove lingering precast visual effects
-        if (auto* renderer = owner_.services().renderer) {
-            if (auto* svs = renderer->getSpellVisualSystem())
-                svs->cancelAllPrecastVisuals();
-        }
-
-    }
-
     // Show failure reason
     int powerType = -1;
     auto playerEntity = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
@@ -4907,10 +4896,18 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // The event goes for any refusal at all, and which one is the reason's
     // doing (0x007fecc0): CHARMED, DONT_REPORT and SPELL_IN_PROGRESS - the
     // three that leave a cast running - say FAILED_QUIET, which the cast bar
-    // does not listen for.  Only the stop waits for anything: not for a cast
-    // refused beside the running one, whose bar goes on.
-    raiseCastFailureEvents("player", data.spellId, data.result, !otherCast);
-    if (otherCast) return;
+    // does not listen for. 0x00809af0 fails the pending cast the count names
+    // (0x008051d0), not whatever is casting: a spell sent during a cast and
+    // refused SPELL_IN_PROGRESS leaves the running cast as it was.
+    raiseCastEnd(owner_.getPlayerGuid(), data.castCount, data.spellId, data.result);
+    if (casting_) return;
+    craftQueueSpellId_ = 0;
+    craftQueueRemaining_ = 0;
+    // Remove lingering precast visual effects
+    if (auto* renderer = owner_.services().renderer) {
+        if (auto* svs = renderer->getSpellVisualSystem())
+            svs->cancelAllPrecastVisuals();
+    }
     if (owner_.spellCastFailedCallbackRef()) owner_.spellCastFailedCallbackRef()(data.spellId);
 }
 
@@ -4981,7 +4978,6 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         begin.spell = owner_.castVisualSpell(data.spellId);
         owner_.castVisuals().started(data.casterUnit, begin);
     }
-    if (data.casterUnit == owner_.getPlayerGuid()) runningCastCount_ = data.castCount;
     // 0x00805330: the active mover's current cast (+0xa5c, +0xa60), which
     // its aimed cast's object is found by (0x00805180).
     const uint64_t mover = owner_.activeMover();
@@ -5002,22 +4998,32 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     if (data.casterUnit == owner_.getPlayerGuid())
         owner_.clickToMoveCastStarted(data.spellId, data.targetFlags, data.targetGuid);
 
+    // 0x00805330: a start not pending with a cast time, of a spell the gate
+    // shows, is the cast the unit's bar shows (0x0072ab60); an instant's start
+    // is none, and raises nothing.
+    const bool shown = (data.castFlags & 0x1u) == 0 && data.castTime > 0 && !rangedWeaponAttack &&
+                       castEventShownFor(data.spellId, data.casterUnit == owner_.getPlayerGuid(), false);
+    if (shown) shownCasts_.castStarted(data.casterUnit, data.castCount, data.spellId);
+
     // Track cast bar for any non-player caster
     if (data.casterUnit != owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
-        auto& s = unitCastStates_[data.casterUnit];
-        s.casting        = true;
-        s.isChannel      = false;
-        s.spellId        = data.spellId;
-        s.timeTotal      = data.castTime / 1000.0f;
-        s.timeRemaining  = s.timeTotal;
-        s.castType       = castType;
+        if (shown) {
+            auto& s = unitCastStates_[data.casterUnit];
+            s.casting        = true;
+            s.isChannel      = false;
+            s.spellId        = data.spellId;
+            s.timeTotal      = data.castTime / 1000.0f;
+            s.timeRemaining  = s.timeTotal;
+            s.castType       = castType;
+        }
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(data.casterUnit, true, false, castType);
         }
     }
 
     // Player's own cast
-    if (data.casterUnit == owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
+    if (data.casterUnit == owner_.getPlayerGuid() && shown) {
+        runningCastCount_ = data.castCount;
         casting_ = true;
         castIsChannel_ = false;
         currentCastSpellId_ = data.spellId;
@@ -5043,18 +5049,12 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     // arena opponent is judged (0x007262e0) as it begins, before
     // UNIT_SPELLCAST_START; nothing else is raised for it - the bar reads
     // notInterruptible from UnitCastingInfo.
-    if (isActiveExpansion("wotlk") && (data.castFlags & 0x1u) == 0 && data.castTime > 0 && !rangedWeaponAttack &&
-        castLockWatched(data.casterUnit, true) &&
-        castEventShownFor(data.spellId, data.casterUnit == owner_.getPlayerGuid(), false))
+    if (shown && isActiveExpansion("wotlk") && castLockWatched(data.casterUnit, true))
         (void)evaluateCastLock(data.casterUnit, data.spellId);
 
-    // Fire UNIT_SPELLCAST_START
-    if (owner_.addonEventCallbackRef() && !rangedWeaponAttack) {
-        std::string unitId = owner_.guidToUnitId(data.casterUnit);
-        if (!unitId.empty()) {
-            owner_.addonEventCallbackRef()("UNIT_SPELLCAST_START", spellcastArgs(unitId, data.spellId));
-        }
-    }
+    if (shown)
+        for (const auto& unitId : owner_.unitTokensForGuid(data.casterUnit))
+            owner_.fireAddonEvent("UNIT_SPELLCAST_START", spellcastArgs(unitId, data.spellId, data.castCount));
 
     // Trigger cast visual effect (precast/cast kit M2) at the caster's position:
     // every spell's, a profession's too - its kit hangs the tool in the hand
@@ -5245,8 +5245,8 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // all, any other UNIT_SPELLCAST_SUCCEEDED, and UNIT_SPELLCAST_STOP with it
     // only where it is the cast that runs.
     const bool pendingGo = (data.castFlags & 0x1u) != 0;
-    const bool endsRunningCast = cast_check::goEndsRunningCast(pendingGo, casting_, castIsChannel_,
-                                                               currentCastSpellId_, data.spellId);
+    const bool endsRunningCast = !pendingGo && casting_ && !castIsChannel_ &&
+                                 shownCasts_.isShown(data.casterUnit, data.castCount, data.spellId);
     // Another cast of the player's runs on through it.
     const bool otherCastRuns = data.casterUnit == owner_.getPlayerGuid() && casting_ && !endsRunningCast;
 
@@ -5382,9 +5382,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         }
     }
 
-    // Clear unit cast bar
-    unitCastStates_.erase(data.casterUnit);
-
     // A spell with no Speed whose AttributesEx2 lacks 0x80 settles its misses
     // here (0x0080e1b0's loop at 0x0080ea84); any other's settle where its
     // missile lands (0x00702fc0, 0x00700e20 - SpellVisualSystem's miss sink,
@@ -5442,14 +5439,9 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         }
     }
 
-    // Fire UNIT_SPELLCAST_SUCCEEDED
-    if (owner_.addonEventCallbackRef() && !pendingGo) {
-        std::string unitId = owner_.guidToUnitId(data.casterUnit);
-        if (!unitId.empty())
-            owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SUCCEEDED", spellcastArgs(unitId, data.spellId));
-        if (data.casterUnit == owner_.getPlayerGuid() && endsRunningCast)
-            owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", spellcastArgs("player", data.spellId));
-    }
+    // 0x007fecc0 with the sentinel past the failures: UNIT_SPELLCAST_SUCCEEDED,
+    // the stop after it for the cast shown.
+    if (!pendingGo) raiseCastEnd(data.casterUnit, data.castCount, data.spellId, cast_failure::kWentOff);
 
     // No impact sound of its own here: the impact kit plays its SoundID
     // where and when it plays - on a missile's arrival for one that flies
@@ -6764,24 +6756,7 @@ void SpellHandler::stopCasting() {
         return;
     }
 
-    if (!casting_) {
-        return;
-    }
-
-    if (currentCastSpellId_ != 0) {
-        auto packet = CancelCastPacket::build(currentCastSpellId_, runningCastCount_, !isPreWotlk());
-        owner_.getSocket()->send(packet);
-    }
-
-    casting_ = false;
-    castIsChannel_ = false;
-    currentCastSpellId_ = 0;
-    castTimeRemaining_ = 0.0f;
-    castTimeTotal_ = 0.0f;
-    craftQueueSpellId_ = 0;
-    craftQueueRemaining_ = 0;
-
-    LOG_INFO("Cancelled spell cast");
+    cancelCast();
 }
 
 void SpellHandler::resetCastState() {
@@ -8464,8 +8439,6 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
                             " facing=", movement.orientation,
                             " selectedTarget=0x", std::hex, owner_.getTargetGuid(), std::dec);
             }
-            casting_ = false; castIsChannel_ = false; currentCastSpellId_ = 0; castTimeRemaining_ = 0.0f;
-            craftQueueSpellId_ = 0; craftQueueRemaining_ = 0;
             int playerPowerType = -1;
             if (auto pe = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
                 if (auto pu = std::dynamic_pointer_cast<Unit>(pe))
@@ -8481,9 +8454,11 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
                                                      castResult, playerPowerType,
                                                      castResultMiscArg, castResultMiscArg2);
             showPlayerCastFailure(castResultSpellId, castResult, errMsg);
+            raiseCastEnd(owner_.getPlayerGuid(), 0, castResultSpellId, castResult);
+            if (casting_) return;
+            craftQueueSpellId_ = 0;
+            craftQueueRemaining_ = 0;
             if (owner_.spellCastFailedCallbackRef()) owner_.spellCastFailedCallbackRef()(castResultSpellId);
-                owner_.fireAddonEvent("UNIT_SPELLCAST_FAILED", spellcastArgs("player", castResultSpellId));
-                owner_.fireAddonEvent("UNIT_SPELLCAST_STOP",   spellcastArgs("player", castResultSpellId));
             // The second of the two chat writes. See handleCastFailed.
         }
     }
@@ -8495,36 +8470,20 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
     uint64_t failOtherGuid = isClassicLikeExpansion()
         ? (packet.hasRemaining(8) ? packet.readUInt64() : 0)
         : packet.readPackedGuid();
-    // 0x00806ad0: castCount, spellId, result - the caster's shown cast ends
-    // where it is this one (0x007fecc0).  The result is read here too: that
-    // same routine picks the event off it, and this packet named nothing but
-    // FAILED before, for every reason.
-    uint8_t failOtherResult = 0;
-    if (!tbcLike2 && failOtherGuid != 0 && packet.hasRemaining(5)) {
-        const size_t at = packet.getReadPos();
-        const uint8_t castCount = packet.readUInt8();
+    // 0x00806ad0: castCount, spellId, result - the caster's cast of that count
+    // ends, whoever the caster (0x007fecc0). TBC's has no count and its
+    // result may be missing.
+    if (failOtherGuid != 0 && packet.hasRemaining(tbcLike2 ? 4 : 5)) {
+        const uint8_t castCount = tbcLike2 ? 0 : packet.readUInt8();
         const uint32_t spellId = packet.readUInt32();
-        if (packet.hasRemaining(1)) failOtherResult = packet.readUInt8();
-        packet.setReadPos(at);
-        owner_.castVisualEnded(failOtherGuid, castCount, spellId);
-        castEnded(failOtherGuid, castCount, spellId);
-        dropHeldMissile(failOtherGuid, castCount);
-    }
-    if (failOtherGuid != 0 && failOtherGuid != owner_.getPlayerGuid()) {
-        // Which spell it was, before the state that says so is dropped: the
-        // cast bar matches the id on a stop against the one it started with,
-        // and there is nowhere else to read it from once this is erased.
-        uint32_t failedSpellId = 0;
-        if (const auto* st = getUnitCastState(failOtherGuid)) failedSpellId = st->spellId;
-        unitCastStates_.erase(failOtherGuid);
-        noteUnitCastEnd(failOtherGuid, false);
-        if (owner_.addonEventCallbackRef()) {
-            std::string unitId;
-            if (failOtherGuid == owner_.getTargetGuid())     unitId = "target";
-            else if (failOtherGuid == owner_.focusGuidRef()) unitId = "focus";
-            if (!unitId.empty())
-                raiseCastFailureEvents(unitId, failedSpellId, failOtherResult, true);
+        const uint8_t result = packet.hasRemaining(1) ? packet.readUInt8() : 0;
+        if (!tbcLike2) {
+            owner_.castVisualEnded(failOtherGuid, castCount, spellId);
+            castEnded(failOtherGuid, castCount, spellId);
+            dropHeldMissile(failOtherGuid, castCount);
         }
+        raiseCastEnd(failOtherGuid, castCount, spellId, result);
+        if (!tbcLike2 && failOtherGuid == owner_.getPlayerGuid()) pendingCastEnded(castCount);
     }
     packet.skipAll();
 }
@@ -8620,6 +8579,8 @@ void SpellHandler::handleSpellDelayed(network::Packet& packet) {
             castSpell = other->second.spellId;
     }
     if (castSpell == 0 || !castEventShownFor(castSpell, isPlayer, false)) return;
+    const auto* shownCast = shownCasts_.of(caster);
+    const uint8_t castCount = shownCast ? shownCast->count : 0;
     const float delaySec = delayMs / 1000.0f;
     if (isPlayer) {
         castTimeRemaining_ += delaySec;
@@ -8631,7 +8592,7 @@ void SpellHandler::handleSpellDelayed(network::Packet& packet) {
     // The cast bar redraws itself from this: it is already on screen and its
     // end moved, so without the event it counts down to the wrong moment.
     for (const auto& unitId : owner_.unitTokensForGuid(caster))
-        owner_.fireAddonEvent("UNIT_SPELLCAST_DELAYED", spellcastArgs(unitId, castSpell));
+        owner_.fireAddonEvent("UNIT_SPELLCAST_DELAYED", spellcastArgs(unitId, castSpell, castCount));
 }
 
 bool SpellHandler::castEventShownFor(uint32_t spellId, bool casterIsPlayer, bool channel) {
@@ -8745,59 +8706,38 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         ? (packet.hasRemaining(8) ? packet.readUInt64() : 0)
         : packet.readPackedGuid();
     // Classic and TBC omit the castCount byte; WotLK includes it
-    //
-    // 0x007fecc0 picks the event by the reason, not by which packet this is:
-    // this named INTERRUPTED for every failure, the plain ones included, which
-    // the client reports as FAILED, and never once the quiet leg.  Where no
-    // reason byte could be read there is nothing to choose on, and the old
-    // notice stands.
-    std::string failureEvent = "UNIT_SPELLCAST_INTERRUPTED";
     const size_t remainingFields = hasCastCount ? 6u : 5u;  // spellId(4)+reason(1) [+castCount(1)]
-    if (packet.hasRemaining(remainingFields)) {
-        const uint8_t failCastCount = hasCastCount ? packet.readUInt8() : 0;
-        uint32_t failSpellId = packet.readUInt32();
-        uint8_t rawFailReason = packet.readUInt8();
-        // 0x00809c70: the caster's shown cast ends where it is this one
-        // (0x007fecc0, after 0x0072ed80); the player's auto-repeat bit goes
-        // for results 0x34..0x36 (0x00807560).
-        if (!isClassic) {
-            const uint64_t caster = failGuid != 0 ? failGuid : owner_.getPlayerGuid();
-            if (caster == owner_.getPlayerGuid()) forgetPendingSwing(failSpellId);
-            if (caster == owner_.getPlayerGuid() && rawFailReason >= 0x34 && rawFailReason <= 0x36) {
-                owner_.castVisuals().autoRepeatStopped(caster);
-                // Not the visual alone: the repeat ends and the server is
-                // told (0x00807560(1)).
-                owner_.stopAutoRepeat(true);
-            }
-            owner_.castVisualEnded(caster, failCastCount, failSpellId);
-            // 0x00809c70 -> 0x008054f0 for the player's pending cast.
-            if (caster == owner_.getPlayerGuid() && hasCastCount) pendingCastEnded(failCastCount);
-            castEnded(caster, failCastCount, failSpellId);
-            dropHeldMissile(caster, failCastCount);
+    if (!packet.hasRemaining(remainingFields)) return;
+    const uint8_t failCastCount = hasCastCount ? packet.readUInt8() : 0;
+    const uint32_t failSpellId = packet.readUInt32();
+    const uint8_t rawFailReason = packet.readUInt8();
+    const uint64_t me = owner_.getPlayerGuid();
+    const uint64_t caster = failGuid != 0 ? failGuid : me;
+    // 0x00809c70: the player's auto-repeat bit goes for results 0x34..0x36
+    // (0x00807560).
+    if (!isClassic) {
+        if (caster == me) forgetPendingSwing(failSpellId);
+        if (caster == me && rawFailReason >= 0x34 && rawFailReason <= 0x36) {
+            owner_.castVisuals().autoRepeatStopped(caster);
+            // Not the visual alone: the repeat ends and the server is
+            // told (0x00807560(1)).
+            owner_.stopAutoRepeat(true);
         }
-        // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
-        uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;
-        // Nothing said, for the player's own failure either: 0x00809c70 only
-        // ends the cast (0x007fecc0), and the reason, where there is one,
-        // came with SMSG_CAST_FAILED. This put "Spell: reason" on screen and
-        // in chat a second time.
-        (void)failSpellId;
-        failureEvent = std::string(
-            cast_failure::castEventName(cast_failure::castEvent(failReason)));
+        owner_.castVisualEnded(caster, failCastCount, failSpellId);
+        castEnded(caster, failCastCount, failSpellId);
+        dropHeldMissile(caster, failCastCount);
     }
-    // And the event that failure is, for the frames watching the cast
-    if (owner_.addonEventCallbackRef()) {
-        auto unitId = (failGuid == 0) ? std::string("player") : owner_.guidToUnitId(failGuid);
-        if (!unitId.empty()) {
-            uint32_t spellId = 0;
-            if (const auto* st = getUnitCastState(failGuid)) spellId = st->spellId;
-            owner_.fireAddonEvent(failureEvent, spellcastArgs(unitId, spellId));
-            owner_.fireAddonEvent("UNIT_SPELLCAST_STOP", spellcastArgs(unitId, spellId));
-        }
-    }
-    if (failGuid == owner_.getPlayerGuid() || failGuid == 0) {
-        // Player's own cast failed.
-        casting_ = false; castIsChannel_ = false; currentCastSpellId_ = 0;
+    // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
+    const uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;
+    // The cast that failed and no other: its event, and its end where it is
+    // the one shown (0x007fecc0, after 0x0072ed80). Nothing said on screen,
+    // for the player's own failure either: the reason, where there is one,
+    // came with SMSG_CAST_FAILED.
+    raiseCastEnd(caster, failCastCount, failSpellId, failReason);
+    // 0x00809c70 -> 0x008054f0 for the player's pending cast.
+    if (caster == me && hasCastCount) pendingCastEnded(failCastCount);
+    if (caster == me) {
+        if (casting_) return;  // another cast, or a channel, goes on
         craftQueueSpellId_ = 0;
         craftQueueRemaining_ = 0;
         // Remove lingering precast visual effects
@@ -8805,16 +8745,11 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
             if (auto* svs = renderer->getSpellVisualSystem())
                 svs->cancelAllPrecastVisuals();
         }
-        if (owner_.spellCastAnimCallbackRef()) {
-            owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, false, SpellCastType::OMNI);
-        }
-    } else {
-        // Another unit's cast failed - clear their tracked cast bar
-        unitCastStates_.erase(failGuid);
-        noteUnitCastEnd(failGuid, false);
-        if (owner_.spellCastAnimCallbackRef()) {
-            owner_.spellCastAnimCallbackRef()(failGuid, false, false, SpellCastType::OMNI);
-        }
+    } else if (getUnitCastState(caster)) {
+        return;
+    }
+    if (owner_.spellCastAnimCallbackRef()) {
+        owner_.spellCastAnimCallbackRef()(caster, false, false, SpellCastType::OMNI);
     }
 }
 
@@ -9468,9 +9403,7 @@ void SpellHandler::logEffectInterruptCast(const SpellLogExecuteEntry& entry, uin
     const uint64_t playerGuid = owner_.getPlayerGuid();
     const uint64_t icTarget = entry.targetGuid;
     const uint32_t icSpellId = entry.value1;
-    // Clear the interrupted unit's cast bar immediately
-    unitCastStates_.erase(icTarget);
-    noteUnitCastEnd(icTarget, false);
+    // The cast itself ends by its SMSG_SPELL_FAILURE.
     // Record interrupt in combat log when player is involved
     if (isPlayerCaster || icTarget == playerGuid)
         owner_.addCombatText(CombatTextEntry::INTERRUPT, 0, icSpellId, isPlayerCaster, 0,
@@ -9751,7 +9684,12 @@ void SpellHandler::handleResumeCastBar(network::Packet& packet) {
     if (entry == owner_.spellNameCacheRef().end()) return;
     const bool channel = (entry->second.attrEx & 0x4u) != 0;
     if (totalMs > 0) {
+        // 0x0072ac50 / 0x0072ae00: the count stays what the unit has (+0xa5c).
+        const auto* visual = owner_.castVisuals().state(caster);
+        if (channel) shownCasts_.channelStarted(caster, spellId);
+        else shownCasts_.castStarted(caster, visual ? visual->castCount : uint8_t{0}, spellId);
         if (caster == owner_.getPlayerGuid()) {
+            if (!channel) runningCastCount_ = visual ? visual->castCount : uint8_t{0};
             casting_            = true;
             castIsChannel_      = channel;
             currentCastSpellId_ = spellId;
@@ -9773,12 +9711,9 @@ void SpellHandler::handleResumeCastBar(network::Packet& packet) {
         LOG_DEBUG("SMSG_RESUME_CAST_BAR: caster=0x", std::hex, caster, std::dec,
                   " spell=", spellId, " remaining=", remainMs, "ms total=", totalMs, "ms",
                   channel ? " (channel)" : "");
-        if (owner_.addonEventCallbackRef()) {
-            const auto unitId = owner_.guidToUnitId(caster);
-            if (!unitId.empty())
-                owner_.fireAddonEvent(channel ? "UNIT_SPELLCAST_CHANNEL_START" : "UNIT_SPELLCAST_START",
-                                      spellcastArgs(unitId, spellId));
-        }
+        for (const auto& unitId : owner_.unitTokensForGuid(caster))
+            owner_.fireAddonEvent(channel ? "UNIT_SPELLCAST_CHANNEL_START" : "UNIT_SPELLCAST_START",
+                                  channelEventArgs(unitId, spellId));
     }
 }
 
@@ -9797,6 +9732,7 @@ void SpellHandler::handleChannelStart(network::Packet& packet) {
     if (chanTotalMs == 0 || chanCaster == 0) return;
     if (!castEventShownFor(chanSpellId, chanCaster == owner_.getPlayerGuid(), true)) return;
     if (!owner_.getEntityManager().getEntity(chanCaster)) return;
+    shownCasts_.channelStarted(chanCaster, chanSpellId);
     {
         if (chanCaster == owner_.getPlayerGuid()) {
             casting_            = true;
@@ -9847,30 +9783,25 @@ void SpellHandler::handleChannelUpdate(network::Packet& packet) {
     // UNIT_SPELLCAST_CHANNEL_STOP instead, and stops its visual.
     if (chanCaster2 == 0) return;
     const bool isPlayer = chanCaster2 == owner_.getPlayerGuid();
-    uint32_t chanSpell = 0;
-    auto other = unitCastStates_.end();
-    if (isPlayer) {
-        if (casting_ && castIsChannel_) chanSpell = currentCastSpellId_;
-    } else {
-        other = unitCastStates_.find(chanCaster2);
-        if (other != unitCastStates_.end() && other->second.casting && other->second.isChannel)
-            chanSpell = other->second.spellId;
-    }
+    const auto* shownChannel = shownCasts_.of(chanCaster2);
+    const uint32_t chanSpell = shownChannel ? shownChannel->channel : 0;
     if (chanSpell == 0 || !castEventShownFor(chanSpell, isPlayer, true)) return;
-    if (isPlayer) {
+    if (isPlayer && casting_ && castIsChannel_) {
         castTimeRemaining_ = chanRemainMs / 1000.0f;
         if (chanRemainMs == 0) {
             casting_ = false;
             castIsChannel_ = false;
             currentCastSpellId_ = 0;
         }
-    } else {
-        other->second.timeRemaining = chanRemainMs / 1000.0f;
-        if (chanRemainMs == 0) {
-            unitCastStates_.erase(other);
-            noteUnitCastEnd(chanCaster2, true);
+    } else if (!isPlayer) {
+        const auto other = unitCastStates_.find(chanCaster2);
+        if (other != unitCastStates_.end() && other->second.isChannel) {
+            other->second.timeRemaining = chanRemainMs / 1000.0f;
+            if (chanRemainMs == 0) unitCastStates_.erase(other);
         }
+        if (chanRemainMs == 0) noteUnitCastEnd(chanCaster2, true);
     }
+    if (chanRemainMs == 0) shownCasts_.channelEnded(chanCaster2);
     LOG_DEBUG("MSG_CHANNEL_UPDATE: caster=0x", std::hex, chanCaster2, std::dec,
               " remaining=", chanRemainMs, "ms");
     const char* event = chanRemainMs != 0 ? "UNIT_SPELLCAST_CHANNEL_UPDATE" : "UNIT_SPELLCAST_CHANNEL_STOP";

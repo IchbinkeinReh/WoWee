@@ -1745,12 +1745,8 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         // FAILED_QUIET for the three refusals that leave a cast running,
         // INTERRUPTED for 0x28/0x29, plain FAILED for everything else - and
         // the stop after it, this being the cast that was shown.
-        if (pet != 0) {
-            const std::string unitId = owner_.guidToUnitId(pet);
-            if (!unitId.empty())
-                if (auto* spells = owner_.getSpellHandler())
-                    spells->raiseCastFailureEvents(unitId, spellId, reason, true);
-        }
+        if (pet != 0)
+            if (auto* spells = owner_.getSpellHandler()) spells->raiseCastEnd(pet, castCount, spellId, reason);
     }
     packet.skipAll();
 }

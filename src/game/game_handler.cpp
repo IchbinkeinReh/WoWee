@@ -949,18 +949,13 @@ void GameHandler::update(float deltaTime) {
 
         // Check if client-side cast timer expired (tick-down is in SpellHandler::updateTimers).
         if (spellHandler_ && spellHandler_->isCasting() && spellHandler_->getCastTimeRemaining() <= 0.0f) {
-            if (spellHandler_->getCraftQueueRemaining() > 0 && craftCastGoGraceSec_ < 2.0f) {
-                // Craft queue cast: SMSG_SPELL_GO is what decrements the queue and
-                // re-casts the next item, and it races this client-side timer.
-                // resetCastState() here would wipe the queue mid-run ("Create All"
-                // stopping after one item), so let the cast bar sit at 100% briefly.
-                // The 2s grace bails out if SPELL_GO never arrives (cast failed
-                // without a result packet, e.g. reagents gone).
-                craftCastGoGraceSec_ += deltaTime;
-            } else {
-                // Any other cast: clean up immediately.
-                spellHandler_->resetCastState();
-            }
+            // A cast whose time is over stays until its SMSG_SPELL_GO or failure
+            // ends it, as the client has it (0x007fecc0): letting go of it here
+            // dropped the cast pose, and the craft queue, for as long as the
+            // server's answer was on its way. The two seconds are for a server
+            // that never sends one.
+            if (craftCastGoGraceSec_ < 2.0f) craftCastGoGraceSec_ += deltaTime;
+            else spellHandler_->resetCastState();
         } else {
             craftCastGoGraceSec_ = 0.0f;
         }

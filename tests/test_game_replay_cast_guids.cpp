@@ -49,6 +49,7 @@ TEST_CASE("an interrupted cast names its caster as the server writes it", "[repl
         CAPTURE(expansion);
         const std::string e = expansion;
         Session s(expansion);
+        s.handler().spellNameCacheRef()[133].name = "Fireball";
         TargetEvents events(s);
         // Spell::SendInterrupted's SMSG_SPELL_FAILURE: WotLK adds the cast
         // count. Classic's whole guid is the layout this client has always
@@ -61,9 +62,9 @@ TEST_CASE("an interrupted cast names its caster as the server writes it", "[repl
         s.receive(p);
         s.handler().setAddonEventCallback({});
         // The event follows the result (0x007fecc0 via 0x00809c70 in ours); what
-        // this case proves is that the caster was read, so both reach "target".
-        REQUIRE(events.names.size() == 2);
-        CHECK(events.names.back() == "UNIT_SPELLCAST_STOP");
+        // this case proves is that the caster was read, so it reaches "target".
+        // No stop: no cast of the mob's was shown.
+        CHECK(events.names == std::vector<std::string>{"UNIT_SPELLCAST_FAILED"});
     }
 }
 
@@ -74,6 +75,7 @@ TEST_CASE("the player's own failure is read in each expansion's layout", "[repla
     for (const char* expansion : {"wotlk", "tbc"}) {
         CAPTURE(expansion);
         Session s(expansion);
+        s.handler().spellNameCacheRef()[133].name = "Fireball";
         std::vector<std::string> names;
         s.handler().setAddonEventCallback([&names](const std::string& name, const std::vector<std::string>& args) {
             if (!args.empty() && args.front() == "player") names.push_back(name);
@@ -85,21 +87,7 @@ TEST_CASE("the player's own failure is read in each expansion's layout", "[repla
         p.writeUInt8(40);
         s.receive(p);
         s.handler().setAddonEventCallback({});
-        REQUIRE(names.size() == 2);
-        CHECK(names.back() == "UNIT_SPELLCAST_STOP");
-    }
-}
-
-TEST_CASE("another unit's failed cast names its caster as the server writes it", "[replay][castguid]") {
-    for (const char* expansion : {"wotlk", "tbc", "classic"}) {
-        CAPTURE(expansion);
-        Session s(expansion);
-        TargetEvents events(s);
-        Packet p(wireOpcode(Opcode::SMSG_SPELL_FAILED_OTHER));
-        writeCaster(p, std::string(expansion) == "classic");
-        p.writeUInt32(133);
-        s.receive(p);
-        CHECK(events.names == std::vector<std::string>{"UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_STOP"});
+        CHECK(names == std::vector<std::string>{"UNIT_SPELLCAST_INTERRUPTED"});
     }
 }
 
@@ -130,6 +118,25 @@ static void startCast(Session& s, const std::string& expansion) {
         p.writeUInt16(0);
     }
     s.receive(p);
+}
+
+TEST_CASE("another unit's failed cast names its caster as the server writes it", "[replay][castguid]") {
+    for (const char* expansion : {"wotlk", "tbc", "classic"}) {
+        CAPTURE(expansion);
+        const std::string e = expansion;
+        Session s(expansion);
+        TargetEvents events(s);
+        startCast(s, e);
+        CHECK(events.names == std::vector<std::string>{"UNIT_SPELLCAST_START"});
+        events.names.clear();
+        Packet p(wireOpcode(Opcode::SMSG_SPELL_FAILED_OTHER));
+        writeCaster(p, e == "classic");
+        if (e == "wotlk") p.writeUInt8(1);
+        p.writeUInt32(133);
+        p.writeUInt8(0);
+        s.receive(p);
+        CHECK(events.names == std::vector<std::string>{"UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_STOP"});
+    }
 }
 
 TEST_CASE("a pushed-back cast names its caster as the server writes it", "[replay][castguid]") {

@@ -6,6 +6,9 @@
 #include "game/combat_handler.hpp"
 #include "game/movement_handler.hpp"
 #include "game/quest_handler.hpp"
+#include "game/spell_handler.hpp"
+
+#include <utility>
 
 using replay::Session;
 using replay::UpdateObject;
@@ -340,4 +343,119 @@ TEST_CASE("a proc going off says nothing and ends no cast", "[replay][playtest]"
     CHECK(events == std::vector<std::string>{"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_STOP"});
     CHECK_FALSE(s.handler().isCasting());
     s.handler().setAddonEventCallback({});
+}
+
+namespace {
+
+// Every UNIT_SPELLCAST_* of the player's, as its event and fourth argument.
+struct CastEvents {
+    std::vector<std::string> heard;
+    Session& session;
+    explicit CastEvents(Session& s) : session(s) {
+        s.handler().setAddonEventCallback([this](const std::string& event, const std::vector<std::string>& args) {
+            const std::string prefix = "UNIT_SPELLCAST_";
+            if (event.rfind(prefix, 0) != 0 || args.size() != 4 || args[0] != "player") return;
+            heard.push_back(event.substr(prefix.size()) + " " + args[1] + " " + args[3]);
+        });
+    }
+    ~CastEvents() { session.handler().setAddonEventCallback({}); }
+    std::vector<std::string> take() { return std::exchange(heard, {}); }
+};
+
+wowee::network::Packet castFailed(uint8_t count, uint32_t spellId, uint8_t result) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CAST_FAILED));
+    p.writeUInt8(count);
+    p.writeUInt32(spellId);
+    p.writeUInt8(result);
+    return p;
+}
+
+wowee::network::Packet spellFailure(Opcode opcode, uint8_t count, uint32_t spellId, uint8_t result) {
+    wowee::network::Packet p(wowee::game::wireOpcode(opcode));
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt8(count);
+    p.writeUInt32(spellId);
+    p.writeUInt8(result);
+    return p;
+}
+
+constexpr uint8_t kInterrupted = 0x28, kInProgress = 0x69;
+
+}  // namespace
+
+// The fourth argument was the spell's id, not the count the cast bar holds it
+// against, and an interrupted cast's bar filled up and flashed.
+TEST_CASE("a cast's events carry its count", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& fireball = s.handler().spellNameCacheRef()[kFireball];
+    fireball.name = "Fireball";
+    fireball.interruptFlags = 0x1;
+    CastEvents events(s);
+    using Heard = std::vector<std::string>;
+
+    // An instant's start is no cast shown.
+    s.receive(playerSpell(Opcode::SMSG_SPELL_START, 3, kFireball, 0, 0));
+    CHECK(events.take().empty());
+    s.receive(playerSpell(Opcode::SMSG_SPELL_GO, 3, kFireball, 0, 0));
+    CHECK(events.take() == Heard{"SUCCEEDED Fireball 3"});
+
+    s.receive(playerSpell(Opcode::SMSG_SPELL_START, 4, kFireball, 0, 3000));
+    CHECK(events.take() == Heard{"START Fireball 4"});
+
+    SECTION("pressed again, it goes on") {
+        s.receive(castFailed(5, kFireball, kInProgress));
+        CHECK(events.take() == Heard{"FAILED_QUIET Fireball 5"});
+        CHECK(s.handler().isCasting());
+        s.receive(playerSpell(Opcode::SMSG_SPELL_GO, 4, kFireball, 0, 0));
+        CHECK(events.take() == Heard{"SUCCEEDED Fireball 4", "STOP Fireball 4"});
+    }
+    SECTION("a step interrupts it, once") {
+        s.handler().sendMovement(Opcode::MSG_MOVE_START_BACKWARD);
+        CHECK(events.take() == Heard{"INTERRUPTED Fireball 4", "STOP Fireball 4"});
+        CHECK_FALSE(s.handler().isCasting());
+        CHECK(s.sent().of(Opcode::CMSG_CANCEL_CAST).size() == 1);
+        // The server's own say ends nothing more.
+        s.receive(castFailed(4, kFireball, kInterrupted));
+        s.receive(spellFailure(Opcode::SMSG_SPELL_FAILURE, 4, kFireball, kInterrupted));
+        CHECK(events.take() == Heard{"INTERRUPTED Fireball 4", "INTERRUPTED Fireball 4"});
+    }
+    SECTION("the server interrupts it") {
+        s.receive(spellFailure(Opcode::SMSG_SPELL_FAILURE, 4, kFireball, kInterrupted));
+        CHECK(events.take() == Heard{"INTERRUPTED Fireball 4", "STOP Fireball 4"});
+        CHECK_FALSE(s.handler().isCasting());
+    }
+    SECTION("stopped by hand") {
+        s.handler().cancelCast();
+        CHECK(events.take() == Heard{"FAILED_QUIET Fireball 4", "STOP Fireball 4"});
+    }
+}
+
+// A failure ended the channel without a word, and its bar ran on.
+TEST_CASE("a channel is ended by its update", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint32_t kRain = 5740;
+    s.handler().spellNameCacheRef()[kRain].name = "Rain";
+    CastEvents events(s);
+    using Heard = std::vector<std::string>;
+
+    wowee::network::Packet start(wowee::game::wireOpcode(Opcode::MSG_CHANNEL_START));
+    start.writePackedGuid(Session::kPlayerGuid);
+    start.writeUInt32(kRain);
+    start.writeUInt32(8000);
+    s.receive(start);
+    CHECK(events.take() == Heard{"CHANNEL_START Rain 0"});
+    s.handler().cancelCast();
+    CHECK(events.take().empty());
+    s.receive(castFailed(7, kRain, kInterrupted));
+    s.receive(spellFailure(Opcode::SMSG_SPELL_FAILURE, 7, kRain, kInterrupted));
+    CHECK(events.take() == Heard{"INTERRUPTED Rain 7", "INTERRUPTED Rain 7"});
+    CHECK(s.handler().isChanneling());
+    wowee::network::Packet end(wowee::game::wireOpcode(Opcode::MSG_CHANNEL_UPDATE));
+    end.writePackedGuid(Session::kPlayerGuid);
+    end.writeUInt32(0);
+    s.receive(end);
+    CHECK(events.take() == Heard{"CHANNEL_STOP Rain 0"});
+    CHECK_FALSE(s.handler().isChanneling());
 }

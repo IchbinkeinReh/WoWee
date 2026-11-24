@@ -16,6 +16,7 @@
 #include "game/cast_interrupt.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/spell_unit_target.hpp"
+#include "game/shown_cast.hpp"
 #include "game/spell_book_records.hpp"
 #include "game/handler_types.hpp"
 #include "network/packet.hpp"
@@ -177,12 +178,13 @@ public:
     void notePetActionCast(uint32_t spellId, uint64_t pet);
     /// SMSG_PET_CAST_FAILED (0x00806c30 -> 0x00804720).
     void notePetCastFailed(uint32_t spellId);
-    /// 0x007fecc0: a cast ending raises for `unitId` the one event its reason
-    /// names - FAILED_QUIET, INTERRUPTED, plain FAILED - and the stop that
-    /// follows only for `firingStop`, the cast this packet named being the one
-    /// shown (see cast_failure::castEvent).
-    void raiseCastFailureEvents(const std::string& unitId, uint32_t spellId,
-                                uint8_t reason, bool firingStop) const;
+    /// 0x007fecc0: a cast of `caster`'s ending raises the one event its reason
+    /// names (cast_failure::castEvent) and, the cast being the one shown,
+    /// clears that and raises UNIT_SPELLCAST_STOP. Whether it was the one
+    /// shown. A spell Spell.dbc does not have raises nothing.
+    bool raiseCastEnd(uint64_t caster, uint8_t castCount, uint32_t spellId, uint8_t reason);
+    /// What the caster's cast bar shows.
+    [[nodiscard]] const ShownCasts& shownCasts() const { return shownCasts_; }
     /// A click on the world at this place, canonical: fills the location the
     /// spell wants (0x0080c340) and casts once nothing more is wanted.
     void placeGroundTarget(const ground_target::Place& place);
@@ -227,7 +229,18 @@ public:
     /// Record a spell cast by using an item - pre-WotLK mounts are items, and
     /// their on-use spell never passes through castSpell().
     void noteGroundCastSpell(uint32_t spellId) { lastGroundCastSpellId_ = spellId; }
-    void cancelCast();
+    /// 0x00806200 on the player's cast - the one running, else the one sent
+    /// and not yet started (+0xa60) - for `reason`: 0x1b for ESC and
+    /// SpellStopCasting (0x00809a80), 0x28 for a step taken (0x00806620). A
+    /// channel is no cast, and stays.
+    static constexpr uint8_t kCancelDontReport = 0x1b;
+    static constexpr uint8_t kCancelInterrupted = 0x28;
+    void cancelCast(uint8_t reason = kCancelDontReport);
+    /// 0x00806620: the player starting to move or jumping cancels each of its
+    /// casts that moving interrupts (InterruptFlags 0x1).
+    void cancelCastsOnMove();
+    /// 0x007ffde0: a cast of the player's is running or sent (+0xa60).
+    [[nodiscard]] bool hasOwnCast() const;
     /// 0x005faa40: the channel spell on the player (UNIT_CHANNEL_SPELL), where
     /// its ChannelInterruptFlags has 0x8 (movement), cancelled with
     /// CMSG_CANCEL_CHANNELLING and the spell's id, u32.
@@ -252,6 +265,9 @@ public:
     [[nodiscard]] bool isCasting() const { return casting_ || restorationActive_; }
     [[nodiscard]] bool isChanneling() const { return casting_ ? castIsChannel_ : restorationActive_; }
     [[nodiscard]] bool isRestoring() const { return restorationActive_; }
+    /// A cast or a channel, eating and drinking - which are neither - aside.
+    [[nodiscard]] bool hasCastOrChannel() const { return casting_; }
+    [[nodiscard]] bool hasChannel() const { return casting_ && castIsChannel_; }
     [[nodiscard]] uint32_t getCurrentCastSpellId() const {
         return casting_ ? currentCastSpellId_ : restorationSpellId_;
     }
@@ -331,8 +347,14 @@ public:
         auto it = unitCastStates_.find(guid);
         return (it != unitCastStates_.end() && it->second.casting) ? &it->second : nullptr;
     }
-    void clearUnitCastStates() { unitCastStates_.clear(); unitCastEnds_.clear(); castLocks_.clear(); }
+    void clearUnitCastStates() {
+        unitCastStates_.clear();
+        unitCastEnds_.clear();
+        castLocks_.clear();
+        shownCasts_.clear();
+    }
     void removeUnitCastState(uint64_t guid) {
+        shownCasts_.forget(guid);
         unitCastStates_.erase(guid);
         unitCastEnds_.erase(guid);
         castLocks_.erase(guid);
@@ -705,16 +727,18 @@ public:
     /// name and raised.
     /// The five values every UNIT_SPELLCAST_* event carries.
     ///
-    /// unit, spell name, rank, cast id, spell id - in that order, which is what
-    /// FrameXML unpacks. These were being fired as just the unit and the spell
-    /// id, so the id sat where the name belongs and the cast id was absent.
     /// castEventShown (cast_event_gate.hpp) for a spell's Spell.dbc row;
     /// false for a spell it does not have.
     bool castEventShownFor(uint32_t spellId, bool casterIsPlayer, bool channel);
     [[nodiscard]] std::vector<std::string> channelEventArgs(const std::string& unitId,
                                                             uint32_t spellId) const;
-    [[nodiscard]] std::vector<std::string> spellcastArgs(const std::string& unitId,
-                                           uint32_t spellId) const;
+    /// 0x0060bf60's four: the token, the spell's name and rank, and the cast
+    /// count - UnitCastingInfo's castID, which the cast bar holds every STOP,
+    /// FAILED and INTERRUPTED against.
+    [[nodiscard]] std::vector<std::string> spellcastArgs(const std::string& unitId, uint32_t spellId,
+                                                         uint8_t castCount) const;
+    /// 0x00806200 on one cast of the player's.
+    void endOwnCast(uint8_t castCount, uint32_t spellId, uint8_t reason);
 
     void abandonPet();
 
@@ -1191,6 +1215,7 @@ private:
 
     // Per-unit cast state
     std::unordered_map<uint64_t, UnitCastState> unitCastStates_;
+    ShownCasts shownCasts_;  ///< every unit's, the player's too
     /// What the client keeps on a unit for 0x007262e0: the not-interruptible
     /// bit (+0xa34 0x8) and the immunities SMSG_SPELL_START's cast flag
     /// 0x4000000 last gave it (+0xa64 schools, +0xa68 mechanics).
