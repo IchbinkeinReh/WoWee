@@ -263,7 +263,6 @@ void GameHandler::resetDbcCaches() {
     taxiPathNodes_.clear();
     areaTriggerDbcLoaded_ = false;
     areaTriggers_.clear();
-    activeAreaTriggers_.clear();
     talentCache_.clear();
     talentTabCache_.clear();
     shapeshiftFormRows_.clear();
@@ -943,9 +942,8 @@ void GameHandler::update(float deltaTime) {
         if (movementHandler_) movementHandler_->updateHeartbeat();
 
         // Check area triggers (instance portals, tavern rests, etc.)
-        if (areaTriggerCooldown_ > 0.0f) areaTriggerCooldown_ -= deltaTime;
         areaTriggerCheckTimer_ += deltaTime;
-        if (areaTriggerCheckTimer_ >= game::AREA_TRIGGER_CHECK_INTERVAL) {
+        if (areaTriggerCheckTimer_ >= AreaTriggerWatch::kIntervalSeconds) {
             areaTriggerCheckTimer_ = 0.0f;
             checkAreaTriggers();
         }

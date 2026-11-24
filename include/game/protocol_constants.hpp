@@ -152,7 +152,6 @@ constexpr float    CLASSIC_PING_INTERVAL_SEC    = 10.0f;
 // ---------------------------------------------------------------------------
 // Area-trigger interval (seconds)
 // ---------------------------------------------------------------------------
-constexpr float AREA_TRIGGER_CHECK_INTERVAL         = 0.25f;
 
 // ---------------------------------------------------------------------------
 // Gameplay distance thresholds

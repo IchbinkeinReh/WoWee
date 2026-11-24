@@ -585,3 +585,64 @@ TEST_CASE("the npc is whoever the open window is of", "[replay][playtest]") {
     s.handler().closeAuctionHouse();
     CHECK(s.handler().getInteractNpcGuid() == 0);
 }
+
+// A portal run into led nowhere: the server was told of it without being told
+// where the player was.
+TEST_CASE("a trigger is told of with the place", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& h = s.handler();
+    h.areaTriggerDbcLoadedRef() = true;
+    wowee::game::GameHandler::AreaTriggerEntry portal, other;
+    portal.id = 2230;
+    portal.mapId = other.mapId = h.getCurrentMapId();
+    portal.x = -300.0f;
+    portal.y = -2300.0f;
+    portal.z = 10.0f;
+    portal.radius = 5.0f;
+    other = portal;
+    other.id = 2231;
+    h.areaTriggersRef() = {portal, other};
+    auto* movement = h.getMovementHandler();
+    REQUIRE(movement);
+    const auto told = [&] { return s.sent().of(Opcode::CMSG_AREATRIGGER).size(); };
+
+    movement->checkAreaTriggers();
+    CHECK(told() == 0);
+    h.setPosition(-301.0f, -2300.0f, 10.0f);
+    movement->checkAreaTriggers();
+    REQUIRE(told() == 1);
+    const auto& all = s.sent().all();
+    REQUIRE(all.size() >= 2);
+    CHECK(all[all.size() - 2].getOpcode() == wowee::game::wireOpcode(Opcode::MSG_MOVE_HEARTBEAT));
+    CHECK(all.back().getOpcode() == wowee::game::wireOpcode(Opcode::CMSG_AREATRIGGER));
+    // Once, and the one over it not while it stands in this one.
+    movement->checkAreaTriggers();
+    CHECK(told() == 1);
+    h.setPosition(-340.0f, -2300.0f, 10.0f);
+    movement->checkAreaTriggers();
+    CHECK(told() == 1);
+    h.setPosition(-301.0f, -2300.0f, 10.0f);
+    movement->checkAreaTriggers();
+    CHECK(told() == 2);
+    // Not the dead.
+    h.setPosition(-340.0f, -2300.0f, 10.0f);
+    movement->checkAreaTriggers();
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 0}}));
+    h.setPosition(-301.0f, -2300.0f, 10.0f);
+    movement->checkAreaTriggers();
+    CHECK(told() == 2);
+}
+
+TEST_CASE("a trigger's box is turned by its yaw", "[replay][playtest]") {
+    wowee::game::GameHandler::AreaTriggerEntry at;
+    at.boxLength = 10.0f;  // along the wire's x, canonical y
+    at.boxWidth = 2.0f;
+    at.boxHeight = 4.0f;
+    CHECK(wowee::game::insideAreaTrigger(at, 0.0f, 4.0f, 0.0f));
+    CHECK_FALSE(wowee::game::insideAreaTrigger(at, 4.0f, 0.0f, 0.0f));
+    CHECK_FALSE(wowee::game::insideAreaTrigger(at, 0.0f, 0.0f, 3.0f));
+    at.boxYaw = 1.5707963f;
+    CHECK(wowee::game::insideAreaTrigger(at, 4.0f, 0.0f, 0.0f));
+    CHECK_FALSE(wowee::game::insideAreaTrigger(at, 0.0f, 4.0f, 0.0f));
+}

@@ -771,15 +771,6 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     // Clear boss encounter unit slots and raid marks on world transfer
     if (socialHandler_) socialHandler_->resetTransferState();
 
-    // Suppress area triggers on initial login - prevents exit portals from
-    // immediately firing when spawning inside a dungeon/instance. Deeprun Tram
-    // (map 369) needs a shorter window because exits are close to the spawn.
-    const bool deeprunTram = data.mapId == 369;
-    activeAreaTriggers_.clear();
-    areaTriggerCheckTimer_ = deeprunTram ? -1.0f : -5.0f;
-    areaTriggerSuppressFirst_ = true;
-    areaTriggerCooldown_ = deeprunTram ? 1.5f : 10.0f;
-
     // Notify application to load terrain for this map/position (online mode)
     if (worldEntryCallback_) {
         worldEntryCallback_(data.mapId, data.x, data.y, data.z, initialWorldEntry);

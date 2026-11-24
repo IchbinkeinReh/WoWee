@@ -107,16 +107,6 @@ const KnownAreaTriggerDestination* findKnownAreaTriggerDestinationByTrigger(uint
     return nullptr;
 }
 
-uint32_t findKnownReturnAreaTrigger(uint32_t triggerId) {
-    switch (triggerId) {
-        case 2166: return 2175; // Deeprun Tram -> Ironforge, return via Ironforge portal
-        case 2171: return 2173; // Deeprun Tram -> Stormwind, return via Stormwind portal
-        case 2173: return 2171; // Stormwind -> Deeprun Tram, exit on Stormwind side
-        case 2175: return 2166; // Ironforge -> Deeprun Tram, exit on Ironforge side
-        default: return 0;
-    }
-}
-
 // What the client does with another unit's animation for the opcode its
 // movement came in (FUN_0073ed10). Every start and stop, turn, swim and
 // ascent asks for its locomotion at once (FUN_0073ac30), as does a change of
@@ -2742,17 +2732,6 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
     // Clear cast bar on teleport - SpellHandler owns the casting_ flag
     if (owner_.getSpellHandler()) owner_.getSpellHandler()->resetCastState();
 
-    // Suppress area triggers briefly after teleport. A one-shot flag is not
-    // enough - the player can leave and re-enter a trigger within seconds and
-    // get teleported again before the world has finished loading. Deeprun Tram
-    // (map 369) is a narrow hallway with portal triggers close to the spawn,
-    // so keep its grace window short enough that exits remain usable.
-    const bool deeprunTram = owner_.getCurrentMapId() == 369;
-    owner_.activeAreaTriggersRef().clear();
-    owner_.areaTriggerCheckTimerRef() = deeprunTram ? -1.0f : -5.0f;
-    owner_.areaTriggerSuppressFirstRef() = true;
-    owner_.areaTriggerCooldownRef() = deeprunTram ? 1.5f : 10.0f;
-
     // The acknowledgement waits for the place to be in. The client answers
     // from the same handler, after 0x006ecf80 has moved the player and read
     // in the area about the new place behind the loading screen
@@ -2868,8 +2847,6 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     }
     const uint32_t transferAreaTriggerId = lastAreaTriggerId_;
     lastAreaTriggerId_ = 0;
-    postTransferReturnAreaTriggerId_ = findKnownReturnAreaTrigger(transferAreaTriggerId);
-    postTransferReturnAreaTriggerSawNear_ = false;
     const bool hasPendingAreaTriggerDestination = pendingAreaTriggerDestinationValid_;
     const uint32_t pendingAreaTriggerDestinationMapId = pendingAreaTriggerDestinationMapId_;
     const glm::vec3 pendingAreaTriggerDestinationServerPos = pendingAreaTriggerDestinationServerPos_;
@@ -2994,12 +2971,6 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         owner_.tabCycleStaleRef() = true;
         owner_.resetCastState();
 
-        const bool deeprunTram = owner_.getCurrentMapId() == 369;
-        owner_.activeAreaTriggersRef().clear();
-        owner_.areaTriggerCheckTimerRef() = deeprunTram ? -1.0f : -5.0f;
-        owner_.areaTriggerSuppressFirstRef() = true;
-        owner_.areaTriggerCooldownRef() = deeprunTram ? 1.5f : 10.0f;
-
         if (owner_.getSocket()) {
             network::Packet ack(wireOpcode(Opcode::MSG_MOVE_WORLDPORT_ACK));
             owner_.getSocket()->send(ack);
@@ -3070,11 +3041,6 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     owner_.clearGossipPois();
     owner_.worldStateMapIdRef() = mapId;
     owner_.worldStateZoneIdRef() = 0;
-    owner_.activeAreaTriggersRef().clear();
-    const bool deeprunTram = mapId == 369;
-    owner_.areaTriggerCheckTimerRef() = deeprunTram ? -1.0f : -5.0f;
-    owner_.areaTriggerSuppressFirstRef() = true;
-    owner_.areaTriggerCooldownRef() = deeprunTram ? 1.5f : 10.0f;
     owner_.stopAutoAttack();
     if (auto* combat = owner_.getCombatHandler()) combat->forgetAttack();
     owner_.resetCastState();
@@ -4076,294 +4042,41 @@ void MovementHandler::loadAreaTriggerDbc() {
 void MovementHandler::checkAreaTriggers() {
     if (!owner_.isInWorld()) return;
     if (onTaxiFlight_ || taxiClientActive_) return;
+    // The player's object there, and alive (0x006dbe30): not between two maps.
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (!player || !player->isUnit() || static_cast<int32_t>(static_cast<const Unit&>(*player).getHealth()) <= 0) return;
 
     loadAreaTriggerDbc();
-    if (owner_.areaTriggersRef().empty()) return;
-
-    const float px = movementInfo.x;
-    const float py = movementInfo.y;
-    const float pz = movementInfo.z;
 
     // Sanity: if position is near map origin on Eastern Kingdoms (map 0),
     // something has corrupted movementInfo - skip area trigger check to
     // avoid firing Alterac/Hillsbrad triggers and causing a rogue teleport.
-    if (isCorruptOriginPosition(owner_.getCurrentMapId(), px, py, pz)) {
-        if (!restoreWorldTransferFallbackIfNearOrigin("checkAreaTriggers")) {
-            LOG_WARNING("checkAreaTriggers: position near map origin (", px, ", ", py, ", ", pz,
-                        ") on map 0 - skipping to avoid rogue teleport. onTransport=",
-                        owner_.isOnTransport(), " transportGuid=0x", std::hex,
-                        owner_.playerTransportGuidRef(), std::dec);
-            return;
-        }
+    if (isCorruptOriginPosition(owner_.getCurrentMapId(), movementInfo.x, movementInfo.y, movementInfo.z) &&
+        !restoreWorldTransferFallbackIfNearOrigin("checkAreaTriggers")) {
+        LOG_WARNING("checkAreaTriggers: position near map origin (", movementInfo.x, ", ", movementInfo.y, ", ",
+                    movementInfo.z, ") on map 0 - skipping to avoid rogue teleport. onTransport=",
+                    owner_.isOnTransport(), " transportGuid=0x", std::hex, owner_.playerTransportGuidRef(), std::dec);
+        return;
     }
 
-    const float checkedPx = movementInfo.x;
-    const float checkedPy = movementInfo.y;
-    const float checkedPz = movementInfo.z;
-
-    // Swept-path samples: also test points between the previous check position
-    // and the current one, so fast (mounted) movement cannot step across a
-    // small portal box between 0.25s polls - the Deeprun entrance trigger only
-    // fired intermittently when ridden into at mount speed.
-    glm::vec3 sweepSamples[10];
-    int sweepCount = 0;
-    {
-        const glm::vec3 cur(checkedPx, checkedPy, checkedPz);
-        const bool sameMap = lastAreaTriggerCheckValid_ &&
-                             lastAreaTriggerCheckMapId_ == owner_.currentMapIdRef();
-        if (sameMap) {
-            const glm::vec3 d = cur - lastAreaTriggerCheckPos_;
-            const float movedSq = d.x * d.x + d.y * d.y + d.z * d.z;
-            // Skip sweep on teleport-sized jumps; only bridge normal movement.
-            if (movedSq > 1.0f && movedSq < 50.0f * 50.0f) {
-                const float moved = std::sqrt(movedSq);
-                const int steps = std::min(8, static_cast<int>(moved));
-                for (int s = 1; s <= steps; ++s) {
-                    const float t = static_cast<float>(s) / static_cast<float>(steps + 1);
-                    sweepSamples[sweepCount++] = lastAreaTriggerCheckPos_ + d * t;
-                }
-            }
-        }
-        sweepSamples[sweepCount++] = cur;
-        lastAreaTriggerCheckPos_ = cur;
-        lastAreaTriggerCheckMapId_ = owner_.currentMapIdRef();
-        lastAreaTriggerCheckValid_ = true;
+    const auto* at = areaTriggerWatch_.check(owner_.areaTriggersRef(), owner_.currentMapIdRef(), movementInfo.x,
+                                             movementInfo.y, movementInfo.z);
+    if (!at) return;
+    // Where the mover is goes first (0x00724e70(0xee)): the server had it where
+    // it last heard of it, up to half a second back and out of the trigger, and
+    // a portal run into led nowhere.
+    sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+    network::Packet pkt(wireOpcode(Opcode::CMSG_AREATRIGGER));
+    pkt.writeUInt32(at->id);
+    lastAreaTriggerId_ = at->id;
+    if (const auto* dest = findKnownAreaTriggerDestinationByTrigger(at->id)) {
+        pendingAreaTriggerDestinationValid_ = true;
+        pendingAreaTriggerDestinationMapId_ = dest->mapId;
+        pendingAreaTriggerDestinationServerPos_ = glm::vec3(dest->serverX, dest->serverY, dest->serverZ);
+        pendingAreaTriggerDestinationServerO_ = dest->serverO;
     }
-
-    // Time-based cooldown after teleport/world entry - suppress ALL trigger
-    // firing (not just the first check) to prevent re-entry from immediately
-    // sending us to a wrong destination.
-    const bool cooldownActive = owner_.areaTriggerCooldownRef() > 0.0f;
-
-    // On first check after map transfer, just mark which triggers we're inside
-    // without firing them - prevents exit portal from immediately sending us back
-    bool suppressFirst = owner_.areaTriggerSuppressFirstRef();
-    if (suppressFirst) {
-        owner_.areaTriggerSuppressFirstRef() = false;
-    }
-
-    for (const auto& at : owner_.areaTriggersRef()) {
-        if (at.mapId != owner_.currentMapIdRef()) continue;
-
-        auto insideTrigger = [&at](float qx, float qy, float qz) -> bool {
-            if (at.radius > 0.0f) {
-                // Sphere trigger - use actual DBC radius
-                float dx = qx - at.x;
-                float dy = qy - at.y;
-                float dz = qz - at.z;
-                float distSq = dx * dx + dy * dy + dz * dz;
-                return distSq <= at.radius * at.radius;
-            }
-            if (at.boxLength > 0.0f || at.boxWidth > 0.0f || at.boxHeight > 0.0f) {
-                // Box trigger. AreaTrigger.dbc stores box axes in server-space
-                // X/Y. The trigger center is cached in canonical space, so swap
-                // deltas back to server-space before applying length/width/yaw.
-                float serverDx = qy - at.y;
-                float serverDy = qx - at.x;
-                float dz = qz - at.z;
-
-                // Rotate into box-local space
-                float cosYaw = std::cos(-at.boxYaw);
-                float sinYaw = std::sin(-at.boxYaw);
-                float localX = serverDx * cosYaw - serverDy * sinYaw;
-                float localY = serverDx * sinYaw + serverDy * cosYaw;
-
-                return std::abs(localX) <= at.boxLength * 0.5f &&
-                       std::abs(localY) <= at.boxWidth * 0.5f &&
-                       std::abs(dz) <= at.boxHeight * 0.5f;
-            }
-            return false;
-        };
-
-        bool inside = false;
-        for (int s = 0; s < sweepCount && !inside; ++s) {
-            inside = insideTrigger(sweepSamples[s].x, sweepSamples[s].y, sweepSamples[s].z);
-        }
-
-        // Near misses, once per trigger. A trigger that does not fire looks
-        // exactly like a trigger that is not there, and the difference is a
-        // number nobody can see: the sphere test is three-dimensional, so
-        // standing on top of something with the right x and y and the wrong z
-        // is outside it. Quest objectives that complete by walking somewhere
-        // fail this way and say nothing at all.
-        if (!inside && !nearMissLogged_.count(at.id)) {
-            const float dx = checkedPx - at.x;
-            const float dy = checkedPy - at.y;
-            const float dz = checkedPz - at.z;
-            const float flat = std::sqrt(dx * dx + dy * dy);
-            const float extent = (at.radius > 0.0f)
-                ? at.radius
-                : std::max(at.boxLength, at.boxWidth) * 0.5f;
-            // Walked past, not stood on. The margin used to be zero - the
-            // player had to be inside the trigger's own flat extent for this
-            // to say anything - and a portal box is three yards across, so
-            // "I walked into it and nothing happened" was never the case this
-            // reported. A few yards either side is what walking through one
-            // looks like when the test refuses it.
-            constexpr float kNearMissMargin = 5.0f;
-            if (extent > 0.0f && flat <= extent + kNearMissMargin) {
-                nearMissLogged_.insert(at.id);
-                if (at.radius > 0.0f) {
-                    LOG_WARNING("AreaTrigger near miss: AT", at.id,
-                                " sphere r=", at.radius,
-                                " flat=", flat, " dz=", dz,
-                                " dist=", std::sqrt(dx * dx + dy * dy + dz * dz),
-                                " (player=(", checkedPx, ", ", checkedPy, ", ", checkedPz,
-                                ") trigger=(", at.x, ", ", at.y, ", ", at.z, "))");
-                } else {
-                    // The same rotation the test itself makes, so the numbers
-                    // printed are the ones it compared: which of the three
-                    // axes refused it, and by how much.
-                    const float serverDx = checkedPy - at.y;
-                    const float serverDy = checkedPx - at.x;
-                    const float cosYaw = std::cos(-at.boxYaw);
-                    const float sinYaw = std::sin(-at.boxYaw);
-                    const float localX = serverDx * cosYaw - serverDy * sinYaw;
-                    const float localY = serverDx * sinYaw + serverDy * cosYaw;
-                    LOG_WARNING("AreaTrigger near miss: AT", at.id,
-                                " box=(", at.boxLength, ", ", at.boxWidth, ", ", at.boxHeight,
-                                ") yaw=", at.boxYaw,
-                                " |local|=(", std::abs(localX), ", ", std::abs(localY),
-                                ", ", std::abs(dz), ")",
-                                " half=(", at.boxLength * 0.5f, ", ", at.boxWidth * 0.5f,
-                                ", ", at.boxHeight * 0.5f, ")",
-                                " (player=(", checkedPx, ", ", checkedPy, ", ", checkedPz,
-                                ") trigger=(", at.x, ", ", at.y, ", ", at.z, "))");
-                }
-            }
-        }
-
-        if (inside) {
-            if (owner_.activeAreaTriggersRef().count(at.id) == 0) {
-                const bool suppressCurrentTrigger =
-                    suppressFirst || cooldownActive || postTransferReturnAreaTriggerId_ == at.id;
-                if (suppressFirst) {
-                    // If we spawn already inside a portal trigger, arm it as
-                    // active so cooldown expiry cannot immediately bounce us
-                    // back through the destination portal. The player must
-                    // leave and re-enter before it can fire.
-                    if (postTransferReturnAreaTriggerId_ == at.id) {
-                        postTransferReturnAreaTriggerSawNear_ = true;
-                    }
-                    owner_.activeAreaTriggersRef().insert(at.id);
-                    LOG_INFO("AreaTrigger armed on post-transfer spawn: AT", at.id,
-                                " cooldown=", owner_.areaTriggerCooldownRef());
-                } else if (postTransferReturnAreaTriggerId_ == at.id) {
-                    // After a map transfer, the destination can place or
-                    // nudge the player into the paired return trigger after
-                    // the normal grace window has elapsed. Arm that trigger
-                    // until the player leaves it once; a later re-entry can
-                    // then intentionally fire it.
-                    postTransferReturnAreaTriggerSawNear_ = true;
-                    owner_.activeAreaTriggersRef().insert(at.id);
-                    LOG_WARNING("AreaTrigger armed for post-transfer return portal: AT", at.id,
-                                " cooldown=", owner_.areaTriggerCooldownRef());
-                } else if (cooldownActive) {
-                    // Do not mark ordinary cooldown-suppressed triggers active.
-                    // If the player walks into a trigger during the cooldown,
-                    // it should fire once the grace window ends.
-                    //
-                    // Said out loud rather than at debug level. From the chair
-                    // a suppressed portal and a portal that does not work are
-                    // the same thing - the player walks in and nothing
-                    // happens - and the window is ten seconds, which is long
-                    // enough to walk into one after arriving.
-                    LOG_WARNING("AreaTrigger cooldown suppressed: AT", at.id,
-                                " cooldown=", owner_.areaTriggerCooldownRef(),
-                                "s left - the player is inside it and it will "
-                                "not fire until they leave and re-enter");
-                } else {
-                    owner_.activeAreaTriggersRef().insert(at.id);
-                }
-
-                if (suppressCurrentTrigger) {
-                    // Suppressed above; if suppressFirst inserted the trigger,
-                    // it will not fire until the player leaves/re-enters.
-                } else {
-                    network::Packet pkt(wireOpcode(Opcode::CMSG_AREATRIGGER));
-                    pkt.writeUInt32(at.id);
-                    lastAreaTriggerId_ = at.id;
-                    if (const auto* dest = findKnownAreaTriggerDestinationByTrigger(at.id)) {
-                        pendingAreaTriggerDestinationValid_ = true;
-                        pendingAreaTriggerDestinationMapId_ = dest->mapId;
-                        pendingAreaTriggerDestinationServerPos_ =
-                            glm::vec3(dest->serverX, dest->serverY, dest->serverZ);
-                        pendingAreaTriggerDestinationServerO_ = dest->serverO;
-                    }
-                    owner_.getSocket()->send(pkt);
-                    const float dx = checkedPx - at.x;
-                    const float dy = checkedPy - at.y;
-                    LOG_WARNING("Fired CMSG_AREATRIGGER: id=", at.id,
-                                " pos=(", checkedPx, ", ", checkedPy, ", ", checkedPz, ")",
-                                " trigger=(", at.x, ", ", at.y, ", ", at.z, ")",
-                                " dist2d=", std::sqrt(dx * dx + dy * dy));
-                }
-            }
-        } else {
-            if (postTransferReturnAreaTriggerId_ == at.id) {
-                const float dx = checkedPx - at.x;
-                const float dy = checkedPy - at.y;
-                const float dz = checkedPz - at.z;
-                const float distSq = dx * dx + dy * dy + dz * dz;
-                const float triggerExtent = std::max({
-                    at.radius,
-                    at.boxLength * 0.5f,
-                    at.boxWidth * 0.5f,
-                    at.boxHeight * 0.5f,
-                    12.0f
-                });
-                const float clearDistance = triggerExtent + 8.0f;
-                if (distSq <= clearDistance * clearDistance) {
-                    postTransferReturnAreaTriggerSawNear_ = true;
-                    // A single outside sample near a destination portal is not
-                    // enough to prove the player intentionally left it. Deeprun
-                    // can report one outside tick and then drift back inside,
-                    // which causes an immediate bounce. Keep the return portal
-                    // armed until the player is comfortably clear.
-                    owner_.activeAreaTriggersRef().insert(at.id);
-                    LOG_DEBUG("AreaTrigger post-transfer return portal retained near trigger: AT", at.id,
-                              " dist=", std::sqrt(distSq),
-                              " clear=", clearDistance);
-                    continue;
-                }
-
-                // Only while the post-transfer window is still open. The
-                // distance test alone never expires: a player who has not been
-                // near the portal and is far from it stays that way, so the
-                // guard held for the rest of the session and that portal could
-                // never be used again.
-                //
-                // Dying inside is exactly that shape. The release teleports the
-                // player to a graveyard nowhere near the portal they came
-                // through, without ever standing at it, so walking back as a
-                // ghost was suppressed every time. The cooldown is ten seconds
-                // and a destination position arrives in one, so anything still
-                // far away after it has genuinely left.
-                if (!postTransferReturnAreaTriggerSawNear_ && distSq > 1000.0f * 1000.0f &&
-                    owner_.areaTriggerCooldownRef() > 0.0f) {
-                    // During map transfer there can be a tick where the current
-                    // map has switched but movementInfo still contains the old
-                    // map's coordinates. That looks thousands of yards away
-                    // from the destination trigger and must not clear the guard
-                    // before the destination position arrives.
-                    owner_.activeAreaTriggersRef().insert(at.id);
-                    // Fires every frame for the brief window between a map switch and
-                    // the destination position arriving - routine, not exceptional.
-                    LOG_DEBUG("AreaTrigger post-transfer return portal waiting for destination position: AT",
-                                at.id, " dist=", std::sqrt(distSq));
-                    continue;
-                }
-
-                postTransferReturnAreaTriggerId_ = 0;
-                postTransferReturnAreaTriggerSawNear_ = false;
-                LOG_INFO("AreaTrigger post-transfer return portal cleared after leaving: AT", at.id,
-                            " dist=", std::sqrt(distSq));
-            }
-
-            // Player left the trigger - allow re-fire on re-entry
-            owner_.activeAreaTriggersRef().erase(at.id);
-        }
-    }
+    owner_.getSocket()->send(pkt);
+    LOG_INFO("CMSG_AREATRIGGER: id=", at->id, " pos=(", movementInfo.x, ", ", movementInfo.y, ", ", movementInfo.z, ")");
 }
 
 // ============================================================

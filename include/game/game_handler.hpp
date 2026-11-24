@@ -5809,13 +5809,9 @@ public:
     auto& homeBindPosRef() { return homeBindPos_; }
 
     // ── Area Triggers ────────────────────────────────────────────────
-    auto& activeAreaTriggersRef() { return activeAreaTriggers_; }
-    auto& areaTriggerCheckTimerRef() { return areaTriggerCheckTimer_; }
     auto& areaTriggerDbcLoadedRef() { return areaTriggerDbcLoaded_; }
     auto& areaTriggerMsgsRef() { return areaTriggerMsgs_; }
     auto& areaTriggersRef() { return areaTriggers_; }
-    auto& areaTriggerSuppressFirstRef() { return areaTriggerSuppressFirst_; }
-    auto& areaTriggerCooldownRef() { return areaTriggerCooldown_; }
 
     // ── Death & Resurrection ─────────────────────────────────────────
     auto& playerDeadRef() { return playerDead_; }
@@ -6997,10 +6993,7 @@ private:
     // ---- Area trigger detection ----
     bool areaTriggerDbcLoaded_ = false;
     std::vector<AreaTriggerEntry> areaTriggers_;
-    std::unordered_set<uint32_t> activeAreaTriggers_;  // triggers player is currently inside
     float areaTriggerCheckTimer_ = 0.0f;
-    bool areaTriggerSuppressFirst_ = false;  // suppress first check after map transfer
-    float areaTriggerCooldown_ = 0.0f;       // seconds remaining - suppress ALL triggers
 
     // Craft queue: seconds the expired cast bar has waited for SMSG_SPELL_GO
     // (which re-casts the next queued item) before giving up

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/area_trigger_watch.hpp"
 #include "game/world_packets.hpp"
 #include "game/entity.hpp"
 #include "core/coordinates.hpp"
@@ -458,19 +459,12 @@ private:
     // Heartbeat timing
     int heartbeatLogCount_ = 0;  // periodic position audit counter
     uint32_t lastAreaTriggerId_ = 0;
-    uint32_t postTransferReturnAreaTriggerId_ = 0;
+    AreaTriggerWatch areaTriggerWatch_;
     // The last SMSG_TRANSFER_PENDING named a transport: the player goes to
     // the next map on it, and SMSG_NEW_WORLD carries their place on its deck.
     bool transferPendingOnTransport_ = false;
     uint32_t transferPendingTransportEntry_ = 0;
     uint32_t transferPendingTransportMapId_ = 0;
-    // Previous checkAreaTriggers() sample for swept-path testing (canonical
-    // coords). Mounted speed covers ~3 yd per 0.25s check, enough to straddle
-    // small portal boxes when only the instantaneous position is tested.
-    glm::vec3 lastAreaTriggerCheckPos_{0.0f};
-    uint32_t lastAreaTriggerCheckMapId_ = 0xFFFFFFFFu;
-    bool lastAreaTriggerCheckValid_ = false;
-    bool postTransferReturnAreaTriggerSawNear_ = false;
     bool pendingAreaTriggerDestinationValid_ = false;
     uint32_t pendingAreaTriggerDestinationMapId_ = 0;
     glm::vec3 pendingAreaTriggerDestinationServerPos_{0.0f};
@@ -517,8 +511,6 @@ private:
     bool taxiWindowOpen_ = false;
     ShowTaxiNodesData currentTaxiData_;
     uint64_t taxiNpcGuid_ = 0;
-    /// Triggers already reported as a near miss, so the log says it once.
-    std::set<uint32_t> nearMissLogged_;
     bool onTaxiFlight_ = false;
     std::string taxiDestName_;
     // Set in activateTaxi(); used by finishClientTaxiFlight() to snap to the

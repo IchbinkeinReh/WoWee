@@ -142,6 +142,8 @@ class SentPackets : public wowee::network::WorldSocket {
 public:
     void send(const wowee::network::Packet& packet) override { sent_.push_back(packet); }
 
+    [[nodiscard]] const std::vector<wowee::network::Packet>& all() const { return sent_; }
+
     // Everything sent with this opcode, oldest first.
     [[nodiscard]] std::vector<wowee::network::Packet> of(Opcode opcode) const {
         std::vector<wowee::network::Packet> found;
