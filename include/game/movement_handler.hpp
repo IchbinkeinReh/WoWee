@@ -65,6 +65,8 @@ public:
     void checkAreaTriggers();
 
     // Transport attachment
+    /// Each vehicle's passengers where it carries them (passengerPlace).
+    void carryVehiclePassengers();
     void setTransportAttachment(uint64_t childGuid, ObjectType type, uint64_t transportGuid,
                                 const glm::vec3& localOffset, bool hasLocalOrientation,
                                 float localOrientation,
@@ -378,6 +380,12 @@ public:
 private:
     TeleportAckGate teleportAck_;
     TeleportAckGate worldportAck_;
+    /// The place in a vehicle each passenger was moved to, as the wire has it.
+    struct SeatOffset {
+        uint64_t vehicle = 0;
+        glm::vec3 offset{0.0f};
+    };
+    std::unordered_map<uint64_t, SeatOffset> seatOffsets_;
     void sendWorldportAck();
     void sendTeleportAck(const TeleportAckGate::Ack& pending);
 

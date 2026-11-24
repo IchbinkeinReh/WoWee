@@ -1,4 +1,5 @@
 #include "game/movement_handler.hpp"
+#include "game/passenger_place.hpp"
 #include "game/mover_mode.hpp"
 #include "game/move_heartbeat.hpp"
 #include "game/transport_route_clock.hpp"
@@ -2391,6 +2392,24 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         if (auto vehicle = owner_.getEntityManager().getEntity(transportGuid)) {
             entity->setPosition(vehicle->getX(), vehicle->getY(), vehicle->getZ(), entity->getOrientation());
         }
+        // Where the move ends in it: the seat's offset.
+        SeatOffset& seat = seatOffsets_[moverGuid];
+        seat = {.vehicle = transportGuid, .offset = glm::vec3(localX, localY, localZ)};
+        if (packet.hasRemaining(5)) {
+            packet.readUInt32();  // the spline's id
+            const uint8_t facing = packet.readUInt8();
+            const size_t facingBytes = facing == 2 ? 12u : facing == 3 ? 8u : facing == 4 ? 4u : 0u;
+            if (facing != 1 && packet.hasRemaining(facingBytes + 4)) {
+                packet.setReadPos(packet.getReadPos() + facingBytes);
+                const uint32_t flags = packet.readUInt32();
+                SplineBlockData spline;
+                if (parseMonsterMoveSplineBody(packet, spline, flags, seat.offset, /*useTbcUncompressedMask=*/false,
+                                               isPreWotlk() ? SplineFlagSet::PreWotlk : SplineFlagSet::Wotlk) &&
+                    spline.hasDest) {
+                    seat.offset = glm::vec3(spline.destination.x, spline.destination.y, spline.destination.z);
+                }
+            }
+        }
         packet.skipAll();
         return;
     }
@@ -4133,7 +4152,46 @@ void MovementHandler::clearTransportAttachment(uint64_t childGuid) {
     owner_.transportAttachmentsRef().erase(childGuid);
 }
 
+void MovementHandler::carryVehiclePassengers() {
+    // A passenger is its place on its vehicle wherever that goes (0x004f4460):
+    // its distance, its click and its sounds were left where it got on.
+    const uint64_t player = owner_.getPlayerGuid();
+    for (const auto& [guid, passenger] : owner_.vehicleRoster().passengers()) {
+        if (guid == player || passenger.vehicleGuid == 0) continue;
+        const auto entity = owner_.getEntityManager().getEntity(guid);
+        const auto vehicle = owner_.getEntityManager().getEntity(passenger.vehicleGuid);
+        if (!entity || !vehicle || !vehicle->isUnit() || entity->isActivelyMoving()) continue;
+        glm::vec3 at(vehicle->getX(), vehicle->getY(), vehicle->getZ());
+        float yaw = vehicle->getOrientation();
+        if (passenger.vehicleGuid == player && owner_.activeMover() == player) {
+            at = glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
+            yaw = movementInfo.orientation;
+        }
+        glm::vec3 offset(0.0f);
+        if (const auto seat = seatOffsets_.find(guid); seat != seatOffsets_.end() &&
+                                                       seat->second.vehicle == passenger.vehicleGuid) {
+            offset = seat->second.offset;
+        } else if (const auto held = owner_.transportAttachmentsRef().find(guid);
+                   held != owner_.transportAttachmentsRef().end() &&
+                   held->second.transportGuid == passenger.vehicleGuid) {
+            // The create block's, as it came.
+            offset = held->second.offsetNeedsTransportResolution
+                         ? held->second.localOffset
+                         : transport_local::toWire(false, held->second.localOffset);
+        }
+        const glm::vec3 place = passengerPlace(at, yaw, offset);
+        const glm::vec3 was(entity->getX(), entity->getY(), entity->getZ());
+        if (glm::dot(place - was, place - was) > 0.0001f)
+            entity->setPosition(place.x, place.y, place.z, entity->getOrientation());
+    }
+    std::erase_if(seatOffsets_, [this](const auto& seat) {
+        const auto passenger = owner_.vehicleRoster().passenger(seat.first);
+        return !passenger || passenger->vehicleGuid != seat.second.vehicle;
+    });
+}
+
 void MovementHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
+    carryVehiclePassengers();
     if (!owner_.getTransportManager() || owner_.transportAttachmentsRef().empty()) {
         return;
     }

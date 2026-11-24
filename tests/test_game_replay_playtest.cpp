@@ -971,3 +971,40 @@ TEST_CASE("the equipment manager hears of every change at once", "[replay][playt
     wowee::network::Packet p = used[0];
     CHECK_FALSE(gh.useEquipmentSet("Mend", false));   // the first is not answered
 }
+
+// The vendors on the player's own mount stayed, for the game, where they got on.
+TEST_CASE("a vehicle's passenger goes where it goes", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kVendor = 0xF130007FF4001520ull;
+    s.receive(UpdateObject().create(kVendor, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    // SMSG_MONSTER_MOVE_TRANSPORT, a stop in seat 1: two yards behind, three up.
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_MONSTER_MOVE_TRANSPORT));
+    p.writePackedGuid(kVendor);
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt8(1);
+    p.writeUInt8(0);
+    p.writeFloat(-2.0f);
+    p.writeFloat(0.0f);
+    p.writeFloat(3.0f);
+    p.writeUInt32(1);
+    p.writeUInt8(1);
+    s.receive(p);
+    auto* mh = s.handler().getMovementHandler();
+    const auto vendor = s.handler().getEntityManager().getEntity(kVendor);
+    REQUIRE(vendor);
+    // Facing north (server +x, canonical +y), then west.
+    auto& move = s.handler().movementInfoRef();
+    move.orientation = wowee::core::coords::serverToCanonicalYaw(0.0f);
+    mh->updateAttachedTransportChildren(0.016f);
+    CHECK(vendor->getX() == Catch::Approx(move.x).margin(0.01f));
+    CHECK(vendor->getY() == Catch::Approx(move.y - 2.0f).margin(0.01f));
+    CHECK(vendor->getZ() == Catch::Approx(move.z + 3.0f).margin(0.01f));
+    move.x += 60.0f;
+    move.y -= 70.0f;
+    move.orientation = wowee::core::coords::serverToCanonicalYaw(1.57079633f);
+    mh->updateAttachedTransportChildren(0.016f);
+    CHECK(vendor->getX() == Catch::Approx(move.x - 2.0f).margin(0.01f));
+    CHECK(vendor->getY() == Catch::Approx(move.y).margin(0.01f));
+}
