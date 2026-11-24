@@ -5746,45 +5746,23 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     // 0x00519df0): THREAT_TOOLTIP with the percentage less a half, rounded
     // (0x007374c0). SetUnit answers 1 only when it wrote this line.
     bool threatShown = false;
-    if (entity && !isPlayer && gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+    if (entity && player) {
         int mode = 3;
         try { mode = std::stoi(wowee::addons::storedCVarValue("threatWarning", "3")); } catch (...) {}
         const bool wanted = mode == 3 || (mode == 1 && gh->isInInstance()) ||
                             (mode == 2 && !gh->getPartyData().members.empty());
-        if (wanted) {
-            lua_getglobal(L, "UnitDetailedThreatSituation");
-            if (lua_isfunction(L, -1)) {
-                lua_pushstring(L, "player");
-                lua_pushstring(L, uidStr.c_str());
-                if (lua_pcall(L, 2, 5, 0) == 0) {
-                    // On the unit's threat list: a threat value, which
-                    // the binding's guess without one leaves at zero.
-                    const double pct = lua_tonumber(L, -3);
-                    if (lua_tonumber(L, -1) > 0.0) {
-                        addLine(formatGlobal(L, globalOr(L, "THREAT_TOOLTIP", "%d%% Threat"),
-                                             {std::to_string(std::lround(pct - 0.5))}),
-                                1.0f, 1.0f, 1.0f);
-                        // In front of it the threat icon, tinted by the
-                        // status (0xad2d70: grey, yellow, orange, red for
-                        // 0 to 3).
-                        static constexpr float kThreatTint[4][3] = {
-                            {0.69f, 0.69f, 0.69f}, {1.0f, 1.0f, 0.467f}, {1.0f, 0.6f, 0.0f}, {1.0f, 0.0f, 0.0f}};
-                        const int status = std::clamp(static_cast<int>(lua_tonumber(L, -4)), 0, 3);
-                        auto& tl = w->tooltipLines.back();
-                        tl.icon = "Interface\\RaidFrame\\UI-RaidFrame-Threat";
-                        tl.iconTint[0] = kThreatTint[status][0];
-                        tl.iconTint[1] = kThreatTint[status][1];
-                        tl.iconTint[2] = kThreatTint[status][2];
-                        tl.iconTint[3] = 1.0f;
-                        threatShown = true;
-                    }
-                    lua_pop(L, 5);
-                } else {
-                    lua_pop(L, 1);
-                }
-            } else {
-                lua_pop(L, 1);
-            }
+        const auto threat = gh->threatSituation(gh->getPlayerGuid(), guid);
+        if (wanted && threat.standing.known) {
+            addLine(formatGlobal(L, globalOr(L, "THREAT_TOOLTIP", "%d%% Threat"),
+                                 {std::to_string(std::lround(threat.scaledPercent - 0.5f))}),
+                    1.0f, 1.0f, 1.0f);
+            // In front of it the threat icon, tinted by the status.
+            const uint32_t tint = game::threatStatusColor(threat.standing.status);
+            auto& tl = w->tooltipLines.back();
+            tl.icon = "Interface\\RaidFrame\\UI-RaidFrame-Threat";
+            for (int i = 0; i < 3; ++i) tl.iconTint[i] = static_cast<float>(tint >> (16 - 8 * i) & 0xff) / 255.0f;
+            tl.iconTint[3] = 1.0f;
+            threatShown = true;
         }
     }
 

@@ -1199,3 +1199,62 @@ TEST_CASE("a death is over where the player's new object lives", "[replay][playt
         CHECK(gh.isPlayerDead());
     }
 }
+
+// Each was raised at once for the first token alone, and with an empty unit for one without any
+// (playtest T60); the list was sorted and its first taken for the victim.
+TEST_CASE("threat events come once a frame, for every token a unit has", "[replay][playtest]") {
+    constexpr uint64_t kMob = 0xF130000001000009ull, kStranger = 0xF130000001000010ull;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    for (const uint64_t guid : {kMob, kStranger})
+        s.receive(UpdateObject().create(guid, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 10}}));
+    gh.setTarget(kMob);
+    gh.setFocus(kMob);
+    std::vector<std::pair<std::string, std::string>> raised;
+    gh.setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event.starts_with("UNIT_THREAT")) raised.emplace_back(event, args.empty() ? "-" : args[0]);
+    });
+    const auto threat = [&](uint64_t mob, uint64_t victim, std::vector<std::pair<uint64_t, uint32_t>> list) {
+        wowee::network::Packet p(wowee::game::wireOpcode(victim ? Opcode::SMSG_HIGHEST_THREAT_UPDATE
+                                                                : Opcode::SMSG_THREAT_UPDATE));
+        p.writePackedGuid(mob);
+        if (victim) p.writePackedGuid(victim);
+        p.writeUInt32(static_cast<uint32_t>(list.size()));
+        for (const auto& [guid, value] : list) {
+            p.writePackedGuid(guid);
+            p.writeUInt32(value);
+        }
+        s.receive(p);
+    };
+    // Another is the victim, the player has more threat than it: high, not tanking.
+    threat(kMob, kGiver, {{kGiver, 100}, {Session::kPlayerGuid, 105}});
+    threat(kMob, 0, {{Session::kPlayerGuid, 106}});
+    threat(kStranger, kGiver, {{kGiver, 100}});
+    CHECK(raised.empty());
+    gh.updateCombatText(0.0f);
+    const auto times = [&](const char* event, const char* unit) {
+        return std::count(raised.begin(), raised.end(), std::pair<std::string, std::string>(event, unit));
+    };
+    CHECK(times("UNIT_THREAT_LIST_UPDATE", "target") == 1);
+    CHECK(times("UNIT_THREAT_LIST_UPDATE", "focus") == 1);
+    CHECK(times("UNIT_THREAT_SITUATION_UPDATE", "player") == 1);
+    CHECK(times("UNIT_THREAT_LIST_UPDATE", "") == 0);
+    CHECK(raised.size() == 3);
+    const auto mine = gh.threatSituation(Session::kPlayerGuid, kMob);
+    CHECK(mine.standing.status == 2);
+    CHECK_FALSE(mine.standing.victim);
+    CHECK(gh.threatSituation(kGiver, kMob).standing.status == 3);
+    CHECK(gh.threatStatus(Session::kPlayerGuid) == 2);
+
+    // Out of sight the list goes, and the player is told.
+    raised.clear();
+    wowee::network::Packet gone(wowee::game::wireOpcode(Opcode::SMSG_DESTROY_OBJECT));
+    gone.writeUInt64(kMob);
+    gone.writeUInt8(0);
+    s.receive(gone);
+    gh.updateCombatText(0.0f);
+    CHECK(times("UNIT_THREAT_SITUATION_UPDATE", "player") == 1);
+    CHECK(gh.threatStatus(Session::kPlayerGuid) == 0);
+    gh.setAddonEventCallback({});
+}

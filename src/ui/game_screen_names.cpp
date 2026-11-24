@@ -817,19 +817,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // (0, 0.53)-(0.555, 0.6), tinted by the player's threat status on
         // the unit (0x007374c0).
         if (threatFlash) {
-            int status = 0;
-            if (const auto* list = gameHandler.getThreatList(guid); list && !list->empty()) {
-                for (size_t i = 0; i < list->size(); ++i) {
-                    if ((*list)[i].victimGuid != playerGuid) continue;
-                    if (i != 0) {
-                        status = 1;
-                    } else {
-                        const uint32_t next = list->size() > 1 ? (*list)[1].threat : 0;
-                        status = list->size() > 1 && next * 11 >= (*list)[0].threat * 10 ? 2 : 3;
-                    }
-                    break;
-                }
-            }
+            const int status = gameHandler.threatSituation(playerGuid, guid).standing.status - 1;
             if (const uint32_t c = un::plateThreatColor(status)) {
                 if (VkDescriptorSet flash = plateTexture(assets, "Interface\\TargetingFrame\\UI-TargetingFrame-Flash.blp")) {
                     const float w = 0.11f * ui, h = 0.029f * ui;

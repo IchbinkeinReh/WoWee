@@ -76,16 +76,6 @@ TEST_CASE("misses show the client's global strings", "[combattext]") {
     CHECK(missFloaterKey(T::MELEE_DAMAGE) == nullptr);
 }
 
-TEST_CASE("threat status as the client keeps it", "[combattext]") {
-    const uint32_t clear[] = {1000, 500};
-    CHECK(clientThreatStatus(clear, 2, 0) == 4);
-    CHECK(clientThreatStatus(clear, 2, 1) == 1);
-    CHECK(clientThreatStatus(clear, 2, 2) == 0);
-    const uint32_t tied[] = {1000, 1000};
-    CHECK(clientThreatStatus(tied, 2, 0) == 3);
-    CHECK(clientThreatStatus(tied, 2, 1) == 2);
-}
-
 TEST_CASE("the threat floater skips 2 to 1 and 3 to 4", "[combattext]") {
     CHECK_FALSE(threatFloaterShown(2, 1));
     CHECK_FALSE(threatFloaterShown(3, 4));

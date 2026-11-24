@@ -4,6 +4,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/combat_text_filter.hpp"
+#include "game/threat_table.hpp"
 #include "game/unit_combat.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "game/game_handler.hpp"
@@ -120,12 +121,66 @@ std::string petSpellNameWithRank(const GameHandler& owner, uint32_t spellId) {
 CombatHandler::CombatHandler(GameHandler& owner)
     : owner_(owner) {}
 
-/// A unit event the client queues for a unit (0x006143f0): raised once for
-/// each unit token that names it, and not at all for a unit without one.
-void CombatHandler::fireUnitEvent(const char* event, uint64_t guid) {
-    if (!owner_.addonEventCallbackRef() || guid == 0) return;
-    for (const auto& unitId : owner_.unitTokensForGuid(guid))
-        owner_.addonEventCallbackRef()(event, {unitId});
+/// 0x006143f0: an event of a unit, queued once however often it comes.
+void CombatHandler::queueUnitEvent(const char* event, uint64_t guid) {
+    if (guid == 0) return;
+    std::pair<uint64_t, std::string> e{guid, event};
+    if (std::find(unitEvents_.begin(), unitEvents_.end(), e) == unitEvents_.end()) unitEvents_.push_back(std::move(e));
+}
+
+/// 0x00614760, once a frame: each is raised for every unit token its unit has
+/// (0x0060bf10), and not at all for a unit without one.
+void CombatHandler::raiseUnitEvents() {
+    const auto events = std::exchange(unitEvents_, {});
+    if (!owner_.addonEventCallbackRef()) return;
+    for (const auto& [guid, event] : events)
+        for (const auto& unitId : owner_.unitTokensForGuid(guid)) owner_.addonEventCallbackRef()(event, {unitId});
+}
+
+/// What a change of `unit`'s threat list calls for (threat_table.hpp).
+void CombatHandler::applyThreatChanges(uint64_t unit, const ThreatTable::Changes& c) {
+    for (const uint64_t guid : c.situations) queueUnitEvent("UNIT_THREAT_SITUATION_UPDATE", guid);
+    if (c.list) queueUnitEvent("UNIT_THREAT_LIST_UPDATE", unit);
+    for (const auto& [before, now] : c.floaters) raiseThreatFloater(unit, before, now);
+    if (!c.sounds.empty() && addons::storedCVarValue("threatPlaySounds", "1") != "0") {
+        if (auto* ac = owner_.services().audioCoordinator)
+            if (auto* sfx = ac->getUiSoundManager())
+                for (const uint32_t id : c.sounds) sfx->playById(id);
+    }
+    // 0x0052b370: the player new to a list while threat is shown and above
+    // level 13, tutorial 0x35.
+    if (std::find(c.joined.begin(), c.joined.end(), owner_.getPlayerGuid()) != c.joined.end() &&
+        threatWarningWanted() && owner_.getPlayerLevel() > 13)
+        owner_.triggerTutorial(0x35);
+}
+
+const ThreatTable* CombatHandler::getThreatTable(uint64_t unit) const {
+    const auto it = threatTables_.find(unit);
+    return it != threatTables_.end() ? &it->second : nullptr;
+}
+
+CombatHandler::ThreatSituation CombatHandler::threatSituation(uint64_t victim, uint64_t unit) const {
+    ThreatSituation out;
+    const auto mob = owner_.getEntityManager().getEntity(unit);
+    const ThreatTable* table = mob && mob->isUnit() ? getThreatTable(unit) : nullptr;
+    if (!table) return out;
+    out.standing = table->standing(victim);
+    bool inReach = false;
+    if (const auto it = owner_.getEntityManager().getEntity(victim); it && it->isUnit()) {
+        const auto& a = static_cast<const Unit&>(*mob);
+        const auto& b = static_cast<const Unit&>(*it);
+        const float reach = click_to_move::meleeReach(a.getCombatReach(), b.getCombatReach());
+        const float dx = a.getX() - b.getX(), dy = a.getY() - b.getY(), dz = a.getZ() - b.getZ();
+        inReach = dx * dx + dy * dy + dz * dz <= reach * reach;
+    }
+    out.scaledPercent = scaledThreatPercent(out.standing, inReach);
+    return out;
+}
+
+uint8_t CombatHandler::threatStatus(uint64_t victim) const {
+    uint8_t worst = 0;
+    for (const auto& [unit, table] : threatTables_) worst = worstThreatStatus(worst, table.standing(victim).status);
+    return worst;
 }
 
 /// The same rule the threat indicator uses, kept in step with it.
@@ -151,57 +206,21 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
     // 0x00756800 hands both of these to 0x006e1660.
     table[Opcode::SMSG_ATTACKSWING_DEADTARGET] = [this](network::Packet& /*packet*/) { stopAutoAttack(); };
     table[Opcode::SMSG_THREAT_CLEAR] = [this](network::Packet& packet) {
-        // 0x00734b00 -> 0x007345c0: the unit's own list, and only while the
-        // unit is in the world and its list has anyone on it. Each victim's
-        // situation is reset and UNIT_THREAT_SITUATION_UPDATE queued for it,
-        // then UNIT_THREAT_LIST_UPDATE for the unit and its threat display
-        // refreshed (0x00512ab0).
+        // 0x00734b00 -> 0x007345c0: a unit in the world.
         if (!packet.hasRemaining(1)) return;
         const uint64_t unitGuid = packet.readPackedGuid();
-        if (!owner_.getEntityManager().getEntity(unitGuid)) return;
-        auto it = threatLists_.find(unitGuid);
-        if (it == threatLists_.end() || it->second.empty()) return;
-        const std::vector<ThreatEntry> victims = std::move(it->second);
-        threatLists_.erase(it);
-        playerTopThreatOn_.erase(unitGuid);
-        playerThreatStatus_.erase(unitGuid);  // reset without a floater (0x0052a160)
-        for (const ThreatEntry& e : victims) fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", e.victimGuid);
-        fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
+        if (owner_.getEntityManager().getEntity(unitGuid)) clearThreat(unitGuid);
     };
     table[Opcode::SMSG_THREAT_REMOVE] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(1)) return;
-        uint64_t unitGuid   = packet.readPackedGuid();
+        const uint64_t unitGuid = packet.readPackedGuid();
         if (!packet.hasRemaining(1)) return;
-        uint64_t victimGuid = packet.readPackedGuid();
-        // 0x00737750: nothing unless the victim is on the unit's list. Its
-        // entry goes and its situation is reset (UNIT_THREAT_SITUATION_UPDATE
-        // for it); the top is picked again where it was the top (0x00737620,
-        // the list here is kept highest first); then UNIT_THREAT_LIST_UPDATE
-        // for the unit.
-        auto it = threatLists_.find(unitGuid);
-        if (it == threatLists_.end()) return;
-        auto& list = it->second;
-        const auto victim = std::find_if(list.begin(), list.end(),
-            [victimGuid](const ThreatEntry& e) { return e.victimGuid == victimGuid; });
-        if (victim == list.end()) return;
-        list.erase(victim);
-        if (list.empty()) threatLists_.erase(it);
-        if (victimGuid == owner_.getPlayerGuid()) {
-            playerTopThreatOn_.erase(unitGuid);
-            playerThreatStatus_.erase(unitGuid);  // reset without a floater (0x0052a160)
-        } else if (const auto left = threatLists_.find(unitGuid); left != threatLists_.end()) {
-            // The top picked again (0x00737620) may move the player's status.
-            std::vector<uint32_t> threats;
-            size_t mine = left->second.size();
-            for (size_t i = 0; i < left->second.size(); ++i) {
-                threats.push_back(left->second[i].threat);
-                if (left->second[i].victimGuid == owner_.getPlayerGuid()) mine = i;
-            }
-            if (mine < threats.size())
-                notePlayerThreatStatus(unitGuid, clientThreatStatus(threats.data(), threats.size(), mine));
-        }
-        fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", victimGuid);
-        fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
+        const uint64_t victimGuid = packet.readPackedGuid();
+        const auto it = threatTables_.find(unitGuid);
+        if (it == threatTables_.end()) return;
+        const auto changes = it->second.remove(victimGuid, owner_.getPlayerGuid());
+        if (it->second.entries().empty()) threatTables_.erase(it);
+        applyThreatChanges(unitGuid, changes);
     };
     // The attack stopped as the player stops it (0x006e2210 -> 0x006e1660).
     table[Opcode::SMSG_CANCEL_COMBAT] = [this](network::Packet& /*packet*/) {
@@ -297,99 +316,25 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         const bool hasVictimGuid = (op == Opcode::SMSG_HIGHEST_THREAT_UPDATE);
         table[op] = [this, hasVictimGuid](network::Packet& packet) {
             if (!packet.hasRemaining(1)) return;
-            uint64_t unitGuid = packet.readPackedGuid();
+            const uint64_t unitGuid = packet.readPackedGuid();
+            std::optional<uint64_t> victim;
             if (hasVictimGuid) {
                 if (!packet.hasRemaining(1)) return;
-                (void)packet.readPackedGuid();  // the new highest-threat target
+                victim = packet.readPackedGuid();
             }
             if (!packet.hasRemaining(4)) return;
-            uint32_t cnt = packet.readUInt32();
-            if (cnt > 100) { packet.skipAll(); return; } // sanity
-            std::vector<ThreatEntry> list;
-            list.reserve(cnt);
+            const uint32_t cnt = packet.readUInt32();
+            std::vector<std::pair<uint64_t, int32_t>> threats;
             for (uint32_t i = 0; i < cnt; ++i) {
                 if (!packet.hasRemaining(1)) return;
-                ThreatEntry entry;
-                entry.victimGuid = packet.readPackedGuid();
+                const uint64_t guid = packet.readPackedGuid();
                 if (!packet.hasRemaining(4)) return;
-                entry.threat = packet.readUInt32();
-                list.push_back(entry);
+                threats.emplace_back(guid, static_cast<int32_t>(packet.readUInt32()));
             }
-            // Sort descending by threat so highest is first
-            std::sort(list.begin(), list.end(),
-                [](const ThreatEntry& a, const ThreatEntry& b){ return a.threat > b.threat; });
-            // Play Aggro Sounds, which the panel offers and nothing read -
-            // here or in the interface. The threat indicator FrameXML draws is
-            // silent by design; in the real client the warning noise is the
-            // client's, which is why nothing in this tree ever made it.
-            //
-            // The sound marks the moment the player becomes the one being
-            // fought, not every update while they are: the list arrives on
-            // every threat change and a warning per packet would be a siren.
-            const bool topNow = !list.empty() &&
-                                list.front().victimGuid == owner_.getPlayerGuid();
-            const bool topBefore = playerTopThreatOn_.count(unitGuid) != 0;
-            if (topNow != topBefore) {
-                if (topNow) playerTopThreatOn_.insert(unitGuid);
-                else        playerTopThreatOn_.erase(unitGuid);
-                // Registered on (0x00510000 "1"), so losing the top of the
-                // threat list makes a noise until the player turns that off.
-                if (topNow && threatWarningWanted() &&
-                    addons::storedCVarValue("threatPlaySounds", "1") != "0") {
-                    // SoundEntries 15262 (0x0071c3b0 plays 0x3b9e).
-                    if (auto* ac = owner_.services().audioCoordinator) {
-                        if (auto* sfx = ac->getUiSoundManager()) sfx->playById(15262);
-                    }
-                }
-            }
-
-            // The player new to this unit's list (0x007416f0 -> 0x0052b370):
-            // with threat warnings on and above level 13, tutorial 0x35.
-            {
-                const uint64_t me = owner_.getPlayerGuid();
-                const auto onList = [me](const std::vector<ThreatEntry>& l) {
-                    return std::any_of(l.begin(), l.end(), [me](const ThreatEntry& e) { return e.victimGuid == me; });
-                };
-                const auto old = threatLists_.find(unitGuid);
-                const bool before = old != threatLists_.end() && onList(old->second);
-                if (!before && onList(list) && threatWarningWanted() && owner_.getPlayerLevel() > 13)
-                    owner_.triggerTutorial(0x35);
-            }
-            threatLists_[unitGuid] = std::move(list);
-            {
-                // The player's status on the unit, as the client keeps it, for
-                // its threat floater (0x0071c3b0, 0x00737620).
-                const auto& l = threatLists_[unitGuid];
-                std::vector<uint32_t> threats;
-                threats.reserve(l.size());
-                size_t mine = l.size();
-                for (size_t i = 0; i < l.size(); ++i) {
-                    threats.push_back(l[i].threat);
-                    if (l[i].victimGuid == owner_.getPlayerGuid()) mine = i;
-                }
-                notePlayerThreatStatus(unitGuid, clientThreatStatus(threats.data(), threats.size(), mine));
-            }
-            if (!owner_.addonEventCallbackRef()) return;
-            auto fire = owner_.addonEventCallbackRef();
-            // The list changed, and separately: whether each unit on it is
-            // tanking. They are different events and unit frames read the
-            // second one - UnitFrameThreatIndicator_OnEvent is registered for
-            // UNIT_THREAT_SITUATION_UPDATE alone, and it is what puts the aggro
-            // border on a frame. It was never fired, so no frame ever showed
-            // one, and the list it would have been read from was misparsed
-            // anyway.
-            fire("UNIT_THREAT_LIST_UPDATE", {owner_.guidToUnitId(unitGuid)});
-            // Named per unit, because the indicator compares the argument
-            // against its own frame's unit and ignores anything else. Every
-            // unit on the list that the interface has a token for, plus the mob
-            // itself - a target frame's indicator is fed by the player's
-            // situation against the target, so both ends have to be told.
-            for (const ThreatEntry& e : threatLists_[unitGuid]) {
-                const std::string who = owner_.guidToUnitId(e.victimGuid);
-                if (!who.empty()) fire("UNIT_THREAT_SITUATION_UPDATE", {who});
-            }
-            if (const std::string mob = owner_.guidToUnitId(unitGuid); !mob.empty())
-                fire("UNIT_THREAT_SITUATION_UPDATE", {mob});
+            // 0x00741c90: a unit that is not in the world has no list.
+            const auto mob = owner_.getEntityManager().getEntity(unitGuid);
+            if (!mob || !mob->isUnit()) return;
+            applyThreatChanges(unitGuid, threatTables_[unitGuid].update(victim, threats, owner_.getPlayerGuid()));
         };
     }
 
@@ -851,12 +796,15 @@ void CombatHandler::addInterruptFloater(uint64_t unit, uint64_t caster, uint32_t
     addMechanicFloater(unit, caster, it->second.attrEx6, 26);
 }
 
-void CombatHandler::notePlayerThreatStatus(uint64_t unit, int now) {
-    int& was = playerThreatStatus_[unit];
-    const int before = was;
-    was = now;
-    if (now == 0) playerThreatStatus_.erase(unit);
-    if (before == now) return;
+void CombatHandler::clearThreat(uint64_t unit) {
+    const auto it = threatTables_.find(unit);
+    if (it == threatTables_.end()) return;
+    const auto changes = it->second.clear();
+    threatTables_.erase(it);
+    applyThreatChanges(unit, changes);
+}
+
+void CombatHandler::raiseThreatFloater(uint64_t unit, int before, int now) {
     // 0x00719220: while threat warnings apply and threatWorldText is on.
     if (!threatWarningWanted() || addons::storedCVarValue("threatWorldText", "1") == "0") return;
     if (!threatFloaterShown(before, now)) return;
@@ -1204,6 +1152,8 @@ void CombatHandler::forgetAttack() {
 void CombatHandler::resetAllCombatState() {
     hostileAttackers_.clear();
     unitMeleeTargets_.clear();
+    threatTables_.clear();
+    unitEvents_.clear();
     combatText_.clear();
     forgetAttack();
     lastMeleeSwingMs_ = 0;
@@ -1984,6 +1934,7 @@ void CombatHandler::forgetUnit(uint64_t guid) {
 }
 
 void CombatHandler::unitLeavesView(uint64_t guid) {
+    clearThreat(guid);   // 0x00734fd0
     const bool group = isGroupMemberGuid(guid);
     bool duel = false;
     if (group) {

@@ -2639,7 +2639,9 @@ bool GameHandler::shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGu
 }
 
 void GameHandler::updateCombatText(float deltaTime) {
-    if (combatHandler_) combatHandler_->updateCombatText(deltaTime);
+    if (!combatHandler_) return;
+    combatHandler_->updateCombatText(deltaTime);
+    combatHandler_->raiseUnitEvents();
 }
 
 bool GameHandler::isAutoAttacking() const {
@@ -2696,12 +2698,16 @@ void GameHandler::clearHostileAttackers() {
     if (combatHandler_) combatHandler_->clearHostileAttackers();
 }
 
-const std::vector<GameHandler::ThreatEntry>* GameHandler::getThreatList(uint64_t unitGuid) const {
-    return combatHandler_ ? combatHandler_->getThreatList(unitGuid) : nullptr;
+const ThreatTable* GameHandler::getThreatTable(uint64_t unit) const {
+    return combatHandler_ ? combatHandler_->getThreatTable(unit) : nullptr;
 }
 
-const std::vector<GameHandler::ThreatEntry>* GameHandler::getTargetThreatList() const {
-    return targetGuid ? getThreatList(targetGuid) : nullptr;
+CombatHandler::ThreatSituation GameHandler::threatSituation(uint64_t victim, uint64_t unit) const {
+    return combatHandler_ ? combatHandler_->threatSituation(victim, unit) : CombatHandler::ThreatSituation{};
+}
+
+uint8_t GameHandler::threatStatus(uint64_t victim) const {
+    return combatHandler_ ? combatHandler_->threatStatus(victim) : uint8_t{0};
 }
 
 bool GameHandler::isHostileAttacker(uint64_t guid) const {

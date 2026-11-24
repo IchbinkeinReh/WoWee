@@ -2,6 +2,7 @@
 
 #include "game/melee_landing.hpp"
 #include "game/auto_attack.hpp"
+#include "game/threat_table.hpp"
 #include "game/tutorials.hpp"
 
 #include "game/world_packets.hpp"
@@ -73,14 +74,17 @@ public:
     void clearCombatLog() { combatLog_.clear(); }
 
     // Threat
-    struct ThreatEntry {
-        uint64_t victimGuid = 0;
-        uint32_t threat     = 0;
+    [[nodiscard]] const ThreatTable* getThreatTable(uint64_t unit) const;
+    /// How one stands on a unit's list, and how near it is to being the victim.
+    struct ThreatSituation {
+        ThreatTable::Standing standing;
+        float scaledPercent = 0.0f;
     };
-    [[nodiscard]] const std::vector<ThreatEntry>* getThreatList(uint64_t unitGuid) const {
-        auto it = threatLists_.find(unitGuid);
-        return (it != threatLists_.end()) ? &it->second : nullptr;
-    }
+    [[nodiscard]] ThreatSituation threatSituation(uint64_t victim, uint64_t unit) const;
+    /// One's status over every list it is on (0x0052a1a0).
+    [[nodiscard]] uint8_t threatStatus(uint64_t victim) const;
+    /// The unit events queued since the last frame (0x00614760).
+    void raiseUnitEvents();
 
     // Hostile attacker tracking
     [[nodiscard]] bool isHostileAttacker(uint64_t guid) const { return hostileAttackers_.count(guid) > 0; }
@@ -271,17 +275,13 @@ private:
 
     uint64_t lastMeleeSwingMs_ = 0;
 
-    // unitGuid → sorted threat list (descending by threat value)
-    std::unordered_map<uint64_t, std::vector<ThreatEntry>> threatLists_;
-    /// Which mobs the player is currently top of the threat list for, so the
-    /// aggro warning sounds on becoming that rather than on every update that
-    /// says they still are. See the threat update handler.
-    std::unordered_set<uint64_t> playerTopThreatOn_;
-    /// The player's threat status on each unit's list, as the client keeps
-    /// it (combat_text_filter.hpp clientThreatStatus), for the threat floater.
-    std::unordered_map<uint64_t, int> playerThreatStatus_;
+    /// The threat lists of the units in the world, by unit.
+    std::unordered_map<uint64_t, ThreatTable> threatTables_;
+    void applyThreatChanges(uint64_t unit, const ThreatTable::Changes& c);
+    void clearThreat(uint64_t unit);
     /// 0x00719220 for the player's status on `unit` moving to `now`.
-    void notePlayerThreatStatus(uint64_t unit, int now);
+    void raiseThreatFloater(uint64_t unit, int before, int now);
+    std::vector<std::pair<uint64_t, std::string>> unitEvents_;
     /// 0x007190a0: whose a line is.
     [[nodiscard]] int floaterSourceOf(uint64_t src, bool isPlayerSource) const;
     void addMechanicFloater(uint64_t unit, uint64_t caster, uint32_t spellAttrEx6, uint32_t mechanicId);
@@ -289,7 +289,7 @@ private:
     /// question IsThreatWarningEnabled answers for the indicator, asked from
     /// C++ so the sound and the picture agree about when they are wanted.
     [[nodiscard]] bool threatWarningWanted() const;
-    void fireUnitEvent(const char* event, uint64_t guid);
+    void queueUnitEvent(const char* event, uint64_t guid);
 
     // Forced faction reactions
     std::unordered_map<uint32_t, uint8_t> forcedReactions_;

@@ -593,7 +593,14 @@ void CombatUI::renderCombatLog(game::GameHandler& gameHandler,
 void CombatUI::renderThreatWindow(game::GameHandler& gameHandler) {
     if (!showThreatWindow_) return;
 
-    const auto* list = gameHandler.getTargetThreatList();
+    // Highest first, as the window lists them.
+    struct Row { uint64_t victimGuid; uint32_t threat; };
+    std::vector<Row> rows;
+    if (const auto* table = gameHandler.getThreatTable(gameHandler.getTargetGuid()))
+        for (const auto& e : table->entries())
+            rows.push_back({e.victim, static_cast<uint32_t>(std::max(e.threat, 0))});
+    std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.threat > b.threat; });
+    const auto* list = &rows;
 
     ImGui::SetNextWindowSize(ImVec2(280, 220), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(10, 300), ImGuiCond_FirstUseEver);
@@ -605,7 +612,7 @@ void CombatUI::renderThreatWindow(game::GameHandler& gameHandler) {
         return;
     }
 
-    if (!list || list->empty()) {
+    if (list->empty()) {
         ImGui::TextDisabled("No threat data for current target.");
         ImGui::End();
         return;

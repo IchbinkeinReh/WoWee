@@ -148,25 +148,6 @@ inline const char* missFloaterKey(CombatTextEntry::Type type) {
     }
 }
 
-/// A victim's threat status on a unit's list as the client keeps it (+0x28 of
-/// the entry): 0 off the list; the unit's top (0x00737620) 4, or 3 while
-/// another entry stands at 2; anyone else 2 with threat at least the top's,
-/// else 1 (0x0071c3b0: the percentage of the top's threat, 100 when the top
-/// has none). `threats` is the list highest first.
-inline int clientThreatStatus(const uint32_t* threats, size_t count, size_t index) {
-    if (index >= count) return 0;
-    const uint32_t top = threats[0];
-    const auto pct = [&](size_t i) -> int64_t {
-        if (top == 0) return 100;
-        const int64_t v = static_cast<int64_t>(threats[i]) * 100 / static_cast<int64_t>(top);
-        return v > 250 ? 250 : v;
-    };
-    if (index != 0) return pct(index) >= 100 ? 2 : 1;
-    for (size_t i = 1; i < count; ++i)
-        if (pct(i) >= 100) return 3;
-    return 4;
-}
-
 /// Whether the threat floater (0x00719220) shows for a status moving from
 /// `before` to `now` (its callers raise it only on a change): not for 2 -> 1
 /// nor 3 -> 4. Its text is the global string COMBAT_THREAT_INCREASE_<now>
