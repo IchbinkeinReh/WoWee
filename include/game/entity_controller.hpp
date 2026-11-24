@@ -366,6 +366,7 @@ private:
     void onCreateGameObject(const UpdateBlock& block, std::shared_ptr<Entity>& entity);
     void onCreateItem(const UpdateBlock& block, bool& newItemCreated);
     void onCreateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity);
+    void corpseGone(uint64_t guid);
     void onValuesUpdateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity);
     /// Draws a corpse from its fields (0x00705670, 0x00705b20); false when
     /// the field layout does not have them.

@@ -2805,21 +2805,8 @@ public:
     /// first - the console's changePlayerDifficulty (0x0052d060).
     void sendChangePlayerDifficulty(uint32_t difficulty);
 
-    /** True when ghost is within 40 yards of corpse position (same map). */
-    bool canReclaimCorpse() const;
     /** Seconds remaining on the PvP corpse-reclaim delay, or 0 if the reclaim is available now. */
     float getCorpseReclaimDelaySec() const;
-    /** Distance (yards) from ghost to corpse, or -1 if no corpse data. */
-    float getCorpseDistance() const {
-        if (!corpsePositionValid_ || currentMapId_ != corpseMapId_) return -1.0f;
-        // movementInfo is canonical (x=north=server_y, y=west=server_x);
-        // corpse coords are raw server (x=west, y=north) - swap to compare.
-        const glm::vec3 corpse = corpseServerPos();
-        float dx = movementInfo.x - corpse.y;
-        float dy = movementInfo.y - corpse.x;
-        float dz = movementInfo.z - corpse.z;
-        return std::sqrt(dx*dx + dy*dy + dz*dz);
-    }
     /** Corpse position in canonical WoW coords (X=north, Y=west).
      *  Returns false if no corpse data or on a different map. */
     bool getCorpseCanonicalPos(float& outX, float& outY) const {
@@ -2835,7 +2822,7 @@ public:
     /// the one SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE gave, asked for at most
     /// every thirty seconds.
     [[nodiscard]] glm::vec3 corpseServerPos() const;
-    /** Send CMSG_RECLAIM_CORPSE; noop if not a ghost or not near corpse. */
+    /** CMSG_RECLAIM_CORPSE (0x0051b800). */
     void reclaimCorpse();
     void releaseSpirit();
     void acceptResurrect();
@@ -5806,13 +5793,17 @@ public:
 
     // ── Corpse & Home Bind ───────────────────────────────────────────
     auto& corpseGuidRef() { return corpseGuid_; }
-    auto& corpseMapIdRef() { return corpseMapId_; }
-    auto& corpsePositionValidRef() { return corpsePositionValid_; }
+    /// 0x00524a30, as the ghost flag changes (0x006df710) and as a world is
+    /// entered (0x00528010): where the corpse lies is forgotten, and a ghost
+    /// asks for it (MSG_CORPSE_QUERY). Whether the player was at it, which
+    /// CORPSE_OUT_OF_RANGE follows.
+    bool refreshCorpsePlace();
+    /// 0x00523db0 with no map: no corpse on the map or the minimap. The same.
+    bool forgetCorpsePlace();
+    /// 0x0051f690 with no map: no graveyard named, as the ghost comes back to
+    /// life (0x006df710) and as a world is entered.
+    void forgetDeathRelease() { deathReleaseValid_ = false; }
     auto& corpseReclaimAvailableMsRef() { return corpseReclaimAvailableMs_; }
-    auto& corpseXRef() { return corpseX_; }
-    auto& corpseYRef() { return corpseY_; }
-    auto& corpseZRef() { return corpseZ_; }
-    auto& corpseTransportLowRef() { return corpseTransportLow_; }
     auto& hasHomeBindRef() { return hasHomeBind_; }
     auto& homeBindMapIdRef() { return homeBindMapId_; }
     auto& homeBindPosRef() { return homeBindPos_; }

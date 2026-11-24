@@ -164,7 +164,6 @@ public:
 
     // --- Death / Resurrection ---
     void releaseSpirit();
-    [[nodiscard]] bool canReclaimCorpse() const;
     [[nodiscard]] float getCorpseReclaimDelaySec() const;
     void reclaimCorpse();
     void useSelfRes();

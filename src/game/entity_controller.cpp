@@ -305,8 +305,8 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             owner_.gameObjectDestroyCallbackRef()(guid);   // 0x004d7230
         } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
             owner_.dynamicObjectDespawnCallbackRef()(guid, false);   // 0x004d7230
-        } else if (entity->getType() == ObjectType::CORPSE && owner_.playerDespawnCallbackRef()) {
-            owner_.playerDespawnCallbackRef()(guid);
+        } else if (entity->getType() == ObjectType::CORPSE) {
+            corpseGone(guid);
         }
         // The transport's own state goes with the server's word, whether or
         // not a model was ever drawn for it or is still held for an animation.
@@ -1161,10 +1161,9 @@ static bool isFeigningDeath(const Entity& entity, const Unit& unit) {
            unit.getHealth() > 0;
 }
 
-// Consolidates player-death state into one place so both the health==0 and
-// dynFlags UNIT_DYNFLAG_DEAD paths share the same corpse-caching logic.
-// Classic WoW does not send SMSG_DEATH_RELEASE_LOC, so this cached position
-// is the primary source for canReclaimCorpse().
+// The player's death, for the health==0 and the dynFlags UNIT_DYNFLAG_DEAD
+// paths both. No corpse yet: there is one to walk to from the release on, and
+// MSG_CORPSE_QUERY says where (GameHandler::refreshCorpsePlace).
 void EntityController::markPlayerDead(const char* source) {
     owner_.playerDeadRef() = true;
     owner_.releasedSpiritRef() = false;
@@ -1173,17 +1172,7 @@ void EntityController::markPlayerDead(const char* source) {
     // of 0x006dc0f0), and the interface reads it from its PLAYER_DEAD handler,
     // which this fires further out.
     owner_.decideReleaseTimer();
-    // owner_.movementInfoRef() is canonical (x=north, y=west); corpseX_/Y_ are
-    // raw server coords (x=west, y=north) - swap axes.
-    owner_.corpseXRef()     = owner_.movementInfoRef().y;
-    owner_.corpseYRef()     = owner_.movementInfoRef().x;
-    owner_.corpseZRef()     = owner_.movementInfoRef().z;
-    owner_.corpseTransportLowRef() = 0;
-    owner_.corpseMapIdRef() = owner_.currentMapIdRef();
-    owner_.corpsePositionValidRef() = true;
-    LOG_INFO("Player died (", source, "). Corpse cached at server=(",
-             owner_.corpseXRef(), ",", owner_.corpseYRef(), ",", owner_.corpseZRef(),
-             ") map=", owner_.corpseMapIdRef());
+    LOG_INFO("Player died (", source, ")");
 }
 
 // 3c: Apply unit fields during VALUES update - tracks health/power/display changes
@@ -2001,9 +1990,9 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             // Not gated on !isCreate, and that is the whole of a bug: logging
             // in already dead delivers the player as a CREATE block, so the
             // ghost flag it carries was never read. releasedSpirit_ stayed
-            // false, canReclaimCorpse refused, and a player who logged in
-            // standing on their own corpse could not take it back - the one
-            // case where the flag arrives without a transition to notice.
+            // false and a player who logged in standing on their own corpse
+            // could not take it back - the one case where the flag arrives
+            // without a transition to notice.
             constexpr uint32_t PLAYER_FLAGS_GHOST = 0x00000010;
             bool wasGhost = owner_.releasedSpiritRef();
             bool nowGhost = (val & PLAYER_FLAGS_GHOST) != 0;
@@ -2011,21 +2000,26 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 owner_.releasedSpiritRef() = true;
                 LOG_INFO("Player entered ghost form (PLAYER_FLAGS)");
                 if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
-                // 0x006df710: the ghost flag coming on triggers tutorial 0x18.
-                if (!isCreate) owner_.triggerTutorial(0x18);
+                // 0x006df710: the ghost flag coming on triggers tutorial 0x18,
+                // and asks where the corpse lies (0x00524a30).
+                if (!isCreate) {
+                    owner_.triggerTutorial(0x18);
+                    if (owner_.refreshCorpsePlace()) pendingEvents_.emit("CORPSE_OUT_OF_RANGE", {});
+                }
             } else if (wasGhost && !nowGhost) {
                 owner_.releasedSpiritRef() = false;
                 owner_.playerDeadRef() = false;
                 owner_.repopPendingRef() = false;
                 owner_.resurrectPendingRef() = false;
                 owner_.selfResAvailableRef() = false;
-                owner_.corpseMapIdRef() = 0;  // corpse reclaimed
-                owner_.corpsePositionValidRef() = false;
                 owner_.corpseGuidRef() = 0;
                 owner_.corpseReclaimAvailableMsRef() = 0;
                 LOG_INFO("Player resurrected (PLAYER_FLAGS ghost cleared)");
-                // 0x006df710, event 0x188.
+                // 0x006df710, event 0x188; the graveyard and the corpse are
+                // forgotten, however it came back to life.
+                owner_.forgetDeathRelease();
                 if (!isCreate) pendingEvents_.emit("PLAYER_UNGHOST", {});
+                if (owner_.refreshCorpsePlace()) pendingEvents_.emit("CORPSE_OUT_OF_RANGE", {});
                 if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(false);
             }
             // Which unit's flags, because that is the only thing the
@@ -2749,12 +2743,11 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
             owner_.playerDeadRef() = true;
             LOG_INFO("Player logged in as ghost (PLAYER_FLAGS)");
             if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
-            // Query corpse position so minimap marker is accurate on reconnect
-            if (owner_.getSocket()) {
-                network::Packet cq(wireOpcode(Opcode::MSG_CORPSE_QUERY));
-                owner_.getSocket()->send(cq);
-            }
         }
+        // 0x00528010, a world entered: no corpse and no graveyard, and a ghost
+        // asks where its own lies.
+        owner_.forgetDeathRelease();
+        if (owner_.refreshCorpsePlace()) pendingEvents_.emit("CORPSE_OUT_OF_RANGE", {});
     }
     // Pre-WotLK aura sync on initial object create
     if (block.guid == owner_.getPlayerGuid()) {
@@ -3046,20 +3039,19 @@ bool EntityController::spawnDynamicObjectFromFields(uint64_t guid, const Entity&
     return true;
 }
 
+// 0x00705f30: the player's own is not there to be reclaimed.
+void EntityController::corpseGone(uint64_t guid) {
+    if (owner_.corpseGuidRef() == guid) owner_.corpseGuidRef() = 0;
+    if (owner_.playerDespawnCallbackRef()) owner_.playerDespawnCallbackRef()(guid);
+}
+
 void EntityController::onCreateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity) {
     // Every corpse is drawn from its own fields, the player's own included.
     const bool drawnFromFields = entity && spawnCorpseFromFields(block.guid, *entity);
-    // Detect player's own corpse object so we have the position even when
-    // SMSG_DEATH_RELEASE_LOC hasn't been received (e.g. login as ghost).
-    //
-    // Not gated on hasMovement, and that gate was a bug of its own: a corpse
-    // is a stationary object and its create block need not carry a movement
-    // block at all. What reclaiming needs from here is the *guid* -
-    // CMSG_RECLAIM_CORPSE names it, and canReclaimCorpse refuses while it is
-    // zero - and the position can come from MSG_CORPSE_QUERY, which the
-    // login-as-ghost path already sends. Gating the guid on the position
-    // meant a ghost who walked back to a corpse that arrived without one
-    // could never take it, however close they stood.
+    // The player's own, and no bones of it (0x00705b20): CMSG_RECLAIM_CORPSE
+    // names it while it is in sight. Where it lies is MSG_CORPSE_QUERY's to
+    // say, and only to a ghost - this took the place from the object, so the
+    // bones of an old death stood on the map as the corpse.
     {
         // CORPSE_FIELD_OWNER is at index 6 (uint64, low word at 6, high at 7)
         uint16_t ownerLowIdx = 6;
@@ -3069,19 +3061,9 @@ void EntityController::onCreateCorpse(const UpdateBlock& block, const std::share
         uint32_t ownerHigh = (ownerHighIt != block.fields.end()) ? ownerHighIt->second : 0;
         uint64_t ownerGuid = (static_cast<uint64_t>(ownerHigh) << 32) | ownerLow;
         if (ownerGuid == owner_.getPlayerGuid() || ownerLow == static_cast<uint32_t>(owner_.getPlayerGuid())) {
-            owner_.corpseGuidRef()  = block.guid;
-            // The position only where the block actually carried one; a
-            // stationary create may not, and overwriting a good answer from
-            // MSG_CORPSE_QUERY with three zeroes would put the corpse at the
-            // map origin and refuse the reclaim on distance instead.
-            if (block.hasMovement) {
-                owner_.corpseXRef()     = block.x;
-                owner_.corpseYRef()     = block.y;
-                owner_.corpseZRef()     = block.z;
-                owner_.corpseTransportLowRef() = 0;
-                owner_.corpseMapIdRef() = owner_.currentMapIdRef();
-                owner_.corpsePositionValidRef() = true;
-            }
+            const auto flagsIt = block.fields.find(fieldIndex(UF::CORPSE_FIELD_FLAGS));
+            if (flagsIt == block.fields.end() || (flagsIt->second & kCorpseFlagBones) == 0)
+                owner_.corpseGuidRef() = block.guid;
 
             // Corpse objects carry ownership and position but not a standalone
             // render model. Reuse the owning character's appearance and equipment
@@ -3116,9 +3098,9 @@ void EntityController::onCreateCorpse(const UpdateBlock& block, const std::share
             if (!drawnFromFields && owner_.npcDeathCallbackRef()) {
                 owner_.npcDeathCallbackRef()(block.guid);
             }
-            LOG_INFO("Corpse object detected: guid=0x", std::hex, owner_.corpseGuidRef(), std::dec,
+            LOG_INFO("Corpse object detected: guid=0x", std::hex, block.guid, std::dec,
                      " server=(", block.x, ", ", block.y, ", ", block.z,
-                     ") map=", owner_.corpseMapIdRef());
+                     ") map=", owner_.currentMapIdRef());
         }
     }
 }
@@ -4399,8 +4381,8 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 owner_.gameObjectDestroyCallbackRef()(data.guid);   // 0x004d7610
             } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
                 owner_.dynamicObjectDespawnCallbackRef()(data.guid, true);   // 0x004d7610
-            } else if (entity->getType() == ObjectType::CORPSE && owner_.playerDespawnCallbackRef()) {
-                owner_.playerDespawnCallbackRef()(data.guid);
+            } else if (entity->getType() == ObjectType::CORPSE) {
+                corpseGone(data.guid);
             }
             if (entity->getType() == ObjectType::GAMEOBJECT) {
                 if (transportGuids_.count(data.guid) > 0) {

@@ -629,9 +629,8 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     releaseStampMs_ = 0;
     releaseNoTimer_ = false;
     corpseGuid_ = 0;
-    corpsePositionValid_ = false;
-    corpseTransportLow_ = 0;
-    corpseTransportFrame_.reset();
+    forgetCorpsePlace();
+    forgetDeathRelease();
     corpseReclaimAvailableMs_ = 0;
     targetGuid = 0;
     focusGuid = 0;
@@ -2383,10 +2382,6 @@ void GameHandler::clearUnitCaches() {
 
 void GameHandler::releaseSpirit() {
     if (combatHandler_) combatHandler_->releaseSpirit();
-}
-
-bool GameHandler::canReclaimCorpse() const {
-    return combatHandler_ ? combatHandler_->canReclaimCorpse() : false;
 }
 
 float GameHandler::getCorpseReclaimDelaySec() const {

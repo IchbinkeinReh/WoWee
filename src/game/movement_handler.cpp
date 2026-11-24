@@ -2986,8 +2986,8 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         owner_.repopPendingRef()           = false;
         owner_.pendingSpiritHealerGuidRef() = 0;
         owner_.resurrectCasterGuidRef()    = 0;
-        owner_.corpseMapIdRef()            = 0;
-        owner_.corpsePositionValidRef()    = false;
+        owner_.forgetCorpsePlace();
+        owner_.forgetDeathRelease();
         owner_.corpseGuidRef()             = 0;
         owner_.clearHostileAttackers();
         owner_.stopAutoAttack();

@@ -487,3 +487,78 @@ TEST_CASE("a teleport is answered with its acknowledgement alone", "[replay][pla
     // What it did is over (0x0098ba90); the key starts it again.
     CHECK_FALSE(has(s, MovementFlags::FORWARD));
 }
+
+// The corpse's marker stood on the map of a character that had died and was
+// alive again.
+TEST_CASE("only a ghost has a corpse on the map", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    float x = 0.0f, y = 0.0f;
+    const auto shown = [&] { return s.handler().getCorpseCanonicalPos(x, y); };
+    const auto asked = [&] { return s.sent().of(Opcode::MSG_CORPSE_QUERY).size(); };
+    const auto answer = [&](bool found) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::MSG_CORPSE_QUERY));
+        p.writeUInt8(found ? 1 : 0);
+        if (found) {
+            p.writeUInt32(s.handler().getCurrentMapId());
+            p.writeFloat(-400.0f);
+            p.writeFloat(-2400.0f);
+            p.writeFloat(20.0f);
+            p.writeUInt32(s.handler().getCurrentMapId());
+            p.writeUInt32(0);
+        }
+        s.receive(p);
+    };
+    const auto values = [&](const UpdateObject::Fields& fields) {
+        s.receive(UpdateObject().values(Session::kPlayerGuid, fields));
+    };
+    const size_t atLogin = asked();
+    CHECK_FALSE(shown());
+    // Bones of one's own, on the way past, and a corpse not yet bones.
+    constexpr uint64_t kBones = 0xF101000000000001ull;
+    const auto corpse = [&](uint64_t guid, uint32_t corpseFlags) {
+        // A corpse's owner is in the fields a dynamic object's caster is.
+        s.receive(UpdateObject().create(guid, wowee::game::ObjectType::CORPSE,
+                                        {{UF::DYNAMICOBJECT_CASTER, static_cast<uint32_t>(Session::kPlayerGuid)},
+                                         {UF::CORPSE_FIELD_FLAGS, corpseFlags}}));
+    };
+    corpse(kBones, 0x05);
+    CHECK_FALSE(shown());
+    CHECK(s.handler().corpseGuidRef() == 0);
+    corpse(kBones + 1, 0x04);
+    CHECK_FALSE(shown());
+    CHECK(s.handler().corpseGuidRef() == kBones + 1);
+    // Dead and not released, and raised again from there.
+    values({{UF::UNIT_FIELD_HEALTH, 0}});
+    CHECK_FALSE(shown());
+    answer(true);
+    CHECK_FALSE(shown());
+    values({{UF::UNIT_FIELD_HEALTH, 100}});
+    CHECK_FALSE(shown());
+    // Released: the ghost asks, and the answer is shown.
+    values({{UF::UNIT_FIELD_HEALTH, 0}});
+    values({{UF::UNIT_FIELD_HEALTH, 1}, {UF::PLAYER_FLAGS, 0x10}});
+    CHECK(asked() == atLogin + 1);
+    CHECK_FALSE(shown());
+    answer(true);
+    REQUIRE(shown());
+
+    SECTION("alive again, however") {
+        values({{UF::PLAYER_FLAGS, 0}});
+        CHECK_FALSE(shown());
+        answer(true);  // one on its way
+        CHECK_FALSE(shown());
+        CHECK(asked() == atLogin + 1);
+    }
+    SECTION("the server has none") {
+        answer(false);
+        CHECK_FALSE(shown());
+    }
+    SECTION("another world") {
+        s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 1}, {UF::UNIT_FIELD_MAXHEALTH, 181}, {UF::PLAYER_FLAGS, 0x10}});
+        CHECK_FALSE(shown());
+        CHECK(asked() == atLogin + 2);
+        answer(true);
+        CHECK(shown());
+    }
+}

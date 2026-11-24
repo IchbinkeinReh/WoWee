@@ -1049,13 +1049,6 @@ void GameHandler::registerCoreOpcodes() {
     };
     dispatchTable_[Opcode::SMSG_FORCED_DEATH_UPDATE] = [this](network::Packet& packet) {
         playerDead_ = true;
-        corpseX_ = movementInfo.y;
-        corpseY_ = movementInfo.x;
-        corpseZ_ = movementInfo.z;
-        corpseTransportLow_ = 0;
-        corpseMapId_ = currentMapId_;
-        corpseLiesOnMapId_ = currentMapId_;
-        corpsePositionValid_ = true;
         if (ghostStateCallback_) ghostStateCallback_(false);
         // The stamp first, then the event: 0x006e0000.c:2497 runs the death
         // decision and only then the routine that says the words, and the
@@ -1119,47 +1112,6 @@ void GameHandler::registerCoreOpcodes() {
     // ---- Batch 3: Corpse/gametime, combat clearing, mount, loot notify,
     //                movement/speed/flags, attack, spells, group ----
 
-    dispatchTable_[Opcode::MSG_CORPSE_QUERY] = [this](network::Packet& packet) {
-        // found(1) + travelMapId(4) + x,y,z(12) + corpseMapId(4) + unk(4).
-        //
-        // Two map ids, and they are not the same question. The first is where
-        // the coordinates are: for a corpse left in a dungeon the server
-        // answers with the instance's *entrance* on the outdoor map, because
-        // that is where a ghost has to walk to. The second is the map the
-        // corpse is actually lying on.
-        //
-        // This paired the coordinates with the second, and everything that
-        // reads corpseMapId_ compares it against the map the player is
-        // standing on - every other writer sets it to exactly that. So a
-        // corpse in a dungeon gave a position on the outdoor map filed under
-        // the dungeon's id, and the check `currentMapId_ != corpseMapId_`
-        // refused to show it precisely where it would have been useful.
-        if (!packet.hasRemaining(1)) return;
-        const uint8_t found = packet.readUInt8();
-        if (!found || !packet.hasRemaining(20)) return;
-        const uint32_t travelMapId = packet.readUInt32();
-        const float cx = packet.readFloat();
-        const float cy = packet.readFloat();
-        const float cz = packet.readFloat();
-        const uint32_t corpseMapId = packet.readUInt32();
-        // The transport it lies on, by its low guid (0x00523db0), its place
-        // in that transport's frame.
-        corpseTransportLow_ = packet.hasRemaining(4) ? packet.readUInt32() : 0;
-        corpseTransportFrame_.reset();
-        corpseMapQueryAllowedAt_ = 0;
-
-        corpseX_ = cx;
-        corpseY_ = cy;
-        corpseZ_ = cz;
-        corpseMapId_ = travelMapId;
-        corpseLiesOnMapId_ = corpseMapId;
-        corpsePositionValid_ = true;
-        LOG_INFO("MSG_CORPSE_QUERY: walk to (", cx, ",", cy, ",", cz,
-                 ") on map ", travelMapId,
-                 corpseMapId != travelMapId
-                     ? " (the corpse itself is inside map " + std::to_string(corpseMapId) + ")"
-                     : "");
-    };
     // ERR_FEIGN_DEATH_RESISTED on the error line only (0x007fd950, game
     // error 0x1c6); this wrote two English lines, one to chat.
     dispatchTable_[Opcode::SMSG_FEIGN_DEATH_RESISTED] = [this](network::Packet& /*packet*/) {

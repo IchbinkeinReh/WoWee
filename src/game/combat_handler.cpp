@@ -2486,21 +2486,9 @@ void CombatHandler::releaseSpirit() {
         owner_.selfResAvailableRef() = false;
         owner_.repopPendingRef() = true;
         owner_.lastRepopRequestMsRef() = static_cast<uint64_t>(now);
+        // The corpse is asked for as the ghost flag comes (0x006df710).
         LOG_INFO("Sent CMSG_REPOP_REQUEST (Release Spirit)");
-        network::Packet cq(wireOpcode(Opcode::MSG_CORPSE_QUERY));
-        owner_.getSocket()->send(cq);
     }
-}
-
-bool CombatHandler::canReclaimCorpse() const {
-    if (!owner_.releasedSpiritRef() || owner_.corpseGuidRef() == 0 ||
-        !owner_.corpsePositionValidRef()) return false;
-    if (owner_.currentMapIdRef() != owner_.corpseMapIdRef()) return false;
-    const glm::vec3 corpse = owner_.corpseServerPos();
-    float dx = owner_.movementInfoRef().x - corpse.y;
-    float dy = owner_.movementInfoRef().y - corpse.x;
-    float dz = owner_.movementInfoRef().z - corpse.z;
-    return (dx*dx + dy*dy + dz*dz) <= (40.0f * 40.0f);
 }
 
 float CombatHandler::getCorpseReclaimDelaySec() const {
@@ -2512,14 +2500,12 @@ float CombatHandler::getCorpseReclaimDelaySec() const {
     return static_cast<float>(owner_.corpseReclaimAvailableMsRef() - nowMs) / 1000.0f;
 }
 
+// 0x0051b800: a resurrection on offer is declined first (0x006d1d30), and the
+// corpse is named where it is in sight; the server judges.
 void CombatHandler::reclaimCorpse() {
-    if (!canReclaimCorpse() || !owner_.getSocket()) return;
-    if (owner_.corpseGuidRef() == 0) {
-        LOG_WARNING("reclaimCorpse: corpse GUID not yet known (corpse object not received); cannot reclaim");
-        return;
-    }
-    auto packet = ReclaimCorpsePacket::build(owner_.corpseGuidRef());
-    owner_.getSocket()->send(packet);
+    if (!owner_.getSocket()) return;
+    if (!owner_.resurrectIsSpiritHealerRef()) declineResurrect();
+    owner_.getSocket()->send(ReclaimCorpsePacket::build(owner_.corpseGuidRef()));
     LOG_INFO("Sent CMSG_RECLAIM_CORPSE for corpse guid=0x", std::hex, owner_.corpseGuidRef(), std::dec);
 }
 

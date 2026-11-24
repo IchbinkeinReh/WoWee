@@ -8,6 +8,8 @@
 
 #include <chrono>
 #include <cmath>
+#include <string>
+#include <utility>
 
 namespace wowee::game {
 
@@ -53,7 +55,55 @@ glm::vec3 GameHandler::corpseServerPos() const {
     return {at.x + kept.x * c - kept.y * s, at.y + kept.x * s + kept.y * c, at.z + kept.z};
 }
 
+bool GameHandler::forgetCorpsePlace() {
+    corpsePositionValid_ = false;
+    corpseMapId_ = 0;
+    corpseLiesOnMapId_ = 0;
+    corpseTransportLow_ = 0;
+    corpseTransportFrame_.reset();
+    return std::exchange(corpseInRangeAnnounced_, false);
+}
+
+bool GameHandler::refreshCorpsePlace() {
+    const bool wasThere = forgetCorpsePlace();
+    if (releasedSpirit_ && socket) socket->send(network::Packet(wireOpcode(Opcode::MSG_CORPSE_QUERY)));
+    return wasThere;
+}
+
 void GameHandler::registerCorpseOpcodes() {
+    // 0x00526530 case 0x216: none, and what was known is forgotten; else the
+    // place of a ghost's corpse, and of nobody else's - the marker stood on the
+    // map of a character that had died and been raised without a release.
+    dispatchTable_[Opcode::MSG_CORPSE_QUERY] = [this](network::Packet& packet) {
+        // found(1) + travelMapId(4) + x,y,z(12) + corpseMapId(4) + transport(4).
+        //
+        // Two map ids, and they are not the same question. The first is where
+        // the coordinates are: for a corpse left in a dungeon the server
+        // answers with the instance's *entrance* on the outdoor map, because
+        // that is where a ghost has to walk to. The second is the map the
+        // corpse is actually lying on.
+        if (!packet.hasRemaining(1)) return;
+        if (packet.readUInt8() == 0) {
+            if (forgetCorpsePlace()) fireAddonEvent("CORPSE_OUT_OF_RANGE", {});
+            return;
+        }
+        if (!packet.hasRemaining(20) || !releasedSpirit_) return;
+        corpseMapId_ = packet.readUInt32();
+        corpseX_ = packet.readFloat();
+        corpseY_ = packet.readFloat();
+        corpseZ_ = packet.readFloat();
+        corpseLiesOnMapId_ = packet.readUInt32();
+        // The transport it lies on, by its low guid (0x00523db0), its place
+        // in that transport's frame.
+        corpseTransportLow_ = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+        corpseTransportFrame_.reset();
+        corpseMapQueryAllowedAt_ = 0;
+        corpsePositionValid_ = true;
+        LOG_INFO("MSG_CORPSE_QUERY: walk to (", corpseX_, ",", corpseY_, ",", corpseZ_, ") on map ", corpseMapId_,
+                 corpseLiesOnMapId_ != corpseMapId_
+                     ? " (the corpse itself is inside map " + std::to_string(corpseLiesOnMapId_) + ")"
+                     : "");
+    };
     // 0x00526530 case 0x4b7: three floats and the facing (0x00512bd0).
     dispatchTable_[Opcode::SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(16)) return;
