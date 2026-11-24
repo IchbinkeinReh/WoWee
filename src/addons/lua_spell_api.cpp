@@ -1396,26 +1396,6 @@ static uint64_t& targetDirectionChosen() {
     return chosen;
 }
 
-/// CreatureType.dbc's flag 1 (critters, companions, gas clouds): never chosen.
-static bool creatureTypeSkipped(game::GameHandler* gh, uint32_t creatureType) {
-    static std::unordered_map<uint32_t, uint32_t> flags;
-    static bool loaded = false;
-    if (!loaded) {
-        auto* am = gh ? gh->services().assetManager : nullptr;
-        if (am && am->isInitialized()) {
-            loaded = true;
-            if (auto dbc = am->loadDBCOptional("CreatureType.dbc"); dbc && dbc->getFieldCount() >= 2) {
-                const uint32_t last = dbc->getFieldCount() - 1;
-                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
-                    flags[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, last);
-                }
-            }
-        }
-    }
-    auto it = flags.find(creatureType);
-    return it != flags.end() && (it->second & 1u) != 0;
-}
-
 static int targetDirection(lua_State* L, bool enemy) {
     if (!lua_isnumber(L, 1)) {
         return luaL_error(L, enemy ? "Usage: TargetDirectionEnemy(facing)"
@@ -1472,7 +1452,7 @@ static int targetDirection(lua_State* L, bool enemy) {
             if (!gh->unitMayAssist(playerGuid, guid) || unit->getHealth() < 1) continue;
         }
         if (entity->getType() == game::ObjectType::UNIT &&
-            creatureTypeSkipped(gh, gh->getCreatureType(unit->getEntry()))) {
+            (gh->creatureTypeFlags(gh->getCreatureType(unit->getEntry())) & 1u) != 0) {
             continue;
         }
         candidates.push_back({guid, worldOf(*entity)});

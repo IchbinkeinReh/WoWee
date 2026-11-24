@@ -3,6 +3,7 @@
 #include "core/pointer_speed.hpp"
 #include "core/platform.hpp"
 #include "core/application.hpp"
+#include "rendering/frustum.hpp"
 #include "rendering/vk_utils.hpp"
 #include "rendering/model_frame_view.hpp"
 #include "core/rt_session_marker.hpp"
@@ -4334,6 +4335,17 @@ void Application::connectWorldHooks() {
         });
         // A unit's ammunition (0x007206a0): from a ranged spell's start, or
         // the player's PLAYER_AMMO_ID.
+        // In the view: the sphere round its model against the frustum.
+        gameHandler->setUnitDrawnCallback([this](uint64_t guid) {
+            glm::vec3 centre;
+            float radius = 0.0f;
+            if (!getRenderBoundsForGuid(guid, centre, radius)) return false;
+            const auto* camera = renderer ? renderer->getCamera() : nullptr;
+            if (!camera) return true;
+            rendering::Frustum frustum;
+            frustum.extractFromMatrix(camera->getViewProjectionMatrix());
+            return frustum.intersectsSphere(centre, radius);
+        });
         gameHandler->setUnitAmmoCallback([this](uint64_t guid, uint32_t value, uint32_t ask, bool isItemEntry) {
             if (!gameHandler || !entitySpawner_) return;
             uint32_t inst = 0;

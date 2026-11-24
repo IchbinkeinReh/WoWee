@@ -668,6 +668,10 @@ set_tests_properties(addon_xml_compiles PROPERTIES SKIP_RETURN_CODE 77)
 # The quest log's display list, which every quest log index counts. Header-only.
 wowee_add_test(test_quest_log_rows SOURCES test_quest_log_rows.cpp)
 
+# ── test_nearest_target_cycle ───────────────────────────────
+# Which targets the target keys go through, and in which order. Header-only.
+wowee_add_test(test_nearest_target_cycle SOURCES test_nearest_target_cycle.cpp)
+
 # ── test_taxi_map ───────────────────────────────────────────
 # The flight map's nodes, their places and the routes over them. Header-only.
 wowee_add_test(test_taxi_map SOURCES test_taxi_map.cpp)

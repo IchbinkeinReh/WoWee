@@ -1,6 +1,7 @@
 // Threat lists through GameHandler's own dispatch. See game_replay.hpp.
 #include <catch_amalgamated.hpp>
 
+#include "core/coordinates.hpp"
 #include "game_replay.hpp"
 
 #include <algorithm>
@@ -52,4 +53,42 @@ TEST_CASE("a threat list is told of by the tokens its unit has", "[replay][threa
     CHECK(has("UNIT_THREAT_LIST_UPDATE", "target"));
     for (const auto& [name, unit] : events) CHECK_FALSE(unit.empty());
     s.handler().setAddonEventCallback(nullptr);
+}
+
+// The target keys, as the playtest pressed them at the Terrace: what is behind
+// is not picked, however near by the old forty yards, and a friend is whoever
+// may be helped and lives.
+TEST_CASE("the target key looks ahead", "[replay][targeting]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    auto& gh = s.handler();
+    const auto unit = [&](uint64_t guid, float serverX, float serverY) {
+        s.receive(UpdateObject().create(guid, wowee::game::ObjectType::UNIT,
+                                        {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+        const auto e = gh.getEntityManager().getEntity(guid);
+        REQUIRE(e);
+        e->setPosition(serverY, serverX, 0.0f, 0.0f);   // canonical
+    };
+    const auto me = gh.getEntityManager().getEntity(Session::kPlayerGuid);
+    REQUIRE(me);
+    me->setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    gh.setOrientation(wowee::core::coords::serverToCanonicalYaw(0.0f));   // along the wire's x
+    unit(0xF130000000000001ull, -15.0f, 0.0f);   // behind, the nearest
+    unit(0xF130000000000002ull, 35.0f, 3.0f);    // ahead
+    unit(0xF130000000000003ull, 20.0f, -2.0f);   // ahead, nearer
+    unit(0xF130000000000004ull, 0.0f, 9.0f);     // beside, within ten
+    unit(0xF130000000000005ull, 60.0f, 0.0f);    // too far
+
+    std::vector<uint64_t> order;
+    for (int i = 0; i < 3; ++i) {
+        gh.targetNearest(false);
+        order.push_back(gh.getTargetGuid());
+    }
+    CHECK(order == std::vector<uint64_t>{0xF130000000000003ull, 0xF130000000000002ull, 0xF130000000000004ull});
+
+    // One that is not drawn is not picked.
+    gh.clearTarget();
+    gh.setUnitDrawnCallback([](uint64_t guid) { return guid != 0xF130000000000003ull; });
+    gh.targetNearest(false);
+    CHECK(gh.getTargetGuid() == 0xF130000000000002ull);
 }

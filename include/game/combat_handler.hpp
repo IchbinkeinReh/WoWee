@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/nearest_target_cycle.hpp"
 #include "game/melee_landing.hpp"
 #include "game/auto_attack.hpp"
 #include "game/tutorials.hpp"
@@ -202,18 +203,16 @@ private:
     // One remembered target of each kind, for targetLastEnemy/Friend. Written
     // by setTarget from the unit taken (0x00524bf0, DAT_00bd07c0/07c8), so
     // they are the last enemy and friend picked - the current one among them.
+    NearestTargetCycle nearestTargets_;
     uint64_t lastEnemyTargetGuid_ = 0;
     uint64_t lastFriendTargetGuid_ = 0;
     /// Whether a remembered target can be taken again (0x00525df0).
     [[nodiscard]] bool rememberedTargetReachable(uint64_t guid) const;
 
-    /// The walk both cycles do: everything alive within range that `wanted`
-    /// accepts, nearest first, then step to the next one past the current
-    /// target. Written out twice with two predicates before this, and the two
-    /// had already drifted - one skipped the dead and the other did not, which
-    /// is right both times and was not written down anywhere.
-    void cycleTarget(bool reverse, const char* noneMessage,
-                     const std::function<bool(uint64_t, Entity&)>& wanted);
+    /// The TargetNearest family's walk (0x00524fc0, nearest_target_cycle.hpp).
+    void targetNext(NearestMode mode, bool reverse);
+    /// 0x00518e40: whether a unit is one of a mode's targets.
+    [[nodiscard]] bool nearestCandidate(NearestMode mode, uint64_t guid) const;
 
     /// Whether a guid is in the player's group.
     [[nodiscard]] bool isGroupMemberGuid(uint64_t guid) const;

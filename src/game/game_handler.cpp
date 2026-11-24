@@ -1138,6 +1138,21 @@ void GameHandler::closeTaxi() {
     if (movementHandler_) movementHandler_->closeTaxi();
 }
 
+uint32_t GameHandler::creatureTypeFlags(uint32_t creatureType) const {
+    if (!creatureTypeFlagsLoaded_) {
+        auto* am = services_.assetManager;
+        if (!am || !am->isInitialized()) return 0;
+        creatureTypeFlagsLoaded_ = true;
+        if (auto dbc = am->loadDBCOptional("CreatureType.dbc"); dbc && dbc->getFieldCount() >= 2) {
+            const uint32_t last = dbc->getFieldCount() - 1;
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                creatureTypeFlags_[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, last);
+        }
+    }
+    const auto it = creatureTypeFlags_.find(creatureType);
+    return it != creatureTypeFlags_.end() ? it->second : 0;
+}
+
 const TaxiMap& GameHandler::getTaxiMap() const {
     static const TaxiMap empty;
     return movementHandler_ ? movementHandler_->getTaxiMap() : empty;

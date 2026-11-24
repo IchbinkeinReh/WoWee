@@ -2062,6 +2062,14 @@ public:
     void setPlayerModelRebuildCallback(PlayerModelRebuildCallback cb) { playerModelRebuildCallback_ = std::move(cb); }
 
     // Ghost state callback - fired when player enters or leaves ghost (spirit) form
+    /// Whether a unit's model is drawn (0x0077f0b0: not culled), which the
+    /// target keys ask. Without a renderer everything is.
+    using UnitDrawnCallback = std::function<bool(uint64_t guid)>;
+    void setUnitDrawnCallback(UnitDrawnCallback cb) { unitDrawnCallback_ = std::move(cb); }
+    [[nodiscard]] bool unitDrawn(uint64_t guid) const { return !unitDrawnCallback_ || unitDrawnCallback_(guid); }
+    /// CreatureType.dbc's flags for a type: 1 for critters, companions, gas
+    /// clouds - those no target key picks.
+    [[nodiscard]] uint32_t creatureTypeFlags(uint32_t creatureType) const;
     using GhostStateCallback = std::function<void(bool isGhost)>;
     void setGhostStateCallback(GhostStateCallback cb) { ghostStateCallback_ = std::move(cb); }
 
@@ -7663,6 +7671,9 @@ private:
     DifficultyLoadingScreenCallback difficultyLoadingScreenCallback_;
     AppearanceChangedCallback appearanceChangedCallback_;
     PlayerModelRebuildCallback playerModelRebuildCallback_;
+    UnitDrawnCallback unitDrawnCallback_;
+    mutable std::unordered_map<uint32_t, uint32_t> creatureTypeFlags_;
+    mutable bool creatureTypeFlagsLoaded_ = false;
     GhostStateCallback ghostStateCallback_;
     MeleeSwingCallback meleeSwingCallback_;
     FaceCameraProvider faceCameraProvider_;
