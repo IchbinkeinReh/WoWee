@@ -836,8 +836,20 @@ void SpellHandler::cancelCastsOnMove() {
 void SpellHandler::requestPetName(uint64_t petGuid) {
     if (petGuid == 0 || !owner_.getSocket()) return;
     if (owner_.getState() != WorldState::IN_WORLD) return;
+    // One that is out already is waited for with it (0x0067ea30).
+    for (const auto& [key, guid] : pendingPetNameQueries_)
+        if (guid == petGuid) return;
     const uint32_t key = nextPetNameQueryKey_++;
     pendingPetNameQueries_[key] = petGuid;
+    sendPetNameQuery(key, petGuid);
+}
+
+void SpellHandler::askPetNamesAgain() {
+    if (!owner_.isInWorld()) return;
+    for (const auto& [key, guid] : pendingPetNameQueries_) sendPetNameQuery(key, guid);
+}
+
+void SpellHandler::sendPetNameQuery(uint32_t key, uint64_t petGuid) {
     network::Packet pkt(wireOpcode(Opcode::CMSG_PET_NAME_QUERY));
     pkt.writeUInt32(key);
     pkt.writeUInt64(petGuid);

@@ -298,9 +298,6 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             owner_.inspectedPlayerItemInstancesRef().erase(guid);
             owner_.pendingAutoInspectRef().erase(guid);
             owner_.playerLeftSight(guid);
-            // Clear pending name query so the query is re-sent when this player
-            // comes back into range (entity is recreated as a new object).
-            pendingNameQueries.erase(guid);
         } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
             owner_.gameObjectDestroyCallbackRef()(guid);   // 0x004d7230
         } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
@@ -4376,7 +4373,6 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 owner_.inspectedPlayerItemInstancesRef().erase(data.guid);
                 owner_.pendingAutoInspectRef().erase(data.guid);
                 owner_.playerLeftSight(data.guid);
-                pendingNameQueries.erase(data.guid);
             } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
                 owner_.gameObjectDestroyCallbackRef()(data.guid);   // 0x004d7610
             } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
@@ -4485,7 +4481,7 @@ void EntityController::queryCreatureInfo(uint32_t entry, uint64_t guid) {
     if (creatureInfoCache.count(entry) || pendingCreatureQueries.count(entry)) return;
     if (!owner_.isInWorld()) return;
 
-    pendingCreatureQueries.insert(entry);
+    pendingCreatureQueries.emplace(entry, guid);
     auto packet = CreatureQueryPacket::build(entry, guid);
     owner_.getSocket()->send(packet);
 }
@@ -4494,9 +4490,18 @@ void EntityController::queryGameObjectInfo(uint32_t entry, uint64_t guid) {
     if (gameObjectInfoCache_.count(entry) || pendingGameObjectQueries_.count(entry)) return;
     if (!owner_.isInWorld()) return;
 
-    pendingGameObjectQueries_.insert(entry);
+    pendingGameObjectQueries_.emplace(entry, guid);
     auto packet = GameObjectQueryPacket::build(entry, guid);
     owner_.getSocket()->send(packet);
+}
+
+void EntityController::askAgain() {
+    if (!owner_.isInWorld()) return;
+    auto& socket = *owner_.getSocket();
+    for (uint64_t guid : pendingNameQueries) socket.send(NameQueryPacket::build(guid));
+    for (const auto& [entry, guid] : pendingCreatureQueries) socket.send(CreatureQueryPacket::build(entry, guid));
+    for (const auto& [entry, guid] : pendingGameObjectQueries_)
+        socket.send(GameObjectQueryPacket::build(entry, guid));
 }
 
 std::string EntityController::getCachedPlayerName(uint64_t guid) const {

@@ -2507,6 +2507,12 @@ uint32_t GameHandler::getCreatureDisplayIdForEntry(uint32_t entry) {
     return 0;
 }
 
+void GameHandler::askUnansweredAgain() {
+    if (entityController_) entityController_->askAgain();
+    if (spellHandler_) spellHandler_->askPetNamesAgain();
+    if (inventoryHandler_) inventoryHandler_->askItemsAgain();
+}
+
 void GameHandler::queryGameObjectInfo(uint32_t entry, uint64_t guid) {
     if (entityController_) entityController_->queryGameObjectInfo(entry, guid);
 }

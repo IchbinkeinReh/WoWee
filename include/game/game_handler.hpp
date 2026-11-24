@@ -1453,6 +1453,13 @@ public:
     /// frame to find.
     uint32_t getCreatureDisplayIdForEntry(uint32_t entry);
     void queryGameObjectInfo(uint32_t entry, uint64_t guid);
+    /// Names, creatures, game objects, pets and items asked for and not yet answered,
+    /// asked for again: the server drops what comes while it moves the player from map to
+    /// map. 12340 asks for none of them in that time - its load takes the thread its
+    /// packets are handled on (0x00403b70) - and knows most from its WDB files
+    /// (0x0067ba40); a query lost left an entry of the combat log waiting for it, and all
+    /// after it behind that (0x0074f910).
+    void askUnansweredAgain();
     const GameObjectQueryResponseData* getCachedGameObjectInfo(uint32_t entry) const override {
         return entityController_->getCachedGameObjectInfo(entry);
     }
@@ -6827,7 +6834,6 @@ private:
     std::unordered_set<uint32_t> pendingItemQueries_;
     std::unordered_set<uint32_t> trainerDescriptionItems_;
     std::vector<std::pair<uint32_t, uint32_t>> pendingQuestRewardItems_;
-    float pendingItemQueryTimer_ = 0.0f;
 
     // Deferred SMSG_ITEM_PUSH_RESULT notifications for items whose info wasn't
     // cached at arrival time; emitted once the query response arrives.

@@ -12,6 +12,7 @@
 #include "core/app_clock.hpp"
 #include "core/config_paths.hpp"
 #include "core/local_time.hpp"
+#include "core/logger.hpp"
 #include "game/combat_handler.hpp"
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
@@ -302,8 +303,8 @@ void CombatLogFeed::nameOf(cl::Party& side) {
         const auto entity = owner_.getEntityManager().getEntity(guid);
         if (entity && entity->isUnit() && plainField(*entity, UF::UNIT_FIELD_PETNUMBER) != 0)
             key = cl::NameKey{.kind = cl::NameKey::Kind::Pet, .id = guid};
-        else if (entity)
-            key = cl::NameKey{.kind = cl::NameKey::Kind::Creature, .id = plainField(*entity, UF::OBJECT_FIELD_ENTRY)};
+        else if (const uint32_t entry = entity ? plainField(*entity, UF::OBJECT_FIELD_ENTRY) : 0; entry != 0)
+            key = cl::NameKey{.kind = cl::NameKey::Kind::Creature, .id = entry};
         else
             key = cl::NameKey{.kind = cl::NameKey::Kind::Creature, .id = cl::guidEntry(guid)};
     } else if (kind == cl::kGuidPet) {
@@ -404,7 +405,20 @@ cl::Entry& CombatLogFeed::create(cl::Event event, uint64_t src, uint64_t dst, co
     return e;
 }
 
-void CombatLogFeed::commit(uint32_t delayMs) { log_.commit(delayMs); }
+void CombatLogFeed::commit(uint32_t delayMs) {
+    log_.commit(delayMs);
+    const cl::Entry* held = log_.heldBy();
+    if (!held) {
+        heldSince_ = -1;
+        return;
+    }
+    if (held->timeMs == heldSince_ || clientNowMs() - held->timeMs < 30000) return;
+    heldSince_ = held->timeMs;
+    for (const auto* key : {&held->src.waiting, &held->dst.waiting, &held->itemWaiting}) {
+        if (*key) LOG_WARNING("Combat log: held for 30 s by a name of kind ", static_cast<int>((*key)->kind), ", id 0x",
+                              std::hex, (*key)->id, std::dec);
+    }
+}
 
 void CombatLogFeed::noteCombatText(const cl::Entry& e) {
     // 0x0074d430: every raise below sits behind one test - the record's other

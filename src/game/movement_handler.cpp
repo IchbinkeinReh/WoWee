@@ -2779,6 +2779,7 @@ void MovementHandler::sendWorldportAck() {
     network::Packet ack(wireOpcode(Opcode::MSG_MOVE_WORLDPORT_ACK));
     owner_.getSocket()->send(ack);
     LOG_INFO("Sent MSG_MOVE_WORLDPORT_ACK");
+    owner_.askUnansweredAgain();
 }
 
 bool MovementHandler::releaseWorldportAck() {

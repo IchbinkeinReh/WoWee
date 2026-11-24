@@ -846,6 +846,9 @@ public:
 
     // ---- Inventory field / rebuild methods (moved from GameHandler) ----
     void queryItemInfo(uint32_t entry, uint64_t guid);
+    /// The items still without an answer, once more.
+    void askItemsAgain();
+    void sendItemQuery(uint32_t entry, uint64_t guid);
     uint64_t resolveOnlineItemGuid(uint32_t itemId) const;
     void detectInventorySlotBases(const FlatFieldMap& fields);
     /// Read the inventory fields off an update block.

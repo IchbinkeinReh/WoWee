@@ -8,6 +8,7 @@
 #include "game/quest_handler.hpp"
 #include "game/spell_handler.hpp"
 
+#include <array>
 #include <utility>
 
 using replay::Session;
@@ -1007,4 +1008,60 @@ TEST_CASE("a vehicle's passenger goes where it goes", "[replay][playtest]") {
     mh->updateAttachedTransportChildren(0.016f);
     CHECK(vendor->getX() == Catch::Approx(move.x - 2.0f).margin(0.01f));
     CHECK(vendor->getY() == Catch::Approx(move.y).margin(0.01f));
+}
+
+// The server drops what comes while it moves the player from map to map, and what had been
+// asked for then was never asked for again: an entry of the combat log waited for its name,
+// and everything after it behind that.
+TEST_CASE("what a worldport lost is asked for again", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kStranger = 0x777;
+    s.receive(UpdateObject().create(kStranger, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    auto& gh = s.handler();
+    const auto names = [&] {
+        size_t n = 0;
+        for (wowee::network::Packet p : s.sent().of(Opcode::CMSG_NAME_QUERY)) n += p.readUInt64() == kStranger;
+        return n;
+    };
+    const auto sent = [&](Opcode op) { return s.sent().of(op).size(); };
+    gh.queryPlayerName(kStranger);
+    REQUIRE(names() == 1);
+    gh.queryCreatureInfo(1725, kGiver);
+    gh.queryGameObjectInfo(31, 0xF11000001F000001ull);
+    gh.queryItemInfo(25, 0);
+    gh.getSpellHandler()->requestPetName(0xF140000001000005ull);
+    const std::array asked = {Opcode::CMSG_CREATURE_QUERY, Opcode::CMSG_GAMEOBJECT_QUERY,
+                              Opcode::CMSG_ITEM_QUERY_SINGLE, Opcode::CMSG_PET_NAME_QUERY};
+    std::array<size_t, 4> before{};
+    for (size_t i = 0; i < asked.size(); ++i) before[i] = sent(asked[i]);
+    // Asked for once, whoever else wants it.
+    gh.queryPlayerName(kStranger);
+    gh.getSpellHandler()->requestPetName(0xF140000001000005ull);
+    CHECK(names() == 1);
+    CHECK(sent(Opcode::CMSG_PET_NAME_QUERY) == before[3]);
+
+    gh.setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    for (float v : {-2328.0f, -358.0f, -8.7f, 0.4f}) world.writeFloat(v);
+    s.receive(world);
+    REQUIRE(sent(Opcode::MSG_MOVE_WORLDPORT_ACK) == 1);
+    CHECK(names() == 2);
+    for (size_t i = 0; i < asked.size(); ++i) CHECK(sent(asked[i]) > before[i]);
+
+    // What is answered is not.
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_NAME_QUERY_RESPONSE));
+    answer.writePackedGuid(kStranger);
+    answer.writeUInt8(0);
+    answer.writeString("Midai");
+    answer.writeString("");
+    for (int i = 0; i < 3; ++i) answer.writeUInt8(1);
+    answer.writeUInt8(0);
+    s.receive(answer);
+    s.receive(world);
+    CHECK(names() == 2);
+    CHECK(gh.getCachedPlayerName(kStranger) == "Midai");
+    gh.setWorldEntryCallback({});
 }

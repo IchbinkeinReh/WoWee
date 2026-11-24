@@ -713,6 +713,8 @@ public:
     /// this sends a number of its own making and uses it to match the reply to
     /// the pet it asked about, which is what the field would have been for.
     void requestPetName(uint64_t petGuid);
+    /// The pets' names still without an answer, once more.
+    void askPetNamesAgain();
     /// 0x007ff180 != 0: whether the spell takes time to cast for this unit -
     /// also what the combat log asks of a cast (the unit's +0x148).
     bool hasCastTime(uint32_t spellId, const Entity& player) const;
@@ -761,6 +763,7 @@ public:
     void showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const;
 
 private:
+    void sendPetNameQuery(uint32_t key, uint64_t petGuid);
     std::unordered_map<uint32_t, uint64_t> pendingPetNameQueries_;
     uint32_t nextPetNameQueryKey_ = 1;
 

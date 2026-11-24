@@ -333,6 +333,10 @@ public:
     [[nodiscard]] bool passesFilters(const Entry& entry) const;
 
     [[nodiscard]] size_t size() const { return entries_.size(); }
+    /// The entry all newer ones are held behind, waiting for a name.
+    [[nodiscard]] const Entry* heldBy() const {
+        return announce_ != entries_.end() && announce_->waiting() ? &*announce_ : nullptr;
+    }
 
 private:
     using It = std::list<Entry>::iterator;

@@ -6425,6 +6425,15 @@ void InventoryHandler::queryItemInfo(uint32_t entry, uint64_t guid) {
     if (!owner_.isInWorld()) return;
 
     owner_.pendingItemQueriesRef().insert(entry);
+    sendItemQuery(entry, guid);
+}
+
+void InventoryHandler::askItemsAgain() {
+    if (!owner_.isInWorld()) return;
+    for (uint32_t entry : owner_.pendingItemQueriesRef()) sendItemQuery(entry, 0);
+}
+
+void InventoryHandler::sendItemQuery(uint32_t entry, uint64_t guid) {
     // Some cores reject CMSG_ITEM_QUERY_SINGLE when the GUID is 0.
     // If we don't have the item object's GUID (e.g. visible equipment decoding),
     // fall back to the player's GUID to keep the request non-zero.

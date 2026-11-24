@@ -150,6 +150,7 @@ private:
     bool loggingCombat_ = false;  ///< 0xb759d4
     std::ofstream logFile_;       ///< 0xb759dc: Logs\WoWCombatLog.txt
     uint32_t replayDelay_ = 0;
+    int64_t heldSince_ = -1;      ///< the entry a warning was logged for
 };
 
 }  // namespace wowee::game
