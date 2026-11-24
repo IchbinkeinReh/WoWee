@@ -44,6 +44,7 @@
 #include "core/coordinates.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/weather.hpp"
+#include "rendering/wmo_renderer.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/horizon_renderer.hpp"
@@ -11543,6 +11544,19 @@ void LuaEngine::registerCoreAPI() {
             return 1;
         });
         lua_setglobal(L_, "__WoweeTestLightning");
+        // __WoweeTestWmoExterior([on]): whether a room hides the outside but
+        // for what its portals show (on by default), and what that came to in
+        // the last frame. For scripted runs: with it off, the same view with
+        // nothing hidden.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            rendering::WMORenderer::testExteriorTrace = true;
+            if (!lua_isnoneornil(L, 1)) rendering::WMORenderer::testExteriorRule = lua_toboolean(L, 1) != 0;
+            auto* renderer = core::Application::getInstance().getRenderer();
+            auto* wmo = renderer ? renderer->getWMORenderer() : nullptr;
+            lua_pushstring(L, wmo ? wmo->lastExteriorCull().c_str() : "");
+            return 1;
+        });
+        lua_setglobal(L_, "__WoweeTestWmoExterior");
         // __WoweeTestWaterProbe(x, y, dx, dy[, radius]): the traced water at
         // the shader's clock, as one line - the waterline along the line from
         // .gps's (x, y) toward (dx, dy) still and with the swash

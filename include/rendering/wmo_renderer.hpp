@@ -3,7 +3,9 @@
 #include "rendering/memory_report.hpp"
 
 #include "audio/zone_ambience.hpp"
+#include "rendering/frustum.hpp"
 #include "rendering/minimap_indoor.hpp"
+#include "rendering/wmo_portal_walk.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/collision_facets.hpp"
 #include "rendering/vk_shader.hpp"
@@ -276,6 +278,16 @@ public:
     /// for renderBlended, which draws them after its trace.
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                 const glm::vec3* viewerPos = nullptr, bool gbuffer = false);
+    /// The ground under the camera, where there is some (no hole), for
+    /// whether the camera is in a room or on the ground over one.
+    void setCameraGround(std::optional<float> z) { cameraGround_ = z; }
+    /// For scripted runs (__WoweeTestWmoExterior): whether a camera in a room
+    /// hides the outside at all, and what that came to in the last frame, one
+    /// entry per building it was in a room of.
+    static inline bool testExteriorRule = true;
+    static inline bool testExteriorTrace = false;
+    [[nodiscard]] const std::string& lastExteriorCull() const { return lastExteriorCull_; }
+
     /// The blended batches the last render(gbuffer) kept, in its order.
     void renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
@@ -857,18 +869,8 @@ private:
     /**
      * Portal data for visibility culling
      */
-    struct PortalData {
-        uint16_t startVertex;
-        uint16_t vertexCount;
-        glm::vec3 normal;
-        float distance;
-    };
-
-    struct PortalRef {
-        uint16_t portalIndex;
-        uint16_t groupIndex;
-        int16_t side;
-    };
+    using PortalData = wmo_portal_walk::Portal;
+    using PortalRef = wmo_portal_walk::Ref;
 
     /**
      * Loaded WMO model data
@@ -928,6 +930,12 @@ private:
         std::vector<PortalRef> portalRefs;
         // For each group: which portal refs belong to it (start index, count)
         std::vector<std::pair<uint16_t, uint16_t>> groupPortalRefs;
+        /// Every group's flags as the portal walk reads them, by the group's
+        /// own number: MOGI's, and 0x10000 from the group itself.
+        std::vector<uint32_t> portalWalkFlags;
+        [[nodiscard]] wmo_portal_walk::Building portalWalk() const {
+            return {portalVertices, portals, portalRefs, groupPortalRefs, portalWalkFlags};
+        }
         /// For the indoor minimap: the name its pictures are filed under,
         /// every group as MOGI has it (by the group's own number, which the
         /// pictures and the portals use) and the groups past each one's
@@ -1057,36 +1065,26 @@ private:
     /// Seeds from both the camera's group and the character's: at a doorway the
     /// two are in different rooms, and walking from only one while judging every
     /// door against the camera's frustum empties the interior.
-    /// `inside`: the camera stands on an interior floor of this model
-    /// (cameraOnInteriorFloor). Then an exterior group is drawn only where a
-    /// chain of portals from the camera's room shows it, each portal clipping
-    /// the view to its own outline on screen (0x007ac060), and not at all
-    /// otherwise; without it every exterior group is drawn, as before.
     void getVisibleGroupsViaPortals(const ModelData& model,
                                      const glm::vec3& cameraLocalPos,
                                      const glm::vec3& viewerLocalPos,
                                      const Frustum& frustum,
                                      const glm::mat4& modelMatrix,
-                                     std::unordered_set<uint32_t>& outVisibleGroups,
-                                     bool inside = false, const glm::mat4* viewProj = nullptr) const;
+                                     std::unordered_set<uint32_t>& outVisibleGroups) const;
 
-    /// Whether the first face of this model straight below `localPos` (its own
-    /// space) belongs to an interior-only group: the camera is in a room, not
-    /// at a door with an interior's box spilling out past it. The exterior
-    /// shell's box holds the whole building, so its box says nothing.
-    bool cameraOnInteriorFloor(const ModelData& model, const glm::vec3& localPos) const;
-    /// The same straight up: a room's ceiling over the camera. At the mouth of
-    /// a gate - Icecrown Citadel's, where the tunnel's floor runs out under
-    /// the open sky - the floor below is a room's and the sky above is not,
-    /// and taking that for a room drew the citadel outside the gate as nothing.
-    bool cameraUnderInteriorCeiling(const ModelData& model, const glm::vec3& localPos) const;
-    bool firstFaceIsInterior(const ModelData& model, const glm::vec3& localPos, const glm::vec3& dir) const;
-
-    /// A portal's outline on screen, in NDC, clipped to `clip` (x0, y0, x1,
-    /// y1); empty (x0 >= x1) when it does not show through it. The whole of
-    /// `clip` when any corner is behind or at the camera.
-    glm::vec4 portalScreenRect(const ModelData& model, uint16_t portalIndex, const glm::mat4& modelViewProj,
-                               const glm::vec4& clip) const;
+    /// The building the camera is in a room of, and what of the outside it
+    /// sees from there: the rooms (wmo_portal_walk::cameraGroups) and the
+    /// frustum through the exits in sight, none where none is.
+    struct CameraRoom {
+        size_t instance = 0;
+        std::vector<uint32_t> groups;
+        std::optional<wmo_portal_walk::Rect> outside;
+        Frustum outsideFrustum;
+    };
+    /// The client's two, the building and the transport (0x007d59b0): of each
+    /// kind the one the first face below the camera is of, where that face
+    /// comes before the ground and is a room's.
+    std::vector<CameraRoom> cameraRooms(const glm::vec3& cameraPos, const glm::mat4& viewProj) const;
 
     /**
      * Test if a portal polygon is visible from a position through a frustum
@@ -1272,6 +1270,8 @@ private:
     /// The per-group view-frustum test, independent of the switch above and
     /// on by default (see render()). WOWEE_WMO_FRUSTUM_CULL=0 turns it off.
     bool frustumCullGroups_ = true;
+    std::optional<float> cameraGround_;
+    std::string lastExteriorCull_;
     float maxGroupDistance = 500.0f;
     float maxGroupDistanceSq = 250000.0f;  // maxGroupDistance^2
     float viewDistance_ = 1200.0f;

@@ -3158,6 +3158,10 @@ void Renderer::update(float deltaTime) {
                 frustum.extractFromMatrix(camera->getProjectionMatrix() * camera->getViewMatrix());
                 WOWEE_PROFILE_SCOPE("wmo interior pass", Cpu);
                 wmoRenderer->updateInteriorPass(camera->getPosition(), &frustum);
+                const glm::vec3 eye = camera->getPosition();
+                wmoRenderer->setCameraGround(terrainManager && !terrainManager->isHoleAt(eye.x, eye.y)
+                                                 ? terrainManager->getHeightAt(eye.x, eye.y)
+                                                 : std::nullopt);
             }
             const auto& zl = lightingManager->getLightingParams();
             // The terrain's baked shadow halves a world object's direct light

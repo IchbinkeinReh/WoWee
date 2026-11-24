@@ -92,17 +92,13 @@ struct WMOFog {
 };
 
 // WMO Portal
+/// MOPT: the corners in MOPV, and the plane they lie in. A portal made in code
+/// without a plane has none (a zero normal).
 struct WMOPortal {
-    uint16_t startVertex;
-    uint16_t vertexCount;
-    uint16_t planeIndex;
-    uint16_t padding;
-};
-
-// WMO Portal Plane
-struct WMOPortalPlane {
-    glm::vec3 normal;
-    float distance;
+    uint16_t startVertex = 0;
+    uint16_t vertexCount = 0;
+    glm::vec3 normal{0.0f};
+    float distance = 0.0f;
 };
 
 // WMO Portal Reference (MOPR chunk) - links portals to groups
@@ -286,7 +282,6 @@ struct WMOModel {
 
     // Portals (visibility culling)
     std::vector<WMOPortal> portals;
-    std::vector<WMOPortalPlane> portalPlanes;
     std::vector<glm::vec3> portalVertices;
     std::vector<WMOPortalRef> portalRefs;  // MOPR chunk - portal-to-group links
 

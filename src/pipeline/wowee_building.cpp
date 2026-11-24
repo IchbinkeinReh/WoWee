@@ -462,7 +462,6 @@ bool WoweeBuildingLoader::toWMOModel(const WoweeBuilding& building, WMOModel& ou
         WMOPortal portal{};
         portal.startVertex = static_cast<uint16_t>(outModel.portalVertices.size());
         portal.vertexCount = static_cast<uint16_t>(wp.vertices.size());
-        portal.planeIndex = 0;
         for (const auto& v : wp.vertices) outModel.portalVertices.push_back(v);
         uint16_t portalIdx = static_cast<uint16_t>(outModel.portals.size());
         outModel.portals.push_back(portal);

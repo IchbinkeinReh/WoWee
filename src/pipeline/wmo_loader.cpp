@@ -446,12 +446,10 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
                     WMOPortal portal;
                     portal.startVertex = read<uint16_t>(wmoData, offset);
                     portal.vertexCount = read<uint16_t>(wmoData, offset);
-                    portal.planeIndex = read<uint16_t>(wmoData, offset);
-                    portal.padding = read<uint16_t>(wmoData, offset);
-
-                    // Skip additional data (12 bytes)
-                    offset += 12;
-
+                    portal.normal.x = read<float>(wmoData, offset);
+                    portal.normal.y = read<float>(wmoData, offset);
+                    portal.normal.z = read<float>(wmoData, offset);
+                    portal.distance = read<float>(wmoData, offset);
                     model.portals.push_back(portal);
                 }
                 core::Logger::getInstance().debug("WMO portals: ", model.portals.size());

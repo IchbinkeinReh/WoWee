@@ -921,27 +921,8 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         PortalData pd;
         pd.startVertex = portal.startVertex;
         pd.vertexCount = portal.vertexCount;
-        // Compute portal plane from vertices if we have them
-        if (portal.vertexCount >= 3 && portal.startVertex + portal.vertexCount <= model.portalVertices.size()) {
-            glm::vec3 v0 = model.portalVertices[portal.startVertex];
-            glm::vec3 v1 = model.portalVertices[portal.startVertex + 1];
-            glm::vec3 v2 = model.portalVertices[portal.startVertex + 2];
-            // Degenerate portal (collinear or coincident verts) → cross is
-            // zero → normalize returns NaN. Fall back to up-axis instead of
-            // poisoning the portal-frustum cull.
-            glm::vec3 cross = glm::cross(v1 - v0, v2 - v0);
-            float crossLen = glm::length(cross);
-            if (crossLen > 1e-6f) {
-                pd.normal = cross / crossLen;
-                pd.distance = glm::dot(pd.normal, v0);
-            } else {
-                pd.normal = glm::vec3(0.0f, 0.0f, 1.0f);
-                pd.distance = 0.0f;
-            }
-        } else {
-            pd.normal = glm::vec3(0.0f, 0.0f, 1.0f);
-            pd.distance = 0.0f;
-        }
+        pd.normal = portal.normal;
+        pd.distance = portal.distance;
         modelData.portals.push_back(pd);
     }
     for (const auto& ref : model.portalRefs) {
@@ -1002,6 +983,11 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 if (at < model.portalVertices.size()) modelData.minimapPortals[pi].push_back(model.portalVertices[at]);
             }
         }
+    }
+    modelData.portalWalkFlags.resize(model.groups.size());
+    for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+        modelData.portalWalkFlags[gi] = modelData.minimapGroups[gi].flags |
+                                        (model.groups[gi].flags & wmo_portal_walk::kAlways);
     }
     modelData.fogs = model.fogs;
     modelData.groupFogIndices.resize(model.groups.size());
@@ -1614,6 +1600,9 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
     // little too much, it means the building vanishes. Seeding from both is a
     // superset of either, so it can only ever add groups.
     const glm::vec3 portalViewerPos = viewerPos ? *viewerPos : camPos;
+    const std::vector<CameraRoom> rooms =
+        testExteriorRule ? cameraRooms(camPos, viewProj) : std::vector<CameraRoom>{};
+    lastExteriorCull_.clear();
     bool doPortalCull = portalCulling && cullingEnabled_;
     bool doDistanceCull = distanceCulling && cullingEnabled_;
 
@@ -1706,35 +1695,17 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
             // per group and skips the per-instance copy + sort.
         }
 
-        // In a room, the exterior groups only where a portal shows them -
+        // In a room, the exterior groups only through the exits in sight -
         // with or without the culling above, which is off by default. The
-        // client walks the portals from the camera's room and draws the
-        // outside only through them (0x007ac060); drawn whole from inside,
-        // an exterior shell's faces that pass behind an interior wall showed
-        // through it: a roof's planks, lit by the night's blue ambient, on
-        // the wall beside a shelf in the Goldshire inn's south bedroom.
-        // Only exterior groups are ever dropped here, never a room, and only
-        // where the floor below the camera is a room's (cameraOnInteriorFloor)
-        // and so is the ceiling above it (cameraUnderInteriorCeiling)
-        // as well as its box, so a camera at a door stays outdoors.
-        bool exteriorByPortals = false;
-        if (!usePortalCulling && !model.portals.empty() && !model.portalRefs.empty() &&
-            glm::all(glm::greaterThanEqual(camPos, instance.worldBoundsMin)) &&
-            glm::all(glm::lessThanEqual(camPos, instance.worldBoundsMax))) {
-            const int camGroup = findContainingGroup(model, localRealCam);
-            if (camGroup >= 0) {
-                const uint32_t f = model.groups[camGroup].groupFlags;
-                if ((f & 0x2000u) != 0 && (f & 0x8u) == 0 && cameraOnInteriorFloor(model, localRealCam) &&
-                    cameraUnderInteriorCeiling(model, localRealCam)) {
-                    portalVisibleGroupSet_.clear();
-                    const glm::vec3 localViewer =
-                        glm::vec3(instance.invModelMatrix * glm::vec4(portalViewerPos, 1.0f));
-                    getVisibleGroupsViaPortals(model, localRealCam, localViewer, frustum, instance.modelMatrix,
-                                               portalVisibleGroupSet_, true, &viewProj);
-                    exteriorByPortals = true;
-                }
-            }
+        // client draws the outside from inside a building through them alone
+        // (wmo_portal_walk.hpp); drawn whole, an exterior shell's faces showed
+        // on an interior wall: a roof's planks, lit by the night's blue
+        // ambient, beside a shelf in the Goldshire inn's south bedroom.
+        const CameraRoom* room = nullptr;
+        for (const CameraRoom& r : rooms) {
+            if (r.instance == instIdx) room = &r;
         }
+        std::string dropped;
 
         for (size_t gi = 0; gi < model.groups.size(); ++gi) {
             if (usePortalCulling &&
@@ -1742,12 +1713,16 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
                 result.portalCulled++;
                 continue;
             }
-            if (exteriorByPortals) {
-                const uint32_t f = model.groups[gi].groupFlags;
-                const bool exterior = !(f & 0x2000u) || (f & 0x8u);
-                if (exterior && portalVisibleGroupSet_.find(static_cast<uint32_t>(gi)) == portalVisibleGroupSet_.end()) {
-                    result.portalCulled++;
-                    continue;
+            if (room && gi < instance.worldGroupBounds.size()) {
+                const uint32_t number = model.groups[gi].groupIndex;
+                const uint32_t flags = number < model.portalWalkFlags.size() ? model.portalWalkFlags[number] : 0u;
+                if ((flags & wmo_portal_walk::kExterior) != 0 && (flags & wmo_portal_walk::kAlways) == 0) {
+                    const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
+                    if (!room->outside || !room->outsideFrustum.intersectsAABB(gMin, gMax)) {
+                        result.portalCulled++;
+                        if (testExteriorTrace && frustum.intersectsAABB(gMin, gMax)) dropped += " " + std::to_string(number);
+                        continue;
+                    }
                 }
             }
 
@@ -1808,6 +1783,16 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
             }
 
             result.visibleGroups.push_back(static_cast<uint32_t>(gi));
+        }
+        if (room && testExteriorTrace) {
+            std::ostringstream line;
+            line << "[" << model.minimapBase << " #" << instance.id << " at " << localRealCam.x << " "
+                 << localRealCam.y << " " << localRealCam.z << " in";
+            for (uint32_t g : room->groups) line << " " << g;
+            line << " outside";
+            if (const auto& r = room->outside) line << " " << r->x << " " << r->y << " " << r->z << " " << r->w;
+            line << " dropped" << dropped << "]";
+            lastExteriorCull_ += line.str();
         }
     };
 
@@ -2662,8 +2647,7 @@ void WMORenderer::getVisibleGroupsViaPortals(const ModelData& model,
                                               const glm::vec3& viewerLocalPos,
                                               const Frustum& frustum,
                                               const glm::mat4& modelMatrix,
-                                              std::unordered_set<uint32_t>& outVisibleGroups,
-                                              bool inside, const glm::mat4* viewProj) const {
+                                              std::unordered_set<uint32_t>& outVisibleGroups) const {
     constexpr uint32_t WMO_GROUP_FLAG_OUTDOOR = 0x8;
     constexpr uint32_t WMO_GROUP_FLAG_INDOOR = 0x2000;
 
@@ -2696,9 +2680,8 @@ void WMORenderer::getVisibleGroupsViaPortals(const ModelData& model,
         // Best-fit group is indoor-only, but the position might also be inside an
         // outdoor group's AABB (e.g., standing on a street near a building whose
         // indoor AABB extends outward).  If any outdoor group also contains the
-        // position, treat this as an outdoor location and show all groups -
-        // unless the floor below is a room's (`inside`).
-        for (size_t gi = 0; gi < model.groups.size() && !inside; gi++) {
+        // position, treat this as an outdoor location and show all groups.
+        for (size_t gi = 0; gi < model.groups.size(); gi++) {
             if (static_cast<int>(gi) == cameraGroup) continue;
             const auto& g = model.groups[gi];
             if (!(g.groupFlags & WMO_GROUP_FLAG_OUTDOOR)) continue;
@@ -2731,14 +2714,11 @@ void WMORenderer::getVisibleGroupsViaPortals(const ModelData& model,
     // start then hides the whole city. Portal traversal below only decides
     // interior-only groups; streets and facades always draw (distance culling
     // still bounds them).
-    // Inside a room (`inside`), the client walks the portals from it alone
-    // and draws an exterior group only where they show it (0x007ac060).
     const auto isExterior = [&](size_t gi) {
         const uint32_t f = model.groups[gi].groupFlags;
         return !(f & WMO_GROUP_FLAG_INDOOR) || (f & WMO_GROUP_FLAG_OUTDOOR);
     };
-    const bool clipped = inside && viewProj != nullptr;
-    for (size_t gi = 0; gi < model.groups.size() && !clipped; ++gi) {
+    for (size_t gi = 0; gi < model.groups.size(); ++gi) {
         if (isExterior(gi)) outVisibleGroups.insert(static_cast<uint32_t>(gi));
     }
 
@@ -2755,19 +2735,8 @@ void WMORenderer::getVisibleGroupsViaPortals(const ModelData& model,
     std::vector<uint32_t> queue;
     queue.reserve(model.groups.size());
 
-    // With `clipped`, how much of the screen each group is seen through (NDC
-    // x0, y0, x1, y1; empty when x0 >= x1): the whole of it from the rooms
-    // the walk starts in, a portal's outline within its own room's from
-    // there. Interior groups are still taken whenever a portal to them is in
-    // the frustum, as before, so no room goes missing; only the exterior
-    // groups need their portals to show.
-    const glm::vec4 kNoRect(1.0f, 1.0f, -1.0f, -1.0f);
-    std::vector<glm::vec4> seen(clipped ? model.groups.size() : 0, kNoRect);
-    const glm::mat4 modelViewProj = clipped ? *viewProj * modelMatrix : glm::mat4(1.0f);
-
     auto seed = [&](int gi) {
         if (gi < 0 || gi >= static_cast<int>(model.groups.size())) return;
-        if (clipped) seen[gi] = glm::vec4(-1.0f, -1.0f, 1.0f, 1.0f);
         if (visited[gi]) return;
         visited[gi] = true;
         queue.push_back(static_cast<uint32_t>(gi));
@@ -2786,9 +2755,6 @@ void WMORenderer::getVisibleGroupsViaPortals(const ModelData& model,
     }
 
     size_t queueIdx = 0;
-    // A group reached again through a wider opening passes it on again; a
-    // bound on that keeps a tangle of portals from looping.
-    size_t revisits = model.groups.size() * 4;
     while (queueIdx < queue.size()) {
         uint32_t currentGroup = queue[queueIdx++];
 
@@ -2804,36 +2770,7 @@ void WMORenderer::getVisibleGroupsViaPortals(const ModelData& model,
             uint32_t targetGroup = ref.groupIndex;
 
             if (targetGroup >= model.groups.size()) continue;
-            if (clipped) {
-                const glm::vec4& from = seen[currentGroup];
-                glm::vec4 through = kNoRect;
-                if (from.x < from.z && from.y < from.w)
-                    through = portalScreenRect(model, ref.portalIndex, modelViewProj, from);
-                const bool shows = through.x < through.z && through.y < through.w;
-                if (shows) {
-                    glm::vec4& to = seen[targetGroup];
-                    const bool had = to.x < to.z && to.y < to.w;
-                    const bool wider = !had || through.x < to.x || through.y < to.y ||
-                                       through.z > to.z || through.w > to.w;
-                    if (wider) {
-                        to = had ? glm::vec4(std::min(to.x, through.x), std::min(to.y, through.y),
-                                             std::max(to.z, through.z), std::max(to.w, through.w))
-                                 : through;
-                        if (visited[targetGroup] && revisits > 0) {
-                            --revisits;
-                            queue.push_back(targetGroup);
-                        }
-                    }
-                }
-                if (visited[targetGroup]) {
-                    if (shows) outVisibleGroups.insert(targetGroup);
-                    continue;
-                }
-                // An exterior group only through a portal that shows it.
-                if (isExterior(targetGroup) && !shows) continue;
-            } else if (visited[targetGroup]) {
-                continue;
-            }
+            if (visited[targetGroup]) continue;
 
             // Check if portal is visible from camera
             if (isPortalVisible(model, ref.portalIndex, cameraLocalPos, frustum, modelMatrix)) {
@@ -3168,65 +3105,40 @@ static bool trianglesAlongRay(const Group& group, const glm::vec3& localOrigin,
     return true;
 }
 
-bool WMORenderer::cameraOnInteriorFloor(const ModelData& model, const glm::vec3& localPos) const {
-    // Straight down in the model's own space, the nearest face drawn or
-    // collided with, as a floor query takes it.
-    return firstFaceIsInterior(model, localPos, glm::vec3(0.0f, 0.0f, -1.0f));
-}
-
-bool WMORenderer::cameraUnderInteriorCeiling(const ModelData& model, const glm::vec3& localPos) const {
-    return firstFaceIsInterior(model, localPos, glm::vec3(0.0f, 0.0f, 1.0f));
-}
-
-bool WMORenderer::firstFaceIsInterior(const ModelData& model, const glm::vec3& localPos,
-                                      const glm::vec3& dir) const {
-    // 30 yards is any storey.
-    constexpr float kReach = 30.0f;
-    float best = kReach;
-    const GroupResources* bestGroup = nullptr;
-    std::vector<uint32_t> tris;
-    for (const auto& group : model.groups) {
-        if (group.groupFlags & kFloorGroupSkip) continue;
-        if (!trianglesAlongRay(group, localPos, dir, tris)) continue;
-        const auto& verts = group.collisionVertices;
-        const auto& indices = group.collisionIndices;
-        for (uint32_t triStart : tris) {
-            if (triStart + 2 >= indices.size()) continue;
-            const float t = rayTriangleIntersect(localPos, dir, verts[indices[triStart]],
-                                                 verts[indices[triStart + 1]], verts[indices[triStart + 2]]);
-            if (t > 0.0f && t < best) {
-                best = t;
-                bestGroup = &group;
-            }
+std::vector<WMORenderer::CameraRoom> WMORenderer::cameraRooms(const glm::vec3& cameraPos,
+                                                             const glm::mat4& viewProj) const {
+    // A mile down (0x00795d40), or to the ground if that comes first.
+    float reach = 1760.0f;
+    if (cameraGround_ && *cameraGround_ < cameraPos.z) reach = std::min(reach, cameraPos.z - *cameraGround_);
+    struct Below {
+        const WMOInstance* instance = nullptr;
+        const ModelData* model = nullptr;
+        uint32_t group = 0;
+        float distance = 0.0f;
+    };
+    std::array<Below, 2> below;  // the building, the transport
+    walkTrianglesAlong(cameraPos, cameraPos.z - reach, kFloorGroupSkip, [](uint8_t) { return true; },
+                       [&](const WMOInstance& instance, const ModelData& model, const GroupResources& group, uint32_t,
+                           uint8_t, float dist, const glm::vec3&) {
+                           Below& b = below[instance.isTransport ? 1 : 0];
+                           if (!b.instance || dist < b.distance) b = {&instance, &model, group.groupIndex, dist};
+                       });
+    std::vector<CameraRoom> out;
+    for (const Below& b : below) {
+        if (!b.instance || b.model->portalRefs.empty()) continue;
+        const wmo_portal_walk::Building building = b.model->portalWalk();
+        const glm::vec3 eye(b.instance->invModelMatrix * glm::vec4(cameraPos, 1.0f));
+        CameraRoom room;
+        room.groups = wmo_portal_walk::cameraGroups(building, eye, b.group, b.distance);
+        if (room.groups.empty()) continue;
+        room.instance = static_cast<size_t>(b.instance - instances.data());
+        room.outside = wmo_portal_walk::outsideRect(building, room.groups, eye, viewProj * b.instance->modelMatrix);
+        if (room.outside) {
+            room.outsideFrustum.extractFromMatrix(wmo_portal_walk::throughRect(*room.outside, viewProj));
         }
+        out.push_back(std::move(room));
     }
-    if (!bestGroup) return false;
-    const uint32_t f = bestGroup->groupFlags;
-    return (f & 0x2000u) != 0 && (f & 0x8u) == 0;
-}
-
-glm::vec4 WMORenderer::portalScreenRect(const ModelData& model, uint16_t portalIndex, const glm::mat4& modelViewProj,
-                                        const glm::vec4& clip) const {
-    const glm::vec4 none(1.0f, 1.0f, -1.0f, -1.0f);
-    if (portalIndex >= model.portals.size()) return none;
-    const auto& portal = model.portals[portalIndex];
-    if (portal.vertexCount < 3 || portal.startVertex + portal.vertexCount > model.portalVertices.size()) return none;
-    glm::vec2 lo(1e30f), hi(-1e30f);
-    for (uint16_t i = 0; i < portal.vertexCount; ++i) {
-        const glm::vec4 c = modelViewProj * glm::vec4(model.portalVertices[portal.startVertex + i], 1.0f);
-        // A corner at or behind the camera: the portal is about the eye, a
-        // door being walked through, and may show anywhere.
-        if (c.w <= 0.05f) return clip;
-        const glm::vec2 ndc = glm::vec2(c) / c.w;
-        lo = glm::min(lo, ndc);
-        hi = glm::max(hi, ndc);
-    }
-    // A little wider than the outline: the portals are drawn to the openings'
-    // frames, and what is seen just past a frame's edge must not be cut.
-    constexpr float kMargin = 0.02f;
-    lo -= glm::vec2(kMargin);
-    hi += glm::vec2(kMargin);
-    return glm::vec4(std::max(lo.x, clip.x), std::max(lo.y, clip.y), std::min(hi.x, clip.z), std::min(hi.y, clip.w));
+    return out;
 }
 
 static bool rayIntersectsAABB(const glm::vec3& origin, const glm::vec3& dir,

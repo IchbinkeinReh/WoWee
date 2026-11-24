@@ -4001,6 +4001,11 @@ wowee_add_test(test_screen_effect_state
 wowee_add_test(test_minimap_tracking
     SOURCES test_minimap_tracking.cpp)
 
+# ── test_wmo_portal_walk ─────────────────────────────────────
+# What a camera in a room sees of the outside (rendering/wmo_portal_walk.hpp).
+wowee_add_test(test_wmo_portal_walk
+    SOURCES test_wmo_portal_walk.cpp ${CMAKE_SOURCE_DIR}/src/rendering/frustum.cpp)
+
 # ── test_minimap_indoor ──────────────────────────────────────
 # The indoor minimap's WMO pictures: tiles, names, area and groups (rendering/minimap_indoor.hpp).
 wowee_add_test(test_minimap_indoor
