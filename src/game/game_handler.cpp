@@ -691,9 +691,7 @@ void GameHandler::updateTimers(float deltaTime) {
             it->second -= deltaTime;
             if (it->second <= 0.0f) {
                 const uint32_t questId = it->first;
-                auto guidIt = acceptNpcGuids.find(questId);
-                const uint64_t npcGuid = guidIt != acceptNpcGuids.end() ? guidIt->second : 0;
-                triggerQuestAcceptResync(questId, npcGuid, "timeout");
+                triggerQuestAcceptResync(questId, "timeout");
                 it = acceptTimeouts.erase(it);
                 acceptNpcGuids.erase(questId);
             } else {

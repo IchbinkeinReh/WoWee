@@ -303,7 +303,7 @@ public:
     void reconcileItemObjectivesFromInventory(
         const std::unordered_map<uint32_t, uint32_t>& carriedCounts);
     void clearPendingQuestAccept(uint32_t questId);
-    void triggerQuestAcceptResync(uint32_t questId, uint64_t npcGuid, const char* reason);
+    void triggerQuestAcceptResync(uint32_t questId, const char* reason);
 
     // Pending quest accept timeout state (used by GameHandler::update)
     std::unordered_map<uint32_t, float>& pendingQuestAcceptTimeoutsRef() { return pendingQuestAcceptTimeouts_; }

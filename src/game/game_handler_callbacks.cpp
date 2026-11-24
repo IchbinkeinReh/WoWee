@@ -4714,8 +4714,8 @@ void GameHandler::clearPendingQuestAccept(uint32_t questId) {
     if (questHandler_) questHandler_->clearPendingQuestAccept(questId);
 }
 
-void GameHandler::triggerQuestAcceptResync(uint32_t questId, uint64_t npcGuid, const char* reason) {
-    if (questHandler_) questHandler_->triggerQuestAcceptResync(questId, npcGuid, reason);
+void GameHandler::triggerQuestAcceptResync(uint32_t questId, const char* reason) {
+    if (questHandler_) questHandler_->triggerQuestAcceptResync(questId, reason);
 }
 
 void GameHandler::acceptQuest() {

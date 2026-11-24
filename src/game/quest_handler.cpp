@@ -849,8 +849,6 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     pendingQuestIds.push_back(pending.first);
                 }
                 for (uint32_t questId : pendingQuestIds) {
-                    const uint64_t npcGuid = pendingQuestAcceptNpcGuids_.count(questId) != 0
-                        ? pendingQuestAcceptNpcGuids_[questId] : 0;
                     if (failReason == 13) {
                         std::string fallbackTitle = "Quest #" + std::to_string(questId);
                         std::string fallbackObjectives;
@@ -859,9 +857,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                             fallbackObjectives = currentQuestDetails_.objectives;
                         }
                         addQuestToLocalLogIfMissing(questId, fallbackTitle, fallbackObjectives);
-                        triggerQuestAcceptResync(questId, npcGuid, "already-on-quest");
+                        triggerQuestAcceptResync(questId, "already-on-quest");
                     } else if (failReason == 18) {
-                        triggerQuestAcceptResync(questId, npcGuid, "already-completed");
+                        triggerQuestAcceptResync(questId, "already-completed");
                     }
                     clearPendingQuestAccept(questId);
                 }
@@ -1603,7 +1601,7 @@ void QuestHandler::acceptQuest() {
     uint64_t npcGuid = currentQuestDetails_.npcGuid;
     if (pendingQuestAcceptTimeouts_.count(questId) != 0) {
         LOG_DEBUG("Ignoring duplicate quest accept while pending: questId=", questId);
-        triggerQuestAcceptResync(questId, npcGuid, "duplicate-accept");
+        triggerQuestAcceptResync(questId, "duplicate-accept");
         dismissQuestDetails();
         return;
     }
@@ -2169,10 +2167,19 @@ void QuestHandler::applyQuestStateFromFields(const FlatFieldMap& fields) {
         uint32_t questId = idIt->second;
         if (questId == 0) continue;
 
-        // Add quest to local log only if we have a pending accept for it
-        if (!hasQuestInLog(questId) && pendingQuestAcceptTimeouts_.count(questId) != 0) {
-            addQuestToLocalLogIfMissing(questId, "Quest #" + std::to_string(questId), "");
-            requestQuestQuery(questId, false);
+        // In the log now, the accept is answered. Add quest to local log only
+        // if we have a pending accept for it.
+        //
+        // Answered whether or not it is in the local log already, which it is:
+        // accepting puts it there. Only where it was not did the slot's
+        // arrival call the time-out off, so five seconds after every accept
+        // the giver was asked for the quest again, and the server answered
+        // that it had been begun.
+        if (pendingQuestAcceptTimeouts_.count(questId) != 0) {
+            if (!hasQuestInLog(questId)) {
+                addQuestToLocalLogIfMissing(questId, "Quest #" + std::to_string(questId), "");
+                requestQuestQuery(questId, false);
+            }
             clearPendingQuestAccept(questId);
         }
 
@@ -2359,18 +2366,14 @@ void QuestHandler::clearPendingQuestAccept(uint32_t questId) {
     pendingQuestAcceptNpcGuids_.erase(questId);
 }
 
-void QuestHandler::triggerQuestAcceptResync(uint32_t questId, uint64_t npcGuid, const char* reason) {
+void QuestHandler::triggerQuestAcceptResync(uint32_t questId, const char* reason) {
     if (questId == 0 || !owner_.getSocket() || owner_.getState() != WorldState::IN_WORLD) return;
 
+    // The quest's text only. The giver is not asked again: the client sends an
+    // accept once and waits for the log's slot, and asking a giver opens its
+    // window, or is answered that the quest is begun (ERR_QUEST_ALREADY_ON).
     LOG_INFO("Quest accept resync: questId=", questId, " reason=", reason ? reason : "unknown");
     requestQuestQuery(questId, true);
-
-    if (npcGuid != 0) {
-        auto queryPkt = owner_.getPacketParsers()
-            ? owner_.getPacketParsers()->buildQueryQuestPacket(npcGuid, questId)
-            : QuestgiverQueryQuestPacket::build(npcGuid, questId);
-        owner_.getSocket()->send(queryPkt);
-    }
 }
 
 // ---------------------------------------------------------------------------

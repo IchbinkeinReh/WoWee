@@ -6552,7 +6552,7 @@ private:
     // ---- Other player movement (MSG_MOVE_* from server) ----
 
     void clearPendingQuestAccept(uint32_t questId);
-    void triggerQuestAcceptResync(uint32_t questId, uint64_t npcGuid, const char* reason);
+    void triggerQuestAcceptResync(uint32_t questId, const char* reason);
     bool hasQuestInLog(uint32_t questId) const;
     int findQuestLogSlotIndexFromServer(uint32_t questId) const;
     void addQuestToLocalLogIfMissing(uint32_t questId, const std::string& title, const std::string& objectives);
