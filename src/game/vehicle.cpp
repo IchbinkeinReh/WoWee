@@ -56,8 +56,8 @@ uint32_t VehicleRoster::vehicleId(uint64_t guid) const {
     return it != vehicleIds_.end() ? it->second : 0;
 }
 
-void VehicleRoster::setTransport(uint64_t guid, uint64_t transportGuid, int8_t seat, float facing, bool animated) {
-    if (guid == 0) return;
+bool VehicleRoster::setTransport(uint64_t guid, uint64_t transportGuid, int8_t seat, float facing, bool animated) {
+    if (guid == 0) return false;
     const auto it = passengers_.find(guid);
     const bool seated = transportGuid != 0 && transportGuid != guid && seat >= 0 &&
                         static_cast<uint32_t>(seat) < kSeatCount;
@@ -71,11 +71,12 @@ void VehicleRoster::setTransport(uint64_t guid, uint64_t transportGuid, int8_t s
     }
     if (!seated) {
         passengers_.erase(guid);
-        return;
+        return changed;
     }
     passengers_[guid] = Passenger{.vehicleGuid = transportGuid,
                                   .seat = static_cast<uint8_t>(seat),
                                   .facing = facing};
+    return changed;
 }
 
 void VehicleRoster::setMoveFlags2(uint64_t guid, uint32_t flags2) {

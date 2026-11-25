@@ -1834,8 +1834,9 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     // its own will (0x0074bb60).
     owner_.vehicleRoster().setMoveFlags2(moverGuid, info.flags2);
     owner_.vehicleRoster().setPitch(moverGuid, info.pitch);
-    owner_.vehicleRoster().setTransport(moverGuid, onTransport ? transportGuid : 0, transportSeat, tLocalO,
-                                        !isPreWotlk() && packet.getOpcode() == wireOpcode(Opcode::MSG_MOVE_UNROOT));
+    if (owner_.vehicleRoster().setTransport(moverGuid, onTransport ? transportGuid : 0, transportSeat, tLocalO,
+                                            !isPreWotlk() && packet.getOpcode() == wireOpcode(Opcode::MSG_MOVE_UNROOT)))
+        owner_.vehicleSeatMoved(moverGuid);
 
     // A vehicle is a unit, not a transport the manager runs: the mover's
     // position is the world one the packet carries, and composing its seat
@@ -2253,6 +2254,7 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
     // moved through (0x0073f590 -> 0x0073c8e0 -> 0x006f0c70 with none).
     if (!isPreWotlk() && owner_.vehicleRoster().passenger(data.guid)) {
         owner_.vehicleRoster().setTransport(data.guid, 0, -1, 0.0f, true);
+        owner_.vehicleSeatMoved(data.guid);
     }
 
     auto entity = owner_.getEntityManager().getEntity(data.guid);
@@ -2514,11 +2516,9 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         }
         // Its seat, where the transport is a vehicle (0x0074c040), moved
         // through (0x0073c8e0 sets +0xa30 0x20000000 around it).
-        owner_.vehicleRoster().setTransport(moverGuid, transportGuid, seat,
-                                            owner_.vehicleRoster().passenger(moverGuid)
-                                                ? owner_.vehicleRoster().passenger(moverGuid)->facing
-                                                : 0.0f,
-                                            true);
+        const auto sits = owner_.vehicleRoster().passenger(moverGuid);
+        if (owner_.vehicleRoster().setTransport(moverGuid, transportGuid, seat, sits ? sits->facing : 0.0f, true))
+            owner_.vehicleSeatMoved(moverGuid);
     } else {
         if (packet.getRemainingSize() < 8 + 1 + 8 + 12) return;
         moverGuid = packet.readUInt64();
