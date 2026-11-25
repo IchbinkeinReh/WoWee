@@ -16600,23 +16600,52 @@ void LuaEngine::fireCursorChanged(uint32_t wid) {
                             -static_cast<double>(line) * lineH * ui::kEditLineSpacing, 0.0, lineH);
 }
 
+namespace {
+
+/// Where in an edit box's text the point (x, y) is, in the tree's units
+/// (0x00964790).
+size_t editTextPlace(const ui::Widget& w, float x, float y) {
+    const float es = w.effScale > 0.0f ? w.effScale : 1.0f;
+    const float fromTop = (w.bottom + w.rectH - y) / es - w.textInsetTop;
+    const float fromLeft = (x - w.left) / es - w.textInsetLeft;
+    const std::string masked = w.editPassword ? std::string(w.editText.size(), '*') : std::string();
+    const std::vector<size_t> lines = w.editMultiLine ? ui::editLinesOf(w) : std::vector<size_t>{0};
+    const size_t line = w.editMultiLine
+        ? ui::editLineAt(lines, fromTop, ui::interfaceFontSize(w.fontHeight) * ui::kEditLineSpacing) : 0;
+    return ui::editPlaceAt(w.editPassword ? masked : w.editText, lines, line, fromLeft,
+                           [&](const std::string& piece) {
+                               return ui::interfaceTextWidth(piece, w.fontFace, w.fontHeight);
+                           });
+}
+
+}  // namespace
+
 void LuaEngine::placeEditCaret(uint32_t wid, float x, float y) {
     settleTextChanged(wid);   // 0x00967020
     widgets_.resolveWidget(wid);
     auto* w = widgets_.get(wid);
     if (!w || !w->isEditBox || w->rectW <= 0.0f || w->rectH <= 0.0f) return;
-    const float es = w->effScale > 0.0f ? w->effScale : 1.0f;
-    const float fromTop = (w->bottom + w->rectH - y) / es - w->textInsetTop;
-    const float fromLeft = (x - w->left) / es - w->textInsetLeft;
-    const std::string masked = w->editPassword ? std::string(w->editText.size(), '*') : std::string();
-    const std::vector<size_t> lines = w->editMultiLine ? ui::editLinesOf(*w) : std::vector<size_t>{0};
-    const size_t line = w->editMultiLine
-        ? ui::editLineAt(lines, fromTop, ui::interfaceFontSize(w->fontHeight) * ui::kEditLineSpacing) : 0;
     w->hasSelection = false;
-    w->cursorPos = ui::editPlaceAt(w->editPassword ? masked : w->editText, lines, line, fromLeft,
-                                   [&](const std::string& piece) {
-                                       return ui::interfaceTextWidth(piece, w->fontFace, w->fontHeight);
-                                   });
+    w->cursorPos = editTextPlace(*w, x, y);
+    fireCursorChanged(wid);
+}
+
+void LuaEngine::dragEditCaret(uint32_t wid, float x, float y) {
+    auto* w = widgets_.get(wid);
+    if (!w || !w->isEditBox || w->rectW <= 0.0f || w->rectH <= 0.0f) return;
+    // While the pointer is over it (0x0048f950 -> 0x0048f730).
+    if (x < w->left || x > w->left + w->rectW || y < w->bottom || y > w->bottom + w->rectH) return;
+    const size_t len = w->editText.size();
+    const size_t caret = std::min(w->cursorPos, len);
+    const size_t target = editTextPlace(*w, x, y);
+    if (target == caret) return;
+    ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
+    if (!sel.active || sel.stop <= sel.start || sel.stop > len) sel = {true, caret, caret};
+    sel = ui::dragSelection(caret, sel, target);
+    w->cursorPos = target;   // 0x00963350
+    w->hasSelection = sel.active;
+    w->selStart = sel.start;
+    w->selEnd = sel.stop;
     fireCursorChanged(wid);
 }
 
@@ -18646,7 +18675,9 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                                  : (i == 1) ? cand->dragRight
                                             : false;
                 if (takes) { owner = id; break; }
-                if (cand->isSlider) { stoppedAtSlider = true; break; }
+                // An edit box likewise: it selects (0x00965660), and what it
+                // is in stays where it is.
+                if (cand->isSlider || cand->isEditBox) { stoppedAtSlider = true; break; }
                 id = cand->parent;
             }
             const float mx = x - pressX_[i], my = y - pressY_[i];
@@ -18685,6 +18716,12 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                         dw && !dw->name.empty() ? dw->name.c_str() : "(unnamed)");
             break;
         }
+    }
+
+    // An edit box selects from where the press was to where the pointer is,
+    // for as long as that is held (+0x2ec from 0x00967cd0 to 0x00962c80).
+    if (buttonDown_[0] && buttons.left && editDragWid_ != 0 && draggingWid_ == 0) {
+        dragEditCaret(editDragWid_, x, y);
     }
 
     // A slider follows the cursor for as long as it is held, which is the only
@@ -18806,6 +18843,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             // Escape and Enter are what give the keyboard back, as they do in
             // WoW.
             if (b.name && std::strcmp(b.name, "LeftButton") == 0) {
+                editDragWid_ = 0;
                 for (uint32_t id = hit; id != 0;) {
                     const auto* cand = widgets_.get(id);
                     if (!cand) break;
@@ -18813,6 +18851,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     // the keyboard (0x00967cd0).
                     if (cand->isEditBox && cand->visible) {
                         placeEditCaret(id, x, y);
+                        editDragWid_ = id;
                         setEditFocus(id);
                         break;
                     }
@@ -18865,6 +18904,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                 callFrameScript(pressedWid_[i], "OnMouseDown", b.name);
         } else if (!b.down && buttonDown_[i]) {
             buttonDown_[i] = false;
+            if (i == 0) editDragWid_ = 0;
             // Before anything asks which frame was pressed, because a link is
             // not a frame's click to take and the frame it is drawn in need not
             // have taken the press at all.

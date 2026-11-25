@@ -229,6 +229,9 @@ public:
     /// The caret of an edit box to where a press at (x, y), in the tree's
     /// units, is in its text, its selection gone (0x00967cd0, 0x00964790).
     void placeEditCaret(uint32_t wid, float x, float y);
+    /// The same as the press is held and the pointer moves: what is between
+    /// the press and there is selected (0x00965660).
+    void dragEditCaret(uint32_t wid, float x, float y);
     /// A key for a frame rather than an edit box. Returns true when a frame
     /// took it, so the caller knows not to also treat it as a movement key or
     /// a binding - which is the whole reason a dialog can be typed into. A
@@ -468,6 +471,8 @@ private:
     /// whole drag, so sliding from one onto the other does not switch which is
     /// being moved.
     uint32_t pickerPart_ = 0;
+    /// The edit box a held press selects in, 0 for none.
+    uint32_t editDragWid_ = 0;
     bool frameAcceptsClick(uint32_t wid, const char* button);
     /// The nearest frame at or above `wid` registered for this button, or `wid`
     /// itself when none is. A click lands on the topmost frame taking the

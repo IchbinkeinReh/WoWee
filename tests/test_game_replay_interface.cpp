@@ -593,6 +593,39 @@ TEST_CASE("a press in an edit box puts the caret there", "[replay][interface]") 
     // Left of the text it is at the text's start, whatever the line.
     ui.engine.placeEditCaret(id, left + 2.0f, top - 5.0f - line * 1.5f);
     CHECK(tree.get(id)->cursorPos == 0);
+
+    // 0x00965660: held and moved it selects, forward and back past where the
+    // press was, as long as the pointer is over the box.
+    const auto selects = [&](size_t from, size_t to, size_t caret) {
+        const auto* w = tree.get(id);
+        return w->hasSelection && w->selStart == from && w->selEnd == to && w->cursorPos == caret;
+    };
+    const float second = top - 5.0f - line * 1.5f;
+    wowee::addons::LuaEngine::MouseButtons held;
+    held.left = true;
+    const float uiScale = tree.uiScale() > 0.0f ? tree.uiScale() : 1.0f;
+    const auto mouse = [&](float x, float y, const wowee::addons::LuaEngine::MouseButtons& buttons) {
+        ui.engine.dispatchMouse(x * uiScale, 768.0f - y * uiScale, 768.0f, buttons);
+    };
+    mouse(left + 10.5f, second, held);
+    CHECK(tree.get(id)->cursorPos == 5);
+    CHECK_FALSE(tree.get(id)->hasSelection);
+    mouse(left + 290.0f, second, held);
+    CHECK(selects(5, 9, 9));
+    mouse(left + 290.0f, top - 5.0f - line * 2.5f, held);
+    CHECK(selects(5, 14, 14));
+    mouse(left + 400.0f, second, held);
+    CHECK(selects(5, 14, 14));
+    mouse(left + 290.0f, top - 5.0f - line * 0.5f, held);
+    // Past the press at a bound, the end that was dragged stays (0x009631a0).
+    CHECK(selects(4, 14, 4));
+    // Let go of, the pointer moves nothing.
+    mouse(left + 290.0f, top - 5.0f - line * 0.5f, {});
+    mouse(left + 290.0f, second, {});
+    CHECK(selects(4, 14, 4));
+    // A press lets it go and begins anew.
+    mouse(left + 10.5f, second, held);
+    CHECK_FALSE(tree.get(id)->hasSelection);
 }
 
 namespace {
