@@ -130,14 +130,15 @@ float letterWidth(const std::string& text, const std::string& fontFace, float si
 }  // namespace
 
 float interfaceTextWidth(const std::string& text, const std::string& fontFace,
-                         float fontHeight) {
+                         float fontHeight, float frameScale) {
     if (text.empty()) return 0.0f;
     const float size = interfaceFontSize(fontHeight);
-    return markupWidth(text, size, [&](const std::string& piece) { return letterWidth(piece, fontFace, size); });
+    return markupWidth(text, pictureUnits(size, frameScale),
+                       [&](const std::string& piece) { return letterWidth(piece, fontFace, size); });
 }
 
 int interfaceTextLines(const std::string& text, const std::string& fontFace,
-                       float fontHeight, float wrapWidth, bool nonSpaceWrap) {
+                       float fontHeight, float wrapWidth, bool nonSpaceWrap, float frameScale) {
     if (text.empty()) return 0;
     const float size = interfaceFontSize(fontHeight);
     ImFont* font = interfaceFaceOrDefault(fontFace);
@@ -148,12 +149,12 @@ int interfaceTextLines(const std::string& text, const std::string& fontFace,
         // everything fits on one line.
         return static_cast<float>(piece.size()) * size * 0.5f;
     };
-    const auto lines = wrapText(parseMarkup(text), wrapWidth, nonSpaceWrap, measure);
+    const auto lines = wrapText(parseMarkup(text, pictureUnits(size, frameScale)), wrapWidth, nonSpaceWrap, measure);
     return lines.empty() ? 1 : static_cast<int>(lines.size());
 }
 
 std::string interfaceFittedText(const std::string& text, ImFont* font, float size, float width, int lines,
-                                bool wordWrap, bool nonSpaceWrap, float indent) {
+                                bool wordWrap, bool nonSpaceWrap, float indent, float frameScale) {
     // 0x00483a40: one without a height is not shortened - its lines are broken
     // at its width, and end where a word is too long for one.
     if (text.empty() || width <= 0.0f || (lines <= 0 && !wordWrap)) return text;
@@ -161,28 +162,24 @@ std::string interfaceFittedText(const std::string& text, ImFont* font, float siz
         if (font) return font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
         return static_cast<float>(piece.size()) * size * 0.5f;
     };
+    const PictureUnits pictures = pictureUnits(size, frameScale);
     return fitText(text, [&](const std::string& t) {
         bool stopped = false;
-        const auto wrapped = wrapText(parseMarkup(t), wordWrap ? width : 0.0f, nonSpaceWrap, measure, indent, &stopped);
+        const auto wrapped = wrapText(parseMarkup(t, pictures), wordWrap ? width : 0.0f, nonSpaceWrap, measure, indent, &stopped);
         if (stopped || (lines > 0 && wrapped.size() > static_cast<size_t>(lines))) return false;
         if (wordWrap) return true;
         float wide = 0.0f;
         if (!wrapped.empty()) {
-            for (const WrapRun& run : wrapped.front()) {
-                wide += run.texture.empty()      ? measure(run.text)
-                        : run.texWidth > 0.0f    ? run.texWidth
-                        : run.texHeight > 0.0f   ? run.texHeight
-                                                 : size;
-            }
+            for (const WrapRun& run : wrapped.front()) wide += run.texture.empty() ? measure(run.text) : run.texWidth;
         }
         return wide <= width + kMeasureSlack;
     }, lines > 0 ? "..." : "");
 }
 
 std::string interfaceFittedText(const std::string& text, const std::string& fontFace, float fontHeight, float width,
-                                int lines, bool wordWrap, bool nonSpaceWrap) {
+                                int lines, bool wordWrap, bool nonSpaceWrap, float frameScale) {
     return interfaceFittedText(text, interfaceFaceOrDefault(fontFace), interfaceFontSize(fontHeight), width, lines,
-                               wordWrap, nonSpaceWrap);
+                               wordWrap, nonSpaceWrap, 0.0f, frameScale);
 }
 
 float editTextWidth(const Widget& box, const std::string& piece) {

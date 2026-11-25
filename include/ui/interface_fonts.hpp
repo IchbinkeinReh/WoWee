@@ -48,8 +48,9 @@ ImFont* interfaceFace(const std::string& pathOrName);
 ///
 /// `fontFace` is the widget's own, `fontHeight` its own point size; zero for
 /// either means the default, which is what the renderer falls back to too.
+/// `frameScale` is the frame's effective scale, which pictures in a text go by.
 float interfaceTextWidth(const std::string& text, const std::string& fontFace,
-                         float fontHeight);
+                         float fontHeight, float frameScale = 1.0f);
 
 /// How many lines a piece of text takes when it is drawn.
 ///
@@ -59,15 +60,15 @@ float interfaceTextWidth(const std::string& text, const std::string& fontFace,
 /// sets a string's text and reads its height in the same breath, long before
 /// the next frame is laid out, and the quest tracker sizes every row that way.
 int interfaceTextLines(const std::string& text, const std::string& fontFace,
-                       float fontHeight, float wrapWidth, bool nonSpaceWrap);
+                       float fontHeight, float wrapWidth, bool nonSpaceWrap, float frameScale = 1.0f);
 
 /// What a box `width` wide shows of a text in at most `lines` lines, 0 for any
 /// number of them (text_wrap.hpp fitText). Without wordWrap it is one line of
 /// that width.
 std::string interfaceFittedText(const std::string& text, ImFont* font, float size, float width, int lines,
-                                bool wordWrap, bool nonSpaceWrap, float indent = 0.0f);
+                                bool wordWrap, bool nonSpaceWrap, float indent = 0.0f, float frameScale = 1.0f);
 std::string interfaceFittedText(const std::string& text, const std::string& fontFace, float fontHeight, float width,
-                                int lines, bool wordWrap, bool nonSpaceWrap);
+                                int lines, bool wordWrap, bool nonSpaceWrap, float frameScale = 1.0f);
 
 struct Widget;
 /// Where an edit box's lines start in its text (edit_lines.hpp): one line of it

@@ -561,15 +561,16 @@ TEST_CASE("an edit box's steps: whole characters, and the ends of escapes with t
 TEST_CASE("a text is as wide as what it draws", "[markup]") {
     using wowee::ui::markupWidth;
     const auto ten = [](const std::string& s) { return 10.0f * static_cast<float>(s.size()); };
-    CHECK(markupWidth("abc", 12.0f, ten) == 30.0f);
-    CHECK(markupWidth("|cffff0000abc|r", 12.0f, ten) == 30.0f);
-    CHECK(markupWidth("|cff9d9d9d|Hitem:1:0|h[abc]|h|r", 12.0f, ten) == 50.0f);
-    CHECK(markupWidth("ab|nabcd|na", 12.0f, ten) == 40.0f);
-    CHECK(markupWidth("|Tx:20:30|tabc", 12.0f, ten) == 60.0f);
-    CHECK(markupWidth("|Tx:20|tabc", 12.0f, ten) == 50.0f);
-    CHECK(markupWidth("abc|Tx:0|t", 12.0f, ten) == 42.0f);
-    CHECK(markupWidth("", 12.0f, ten) == 0.0f);
-    CHECK(markupWidth("a||b", 12.0f, ten) == 30.0f);
+    const wowee::ui::PictureUnits plain{1.0f, 12.0f, 1.0f};
+    CHECK(markupWidth("abc", plain, ten) == 30.0f);
+    CHECK(markupWidth("|cffff0000abc|r", plain, ten) == 30.0f);
+    CHECK(markupWidth("|cff9d9d9d|Hitem:1:0|h[abc]|h|r", plain, ten) == 50.0f);
+    CHECK(markupWidth("ab|nabcd|na", plain, ten) == 40.0f);
+    CHECK(markupWidth("|Tx:20:30|tabc", plain, ten) == 60.0f);
+    CHECK(markupWidth("|Tx:20|tabc", plain, ten) == 50.0f);
+    CHECK(markupWidth("abc|Tx:0|t", plain, ten) == 42.0f);
+    CHECK(markupWidth("", plain, ten) == 0.0f);
+    CHECK(markupWidth("a||b", plain, ten) == 30.0f);
 }
 
 // 0x006c6ec5
@@ -589,4 +590,43 @@ TEST_CASE("a link's text is its markup out of the line", "[markup]") {
     CHECK(textOf("|Hitem:1|h[A]").empty());
     for (const WrapRun& r : parseMarkup("|Hitem:1|h[A]|h tail"))
         if (r.link.empty()) CHECK(r.linkText.empty());
+}
+
+// 0x006c0e80
+TEST_CASE("the size of a picture in a text", "[markup]") {
+    using namespace wowee::ui;
+    const TextScreen before = textScreen();
+    textScreen() = {4.0f / 3.0f, 1.0f};   // 0x00ac0cb4 is 0.8 there
+    const auto sizeOf = [](const std::string& text, float size, float scale) {
+        for (const WrapRun& r : parseMarkup(text, pictureUnits(size, scale)))
+            if (!r.texture.empty()) return std::pair(r.texHeight, r.texWidth);
+        return std::pair(-1.0f, -1.0f);
+    };
+    const auto is = [](std::pair<float, float> p, float h, float w) {
+        return p.first == Catch::Approx(h) && p.second == Catch::Approx(w);
+    };
+    // For letters 14 high.
+    CHECK(is(sizeOf("|Tx:20:30|t", 14.0f, 1.0f), 25.0f, 37.5f));
+    CHECK(is(sizeOf("|Tx:20:30|t", 28.0f, 1.0f), 50.0f, 75.0f));
+    CHECK(is(sizeOf("|Tx:20|t", 14.0f, 1.0f), 25.0f, 25.0f));
+    CHECK(is(sizeOf("|Tx:20:0|t", 14.0f, 1.0f), 25.0f, 14.0f));
+    // None is the line's, and a width without a height so many times that.
+    CHECK(is(sizeOf("|Tx|t", 14.0f, 1.0f), 14.0f, 14.0f));
+    CHECK(is(sizeOf("|Tx:0|t", 12.0f, 1.0f), 12.0f, 12.0f));
+    CHECK(is(sizeOf("|Tx:0:0:2:0|t", 12.0f, 1.0f), 12.0f, 12.0f));
+    CHECK(is(sizeOf("|Tx:0:2|t", 12.0f, 1.0f), 12.0f, 24.0f));
+    // The frame's scale once more, UIParent's among it.
+    CHECK(is(sizeOf("|Tx:20|t", 14.0f, 0.5f), 12.5f, 12.5f));
+    CHECK(is(sizeOf("|Tx:0:2|t", 12.0f, 0.5f), 6.0f, 6.0f));
+    textScreen().uiScale = 0.5f;
+    CHECK(is(sizeOf("|Tx:20|t", 14.0f, 1.0f), 12.5f, 12.5f));
+    CHECK(is(sizeOf("|Tx:0|t", 14.0f, 1.0f), 7.0f, 7.0f));
+    textScreen() = {16.0f / 9.0f, 1.0f};
+    CHECK(is(sizeOf("|Tx:14|t", 14.0f, 1.0f), 16.06286f, 16.06286f));
+    textScreen() = before;
+    // Moved by two, and by nothing where it does not say.
+    for (const WrapRun& r : parseMarkup("|Tx:0:0:2:-1|t", pictureUnits(12.0f, 1.0f))) {
+        CHECK(r.texX == 2.0f);
+        CHECK(r.texY == -1.0f);
+    }
 }

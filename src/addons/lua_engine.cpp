@@ -1786,14 +1786,14 @@ int lua_Region_SetHeight(lua_State* L) {
 /// the alternative was answering nil, and MoneyFrame does
 /// SetWidth(GetTextWidth() + iconWidth) - arithmetic that loses the file.
 float measureTextWidth(const std::string& text, const std::string& fontFace,
-                       float fontHeight) {
+                       float fontHeight, float frameScale) {
     // Through the same function the renderer draws with, so a widget sized to
     // its own text gets the width its own text will occupy. Measuring in this
     // client's face at a flat twelve while drawing in the interface's at its
     // real height made every self-sized label narrower than what went in it -
     // MoneyFrame sizes all three coin buttons that way, and the gold, silver
     // and copper ran into one another.
-    return wowee::ui::interfaceTextWidth(text, fontFace, fontHeight);
+    return wowee::ui::interfaceTextWidth(text, fontFace, fontHeight, frameScale);
 }
 
 /// The font string a widget measures: itself if it is one, and otherwise the
@@ -1815,7 +1815,7 @@ int lua_Region_GetTextWidth(lua_State* L) {
     syncTooltipLineStringOf(L, widgetOf(L, 1));
     const auto* w = textWidgetOf(L, 1);
     // 0x00483e80: of what its box shows.
-    lua_pushnumber(L, w ? measureTextWidth(fontStringShown(*w), w->fontFace, w->fontHeight) : 0.0);
+    lua_pushnumber(L, w ? measureTextWidth(fontStringShown(*w), w->fontFace, w->fontHeight, w->effScale) : 0.0);
     return 1;
 }
 
@@ -1898,7 +1898,7 @@ std::string fontStringShown(const wowee::ui::Widget& w) {
                                           !w.heightGiven ? 0
                                           : w.wordWrap   ? wowee::ui::linesThatFit(w.height, size, w.lineSpacing)
                                                          : 1,
-                                          w.wordWrap, w.nonSpaceWrap);
+                                          w.wordWrap, w.nonSpaceWrap, w.effScale);
 }
 
 double fontStringTextHeight(const wowee::ui::Widget& w) {
@@ -1910,7 +1910,7 @@ double fontStringTextHeight(const wowee::ui::Widget& w) {
     const float wrapWidth = w.wordWrap ? wowee::ui::givenWidth(w) : 0.0f;
     const int lines = std::max(1, wowee::ui::interfaceTextLines(
                                       fontStringShown(w), w.fontFace, w.fontHeight,
-                                      wrapWidth, w.nonSpaceWrap));
+                                      wrapWidth, w.nonSpaceWrap, w.effScale));
     return wowee::ui::textHeight(static_cast<size_t>(lines), line, w.lineSpacing);
 }
 
@@ -1932,7 +1932,7 @@ float ownWidth(const wowee::ui::WidgetTree& tree, const wowee::ui::Widget& w) {
         case WidgetKind::FontString:
             // One without a text is a unit wide.
             if (const float given = wowee::ui::givenWidth(w); given > 0.0f) return given;
-            return std::max(1.0f, static_cast<float>(measureTextWidth(w.text, w.fontFace, w.fontHeight)));
+            return std::max(1.0f, static_cast<float>(measureTextWidth(w.text, w.fontFace, w.fontHeight, w.effScale)));
         case WidgetKind::Texture:
             if (w.width > 0.0f && !w.widthFromImage) return w.width;
             return tree.pictureSize(w.texturePath, pictureW, pictureH) ? pictureW : 0.0f;

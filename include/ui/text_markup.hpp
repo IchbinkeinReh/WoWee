@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cmath>
 #include <string>
 #include <utility>
 #include <vector>
@@ -157,9 +158,9 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
                     // Height then width. Anything unparsable stays zero, which
                     // is the same as the escape asking for the line height.
                     size_t at = firstColon + 1;
-                    float offX = 0.0f, offY = 0.0f, fileW = 0.0f, fileH = 0.0f;
+                    float fileW = 0.0f, fileH = 0.0f;
                     float cut[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
-                    float* fields[10] = {&tex.texHeight, &tex.texWidth, &offX, &offY, &fileW, &fileH,
+                    float* fields[10] = {&tex.texHeight, &tex.texWidth, &tex.texX, &tex.texY, &fileW, &fileH,
                                          &cut[0], &cut[1], &cut[2], &cut[3]};
                     for (float* field : fields) {
                         if (at > payload.size()) break;
@@ -170,8 +171,7 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
                         if (next == std::string::npos) break;
                         at = next + 1;
                     }
-                    (void)offX;
-                    (void)offY;
+                    tex.texWidthGiven = payload.find(':', firstColon + 1) != std::string::npos;
                     if (fileW > 0.0f && fileH > 0.0f && cut[3] >= 0.0f) {
                         tex.uv[0] = cut[0] / fileW;
                         tex.uv[1] = cut[1] / fileW;
@@ -190,20 +190,55 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
     return runs;
 }
 
+/// The screen texts are drawn on, which the pictures in them go by.
+struct TextScreen {
+    float aspect = 4.0f / 3.0f;
+    float uiScale = 1.0f;   ///< UIParent's, which the tree holds apart from a frame's
+};
+inline TextScreen& textScreen() {
+    static TextScreen screen;
+    return screen;
+}
+
+/// What the numbers of a picture come to in a text whose letters are `size` high, in the
+/// same units, on a frame of that scale (0x006c0e80): they are for letters 14 high, get
+/// the scale of the frame once more than the letters do, and the client's own aspect
+/// factor (0x00ac0cb4) on top. A number of none is the height of a line.
+struct PictureUnits {
+    float number = 1.0f, line = 0.0f, scale = 1.0f;
+};
+[[nodiscard]] inline PictureUnits pictureUnits(float size, float frameScale) {
+    const TextScreen& screen = textScreen();
+    const float scale = (frameScale > 0.0f ? frameScale : 1.0f) * screen.uiScale;
+    return {size / 14.0f * scale * std::sqrt(screen.aspect * screen.aspect + 1.0f) / screen.aspect, size * scale, scale};
+}
+/// A picture's numbers turned into sizes: with one it is as wide as high, and without a
+/// height the width is so many times that of the line.
+inline void sizePicture(WrapRun& run, const PictureUnits& units) {
+    const bool high = run.texHeight > 0.0f;
+    const float height = high ? run.texHeight * units.number : units.line;
+    if (!run.texWidthGiven) run.texWidth = height;
+    else if (run.texWidth <= 0.0f) run.texWidth = units.line;
+    else run.texWidth *= high ? units.number : units.scale * height;
+    run.texHeight = height;
+    run.texX *= units.scale;
+    run.texY *= units.scale;
+}
+[[nodiscard]] inline std::vector<WrapRun> parseMarkup(const std::string& in, const PictureUnits& units) {
+    auto runs = parseMarkup(in);
+    for (WrapRun& run : runs)
+        if (!run.texture.empty()) sizePicture(run, units);
+    return runs;
+}
+
 /// How wide a text is drawn (0x00483e80 -> 0x004bdcd0): the widest of its lines, as it
-/// breaks them itself; a picture as wide as it says it is, or high, or as its line is;
-/// nothing for what draws nothing.
+/// breaks them itself, the pictures among them; nothing for what draws nothing.
 template <class Measure>
-[[nodiscard]] float markupWidth(const std::string& text, float lineSize, Measure&& measure) {
+[[nodiscard]] float markupWidth(const std::string& text, const PictureUnits& units, Measure&& measure) {
     float widest = 0.0f;
-    for (const auto& line : wrapText(parseMarkup(text), 0.0f, false, measure)) {
+    for (const auto& line : wrapText(parseMarkup(text, units), 0.0f, false, measure)) {
         float wide = 0.0f;
-        for (const WrapRun& run : line) {
-            wide += run.texture.empty()    ? measure(run.text)
-                    : run.texWidth > 0.0f  ? run.texWidth
-                    : run.texHeight > 0.0f ? run.texHeight
-                                           : lineSize;
-        }
+        for (const WrapRun& run : line) wide += run.texture.empty() ? measure(run.text) : run.texWidth;
         widest = std::max(widest, wide);
     }
     return widest;

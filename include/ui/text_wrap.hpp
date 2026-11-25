@@ -41,10 +41,12 @@ struct WrapRun {
     /// amounts are written this way - GOLD_AMOUNT_TEXTURE is "%d" followed by
     /// one of these - so a run of them is what a price is made of.
     std::string texture;
-    /// Height and width from the escape, in interface units. Zero means "the
-    /// height of the line", which is what every coin escape asks for.
+    /// Height and width, and how far it is moved right and up: the escape's own
+    /// numbers, and once sizePicture has been through them what they come to.
     float texHeight = 0.0f;
     float texWidth = 0.0f;
+    bool texWidthGiven = false;
+    float texX = 0.0f, texY = 0.0f;
     /// The part of the file shown, left/right/top/bottom as fractions -
     /// the escape's last four numbers over its texture size; all of it by
     /// default.

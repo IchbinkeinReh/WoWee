@@ -129,7 +129,7 @@ private:
     /// wrapWidth of zero draws one line, which is what an auto-sized label
     /// and a tooltip row want; a positive one breaks the text to fit.
     /// Answers the height it drew, in pixels.
-    float drawMarkupText(ImDrawList* dl, ImFont* font, float size, ImVec2 at,
+    float drawMarkupText(ImDrawList* dl, ImFont* font, float size, float frameScale, ImVec2 at,
                         uint32_t fallback, float alpha, const std::string& text,
                         float wrapWidth = 0.0f, bool nonSpaceWrap = false,
                         const char* justifyH = nullptr, bool forceColor = false,

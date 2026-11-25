@@ -1,4 +1,5 @@
 #include "ui/widget_tree.hpp"
+#include "ui/text_markup.hpp"
 #include "ui/layout_cache.hpp"
 
 #include <unordered_map>
@@ -1015,6 +1016,7 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     // here, for this screen and this safe area.
     applyDefaultUserScale(pixelW, pixelH);
     uiScale_ = ((pixelH > 0.0f) ? (pixelH / kInterfaceHeight) : 1.0f) * userScale_;
+    textScreen() = {pixelW > 0.0f && pixelH > 0.0f ? pixelW / pixelH : 4.0f / 3.0f, userScale_};
     const float screenW = (uiScale_ > 0.0f) ? (pixelW / uiScale_) : pixelW;
     // The same division as the width, and it used to be the constant instead.
     // The two agree at a user scale of 1 and only there: the screen shows
