@@ -3745,7 +3745,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"CancelAreaSpiritHeal", [](lua_State* L) -> int { (void)L; return 0; }},
                 {"GetAreaSpiritHealerTime", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? gh->getAreaSpiritHealerTime() : 0.0f);
+            lua_pushnumber(L, gh ? gh->getAreaSpiritHealerTime() : 0);
             return 1;
         }},
                 {"GetGuildRosterInfo",      lua_GetGuildRosterInfo},

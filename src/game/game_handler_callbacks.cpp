@@ -4486,9 +4486,15 @@ void GameHandler::takeSpiritGuide(uint64_t guid) {
     if (areaSpiritHealerGuid_ == guid) return;
     areaSpiritHealerGuid_ = guid;
     constexpr uint32_t kWaitingToResurrect = 0xa18;
-    if (areaSpiritHealerAnswered_) cancelAura(kWaitingToResurrect);
-    areaSpiritHealerAnswered_ = false;
+    if (areaSpiritHealerEnds_) cancelAura(kWaitingToResurrect);
+    areaSpiritHealerEnds_.reset();
     if (guid != 0) queryAreaSpiritHealer(guid);
+}
+
+int GameHandler::getAreaSpiritHealerTime() const {
+    if (!areaSpiritHealerEnds_) return 0;
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(*areaSpiritHealerEnds_ - core::steadyNow());
+    return std::max(0, static_cast<int>(left.count())) / 1000;
 }
 
 void GameHandler::stepSpiritGuide() {

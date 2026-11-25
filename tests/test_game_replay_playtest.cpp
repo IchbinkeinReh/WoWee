@@ -613,6 +613,12 @@ TEST_CASE("a ghost takes the spirit guide it comes to", "[replay][playtest]") {
     s.receive(time);
     CHECK(inRange == 1);
     CHECK(cancelled() == 0);
+    // T297: it runs down, in whole seconds (0x00516b90).
+    CHECK(gh.getAreaSpiritHealerTime() == 20);
+    wowee::core::advanceTestClock(6.5);
+    CHECK(gh.getAreaSpiritHealerTime() == 13);
+    wowee::core::advanceTestClock(20.0);
+    CHECK(gh.getAreaSpiritHealerTime() == 0);
     at(22.5f);
     CHECK(gh.getAreaSpiritHealerGuid() == 0);
     CHECK(cancelled() == 1);

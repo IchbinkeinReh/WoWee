@@ -1477,8 +1477,7 @@ void GameHandler::registerCoreOpcodes() {
         // 0x00524b10: the guide the ghost is at, looked at once more.
         stepSpiritGuide();
         if (guid != areaSpiritHealerGuid_ || timeMs == 0) return;
-        areaSpiritHealerAnswered_ = true;
-        areaSpiritHealerSeconds_ = static_cast<float>(timeMs) / 1000.0f;
+        areaSpiritHealerEnds_ = core::steadyNow() + std::chrono::milliseconds(timeMs);
         // No chat line: 0x00524b10 keeps the time and raises
         // AREA_SPIRIT_HEALER_IN_RANGE, and the dialog counts down. This also
         // printed English "You will be able to resurrect in N seconds."

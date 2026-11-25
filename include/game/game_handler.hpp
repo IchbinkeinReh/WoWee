@@ -479,7 +479,8 @@ public:
     bool resurrectHasSickness() const { return resurrectHasSickness_; }
     bool resurrectHasTimer() const { return resurrectHasTimer_; }
     /// Seconds until the next one, and the healer it belongs to.
-    float getAreaSpiritHealerTime() const { return areaSpiritHealerSeconds_; }
+    /// The whole seconds until then (0x00516b90): 0 when over, or none was answered.
+    int getAreaSpiritHealerTime() const;
     uint64_t getAreaSpiritHealerGuid() const { return areaSpiritHealerGuid_; }
     /// RUNE_POWER_UPDATE for each rune the client says it of (0x0081b530
     /// 0x256): its slot from 1, and "1" when usable.
@@ -8066,7 +8067,8 @@ private:
     bool        resurrectHasSickness_ = false;
     bool        resurrectHasTimer_ = true;
     uint64_t    areaSpiritHealerGuid_ = 0;
-    bool        areaSpiritHealerAnswered_ = false;   ///< 0x00bd0840
+    /// When the guide resurrects next, once it has answered (0x00bd0840).
+    std::optional<std::chrono::steady_clock::time_point> areaSpiritHealerEnds_;
     /// The conversation last asked for, until the server answers it.
     ///
     /// A server that refuses one says nothing - out of reach, a creature that
@@ -8086,7 +8088,6 @@ private:
     /// through. Called from the dispatch for every packet that opens an NPC's
     /// window.
     void noteNpcAnswered() { pendingNpcHello_.guid = 0; }
-    float       areaSpiritHealerSeconds_ = 0.0f;
 
     /// One calendar packet, read and applied as 0x005c3fe0 does, and the
     /// events it raises fired.
