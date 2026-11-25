@@ -771,6 +771,38 @@ TEST_CASE("the reputation rows are in the order of their names", "[replay][inter
                      "+Other;Erster;Zweiter;+Inactive;Ödland;thorium;"));
 }
 
+// 0x0096f4a0: a button's label has the font object of the button's state.
+TEST_CASE("a button's label takes the font of its state", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("FN = CreateFont('FN') FN:SetTextColor(1, .8, 0) FH = CreateFont('FH') FH:SetTextColor(1, 1, 1) "
+           "FD = CreateFont('FD') FD:SetTextColor(.5, .5, .5) "
+           "b = CreateFrame('Button', 'PlayBt', UIParent) b:SetNormalFontObject('FN') b:SetHighlightFontObject(FH) "
+           "b:SetDisabledFontObject('FD') b:SetText('x') f = b:GetFontString() "
+           "function red() return math.floor(f:GetTextColor() * 10 + .5) end");
+    CHECK(ui.is("f:GetFontObject() == FN and b:GetHighlightFontObject() == FH and b:GetDisabledFontObject() == FD"));
+    ui.run("b:Disable()");
+    CHECK(ui.is("f:GetFontObject() == FD and red() == 5"));
+    ui.run("b:LockHighlight()");   // a disabled one's all the same
+    CHECK(ui.is("f:GetFontObject() == FD"));
+    ui.run("b:Enable()");
+    CHECK(ui.is("f:GetFontObject() == FH and red() == 10"));
+    ui.run("b:UnlockHighlight()");
+    CHECK(ui.is("f:GetFontObject() == FN"));
+    ui.run("b:SetButtonState('DISABLED')");
+    CHECK(ui.is("f:GetFontObject() == FD"));
+    ui.run("b:SetButtonState('NORMAL')");
+    CHECK(ui.is("f:GetFontObject() == FN"));
+    // What the label has set itself is its own.
+    ui.run("f:SetTextColor(.3, 0, 0) b:Disable()");
+    CHECK(ui.is("f:GetFontObject() == FD and red() == 3"));
+    // Another label, of the state as it is, and one without a font follows none.
+    ui.run("g = b:CreateFontString() b:SetFontString(g)");
+    CHECK(ui.is("g:GetFontObject() == FD"));
+    ui.run("c = CreateFrame('Button', 'PlayBt2', UIParent) h = c:CreateFontString() h:SetFontObject('FN') c:SetFontString(h)");
+    CHECK(ui.is("h:GetFontObject() == nil and select(2, h:GetTextColor()) > .7"));
+}
+
 // T248: each element of an XML file is built for itself; an error in one ends that one alone,
 // a script that does not compile is not set, an OnLoad's error ends the OnLoad.
 TEST_CASE("an error in an addon's XML ends no more than itself", "[replay][interface]") {

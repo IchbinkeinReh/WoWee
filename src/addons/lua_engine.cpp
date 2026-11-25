@@ -2772,6 +2772,11 @@ int lua_CheckButton_GetChecked(lua_State* L) {
     return 1;
 }
 
+/// The font a button's state gives its label (0x0096f4a0): the disabled one's, the one of the
+/// mouse on it or of its highlight locked (+0x204), or the normal one's - as its own font object,
+/// so that the label's size, face and colour are that one's but for what it has set itself.
+static void refreshButtonFont(lua_State* L, uint32_t id);
+
 /// SetButtonState(state, lock) / GetButtonState. The interface holding a
 /// button down itself: ActionButton_UpdateState pushes the button for an
 /// ability that is toggled on, and no amount of moving the cursor should let
@@ -2788,6 +2793,7 @@ int lua_Button_SetButtonState(lua_State* L) {
     else if (state && sameWord(state, "DISABLED")) w->setButtonState(S::Disabled, lock);
     else if (state && sameWord(state, "NORMAL"))   w->setButtonState(S::Normal, lock);
     else return luaL_error(L, "Usage: %s:SetButtonState(\"state\", lock)", usageName(L, 1));
+    refreshButtonFont(L, w->id);
     return 0;
 }
 int lua_Button_GetButtonState(lua_State* L) {
@@ -2799,11 +2805,17 @@ int lua_Button_GetButtonState(lua_State* L) {
     return 1;
 }
 int lua_Button_LockHighlight(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->highlightLocked = true;
+    if (auto* w = widgetOf(L, 1)) {   // 0x00490a30
+        w->highlightLocked = true;
+        refreshButtonFont(L, w->id);
+    }
     return 0;
 }
 int lua_Button_UnlockHighlight(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->highlightLocked = false;
+    if (auto* w = widgetOf(L, 1)) {
+        w->highlightLocked = false;
+        refreshButtonFont(L, w->id);
+    }
     return 0;
 }
 
@@ -7530,6 +7542,7 @@ int lua_Button_Enable(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
     if (!w || !w->setEnabled(true)) return 0;
+    refreshButtonFont(L, w->id);
     taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
@@ -7548,6 +7561,7 @@ int lua_Button_Disable(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
     if (!w || !w->setEnabled(false)) return 0;
+    refreshButtonFont(L, w->id);
     taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
@@ -8676,6 +8690,40 @@ int lua_Region_GetVertexColor(lua_State* L) {
     return 4;
 }
 
+static void refreshButtonFont(lua_State* L, uint32_t id) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const wowee::ui::Widget* w = tree ? tree->get(id) : nullptr;
+    if (!w) return;
+    taint::Quiet quiet;
+    const int top = lua_gettop(L);
+    if (pushFrameOfWidget(L, id)) {
+        const int frame = lua_gettop(L);
+        lua_pushstring(L, "__fontString");
+        lua_rawget(L, frame);
+        const uint32_t label = lua_istable(L, -1) ? widgetIdOf(L, lua_gettop(L)) : 0;
+        if (auto* fs = label ? tree->get(label) : nullptr) {
+            lua_pushstring(L, !w->enabled ? "__disabledFontObject"
+                              : w->highlightLocked || tree->hoveredWidget() == id ? "__highlightFontObject"
+                                                                                  : "__normalFontObject");
+            lua_rawget(L, frame);
+            applyFontObject(L, lua_gettop(L), fs);
+        }
+    }
+    lua_settop(L, top);
+}
+
+/// A button's font at `field`, as CSimpleButton keeps it: the object, by name or itself.
+static void keepButtonFont(lua_State* L, const char* field) {
+    taint::Quiet quiet;
+    if (lua_type(L, 2) == LUA_TSTRING) lua_getglobal(L, lua_tostring(L, 2));
+    else lua_pushvalue(L, 2);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_pushnil(L);
+    }
+    lua_setfield(L, 1, field);
+}
+
 /// Button:SetNormalFontObject(font) - the font its label is drawn in.
 ///
 /// FrameXML declares this as <NormalFont style="GameFontNormal"/> on 71 button
@@ -8691,8 +8739,7 @@ int lua_Frame_SetNormalFontObject(lua_State* L) {
     // SetFontString (0x0096f7b0) - so a <NormalFont> written before the
     // <ButtonText>, or inherited from a template, still reaches it. The
     // label made by SetFontString reads this field; see kButtonLabelLua.
-    lua_pushvalue(L, 2);
-    lua_setfield(L, 1, "__normalFontObject");
+    keepButtonFont(L, "__normalFontObject");
 
     // The label, not the button: a button has no text of its own. Only the
     // one the button already has. Making one here, when the font is named
@@ -8707,7 +8754,7 @@ int lua_Frame_SetNormalFontObject(lua_State* L) {
     wowee::ui::Widget* fs = fsId ? tree->get(fsId) : nullptr;
     lua_pop(L, 1);
     if (!fs) return 0;
-    applyFontObject(L, 2, fs);
+    if (const auto* w = widgetOf(L, 1)) refreshButtonFont(L, w->id);
 
     // A label with no anchors of its own is centred on its button - that is
     // what an unanchored region gets - and justifying text inside a box that
@@ -8726,6 +8773,11 @@ int lua_Frame_SetNormalFontObject(lua_State* L) {
         a.relativeTo = 0;   // the button
         tree->addPoint(fsId, a);
     }
+    return 0;
+}
+/// __WoweeButtonFont(button): its label is another (0x0096f7b0).
+static int lua_WoweeButtonFont(lua_State* L) {
+    if (const auto* w = widgetOf(L, 1)) refreshButtonFont(L, w->id);
     return 0;
 }
 /// SetNormalFontObject("fontname" or fontObject) (0x00977340): a font's
@@ -8971,36 +9023,13 @@ int lua_wowee_setAnimOffset(lua_State* L) {
     return 0;
 }
 
-/// Read just the colour out of a font object, for the states this renderer
-/// draws by colour alone. The face and size come from the normal font: a
-/// button whose label changed size on hover would jump about.
-static void applyStateColor(lua_State* L, int fontIndex, float out[4], bool& flag) {
-    if (lua_isstring(L, fontIndex)) {
-        lua_getglobal(L, lua_tostring(L, fontIndex));
-    } else {
-        lua_pushvalue(L, fontIndex);
-    }
-    if (lua_istable(L, -1)) {
-        const char* keys[4] = {"r", "g", "b", "a"};
-        for (int i = 0; i < 4; ++i) {
-            lua_getfield(L, -1, keys[i]);
-            if (lua_isnumber(L, -1)) {
-                out[i] = static_cast<float>(lua_tonumber(L, -1));
-                flag = true;
-            }
-            lua_pop(L, 1);
-        }
-    }
-    lua_pop(L, 1);
-}
-
 int lua_Frame_SetHighlightFontObject(lua_State* L) {
     // 0x00977640: a font's name or a font object.
     if (const int t = lua_type(L, 2); t != LUA_TSTRING && t != LUA_TTABLE)
         return luaL_error(L, "Usage: %s:SetHighlightFontObject(\"fontname\")", usageName(L, 1));
-    if (auto* w = widgetOf(L, 1)) {
-        applyStateColor(L, 2, w->highlightColor, w->hasHighlightColor);
-        w->highlightFontName = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
+    if (const auto* w = widgetOf(L, 1)) {
+        keepButtonFont(L, "__highlightFontObject");
+        refreshButtonFont(L, w->id);
     }
     return 0;
 }
@@ -9008,27 +9037,22 @@ int lua_Frame_SetDisabledFontObject(lua_State* L) {
     // 0x009774c0: a font's name or a font object.
     if (const int t = lua_type(L, 2); t != LUA_TSTRING && t != LUA_TTABLE)
         return luaL_error(L, "Usage: %s:SetDisabledFontObject(\"fontname\")", usageName(L, 1));
-    if (auto* w = widgetOf(L, 1)) {
-        applyStateColor(L, 2, w->disabledColor, w->hasDisabledColor);
-        w->disabledFontName = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
+    if (const auto* w = widgetOf(L, 1)) {
+        keepButtonFont(L, "__disabledFontObject");
+        refreshButtonFont(L, w->id);
     }
     return 0;
 }
-/// GetHighlightFontObject / GetDisabledFontObject: the font object named,
+/// GetHighlightFontObject / GetDisabledFontObject (0x00977750, 0x009775d0): the font object,
 /// or nothing.
-static int pushNamedFontObject(lua_State* L, const std::string& name) {
-    if (name.empty()) return 0;
-    lua_getglobal(L, name.c_str());
-    return 1;
+static int pushButtonFont(lua_State* L, const char* field) {
+    if (!lua_istable(L, 1)) return 0;
+    taint::Quiet quiet;
+    lua_getfield(L, 1, field);
+    return lua_istable(L, -1) ? 1 : 0;
 }
-int lua_Frame_GetHighlightFontObject(lua_State* L) {
-    const auto* w = widgetOf(L, 1);
-    return w ? pushNamedFontObject(L, w->highlightFontName) : 0;
-}
-int lua_Frame_GetDisabledFontObject(lua_State* L) {
-    const auto* w = widgetOf(L, 1);
-    return w ? pushNamedFontObject(L, w->disabledFontName) : 0;
-}
+int lua_Frame_GetHighlightFontObject(lua_State* L) { return pushButtonFont(L, "__highlightFontObject"); }
+int lua_Frame_GetDisabledFontObject(lua_State* L) { return pushButtonFont(L, "__disabledFontObject"); }
 int lua_Frame_EnableJoystick(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) w->joystickEnabled = luaClientSwitchArg(L, 2, true);
     return 0;
@@ -12282,6 +12306,8 @@ void LuaEngine::registerCoreAPI() {
 
     lua_pushcfunction(L_, lua_wowee_fireOnLoad);
     lua_setglobal(L_, "__WoweeFireOnLoad");
+    lua_pushcfunction(L_, lua_WoweeButtonFont);
+    lua_setglobal(L_, "__WoweeButtonFont");
 
     lua_pushcfunction(L_, lua_GetMouseFocus);
     lua_setglobal(L_, "GetMouseFocus");
@@ -18902,13 +18928,12 @@ bool LuaEngine::holdsMousePress() const {
 void LuaEngine::releaseMouseHover() {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
-    if (hoverWid_ != 0) {
-        callFrameScriptMotion(hoverWid_, "OnLeave", false);
-        hoverWid_ = 0;
-    }
+    const uint32_t left = std::exchange(hoverWid_, 0u);
+    if (left != 0) callFrameScriptMotion(left, "OnLeave", false);
     if (const HoverLink was = std::exchange(hoverLink_, {}); was.owner != 0)
         callFrameScript2(was.owner, "OnHyperlinkLeave", was.link.c_str(), was.text.c_str());
     widgets_.setInteraction(0);
+    refreshButtonFont(L_, left);
     // Nothing is under the cursor and nothing is holding it, which is the
     // camera's cue that it may turn again.
     ui::frameXmlNoteMouseOwned(false);
@@ -19049,8 +19074,10 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     if (hit != hoverWid_) {
         const bool moved = !haveCursor_ || x != cursorX_ || y != cursorY_;
         if (hoverWid_ != 0 && hearsMotion(hoverWid_)) callFrameScriptMotion(hoverWid_, "OnLeave", moved);
+        refreshButtonFont(L_, hoverWid_);   // 0x0096fd00
         hoverWid_ = hit;
         if (hoverWid_ != 0 && hearsMotion(hoverWid_)) callFrameScriptMotion(hoverWid_, "OnEnter", moved);
+        refreshButtonFont(L_, hoverWid_);   // 0x0096fca0
     }
     // And a link's own (0x00978420, 0x00978480).
     if (HoverLink over = linkUnder(x, y, hit, "OnHyperlinkEnter", "OnHyperlinkLeave"); !(over == hoverLink_)) {

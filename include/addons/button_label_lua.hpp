@@ -16,9 +16,9 @@
 // justification: UIMenuButtonTemplate names GameFontNormalLeft and no anchors,
 // and its "Say" sits against the left edge.
 //
-// SetNormalFontObject is the C binding (lua_Frame_SetNormalFontObject). It
-// keeps the font in __normalFontObject and gives it to the label the button
-// already has; this is the other half. Run with __WoweeFrameMT defined, after
+// SetNormalFontObject is the C binding (lua_Frame_SetNormalFontObject), as are
+// its two siblings. Each keeps its font on the button and gives the label the
+// button already has that of its state; this is the other half. Run with __WoweeFrameMT defined, after
 // the block that installs the rest of the button methods.
 //
 // GetFontString makes a label on demand when a button is asked for one it has
@@ -31,22 +31,16 @@ namespace wowee::addons {
 inline constexpr const char* kButtonLabelLua = R"LUA(
 local mt = __WoweeFrameMT
 
-local function fontObjectOf(font)
-    if type(font) == 'string' then return rawget(_G, font) end
-    return font
-end
-
 -- Where a label with no anchors goes: the point its button's normal font
 -- justifies to, the middle when it says nothing.
 local function labelPoint(font)
-    local object = fontObjectOf(font)
-    local justify = type(object) == 'table' and rawget(object, 'justifyH')
+    local justify = type(font) == 'table' and rawget(font, 'justifyH')
     if justify == 'LEFT' or justify == 'RIGHT' then return justify end
     return 'CENTER'
 end
 
 function mt:GetNormalFontObject()
-    return fontObjectOf(self.__normalFontObject)
+    return self.__normalFontObject
 end
 
 function mt:SetFontString(fs)
@@ -60,9 +54,7 @@ function mt:SetFontString(fs)
         local point = labelPoint(font)
         fs:SetPoint(point, self, point)
     end
-    if font ~= nil and self.SetNormalFontObject then
-        self:SetNormalFontObject(font)
-    end
+    __WoweeButtonFont(self)
 end
 
 function mt:GetFontString()

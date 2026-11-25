@@ -325,8 +325,8 @@ struct Widget {
     float pushedTextOffsetX = 0.0f, pushedTextOffsetY = 0.0f;
 
     /// A button's label colour while the cursor is over it and while it is
-    /// disabled, from <HighlightFont> and <DisabledFont>. Unset means draw it
-    /// the usual way, so a template that names neither is unaffected.
+    /// disabled, by its components (SetHighlightTextColor, SetDisabledTextColor:
+    /// the interface before 3.0). Unset means draw it as its font says.
     bool  hasHighlightColor = false, hasDisabledColor = false;
     float highlightColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float disabledColor[4]  = {0.5f, 0.5f, 0.5f, 1.0f};
@@ -1013,11 +1013,6 @@ struct Widget {
     /// What of a font object's it has set itself and takes from none any more
     /// (font_follow.hpp).
     uint8_t fontOwn = 0;
-    /// The font objects SetHighlightFontObject / SetDisabledFontObject were
-    /// given by name, which GetHighlightFontObject / GetDisabledFontObject
-    /// hand back (0x00977750, 0x009775d0).
-    std::string highlightFontName;
-    std::string disabledFontName;
     /// SetNonBlocking (texture flag 1, 0x0048caa0) and EnableJoystick (frame
     /// flag 0x10 of +0xd8, 0x004a11d0).
     bool nonBlocking = false;

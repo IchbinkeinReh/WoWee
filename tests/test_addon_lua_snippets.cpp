@@ -222,11 +222,14 @@ __WoweeFrameMT = {}
 __WoweeFrameMT.__index = __WoweeFrameMT
 function __WoweeFrameMT:CreateFontString() return fontString() end
 function __WoweeFrameMT:SetNormalFontObject(font)
-    self.__normalFontObject = font
+    local object = type(font) == 'string' and _G[font] or font
+    self.__normalFontObject = object
     local fs = self.__fontString
     if not fs then return end
-    local object = type(font) == 'string' and _G[font] or font
     if object and object.justifyH then fs.justifyH = object.justifyH end
+end
+function __WoweeButtonFont(button)
+    if button.__normalFontObject then button:SetNormalFontObject(button.__normalFontObject) end
 end
 function newButton() return setmetatable({}, __WoweeFrameMT) end
 )LUA";
