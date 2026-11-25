@@ -3631,6 +3631,7 @@ static bool fillQuestTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         line(global("QUEST_TOOLTIP_REQUIREMENTS", "Requirements:"), 1.0f, 0.82f, 0.0f, false);
         for (const std::string& r : reqs) line(" - " + r, 1.0f, 1.0f, 1.0f, false);
     }
+    w->shown = true;   // as every kind's builder ends (0x0061e6b0 -> 0x006288a0)
     // And the quest builder's own script at its end (0x00622960).
     if (pushFrameOfWidget(L, w->id)) {
         callScriptOnTable(L, lua_gettop(L), "OnTooltipSetQuest", 0.0);
@@ -4718,6 +4719,7 @@ static bool fillAchievementLinkTooltip(lua_State* L, wowee::ui::Widget* w, game:
         }
         if (!left.empty()) push(std::move(left), leftColour, "", leftColour);
     }
+    w->shown = true;
     return true;
 }
 

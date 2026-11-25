@@ -768,3 +768,25 @@ TEST_CASE("the reputation rows are in the order of their names", "[replay][inter
     CHECK(ui.rowsAre("+Classic;>+Cartel;>Beutebucht;>Ratchet;>+Horde;>Orgrimmar;+Wrath;Zuldrak;"
                      "+Other;Erster;Zweiter;+Inactive;Ödland;thorium;"));
 }
+
+// 0x0061e6b0: every kind of link shows its tooltip, a quest's once it is known.
+TEST_CASE("a quest's link shows its tooltip", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("tip = CreateFrame('GameTooltip', 'PlayQuestTip', UIParent) tip:Hide() tip:SetOwner(UIParent, 'ANCHOR_NONE') "
+           "tip:SetHyperlink('quest:435:20')");
+    CHECK(ui.is("not tip:IsShown()"));
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUEST_QUERY_RESPONSE));
+    for (int i = 0; i < 65; ++i) p.writeUInt32(i == 0 ? 435u : i == 1 ? 2u : i == 2 ? 20u : 0u);
+    for (const char* text : {"Escorting Erland", "Escort Erland.", "Details.", "", ""}) p.writeString(text);
+    for (int i = 0; i < 16 + 12; ++i) p.writeUInt32(0);
+    for (int i = 0; i < 4; ++i) p.writeString("");
+    s.receive(p);
+    ui.run("__WoweeQuestQueryAnswered(435)");
+    CHECK(ui.is("tip:IsShown() and tip:NumLines() == 3"));
+    ui.run("tip:SetHyperlink('quest:435:20')");   // and its second click closes it
+    CHECK(ui.is("not tip:IsShown()"));
+    ui.run("tip:SetOwner(UIParent, 'ANCHOR_NONE') tip:SetHyperlink('|cffffff00|Hquest:435:20|h[x]|h|r')");
+    CHECK(ui.is("tip:IsShown() and tip:NumLines() == 3"));
+}
