@@ -76,7 +76,7 @@ bool holds(ToolContext& context, const json& args, const Aftermath& since) {
         if (until == "loaded") return inWorld(context) && !context.app.loadingScreenUp();
         const auto target = gh->getEntityManager().getEntity(gh->getTargetGuid());
         const auto targetDead = [&] {
-            return target && target->getType() != game::ObjectType::GAMEOBJECT &&
+            return target && target->isUnit() &&
                    static_cast<const game::Unit&>(*target).getHealth() == 0;
         };
         if (until == "target_dead") return targetDead();
