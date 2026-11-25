@@ -117,18 +117,23 @@ float interfaceFontSize(float fontHeight) {
     return (ImGui::GetCurrentContext() != nullptr) ? ImGui::GetFontSize() : 12.0f;
 }
 
-float interfaceTextWidth(const std::string& text, const std::string& fontFace,
-                         float fontHeight) {
-    if (text.empty()) return 0.0f;
-    const float size = interfaceFontSize(fontHeight);
-    if (ImFont* font = interfaceFaceOrDefault(fontFace)) {
-        return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x;
-    }
+namespace {
+/// The letters' width as they stand, whatever they spell.
+float letterWidth(const std::string& text, const std::string& fontFace, float size) {
+    if (ImFont* font = interfaceFaceOrDefault(fontFace)) return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x;
     // No context yet - during the FrameXML load there may be no frame in
     // flight to ask. An estimate is far better than nothing: the alternative
     // is answering zero, and MoneyFrame does SetWidth(GetTextWidth() +
     // iconWidth), which then places three buttons on top of each other.
     return static_cast<float>(text.size()) * size * 0.5f;
+}
+}  // namespace
+
+float interfaceTextWidth(const std::string& text, const std::string& fontFace,
+                         float fontHeight) {
+    if (text.empty()) return 0.0f;
+    const float size = interfaceFontSize(fontHeight);
+    return markupWidth(text, size, [&](const std::string& piece) { return letterWidth(piece, fontFace, size); });
 }
 
 int interfaceTextLines(const std::string& text, const std::string& fontFace,
@@ -183,7 +188,7 @@ std::string interfaceFittedText(const std::string& text, const std::string& font
 float editTextWidth(const Widget& box, const std::string& piece) {
     std::string letters;
     for (const auto& run : parseMarkup(piece)) letters += run.text;
-    return interfaceTextWidth(letters, box.fontFace, box.fontHeight);
+    return letterWidth(letters, box.fontFace, interfaceFontSize(box.fontHeight));
 }
 
 const std::vector<size_t>& editBoxLines(const Widget& box) {

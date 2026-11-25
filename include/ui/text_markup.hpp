@@ -171,6 +171,25 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
     return runs;
 }
 
+/// How wide a text is drawn (0x00483e80 -> 0x004bdcd0): the widest of its lines, as it
+/// breaks them itself; a picture as wide as it says it is, or high, or as its line is;
+/// nothing for what draws nothing.
+template <class Measure>
+[[nodiscard]] float markupWidth(const std::string& text, float lineSize, Measure&& measure) {
+    float widest = 0.0f;
+    for (const auto& line : wrapText(parseMarkup(text), 0.0f, false, measure)) {
+        float wide = 0.0f;
+        for (const WrapRun& run : line) {
+            wide += run.texture.empty()    ? measure(run.text)
+                    : run.texWidth > 0.0f  ? run.texWidth
+                    : run.texHeight > 0.0f ? run.texHeight
+                                           : lineSize;
+        }
+        widest = std::max(widest, wide);
+    }
+    return widest;
+}
+
 /// What an edit box's text is of (0x006bd5a0), one after the other.
 struct EditToken {
     enum Type { Plain = 0, Color = 1, ColorEnd = 2, Break = 3, Bar = 4, Link = 5, LinkEnd = 6, Picture = 7, PictureEnd = 8 };

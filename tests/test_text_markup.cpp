@@ -556,3 +556,18 @@ TEST_CASE("an edit box's steps: whole characters, and the ends of escapes with t
     CHECK(wordDeleteBackFrom(words, words.size()) == 14);  // the end of the colour is no blank
     CHECK(wordDeleteBackFrom("ab \xC3\xA4x ", 7) == 3);
 }
+
+// 0x00483e80, 0x006bce60
+TEST_CASE("a text is as wide as what it draws", "[markup]") {
+    using wowee::ui::markupWidth;
+    const auto ten = [](const std::string& s) { return 10.0f * static_cast<float>(s.size()); };
+    CHECK(markupWidth("abc", 12.0f, ten) == 30.0f);
+    CHECK(markupWidth("|cffff0000abc|r", 12.0f, ten) == 30.0f);
+    CHECK(markupWidth("|cff9d9d9d|Hitem:1:0|h[abc]|h|r", 12.0f, ten) == 50.0f);
+    CHECK(markupWidth("ab|nabcd|na", 12.0f, ten) == 40.0f);
+    CHECK(markupWidth("|Tx:20:30|tabc", 12.0f, ten) == 60.0f);
+    CHECK(markupWidth("|Tx:20|tabc", 12.0f, ten) == 50.0f);
+    CHECK(markupWidth("abc|Tx:0|t", 12.0f, ten) == 42.0f);
+    CHECK(markupWidth("", 12.0f, ten) == 0.0f);
+    CHECK(markupWidth("a||b", 12.0f, ten) == 30.0f);
+}
