@@ -225,6 +225,8 @@ public:
     /// passenger component's state (+0xf60 +0x14), 0 for none - as the
     /// drawing side steps it; and the tables the seats are read from.
     void setSeatState(uint64_t guid, uint8_t state);
+    /// The passengers have gone with their world (0x00734fd0 -> 0x0074cd60): in no seat's state any more.
+    void forgetSeatStates() { seatStates_.clear(); }
     [[nodiscard]] uint8_t seatState(uint64_t guid) const;
     /// A seated unit asked its vehicle for a seat change (0x00747fa0, its
     /// passenger component's +0x10 0x8 and +0x4c): asked until its seat

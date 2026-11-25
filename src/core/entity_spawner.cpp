@@ -325,6 +325,10 @@ void EntitySpawner::resetAllState() {
     // The passengers go with their units, and the player's vehicle camera
     // with the player (0x00734fd0 -> 0x0074cd60).
     seatedPassengers_.clear();
+    // And what their seats held of them: a state written after the world had
+    // been left, on the way out of a seat, held the player's keys for good -
+    // nothing was there to end it.
+    if (gameHandler_) gameHandler_->vehicleRoster().forgetSeatStates();
     // A move held for a vehicle's animation is let go only from here
     // (stepHeldVehicleMoves), and the game handler holds the mover - its
     // keys and its casts - for as long as it waits. With the vehicle's model

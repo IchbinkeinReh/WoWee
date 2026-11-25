@@ -512,6 +512,18 @@ TEST_CASE("how long a thing can be handed back", "[replay][playtest]") {
     CHECK(s.handler().itemRefundLeft(kItem) == 0);
 }
 
+// T292: the state of a way out of a seat, written as the world was left, stayed.
+TEST_CASE("a seat's state goes with the world", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& roster = s.handler().vehicleRoster();
+    roster.setSeatState(Session::kPlayerGuid, 4);
+    CHECK(s.handler().heldBySeat(Session::kPlayerGuid));
+    roster.forgetSeatStates();
+    CHECK(roster.seatState(Session::kPlayerGuid) == 0);
+    CHECK_FALSE(s.handler().heldBySeat(Session::kPlayerGuid));
+}
+
 // What is read of a packet is counted: too little or too much of it.
 TEST_CASE("packets read short or past their end are counted", "[replay][playtest]") {
     Session s;
