@@ -1604,3 +1604,40 @@ TEST_CASE("a guild's charter is signed by those without a guild", "[replay][inte
         }
     }
 }
+
+// 0x00545950, 0x005459c0 -> 0x00544140: by the map the place is on, wherever the
+// player is (T302: a corpse on the other continent had no place).
+TEST_CASE("a corpse on another map has its place on that map", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 1}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FLAGS, 0x10}});
+    Interface ui(s);
+    uint32_t askedMap = 0;
+    glm::vec3 askedAt(0.0f);
+    wowee::addons::LuaServices services;
+    services.mapUVForPlace = [&](uint32_t map, float x, float y, float z, float& u, float& v) {
+        askedMap = map;
+        askedAt = glm::vec3(x, y, z);
+        u = 0.25f;
+        v = 0.75f;
+        return map == 1;
+    };
+    ui.engine.setLuaServices(services);
+    const auto answer = [&](uint32_t map) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::MSG_CORPSE_QUERY));
+        p.writeUInt8(1);
+        p.writeUInt32(map);
+        for (float f : {1318.0f, -4655.0f, 30.0f}) p.writeFloat(f);
+        p.writeUInt32(map);
+        p.writeUInt32(0);
+        s.receive(p);
+    };
+    REQUIRE(s.handler().getCurrentMapId() != 1);
+    answer(1);
+    ui.run("x, y = GetCorpseMapPosition()");
+    CHECK(ui.is("x == 0.25 and y == 0.75"));
+    CHECK(askedMap == 1);
+    CHECK(askedAt == glm::vec3(-4655.0f, 1318.0f, 30.0f));
+    answer(530);
+    ui.run("x, y = GetCorpseMapPosition()");
+    CHECK(ui.is("x == 0 and y == 0"));
+}

@@ -1619,6 +1619,16 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             v = uv->y;
             return true;
         };
+        luaSvc.mapUVForPlace = [r = renderer.get()](uint32_t mapId, float x, float y, float z, float& u, float& v) -> bool {
+            auto* wmap = r ? r->getWorldMap() : nullptr;
+            if (!wmap) return false;
+            const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(x, y, z));
+            const auto uv = wmap->mapPointOf(mapId, wire.x, wire.y, wire.z);
+            if (!uv) return false;
+            u = uv->x;
+            v = uv->y;
+            return true;
+        };
         luaSvc.mapUVForShownPos = [r = renderer.get()](float x, float y, float z, float& u, float& v) -> bool {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             return wmap ? wmap->mapUVForCanonical(x, y, z, u, v) : false;

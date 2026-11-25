@@ -199,6 +199,8 @@ struct LuaServices {
     /// map, or the map shows another. GetPlayerMapPosition answers in this
     /// space - FrameXML multiplies it by the map frame's width.
     std::function<bool(float, float, float, float&, float&)> mapUVForWorldPos;
+    /// The same of a place on the map given, wherever the player is.
+    std::function<bool(uint32_t, float, float, float, float&, float&)> mapUVForPlace;
     /// The same of a position on the map showing, wherever the player is.
     std::function<bool(float, float, float, float&, float&)> mapUVForShownPos;
     /// The shown map's row as the quest POI icon list needs it: whether there

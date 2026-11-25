@@ -4502,12 +4502,13 @@ static int bgCount(game::GameHandler* gh, int group) {
 /// bounded by MAX_RAID_MEMBERS rather than by how many are present and hides
 /// each frame whose position comes back as zero. On an AzerothCore realm that
 /// is every one of them: the server writes the count and never the entries.
-/// A canonical world position on the map being shown, as the two below push
-/// it (0x00544140): x and y, or 0 and 0 where it is not on this map.
-static int pushMapUV(lua_State* L, bool known, float wx, float wy, float wz) {
+/// A canonical place on a map of the world on the map being shown, as the two
+/// below push it (0x00544140): x and y, or 0 and 0 where it is not on this one.
+/// Wherever the player is: a ghost on another continent sees its corpse there.
+static int pushMapUV(lua_State* L, bool known, uint32_t mapId, const glm::vec3& at) {
     auto* svc = getLuaServices(L);
     float u = 0.0f, v = 0.0f;
-    if (!known || !svc || !svc->mapUVForWorldPos || !svc->mapUVForWorldPos(wx, wy, wz, u, v)) {
+    if (!known || !svc || !svc->mapUVForPlace || !svc->mapUVForPlace(mapId, at.x, at.y, at.z, u, v)) {
         u = 0.0f;
         v = 0.0f;
     }
@@ -4520,9 +4521,10 @@ static int pushMapUV(lua_State* L, bool known, float wx, float wy, float wz) {
 // map being shown.
 static int lua_GetCorpseMapPosition(lua_State* L) {
     auto* gh = getGameHandler(L);
-    float cx = 0.0f, cy = 0.0f;
-    const bool known = gh && gh->getCorpseCanonicalPos(cx, cy);
-    return pushMapUV(L, known, cx, cy, 0.0f);
+    uint32_t mapId = 0;
+    glm::vec3 at{0.0f};
+    const bool known = gh && gh->getCorpsePlace(mapId, at);
+    return pushMapUV(L, known, mapId, at);
 }
 
 // GetDeathReleasePosition() (0x005459c0): where a release would put the
@@ -4531,8 +4533,8 @@ static int lua_GetDeathReleasePosition(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint32_t mapId = 0;
     glm::vec3 at{0.0f};
-    const bool known = gh && gh->getDeathReleaseLocation(mapId, at) && mapId == gh->getCurrentMapId();
-    return pushMapUV(L, known, at.x, at.y, at.z);
+    const bool known = gh && gh->getDeathReleaseLocation(mapId, at);
+    return pushMapUV(L, known, mapId, at);
 }
 
 static int lua_GetBattlefieldPosition(lua_State* L) {

@@ -2930,6 +2930,15 @@ public:
         outY = corpse.x;  // server X = canonical Y (west)
         return true;
     }
+    /// The same wherever the player is: its map (0x00bd0818) and its place
+    /// there, canonical. False without a corpse.
+    bool getCorpsePlace(uint32_t& mapId, glm::vec3& canonical) const {
+        if (!corpsePositionValid_) return false;
+        const glm::vec3 corpse = corpseServerPos();
+        mapId = corpseMapId_;
+        canonical = glm::vec3(corpse.y, corpse.x, corpse.z);
+        return true;
+    }
     /// The corpse where it lies in the world, server coordinates (0x0051f430):
     /// the place as kept, or for a corpse on a transport that place in the
     /// transport's frame - the transport's own where it is in sight, else
