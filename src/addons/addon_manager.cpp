@@ -1782,38 +1782,15 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
         }
     };
 
-    // The frames between two files run as one chunk. The emitted Lua opens
-    // with "local __w = {}", the table its frame temporaries live in, and a
-    // chunk cannot see a local of the one before it - so each hands the table
-    // to the next through a global named for this load alone, which a nested
-    // file's own chunks cannot clobber.
-    static unsigned long long xmlLoadSerial = 0;
-    const std::string temps = "__WoweeXmlTemps" + std::to_string(++xmlLoadSerial);
-    std::size_t emittedUpTo = 0;
-    bool framesFailed = false;
-    const auto runFrames = [&](std::size_t to) {
-        to = std::min(to, emitted.lua.size());
-        if (to <= emittedUpTo) return;
-        std::string chunk;
-        if (emittedUpTo > 0) chunk = "local __w = " + temps + "\n";
-        chunk.append(emitted.lua, emittedUpTo, to - emittedUpTo);
-        chunk += "\n" + temps + " = __w\n";
-        emittedUpTo = to;
-        if (!luaEngine_.executeString(chunk)) {
-            if (ok) lastXmlError_ = "frames: " + luaEngine_.lastError();
-            LOG_ERROR("AddonManager: frames from ", path, " failed to build");
-            ok = false;
-            framesFailed = true;
-        }
-    };
-    for (const auto& at : emitted.filesInOrder) {
-        runFrames(at.luaOffset);
+    const bool built = luaEngine_.buildElements(emitted, fs::path(path).filename().string(), [&](const auto& at) {
         if (at.include) loadInclude(at.file);
         else loadScript(at.file);
-    }
-    runFrames(emitted.lua.size());
-    luaEngine_.executeString(temps + " = nil");
-    if (!emitted.lua.empty() && !framesFailed) {
+    });
+    if (!built) {
+        if (ok) lastXmlError_ = "frames: " + luaEngine_.lastError();
+        LOG_ERROR("AddonManager: not all of ", path, " could be built");
+        ok = false;
+    } else if (!emitted.lua.empty()) {
         LOG_INFO("AddonManager: built frames from ", path);
     }
     return ok;

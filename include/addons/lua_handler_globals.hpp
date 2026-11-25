@@ -55,9 +55,8 @@ int pcallScript(lua_State* L, const char* script, int nargs, int errfunc);
 /// the first line of an OnLoad is how nearly every frame in the file gets off
 /// the screen.
 ///
-/// Not a pcall. An OnLoad that raises has always taken the rest of its file
-/// with it, and loadFrameXml's failure list is built on that; this only puts a
-/// name in scope around the call.
+/// Run through 0x0048ec10 like any other script (0x00493230): an error is reported, and
+/// what the frame is in goes on being built.
 int lua_WoweeFireOnLoad(lua_State* L);
 
 // ---- Script slots on objects that are not frames ---------------------------

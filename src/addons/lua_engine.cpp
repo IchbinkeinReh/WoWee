@@ -20513,29 +20513,96 @@ void LuaEngine::runScriptAs(const std::string& code, int taint) {
     taint::execute(L_, code.c_str(), code.c_str(), taint);
 }
 
+void LuaEngine::reportChunkError() {
+    const char* errMsg = lua_tostring(L_, -1);
+    std::string msg = errMsg ? errMsg : "(unknown error)";
+    lastError_ = msg;
+    LOG_ERROR("LuaEngine: script error: ", msg);
+    noteLuaError(msg);
+    if (luaErrorCallback_) luaErrorCallback_(msg);
+    if (gameHandler_) {
+        game::MessageChatData errChat;
+        errChat.type = game::ChatType::SYSTEM;
+        errChat.language = game::ChatLanguage::UNIVERSAL;
+        errChat.message = "|cffff4040[Lua Error] " + msg + "|r";
+        gameHandler_->addLocalChatMessage(errChat);
+    }
+    lua_pop(L_, 1);
+}
+
 bool LuaEngine::executeString(const std::string& code) {
     if (!L_) return false;
 
     BudgetGuard guard(L_, chunkTimeoutMs_);
-    int err = runChunk(L_, code.c_str(), code.size(), code.c_str());
-    if (err != 0) {
-        const char* errMsg = lua_tostring(L_, -1);
-        std::string msg = errMsg ? errMsg : "(unknown error)";
-        lastError_ = msg;
-        LOG_ERROR("LuaEngine: script error: ", msg);
-        noteLuaError(msg);
-        if (luaErrorCallback_) luaErrorCallback_(msg);
-        if (gameHandler_) {
-            game::MessageChatData errChat;
-            errChat.type = game::ChatType::SYSTEM;
-            errChat.language = game::ChatLanguage::UNIVERSAL;
-            errChat.message = "|cffff4040[Lua Error] " + msg + "|r";
-            gameHandler_->addLocalChatMessage(errChat);
-        }
-        lua_pop(L_, 1);
-        return false;
+    if (runChunk(L_, code.c_str(), code.size(), code.c_str()) == 0) return true;
+    reportChunkError();
+    return false;
+}
+
+bool LuaEngine::buildElements(const ui::EmitResult& emitted, const std::string& fileName,
+                              const std::function<void(const ui::EmitResult::FileAt&)>& onFile) {
+    // The table the emitted Lua keeps its frames in, which it opens with as a local, is handed on
+    // through a global named for this load alone, which a nested file's chunks cannot clobber.
+    static unsigned long long serial = 0;
+    const std::string temps = "__WoweeXmlTemps" + std::to_string(++serial);
+    const std::string before = "local __w = " + temps + " ";
+    if (!executeString(temps + " = {}")) return false;
+    std::string failed;
+    const auto build = [&](std::size_t from, std::size_t to, const std::string& name) {
+        if (executeElement(before, emitted.lua.substr(from, to - from), fileName + ":" + name, from, emitted.scripts))
+            return;
+        LOG_ERROR("LuaEngine: ", name, " of ", fileName, " failed to build");
+        if (failed.empty()) failed = lastError_;
+    };
+    if (emitted.elements.empty() && !emitted.lua.empty()) build(0, emitted.lua.size(), "");
+    std::size_t file = 0;
+    for (std::size_t i = 0; i < emitted.elements.size(); ++i) {
+        const std::size_t from = emitted.elements[i].luaOffset;
+        const std::size_t to = i + 1 < emitted.elements.size() ? emitted.elements[i + 1].luaOffset : emitted.lua.size();
+        if (from < to) build(from, to, emitted.elements[i].name);
+        for (; file < emitted.filesInOrder.size() && emitted.filesInOrder[file].element == i; ++file)
+            onFile(emitted.filesInOrder[file]);
     }
-    return true;
+    executeString(temps + " = nil");
+    if (failed.empty()) return true;
+    lastError_ = failed;
+    return false;
+}
+
+bool LuaEngine::executeElement(const std::string& before, const std::string& body, const std::string& name,
+                               std::size_t offset, const std::vector<ui::EmitResult::Script>& scripts) {
+    if (!L_) return false;
+
+    BudgetGuard guard(L_, chunkTimeoutMs_);
+    std::string chunk = before + body;
+    const std::string chunkName = "=" + name;
+    const auto load = [&] { return luaL_loadbuffer(L_, chunk.data(), chunk.size(), chunkName.c_str()); };
+    bool whole = true;
+    lua_pushcfunction(L_, luaTracebackHandler);
+    const int handler = lua_gettop(L_);
+    int err = load();
+    if (err == LUA_ERRSYNTAX) {
+        lua_pop(L_, 1);
+        for (const auto& script : scripts) {
+            if (script.luaOffset < offset || script.luaOffset + script.length > offset + body.size()) continue;
+            const std::string alone = "return " + script.function;
+            const std::string aloneName = "=" + name + ":" + script.name;
+            if (luaL_loadbuffer(L_, alone.data(), alone.size(), aloneName.c_str()) == 0) {
+                lua_pop(L_, 1);
+                continue;
+            }
+            reportChunkError();
+            whole = false;
+            for (std::size_t i = 0; i < script.length; ++i)
+                if (char& ch = chunk[before.size() + script.luaOffset - offset + i]; ch != '\n') ch = ' ';
+        }
+        err = load();
+    }
+    if (err == 0) err = lua_pcall(L_, 0, 0, handler);
+    lua_remove(L_, handler);
+    if (err == 0) return whole;
+    reportChunkError();
+    return false;
 }
 
 // Outside the file's unnamed namespaces, for lua_inventory_api.cpp's

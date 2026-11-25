@@ -39,8 +39,27 @@ struct EmitResult {
         std::string file;
         bool include = false;
         std::size_t luaOffset = 0;
+        std::size_t element = 0;   // of `elements`
     };
     std::vector<FileAt> filesInOrder;
+    /// The elements of the file, in document order: where in `lua` each begins and what it
+    /// is called. The client builds each for itself, and one that fails ends nothing but
+    /// itself. What is before the first is for a caller that runs `lua` whole.
+    struct Element {
+        std::string name;
+        std::size_t luaOffset = 0;
+    };
+    std::vector<Element> elements;
+    /// The scripts written in the file: where in `lua` the statement that sets one is, and
+    /// the function it sets. One that does not compile is left unset (0x0081a0f0's message),
+    /// and what it is of is built.
+    struct Script {
+        std::string name;
+        std::size_t luaOffset = 0;
+        std::size_t length = 0;
+        std::string function;
+    };
+    std::vector<Script> scripts;
     std::vector<std::string> warnings;
 };
 

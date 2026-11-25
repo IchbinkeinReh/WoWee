@@ -238,6 +238,16 @@ struct Emitter {
     }
 
     void line(const std::string& s) { result.lua += s; result.lua += "\n"; }
+    /// What another has written, here.
+    void take(EmitResult& inner) {
+        const std::size_t at = result.lua.size();
+        result.lua += inner.lua;
+        for (auto& script : inner.scripts) {
+            script.luaOffset += at;
+            result.scripts.push_back(std::move(script));
+        }
+        for (auto& w : inner.warnings) result.warnings.push_back(std::move(w));
+    }
 
     void emitScripts(const XmlNode& scripts, const std::string& var) {
         // A handler the object's type does not have is skipped, not raised:
@@ -282,9 +292,11 @@ struct Emitter {
             // left those names nil, so every one of these bodies failed the
             // moment it touched its own argument - arithmetic on a nil elapsed
             // being the loudest of them.
-            guarded(s.name, var + ":SetScript(" + quote(s.name) +
-                    ", function(" + scriptSignature(s.name) + ") " +
-                    scriptPrelude(s.name) + body + " end)");
+            const std::string function =
+                "function(" + scriptSignature(s.name) + ") " + scriptPrelude(s.name) + body + " end";
+            const std::size_t at = result.lua.size();
+            guarded(s.name, var + ":SetScript(" + quote(s.name) + ", " + function + ")");
+            result.scripts.push_back({s.name, at, result.lua.size() - at, function});
         }
     }
 
@@ -513,8 +525,7 @@ struct Emitter {
         inner.runtimeParentName = true;
         inner.emitRegionProperties(node, "self", "self:GetParent()", name, isTexture);
         line("__WoweeTemplates[" + quote(name) + "] = function(self)");
-        result.lua += inner.result.lua;
-        for (auto& w : inner.result.warnings) result.warnings.push_back(w);
+        take(inner.result);
         line("end");
         wrapTemplate(name);
     }
@@ -667,7 +678,7 @@ struct Emitter {
     void emitOwnOnLoad(const XmlNode& node, const std::string& var) {
         for (const XmlNode& scripts : node.children) {
             if (scripts.name != "Scripts" || !scripts.child("OnLoad")) continue;
-            line("do local load = " + var + ":GetScript(\"OnLoad\") if load then load(" + var + ") end end");
+            line("__WoweeRunScriptSlot(" + var + ", \"OnLoad\")");
             return;
         }
     }
@@ -1063,8 +1074,7 @@ struct Emitter {
                 line("if " + *par + " and __noParent then self:SetParent(" +
                      *par + ") end");
             }
-            result.lua += inner.result.lua;
-            for (auto& w : inner.result.warnings) result.warnings.push_back(w);
+            take(inner.result);
             line("end");
             wrapTemplate(name);
             return {};
@@ -1921,16 +1931,16 @@ void emitBindings(Emitter& e, const XmlNode& root) {
         }
         if (!b.attrBool("hidden")) e.line("__WoweeBindings[#__WoweeBindings+1] = " + quote(name));
         if (b.attrBool("runOnUp")) {
-            e.line("__WoweeBindingRunOnUp[\"" + name + "\"] = true");
+            e.line("__WoweeBindingRunOnUp[" + quote(name) + "] = true");
         }
         if (!b.text.empty()) {
             // keystate arrives as a parameter rather than a global. The bodies
             // read it to tell a press from a release, and a global would carry
             // one binding's state into the next.
-            e.result.lua += "__WoweeBindingScripts[\"" + name +
-                            "\"] = function(keystate, pressure, angle, precision)\n";
-            e.result.lua += b.text;
-            e.result.lua += "\nend\n";
+            const std::string function = "function(keystate, pressure, angle, precision)\n" + b.text + "\nend";
+            const std::size_t at = e.result.lua.size();
+            e.line("__WoweeBindingScripts[" + quote(name) + "] = " + function);
+            e.result.scripts.push_back({name, at, e.result.lua.size() - at, function});
         }
         if (const std::string* key = b.attr("default"); key && !key->empty())
             e.line("if __WoweeBindDefault then __WoweeBindDefault(" + quote(name) + ", " + quote(*key) + ") end");
@@ -1953,17 +1963,18 @@ EmitResult emitFrameXml(const XmlNode& rootIn) {
         e.result.warnings.push_back("root element is <" + root.name + ">, expected <Ui>");
     }
     for (const XmlNode& node : root.children) {
+        e.result.elements.push_back({node.attrOr("name", node.name), e.result.lua.size()});
         if (node.name == "Script") {
             if (const std::string* file = node.attr("file")) {
                 e.result.scriptFiles.push_back(*file);
-                e.result.filesInOrder.push_back({*file, false, e.result.lua.size()});
+                e.result.filesInOrder.push_back({*file, false, e.result.lua.size(), e.result.elements.size() - 1});
             } else if (!node.text.empty()) {
                 e.result.lua += node.text + "\n";
             }
         } else if (node.name == "Include") {
             if (const std::string* file = node.attr("file")) {
                 e.result.includeFiles.push_back(*file);
-                e.result.filesInOrder.push_back({*file, true, e.result.lua.size()});
+                e.result.filesInOrder.push_back({*file, true, e.result.lua.size(), e.result.elements.size() - 1});
             }
         } else if (node.name == "Font") {
             e.emitFont(node);

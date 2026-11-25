@@ -656,6 +656,32 @@ TEST_CASE("A template installs OnLoad but does not run it", "[framexml][emit]") 
     REQUIRE(has(r.lua, "SetScript(\"OnLoad\""));
 }
 
+TEST_CASE("The elements of a file and the scripts in it are told apart", "[framexml][emit]") {
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"A\"><Scripts><OnLoad>x = 1</OnLoad><OnShow>oops(</OnShow></Scripts></Frame>"
+        "<Script file=\"Foo.lua\"/><Script>y = 2</Script><Frame name=\"B\"/></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE(r.elements.size() == 4);
+    CHECK(r.elements[0].name == "A");
+    CHECK(r.elements[1].name == "Script");
+    CHECK(r.elements[3].name == "B");
+    REQUIRE(r.filesInOrder.size() == 1);
+    CHECK(r.filesInOrder[0].element == 1);
+    CHECK(r.elements[1].luaOffset == r.elements[2].luaOffset);
+    CHECK(r.lua.substr(r.elements[2].luaOffset, r.elements[3].luaOffset - r.elements[2].luaOffset) == "y = 2\n");
+    REQUIRE(r.scripts.size() == 2);
+    CHECK(r.scripts[1].name == "OnShow");
+    const std::string statement = r.lua.substr(r.scripts[1].luaOffset, r.scripts[1].length);
+    CHECK(statement.find(r.scripts[1].function) != std::string::npos);
+    CHECK(statement.find("x = 1") == std::string::npos);
+    CHECK(statement.back() == '\n');
+    // A template's, which are written apart.
+    XmlNode templates = parseOrFail("<Ui><Frame name=\"T\" virtual=\"true\"><Scripts><OnHide>bad(</OnHide></Scripts></Frame></Ui>");
+    const EmitResult t = emitFrameXml(templates);
+    REQUIRE(t.scripts.size() == 1);
+    CHECK(t.lua.substr(t.scripts[0].luaOffset, t.scripts[0].length).find(t.scripts[0].function) != std::string::npos);
+}
+
 TEST_CASE("$parent skips unnamed frames to the nearest named one",
           "[framexml][emit]") {
     // An unnamed frame has no name to lend, so $parent means the nearest
@@ -1695,6 +1721,6 @@ TEST_CASE("What a frame's XML says besides", "[framexml][emit]") {
     CHECK(has(r.lua, ":SetChecked(true)"));
     // The text goes to the label, and an animation group is told once it is there.
     CHECK(r.lua.find(":SetFontString(") < r.lua.find(":SetText(\"Los\")"));
-    CHECK(has(r.lua, ":GetScript(\"OnLoad\") if load then load("));
+    CHECK(has(r.lua, "__WoweeRunScriptSlot("));
     CHECK(r.lua.find(":CreateAnimation(") < r.lua.find(":GetScript(\"OnLoad\") if load"));
 }

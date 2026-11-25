@@ -160,6 +160,14 @@ int pcallScript(lua_State* L, const char* script, int nargs, int errfunc) {
     return rc;
 }
 
+namespace {
+ScriptErrorReporter gScriptErrorReporter = nullptr;
+}  // namespace
+
+void setScriptErrorReporter(ScriptErrorReporter reporter) {
+    gScriptErrorReporter = reporter;
+}
+
 int lua_WoweeFireOnLoad(lua_State* L) {
     if (!lua_istable(L, 1)) return 0;
     {
@@ -173,42 +181,11 @@ int lua_WoweeFireOnLoad(lua_State* L) {
         lua_remove(L, -2);                // __scripts, leaving the handler
     }
     lua_pushvalue(L, 1);                  // self
-    if (!gLegacyHandlerGlobals) {
-        // 0x00493230 runs it through 0x0048ec10 like any other script. A
-        // pcall so the taint is put back before a raise goes on up - it is
-        // raised again, because an OnLoad that raises has always taken the
-        // rest of its file with it.
-        if (taint::pcallHandler(L, 1, 0, 0) != 0) return lua_error(L);
-        return 0;
+    if (pcallScript(L, "OnLoad", 1, 0) != 0) {
+        if (gScriptErrorReporter) gScriptErrorReporter(L, "OnLoad");
+        else lua_pop(L, 1);
     }
-    // The saved value rides on the stack below the call rather than anywhere it
-    // would have to be cleaned up, because a raise here does not return.
-    {
-        taint::Quiet quiet;
-        rawGetGlobal(L, "this");
-        lua_insert(L, -3);                // beneath the handler and its argument
-        lua_pushvalue(L, 1);
-        lua_setglobal(L, "this");
-    }
-    if (taint::pcallHandler(L, 1, 0, 0) != 0) {
-        {
-            taint::Quiet quiet;
-            lua_pushvalue(L, -2);
-            lua_setglobal(L, "this");
-        }
-        return lua_error(L);
-    }
-    taint::Quiet quiet;
-    lua_setglobal(L, "this");             // what was saved, still on the stack
     return 0;
-}
-
-namespace {
-ScriptErrorReporter gScriptErrorReporter = nullptr;
-}  // namespace
-
-void setScriptErrorReporter(ScriptErrorReporter reporter) {
-    gScriptErrorReporter = reporter;
 }
 
 int lua_WoweeSetScriptSlot(lua_State* L) {

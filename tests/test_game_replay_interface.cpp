@@ -10,7 +10,9 @@
 #include "game/player_display_flags.hpp"
 #include "game_replay.hpp"
 #include "pipeline/dbc_loader.hpp"
+#include "ui/framexml_emitter.hpp"
 #include "ui/widget_tree.hpp"
+#include "ui/xml_parser.hpp"
 
 #include <algorithm>
 #include <array>
@@ -767,6 +769,39 @@ TEST_CASE("the reputation rows are in the order of their names", "[replay][inter
     ui.run("SetFactionInactive(3) SetFactionInactive(2)");
     CHECK(ui.rowsAre("+Classic;>+Cartel;>Beutebucht;>Ratchet;>+Horde;>Orgrimmar;+Wrath;Zuldrak;"
                      "+Other;Erster;Zweiter;+Inactive;Ödland;thorium;"));
+}
+
+// T248: each element of an XML file is built for itself; an error in one ends that one alone,
+// a script that does not compile is not set, an OnLoad's error ends the OnLoad.
+TEST_CASE("an error in an addon's XML ends no more than itself", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    const auto build = [&](const std::string& xml) {
+        wowee::ui::XmlNode root;
+        std::string error;
+        REQUIRE(wowee::ui::parseXml("<Ui>" + xml + "</Ui>", root, error));
+        std::vector<std::string> files;
+        const bool whole = ui.engine.buildElements(wowee::ui::emitFrameXml(root), "t.xml",
+                                                   [&](const auto& at) { files.push_back(at.file); });
+        CHECK((files.empty() || files == std::vector<std::string>{"F.lua"}));
+        return whole;
+    };
+    CHECK(build("<Frame name=\"Xa1\"/><Script file=\"F.lua\"/><Frame name=\"Xa2\" parent=\"Xa1\"/>"));
+    CHECK(ui.is("Xa2:GetParent() == Xa1"));
+    CHECK_FALSE(build("<Frame name=\"Xb1\"/><Script>error('inline')</Script><Frame name=\"Xb2\"/>"
+                      "<Script>syntax(</Script><Frame name=\"Xb3\"/>"));
+    CHECK(ui.is("rawget(_G, 'Xb1') and rawget(_G, 'Xb2') and rawget(_G, 'Xb3')"));
+    // An OnLoad that raises, of the frame's child too.
+    build("<Frame name=\"Xc1\"><Frames><Frame name=\"Xc2\"><Scripts><OnLoad>error('load')</OnLoad></Scripts></Frame>"
+          "<Frame name=\"Xc3\"/></Frames><Scripts><OnLoad>xc = self:GetName() error('too')</OnLoad></Scripts></Frame>"
+          "<Frame name=\"Xc4\"/>");
+    CHECK(ui.is("rawget(_G, 'Xc3') and rawget(_G, 'Xc4') and xc == 'Xc1'"));
+    // One that does not compile is left out, the others of the frame are set.
+    CHECK_FALSE(build("<Frame name=\"Xd1\" virtual=\"true\"><Scripts><OnLoad>oops(</OnLoad><OnShow>xd = 1</OnShow></Scripts></Frame>"
+                      "<Frame name=\"Xd2\" inherits=\"Xd1\"><Scripts><OnHide>\nthis is none\n</OnHide></Scripts></Frame>"
+                      "<Frame name=\"Xd3\" inherits=\"NoSuchTemplate\"/>"));
+    CHECK(ui.is("Xd2:GetScript('OnShow') and not Xd2:GetScript('OnLoad') and not Xd2:GetScript('OnHide')"));
+    CHECK(ui.is("rawget(_G, 'Xd3') and Xd3:IsShown()"));
 }
 
 // 0x0061e6b0: every kind of link shows its tooltip, a quest's once it is known.

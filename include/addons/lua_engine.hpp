@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/framexml_emitter.hpp"
 #include "addons/lua_services.hpp"
 #include "game/combat_log.hpp"
 #include "ui/chat/chat_bubble_view.hpp"
@@ -65,6 +66,11 @@ public:
     };
     bool executeFile(const std::string& path);
     bool executeString(const std::string& code);
+    /// An XML file's elements, in their order, each for itself as the client builds them: one
+    /// that fails ends nothing but itself. `onFile` is given the files where they are named.
+    /// Whether all of it was built; lastError is the first that was not.
+    bool buildElements(const ui::EmitResult& emitted, const std::string& fileName,
+                       const std::function<void(const ui::EmitResult::FileAt&)>& onFile);
     /// The chat bubbles there are, at this scale (chat_bubble_lua.hpp).
     void showChatBubbles(float scale, const std::vector<ui::ChatBubbleView>& bubbles);
 
@@ -434,6 +440,12 @@ private:
     int eventDepth_ = 0;
     /// Time since the action bars' usability was last rescanned (dispatchOnUpdate).
     float usabilityRescanTimer_ = 0.0f;
+    /// One element: `body`, from `offset` on of what the emitter wrote, behind `before`. The
+    /// scripts in it that do not compile are reported and left unset.
+    bool executeElement(const std::string& before, const std::string& body, const std::string& name,
+                        std::size_t offset, const std::vector<ui::EmitResult::Script>& scripts);
+    /// The error on top of the stack, reported and popped.
+    void reportChunkError();
     std::string lastError_;
     unsigned long long chunkTimeoutMs_ = 0;
 
