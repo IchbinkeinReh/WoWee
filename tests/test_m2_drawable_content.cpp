@@ -153,3 +153,15 @@ TEST_CASE("a unit can be shown as bones alone", "[m2][content]") {
     CHECK_FALSE(invisible.hasDrawableContent());
     CHECK_FALSE(invisible.hasContent());
 }
+
+// T328: which of a building's groups are drawn goes by their flags and the
+// portals (0x007b3a10, 0x007ac060), never by a name or how few vertices they
+// have: Dalaran's floating rocks were gone within 196 yards.
+TEST_CASE("no group of a building is told by its name", "[wmo]") {
+    const std::string renderer = source("src/rendering/wmo_renderer.cpp");
+    REQUIRE(!renderer.empty());
+    for (const char* rule : {"isLOD", "\"facade\"", "\"city\"", "LOD_SHELL", "isLargeWmo"}) {
+        INFO(rule);
+        CHECK(renderer.find(rule) == std::string::npos);
+    }
+}

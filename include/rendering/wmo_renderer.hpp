@@ -775,7 +775,6 @@ private:
         /// in ModelData::groups: an empty group is not kept there.
         uint32_t groupIndex = 0;
         bool allUntextured = false;  // True if ALL batches use fallback white texture (collision/placeholder group)
-        bool isLOD = false;          // Distance-only group (skip when camera is close)
 
         // Material batches (start index, count, material ID)
         struct Batch {
