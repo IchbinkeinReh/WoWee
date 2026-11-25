@@ -191,12 +191,55 @@ TEST_CASE("only a named GameTooltip has line font strings", "[tooltip]") {
     CHECK(asked == 0);
 }
 
-TEST_CASE("lines made of an addon's own font strings leave the named ones hidden", "[tooltip]") {
-    Fixture f;
-    auto adopted = line("mine", "too");
-    adopted.leftFontString = 999;
-    f.tooltip().tooltipLines.push_back(adopted);
-    mirrorTooltipLines(f.tree, f.tip, f.maker());
-    CHECK(f.fs("GameTooltipTextLeft1").text.empty());
-    CHECK_FALSE(f.fs("GameTooltipTextLeft1").shown);
+// 0x0061fe30: a library's hidden tooltip, with no template and no name.
+TEST_CASE("lines are written into the font strings a tooltip is given", "[tooltip]") {
+    WidgetTree tree;
+    int made = 0;
+    const MakeTooltipLineString make = [&](std::size_t, bool) { ++made; return 0u; };
+    const uint32_t tip = tree.create(WidgetKind::Frame, 0, "");
+    tree.get(tip)->objectType = "GameTooltip";
+    std::vector<uint32_t> left, right;
+    for (int i = 0; i < 3; ++i) {
+        left.push_back(tree.create(WidgetKind::FontString, tip, ""));
+        right.push_back(tree.create(WidgetKind::FontString, tip, ""));
+        addTooltipLineStrings(tree, tip, left.back(), right.back());
+    }
+    tree.get(tip)->tooltipLines.push_back(line("Sword"));
+    tree.get(tip)->tooltipLines.push_back(line("One-Hand", "Sword"));
+    CHECK(mirrorTooltipLines(tree, tip, make) == 2);
+    CHECK(tree.get(left[0])->text == "Sword");
+    CHECK(tree.get(left[0])->shown);
+    CHECK(tree.get(right[0])->text.empty());
+    CHECK(tree.get(right[1])->text == "Sword");
+    CHECK_FALSE(tree.get(left[2])->shown);
+    CHECK(made == 0);
+    tree.get(tip)->tooltipLines.clear();
+    mirrorTooltipLines(tree, tip, make);
+    CHECK(tree.get(left[0])->text.empty());
+    CHECK_FALSE(tree.get(left[0])->shown);
+}
+
+TEST_CASE("font strings given come after those a tooltip has", "[tooltip]") {
+    WidgetTree tree;
+    const uint32_t tip = tree.create(WidgetKind::Frame, 0, "Tip");
+    tree.get(tip)->objectType = "GameTooltip";
+    // Of a template: named.
+    tree.create(WidgetKind::FontString, tip, "TipTextLeft1");
+    tree.create(WidgetKind::FontString, tip, "TipTextRight1");
+    const uint32_t l = tree.create(WidgetKind::FontString, tip, ""), r = tree.create(WidgetKind::FontString, tip, "");
+    addTooltipLineStrings(tree, tip, l, r);
+    REQUIRE(tree.get(tip)->tooltipLineAnchors.size() == 2);
+    CHECK(tree.get(tip)->tooltipLineAnchors[1] == l);
+    CHECK(tree.get(tip)->tooltipRightStrings[1] == r);
+    // A script's own, named as the first line's are, is the first.
+    const uint32_t own = tree.create(WidgetKind::Frame, 0, "Own");
+    tree.get(own)->objectType = "GameTooltip";
+    const uint32_t l1 = tree.create(WidgetKind::FontString, own, "OwnTextLeft1");
+    const uint32_t r1 = tree.create(WidgetKind::FontString, own, "OwnTextRight1");
+    const uint32_t l2 = tree.create(WidgetKind::FontString, own, "OwnTextLeft2");
+    const uint32_t r2 = tree.create(WidgetKind::FontString, own, "OwnTextRight2");
+    addTooltipLineStrings(tree, own, l1, r1);
+    addTooltipLineStrings(tree, own, l2, r2);
+    CHECK(tree.get(own)->tooltipLineAnchors == std::vector<uint32_t>{l1, l2});
+    CHECK(tree.get(own)->tooltipRightStrings == std::vector<uint32_t>{r1, r2});
 }

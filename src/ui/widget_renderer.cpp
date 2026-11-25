@@ -494,18 +494,6 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
     // reason: one line of text plus a tooltip's padding, in place of the
     // 233x215 its XML asks for.
     if (w->objectType != "GameTooltip") return;
-    // A line made of font strings shows them as they are now.
-    for (auto& line : w->tooltipLines) {
-        const auto adopt = [&tree](uint32_t id, std::string& text, float (&c)[4]) {
-            const Widget* fs = id ? tree.get(id) : nullptr;
-            if (!fs) return;
-            text = fs->text;
-            for (int i = 0; i < 4; ++i) c[i] = fs->color[i];
-        };
-        adopt(line.leftFontString, line.left, line.lc);
-        adopt(line.rightFontString, line.right, line.rc);
-    }
-
     namespace tl = tooltip_layout;
     constexpr float kPad = tl::kPad;
     // A line in its own font: the first is the header's (GameTooltipHeaderText),

@@ -802,10 +802,6 @@ struct Widget {
         /// 0x0061c8b0 with a colour). Empty for none.
         std::string icon;
         uint32_t iconWidget = 0;   ///< the tooltip's own texture that shows it
-        /// AddFontStrings (0x0061fe30): the two font strings the line is made
-        /// of, whose text and colour it shows as they stand. 0 for a line of
-        /// its own.
-        uint32_t leftFontString = 0, rightFontString = 0;
         /// Lines the wrap produced, filled by the sizing pass so the draw and
         /// the height agree on how tall this line is.
         mutable int lines = 1;

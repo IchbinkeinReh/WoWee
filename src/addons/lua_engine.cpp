@@ -2322,16 +2322,20 @@ uint32_t makeTooltipLineString(lua_State* L, uint32_t tooltipId, std::size_t lin
     if (!fs) return id;
     fs->shown = false;
     wowee::ui::Anchor a;
+    const auto leftOf = [&](std::size_t at) -> const wowee::ui::Widget* {
+        const wowee::ui::Widget* of = tree->get(tooltipId);
+        if (of && at - 1 < of->tooltipLineAnchors.size())
+            if (const auto* given = tree->get(of->tooltipLineAnchors[at - 1])) return given;
+        return tree->findByName(wowee::ui::tooltipLineStringName(tipName, at, false));
+    };
     if (right) {
-        const wowee::ui::Widget* left =
-            tree->findByName(wowee::ui::tooltipLineStringName(tipName, line, false));
+        const wowee::ui::Widget* left = leftOf(line);
         a.point = "RIGHT";
         a.relativeTo = left ? left->id : tooltipId;
         a.relativePoint = "LEFT";
         a.x = 40.0f;
     } else {
-        const wowee::ui::Widget* above =
-            line > 1 ? tree->findByName(wowee::ui::tooltipLineStringName(tipName, line - 1, false)) : nullptr;
+        const wowee::ui::Widget* above = line > 1 ? leftOf(line - 1) : nullptr;
         a.point = "TOPLEFT";
         a.relativeTo = above ? above->id : tooltipId;
         a.relativePoint = above ? "BOTTOMLEFT" : "TOPLEFT";
@@ -2348,7 +2352,7 @@ void syncTooltipLineStrings(lua_State* L, uint32_t tooltipId) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree || tooltipId == 0) return;
     const wowee::ui::Widget* tip = tree->get(tooltipId);
-    if (!tip || tip->objectType != "GameTooltip" || tip->name.empty()) return;
+    if (!tip || tip->objectType != "GameTooltip" || (tip->name.empty() && tip->tooltipLineAnchors.empty())) return;
     const int top = lua_gettop(L);
     wowee::ui::mirrorTooltipLines(*tree, tooltipId, [L, tooltipId](std::size_t line, bool right) {
         return makeTooltipLineString(L, tooltipId, line, right);
@@ -6264,14 +6268,10 @@ void tickCooldowns(lua_State* L) {
 }
 }  // namespace
 
-/// The last line AddFontStrings made is the two font strings themselves
-/// (0x0061fe30): it shows what they say and how they are coloured from now on.
-int lua_Tooltip_AdoptFontStrings(lua_State* L) {
-    auto* w = widgetOf(L, 1);
-    if (!w || w->tooltipLines.empty()) return 0;
-    auto& line = w->tooltipLines.back();
-    line.leftFontString = widgetIdOf(L, 2);
-    line.rightFontString = widgetIdOf(L, 3);
+int lua_Tooltip_AddFontStrings(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (w && tree) wowee::ui::addTooltipLineStrings(*tree, w->id, widgetIdOf(L, 2), widgetIdOf(L, 3));
     return 0;
 }
 
@@ -12875,7 +12875,7 @@ void LuaEngine::registerCoreAPI() {
         lua_Tooltip_SetTalent, lua_Tooltip_SetAuctionItem, lua_Tooltip_AppendItemEnchants,
         lua_Tooltip_AppendEquippedEnchants, lua_Tooltip_SetTradeSkillItem, lua_Tooltip_SetUnit,
         lua_Tooltip_SetFrameStack, lua_Tooltip_SetUnitAura, lua_Tooltip_SetSendMailItem,
-        lua_Tooltip_SetPetAction, lua_Tooltip_SetShapeshift, lua_Tooltip_AdoptFontStrings,
+        lua_Tooltip_SetPetAction, lua_Tooltip_SetShapeshift, lua_Tooltip_AddFontStrings,
         lua_Tooltip_SetPossession, lua_Tooltip_SetQuestRewardSpell, lua_Tooltip_SetTotem,
         lua_Tooltip_SetText, lua_WoweeTooltipItemBuilt, lua_Tooltip_SetAuctionSellItem,
     };
@@ -12948,8 +12948,8 @@ void LuaEngine::registerCoreAPI() {
         // anyone who hovered it.
         // QuestPOI:UpdateQuestPOI does nothing in the client (0x0058e990).
         "function mt:UpdateQuestPOI() end\n"
-        // GameTooltip:AddFontStrings(left, right) (0x006201f0): a line made of
-        // the two font strings' text and colours. Both must be font strings.
+        // GameTooltip:AddFontStrings(left, right) (0x006201f0): what the next
+        // line without any is written into. Both must be font strings.
         "function mt:AddFontStrings(l, r)\n"
         "    local function ok(fs) return type(fs) == 'table' and fs.GetObjectType and fs:GetObjectType() == 'FontString' end\n"
         "    if type(l) ~= 'table' or type(r) ~= 'table' then\n"
@@ -12958,10 +12958,7 @@ void LuaEngine::registerCoreAPI() {
         "    if not ok(l) or not ok(r) then\n"
         "        error(('%s:AddFontStrings(): Wrong object type, expected fontstring'):format(self:GetName() or '<unnamed>'), 3)\n"
         "    end\n"
-        "    local lr, lg, lb = l:GetTextColor()\n"
-        "    local rr, rg, rb = r:GetTextColor()\n"
-        "    self:AddDoubleLine(l:GetText() or '', r:GetText() or '', lr, lg, lb, rr, rg, rb)\n"
-        "    __WoweeTooltipAdoptFontStrings(self, l, r)\n"
+        "    __WoweeTooltipAddFontStrings(self, l, r)\n"
         "end\n"
         // SetInventoryPortraitTexture(texture, unit, slot) (0x005ea9b0): the
         // texture shows the icon of what the unit wears in that slot.
@@ -14376,8 +14373,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipFadeOut");
     lua_pushcfunction(L_, lua_Tooltip_MarkEnchantSpot);
     lua_setglobal(L_, "__WoweeTooltipMarkEnchantSpot");
-    lua_pushcfunction(L_, lua_Tooltip_AdoptFontStrings);
-    lua_setglobal(L_, "__WoweeTooltipAdoptFontStrings");
+    lua_pushcfunction(L_, lua_Tooltip_AddFontStrings);
+    lua_setglobal(L_, "__WoweeTooltipAddFontStrings");
     lua_pushcfunction(L_, lua_Tooltip_SetPossession);
     lua_setglobal(L_, "__WoweeTooltipSetPossession");
     lua_pushcfunction(L_, lua_Tooltip_SetQuestRewardSpell);
@@ -14408,7 +14405,7 @@ void LuaEngine::registerCoreAPI() {
     for (const char* builder :
          {"__WoweeTooltipSetSpellByID", "__WoweeTooltipSetUnitAura", "__WoweeTooltipSetAction",
           "__WoweeTooltipSetSendMailItem",
-          "__WoweeTooltipSetPetAction", "__WoweeTooltipSetShapeshift", "__WoweeTooltipAdoptFontStrings",
+          "__WoweeTooltipSetPetAction", "__WoweeTooltipSetShapeshift", "__WoweeTooltipAddFontStrings",
           "__WoweeTooltipSetPossession", "__WoweeTooltipSetQuestRewardSpell", "__WoweeTooltipSetTotem",
           "__WoweeTooltipSetText", "__WoweeTooltipItemBuilt", "__WoweeTooltipSetAuctionSellItem"}) {
         lua_getglobal(L_, builder);

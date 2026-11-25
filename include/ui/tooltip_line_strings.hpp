@@ -41,13 +41,19 @@ using MakeTooltipLineString = std::function<uint32_t(std::size_t line, bool righ
 /// shown where the side has text (0x0061fec0 shows a side only for a
 /// non-empty string). The pair after the last line is made too, as the client
 /// keeps one spare. Every line font string past the last line is emptied and
-/// hidden, as ClearLines leaves it. Lines made of an addon's own font strings
-/// (AddFontStrings) are theirs and leave the named ones hidden.
+/// hidden, as ClearLines leaves it.
 ///
-/// Only a GameTooltip with a name has line font strings; anything else is left
-/// alone. Answers how many lines were mirrored.
+/// Only a GameTooltip has line font strings: with a name those of its name, and
+/// any those it was given (addTooltipLineStrings). Anything else is left alone.
+/// Answers how many lines were mirrored.
 std::size_t mirrorTooltipLines(WidgetTree& tree, uint32_t tooltipId,
                                const MakeTooltipLineString& make);
+
+/// AddFontStrings (0x006201f0 -> 0x0061fe30): the pair is the next line's that
+/// the tooltip has none for - after those of its template, those made for a line
+/// and those given before. What is named as that line's is counted only where it
+/// is not this pair: a script makes "$parentTextLeft1" and gives it.
+void addTooltipLineStrings(WidgetTree& tree, uint32_t tooltipId, uint32_t left, uint32_t right);
 
 /// A line font string was written (SetText, SetTextColor): carry it into the
 /// tooltip line it stands for, so the tooltip draws what the interface set.
