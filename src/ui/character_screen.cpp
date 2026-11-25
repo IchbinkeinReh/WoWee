@@ -1,4 +1,5 @@
 #include "ui/character_screen.hpp"
+#include "game/chr_names.hpp"
 #include "game/equipment_hash.hpp"
 #include "ui/ui_colors.hpp"
 #include "rendering/character_preview.hpp"
@@ -22,6 +23,17 @@
 namespace wowee { namespace ui {
 
 namespace {
+
+/// The client's own words for them, by the character's gender (ChrRaces, ChrClasses).
+std::string raceName(pipeline::AssetManager* assets, const game::Character& c) {
+    std::string name = game::chrRaceName(assets, static_cast<uint32_t>(c.race), static_cast<int>(c.gender)).name;
+    return name.empty() ? std::string(game::getRaceName(c.race)) : name;
+}
+std::string className(pipeline::AssetManager* assets, const game::Character& c) {
+    std::string name =
+        game::chrClassName(assets, static_cast<uint32_t>(c.characterClass), static_cast<int>(c.gender)).name;
+    return name.empty() ? std::string(game::getClassName(c.characterClass)) : name;
+}
 
 // Written in units and drawn at a scale taken from the window, the same way
 // the login card is. See paper_ui.hpp.
@@ -211,9 +223,9 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
                 std::snprintf(level, sizeof(level), "%d", character.level);
                 ui_.text(ImVec2(levelX, smallY), level, smallSize,
                          selected ? theme.ink : theme.inkSoft);
-                ui_.text(ImVec2(raceX, smallY), game::getRaceName(character.race), smallSize,
+                ui_.text(ImVec2(raceX, smallY), raceName(assetManager_, character).c_str(), smallSize,
                          theme.inkSoft);
-                ui_.text(ImVec2(classX, smallY), game::getClassName(character.characterClass),
+                ui_.text(ImVec2(classX, smallY), className(assetManager_, character).c_str(),
                          smallSize,
                          ui_.onPaper(classColor(static_cast<uint8_t>(character.characterClass))));
 
@@ -603,10 +615,10 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
     ui_.text(col.at(), level, bodySize, theme.inkSoft);
     col.gap(bodySize * 1.35f);
 
-    ui_.text(col.at(), game::getRaceName(character.race), bodySize, theme.inkSoft);
+    ui_.text(col.at(), raceName(assetManager_, character).c_str(), bodySize, theme.inkSoft);
     col.gap(bodySize * 1.35f);
 
-    ui_.text(col.at(), game::getClassName(character.characterClass), bodySize,
+    ui_.text(col.at(), className(assetManager_, character).c_str(), bodySize,
              ui_.onPaper(classColor(static_cast<uint8_t>(character.characterClass))));
     col.gap(bodySize * 1.35f);
 
@@ -668,8 +680,8 @@ void CharacterScreen::renderDeleteConfirm(const game::Character& character, floa
         ui_.text(col.at(), "Delete this hero?", px(26), theme.ink, /*titleFace=*/true);
         col.gap(px(30));
         std::snprintf(line, sizeof(line), "%s, level %d %s %s.", character.name.c_str(),
-                      character.level, game::getRaceName(character.race),
-                      game::getClassName(character.characterClass));
+                      character.level, raceName(assetManager_, character).c_str(),
+                      className(assetManager_, character).c_str());
     }
     col.gap(ui_.wrapped(col.at(), col.width(), line, px(kBodySize), theme.inkSoft) + px(10));
 
