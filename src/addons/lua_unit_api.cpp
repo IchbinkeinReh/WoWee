@@ -1036,8 +1036,8 @@ static int lua_GetShieldBlock(lua_State* L) {
 static int lua_GetSpellPenetration(lua_State* L) {
     const uint16_t index = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_TARGET_RESISTANCE);
     const auto player = localPlayerObject(L, index);
-    // From nothing, so that none is 0 and not -0.
-    lua_pushnumber(L, player ? 0.0 - static_cast<double>(static_cast<int32_t>(player->getField(index))) : 0.0);
+    // Negated as the integer it is, so that none is 0 and not -0.
+    lua_pushnumber(L, player ? static_cast<double>(-static_cast<int64_t>(static_cast<int32_t>(player->getField(index)))) : 0.0);
     return 1;
 }
 
