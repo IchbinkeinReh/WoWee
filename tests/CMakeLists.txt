@@ -4338,6 +4338,10 @@ wowee_add_test(test_addon_files
             ${CMAKE_SOURCE_DIR}/src/pipeline/blp_loader.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_world_mouse ─────────────────────────────────────────
+wowee_add_test(test_world_mouse
+    SOURCES test_world_mouse.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

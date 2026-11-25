@@ -2,6 +2,7 @@
 
 #include "addons/lua_services.hpp"
 #include "game/combat_log.hpp"
+#include "ui/world_mouse.hpp"
 #include "ui/text_changes.hpp"
 #include "ui/widget_tree.hpp"
 #include <map>
@@ -606,6 +607,7 @@ private:
     static constexpr int kMouseButtons = 5;
     uint32_t pressedWid_[kMouseButtons] = {};
     bool buttonDown_[kMouseButtons] = {};
+    ui::WorldPresses<kMouseButtons> worldPresses_;
     /// Where each button went down, so a drag can be told from a click by how
     /// far the cursor has travelled since. Without a threshold every click is a
     /// one-pixel drag and nothing would ever reach OnClick.

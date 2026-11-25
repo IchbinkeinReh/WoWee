@@ -7843,7 +7843,7 @@ int lua_Frame_EnableMouse(lua_State* L) {
 }
 int lua_Frame_IsMouseEnabled(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    luaPushOneOrNil(L, w && w->mouseEnabled ? 1 : 0);
+    luaPushOneOrNil(L, w && (w->mouseEnabled || w->name == "WorldFrame") ? 1 : 0);
     return 1;
 }
 
@@ -8820,9 +8820,11 @@ int lua_StatusBar_SetDisplayValue(lua_State* L) {
 int lua_GetMouseFocus(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree) { lua_pushnil(L); return 1; }
-    const uint32_t hovered = tree->hoveredWidget();
-    if (hovered == 0) { lua_pushnil(L); return 1; }
-    pushFrameByWid(L, hovered);
+    const auto* world = tree->findByName("WorldFrame");
+    const uint32_t focus =
+        wowee::ui::mouseFocus(tree->hoveredWidget(), world ? world->id : 0, world && world->visible);
+    if (focus == 0) { lua_pushnil(L); return 1; }
+    pushFrameByWid(L, focus);
     return 1;
 }
 
@@ -18922,6 +18924,10 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     heldByTitle = true;
                 }
             }
+            // The world's own frame, under all of the interface.
+            if (worldPresses_.down(static_cast<size_t>(i), hit))
+                if (const auto* world = widgets_.findByName("WorldFrame"); world && world->visible)
+                    callFrameScript(world->id, "OnMouseDown", b.name);
             if (!heldByTitle && pressedWid_[i] != 0) {
                 callFrameScript(pressedWid_[i], "OnMouseDown", b.name);
                 // A button (0x0096fa80): clicked as it goes down where it is
@@ -18938,6 +18944,9 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             }
         } else if (!b.down && buttonDown_[i]) {
             buttonDown_[i] = false;
+            if (worldPresses_.up(static_cast<size_t>(i)))
+                if (const auto* world = widgets_.findByName("WorldFrame"); world && world->visible)
+                    callFrameScript(world->id, "OnMouseUp", b.name);
             // Before anything asks which frame was pressed, because a link is
             // not a frame's click to take and the frame it is drawn in need not
             // have taken the press at all.
