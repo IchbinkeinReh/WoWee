@@ -3,6 +3,7 @@
 #include "rendering/light_space_cull.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/collision_facets.hpp"
+#include "rendering/pointer_pick.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/spatial_grid.hpp"
@@ -3989,7 +3990,7 @@ bool WMORenderer::segmentBlocked(const glm::vec3& from, const glm::vec3& to) con
 }
 
 std::optional<float> WMORenderer::segmentHit(const glm::vec3& from, const glm::vec3& to,
-                                             uint8_t skipFaces) const {
+                                             uint32_t skipFaces, uint32_t* hitInstanceId) const {
     QueryTimer timer(&queryTimeMs, &queryCallCount);
     const glm::vec3 delta = to - from;
     const float dist = glm::length(delta);
@@ -4026,14 +4027,21 @@ std::optional<float> WMORenderer::segmentHit(const glm::vec3& from, const glm::v
                 if (triStart + 2 >= indices.size()) continue;
                 // 0x007ae140 makes 0x120111's mask 0x84: a detail face (MOPY
                 // 0x04) is not there for it; the weather's 0x220122 makes
-                // 0x88, a collision-only face (0x08).
+                // 0x88, a collision-only face (0x08); the pointer's 0x1000124
+                // 0x188, that and a face whose material blends.
                 const size_t tri = triStart / 3;
-                if (tri < group.triMopyFlags.size() && (group.triMopyFlags[tri] & skipFaces) != 0) continue;
+                if (tri < group.triMopyFlags.size()) {
+                    const uint8_t material = tri < group.triMaterials.size() ? group.triMaterials[tri] : 0xff;
+                    const bool blends = material != 0xff && material < model.materialBlendModes.size() &&
+                                        model.materialBlendModes[material] != 0;
+                    if (!pointer_pick::buildingFaceHit(skipFaces, group.triMopyFlags[tri], blends)) continue;
+                }
                 const float t = rayTriangleIntersect(localFrom, localDir, verts[indices[triStart]],
                                                      verts[indices[triStart + 1]], verts[indices[triStart + 2]]);
                 if (t > 0.0f && t < best * localDist) {
                     best = t / localDist;
                     hit = true;
+                    if (hitInstanceId) *hitInstanceId = instance.id;
                 }
             }
         }
@@ -4987,8 +4995,8 @@ std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::ve
     return std::nullopt;
 }
 
-float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                                        bool ignoreCollisionFocus, uint32_t* hitInstanceId) const {
+float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction,
+                                        float maxDistance) const {
     QueryTimer timer(&queryTimeMs, &queryCallCount);
     float closestHit = maxDistance;
     // The camera is a solid sphere and every solid surface stops it: floors and
@@ -5021,7 +5029,7 @@ float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3
     for (size_t idx : tl_candidateScratch) {
         const auto& instance = instances[idx];
         if (instance.hidden) continue;
-        if (!ignoreCollisionFocus && outsideCollisionFocus(instance)) continue;
+        if (outsideCollisionFocus(instance)) continue;
 
         glm::vec3 center = (instance.worldBoundsMin + instance.worldBoundsMax) * 0.5f;
         glm::vec3 halfExtent = instance.worldBoundsMax - center;
@@ -5119,7 +5127,6 @@ float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3
                 if (worldDist < MIN_HIT_DISTANCE) continue;
                 if (worldDist < closestHit && worldDist <= maxDistance) {
                     closestHit = worldDist;
-                    if (hitInstanceId) *hitInstanceId = instance.id;
                 }
             }
         }

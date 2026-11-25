@@ -3,6 +3,7 @@
 #include "rendering/memory_report.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/collision_facets.hpp"
+#include "rendering/pointer_pick.hpp"
 #include "rendering/client_ribbon.hpp"
 #include "rendering/instance_dedup.hpp"
 #include "rendering/spatial_grid.hpp"
@@ -210,6 +211,8 @@ struct M2ModelGPU {
         [[nodiscard]] bool valid() const { return triCount > 0; }
     };
     CollisionMesh collision;
+    /// What of it hides from the pointer what is behind it (pointer_pick.hpp).
+    pointer_pick::DoodadMesh pickMesh;
 
     std::string name;
 
@@ -969,6 +972,13 @@ public:
     void gatherCollisionTriangles(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                   std::vector<glm::vec3>& out, bool facingUpOnly = false,
                                   bool includeGameObjects = false) const;
+    /// How far along the ray the first opaque triangle a doodad draws is, no
+    /// farther than `maxDistance`: what hides an object from the pointer
+    /// (trace flag 0x4 with 0x1000000, 0x007a2760, 0x0081daf0). The map's
+    /// doodads the frame draws at that distance from the eye, which is where
+    /// the ray starts; no game object's model, no ground cover.
+    [[nodiscard]] std::optional<float> rayHitDrawnDoodad(const glm::vec3& origin, const glm::vec3& direction,
+                                                         float maxDistance) const;
     /// WOWEE_CAMCOL_DIAG: every doodad whose box the segment crosses, as
     /// "tEnter:name/collision/gameObject/skip".
     [[nodiscard]] std::string describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;

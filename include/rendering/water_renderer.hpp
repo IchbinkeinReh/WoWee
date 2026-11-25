@@ -346,6 +346,10 @@ public:
                                                  float glX, float glY) const;
 
     std::optional<float> getWaterHeightAt(float glX, float glY) const;
+    /// How far along a ray the first liquid surface it crosses is, from
+    /// either side, no farther than `maxT` (0x007a3570, 0x007cb2f0 with a
+    /// trace's 0x20000).
+    std::optional<float> raySurfaceHit(const glm::vec3& origin, const glm::vec3& dir, float maxT) const;
     /// The surface the traced water draws over a point, for what rides its
     /// waves (Renderer::updateWaveRide): the flat level getWaterHeightAt
     /// answers, and the waves' height over it and normal there at the

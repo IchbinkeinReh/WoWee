@@ -1649,6 +1649,10 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.textureWeightTracks = model.textureWeightTracks;
     gpuModel.hasTextureAnimation = false;
 
+    // What of it hides what is behind it from the pointer: the batches that
+    // draw opaque (0x0081daf0), one of them with nothing to draw left out.
+    std::vector<std::pair<uint32_t, uint32_t>> hidingRanges;
+
     // Build per-batch GPU entries
     if (!model.batches.empty()) {
         for (const auto& batch : model.batches) {
@@ -1896,8 +1900,13 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 }
             }
 
+            if (pointer_pick::doodadBatchHides(batch.flags, batch.materialLayer, bgpu.blendMode,
+                                               bgpu.materialFlags, bgpu.batchOpacity > 0.0f)) {
+                hidingRanges.emplace_back(batch.indexStart, batch.indexCount);
+            }
             gpuModel.batches.push_back(bgpu);
         }
+        gpuModel.pickMesh = pointer_pick::doodadMesh(model.vertices, model.indices, hidingRanges);
     } else {
         // Fallback: single batch covering all indices with first texture
         M2ModelGPU::BatchGPU bgpu;
@@ -3175,6 +3184,7 @@ void M2Renderer::memoryReport(std::vector<MemoryEntry>& out) const {
                          trackBytes(r.visibilityTrack) + trackBytes(r.texSlotTrack);
         }
         const auto& c = m.collision;
+        collision += vectorBytes(m.pickMesh.vertices) + vectorBytes(m.pickMesh.indices);
         collision += vectorBytes(c.vertices) + vectorBytes(c.indices) + vectorBytes(c.normals) +
                      vectorBytes(c.triBounds) + vectorBytes(c.cellFloorTris) + vectorBytes(c.cellWallTris);
         for (const auto& cell : c.cellFloorTris) collision += vectorBytes(cell);

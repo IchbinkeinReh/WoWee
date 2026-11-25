@@ -1484,6 +1484,39 @@ void M2Renderer::gatherCollisionTriangles(const glm::vec3& boxMin, const glm::ve
     }
 }
 
+std::optional<float> M2Renderer::rayHitDrawnDoodad(const glm::vec3& origin, const glm::vec3& direction,
+                                                   float maxDistance) const {
+    const glm::vec3 end = origin + direction * maxDistance;
+    std::vector<size_t> candidates;
+    gatherCandidates(glm::min(origin, end), glm::max(origin, end), candidates);
+    static const std::vector<glm::mat4> kBindPose;
+    std::optional<float> best;
+    float limit = maxDistance;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        if (!instance.cachedModel || instance.detailDoodad || instance.isGameObject) continue;
+        const M2ModelGPU& model = *instance.cachedModel;
+        if (model.pickMesh.empty() || model.isInvisibleTrap || model.isSpellEffect) continue;
+        if (instance.scale <= 0.001f || instance.fade <= 0.0f) continue;
+        // 0x0081cff0: the models whose bounding sphere the ray meets.
+        const glm::vec3 toCenter = instance.cachedCullCenter - origin;
+        const float along = glm::dot(toCenter, direction);
+        const float r = instance.cachedVisualRadius;
+        if (along + r < 0.0f || along - r > limit) continue;
+        if (glm::dot(toCenter, toCenter) - along * along > r * r) continue;
+        // Not what the frame has culled (+0x25, set by 0x00791cb0's distance).
+        if (instanceDistanceFade(instance, glm::dot(toCenter, toCenter)) <= 0.0f) continue;
+        const bool posed = instance.cachedHasAnimation && !instance.cachedDisableAnimation;
+        const auto t = pointer_pick::rayHitDoodad(model.pickMesh, posed ? instance.boneMatrices : kBindPose,
+                                                  instance.drawMatrix(), origin, direction, limit);
+        if (t && *t > 0.0f) {
+            limit = *t;
+            best = *t;
+        }
+    }
+    return best;
+}
+
 std::string M2Renderer::describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {
     const glm::vec3 end = origin + direction * maxDistance;
     std::vector<size_t> candidates;

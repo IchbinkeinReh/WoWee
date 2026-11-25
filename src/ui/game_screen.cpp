@@ -58,6 +58,7 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/pvp_flags.hpp"
 #include "game/game_utils.hpp"
+#include "game/world_pick.hpp"
 #include "core/logger.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1777,7 +1778,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     mousePos.x, mousePos.y, static_cast<float>(window->getWidth()),
                     static_cast<float>(window->getHeight()));
                 uint32_t building = 0;
-                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building);
+                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance,
+                                                         (gameHandler.worldPickFlags() & game::world_pick::kLiquid) != 0,
+                                                         &building);
                 const auto aim = gameHandler.aimGroundTarget(
                     ground ? std::optional<game::ground_target::Place>(groundPlaceAt(gameHandler, *ground, building))
                            : std::nullopt);
@@ -1942,7 +1945,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 // (0x00527360 -> 0x0080c340).
                 if (gameHandler.isGroundTargeting()) {
                     uint32_t building = 0;
-                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building)) {
+                    if (auto ground = renderer->pickGround(
+                            ray.origin, ray.direction, kGroundPickDistance,
+                            (gameHandler.worldPickFlags() & game::world_pick::kLiquid) != 0, &building)) {
                         gameHandler.placeGroundTarget(groundPlaceAt(gameHandler, *ground, building));
                     }
                     return;
@@ -2229,7 +2234,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     // on (0x005278c0 -> 0x0072f040, kind 8). Without it the
                     // click does nothing.
                     uint32_t building = 0;
-                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building)) {
+                    if (auto ground = renderer->pickGround(
+                            ray.origin, ray.direction, kGroundPickDistance,
+                            (gameHandler.worldPickFlags() & game::world_pick::kLiquid) != 0, &building)) {
                         gameHandler.clickToMoveTo(groundPlaceAt(gameHandler, *ground, building).canonical);
                     } else {
                         gameHandler.clickToMoveFaceDirection(core::coords::renderToCanonical(ray.direction));

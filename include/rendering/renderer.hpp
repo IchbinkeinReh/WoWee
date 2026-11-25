@@ -441,13 +441,22 @@ public:
     /// radius, and whether the place is out of the spell's reach.
     void setSpellTargetCircle(const glm::vec3& pos, float radius, bool unacceptable);
     void clearSpellTargetCircle();
-    /// The first terrain, building or doodad surface along a ray from the
-    /// camera, renderer coordinates - the ground a click on the world lands
-    /// on (CWorld's intersect, 0x004f66c0's place).
-    /// wmoInstanceId, where given, is the building the place is on, 0 for
-    /// none.
+    /// How far along a ray from the camera (renderer coordinates, `dir` of
+    /// length 1) the first thing of the world that is seen there is: the
+    /// terrain, a building's opaque face, a doodad's opaque triangle, with
+    /// `liquid` a liquid's surface. Whatever is farther is hidden from the
+    /// pointer (0x004f9930's first trace, pointer_pick.hpp).
+    [[nodiscard]] std::optional<float> pointerBlockedAt(const glm::vec3& origin, const glm::vec3& dir,
+                                                        float maxDistance, bool liquid,
+                                                        uint32_t* wmoInstanceId = nullptr) const;
+    /// The place on the ground the pointer is at, renderer coordinates
+    /// (0x004f9930 with a ground flag): what it is blocked at, or before that
+    /// the first surface of the trace 0x100151 - the terrain, a building's
+    /// collision, the models'. wmoInstanceId, where given, is the building
+    /// the place is on, 0 for none.
     [[nodiscard]] std::optional<glm::vec3> pickGround(const glm::vec3& origin, const glm::vec3& dir,
-                                                      float maxDistance, uint32_t* wmoInstanceId = nullptr) const;
+                                                      float maxDistance, bool liquid,
+                                                      uint32_t* wmoInstanceId = nullptr) const;
     /// How far from `from` to `to` (0..1) the first surface is, either
     /// side: the world's intersect with 0x120111 (0x007a3b70) - the
     /// terrain, the buildings and the doodads' collision. Renderer

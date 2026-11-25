@@ -53,6 +53,7 @@
 #include "rendering/levelup_effect.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/character_preview.hpp"
+#include "rendering/pointer_pick.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/collision_geometry.hpp"
@@ -4071,77 +4072,122 @@ std::optional<float> Renderer::intersectSegment(const glm::vec3& from, const glm
     return best;
 }
 
-std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm::vec3& dir,
-                                              float maxDistance, uint32_t* wmoInstanceId) const {
-    const glm::vec3 d = glm::normalize(dir);
+// Where a ray crosses a height field, marched in steps of `step` up to `reach`
+// and the crossing halved down, from either side.
+//
+// A crossing, not being under it. The terrain is a surface the ray meets,
+// and a ray that starts beneath it has met nothing: the Undercity lies a
+// hundred yards under Tirisfal's ground, so every ray from its camera began
+// "below" and was stopped at its first step. The pointer then found no one
+// there (Edward Cairn in the Trade Quarter could not be clicked, and a
+// click on him cleared the target as a click on nothing does), and a spell
+// aimed at the floor was put down at the camera instead.
+static std::optional<float> crossHeights(const std::function<std::optional<float>(float, float)>& heightAt,
+                                         const glm::vec3& origin, const glm::vec3& d, float reach, float step) {
+    auto below = [&](float t) -> std::optional<bool> {
+        const glm::vec3 p = origin + d * t;
+        const auto h = heightAt(p.x, p.y);
+        if (!h) return std::nullopt;
+        return p.z <= *h;
+    };
+    std::optional<bool> prevSide = below(0.0f);
+    float prev = 0.0f;
+    for (float t = step; t <= reach; t += step) {
+        const auto side = below(t);
+        if (side && prevSide && *side != *prevSide) {
+            float lo = prev, hi = t;
+            for (int i = 0; i < 16; ++i) {
+                const float mid = 0.5f * (lo + hi);
+                const auto midSide = below(mid);
+                (midSide && *midSide == *prevSide ? lo : hi) = mid;
+            }
+            return hi;
+        }
+        prevSide = side;
+        prev = t;
+    }
+    return std::nullopt;
+}
+
+std::optional<float> Renderer::pointerBlockedAt(const glm::vec3& origin, const glm::vec3& dir, float maxDistance,
+                                                bool liquid, uint32_t* wmoInstanceId) const {
+    // 0x004f9930: 0x1000124, with the liquid's surface 0x1020124.
+    const uint32_t mask =
+        pointer_pick::buildingFaceMask(liquid ? pointer_pick::kTraceSeenLiquid : pointer_pick::kTraceSeen);
     float best = maxDistance;
     bool hit = false;
     uint32_t building = 0;
-    // Buildings and doodads, by their collision triangles, whatever the
-    // collision focus around the player.
     if (wmoRenderer) {
         uint32_t id = 0;
-        const float t = wmoRenderer->raycastBoundingBoxes(origin, d, best, true, &id);
-        if (t < best) { best = t; hit = true; building = id; }
-    }
-    // The terrain, where the ray crosses it - marched in half-yard steps and
-    // the crossing halved down, as intersectSegment does.
-    //
-    // A crossing, not being under it. The terrain is a surface the ray meets,
-    // and a ray that starts beneath it has met nothing: the Undercity lies
-    // a hundred yards under Tirisfal's ground, so every ray from its camera began
-    // "below" and was stopped at its first step. The pointer then found no one
-    // there (Edward Cairn in the Trade Quarter could not be clicked, and a
-    // click on him cleared the target as a click on nothing does), and a spell
-    // aimed at the floor was put down at the camera instead.
-    if (terrainManager) {
-        constexpr float kStep = 0.5f;
-        auto below = [&](float t) -> std::optional<bool> {
-            const glm::vec3 p = origin + d * t;
-            const auto h = terrainManager->getHeightAt(p.x, p.y);
-            if (!h) return std::nullopt;
-            return p.z <= *h;
-        };
-        std::optional<bool> prevSide = below(0.0f);
-        float prev = 0.0f;
-        for (float t = kStep; t <= best; t += kStep) {
-            const auto side = below(t);
-            if (side && prevSide && *side != *prevSide) {
-                float lo = prev, hi = t;
-                for (int i = 0; i < 16; ++i) {
-                    const float mid = 0.5f * (lo + hi);
-                    const auto midSide = below(mid);
-                    (midSide && *midSide == *prevSide ? lo : hi) = mid;
-                }
-                if (hi < best) { best = hi; hit = true; building = 0; }
-                break;
-            }
-            prevSide = side;
-            prev = t;
+        if (const auto f = wmoRenderer->segmentHit(origin, origin + dir * best, mask, &id)) {
+            best *= *f;
+            hit = true;
+            building = id;
         }
     }
-    // Doodads by the upward faces of their collision meshes along the ray.
+    if (terrainManager) {
+        const auto t = crossHeights([this](float x, float y) { return terrainManager->getHeightAt(x, y); }, origin, dir,
+                                    best, 0.5f);
+        if (t && *t < best) {
+            best = *t;
+            hit = true;
+            building = 0;
+        }
+    }
+    if (liquid && waterRenderer) {
+        if (const auto t = waterRenderer->raySurfaceHit(origin, dir, best); t && *t < best) {
+            best = *t;
+            hit = true;
+            building = 0;
+        }
+    }
+    if (m2Renderer) {
+        if (const auto t = m2Renderer->rayHitDrawnDoodad(origin, dir, best)) {
+            best = *t;
+            hit = true;
+            building = 0;
+        }
+    }
+    if (!hit) return std::nullopt;
+    if (wmoInstanceId) *wmoInstanceId = building;
+    return best;
+}
+
+std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm::vec3& dir, float maxDistance,
+                                              bool liquid, uint32_t* wmoInstanceId) const {
+    const glm::vec3 d = glm::normalize(dir);
+    float best = maxDistance;
+    uint32_t building = 0;
+    bool hit = false;
+    if (const auto t = pointerBlockedAt(origin, d, best, liquid, &building)) {
+        best = *t;
+        hit = true;
+    }
+    // Then what stands in the way before it (0x100151): a building's faces
+    // but the detail ones and those the camera goes through, the models'
+    // collision, game objects' too, whichever way they face. The terrain is
+    // behind what it was met at above.
+    if (wmoRenderer) {
+        uint32_t id = 0;
+        if (const auto f = wmoRenderer->segmentHit(
+                origin, origin + d * best, pointer_pick::buildingFaceMask(pointer_pick::kTraceGround), &id)) {
+            best *= *f;
+            hit = true;
+            building = id;
+        }
+    }
     if (m2Renderer) {
         const glm::vec3 end = origin + d * best;
         std::vector<glm::vec3> tris;
-        m2Renderer->gatherBlobShadowGround(glm::min(origin, end) - glm::vec3(0.5f),
-                                           glm::max(origin, end) + glm::vec3(0.5f), tris);
+        m2Renderer->gatherCollisionTriangles(glm::min(origin, end) - glm::vec3(0.5f),
+                                             glm::max(origin, end) + glm::vec3(0.5f), tris, false, true);
         for (size_t i = 0; i + 2 < tris.size(); i += 3) {
-            // Moller-Trumbore, both faces.
-            const glm::vec3 e1 = tris[i + 1] - tris[i];
-            const glm::vec3 e2 = tris[i + 2] - tris[i];
-            const glm::vec3 pv = glm::cross(d, e2);
-            const float det = glm::dot(e1, pv);
-            if (std::abs(det) < 1e-8f) continue;
-            const float inv = 1.0f / det;
-            const glm::vec3 tv = origin - tris[i];
-            const float u = glm::dot(tv, pv) * inv;
-            if (u < 0.0f || u > 1.0f) continue;
-            const glm::vec3 qv = glm::cross(tv, e1);
-            const float v = glm::dot(d, qv) * inv;
-            if (v < 0.0f || u + v > 1.0f) continue;
-            const float t = glm::dot(e2, qv) * inv;
-            if (t > 0.0f && t < best) { best = t; hit = true; building = 0; }
+            const float t = rayTriangleIntersect(origin, d, tris[i], tris[i + 1], tris[i + 2]);
+            if (t > 0.0f && t < best) {
+                best = t;
+                hit = true;
+                building = 0;
+            }
         }
     }
     if (!hit) return std::nullopt;

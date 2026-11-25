@@ -47,8 +47,11 @@ ScenePick pickScene(game::GameHandler& gameHandler,
     const uint32_t pickFlags = gameHandler.worldPickFlags();
     if ((pickFlags & game::world_pick::kObjectMask) == 0) return pick;
 
-    // Where the ray first meets the world - a building's collision triangles
-    // or the ground; only what the ray reaches before that can be picked.
+    // Where the ray first meets what is seen of the world - the ground, a
+    // building's or a doodad's opaque faces, the liquid with the liquid flag;
+    // only what the ray reaches before that can be picked. What only stands
+    // in the way hides nothing: the auctioneers of Orgrimmar stand behind a
+    // collision mesh nobody sees.
     // Half a yard of slack keeps a unit standing on the floor pickable where
     // its sphere dips into it.
     //
@@ -64,8 +67,9 @@ ScenePick pickScene(game::GameHandler& gameHandler,
         if (!occlusionRenderer) return false;
         if (worldT < 1e29f) return t > worldT + kOcclusionSlack;
         if (t <= worldTracedTo + kOcclusionSlack) return false;
-        if (const auto hit = occlusionRenderer->pickGround(ray.origin, ray.direction, t)) {
-            worldT = glm::length(*hit - ray.origin);
+        const bool liquid = (pickFlags & game::world_pick::kLiquid) != 0;
+        if (const auto hit = occlusionRenderer->pointerBlockedAt(ray.origin, ray.direction, t, liquid)) {
+            worldT = *hit;
         }
         worldTracedTo = t;
         return worldT < 1e29f && t > worldT + kOcclusionSlack;
