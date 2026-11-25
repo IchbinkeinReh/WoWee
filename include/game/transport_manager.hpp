@@ -196,11 +196,9 @@ public:
     TransportManager();
     ~TransportManager();
 
-    // A monotonic millisecond clock, for a path time kept as an offset from it.
-    static int64_t nowSteadyMs() {
-        return static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
-    }
+    // A monotonic millisecond clock (core::steadyNow's, as the packets' wait is
+    // measured), for a path time kept as an offset from it.
+    static int64_t nowSteadyMs();
 
     // Absolute wall-clock ms. Used to seed a client-animated transport's starting phase
     // so it's deterministic across clients/restarts instead of depending on when this

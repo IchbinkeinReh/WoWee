@@ -33,6 +33,7 @@ double appTimeSeconds() {
 }
 
 void holdTestClock(bool held) {
+    testClockOffset() = 0.0;
     if (held) heldAt() = std::chrono::steady_clock::now();
     else heldAt().reset();
 }

@@ -29,7 +29,8 @@ double appTimeSeconds();
 /// exactly the steady_clock as before.
 void advanceTestClock(double seconds);
 
-/// Tests only: the clock stands still, but for what advanceTestClock adds, until it is let go.
+/// Tests only: the clock stands still at the real one's time, but for what advanceTestClock adds,
+/// until it is let go. What a test before added is not there any more.
 void holdTestClock(bool held);
 
 } // namespace wowee::core

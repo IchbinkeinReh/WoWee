@@ -13,6 +13,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/movement_limits.hpp"
+#include "core/app_clock.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include <glm/gtc/matrix_transform.hpp>
@@ -163,6 +164,11 @@ const char* TransportManager::routeClockSourceName(RouteClockSource source) {
 }
 
 TransportManager::TransportManager() = default;
+
+int64_t TransportManager::nowSteadyMs() {
+    return static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        core::steadyNow().time_since_epoch()).count());
+}
 TransportManager::~TransportManager() = default;
 
 void TransportManager::update(float deltaTime) {

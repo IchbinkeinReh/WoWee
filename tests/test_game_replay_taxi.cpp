@@ -606,7 +606,8 @@ TEST_CASE("an aura's time counts from when its packet came", "[replay][taxi]") {
     const auto& auras = s.handler().getPlayerAuras();
     REQUIRE_FALSE(auras.empty());
     // Counted by the real clock, as the interface counts it.
-    const auto left = auras[0].getRemainingMs(static_cast<uint64_t>(wowee::game::TransportManager::nowSteadyMs()));
+    const auto left = auras[0].getRemainingMs(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count()));
     CHECK(left <= 24000);
     CHECK(left > 22000);
 }

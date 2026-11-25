@@ -340,6 +340,8 @@ TEST_CASE("a block's spline goes by the clock from before its packet came", "[re
     Session s;
     s.setConnected(true);
     auto& gh = s.handler();
+    // The packets' wait and the clock it is measured by are one: ahead of the real one here.
+    wowee::core::advanceTestClock(30.0);
     gh.setUnitClock(wowee::core::steadyNow() - 5s);
     gh.update(0.016f);
     std::vector<glm::vec3> way;
