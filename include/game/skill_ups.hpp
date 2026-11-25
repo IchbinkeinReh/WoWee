@@ -33,6 +33,12 @@ public:
         uint32_t minLevel = 0;    ///< +0x14
         uint32_t tierId = 0;      ///< +0x18, SkillTiers.dbc
         uint32_t costIndex = 0;   ///< +0x1c, the SkillCostsData column
+        /// Whether a skill with this row is in the skills list (0x005cd9b0): not
+        /// with flag 0x2; with flag 0x1, or a value, or - flag 0x4 - the level.
+        [[nodiscard]] bool listed(uint32_t value, uint32_t level) const {
+            return (flags & 0x2u) == 0 &&
+                   ((flags & 0x1u) != 0 || value != 0 || ((flags & 0x4u) != 0 && minLevel <= level));
+        }
     };
 
     /// Reads the four tables once; harmless to call again.

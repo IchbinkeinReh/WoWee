@@ -2067,6 +2067,11 @@ static std::vector<SkillRow> skillRows(game::GameHandler* gh) {
     for (uint32_t id : skillOrder(gh)) {
         const uint32_t cat = gh->getSkillCategory(id);
         if (cat == kNotDisplayed) continue;
+        // 0x005cd9b0.
+        if (const auto* info = gh->skillRaceClassInfo(id); info && !game::isPreWotlk()) {
+            const auto skill = gh->getPlayerSkills().find(id);
+            if (!info->listed(skill != gh->getPlayerSkills().end() ? skill->second.value : 0u, gh->getPlayerLevel())) continue;
+        }
         grouped[{gh->getSkillCategorySortIndex(cat), cat}].push_back(id);
     }
 

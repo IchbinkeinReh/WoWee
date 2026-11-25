@@ -4419,6 +4419,10 @@ wowee_add_test(test_quest_log_rows
 wowee_add_test(test_achievement_progress
     SOURCES test_achievement_progress.cpp)
 
+# ── test_skill_list ──────────────────────────────────────────
+wowee_add_test(test_skill_list
+    SOURCES test_skill_list.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
