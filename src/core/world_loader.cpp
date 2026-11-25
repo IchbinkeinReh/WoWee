@@ -6,6 +6,7 @@
 #include "core/config_paths.hpp"
 #include "core/application.hpp"
 #include "core/world_entry_callback_handler.hpp"
+#include "rendering/loading_tip.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "core/entity_spawner.hpp"
 #include "core/appearance_composer.hpp"
@@ -41,6 +42,7 @@
 #include "game/transport_manager.hpp"
 #include "game/world.hpp"
 
+#include <cstdlib>
 #include <new>
 #include <SDL3/SDL.h>
 #include <chrono>
@@ -731,6 +733,17 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                     : std::nullopt);
     }
     bool loadingScreenOk = loadingScreen.initialize(assetManager_, mapId);
+    // 0x004d9c00: the next of the game's tips, where it is the way into the world.
+    if (gameHandler_ && gameHandler_->takeLoadingTip() && addons::storedCVarValue("showGameTips", "1") != "0") {
+        if (const auto tips = assetManager_->loadDBCOptional("GameTips.dbc")) {
+            const int row = rendering::loading_tip::row(std::atoi(addons::storedCVarValue("gameTip", "0").c_str()),
+                                                        static_cast<int>(tips->getRecordCount()));
+            if (row >= 0) {
+                loadingScreen.setTip(tips->getString(static_cast<uint32_t>(row), 1));
+                addons::setStoredCVar("gameTip", std::to_string(row + 1));
+            }
+        }
+    }
     // 0x0040a990: the loading screen starts the keep-alive's thirty seconds.
     if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/true);
 

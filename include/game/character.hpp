@@ -134,6 +134,7 @@ struct Character {
 
     // State
     uint32_t flags;             // Character flags (PvP, dead, etc.)
+    bool firstLogin = false;    ///< it has not been in the world yet
 
     // Optional data
     PetData pet;                                // Pet information (if exists)

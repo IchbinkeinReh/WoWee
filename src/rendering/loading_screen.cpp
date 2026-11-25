@@ -10,6 +10,10 @@
 #include "rendering/vk_context.hpp"
 #include "core/logger.hpp"
 #include "pipeline/data_stream.hpp"
+#include "rendering/loading_tip.hpp"
+#include "ui/interface_fonts.hpp"
+#include "ui/text_markup.hpp"
+#include "ui/text_wrap.hpp"
 #include "ui/stream_progress.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -19,6 +23,7 @@
 #ifdef WOWEE_VR
 #include "vr/vr_runtime.hpp"
 #endif
+#include <cfloat>
 #include <cstring>
 
 // The one definition of stb_image the other image readers link against.
@@ -97,6 +102,8 @@ bool LoadingScreen::initialize(pipeline::AssetManager* assets, uint32_t mapId) {
 void LoadingScreen::setStatus(const std::string& status) {
     LOG_DEBUG("Loading: ", status);
 }
+
+void LoadingScreen::setTip(const std::string& tip) { tip_ = loading_tip::trimmed(tip); }
 
 void LoadingScreen::release(Texture& tex) {
     if (!vkCtx) return;
@@ -420,12 +427,39 @@ void LoadingScreen::drawPicture(ImDrawList* drawList, float screenW, float scree
 
 }
 
+void LoadingScreen::drawTip(ImDrawList* drawList, float screenW, float screenH) const {
+    ImFont* font = tip_.empty() ? nullptr : ui::interfaceFaceOrDefault("Fonts\\FRIZQT__.TTF");
+    if (!font) return;
+    namespace lt = loading_tip;
+    const lt::Place at = lt::place(screenW, screenH);
+    const auto widthOf = [&](const std::string& piece) {
+        return font->CalcTextSizeA(at.size, FLT_MAX, 0.0f, piece.c_str()).x;
+    };
+    const auto lines = ui::wrapText(ui::parseMarkup(tip_), at.width, false, widthOf);
+    float y = at.foot - ui::textHeight(lines.size(), at.size, at.spacing);
+    for (const auto& line : lines) {
+        float x = at.left;
+        for (const ui::WrapRun& run : line) {
+            const ImU32 colour =
+                run.hasColor ? IM_COL32(static_cast<int>(run.rgba[0] * 255.0f), static_cast<int>(run.rgba[1] * 255.0f),
+                                        static_cast<int>(run.rgba[2] * 255.0f), lt::kAlpha)
+                             : IM_COL32(lt::kGrey, lt::kGrey, lt::kGrey, lt::kAlpha);
+            drawList->AddText(font, at.size, ImVec2(x + at.shadowX, y + at.shadowY), IM_COL32(0, 0, 0, lt::kAlpha),
+                              run.text.c_str());
+            drawList->AddText(font, at.size, ImVec2(x, y), colour, run.text.c_str());
+            x += widthOf(run.text);
+        }
+        y += at.size + at.spacing;
+    }
+}
+
 void LoadingScreen::drawOverlay() {
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
     // Black first, as the screen is black around a picture of another shape.
     drawList->AddRectFilled(ImVec2(0.0f, 0.0f), size, IM_COL32(0, 0, 0, 255));
     drawPicture(drawList, size.x, size.y);
+    drawTip(drawList, size.x, size.y);
     ui::drawStreamProgress(drawList, size.x, size.y);
 }
 
@@ -456,6 +490,7 @@ void LoadingScreen::render() {
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     drawPicture(ImGui::GetWindowDrawList(), screenW, screenH);
+    drawTip(ImGui::GetWindowDrawList(), screenW, screenH);
     // The streaming data mode's fetch, while it goes on (not the original's).
     ui::drawStreamProgress(ImGui::GetWindowDrawList(), screenW, screenH);
 

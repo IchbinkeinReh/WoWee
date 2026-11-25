@@ -85,9 +85,9 @@ void writeCharacter(Writer& w, uint64_t guid, const std::string& name,
     w.u32(0);                   // flags
     if (wotlkTail) {
         w.u32(0);               // customization
-        w.u8(0);                // unknown
+        w.u8(level != 70 ? 1 : 0);   // firstLogin
     } else {
-        w.u8(1);                // firstLogin
+        w.u8(level != 70 ? 1 : 0);   // firstLogin
     }
     w.u32(0);                   // pet display model
     w.u32(0);                   // pet level
@@ -110,6 +110,7 @@ void checkOneCharacter(CharEnumResponse& response, const std::string& name,
     CHECK(static_cast<uint8_t>(c.race) == race);
     CHECK(static_cast<uint8_t>(c.characterClass) == klass);
     CHECK(c.level == level);
+    CHECK(c.firstLogin == (level != 70));
     CHECK(c.zoneId == 1519);
     // The position is the tell for a field read out of step: it sits in the
     // middle of the entry, so anything short before it lands here first.

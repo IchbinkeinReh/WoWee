@@ -573,7 +573,7 @@ bool parseCharEnumPreWotlk(network::Packet& packet, CharEnumResponse& response,
         character.guildId = packet.readUInt32();
         character.flags = packet.readUInt32();
         // One byte here, where WotLK sends uint32 customization + uint8 unknown.
-        /*uint8_t firstLogin =*/ packet.readUInt8();
+        character.firstLogin = packet.readUInt8() != 0;
 
         // Pet data, always present even with no pet.
         character.pet.displayModel = packet.readUInt32();
@@ -717,7 +717,7 @@ bool CharEnumParser::parse(network::Packet& packet, CharEnumResponse& response) 
             if (!packet.hasRemaining(1)) {
                 // Unknown missing
             } else {
-                packet.readUInt8();   // Unknown
+                character.firstLogin = packet.readUInt8() != 0;
             }
         }
 

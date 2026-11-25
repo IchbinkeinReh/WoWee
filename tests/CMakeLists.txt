@@ -4386,6 +4386,10 @@ wowee_add_test(test_cvar_ids
 wowee_add_test(test_character_config
     SOURCES test_character_config.cpp ${CMAKE_SOURCE_DIR}/src/addons/client_cvar_registry.cpp)
 
+# ── test_loading_tip ─────────────────────────────────────────
+wowee_add_test(test_loading_tip
+    SOURCES test_loading_tip.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

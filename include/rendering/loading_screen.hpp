@@ -50,6 +50,9 @@ public:
         crossingLeftFrom_ = leftFrom;
     }
 
+    /// The tip it shows (0x00407e30), as 0x0040ab70 draws it.
+    void setTip(const std::string& tip);
+
     /// The bar only fills: a value under what it shows is ignored, and it is
     /// held to 0 - 1 (0x0040af40, 0x004079d0). A new screen starts empty
     /// (initialize, as 0x0040ab70 does).
@@ -74,6 +77,7 @@ private:
     bool loadTexture(pipeline::AssetManager* assets, const std::string& path, Texture& out);
     bool upload(const uint8_t* rgba, int width, int height, Texture& out);
     void drawPicture(ImDrawList* drawList, float screenW, float screenH) const;
+    void drawTip(ImDrawList* drawList, float screenW, float screenH) const;
     void release(Texture& tex);
     /// 0x00409880 and 0x0040a160: the crossing and its textures, or nothing.
     bool loadCrossing(pipeline::AssetManager* assets);
@@ -94,6 +98,7 @@ private:
     Texture dynamicElements_;
     std::array<Texture, 12> worldTiles_;
 
+    std::string tip_;
     float loadProgress = 0.0f;
     /// This screen holds the world's sound (AudioEngine::beginWorldSoundHold).
     bool holdsWorldSound_ = false;

@@ -531,6 +531,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     // Find character name for logging
     for (const auto& character : characters) {
         if (character.guid == characterGuid) {
+            loadingTipDue_ = !character.firstLogin;
             LOG_INFO("Character: ", character.name);
             LOG_INFO("Level ", static_cast<int>(character.level), " ",
                      getRaceName(character.race), " ",

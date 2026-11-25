@@ -4733,6 +4733,10 @@ public:
     /// 1 a suggestion, with the client's report in front of the text.
     void sendBugReport(uint32_t type, const std::string& text);
 
+    /// The loading screen into the world has a tip (0x004d9c00): entered from the
+    /// character selection, by a character that has been in it before. Asked once.
+    bool takeLoadingTip() { return std::exchange(loadingTipDue_, false); }
+
     /// Account data (AccountData.cpp): the eight copies the realm keeps.
     static constexpr uint32_t kAccountDataTypes = 8;
     /// What the interface layer gives the sync for the copies it owns: the
@@ -6586,6 +6590,7 @@ private:
     std::array<bool, kAccountDataTypes> accountDataAwaited_{};
     std::array<std::string, kAccountDataTypes> accountDataLastText_{};
     std::string accountDataCharacter_;   // whose per-character copies are known
+    bool loadingTipDue_ = false;
 
     /**
      * Handle SMSG_MOTD from server
