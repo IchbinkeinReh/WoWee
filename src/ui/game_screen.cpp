@@ -381,16 +381,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         appearanceCallbackSet_ = true;
     }
 
-    // Set up UI error frame callback (once)
-    if (!uiErrorCallbackSet_) {
-        gameHandler.setUIErrorCallback([this](const std::string& msg) {
-            // UIErrorsFrame draws the text, and what is heard is the game
-            // error's own (0x005216f0, playGameErrorSound) - most have none.
-            (void)msg;
-        });
-        uiErrorCallbackSet_ = true;
-    }
-
     // No flash callback here. The red overlay on a failed cast belonged to
     // this client's own action bar; FrameXML draws the bars and flashes its
     // own button from UI_ERROR_MESSAGE.

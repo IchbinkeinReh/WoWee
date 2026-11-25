@@ -4624,10 +4624,7 @@ public:
     }
 
     // UI error frame: prominent on-screen error messages (spell can't be cast, etc.)
-    using UIErrorCallback = std::function<void(const std::string& msg)>;
-    void setUIErrorCallback(UIErrorCallback cb) { uiErrorCallback_ = std::move(cb); }
     void addUIError(const std::string& msg) {
-        if (uiErrorCallback_) uiErrorCallback_(msg);
         fireAddonEvent("UI_ERROR_MESSAGE", {msg});
     }
     /// A script that failed, shown on screen without telling any script about it.
@@ -7969,9 +7966,6 @@ private:
     PlaySoundCallback playSoundCallback_;
     PlayPositionalSoundCallback playPositionalSoundCallback_;
     SoundAtUnitCallback soundAtUnitCallback_;
-
-    // ---- UI error frame callback ----
-    UIErrorCallback uiErrorCallback_;
 
     // ---- Reputation change callback ----
     RepChangeCallback repChangeCallback_;
