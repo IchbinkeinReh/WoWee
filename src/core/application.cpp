@@ -1458,7 +1458,7 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             if (!panel.setSettingValue(key, value)) return;
             // The stored CVars are put back at every entry: written then only
             // where one differs, not once for each.
-            if (!addons::replayingStoredCVars() || panel.settingValue(key) != before) gs.saveSettings();
+            if (!addons::replayingStoredCVars() || panel.settingValue(key) != before) gs.saveSettingsSoon();
         };
 
         // Every schema key must be answered, or its control is drawn and inert.
@@ -1511,7 +1511,7 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             } else if (key == "enableall") { sp.soundMuted_ = (v <= 0.0f);
             } else { return; }
             sp.applyAudioVolumes(audioCoordinator_.get());
-            if (!addons::replayingStoredCVars() || values() != before) gs.saveSettings();
+            if (!addons::replayingStoredCVars() || values() != before) gs.saveSettingsSoon();
         };
         luaSvc.reapplyAudioVolumes = [uim = uiManager.get(), this]() {
             if (!uim) return;

@@ -2,6 +2,7 @@
 
 #include "core/screen_recorder.hpp"
 #include "game/guild_emblem.hpp"
+#include <utility>
 #include <optional>
 
 #include "game/game_handler.hpp"
@@ -140,6 +141,13 @@ public:
     ChatPanel& getChatPanel() { return chatPanel_; }
 
     void saveSettings();
+    /// At the next frame, once for however many ask: the stored CVars put back
+    /// at an entry are dozens (T324).
+    void saveSettingsSoon() { saveSoon_ = true; }
+    void saveSettingsDue() {
+        if (std::exchange(saveSoon_, false)) saveSettings();
+    }
+    bool saveSoon_ = false;
     /// The ray tracing's memory guard's answers, shown as the client's own
     /// dialog; and the marker that says a session is tracing
     /// (core/rt_session_marker.hpp), kept up to date. Each frame.

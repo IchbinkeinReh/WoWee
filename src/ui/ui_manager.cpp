@@ -649,6 +649,7 @@ void UIManager::refreshInterfaceScale() {
 }
 
 void UIManager::render(core::AppState appState, auth::AuthHandler* authHandler, game::GameHandler* gameHandler) {
+    if (gameScreen) gameScreen->saveSettingsDue();
     if (!imguiInitialized) return;
 
     // Two ~150-200ms spikes land here every launch, before login. Decoding the
