@@ -154,6 +154,11 @@ void WidgetTree::reset() {
     // rather than naming something WoW has no word for.
     rootId_ = create(WidgetKind::Frame, 0, "");
     uiParentId_ = create(WidgetKind::Frame, rootId_, "UIParent");
+    // The bottom, as every layout has it, and from the start: an OnLoad asks
+    // for levels long before the first layout, and was told them one too high.
+    // The breath bar's LowerFrameLevel put it on its frame's level that way,
+    // and a layout later it was one over it, on top of the word on the frame.
+    widgets_[uiParentId_].effLevel = 0;
 }
 
 uint32_t WidgetTree::create(WidgetKind kind, uint32_t parent, const std::string& name) {
@@ -653,6 +658,29 @@ void WidgetTree::shiftExplicitLevels(uint32_t id, int delta) {
     }
 }
 
+void WidgetTree::setLevel(uint32_t id, int level) {
+    Widget* w = get(id);
+    if (!w) return;
+    // Anything inside that set its own level moves by the same amount, because
+    // a child's level is relative to its parent (0x004910a0). And all of them
+    // are there at once: left for the next layout, a window raised twice in
+    // one frame moved its own by the first step again, and the breath bar
+    // stood over the word on its frame.
+    shiftExplicitLevels(id, level - w->effLevel);
+    w->level = level;
+    w->levelExplicit = true;
+    w->effLevel = level;
+    const auto settle = [this](const auto& self, const Widget& parent) -> void {
+        for (const uint32_t child : parent.children) {
+            Widget* c = get(child);
+            if (!c) continue;
+            c->effLevel = c->levelExplicit && c->level >= parent.effLevel ? c->level : parent.effLevel + 1;
+            self(self, *c);
+        }
+    };
+    settle(settle, *w);
+}
+
 void WidgetTree::raise(uint32_t id) {
     Widget* w = get(id);
     if (!w) return;
@@ -675,10 +703,7 @@ void WidgetTree::raise(uint32_t id) {
     if (w->effLevel > highest) return;
     // Explicit from here on, or the next layout would recompute it from the
     // parent and undo the raise immediately.
-    const int newLevel = highest + 1;
-    shiftExplicitLevels(id, newLevel - w->effLevel);
-    w->level = newLevel;
-    w->levelExplicit = true;
+    setLevel(id, highest + 1);
 }
 
 void WidgetTree::lower(uint32_t id) {
@@ -697,10 +722,7 @@ void WidgetTree::lower(uint32_t id) {
     if (lowest == INT_MAX || w->effLevel < lowest) return;
     // Never below zero: a negative level sorts under the root and the frame
     // stops being drawn at all.
-    const int newLevel = (lowest > 0) ? lowest - 1 : 0;
-    shiftExplicitLevels(id, newLevel - w->effLevel);
-    w->level = newLevel;
-    w->levelExplicit = true;
+    setLevel(id, (lowest > 0) ? lowest - 1 : 0);
 }
 
 const Anchor* WidgetTree::pointAt(uint32_t id, int index) const {

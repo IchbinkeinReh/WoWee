@@ -7894,12 +7894,9 @@ int lua_Frame_SetFrameLevel(lua_State* L) {
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFrameLevel(level)", who);
     const int wanted = static_cast<int>(lua_tonumber(L, 2));
     if (wanted < 0) return luaL_error(L, "%s:SetFrameLevel(): Passed negative frame level: %d", who, wanted);
-    // Anything inside that set its own level moves by the same amount, because
-    // a child's level is relative to its parent. Raising a window by hand and
-    // raising it by clicking it must leave the same arrangement behind.
-    if (tree && id) tree->shiftExplicitLevels(id, wanted - w->effLevel);
-    w->level = wanted;
-    w->levelExplicit = true;
+    // Raising a window by hand and raising it by clicking it must leave the
+    // same arrangement behind.
+    if (tree && id) tree->setLevel(id, wanted);
     return 0;
 }
 int lua_FontString_SetText(lua_State* L) {

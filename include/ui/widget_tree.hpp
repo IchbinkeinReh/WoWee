@@ -1082,6 +1082,9 @@ public:
     /// takes what is inside it along. Public because SetFrameLevel needs the
     /// same behaviour.
     void shiftExplicitLevels(uint32_t id, int delta);
+    /// Frame:SetFrameLevel: the frame to a level of its own, and with it what
+    /// is inside.
+    void setLevel(uint32_t id, int level);
 
     /// The frame currently following the cursor, if any.
     ///

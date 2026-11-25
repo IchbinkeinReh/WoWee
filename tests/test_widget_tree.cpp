@@ -3949,4 +3949,54 @@ TEST_CASE("a button without a picture for its state keeps the one it has", "[wid
     CHECK(shown(greyCheck));
 }
 
-/
+// P66: the breath bar's OnLoad sets it on its frame's own level (LowerFrameLevel), so that the
+// word on the frame is over it. Asked before the first layout, the levels were one too high.
+TEST_CASE("a frame's level before the first layout is the one after it", "[widget][framelevel]") {
+    WidgetTree tree;
+    const auto made = [&](WidgetKind kind, uint32_t parent, const char* name) {
+        const uint32_t id = tree.create(kind, parent, name);
+        tree.get(id)->width = tree.get(id)->height = 20.0f;
+        tree.get(id)->anchors.push_back({});
+        return id;
+    };
+    const uint32_t win = made(WidgetKind::Frame, tree.uiParentId(), "MirrorTimer1");
+    const uint32_t text = made(WidgetKind::FontString, win, "MirrorTimer1Text");
+    tree.get(text)->layer = DrawLayer::Overlay;
+    tree.get(text)->text = "Breath";
+    const uint32_t bar = made(WidgetKind::Frame, win, "MirrorTimer1StatusBar");
+    tree.get(bar)->isStatusBar = true;
+    tree.get(bar)->barTexture = "bar";
+    const int before = tree.get(win)->effLevel;
+    CHECK(before == 1);
+    tree.setLevel(bar, tree.get(bar)->effLevel - 1);
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.get(tree.uiParentId())->effLevel == 0);
+    CHECK(tree.get(win)->effLevel == before);
+    CHECK(tree.get(bar)->effLevel == before);
+    const auto& order = tree.drawOrder();
+    REQUIRE(order.size() == 2);
+    CHECK(order[0]->id == bar);
+    CHECK(order[1]->id == text);
+}
+
+// And raised twice before a layout, a frame took what is inside further than itself.
+TEST_CASE("a frame raised twice before a layout keeps what is inside where it is", "[widget][framelevel]") {
+    WidgetTree tree;
+    const uint32_t other = tree.create(WidgetKind::Frame, tree.root(), "Other");
+    tree.setLevel(other, 40);
+    const uint32_t win = tree.create(WidgetKind::Frame, tree.root(), "MirrorTimer1");
+    const uint32_t bar = tree.create(WidgetKind::Frame, win, "MirrorTimer1StatusBar");
+    const uint32_t text = tree.create(WidgetKind::FontString, win, "MirrorTimer1Text");
+    tree.setLevel(bar, tree.get(bar)->effLevel - 1);
+    CHECK(tree.get(bar)->effLevel == tree.get(win)->effLevel);
+    tree.raise(win);
+    const int once = tree.get(win)->effLevel;
+    CHECK(once > 40);
+    CHECK(tree.get(bar)->effLevel == once);
+    CHECK(tree.get(text)->effLevel == once + 1);
+    tree.raise(win);
+    tree.raise(win);
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.get(bar)->effLevel == tree.get(win)->effLevel);
+    CHECK(tree.get(text)->effLevel == tree.get(win)->effLevel + 1);
+}
