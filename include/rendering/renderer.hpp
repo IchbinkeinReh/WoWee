@@ -587,6 +587,8 @@ private:
         uint32_t instanceId = 0;
     };
     std::vector<SkyLayerInstance> skyLayers_;
+    /// The light's sky model has an instance to draw.
+    [[nodiscard]] bool skyLayerDrawn(const std::string& lightPath) const;
     /// Sky models already uploaded, by path, so one that fades out and back in
     /// is not read off disk again.
     std::unordered_map<std::string, uint32_t> loadedSkyModels_;

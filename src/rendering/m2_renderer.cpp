@@ -836,7 +836,7 @@ void M2Renderer::shutdown() {
     shadowCullDirty_ = true;
     spatialGrid.clear();
     instanceIndexById.clear();
-    instanceDedupMap_.clear();
+    instanceDedup_.clear();
     // Model and bone destruction above is deferred; drain it now while the
     // descriptor pools are still alive.
     vkCtx_->flushDeferredCleanup();

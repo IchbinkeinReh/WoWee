@@ -2419,6 +2419,21 @@ const std::string& Renderer::getCurrentZoneName() const {
     return zoneTextsKnown_ ? zoneTexts_.zone : empty;
 }
 
+namespace {
+std::string skyLayerPath(std::string p) {
+    std::replace(p.begin(), p.end(), '/', '\\');
+    return p;
+}
+} // namespace
+
+bool Renderer::skyLayerDrawn(const std::string& lightPath) const {
+    if (!skyboxModelRenderer_) return false;
+    const std::string path = skyLayerPath(lightPath);
+    return std::any_of(skyLayers_.begin(), skyLayers_.end(), [&](const SkyLayerInstance& sky) {
+        return sky.path == path && skyboxModelRenderer_->hasInstance(sky.instanceId);
+    });
+}
+
 bool Renderer::updateSkyboxLayers() {
     // Which skybox models a place uses is Light.dbc's answer, not a map id:
     // LightParams names a LightSkybox row and LightSkybox names the model.
@@ -2432,23 +2447,20 @@ bool Renderer::updateSkyboxLayers() {
         return false;
     }
 
-    auto normalized = [](std::string p) {
-        std::replace(p.begin(), p.end(), '/', '\\');
-        return p;
-    };
     const auto& layers = lightingManager->getSkyboxLayers();
 
-    // Faded out and no longer wanted.
+    // Faded out and no longer wanted, or no instance any more.
     std::erase_if(skyLayers_, [&](const SkyLayerInstance& sky) {
-        const bool wanted = std::any_of(layers.begin(), layers.end(), [&](const auto& l) {
-            return normalized(l.path) == sky.path;
-        });
+        const bool wanted = skyboxModelRenderer_->hasInstance(sky.instanceId) &&
+            std::any_of(layers.begin(), layers.end(), [&](const auto& l) {
+                return skyLayerPath(l.path) == sky.path;
+            });
         if (!wanted) skyboxModelRenderer_->removeInstance(sky.instanceId);
         return !wanted;
     });
 
     for (const auto& layer : layers) {
-        const std::string path = normalized(layer.path);
+        const std::string path = skyLayerPath(layer.path);
         auto it = std::find_if(skyLayers_.begin(), skyLayers_.end(),
                                [&](const SkyLayerInstance& s) { return s.path == path; });
         if (it == skyLayers_.end()) {
@@ -4778,7 +4790,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     // coverage whatever the flags said.
     const bool drawSkyModels = skyboxModelRenderer_ && !skyLayers_.empty();
     const bool useOriginalSkybox = drawSkyModels && lightingManager &&
-        LightingManager::skyboxHidesProceduralSky(lightingManager->getSkyboxLayers());
+        LightingManager::skyboxHidesProceduralSky(
+            lightingManager->getSkyboxLayers(),
+            [this](const LightingManager::SkyboxLayer& l) { return skyLayerDrawn(l.path); });
     // The client's stars go with the procedural sky: drawn while it is, at
     // the star clock's alpha, and not under a sharp-stars point field that
     // stands in for them (0x007f09b0, 0x009abd50).

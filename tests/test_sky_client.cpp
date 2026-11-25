@@ -8,6 +8,7 @@
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "rendering/day_night.hpp"
+#include "rendering/instance_dedup.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "test_support.hpp"
 
@@ -248,18 +249,70 @@ TEST_CASE("the stars are out from 22:30 to 04:30", "[sky][stars]") {
     CHECK(std::string(dn::kStarsModelPath) == "Environments\\Stars\\stars.mdl");
 }
 
+TEST_CASE("a sky model that followed the camera is made anew where it was first made", "[sky][skybox]") {
+    // Shadowmoon's sky was black from the second landing on: the model is made
+    // at the camera, follows it, and goes as the light does. Its entry stayed
+    // where it was made and gave the next one there an id nothing is drawn for.
+    using wowee::rendering::InstanceDedup;
+    const glm::vec3 landing{-5098.7f, 505.36f, 84.86f};
+    const glm::vec3 further{-5000.0f, 600.0f, 90.0f};
+    InstanceDedup there;
+    there.file(7, landing, 1);
+    CHECK(there.find(7, landing) == 1);
+    CHECK(there.find(8, landing) == 0);
+    there.move(7, landing, further, 1);
+    CHECK(there.find(7, landing) == 0);  // it is not here any more
+    CHECK(there.find(7, further) == 1);
+    there.forget(7, further, 1);
+    CHECK(there.size() == 0);
+
+    // One kept to itself is not given out because it moved, or went.
+    there.move(7, landing, further, 2);
+    CHECK(there.size() == 0);
+    there.file(7, landing, 3);
+    there.forget(7, landing, 2);
+    CHECK(there.find(7, landing) == 3);
+    // Onto a place taken, it is the one there that stays given out.
+    there.file(7, further, 4);
+    there.move(7, landing, further, 3);
+    CHECK(there.find(7, further) == 4);
+    CHECK(there.find(7, landing) == 0);
+
+    // Both ways of moving an instance move it, both of removing one forget it.
+    const std::string src = wowee::test::slurp("src/rendering/m2_renderer_instance.cpp");
+    const auto body = [&src](const std::string& name) {
+        const auto at = src.find(name);
+        REQUIRE(at != std::string::npos);
+        return src.substr(at, src.find("\n}\n", at) - at);
+    };
+    CHECK(body("void M2Renderer::setInstancePosition(").find("instanceDedup_.move(") != std::string::npos);
+    CHECK(body("void M2Renderer::setInstanceTransform(").find("instanceDedup_.move(") != std::string::npos);
+    CHECK(body("void M2Renderer::removeInstance(").find("instanceDedup_.forget(") != std::string::npos);
+    CHECK(body("void M2Renderer::removeInstances(").find("instanceDedup_.forget(") != std::string::npos);
+}
+
 TEST_CASE("a sky model hides the procedural sky only without flag 0x2", "[sky][skybox]") {
     using Layer = LightingManager::SkyboxLayer;
+    const auto hides = [](const std::vector<Layer>& layers) {
+        return LightingManager::skyboxHidesProceduralSky(layers, [](const Layer&) { return true; });
+    };
     // 0x007f09b0: past 0.99 and not 'combine with the procedural sky'.
-    CHECK(LightingManager::skyboxHidesProceduralSky({Layer{.path = "a", .weight = 1.0f, .flags = 0}}));
-    CHECK_FALSE(LightingManager::skyboxHidesProceduralSky(
-        {Layer{.path = "a", .weight = 1.0f, .flags = LightingManager::kSkyboxFlagCombineProcedural}}));
+    CHECK(hides({Layer{.path = "a", .weight = 1.0f, .flags = 0}}));
+    CHECK_FALSE(hides({Layer{.path = "a", .weight = 1.0f,
+                             .flags = LightingManager::kSkyboxFlagCombineProcedural}}));
     // Half way up hides nothing: it used to, at 0.5 coverage.
-    CHECK_FALSE(LightingManager::skyboxHidesProceduralSky({Layer{.path = "a", .weight = 0.6f, .flags = 0}}));
+    CHECK_FALSE(hides({Layer{.path = "a", .weight = 0.6f, .flags = 0}}));
     // The death model hides it whatever its flags.
+    CHECK(hides({Layer{.path = "d", .weight = 1.0f,
+                       .flags = LightingManager::kSkyboxFlagCombineProcedural,
+                       .deathOverride = true}}));
+    // One that is not there to be drawn takes nothing away (0x00824fc0 asked
+    // of each in 0x007f09b0): the dome would go and nothing would come.
+    CHECK_FALSE(LightingManager::skyboxHidesProceduralSky(
+        {Layer{.path = "a", .weight = 1.0f, .flags = 0}}, [](const Layer&) { return false; }));
     CHECK(LightingManager::skyboxHidesProceduralSky(
-        {Layer{.path = "d", .weight = 1.0f, .flags = LightingManager::kSkyboxFlagCombineProcedural,
-               .deathOverride = true}}));
+        {Layer{.path = "a", .weight = 1.0f, .flags = 0}, Layer{.path = "b", .weight = 1.0f, .flags = 0}},
+        [](const Layer& l) { return l.path == "b"; }));
     // The glare fades by the heaviest model, or by the death model alone.
     CHECK(LightingManager::skyboxGlareWeight({Layer{.path = "a", .weight = 0.3f},
                                               Layer{.path = "b", .weight = 0.7f}}) ==
