@@ -1,6 +1,9 @@
 #include <catch_amalgamated.hpp>
 
 #include "game/inventory_slots.hpp"
+#include "game/item_slot_rules.hpp"
+
+#include <vector>
 
 using namespace wowee::game::slots;
 
@@ -178,4 +181,45 @@ TEST_CASE("the character's positions for a swap's bind ask", "[inventory][slots]
     CHECK(isCharacterPosition(kNoContainer, 0x49));
     CHECK_FALSE(isCharacterPosition(kNoContainer, 0x4a));
     CHECK_FALSE(isCharacterPosition(19, 0));             // a slot inside a bag
+}
+
+// 0x007082b0, 0x006d4a00 (T304): the places an item can be put in.
+TEST_CASE("the places of the character an item fits", "[inventory][slots]") {
+    namespace rules = wowee::game::item_slots;
+    const auto places = [](uint32_t itemClass, uint32_t subClass, uint32_t type, bool relics = false, bool grip = false,
+                           uint32_t flags = 0) {
+        std::vector<int> out;
+        for (int p = -1; p <= 22; ++p) {
+            if (rules::fits({itemClass, subClass, type, flags}, p, relics, [&](uint32_t, uint32_t) { return grip; }))
+                out.push_back(p);
+        }
+        return out;
+    };
+    using V = std::vector<int>;
+    CHECK(places(4, 1, 1) == V{0});
+    CHECK(places(4, 0, 11) == V{10, 11});
+    CHECK(places(1, 0, 18) == V{19, 20, 21, 22});      // a bag
+    CHECK(places(2, 19, 26) == V{17});                  // a wand
+    CHECK(places(2, 19, 26, true).empty());             // of a class with relics
+    CHECK(places(4, 7, 28, true) == V{17});
+    CHECK(places(4, 7, 28).empty());
+    CHECK(places(6, 2, 24) == V{-1});                   // arrows
+    CHECK(places(2, 15, 13) == V{15, 16});              // a dagger
+    CHECK(places(2, 8, 17) == V{15});                   // a two-hander
+    CHECK(places(2, 8, 17, false, true) == V{15, 16});  // with Titan's Grip
+    CHECK(places(2, 7, 21) == V{15});
+    CHECK(places(2, 7, 22) == V{16});
+    CHECK(places(2, 13, 22, false, true) == V{16});     // a fist weapon never
+    CHECK(places(2, 7, 22, false, true, 0x40000000u) == V{16});
+    CHECK(places(15, 0, 0).empty());
+    // The bank takes anything; numbers that name no place.
+    CHECK(rules::fits({15, 0, 0, 0}, 39, false, [](uint32_t, uint32_t) { return false; }));
+    CHECK(rules::known(-1));
+    CHECK(rules::known(73));
+    CHECK_FALSE(rules::known(23));
+    CHECK_FALSE(rules::known(74));
+    CHECK_FALSE(rules::known(118));
+    CHECK(rules::bagPlace(19));
+    CHECK(rules::bagPlace(67));
+    CHECK_FALSE(rules::bagPlace(39));
 }

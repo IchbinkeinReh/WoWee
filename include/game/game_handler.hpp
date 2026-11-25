@@ -1855,6 +1855,10 @@ public:
     [[nodiscard]] uint32_t itemMadeByRecipe(const ItemQueryResponseData& item) const;
     /// 0x007082b0 with the off hand's slot (game/dressing_room.hpp).
     [[nodiscard]] bool itemFitsOffHand(uint32_t itemId) const;
+    /// 0x007082b0 of any of the player's item places (game/item_slot_rules.hpp).
+    [[nodiscard]] bool itemFitsPlace(uint32_t itemId, int place, bool relics) const;
+    /// A learnt spell names such a weapon for the other hand (0x006e7d24).
+    [[nodiscard]] bool weaponGripAllows(uint32_t itemClass, uint32_t subClass) const;
 
     // Minimap pings from party members
     struct MinimapPing {

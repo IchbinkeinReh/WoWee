@@ -3,6 +3,7 @@
 #include "ui/portrait_claims.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/battleground_flag.hpp"
+#include "game/item_slot_rules.hpp"
 #include "game/chr_names.hpp"
 #include "game/game_utils.hpp"
 #include "game/grey_triviality.hpp"
@@ -366,6 +367,21 @@ static uint8_t unitClassId(lua_State* L, game::GameHandler* gh, const std::strin
     }
     if (classId == 0) classId = gh->lookupPlayerClass(guid);
     return classId;
+}
+
+/// The class wears relics in the ranged place (ChrClasses flag 0x8).
+static bool classWearsRelics(game::GameHandler* gh, uint8_t c) {
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* layout = layouts ? layouts->getLayout("ChrClasses") : nullptr;
+    const uint32_t flagsF = layout ? layout->tryField("Flags") : 0xFFFFFFFFu;
+    auto dbc = am && am->isInitialized() ? am->loadDBCOptional("ChrClasses.dbc") : nullptr;
+    bool relic = false;
+    if (dbc && dbc->isLoaded() && flagsF < dbc->getFieldCount()) {
+        for (uint32_t r = 0; r < dbc->getRecordCount(); ++r)
+            if (dbc->getUInt32(r, 0) == c) { relic = (dbc->getUInt32(r, flagsF) & 0x8u) != 0; break; }
+    }
+    return relic;
 }
 
 /// UnitClass(unit) → the class name in the unit's gender, and its token;
@@ -4551,17 +4567,7 @@ void registerUnitLuaAPI(lua_State* L) {
             auto* unit = gh ? resolveUnit(L, uid.c_str()) : nullptr;
             if (!unit || unit->getType() != game::ObjectType::PLAYER) { luaPushOneOrNil(L, 0); return 1; }
             const uint8_t c = unitClassId(L, gh, uid);
-            auto* am = gh->services().assetManager;
-            const auto* layouts = pipeline::getActiveDBCLayout();
-            const auto* layout = layouts ? layouts->getLayout("ChrClasses") : nullptr;
-            const uint32_t flagsF = layout ? layout->tryField("Flags") : 0xFFFFFFFFu;
-            auto dbc = am && am->isInitialized() ? am->loadDBCOptional("ChrClasses.dbc") : nullptr;
-            bool relic = false;
-            if (dbc && dbc->isLoaded() && flagsF < dbc->getFieldCount()) {
-                for (uint32_t r = 0; r < dbc->getRecordCount(); ++r)
-                    if (dbc->getUInt32(r, 0) == c) { relic = (dbc->getUInt32(r, flagsF) & 0x8u) != 0; break; }
-            }
-            luaPushOneOrNil(L, relic);
+            luaPushOneOrNil(L, classWearsRelics(gh, c));
             return 1;
         }},
                 // Whether the repair cursor is up. A flat false meant the
@@ -4606,50 +4612,28 @@ void registerUnitLuaAPI(lua_State* L) {
                                sl.item.curDurability == 0);
             return 1;
         }},
-                // CursorCanGoInSlot(slot) - whether what the cursor is holding
-                // could be worn in that paperdoll slot, which is what makes the
-                // slot light up while an item is being dragged. Answering no
-                // for everything meant nothing ever lit up.
-                //
-                // Which slot of a pair, this does not decide: both rings and
-                // both trinkets light up, as they do in WoW. That is a
-                // different question from the one InventoryScreen answers when
-                // it picks a slot to equip into, so this does not go looking
-                // for that logic.
+                // CursorCanGoInSlot(slot) (0x005ea880 -> 0x006d4a00): whether
+                // what the cursor holds can be put there - the paperdoll's, the
+                // bags' and the bank's buttons light up by it. No value for a
+                // slot there is none of.
                 {"CursorCanGoInSlot",       [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const int place = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
+            if (!gh || !game::item_slots::known(place)) return 0;
             const uint32_t held = cursorItemId();
-            if (!gh || slot < 1 || held == 0) { luaPushOneOrNil(L, 0); return 1; }
-            const auto* info = gh->getItemInfo(held);
-            if (!info || !info->valid) { luaPushOneOrNil(L, 0); return 1; }
-            // Paperdoll slot ids are the EquipSlot enum plus one.
-            using namespace game::InvType;
-            bool fits = false;
-            switch (info->inventoryType) {
-                case HEAD:       fits = (slot == 1);  break;
-                case NECK:       fits = (slot == 2);  break;
-                case SHOULDERS:  fits = (slot == 3);  break;
-                case SHIRT:      fits = (slot == 4);  break;
-                case CHEST: case ROBE: fits = (slot == 5); break;
-                case WAIST:      fits = (slot == 6);  break;
-                case LEGS:       fits = (slot == 7);  break;
-                case FEET:       fits = (slot == 8);  break;
-                case WRISTS:     fits = (slot == 9);  break;
-                case HANDS:      fits = (slot == 10); break;
-                case FINGER:     fits = (slot == 11 || slot == 12); break;
-                case TRINKET:    fits = (slot == 13 || slot == 14); break;
-                case BACK:       fits = (slot == 15); break;
-                // A one-hander goes in either hand; a main-hand-only weapon and
-                // a two-hander only in the first.
-                case ONE_HAND:   fits = (slot == 16 || slot == 17); break;
-                case MAIN_HAND: case TWO_HAND: fits = (slot == 16); break;
-                case SHIELD: case OFF_HAND: case HOLDABLE: fits = (slot == 17); break;
-                case RANGED_BOW: case RANGED_GUN: case THROWN: fits = (slot == 18); break;
-                case TABARD:     fits = (slot == 19); break;
-                default:         fits = false; break;
+            if (held == 0) {
+                luaPushOneOrNil(L, place == game::item_slots::kAmmo && cursorHoldsAmmo());
+                return 1;
             }
-            luaPushOneOrNil(L, fits);
+            // A bag with something in it - one that is worn - stays among them.
+            if (const int bag = cursorEquipSlot() - 20; bag >= 0 && bag < game::Inventory::NUM_BAG_SLOTS &&
+                                                        !game::item_slots::bagPlace(place)) {
+                const auto& inventory = gh->getInventory();
+                for (int i = 0; i < inventory.getBagSize(bag); ++i) {
+                    if (!inventory.getBagSlot(bag, i).empty()) return luaReturnNil(L);
+                }
+            }
+            luaPushOneOrNil(L, gh->itemFitsPlace(held, place, classWearsRelics(gh, unitClassId(L, gh, "player"))));
             return 1;
         }},
                 // The pet tab of the character sheet, which is handed over -

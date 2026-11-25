@@ -11,6 +11,7 @@
 #include "game/item_text.hpp"
 #include "game/difficulty_change.hpp"
 #include "game/dressing_room.hpp"
+#include "game/item_slot_rules.hpp"
 #include "game/achievement_criteria.hpp"
 #include "game/game_utils.hpp"
 #include "rendering/world_map/map_resolver.hpp"
@@ -6358,24 +6359,37 @@ uint32_t spellTaughtBy(const GameHandler::SpellNameEntry& lesson, const ItemQuer
 }
 }  // namespace
 
+bool GameHandler::weaponGripAllows(uint32_t itemClass, uint32_t subClass) const {
+    loadSpellNameCache();
+    for (const uint32_t spellId : getKnownSpells()) {
+        const auto it = spellNameCache_.find(spellId);
+        if (it == spellNameCache_.end()) continue;
+        const auto& grip = it->second;
+        if (grip.effectIds[0] == SpellEffect::TITAN_GRIP && (grip.attr & 0x20u) == 0 &&
+            grip.equippedItemClass == static_cast<int32_t>(itemClass) &&
+            (grip.equippedItemSubClassMask & (1u << (subClass & 31u))) != 0)
+            return true;
+    }
+    return false;
+}
+
 bool GameHandler::itemFitsOffHand(uint32_t itemId) const {
     const auto* item = itemId != 0 ? getItemInfo(itemId) : nullptr;
     if (!item) return false;
     return dressing_room::itemFitsOffHand(
         item->itemClass, item->subClass, static_cast<uint8_t>(item->inventoryType), item->itemFlags,
-        [this](uint32_t itemClass, uint32_t subClass) {
-            loadSpellNameCache();
-            for (const uint32_t spellId : getKnownSpells()) {
-                const auto it = spellNameCache_.find(spellId);
-                if (it == spellNameCache_.end()) continue;
-                const auto& grip = it->second;
-                if (grip.effectIds[0] == SpellEffect::TITAN_GRIP && (grip.attr & 0x20u) == 0 &&
-                    grip.equippedItemClass == static_cast<int32_t>(itemClass) &&
-                    (grip.equippedItemSubClassMask & (1u << (subClass & 31u))) != 0)
-                    return true;
-            }
-            return false;
-        });
+        [this](uint32_t itemClass, uint32_t subClass) { return weaponGripAllows(itemClass, subClass); });
+}
+
+bool GameHandler::itemFitsPlace(uint32_t itemId, int place, bool relics) const {
+    const auto* item = itemId != 0 ? getItemInfo(itemId) : nullptr;
+    if (!item || !item->valid) return false;
+    return item_slots::fits({.itemClass = item->itemClass,
+                             .subClass = item->subClass,
+                             .inventoryType = static_cast<uint32_t>(item->inventoryType),
+                             .flags = item->itemFlags},
+                            place, relics,
+                            [this](uint32_t itemClass, uint32_t subClass) { return weaponGripAllows(itemClass, subClass); });
 }
 
 uint32_t GameHandler::itemMadeByRecipe(const ItemQueryResponseData& item) const {

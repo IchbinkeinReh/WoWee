@@ -1587,6 +1587,9 @@ void onTradeShown(lua_State* L);
 /// came from a bag or nothing is held. One-based, as FrameXML numbers slots.
 int cursorEquipSlot();
 
+/// Whether it holds the ammunition of the character window (its cursor type 9).
+bool cursorHoldsAmmo();
+
 /// Whether the cursor is carrying an item that came out of the player's own
 /// inventory - a bag slot or a worn slot - rather than off an action bar.
 ///
