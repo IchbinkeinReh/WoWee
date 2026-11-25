@@ -1,5 +1,11 @@
 #include <catch_amalgamated.hpp>
 
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
+}
+
 #include "ui/xml_parser.hpp"
 #include "ui/framexml_emitter.hpp"
 
@@ -346,8 +352,32 @@ TEST_CASE("A binding becomes a listed command and a callable body",
     REQUIRE(has(r.lua, "\"HEADER_MOVEMENT\""));
     REQUIRE(has(r.lua, "\"JUMP\""));
     REQUIRE(r.lua.find("HEADER_MOVEMENT") < r.lua.find("+1] = \"JUMP\""));
-    REQUIRE(has(r.lua, "__WoweeBindingScripts[\"JUMP\"] = function(keystate)"));
+    REQUIRE(has(r.lua, "__WoweeBindingScripts[\"JUMP\"] = function(keystate, pressure, angle, precision)"));
     REQUIRE(has(r.lua, "DoJump();"));
+}
+
+// 0x00564470
+TEST_CASE("A binding there is already is no second one", "[framexml][emit][bindings]") {
+    XmlNode root = parseOrFail(
+        "<Bindings><Binding name=\"A\" header=\"TST\" default=\"SHIFT-F8\">a()</Binding>"
+        "<Binding name=\"A\" header=\"TST\">b()</Binding>"
+        "<Binding name=\"C\" header=\"TST\"/>"
+        "<Binding name=\"HID\" hidden=\"true\">h()</Binding>"
+        "<Binding name=\"DBG\" debug=\"true\">d()</Binding></Bindings>");
+    const std::string lua = emitFrameXml(root).lua;
+    const std::string twice = lua + "\n" + lua;
+    lua_State* L = luaL_newstate();
+    lua_pushcfunction(L, luaopen_base);
+    lua_call(L, 0, 0);
+    REQUIRE(luaL_dostring(L, "bound = '' function __WoweeBindDefault(c, k) bound = bound .. c .. '=' .. k .. ';' end "
+                             "said = '' function a() said = said .. 'a' end function b() said = said .. 'b' end "
+                             "function h() said = said .. 'h' end") == 0);
+    REQUIRE(luaL_dostring(L, twice.c_str()) == 0);
+    REQUIRE(luaL_dostring(L, "local list = '' for _, n in ipairs(__WoweeBindings) do list = list .. n .. ' ' end "
+                             "__WoweeBindingScripts.A() __WoweeBindingScripts.HID() "
+                             "return list .. said .. ' ' .. bound .. tostring(__WoweeBindingScripts.DBG)") == 0);
+    CHECK(std::string(lua_tostring(L, -1)) == "HEADER_TST A C ah A=SHIFT-F8;nil");
+    lua_close(L);
 }
 
 TEST_CASE("A binding without a header adds no row of its own",

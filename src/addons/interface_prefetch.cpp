@@ -68,6 +68,11 @@ std::string key(const std::string& path) {
 void start(std::vector<std::string> roots) {
     stop();
     g_stop = false;
+    // What was read before may have changed on the disk.
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_files.clear();
+    }
     g_thread = std::thread(run, std::move(roots));
 }
 

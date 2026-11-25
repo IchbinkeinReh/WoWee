@@ -65,24 +65,30 @@ static std::string canonicalAddonName(const std::string& onDisk) {
     return onDisk;
 }
 
-std::vector<std::string> TocFile::getRequiredDependencies() const {
-    auto startsWithNoCase = [](const std::string& s, const char* prefix) {
-        for (size_t i = 0; prefix[i]; ++i) {
-            if (i >= s.size() ||
-                std::tolower(static_cast<unsigned char>(s[i])) !=
-                    std::tolower(static_cast<unsigned char>(prefix[i]))) {
-                return false;
-            }
-        }
-        return true;
-    };
+static bool startsWithNoCase(const std::string& s, const char* prefix) {
+    for (size_t i = 0; prefix[i]; ++i) {
+        if (i >= s.size() || std::tolower(static_cast<unsigned char>(s[i])) !=
+                                 std::tolower(static_cast<unsigned char>(prefix[i])))
+            return false;
+    }
+    return true;
+}
+
+/// Every directive whose name begins with one of `prefixes`, split at spaces and
+/// commas; directives taken in name order.
+static std::vector<std::string> namesOf(const std::unordered_map<std::string, std::string>& directives,
+                                        std::initializer_list<const char*> prefixes) {
     std::vector<std::string> keys;
     for (const auto& [key, value] : directives) {
         (void)value;
-        if (startsWithNoCase(key, "RequiredDep") || startsWithNoCase(key, "Dep")) keys.push_back(key);
+        for (const char* prefix : prefixes) {
+            if (!startsWithNoCase(key, prefix)) continue;
+            keys.push_back(key);
+            break;
+        }
     }
     std::sort(keys.begin(), keys.end());
-    std::vector<std::string> deps;
+    std::vector<std::string> names;
     for (const auto& key : keys) {
         const std::string& value = directives.at(key);
         size_t pos = 0;
@@ -90,12 +96,43 @@ std::vector<std::string> TocFile::getRequiredDependencies() const {
             const size_t start = value.find_first_not_of(" ,\t", pos);
             if (start == std::string::npos) break;
             const size_t end = value.find_first_of(" ,\t", start);
-            deps.push_back(value.substr(start, end == std::string::npos ? std::string::npos : end - start));
+            names.push_back(value.substr(start, end == std::string::npos ? std::string::npos : end - start));
             if (end == std::string::npos) break;
             pos = end;
         }
     }
-    return deps;
+    return names;
+}
+
+std::vector<std::string> TocFile::getRequiredDependencies() const { return namesOf(directives, {"RequiredDep", "Dep"}); }
+std::vector<std::string> TocFile::getOptionalDependencies() const { return namesOf(directives, {"OptionalDep"}); }
+std::vector<std::string> TocFile::getLoadWith() const { return namesOf(directives, {"LoadWith"}); }
+std::vector<std::string> TocFile::getLoadManagers() const { return namesOf(directives, {"LoadManager"}); }
+
+std::pair<std::string, std::string> tocDirective(const std::string& text, const std::string& locale) {
+    const size_t colon = text.find(':');
+    if (colon == std::string::npos) return {};
+    const auto trim = [](std::string s) {
+        const size_t start = s.find_first_not_of(" \t");
+        const size_t end = s.find_last_not_of(" \t");
+        return start == std::string::npos ? std::string() : s.substr(start, end - start + 1);
+    };
+    std::string key = trim(text.substr(0, colon));
+    const std::string value = trim(text.substr(colon + 1));
+    const size_t dash = key.rfind('-');
+    bool localised = false;
+    for (const char* name : {"Title", "Notes", "Author", "Version", "X-"})
+        if (startsWithNoCase(key, name)) localised = true;
+    if (localised && dash != std::string::npos) {
+        const std::string suffix = key.substr(dash + 1);
+        for (const char* known : {"enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "esMX", "ruRU"}) {
+            if (!startsWithNoCase(suffix, known)) continue;
+            if (!startsWithNoCase(locale, known)) return {};
+            key = trim(key.substr(0, dash));
+            break;
+        }
+    }
+    return {key, value};
 }
 
 static std::vector<std::string> parseVarList(const std::string& val) {
@@ -124,7 +161,7 @@ std::vector<std::string> TocFile::getSavedVariablesPerCharacter() const {
     return (it != directives.end()) ? parseVarList(it->second) : std::vector<std::string>{};
 }
 
-std::optional<TocFile> parseTocFile(const std::string& tocPath) {
+std::optional<TocFile> parseTocFile(const std::string& tocPath, const std::string& locale) {
     std::ifstream f(tocPath);
     if (!f.is_open()) return std::nullopt;
 
@@ -142,7 +179,11 @@ std::optional<TocFile> parseTocFile(const std::string& tocPath) {
     toc.addonName = canonicalAddonName(toc.addonName);
 
     std::string line;
+    bool first = true;
     while (std::getline(f, line)) {
+        // 0x005f86a0: without its byte order mark.
+        if (first && line.rfind("\xEF\xBB\xBF", 0) == 0) line.erase(0, 3);
+        first = false;
         // Strip trailing CR (Windows line endings)
         if (!line.empty() && line.back() == '\r') line.pop_back();
 
@@ -151,21 +192,8 @@ std::optional<TocFile> parseTocFile(const std::string& tocPath) {
 
         // ## directives
         if (line.size() >= 3 && line[0] == '#' && line[1] == '#') {
-            std::string directive = line.substr(2);
-            size_t colon = directive.find(':');
-            if (colon != std::string::npos) {
-                std::string key = directive.substr(0, colon);
-                std::string val = directive.substr(colon + 1);
-                // Trim whitespace
-                auto trim = [](std::string& s) {
-                    size_t start = s.find_first_not_of(" \t");
-                    size_t end = s.find_last_not_of(" \t");
-                    s = (start == std::string::npos) ? "" : s.substr(start, end - start + 1);
-                };
-                trim(key);
-                trim(val);
-                if (!key.empty()) toc.directives[key] = val;
-            }
+            auto [key, value] = tocDirective(line.substr(2), locale);
+            if (!key.empty()) toc.directives[key] = value;
             continue;
         }
 

@@ -4004,6 +4004,19 @@ void applyAccountBindingsText(lua_State* L, const std::string& text) {
     if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
 }
 
+/// __WoweeBindDefault(command, key): a Bindings.xml's default (0x00564470 ->
+/// 0x00562ed0), where the key is on nothing and the command was never bound.
+static int lua_WoweeBindDefault(lua_State* L) {
+    seedBindingDefaults();
+    auto& keys = bindingKeys();
+    const std::string command = luaL_checkstring(L, 1), key = luaL_checkstring(L, 2);
+    if (keys.count(command)) return 0;
+    for (const auto& [other, slots] : keys)
+        if (slots[0] == key || slots[1] == key) return 0;
+    placeBindingKey(keys, key, command);
+    return 0;
+}
+
 // RunBinding(command, keystate) → runs what bindings.xml says the command does
 static int lua_RunBinding(lua_State* L) {
     const std::string command = luaL_checkstring(L, 1);
@@ -4540,6 +4553,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"GetCurrentBindingSet", [](lua_State* L) -> int {
             lua_pushnumber(L, 1); return 1;
         }},
+                {"__WoweeBindDefault", lua_WoweeBindDefault},
                 {"SaveBindings",        lua_SaveBindings},
                 {"LoadBindings",        lua_LoadBindings},
                 {"RunBinding",          lua_RunBinding},

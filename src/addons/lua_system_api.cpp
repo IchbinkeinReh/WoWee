@@ -3026,19 +3026,23 @@ static int lua_GetAddOnInfo(lua_State* L) {
         auto* svc = getLuaServices(L);
         luaPushOneOrNil(L, !name || !svc || !svc->isAddOnEnabled || svc->isAddOnEnabled(name));
     }
-    // 5 - 7: loadable, why not, and security (0x00511240, 0x005f4c90): an
-    // addon the server banned in SMSG_ADDON_INFO is BANNED and not loadable
-    // for that reason; a Blizzard one, whose signature the client checks, is
-    // SECURE; anything else INSECURE.
+    // 5 - 7: loadable, why not, and security (0x00511240, 0x005f4c90): one that
+    // is loaded, or may be (0x005f7e90); an addon the server banned in
+    // SMSG_ADDON_INFO is BANNED; a Blizzard one, whose signature the client
+    // checks, is SECURE; anything else INSECURE.
     {
-        const char* name = lua_tostring(L, -4);
+        const std::string name = lua_tostring(L, -4) ? lua_tostring(L, -4) : "";
         auto* gh = getGameHandler(L);
-        const auto* verdict = (gh && name) ? gh->addonVerdict(name) : nullptr;
-        const bool banned = verdict && verdict->banned;
-        const bool blizzard = name && std::string(name).rfind("Blizzard_", 0) == 0;
-        if (banned) { lua_pushnil(L); lua_pushstring(L, "BANNED"); }
-        else        { luaPushOneOrNil(L, 1); lua_pushnil(L); }
-        lua_pushstring(L, banned ? "BANNED" : blizzard ? "SECURE" : "INSECURE");
+        auto* svc = getLuaServices(L);
+        const auto* verdict = gh ? gh->addonVerdict(name) : nullptr;
+        const bool finished = svc && svc->isAddOnFinished && svc->isAddOnFinished(name);
+        const std::string why = !finished && svc && svc->addOnRefusal ? svc->addOnRefusal(name) : std::string();
+        luaPushOneOrNil(L, why.empty());
+        if (why.empty()) lua_pushnil(L);
+        else lua_pushstring(L, why.c_str());
+        lua_pushstring(L, verdict && verdict->banned          ? "BANNED"
+                          : name.rfind("Blizzard_", 0) == 0 ? "SECURE"
+                                                             : "INSECURE");
     }
     return 7;
 }
@@ -5449,40 +5453,12 @@ static int lua_IsModifierKeyDown(lua_State* L) {
 /// deciding whether a feature exists - answering no where the answer is yes
 /// hides an addon from the interface that is meant to work with it.
 static int lua_IsAddOnLoaded(lua_State* L) {
-    const char* wanted = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
-    if (!wanted) { luaPushOneOrNil(L, 0); return 1; }
-
-    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_info");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); luaPushOneOrNil(L, 0); return 1; }
-    const int count = static_cast<int>(lua_objlen(L, -1));
-    bool found = false;
-    for (int i = 1; i <= count && !found; ++i) {
-        lua_rawgeti(L, -1, i);
-        if (lua_istable(L, -1)) {
-            lua_getfield(L, -1, "loadOnDemand");
-            const bool lod = lua_toboolean(L, -1) != 0;
-            lua_pop(L, 1);
-            lua_getfield(L, -1, "name");
-            const char* name = lua_tostring(L, -1);
-            // Being listed means loaded only for addons that load at startup.
-            // A load-on-demand one is listed from the start and loaded later,
-            // so its state is the manager's to answer, below.
-            found = !lod && name && std::strcmp(name, wanted) == 0;
-            lua_pop(L, 1);
-        }
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    // A load-on-demand addon is not in the list handed to the VM at startup -
-    // it is not loaded then - so its loaded state is asked of the manager.
-    if (!found) {
-        auto* svc = getLuaServices(L);
-        if (svc && svc->isAddOnLoaded) found = svc->isAddOnLoaded(wanted);
-    }
-    // loaded, then finished (0x00511b30): an addon here has run its files by
-    // the time anything can ask, so the two agree.
-    luaPushOneOrNil(L, found);
-    luaPushOneOrNil(L, found);
+    // Loaded, from the moment its files begin, and whether they have all run
+    // (0x00511b30: +0x18, +0x19).
+    const std::string name = addonNameArg(L, 1, "Usage: IsAddOnLoaded(index or \"name\")");
+    auto* svc = getLuaServices(L);
+    luaPushOneOrNil(L, svc && svc->isAddOnLoaded && svc->isAddOnLoaded(name));
+    luaPushOneOrNil(L, svc && svc->isAddOnFinished && svc->isAddOnFinished(name));
     return 2;
 }
 

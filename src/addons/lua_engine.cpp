@@ -19874,7 +19874,7 @@ int luaTracebackHandler(lua_State* L) {
 /// Loads and runs a chunk with the traceback handler in place. Returns the
 /// same non-zero-on-error convention as luaL_dostring.
 int runChunk(lua_State* L, const char* chunk, size_t len, const char* name,
-             int nresults = 0) {
+             int nresults = 0, const char* addon = nullptr, int addonTable = LUA_NOREF) {
     const int base = lua_gettop(L);
     lua_pushcfunction(L, luaTracebackHandler);
     if (luaL_loadbuffer(L, chunk, len, name) != 0) {
@@ -19883,7 +19883,13 @@ int runChunk(lua_State* L, const char* chunk, size_t len, const char* name,
         lua_remove(L, base + 1);
         return 1;
     }
-    const int rc = lua_pcall(L, 0, nresults, base + 1);
+    int args = 0;
+    if (addon && addonTable != LUA_NOREF) {
+        lua_pushstring(L, addon);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, addonTable);
+        args = 2;
+    }
+    const int rc = lua_pcall(L, args, nresults, base + 1);
     lua_remove(L, base + 1);
     return rc;
 }
@@ -19958,6 +19964,20 @@ void LuaEngine::bootstrap(const char* code) {
     lua_pop(L_, 1);
 }
 
+LuaEngine::AddonFiles::AddonFiles(LuaEngine& engine, const std::string& name)
+    : engine_(engine), outerName_(engine.addonName_), outerTable_(engine.addonTable_) {
+    if (!engine_.L_) return;
+    lua_newtable(engine_.L_);
+    engine_.addonTable_ = luaL_ref(engine_.L_, LUA_REGISTRYINDEX);
+    engine_.addonName_ = name;
+}
+
+LuaEngine::AddonFiles::~AddonFiles() {
+    if (engine_.L_ && engine_.addonTable_ != outerTable_) luaL_unref(engine_.L_, LUA_REGISTRYINDEX, engine_.addonTable_);
+    engine_.addonTable_ = outerTable_;
+    engine_.addonName_ = outerName_;
+}
+
 bool LuaEngine::executeFile(const std::string& path) {
     if (!L_) return false;
 
@@ -19992,7 +20012,8 @@ bool LuaEngine::executeFile(const std::string& path) {
         source.erase(0, 3);
     }
     const std::string chunkName = "@" + path;
-    int err = runChunk(L_, source.c_str(), source.size(), chunkName.c_str());
+    int err = runChunk(L_, source.c_str(), source.size(), chunkName.c_str(), 0,
+                       addonName_.empty() ? nullptr : addonName_.c_str(), addonTable_);
     if (err != 0) {
         const char* errMsg = lua_tostring(L_, -1);
         std::string msg = errMsg ? errMsg : "(unknown error)";

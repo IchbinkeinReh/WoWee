@@ -1,3 +1,5 @@
+#include "addons/addon_load.hpp"
+#include "game/expansion_profile.hpp"
 #include "addons/addon_manager.hpp"
 #include "addons/addon_trust.hpp"
 #include "game/game_handler.hpp"
@@ -58,6 +60,8 @@ bool AddonManager::initialize(game::GameHandler* gameHandler, const LuaServices&
     luaServices_.isAddOnLoaded = [this](const std::string& name) {
         return isAddOnLoadedByName(name);
     };
+    luaServices_.isAddOnFinished = [this](const std::string& name) { return isAddOnFinishedByName(name); };
+    luaServices_.addOnRefusal = [this](const std::string& name) { return addOnRefusal(name); };
     luaServices_.setAddOnEnabled = [this](const std::string& name, bool enabled) {
         setAddonEnabled(name, enabled);
     };
@@ -108,13 +112,19 @@ std::filesystem::path resolvePath(const std::filesystem::path& base,
     return at;
 }
 
+std::string lowered(std::string v) {
+    for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return v;
+}
+
 } // namespace
 
 void AddonManager::scanAddons(const std::string& addonsPath) {
     addonsPath_ = addonsPath;
     addons_.clear();
     lodAddons_.clear();
-    lodLoaded_.clear();
+    loadedAddons_.clear();
+    finishedAddons_.clear();
 
     // Two places are searched. The game data's own Interface\AddOns is where a
     // player's existing addons already live, and an "addons" directory beside
@@ -201,6 +211,8 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
     std::set<std::string> lodSeen;
     int duplicates = 0;
 
+    const auto* profile = luaServices_.expansionRegistry ? luaServices_.expansionRegistry->getActive() : nullptr;
+    const std::string locale = profile ? profile->locale : std::string("enUS");
     for (const auto& dir : dirs) {
         ++scannedDirs;
         std::string dirName = dir.filename().string();
@@ -228,7 +240,7 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
         }
 
         std::string tocPath = (dir / (dirName + ".toc")).string();
-        auto toc = parseTocFile(tocPath);
+        auto toc = parseTocFile(tocPath, locale);
         if (!toc) { ++noToc; continue; }
 
         if (toc->isLoadOnDemand()) {
@@ -366,6 +378,51 @@ std::vector<std::string> AddonManager::deferredAddonGlobals() const {
     return names;
 }
 
+/// The addons there are, for addon_load.hpp.
+struct AddonManager::LoadWorld : addon_load::World {
+    explicit LoadWorld(AddonManager& m) : manager(m) {}
+    AddonManager& manager;
+    std::unordered_map<std::string, addon_load::Addon> known;
+
+    const addon_load::Addon* find(const std::string& name) override {
+        const std::string key = lowered(name);
+        if (const auto it = known.find(key); it != known.end()) return &it->second;
+        const TocFile* toc = manager.findAddon(name);
+        if (!toc) return nullptr;
+        addon_load::Addon a;
+        a.name = toc->addonName;
+        a.enabled = manager.isAddonEnabled(toc->addonName);
+        // One the server banned (SMSG_ADDON_INFO, 0x005f79a0).
+        a.banned = manager.isAddonBanned(toc->addonName);
+        a.onDemand = toc->isLoadOnDemand();
+        a.optional = toc->getOptionalDependencies();
+        a.required = toc->getRequiredDependencies();
+        a.managers = toc->getLoadManagers();
+        for (const auto* list : {&manager.addons_, &manager.lodAddons_})
+            for (const TocFile& other : *list)
+                for (const std::string& with : other.getLoadWith())
+                    if (lowered(with) == key) a.withIt.push_back(other.addonName);
+        return &known.emplace(key, std::move(a)).first->second;
+    }
+    bool loaded(const addon_load::Addon& a) override { return manager.loadedAddons_.count(lowered(a.name)) != 0; }
+    void begin(const addon_load::Addon& a, bool on) override {
+        if (on) manager.loadedAddons_.insert(lowered(a.name));
+        else manager.loadedAddons_.erase(lowered(a.name));
+    }
+    void run(const addon_load::Addon& a) override {
+        const TocFile* toc = manager.findAddon(a.name);
+        if (!toc) return;
+        if (toc->isLoadOnDemand()) LOG_INFO("AddonManager: loading on demand: ", toc->addonName);
+        // A copy: a file that asks for an addon may have the lists read again.
+        const TocFile addon = *toc;
+        if (!manager.loadAddon(addon))
+            LOG_WARNING("AddonManager: '", addon.addonName, "' ran with errors");
+        // What it draws is on screen from here, which for some of them is a
+        // second copy of something this client is already drawing.
+        if (addon.isLoadOnDemand()) ui::frameXmlNoteAddOnLoaded(addon.addonName);
+    }
+};
+
 void AddonManager::loadAllAddons() {
     // The original interface, when asked for. Before any addon, because addons
     // are written against a world where FrameXML has already defined its frames
@@ -484,22 +541,19 @@ void AddonManager::loadAllAddons() {
         if (isAddonEnabled(addon.addonName)) enabled.push_back(addon);
     }
     luaEngine_.setAddonList(enabled);
-    int loaded = 0, failed = 0, skipped = 0;
-    for (const auto& addon : addons_) {
-        if (!isAddonEnabled(addon.addonName)) {
-            LOG_INFO("AddonManager: skipping disabled addon: ", addon.addonName);
-            skipped++;
-            continue;
+    // In their order, each with what it needs (0x005f84a0).
+    {
+        std::vector<std::string> names;
+        names.reserve(addons_.size() + lodAddons_.size());
+        for (const auto& addon : addons_) names.push_back(addon.addonName);
+        for (const auto& addon : lodAddons_) names.push_back(addon.addonName);
+        LoadWorld world(*this);
+        addon_load::loadAll(world, names);
+        for (const auto& addon : addons_) {
+            if (loadedAddons_.count(lowered(addon.addonName))) continue;
+            LOG_WARNING("AddonManager: not loading ", addon.addonName, ": ",
+                        addon_load::refusal(world, addon.addonName, false));
         }
-        // One the server banned (SMSG_ADDON_INFO, 0x005f79a0) is not loaded
-        // (0x005f7e90: security BANNED is reason BANNED).
-        if (isAddonBanned(addon.addonName)) {
-            LOG_WARNING("AddonManager: not loading addon the server banned: ", addon.addonName);
-            skipped++;
-            continue;
-        }
-        if (loadAddon(addon)) loaded++;
-        else failed++;
     }
     addonsLoaded_ = true;
     // The frames the player placed, put back once the interface has loaded
@@ -512,9 +566,7 @@ void AddonManager::loadAllAddons() {
             luaEngine_.applyLayoutCache(text.str());
         }
     }
-    LOG_INFO("AddonManager: loaded ", loaded, " addons",
-             (failed > 0 ? (", " + std::to_string(failed) + " failed") : ""),
-             (skipped > 0 ? (", " + std::to_string(skipped) + " disabled") : ""));
+    LOG_INFO("AddonManager: loaded ", finishedAddons_.size(), " of ", addons_.size(), " addons");
 }
 
 // ---- Per-addon enable/disable (persisted) ----------------------------------
@@ -1776,27 +1828,7 @@ bool AddonManager::loadAddon(const TocFile& addon) {
         const bool clientAddon = isClientAddon(addon.basePath);
         const int loadTaint = addonTaint(addon, clientAddon);
         taint::Scope scope(loadTaint, loadTaint);
-        // The player's own addon: its files from the original's WTF first,
-        // copied when missing or newer there. Like the original's loader,
-        // which runs both files when they exist, whatever the .toc declares.
-        if (clientAddon) copyClientSavedVariables(addon);
-        // Load SavedVariables before addon code (so globals are available at load time)
-        auto savedVars = addon.getSavedVariables();
-        if (!savedVars.empty() || clientAddon) {
-            std::string svPath = getSavedVariablesPath(addon);
-            luaEngine_.loadSavedVariables(svPath);
-            LOG_DEBUG("AddonManager: loaded saved variables for '", addon.addonName, "'");
-        }
-        // Load per-character SavedVariables
-        auto savedVarsPC = addon.getSavedVariablesPerCharacter();
-        if (!savedVarsPC.empty() || clientAddon) {
-            std::string svpcPath = getSavedVariablesPerCharacterPath(addon);
-            if (!svpcPath.empty()) {
-                luaEngine_.loadSavedVariables(svpcPath);
-                LOG_DEBUG("AddonManager: loaded per-character saved variables for '", addon.addonName, "'");
-            }
-        }
-
+        const LuaEngine::AddonFiles files(luaEngine_, addon.addonName);
         for (const auto& filename : addon.files) {
             std::string lower = filename;
             for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1820,83 +1852,60 @@ bool AddonManager::loadAddon(const TocFile& addon) {
                 if (!loadXmlFile(fullPath, 0)) success = false;
             }
         }
+        // Its key bindings (0x00564760).
+        if (const fs::path bindings = resolveChild(fs::path(addon.basePath), "Bindings.xml");
+            !bindings.empty() && !loadXmlFile(bindings.string(), 0))
+            LOG_WARNING("AddonManager: could not read the key bindings of ", addon.addonName, ": ", lastXmlError_);
+        // What it saved, over what its files set: the account's, then the
+        // character's. The player's own addon: from the original's WTF first,
+        // copied when missing or newer there. Like the original's loader,
+        // which runs both files when they exist, whatever the .toc declares.
+        if (clientAddon) copyClientSavedVariables(addon);
+        if (clientAddon || !addon.getSavedVariables().empty()) {
+            luaEngine_.loadSavedVariables(getSavedVariablesPath(addon));
+            LOG_DEBUG("AddonManager: loaded saved variables for '", addon.addonName, "'");
+        }
+        if (clientAddon || !addon.getSavedVariablesPerCharacter().empty()) {
+            if (const std::string path = getSavedVariablesPerCharacterPath(addon); !path.empty()) {
+                luaEngine_.loadSavedVariables(path);
+                LOG_DEBUG("AddonManager: loaded per-character saved variables for '", addon.addonName, "'");
+            }
+        }
     }
-
-    // Fire ADDON_LOADED event after all addon files are executed
-    // This is the standard WoW pattern for addon initialization
-    if (success) {
-        luaEngine_.fireEvent("ADDON_LOADED", {addon.addonName});
-    }
+    finishedAddons_.insert(lowered(addon.addonName));
+    // Whatever became of its files.
+    luaEngine_.fireEvent("ADDON_LOADED", {addon.addonName});
     return success;
 }
 
-namespace {
-std::string lowered(std::string v) {
-    for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return v;
+const TocFile* AddonManager::findAddon(const std::string& name) const {
+    const std::string key = lowered(name);
+    for (const auto* list : {&addons_, &lodAddons_})
+        for (const TocFile& addon : *list)
+            if (lowered(addon.addonName) == key) return &addon;
+    return nullptr;
 }
-}  // namespace
 
-bool AddonManager::isAddOnLoadedByName(const std::string& name) const {
-    return lodLoaded_.count(lowered(name)) != 0;
+bool AddonManager::isAddOnLoadedByName(const std::string& name) const { return loadedAddons_.count(lowered(name)) != 0; }
+
+bool AddonManager::isAddOnFinishedByName(const std::string& name) const {
+    return finishedAddons_.count(lowered(name)) != 0;
+}
+
+std::string AddonManager::addOnRefusal(const std::string& name) {
+    LoadWorld world(*this);
+    return addon_load::refusal(world, name, true);
 }
 
 bool AddonManager::loadAddOnByName(const std::string& name, std::string& reason) {
-    const std::string key = lowered(name);
     // Already loaded is success, not an error: FrameXML calls LoadAddOn every
-    // time a panel is opened and only checks the first return.
-    if (lodLoaded_.count(key)) { reason.clear(); return true; }
-
-    const TocFile* found = nullptr;
-    for (const TocFile& a : lodAddons_) {
-        if (lowered(a.addonName) == key) { found = &a; break; }
-    }
-    if (!found) {
-        // Not on the on-demand list is not the same as not present. An addon
-        // whose .toc omits LoadOnDemand is loaded at startup instead, and
-        // FrameXML still asks for it by name: uiparent.lua calls
-        // UIParentLoadAddOn("Blizzard_TokenUI"), whose .toc has no such line,
-        // and that reported MISSING for an addon already running - raising the
-        // "Couldn't load" popup over a UI that was working.
-        for (const TocFile& a : addons_) {
-            if (lowered(a.addonName) != key) continue;
-            if (!isAddonEnabled(a.addonName)) { reason = "DISABLED"; return false; }
-            if (isAddonBanned(a.addonName)) { reason = "BANNED"; return false; }
-            // Only once the startup pass has actually run it. Before that it is
-            // listed but not loaded, and saying otherwise would have the caller
-            // use frames that do not exist yet.
-            if (addonsLoaded_) { reason.clear(); return true; }
-            break;
-        }
-        reason = "MISSING";
-        return false;
-    }
-    if (!isAddonEnabled(found->addonName)) { reason = "DISABLED"; return false; }
-    if (isAddonBanned(found->addonName)) { reason = "BANNED"; return false; }
-
-    // Recorded before loading, not after: the addon's own files run during
-    // this call and one of them may call LoadAddOn on the same name, which
-    // would otherwise recurse until the stack gave out.
-    lodLoaded_.insert(key);
-    LOG_INFO("AddonManager: loading on demand: ", found->addonName);
-    if (!loadAddon(*found)) {
-        // CORRUPT, not a token of our own. UIParentLoadAddOn builds a
-        // global name out of whatever comes back - _G["ADDON_"..reason] -
-        // and hands it to format, so a reason globalstrings does not have
-        // makes the report raise instead of reporting. See lua_LoadAddOn,
-        // which will not let an unknown one through either.
-        reason = "CORRUPT";
-        LOG_WARNING("AddonManager: '", found->addonName, "' failed to load on demand");
-        // Left in the loaded set deliberately. A half-run addon has already
-        // built frames and set globals, and running its files a second time
-        // would build them again - the duplicate-frame problem the scan goes
-        // out of its way to avoid.
-        return false;
-    }
-    // What it draws is on screen from here, which for some of them is a second
-    // copy of something this client is already drawing.
-    ui::frameXmlNoteAddOnLoaded(found->addonName);
-    return true;
+    // time a panel is opened and only checks the first return (0x005f80b0).
+    reason.clear();
+    LoadWorld world(*this);
+    if (addon_load::load(world, name, true)) return true;
+    reason = addon_load::refusal(world, name, true);
+    if (reason.empty()) reason = "UNKNOWN_ERROR";
+    return false;
 }
 
 bool AddonManager::runScript(const std::string& code) {
@@ -2000,7 +2009,8 @@ bool AddonManager::unloadAll() {
     saveEnabledState();
     addons_.clear();
     lodAddons_.clear();
-    lodLoaded_.clear();
+    loadedAddons_.clear();
+    finishedAddons_.clear();
     addonsLoaded_ = false;
     // Closing the state is what disposes of the interface: the widget tree
     // goes down with it, so the frames FrameXML built are gone rather than

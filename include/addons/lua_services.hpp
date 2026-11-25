@@ -333,8 +333,12 @@ struct LuaServices {
     /// Returns WoW's pair: loaded, and a reason when it did not. Reasons are
     /// WoW's own tokens - MISSING, DISABLED, LOAD_ON_DEMAND_ERROR.
     std::function<bool(const std::string& name, std::string& reason)> loadAddOn;
-    /// Whether a named addon has been loaded, for IsAddOnLoaded.
+    /// Whether a named addon has been loaded, and whether its files have all
+    /// run, for IsAddOnLoaded.
     std::function<bool(const std::string& name)> isAddOnLoaded;
+    std::function<bool(const std::string& name)> isAddOnFinished;
+    /// Why it would not be loaded, "" where it would, for GetAddOnInfo.
+    std::function<std::string(const std::string& name)> addOnRefusal;
 
     /// Write every loaded addon's SavedVariables out now.
     ///

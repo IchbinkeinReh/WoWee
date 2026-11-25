@@ -71,6 +71,9 @@ public:
     /// directory on a case-sensitive filesystem is blizzard_talentui.
     bool loadAddOnByName(const std::string& name, std::string& reason);
     [[nodiscard]] bool isAddOnLoadedByName(const std::string& name) const;
+    [[nodiscard]] bool isAddOnFinishedByName(const std::string& name) const;
+    /// Why LoadAddOn would not load it, "" where it would (addon_load.hpp).
+    [[nodiscard]] std::string addOnRefusal(const std::string& name);
     LuaEngine* getLuaEngine() { return &luaEngine_; }
     [[nodiscard]] bool isInitialized() const { return luaEngine_.isInitialized(); }
 
@@ -134,7 +137,8 @@ private:
     std::vector<TocFile> addons_;
     /// Declared LoadOnDemand: known, listed, and not run until asked for.
     std::vector<TocFile> lodAddons_;
-    std::set<std::string> lodLoaded_;
+    /// Loaded, and those of them whose files have all run (+0x18, +0x19).
+    std::set<std::string> loadedAddons_, finishedAddons_;
     game::GameHandler* gameHandler_ = nullptr;
     LuaServices luaServices_;
     std::string addonsPath_;
@@ -146,6 +150,9 @@ private:
     [[nodiscard]] std::vector<std::string> deferredAddonGlobals() const;
 
     bool loadAddon(const TocFile& addon);
+    struct LoadWorld;
+    /// The .toc of an addon, in any case of its name.
+    [[nodiscard]] const TocFile* findAddon(const std::string& name) const;
     [[nodiscard]] std::string getSavedVariablesPath(const TocFile& addon) const;
     [[nodiscard]] std::string getSavedVariablesPerCharacterPath(const TocFile& addon) const;
     std::string characterName_;

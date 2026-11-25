@@ -34,3 +34,31 @@ TEST_CASE("no dependency directive, no dependencies", "[toc]") {
     toc.directives["Interface"] = "30300";
     CHECK(toc.getRequiredDependencies().empty());
 }
+
+TEST_CASE("the other lists of a .toc", "[toc]") {
+    TocFile toc;
+    toc.directives["OptionalDeps"] = "Masque, LibStub";
+    toc.directives["LoadWith"] = "Blizzard_AuctionUI";
+    toc.directives["LoadManagers"] = "AddonLoader";
+    toc.directives["Dependencies"] = "Ace3";
+    CHECK(toc.getOptionalDependencies() == std::vector<std::string>{"Masque", "LibStub"});
+    CHECK(toc.getLoadWith() == std::vector<std::string>{"Blizzard_AuctionUI"});
+    CHECK(toc.getLoadManagers() == std::vector<std::string>{"AddonLoader"});
+    CHECK(toc.getRequiredDependencies() == std::vector<std::string>{"Ace3"});
+}
+
+// 0x005f85d0
+TEST_CASE("a .toc's line for another language is none", "[toc]") {
+    using wowee::addons::tocDirective;
+    using Directive = std::pair<std::string, std::string>;
+    CHECK(tocDirective(" Title: Probe", "deDE") == Directive{"Title", "Probe"});
+    CHECK(tocDirective(" Title-deDE: Probe A", "deDE") == Directive{"Title", "Probe A"});
+    CHECK(tocDirective(" Title-dede : Probe A", "deDE") == Directive{"Title", "Probe A"});
+    CHECK(tocDirective("Title-frFR: Essai", "deDE").first.empty());
+    CHECK(tocDirective("Notes -frFR: Essai", "frFR") == Directive{"Notes", "Essai"});
+    CHECK(tocDirective("X-Category-ruRU: A", "deDE").first.empty());
+    CHECK(tocDirective("X-Category-Mage: A", "deDE") == Directive{"X-Category-Mage", "A"});
+    CHECK(tocDirective("X-Website: http://a-b.c", "deDE") == Directive{"X-Website", "http://a-b.c"});
+    CHECK(tocDirective("SavedVariables-frFR: A", "deDE") == Directive{"SavedVariables-frFR", "A"});
+    CHECK(tocDirective("no directive", "deDE").first.empty());
+}

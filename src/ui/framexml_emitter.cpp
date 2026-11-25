@@ -1817,6 +1817,7 @@ void emitBindings(Emitter& e, const XmlNode& root) {
     // And the order they were declared in, which the client's list keeps
     // (0x0055e870 walks it): GetModifiedClickAction(i) is the i-th.
     e.line("__WoweeModifiedClickOrder = __WoweeModifiedClickOrder or {}");
+    e.line("__WoweeBindingNames = __WoweeBindingNames or {}");
     e.line("__WoweeBindingScripts = __WoweeBindingScripts or {}");
     e.line("__WoweeBindingRunOnUp = __WoweeBindingRunOnUp or {}");
     for (const XmlNode& m : root.children) {
@@ -1855,16 +1856,24 @@ void emitBindings(Emitter& e, const XmlNode& root) {
         if (const std::string* platform = b.attr("platform"); platform && !platform->empty()) {
             continue;
         }
+        // 0x00564470: not for debugging, and not one there is already.
+        if (b.attrBool("debug")) continue;
+        e.line("if not __WoweeBindingNames[" + quote(name) + "] then");
+        e.line("__WoweeBindingNames[" + quote(name) + "] = true");
         // A header attribute does not name the binding's section - it opens
         // one, as a row of its own above the command that carries it. The list
         // shows it through BINDING_HEADER_*, and everything after it belongs to
         // it until the next.
         if (const std::string* h = b.attr("header")) {
             if (!h->empty()) {
-                e.line("__WoweeBindings[#__WoweeBindings+1] = \"HEADER_" + *h + "\"");
+                const std::string header = quote("HEADER_" + *h);
+                e.line("if not __WoweeBindingNames[" + header + "] then");
+                e.line("__WoweeBindingNames[" + header + "] = true");
+                e.line("__WoweeBindings[#__WoweeBindings+1] = " + header);
+                e.line("end");
             }
         }
-        e.line("__WoweeBindings[#__WoweeBindings+1] = \"" + name + "\"");
+        if (!b.attrBool("hidden")) e.line("__WoweeBindings[#__WoweeBindings+1] = " + quote(name));
         if (b.attrBool("runOnUp")) {
             e.line("__WoweeBindingRunOnUp[\"" + name + "\"] = true");
         }
@@ -1873,10 +1882,13 @@ void emitBindings(Emitter& e, const XmlNode& root) {
             // read it to tell a press from a release, and a global would carry
             // one binding's state into the next.
             e.result.lua += "__WoweeBindingScripts[\"" + name +
-                            "\"] = function(keystate)\n";
+                            "\"] = function(keystate, pressure, angle, precision)\n";
             e.result.lua += b.text;
             e.result.lua += "\nend\n";
         }
+        if (const std::string* key = b.attr("default"); key && !key->empty())
+            e.line("if __WoweeBindDefault then __WoweeBindDefault(" + quote(name) + ", " + quote(*key) + ") end");
+        e.line("end");
     }
 }
 

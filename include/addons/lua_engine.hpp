@@ -42,6 +42,20 @@ public:
     bool initialize();
     void shutdown();
 
+    /// While an addon's files run (0x00818e50): each gets the addon's name and a
+    /// table of the addon's own. FrameXML's get nothing.
+    class AddonFiles {
+    public:
+        AddonFiles(LuaEngine& engine, const std::string& name);
+        ~AddonFiles();
+        AddonFiles(const AddonFiles&) = delete;
+        AddonFiles& operator=(const AddonFiles&) = delete;
+
+    private:
+        LuaEngine& engine_;
+        std::string outerName_;
+        int outerTable_;
+    };
     bool executeFile(const std::string& path);
     bool executeString(const std::string& code);
 
@@ -459,6 +473,8 @@ private:
     /// The mouse pressed in an edit box, and moved while it is held.
     void pressInEditBox(uint32_t wid, float x, float y);
     void dragInEditBox(float x, float y);
+    std::string addonName_;   ///< whose files run, and its table in the registry
+    int addonTable_ = -2;
     uint32_t editDragWid_ = 0;
     size_t editDragFrom_ = 0;
     std::vector<uint32_t> cooldowns_;

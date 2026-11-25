@@ -41,3 +41,23 @@ TEST_CASE("what was read ahead is handed out, and nothing else", "[interface_pre
     CHECK_FALSE(prefetch::take((root / "Missing.lua").string(), out));
     fs::remove_all(root, ec);
 }
+
+TEST_CASE("a file changed on the disk is read anew", "[interface_prefetch]") {
+    const fs::path root = fs::temp_directory_path() / "wowee_prefetch_again";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    { std::ofstream(root / "Code.lua") << "x = 1"; }
+    { std::ofstream(root / "Gone.lua") << "y = 1"; }
+    prefetch::start({root.string()});
+    prefetch::wait();
+    { std::ofstream(root / "Code.lua") << "x = 2"; }
+    fs::remove(root / "Gone.lua", ec);
+    prefetch::start({root.string()});
+    prefetch::wait();
+    std::string out;
+    REQUIRE(prefetch::take((root / "Code.lua").string(), out));
+    CHECK(out == "x = 2");
+    CHECK_FALSE(prefetch::take((root / "Gone.lua").string(), out));
+    fs::remove_all(root, ec);
+}

@@ -429,10 +429,11 @@ add_executable(test_framexml
     ${CMAKE_SOURCE_DIR}/src/ui/framexml_emitter.cpp
 )
 target_include_directories(test_framexml PRIVATE ${TEST_INCLUDE_DIRS})
-target_include_directories(test_framexml SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_include_directories(test_framexml SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
 target_compile_definitions(test_framexml PRIVATE
     WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-target_link_libraries(test_framexml PRIVATE catch2_main)
+target_link_libraries(test_framexml PRIVATE catch2_main lua51)
 add_test(NAME framexml COMMAND test_framexml)
 register_test_target(test_framexml)
 
@@ -4321,6 +4322,10 @@ register_test_target(test_lua_numbers)
 # ── test_spell_call ──────────────────────────────────────────
 wowee_add_test(test_spell_call
     SOURCES test_spell_call.cpp)
+
+# ── test_addon_load ──────────────────────────────────────────
+wowee_add_test(test_addon_load
+    SOURCES test_addon_load.cpp)
 
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
