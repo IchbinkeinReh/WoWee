@@ -1,3 +1,4 @@
+#include <cctype>
 #include <cstdlib>
 #include "rendering/m2_renderer.hpp"
 #include "game/go_interaction_anim.hpp"

@@ -3,6 +3,7 @@
 #include "rendering/shadow_params.hpp"
 #include "rendering/terrain_renderer.hpp"
 #include "rendering/model_memory.hpp"
+#include <cctype>
 #include <cstdio>
 #include "rendering/rt_scene.hpp"
 #include "rendering/vk_context.hpp"

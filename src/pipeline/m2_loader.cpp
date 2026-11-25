@@ -23,6 +23,7 @@
 #include "rendering/m2_texture_combiner.hpp"
 #include "pipeline/m2_color_track.hpp"
 #include "core/logger.hpp"
+#include <cctype>
 #include <cstddef>
 #include <cstring>
 #include <algorithm>

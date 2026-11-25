@@ -23,6 +23,7 @@
 #include "rendering/rt_glow_pulse.hpp"
 #include "rendering/model_memory.hpp"
 #include "pipeline/bc_encode.hpp"
+#include <cctype>
 #include <cstdio>
 #include "rendering/shadow_params.hpp"
 #include "rendering/shadow_unit_tile.hpp"

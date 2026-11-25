@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cstdlib>
 #include <mutex>
 #include <set>

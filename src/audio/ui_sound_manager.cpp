@@ -4,6 +4,7 @@
 #include "audio/sound_entry.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "core/logger.hpp"
+#include <cctype>
 #include <random>
 #include <unordered_set>
 
