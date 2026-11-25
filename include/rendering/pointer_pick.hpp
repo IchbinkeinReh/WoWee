@@ -73,6 +73,12 @@ inline constexpr uint32_t kTraceGround = 0x100151;       ///< ...its second, for
     return blendMode == 0 || (materialFlags & 0x20) != 0;
 }
 
+/// 0x0081daf0 for an object itself (mode 0): whether a batch is one the pointer finds it by -
+/// its first layer, not flagged 0x8; blended ones too.
+[[nodiscard]] constexpr bool objectBatchFound(uint8_t batchFlags, uint16_t materialLayer) {
+    return materialLayer == 0 && (batchFlags & 0x8) == 0;
+}
+
 /// The triangles of a doodad's model that hide what is behind it, and the
 /// vertices they use - all that is kept of its mesh on this side.
 struct DoodadMesh {
@@ -113,6 +119,22 @@ DoodadMesh doodadMesh(const std::vector<Vertex>& vertices, const std::vector<uin
     mesh.indices.shrink_to_fit();
     return mesh;
 }
+
+/// An object's model's, all it is found by. A model without batches is drawn whole.
+template <class Model>
+DoodadMesh objectMesh(const Model& model) {
+    std::vector<std::pair<uint32_t, uint32_t>> ranges;
+    for (const auto& batch : model.batches)
+        if (objectBatchFound(batch.flags, batch.materialLayer)) ranges.emplace_back(batch.indexStart, batch.indexCount);
+    if (model.batches.empty()) ranges.emplace_back(0u, static_cast<uint32_t>(model.indices.size()));
+    return doodadMesh(model.vertices, model.indices, ranges);
+}
+
+/// Where a ray meets an object; `known` where its triangles are there to be asked.
+struct ObjectHit {
+    bool known = false;
+    std::optional<float> at;
+};
 
 /// Where the ray first meets it, posed by `bones` and placed by `model`
 /// (0x0081df10's pass over the models the trace marked).

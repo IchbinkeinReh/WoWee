@@ -1517,6 +1517,19 @@ std::optional<float> M2Renderer::rayHitDrawnDoodad(const glm::vec3& origin, cons
     return best;
 }
 
+std::optional<float> M2Renderer::rayHitInstance(uint32_t instanceId, const pointer_pick::DoodadMesh& mesh,
+                                                const glm::vec3& origin, const glm::vec3& direction,
+                                                float maxDistance) const {
+    const auto it = instanceIndexById.find(instanceId);
+    if (it == instanceIndexById.end()) return std::nullopt;
+    const M2Instance& instance = instances[it->second];
+    if (instance.scale <= 0.001f) return std::nullopt;
+    static const std::vector<glm::mat4> kBindPose;
+    const bool posed = instance.cachedHasAnimation && !instance.cachedDisableAnimation;
+    return pointer_pick::rayHitDoodad(mesh, posed ? instance.boneMatrices : kBindPose, instance.drawMatrix(), origin,
+                                      direction, maxDistance);
+}
+
 std::string M2Renderer::describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {
     const glm::vec3 end = origin + direction * maxDistance;
     std::vector<size_t> candidates;

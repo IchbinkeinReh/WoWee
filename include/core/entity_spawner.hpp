@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/pointer_pick.hpp"
 #include "game/object_effect.hpp"
 #include "game/character.hpp"
 #include "game/mirror_image.hpp"
@@ -207,6 +208,11 @@ public:
     /// (CharacterRenderer::rayHitInstance); none for a unit without one.
     [[nodiscard]] std::optional<float> rayHitUnit(uint64_t guid, const glm::vec3& origin,
                                                   const glm::vec3& direction, float maxDistance) const;
+    /// The same for a game object (0x0081daf0), a building's too: the first face of the world
+    /// the ray meets.
+    [[nodiscard]] rendering::pointer_pick::ObjectHit rayHitGameObject(uint64_t guid, const glm::vec3& origin,
+                                                                      const glm::vec3& direction,
+                                                                      float maxDistance) const;
     uint32_t characterInstanceIdForGuid(uint64_t guid) const;
     /// Where the client puts a unit's name (0x0071fef0): its model's
     /// PlayerNameMounted attachment while it rides (the mount's model),
@@ -1404,6 +1410,7 @@ private:
     };
 
     std::unordered_map<uint32_t, uint32_t> gameObjectDisplayIdModelCache_;
+    std::unordered_map<uint32_t, rendering::pointer_pick::DoodadMesh> gameObjectMeshes_;   // by model id
     std::unordered_set<uint32_t> gameObjectDisplayIdFailedCache_;
     std::unordered_map<uint32_t, uint32_t> gameObjectDisplayIdWmoCache_;
     std::unordered_map<uint64_t, GameObjectInstanceInfo> gameObjectInstances_;

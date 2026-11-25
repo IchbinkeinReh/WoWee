@@ -310,6 +310,7 @@ void EntitySpawner::resetAllState() {
 
     // Clear GO display caches
     gameObjectDisplayIdModelCache_.clear();
+    gameObjectMeshes_.clear();
     gameObjectDisplayIdWmoCache_.clear();
     gameObjectDisplayIdFailedCache_.clear();
     // Instance ids in here belong to a renderer that has just been cleared.
@@ -1879,6 +1880,22 @@ uint64_t EntitySpawner::gameObjectOfFace(bool building, uint32_t owner, const gl
             return guid;
     }
     return 0;
+}
+
+rendering::pointer_pick::ObjectHit EntitySpawner::rayHitGameObject(uint64_t guid, const glm::vec3& origin,
+                                                                  const glm::vec3& direction,
+                                                                  float maxDistance) const {
+    const auto it = gameObjectInstances_.find(guid);
+    if (it == gameObjectInstances_.end() || !renderer_) return {};
+    if (it->second.isWmo) {
+        uint32_t building = 0;
+        const auto at = renderer_->pointerBlockedAt(origin, direction, maxDistance, false, &building);
+        return {.known = true, .at = building == it->second.instanceId ? at : std::nullopt};
+    }
+    const auto mesh = gameObjectMeshes_.find(it->second.modelId);
+    const auto* m2 = renderer_->queryM2Renderer();
+    if (!m2 || mesh == gameObjectMeshes_.end()) return {};
+    return {.known = true, .at = m2->rayHitInstance(it->second.instanceId, mesh->second, origin, direction, maxDistance)};
 }
 
 std::optional<float> EntitySpawner::rayHitUnit(uint64_t guid, const glm::vec3& origin,

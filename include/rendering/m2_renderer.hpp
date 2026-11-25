@@ -986,6 +986,11 @@ public:
     /// the ray starts; no game object's model, no ground cover.
     [[nodiscard]] std::optional<float> rayHitDrawnDoodad(const glm::vec3& origin, const glm::vec3& direction,
                                                          float maxDistance) const;
+    /// The same of one instance, by a mesh of its model as it is posed and placed; shown or not
+    /// is for the caller to know.
+    [[nodiscard]] std::optional<float> rayHitInstance(uint32_t instanceId, const pointer_pick::DoodadMesh& mesh,
+                                                      const glm::vec3& origin, const glm::vec3& direction,
+                                                      float maxDistance) const;
     /// WOWEE_CAMCOL_DIAG: every doodad whose box the segment crosses, as
     /// "tEnter:name/collision/gameObject/skip".
     [[nodiscard]] std::string describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;

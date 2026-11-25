@@ -72,19 +72,19 @@ struct ScenePick {
     uint64_t deadUnitGuid = 0;         ///< Nearest corpse, by centre.
     float    deadUnitCenterT = 1e30f;
 
-    uint64_t objectGuid = 0;           ///< The interactable object best aimed at.
-    float    objectCenterT = 1e30f;    ///< Its centre's distance along the ray.
-    /// How far the ray passed from that object's centre, as a fraction of its
-    /// radius: nought is dead centre, one is a graze. What objects are ranked
-    /// by - see the picker, and the scenery-at-the-elbow it exists to stop.
-    float    objectAim = 1e30f;
+    /// Where the ray first meets that unit's own triangles; none where it meets its
+    /// sphere alone.
+    float    unitT = 1e30f;
 
-    /// The object best aimed at that the client lets the pointer rest on
+    uint64_t objectGuid = 0;           ///< The interactable object whose triangles the ray meets first.
+    float    objectT = 1e30f;          ///< And where.
+
+    /// The first such that the client lets the pointer rest on
     /// (gameObjectTakesMouseover), usable or not: an anvil or a forge is named
     /// with no cursor of its own. Plain scenery - a signpost, a banner, a
     /// shop's board - is not tracked by the client and shows no tooltip.
     uint64_t mouseoverObjectGuid = 0;
-    float    mouseoverObjectAim = 1e30f;
+    float    mouseoverObjectT = 1e30f;
     /// The nearest corpse the ray meets: never what a click acts on, but
     /// the pointer rests on it and the client names whose it is (0x0051f790
     /// case 0x81 -> 0x00622410).
@@ -99,30 +99,20 @@ struct ScenePick {
         return livingUnitGuid != 0 ? livingUnitCenterT : deadUnitCenterT;
     }
 
-    /// Resolve to the one thing under the cursor: a unit unless an object's
-    /// centre is clearly in front of it, so a creature is never lost to a
-    /// decorative or backing object behind it.
+    /// Resolve to the one thing under the cursor: the triangles the ray meets first
+    /// (0x0081df10). A unit that only its sphere's margin reaches is there where
+    /// nothing else is.
     ///
     /// This and not closestGuid is what a caller wants. closestGuid is the
-    /// nearest *entry point* of anything pickable, and a game object's sphere
-    /// is 2.5 yards against a unit's 1.8 - so a wide object beside an NPC is
-    /// entered first even when the NPC is nearer, and answers closestGuid while
-    /// a click still lands on the NPC. kMaxGameObjectPickRadius exists for that
-    /// same reason. Every affordance drawn for what a click would do has to ask
-    /// this one.
+    /// nearest *entry point* of anything pickable. Every affordance drawn for
+    /// what a click would do has to ask this one.
     ///
     /// Inline so the rule can be tested without linking the picker's traversal,
     /// which needs the whole client behind it.
     [[nodiscard]] uint64_t resolve() const {
-        // A unit wins over a game object unless the object's centre is clearly
-        // in front of the unit's.
-        constexpr float kUnitOverGoBias = 2.0f;
         const uint64_t unit = unitGuid();
-        if (unit != 0 && (objectGuid == 0 || unitCenterT() <= objectCenterT + kUnitOverGoBias)) {
-            return unit;
-        }
-        if (objectGuid != 0) return objectGuid;
-        return 0;
+        if (unit == 0 || objectGuid == 0) return unit != 0 ? unit : objectGuid;
+        return unitT <= objectT ? unit : objectGuid;
     }
 
     /// The one object the pointer rests on, the client's mouseover: what a

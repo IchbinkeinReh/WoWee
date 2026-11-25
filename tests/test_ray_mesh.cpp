@@ -164,3 +164,41 @@ TEST_CASE("a doodad hides what is behind its opaque triangles alone", "[ray_mesh
     // A model of collision alone draws nothing, and so hides nothing.
     CHECK(pp::doodadMesh(v, indices, {}).empty());
 }
+
+// 0x0081daf0, mode 0
+TEST_CASE("an object is found by its first layers, blended or not", "[pointer]") {
+    using namespace wowee::rendering::pointer_pick;
+    CHECK(objectBatchFound(0, 0));
+    CHECK_FALSE(objectBatchFound(0x8, 0));
+    CHECK_FALSE(objectBatchFound(0, 1));
+    struct Vertex {
+        glm::vec3 position{0.0f};
+        uint8_t boneWeights[4] = {255, 0, 0, 0};
+        uint8_t boneIndices[4] = {0, 0, 0, 0};
+    };
+    struct Batch {
+        uint8_t flags = 0;
+        uint16_t materialLayer = 0;
+        uint32_t indexStart = 0, indexCount = 3;
+    };
+    struct {
+        std::vector<Vertex> vertices;
+        std::vector<uint16_t> indices = {0, 1, 2, 3, 4, 5};
+        std::vector<Batch> batches;
+    } model;
+    for (const glm::vec3& p : {glm::vec3(0, 0, 0), glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), glm::vec3(5, 0, 0),
+                               glm::vec3(6, 0, 0), glm::vec3(5, 1, 0)})
+        model.vertices.push_back({.position = p});
+    CHECK(objectMesh(model).indices.size() == 6);   // without batches, whole
+    model.batches = {{.indexStart = 0}, {.materialLayer = 1, .indexStart = 3}};
+    const auto mesh = objectMesh(model);
+    CHECK(mesh.indices.size() == 3);
+    CHECK(mesh.vertices.size() == 3);
+    const std::vector<glm::mat4> bones;
+    const glm::vec3 down(0.0f, 0.0f, -1.0f);
+    const auto hit = rayHitDoodad(mesh, bones, glm::mat4(1.0f), glm::vec3(0.2f, 0.2f, 4.0f), down, 100.0f);
+    REQUIRE(hit);
+    CHECK(*hit == Catch::Approx(4.0f));
+    CHECK_FALSE(rayHitDoodad(mesh, bones, glm::mat4(1.0f), glm::vec3(0.8f, 0.8f, 4.0f), down, 100.0f));
+    CHECK_FALSE(rayHitDoodad(mesh, bones, glm::mat4(1.0f), glm::vec3(5.2f, 0.2f, 4.0f), down, 100.0f));
+}

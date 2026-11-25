@@ -8478,6 +8478,12 @@ uint64_t Application::gameObjectOfFace(bool building, uint32_t owner, const glm:
     return entitySpawner_ ? entitySpawner_->gameObjectOfFace(building, owner, at) : 0;
 }
 
+rendering::pointer_pick::ObjectHit Application::rayHitGameObject(uint64_t guid, const glm::vec3& origin,
+                                                                const glm::vec3& direction, float maxDistance) const {
+    if (!entitySpawner_) return {};
+    return entitySpawner_->rayHitGameObject(guid, origin, direction, maxDistance);
+}
+
 std::optional<float> Application::rayHitUnit(uint64_t guid, const glm::vec3& origin, const glm::vec3& direction,
                                              float maxDistance) const {
     if (!entitySpawner_) return std::nullopt;

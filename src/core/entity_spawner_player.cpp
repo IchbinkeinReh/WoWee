@@ -763,6 +763,7 @@ uint32_t EntitySpawner::uploadGameObjectM2(PreparedGameObjectM2& prepared) {
     // going through exactly that reap/reload churn on every return trip.
     m2Renderer->setModelPinned(modelId, true);
     gameObjectDisplayIdModelCache_[prepared.displayId] = modelId;
+    gameObjectMeshes_[modelId] = rendering::pointer_pick::objectMesh(model);
     return modelId;
 }
 

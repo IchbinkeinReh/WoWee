@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/pointer_pick.hpp"
 #include "rendering/player_animation_seen.hpp"
 #include "rendering/memory_growth.hpp"
 #include "core/window.hpp"
@@ -185,6 +186,9 @@ public:
     [[nodiscard]] bool loadingScreenUp() const { return settleScreen_ || difficultyLoadingScreen_; }
     /// Where a world ray first meets the triangles a unit's model draws
     /// (CharacterRenderer::rayHitInstance); none for a unit without one.
+    [[nodiscard]] rendering::pointer_pick::ObjectHit rayHitGameObject(uint64_t guid, const glm::vec3& origin,
+                                                                      const glm::vec3& direction,
+                                                                      float maxDistance) const;
     [[nodiscard]] std::optional<float> rayHitUnit(uint64_t guid, const glm::vec3& origin,
                                                   const glm::vec3& direction, float maxDistance) const;
     /// The game object highlight on the mouseover (0x0051f790 calls
