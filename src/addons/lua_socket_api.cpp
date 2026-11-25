@@ -417,6 +417,15 @@ GemEnchantRow gemEnchantRow(game::GameHandler* gh, uint32_t enchantId) {
     return out;
 }
 
+/// Whether the player has the skill and the rank of it the row asks for.
+bool enchantSkillMet(game::GameHandler* gh, const GemEnchantRow& row) {
+    if (row.skillId == 0) return true;
+    const auto& skills = gh->getPlayerSkills();
+    const auto it = skills.find(row.skillId);
+    const int have = it != skills.end() && it->second.value != 0 ? it->second.effectiveValue() : 0;
+    return static_cast<int>(row.skillRank) <= have;
+}
+
 /// SpellItemEnchantmentCondition row `id`, as the file packs it (64 bytes).
 bool conditionRow(game::GameHandler* gh, uint32_t id, game::gem_conditions::Row& row) {
     auto* am = gh ? gh->services().assetManager : nullptr;
@@ -490,9 +499,35 @@ void pushSocketedGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid,
     pushSocketedGems(L, gh, gh->getItemSocketEnchantIds(itemGuid), itemId);
     // A socket an enchant added (the prismatic slot): one more after the
     // template's, of no colour.
-    if (gh->getItemPrismaticEnchant(itemGuid) != 0) {
+    if (const uint32_t added = gh->getItemPrismaticEnchant(itemGuid); added != 0) {
         lua_pushboolean(L, 1);
         lua_setfield(L, -2, "prismatic");
+        // The skill it asks for, and whether that or its level is short
+        // (0x006277f0).
+        const GemEnchantRow row = gemEnchantRow(gh, added);
+        if (row.skillId != 0) {
+            const bool skillOk = enchantSkillMet(gh, row);
+            lua_pushboolean(L, skillOk && row.minLevel <= gh->getPlayerLevel() ? 0 : 1);
+            lua_setfield(L, -2, "prismaticShort");
+            if (!skillOk) {
+                const std::string& name = gh->getSkillName(row.skillId);
+                lua_pushstring(L, name.empty() ? "UNKNOWN" : name.c_str());
+                lua_setfield(L, -2, "prismaticSkill");
+                lua_pushnumber(L, row.skillRank);
+                lua_setfield(L, -2, "prismaticRank");
+            }
+        }
+        // And the gems of an item with one.
+        lua_getfield(L, -1, "gems");
+        for (int i = 1; lua_istable(L, -1) && i <= 3; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "added");
+            }
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
     }
 }
 
@@ -538,11 +573,7 @@ void pushSocketedGems(lua_State* L, game::GameHandler* gh,
             const GemEnchantRow row = gemEnchantRow(gh, ench);
             bool skillOk = true;
             if (row.skillId != 0) {
-                const auto& skills = gh->getPlayerSkills();
-                auto it = skills.find(row.skillId);
-                const int have = (it != skills.end() && it->second.value != 0)
-                    ? it->second.effectiveValue() : 0;
-                skillOk = static_cast<int>(row.skillRank) <= have;
+                skillOk = enchantSkillMet(gh, row);
                 const std::string& sn = gh->getSkillName(row.skillId);
                 lua_pushstring(L, sn.empty() ? "UNKNOWN" : sn.c_str());
                 lua_setfield(L, -2, "skillName");

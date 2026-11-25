@@ -1039,6 +1039,51 @@ TEST_CASE("an animation has the methods of its kind", "[replay][interface]") {
     CHECK(ui.is("a:GetParent() == other and cp:GetParent() == other2 and not pcall(cp.SetParent, cp, r)"));
 }
 
+// T161's rest: 0x006277f0's sixth argument of a gem, and the skill an added socket asks for.
+TEST_CASE("a gem to be destroyed is said to be", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    answerItem(s, 24021, "Ruby");
+    answerItem(s, 24022, "Bracer");
+    ui.run("DESTROY_GEM, CURRENTLY_EQUIPPED = 'destroyed', 'worn' SOCKET_ITEM_MIN_SKILL = 'needs %s (%d)' "
+           "EMPTY_SOCKET_NO_COLOR, EMPTY_SOCKET_RED, SOCKET_ITEM_REQ_SKILL = 'empty', 'red', 'needs %s' "
+           "_GetItemTooltipData = function(id) "
+           "  if id == 24021 then return {gemProperty = {text = '+10', ok = true}} end return {sockets = {{color = 2}}} end "
+           "tip = CreateFrame('GameTooltip', 'PlaySock', UIParent) "
+           "function fill(id, inst, header) tip:SetOwner(UIParent, 'ANCHOR_NONE') __WoweeTooltipEquippedHeader = header "
+           "  _WoweePopulateItemTooltip(tip, id, inst) __WoweeTooltipEquippedHeader = nil end");
+    const auto* w = ui.engine.widgets().findByName("PlaySock");
+    REQUIRE(w);
+    // Each line with its red and green in tenths.
+    const auto lines = [&](const std::string& args) {
+        ui.run("fill(" + args + ")");
+        std::string all = "|";
+        for (const auto& line : w->tooltipLines)
+            all += line.left + ":" + std::to_string(static_cast<int>(line.lc[0] * 10 + .5f)) + "," +
+                   std::to_string(static_cast<int>(line.lc[1] * 10 + .5f)) + "|";
+        return all;
+    };
+    const auto has = [](const std::string& all, const char* what) { return all.find(what) != std::string::npos; };
+    CHECK(lines("24021, nil, true") == "|destroyed:10,1|Ruby:5,5|+10:5,5|");
+    const std::string plain = lines("24021");
+    CHECK(has(plain, "|+10:10,10|"));
+    CHECK_FALSE(has(plain, "destroyed"));
+    CHECK(has(lines("24022, nil, true"), "|worn:5,5|Bracer:"));
+    // The socket an enchantment put in.
+    CHECK(has(lines("24022, {prismatic = true}"), "|red:5,5|empty:5,5|"));
+    CHECK(has(lines("24022, {prismatic = true, prismaticShort = true, prismaticSkill = 'Smith', prismaticRank = 400}"),
+              "|red:5,5|empty:10,1|needs Smith (400):10,1|"));
+    CHECK(has(lines("24022, {prismatic = true, prismaticShort = true}"), "|empty:10,1|"));
+    ui.run("gem = {text = 'ruby', skillOk = false, levelOk = true, conditionsMet = true, skillName = 'Cut', skillRank = 0} "
+           "ENCHANT_ITEM_REQ_SKILL = 'asks %s'");
+    const std::string own = lines("24022, {gems = {gem}}");
+    CHECK(has(own, "|ruby:10,1|asks Cut:10,1|"));
+    CHECK_FALSE(has(own, "needs"));
+    ui.run("gem.added = true");
+    CHECK(has(lines("24022, {gems = {gem}}"), "|asks Cut:10,1|needs Cut:10,1|"));
+}
+
 // T278: 0x004fdbc0: what a chat line's event has.
 TEST_CASE("the client's own chat lines are from no one", "[replay][interface]") {
     Session s;

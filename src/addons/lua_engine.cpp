@@ -7114,10 +7114,9 @@ int lua_Tooltip_SetSocketGem(lua_State* L) {
 
 /// SetExistingSocketGem(index, [comparison]) - the gem already in the socket.
 ///
-/// The second argument means "this is the comparison window", which is how the
-/// panel shows what a click would throw away. It changes nothing about which
-/// item is described, so it is read and not used rather than silently ignored:
-/// the shopping tooltip it fills is positioned by the caller.
+/// The second argument means the gem that is to be destroyed, the comparison
+/// beside the one that takes its place: said so over it, in red
+/// (0x006277f0's sixth argument; _WoweePopulateItemTooltip's header).
 int lua_Tooltip_SetExistingSocketGem(lua_State* L) {
     // 0x00630370, whose usage line names the other method.
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetSocketGem(index, [toDestroy])", usageName(L, 1));
@@ -7126,7 +7125,16 @@ int lua_Tooltip_SetExistingSocketGem(lua_State* L) {
     if (!widgetOf(L, 1) || !gh || index < 0 || index > 2) { lua_pushboolean(L, 0); return 1; }
     const auto enchants = gh->getItemSocketEnchantIds(gh->getSocketItemGuid());
     const uint32_t gemId = gh->getEnchantGemItem(enchants[static_cast<size_t>(index)]);
-    lua_pushboolean(L, fillItemTooltipById(L, gh, gemId) ? 1 : 0);
+    const bool destroys = lua_type(L, 3) == LUA_TNUMBER ? lua_tonumber(L, 3) != 0 : lua_toboolean(L, 3) != 0;
+    const auto header = [L](bool on) {
+        if (on) lua_pushboolean(L, 1);
+        else lua_pushnil(L);
+        lua_setglobal(L, "__WoweeTooltipEquippedHeader");
+    };
+    if (destroys) header(true);
+    const bool filled = fillItemTooltipById(L, gh, gemId);
+    if (destroys) header(false);
+    lua_pushboolean(L, filled ? 1 : 0);
     return 1;
 }
 
@@ -15361,10 +15369,17 @@ void LuaEngine::registerCoreAPI() {
         "    if not name then return false end\n"
         "    local qColors = {[0]={0.62,0.62,0.62},[1]={1,1,1},[2]={0.12,1,0},[3]={0,0.44,0.87},[4]={0.64,0.21,0.93},[5]={1,0.5,0},[6]={0.9,0.8,0.5},[7]={0,0.8,1}}\n"
         "    local c = qColors[quality or 1] or {1,1,1}\n"
+        "    local destroys = not append and __WoweeTooltipEquippedHeader and (_GetItemTooltipData(itemId) or {}).gemProperty\n"
         // Appended under what the tooltip holds, the name opens with a newline
         // - a blank line between the two (0x006277f0's "\n%s" with its eighth
         // argument).
         "    if append then self:AddLine('\\n'..name, c[1], c[2], c[3])\n"
+        "    elseif destroys then\n"
+        // A gem that another is to take the place of (0x006277f0's sixth
+        // argument, of an item with GemProperties): what it is and what it
+        // gives in grey.
+        "        self:SetText(DESTROY_GEM or 'Gem to be destroyed', 1, 0.125, 0.125)\n"
+        "        self:AddLine(name, 0.5, 0.5, 0.5)\n"
         "    elseif __WoweeTooltipEquippedHeader then\n"
         "        self:SetText(CURRENTLY_EQUIPPED or 'Currently Equipped', 0.5, 0.5, 0.5)\n"
         "        self:AddLine(name, c[1], c[2], c[3])\n"
@@ -15394,7 +15409,7 @@ void LuaEngine::registerCoreAPI() {
         "        if data and data.isHeroic then\n"
         "            self:AddLine(ITEM_HEROIC_EPIC or 'Heroic Epic', 1, 1, 1)\n"
         "        else\n"
-        "            local qn = _G['ITEM_QUALITY'..(quality or 1)..'_DESC']\n"
+        "            local qn = _G['ITEM_QUALITY'..(destroys and 0 or quality or 1)..'_DESC']\n"
         "            if qn then self:AddLine(qn, 1, 1, 1) end\n"
         "        end\n"
         "    end\n"
@@ -15570,6 +15585,15 @@ void LuaEngine::registerCoreAPI() {
         // colour, grey otherwise and always on a bare template.
         "        roll(2)\n"
         "        local gems = inst and inst.gems\n"
+        // The skill a socket asks for that an enchantment has put into the
+        // item (a blacksmith's), in red where it is short; and of a gem in one,
+        // of the gem's own (both 0x006277f0). There is no line for its level.
+        "        local function socketSkill(skill, rank)\n"
+        "            if not skill then return end\n"
+        "            if rank and rank > 0 then\n"
+        "                self:AddLine(format(SOCKET_ITEM_MIN_SKILL or 'Socket requires %s (%d)', skill, rank), 1, 0.125, 0.125)\n"
+        "            else self:AddLine(format(SOCKET_ITEM_REQ_SKILL or 'Socket requires %s', skill), 1, 0.125, 0.125) end\n"
+        "        end\n"
         "        local function gemLines(g)\n"
         "            local r, gc, b = 1, 1, 1\n"
         "            if not (g.skillOk and g.levelOk) then r, gc, b = 1, 0.125, 0.125\n"
@@ -15598,6 +15622,7 @@ void LuaEngine::registerCoreAPI() {
         "            if not g.levelOk then\n"
         "                self:AddLine(format(ENCHANT_ITEM_REQ_LEVEL or 'Requires Level %d', g.minLevel), 1, 0.125, 0.125)\n"
         "            end\n"
+        "            if g.added and not (g.skillOk and g.levelOk) then socketSkill(g.skillName, g.skillRank) end\n"
         "        end\n"
         "        if data.sockets or gems or (inst and inst.prismatic) then\n"
         "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
@@ -15614,9 +15639,12 @@ void LuaEngine::registerCoreAPI() {
         "                if g then gemLines(g)\n"
         "                elseif socks[i] and not brief then\n"
         "                    local key = socketKeys[socks[i].color] or 'EMPTY_SOCKET_NO_COLOR'\n"
-        "                    self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
+        "                    local short = socks[i].color == 0 and inst and inst.prismaticShort\n"
+        "                    if short then self:AddLine(_G[key] or key, 1, 0.125, 0.125)\n"
+        "                    else self:AddLine(_G[key] or key, 0.5, 0.5, 0.5) end\n"
         "                    local art = socketArt[socks[i].color]\n"
         "                    self:AddTexture(art and ('Interface\\\\ItemSocketingFrame\\\\UI-EmptySocket-'..art) or 'Interface\\\\ItemSocketingFrame\\\\UI-EmptySocket')\n"
+        "                    if short then socketSkill(inst.prismaticSkill, inst.prismaticRank) end\n"
         "                end\n"
         "            end\n"
         "        end\n"
@@ -15639,7 +15667,8 @@ void LuaEngine::registerCoreAPI() {
         // it, white when met and grey when not (0x0062a8c0, 0x0061c0b0).
         "        if data.gemProperty then\n"
         "            local g = data.gemProperty\n"
-        "            if g.ok then self:AddLine(g.text, 1, 1, 1) else self:AddLine(g.text, 1, 0.125, 0.125) end\n"
+        "            if destroys then self:AddLine(g.text, 0.5, 0.5, 0.5)\n"
+        "            elseif g.ok then self:AddLine(g.text, 1, 1, 1) else self:AddLine(g.text, 1, 0.125, 0.125) end\n"
         "            for _, c in ipairs(g.conditions or {}) do\n"
         "                local fmt = c.key and _G[c.key]\n"
         "                local ca, cb = _G[c.colorA] or c.colorA, _G[c.colorB] or c.colorB\n"
