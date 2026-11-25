@@ -1883,22 +1883,19 @@ int lua_Region_GetFieldSize(lua_State* L) {
 /// so a two-line objective was given a one-line row and the rows below it were
 /// drawn over its second line.
 ///
-/// The width it wraps inside is the renderer's own rule (textWrapWidth): a
-/// declared width with no height is a paragraph, and so is anything the
-/// interface has marked as wrapping or held by its two sides. A label sized by
-/// its own text wraps at nothing and is one line unless it carries a |n.
+/// The width it wraps inside is the one it was given alone (0x00483fa0): a declared
+/// width, or one the interface has set. A label sized by its own text, or held by its
+/// two sides, wraps at nothing and is one line unless it carries a |n.
 /// What of its text a font string shows (0x00483a40): the box it was given is
 /// its width, and its height where that was given too.
 std::string fontStringShown(const wowee::ui::Widget& w) {
-    if (w.kind != wowee::ui::WidgetKind::FontString || w.autoSized || w.text.empty()) return w.text;
-    const float width = w.wordWrap ? wowee::ui::textWrapWidth(w) : w.width;
-    const bool given = w.width > 0.0f && w.height > 0.0f && !w.wrapsToWidth && !w.wrapsBetweenAnchors;
-    if (width <= 0.0f && !given) return w.text;
+    const float width = wowee::ui::givenWidth(w);
+    if (w.kind != wowee::ui::WidgetKind::FontString || w.text.empty() || width <= 0.0f) return w.text;
     const float size = wowee::ui::interfaceFontSize(w.fontHeight);
-    return wowee::ui::interfaceFittedText(w.text, w.fontFace, w.fontHeight, given ? w.width : width,
-                                          !given       ? 0
-                                          : w.wordWrap ? wowee::ui::linesThatFit(w.height, size, w.lineSpacing)
-                                                       : 1,
+    return wowee::ui::interfaceFittedText(w.text, w.fontFace, w.fontHeight, width,
+                                          !w.heightGiven ? 0
+                                          : w.wordWrap   ? wowee::ui::linesThatFit(w.height, size, w.lineSpacing)
+                                                         : 1,
                                           w.wordWrap, w.nonSpaceWrap);
 }
 
@@ -1908,8 +1905,7 @@ double fontStringTextHeight(const wowee::ui::Widget& w) {
     // fallbacks - twelve here, twelve below, fourteen in the edit box - and a
     // label with no declared height is drawn at none of them.
     const float line = wowee::ui::interfaceFontSize(w.fontHeight);
-    const bool given = !w.autoSized && w.width > 0.0f && w.height > 0.0f && !w.wrapsToWidth && !w.wrapsBetweenAnchors;
-    const float wrapWidth = !w.wordWrap ? 0.0f : given ? w.width : wowee::ui::textWrapWidth(w);
+    const float wrapWidth = w.wordWrap ? wowee::ui::givenWidth(w) : 0.0f;
     const int lines = std::max(1, wowee::ui::interfaceTextLines(
                                       fontStringShown(w), w.fontFace, w.fontHeight,
                                       wrapWidth, w.nonSpaceWrap));
@@ -1974,7 +1970,7 @@ int lua_Region_GetHeight(lua_State* L) {
     // against last frame's text, and the interface reads a height it has just
     // changed the text of.
     const bool staleAutoSize =
-        w && w->kind == wowee::ui::WidgetKind::FontString && w->autoSized &&
+        w && w->kind == wowee::ui::WidgetKind::FontString && w->autoSized && !w->heightGiven &&
         !w->text.empty() && w->text != w->measuredText;
     // And a paragraph - a declared width that wraps, its height following the
     // text - is as stale once its text changes: the renderer wrote last
@@ -1985,9 +1981,7 @@ int lua_Region_GetHeight(lua_State* L) {
     // box with the Accept and Cancel buttons drawn over the middle of it.
     const bool staleParagraph =
         w && w->kind == wowee::ui::WidgetKind::FontString && !w->text.empty() &&
-        ((w->wrapsToWidth && w->text != w->measuredText) ||
-         (w->wrapsBetweenAnchors &&
-          (w->text != w->measuredText || wowee::ui::textWrapWidth(*w) != w->measuredWidth)));
+        !w->heightGiven && (w->wrapsToWidth || w->wrapsBetweenAnchors) && w->text != w->measuredText;
     if (w && !w->text.empty() && w->kind == wowee::ui::WidgetKind::FontString &&
         (staleAutoSize || staleParagraph || (w->rectH <= 0.0f && w->height <= 0.0f))) {
         // A font string that was never given a height is as tall as its text,

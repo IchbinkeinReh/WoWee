@@ -306,8 +306,8 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     const bool spansY = anchorsSpanAxis(w->anchors, false);
     // What it was measured as before it was held there is not its size.
     const auto forget = [w] {
-        if (w->autoSized) w->width = w->height = 0.0f;
-        if (w->wrapsBetweenAnchors) w->height = 0.0f;
+        if (w->autoSized) w->width = 0.0f;
+        if (!w->heightGiven && (w->autoSized || w->wrapsBetweenAnchors)) w->height = 0.0f;
         w->autoSized = w->wrapsBetweenAnchors = false;
         w->measuredText.clear();
     };
@@ -361,11 +361,11 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     const bool sameMeasurement = w->measuredText == w->text &&
                                  w->measuredSize == size &&
                                  w->measuredFace == w->fontFace;
-    // Held by its sides: as wide as they are apart (textWrapWidth), and as
-    // tall as that makes it where it has no height of its own.
-    const float between = spansX ? textWrapWidth(*w) : 0.0f;
-    if (between > 0.0f) {
-        if (sameMeasurement && !w->autoSized && w->measuredWidth == between) return;
+    // Held by its sides: as wide as they are apart, and as tall as its own lines
+    // where it has no height of its own (0x00483fa0): they are broken at a width it
+    // was given alone, never at its sides.
+    if (spansX) {
+        if (sameMeasurement && w->wrapsBetweenAnchors) return;
         if (w->autoSized) forget();
     } else if (paragraph) {
         if (sameMeasurement) return;
@@ -385,20 +385,17 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         return runFont->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
     };
 
-    if (between > 0.0f) {
+    if (spansX) {
         const int rows = static_cast<int>(
-            wrapText(parseMarkup(w->text), w->wordWrap ? between : 0.0f, w->nonSpaceWrap, measureRun,
+            wrapText(parseMarkup(w->text), w->wordWrap ? givenWidth(*w) : 0.0f, w->nonSpaceWrap, measureRun,
                      w->indentedWordWrap && linkScale_ > 0.0f ? kIndentedWrapPixels / linkScale_ : 0.0f)
                 .size());
         w->wrappedLines = rows > 0 ? rows : 1;
-        if (w->height <= 0.0f || w->wrapsBetweenAnchors) {
-            w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
-            w->wrapsBetweenAnchors = true;
-        }
+        if (!w->heightGiven) w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
+        w->wrapsBetweenAnchors = true;
         w->measuredText = w->text;
         w->measuredSize = size;
         w->measuredFace = w->fontFace;
-        w->measuredWidth = between;
         return;
     }
 
@@ -431,9 +428,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     const int rows = static_cast<int>(
         wrapText(parseMarkup(w->text), 0.0f, false, measureRun).size());
     w->wrappedLines = rows > 0 ? rows : 1;
-    if (w->height <= 0.0f || w->autoSized) {
-        w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
-    }
+    if (!w->heightGiven) w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
     w->autoSized = true;
     w->measuredText = w->text;
     w->measuredSize = size;
@@ -1485,11 +1480,6 @@ void WidgetRenderer::layout(WidgetTree& tree, float screenW, float screenH) {
     mark(times.sizing, [&] { sizeArtAndText(tree); });
 
     mark(times.solve, [&] { tree.layout(screenW, screenH); });
-    // Labels whose sides have moved: as tall as that makes them.
-    if (tree.takeWrapChanged()) {
-        mark(times.sizing, [&] { sizeArtAndText(tree); });
-        mark(times.solve, [&] { tree.layout(screenW, screenH); });
-    }
 
     if (profile) {
         ++times.frames;
@@ -3408,7 +3398,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // its height has room for (0x00483a40).
             const bool boxed = !w->autoSized && boxWidth > size;
             const float wrapW = boxed && w->wordWrap ? boxWidth : 0.0f;
-            const bool ownHeight = w->wrapsToWidth || w->wrapsBetweenAnchors;
+            const bool ownHeight = w->wrapsToWidth && !w->wrapsBetweenAnchors;
             const int most = boxed && !ownHeight && y1 - y0 > 0.0f ? linesThatFit(y1 - y0, size, spacing) : 0;
             // Held to its box when the box is what decides its width. A string
             // sized from its own text has no box to be held to and is left

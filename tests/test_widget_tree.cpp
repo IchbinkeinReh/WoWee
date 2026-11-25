@@ -3651,47 +3651,28 @@ TEST_CASE("a new parent leaves the points where they are", "[widgets]") {
     CHECK(tree.pointAt(f, 0)->relativeTo == b);
 }
 
-TEST_CASE("a label between two sides breaks its lines there", "[widgets]") {
+// 0x00483fa0, 0x00488d00
+TEST_CASE("a label's lines are broken at a width it was given, not between its sides", "[widgets]") {
     WidgetTree tree;
     const uint32_t frame = tree.create(WidgetKind::Frame, tree.rootId(), "Frame");
-    tree.setWidth(frame, 200.0f);
-    tree.setHeight(frame, 100.0f);
-    tree.addPoint(frame, {"CENTER", 0, "CENTER", 0.0f, 0.0f});
     const uint32_t label = tree.create(WidgetKind::FontString, frame, "Label");
     tree.get(label)->text = "some words";
     tree.addPoint(label, {"TOPLEFT", 0, "TOPLEFT", 10.0f, 0.0f});
-    CHECK(textWrapWidth(*tree.get(label)) == 0.0f);   // as wide as its text
     tree.addPoint(label, {"RIGHT", 0, "RIGHT", -30.0f, 0.0f});
-    (void)tree.takeWrapChanged();
-    for (uint32_t id = tree.takeMeasureDirty(1); id != 0; id = tree.takeMeasureDirty(id + 1)) {}
-    tree.layout(1024.0f, 768.0f);
-    CHECK(textWrapWidth(*tree.get(label)) == Catch::Approx(160.0f));
-    CHECK(tree.takeWrapChanged());
-    CHECK_FALSE(tree.takeWrapChanged());
-    // Marked to be measured, until it has been at that width.
-    CHECK(tree.takeMeasureDirty(label) == label);
-    tree.get(label)->measuredWidth = textWrapWidth(*tree.get(label));
-    tree.setHeight(frame, 120.0f);
-    tree.layout(1024.0f, 768.0f);
-    CHECK_FALSE(tree.takeWrapChanged());
-    tree.setWidth(frame, 240.0f);
-    tree.layout(1024.0f, 768.0f);
-    CHECK(tree.takeWrapChanged());
-    CHECK(textWrapWidth(*tree.get(label)) == Catch::Approx(200.0f));
-    // In its own units, whatever its scale.
-    tree.get(label)->effScale = 2.0f;
-    CHECK(textWrapWidth(*tree.get(label)) == Catch::Approx(100.0f));
-    // A height given is its own; the anchors' width is not its declared one.
+    CHECK(givenWidth(*tree.get(label)) == 0.0f);
+    tree.setWidth(label, 70.0f);
+    CHECK(givenWidth(*tree.get(label)) == 70.0f);
+    // As wide as its text: no width was given.
+    tree.get(label)->autoSized = true;
+    CHECK(givenWidth(*tree.get(label)) == 0.0f);
+    // A height that was set is its own, until it is set to nothing.
+    CHECK_FALSE(tree.get(label)->heightGiven);
     tree.get(label)->wrapsBetweenAnchors = true;
     tree.setHeight(label, 32.0f);
+    CHECK(tree.get(label)->heightGiven);
     CHECK_FALSE(tree.get(label)->wrapsBetweenAnchors);
-    tree.clearPoints(label);
-    tree.get(label)->autoSized = false;
-    tree.get(label)->wrapsToWidth = false;
-    tree.setWidth(label, 70.0f);
-    CHECK(textWrapWidth(*tree.get(label)) == 70.0f);
-    tree.get(label)->autoSized = true;
-    CHECK(textWrapWidth(*tree.get(label)) == 0.0f);
+    tree.setHeight(label, 0.0f);
+    CHECK_FALSE(tree.get(label)->heightGiven);
 }
 
 TEST_CASE("a button's states are the mouse's and SetButtonState's", "[widgets]") {

@@ -527,6 +527,7 @@ void WidgetTree::setHeight(uint32_t id, float height) {
         w->measuredText.clear();
     }
     w->wrapsBetweenAnchors = false;
+    w->heightGiven = height > 0.0f;
     w->height = height;
     w->heightFromImage = false;
     w->rectH = height;
@@ -1390,12 +1391,6 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
         if (w->buttonArt != ButtonArt::None && parent) {
             if (w->rectW <= 0.0f) { w->left   = pLeft;   w->rectW = pW; }
             if (w->rectH <= 0.0f) { w->bottom = pBottom; w->rectH = pH; }
-        }
-        // A label between two sides has its lines broken there.
-        if (w->kind == WidgetKind::FontString && !w->text.empty() && anchorsSpanAxis(w->anchors, true) &&
-            textWrapWidth(*w) != w->measuredWidth) {
-            markMeasureDirty(id);
-            wrapChanged_ = true;
         }
     }
     // After the solve, so it displaces the result rather than becoming another
