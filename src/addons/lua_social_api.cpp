@@ -997,7 +997,7 @@ static int pushContactNameAt(lua_State* L, uint32_t listMask) {
         const auto& name = rows[index - 1]->name;
         lua_pushlstring(L, name.data(), name.size());
     } else {
-        lua_pushstring(L, "UNKNOWN");
+        lua_pushstring(L, game::interfaceString("UNKNOWN", "Unknown").c_str());
     }
     return 1;
 }
@@ -5108,7 +5108,7 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!gh || !gh->isPlayerDead()) { lua_pushnil(L); return 1; }
             if (const uint32_t spellId = gh->getSelfResSpellId(); spellId != 0) {
                 const std::string& name = gh->getSpellName(spellId);
-                lua_pushstring(L, name.empty() ? "UNKNOWN" : name.c_str());
+                lua_pushstring(L, name.empty() ? game::interfaceString("UNKNOWN", "Unknown").c_str() : name.c_str());
                 return 1;
             }
             if (gh->canSelfRes()) {
