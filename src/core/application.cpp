@@ -2929,15 +2929,12 @@ void Application::run() {
                         if (engine->dispatchFrameKey(event.key.key, true)) {
                             // Taken, so not also acted on by the ImGui side
                             // of the chain (GameScreen reads the same press):
-                            // the movie frame's Escape went on to toggle the
-                            // game menu, which shows UIParent again under it.
-                            switch (event.key.key) {
-                                case SDLK_ESCAPE: ui::noteInterfaceConsumedKey(ImGuiKey_Escape); break;
-                                case SDLK_RETURN:
-                                case SDLK_KP_ENTER: ui::noteInterfaceConsumedKey(ImGuiKey_Enter); break;
-                                case SDLK_TAB: ui::noteInterfaceConsumedKey(ImGuiKey_Tab); break;
-                                default: break;
-                            }
+                            // a key a frame takes goes nowhere else (0x004943c0
+                            // stops at the one that does, 0x0048fb80). The
+                            // movie frame's Escape went on to toggle the game
+                            // menu, and the world map's M, which closes it in
+                            // its OnKeyDown, opened it again.
+                            ui::noteInterfaceConsumedKeycode(static_cast<int>(event.key.key));
                             // Escape says so, because "Escape does nothing"
                             // is a live report and this is one of the three
                             // ways the press can end before the chain that
@@ -2975,9 +2972,7 @@ void Application::run() {
                                 (mods & SDL_KMOD_ALT) != 0, true,
                                 event.key.repeat)) {
                             // Not the client's own panels' as well.
-                            if (event.key.key >= SDLK_A && event.key.key <= SDLK_Z)
-                                ui::noteInterfaceConsumedKey(
-                                    static_cast<ImGuiKey>(ImGuiKey_A + static_cast<int>(event.key.key - SDLK_A)));
+                            ui::noteInterfaceConsumedKeycode(static_cast<int>(event.key.key));
                             // The fourth way a press can end in the pump - an
                             // interface key binding claimed it - which had no
                             // line. For the DEFAULT Escape this does not fire:

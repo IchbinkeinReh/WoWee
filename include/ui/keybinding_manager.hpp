@@ -137,6 +137,11 @@ bool interfaceConsumedKey(ImGuiKey key);
 /// to having taken anything.
 void noteInterfaceConsumedKey(ImGuiKey key);
 
+/// ImGui's name for a key SDL names, None for one it has none for.
+ImGuiKey imguiKeyOf(int sdlKeycode);
+/// The same for the key of an event, whichever it is.
+void noteInterfaceConsumedKeycode(int sdlKeycode);
+
 /// Cleared at the top of each event pump, so a flag only ever describes the
 /// iteration it was set in.
 void clearInterfaceConsumedKeys();

@@ -4523,6 +4523,8 @@ target_include_directories(test_keybinding_defaults SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/extern/imgui
 )
 target_link_libraries(test_keybinding_defaults PRIVATE catch2_main imgui)
+target_compile_definitions(test_keybinding_defaults PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME keybinding_defaults COMMAND test_keybinding_defaults)
 register_test_target(test_keybinding_defaults)
 
