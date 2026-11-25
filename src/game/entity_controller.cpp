@@ -4882,13 +4882,10 @@ void EntityController::showGameObjectPageText(uint64_t guid) {
                 " pageId=", pageId, " hasData=", info.hasData);
 
     if (pageId != 0 && owner_.getSocket() && owner_.getState() == WorldState::IN_WORLD) {
-        owner_.bookPagesRef().clear();  // start a fresh book for this interaction
         owner_.setBookTitle(info.name);
         owner_.setBookMaterial(pageMaterial);
-        auto req = PageTextQueryPacket::build(pageId, guid);
-        owner_.getSocket()->send(req);
         // The reading window opens with the object (0x0058a1a0 -> 0x0051fce0).
-        owner_.setBookObject(guid);
+        owner_.openBook(pageId, guid);
         return;
     }
 
@@ -4916,42 +4913,11 @@ void EntityController::handlePageTextQueryResponse(network::Packet& packet) {
 
     data.text = resolveTextTokens(data.text, owner_);
 
-    // Append page if not already collected
-    bool alreadyHave = false;
-    for (const auto& bp : owner_.bookPagesRef()) {
-        if (bp.pageId == data.pageId) { alreadyHave = true; break; }
-    }
-    if (!alreadyHave) {
-        owner_.bookPagesRef().push_back({.pageId = data.pageId, .text = data.text});
-    }
-
-    // Follow the chain: if there's a next page we haven't fetched yet, request it
-    if (data.nextPageId != 0) {
-        bool nextHave = false;
-        for (const auto& bp : owner_.bookPagesRef()) {
-            if (bp.pageId == data.nextPageId) { nextHave = true; break; }
-        }
-        if (!nextHave && owner_.getSocket() && owner_.getState() == WorldState::IN_WORLD) {
-            auto req = PageTextQueryPacket::build(data.nextPageId, owner_.getPlayerGuid());
-            owner_.getSocket()->send(req);
-        }
-    }
-    // Tell the interface, which is otherwise never told about a book at all.
-    // The mail path fires these two from InventoryHandler and FrameXML's
-    // ItemTextFrame is wired to them; a book arrives on a different opcode and
-    // fired nothing, so with the Book element handed over there was nothing to
-    // read. BEGIN on the first page - the frame clears itself and picks its
-    // material on that - and READY on every page, since each one that lands is
-    // another the reader can turn to.
-    if (owner_.addonEventCallbackRef()) {
-        if (owner_.bookPagesRef().size() == 1) {
-            owner_.addonEventCallbackRef()("ITEM_TEXT_BEGIN", {});
-        }
-        owner_.addonEventCallbackRef()("ITEM_TEXT_READY", {});
-    }
-    LOG_DEBUG("handlePageTextQueryResponse: pageId=", data.pageId,
-              " nextPage=", data.nextPageId,
-              " totalPages=", owner_.bookPagesRef().size());
+    // The server answers for the pages after it as well: each is kept, and the
+    // one shown is drawn - the window opened by the first.
+    if (!owner_.bookRef().arrived(data.pageId, data.text, data.nextPageId)) return;
+    if (owner_.book().page() == 0) owner_.fireAddonEvent("ITEM_TEXT_BEGIN", {});
+    owner_.fireAddonEvent("ITEM_TEXT_READY", {});
 }
 
 

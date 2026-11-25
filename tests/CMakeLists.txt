@@ -4354,6 +4354,10 @@ wowee_add_test(test_replace_enchant
 wowee_add_test(test_binding_sets
     SOURCES test_binding_sets.cpp)
 
+# ── test_item_book ───────────────────────────────────────────
+wowee_add_test(test_item_book
+    SOURCES test_item_book.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

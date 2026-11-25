@@ -3172,15 +3172,12 @@ void InventoryHandler::readItemBySlot(int backpackIndex) {
     uint64_t itemGuid = owner_.backpackSlotGuidsRef()[backpackIndex];
     if (itemGuid == 0) itemGuid = owner_.resolveOnlineItemGuid(slot.item.itemId);
 
-    owner_.bookPagesRef().clear();
     owner_.setBookTitle(info ? info->name : std::string());
     owner_.setBookMaterial(info ? info->pageMaterial : 0u);
-    // The reading window opens with the item (0x0058a1a0 -> 0x0051fce0).
-    if (itemGuid != 0) owner_.setBookObject(itemGuid);
     auto readPacket = ReadItemPacket::build(0xFF, static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex));
     owner_.getSocket()->send(readPacket);
-    auto pagePacket = PageTextQueryPacket::build(pageTextId, itemGuid != 0 ? itemGuid : owner_.getPlayerGuid());
-    owner_.getSocket()->send(pagePacket);
+    // The reading window opens with the item (0x0058a1a0 -> 0x0051fce0).
+    owner_.openBook(pageTextId, itemGuid);
     LOG_INFO("readItemBySlot: CMSG_READ_ITEM pageTextId=", pageTextId,
              " bag=0xFF slot=", (Inventory::NUM_EQUIP_SLOTS + backpackIndex));
 }
@@ -3212,15 +3209,12 @@ void InventoryHandler::readItemInBag(int bagIndex, int slotIndex) {
     if (itemGuid == 0) itemGuid = owner_.resolveOnlineItemGuid(slot.item.itemId);
 
     uint8_t wowBag = static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bagIndex);
-    owner_.bookPagesRef().clear();
     owner_.setBookTitle(info ? info->name : std::string());
     owner_.setBookMaterial(info ? info->pageMaterial : 0u);
-    // The reading window opens with the item (0x0058a1a0 -> 0x0051fce0).
-    if (itemGuid != 0) owner_.setBookObject(itemGuid);
     auto readPacket = ReadItemPacket::build(wowBag, static_cast<uint8_t>(slotIndex));
     owner_.getSocket()->send(readPacket);
-    auto pagePacket = PageTextQueryPacket::build(pageTextId, itemGuid != 0 ? itemGuid : owner_.getPlayerGuid());
-    owner_.getSocket()->send(pagePacket);
+    // The reading window opens with the item (0x0058a1a0 -> 0x0051fce0).
+    owner_.openBook(pageTextId, itemGuid);
     LOG_INFO("readItemInBag: CMSG_READ_ITEM pageTextId=", pageTextId,
              " bag=", static_cast<int>(wowBag), " slot=", slotIndex);
 }

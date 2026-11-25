@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/item_book.hpp"
 #include "game/stat_tables.hpp"
 #include "game/macro_list.hpp"
 #include "game/pet_action.hpp"
@@ -4071,10 +4072,13 @@ public:
 
     // ---- Readable text (books / scrolls / notes) ----
     // Populated by handlePageTextQueryResponse(); multi-page items chain via nextPageId.
-    struct BookPage { uint32_t pageId = 0; std::string text; };
-    const std::vector<BookPage>& getBookPages() const { return bookPages_; }
-    bool hasBookOpen() const { return !bookPages_.empty(); }
-    void clearBook() { bookPages_.clear(); bookTitle_.clear(); bookMaterial_ = 0; bookObjectGuid_ = 0; }
+    [[nodiscard]] const ItemBook& book() const { return book_; }
+    ItemBook& bookRef() { return book_; }
+    /// Opened at its first page, which is asked for or shown.
+    void openBook(uint32_t firstPage, uint64_t object);
+    /// Turned on or back by a page (0x0058a150, 0x0058a110).
+    void turnBookPage(bool on);
+    void clearBook() { book_.close(); bookTitle_.clear(); bookMaterial_ = 0; bookObjectGuid_ = 0; }
     /// The object a book being read is from - a game object or an item - which
     /// the reading window opens with (0x0058a1a0 -> 0x0051fce0).
     void setBookObject(uint64_t guid) { bookObjectGuid_ = guid; setInteractionObject(guid, go_interaction::Window::Book); }
@@ -5931,7 +5935,6 @@ public:
     // ── Trainer, GM & Misc ───────────────────────────────────────────
     auto& gmTicketActiveRef() { return gmTicketActive_; }
     auto& gmTicketTextRef() { return gmTicketText_; }
-    auto& bookPagesRef() { return bookPages_; }
     auto& activeTotemSlotsRef() { return activeTotemSlots_; }
     /// The per-unit aura lists SpellHandler keeps, which the interface reads.
     std::unordered_map<uint64_t, std::vector<AuraSlot>>& unitAurasCacheRef();
@@ -7734,7 +7737,7 @@ private:
     LevelUpCallback levelUpCallback_;
     LevelUpDeltas lastLevelUpDeltas_;
     std::vector<TempEnchantTimer> tempEnchantTimers_;
-    std::vector<BookPage> bookPages_;            // pages collected for the current readable item
+    ItemBook book_;                              // what is read in the item text window
     uint64_t bookObjectGuid_ = 0;                // what they are read from, 0 for none
     std::string bookTitle_;                      // name of the object or item those pages belong to
     uint32_t bookMaterial_ = 0;                  // PageTextMaterial.dbc id, 0 for unknown

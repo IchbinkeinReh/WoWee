@@ -1468,6 +1468,28 @@ const std::string& GameHandler::getItemText() const {
     if (inventoryHandler_) return inventoryHandler_->getItemText();
     return itemText_;
 }
+void GameHandler::openBook(uint32_t firstPage, uint64_t object) {
+    if (object != 0) setBookObject(object);
+    book_.open(firstPage);
+    if (const uint32_t page = book_.wanted()) {
+        if (socket && state == WorldState::IN_WORLD)
+            socket->send(PageTextQueryPacket::build(page, object != 0 ? object : playerGuid));
+        return;
+    }
+    fireAddonEvent("ITEM_TEXT_BEGIN", {});
+    fireAddonEvent("ITEM_TEXT_READY", {});
+}
+
+void GameHandler::turnBookPage(bool on) {
+    if (!(on ? book_.turnOn() : book_.turnBack())) return;
+    if (const uint32_t page = book_.wanted()) {
+        if (socket && state == WorldState::IN_WORLD)
+            socket->send(PageTextQueryPacket::build(page, bookObjectGuid_ != 0 ? bookObjectGuid_ : playerGuid));
+        return;
+    }
+    fireAddonEvent("ITEM_TEXT_READY", {});
+}
+
 void GameHandler::closeItemText() {
     if (inventoryHandler_) inventoryHandler_->closeItemText();
     else itemTextOpen_ = false;

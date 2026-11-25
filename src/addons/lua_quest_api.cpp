@@ -837,18 +837,6 @@ static int lua_GetQuestIndexForTimer(lua_State* L) {
     return luaReturnNil(L);
 }
 
-/// Which page of an open book is being read, zero-based.
-///
-/// The reader's own state, not the client's: every page is already in hand by
-/// the time the frame draws one, so turning a page moves this and nothing else.
-/// Reset when a book is closed, which is the only moment it can be stale.
-static int& bookPage() { static int page = 0; return page; }
-
-/// Tell the frame to redraw from whatever the page bindings now answer.
-static void fireItemTextReady(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("ITEM_TEXT_READY", {});
-}
-
 static int lua_GetQuestLogTitle(lua_State* L) {
     // 0x005e5cc0
     if (!lua_isnumber(L, 1))
@@ -5176,15 +5164,11 @@ void registerQuestLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             if (!gh) { lua_pushstring(L, ""); return 1; }
             // Two things arrive on this frame and they come by different
-            // opcodes: a letter's body, which is one page, and a book, which
-            // chains through nextPageId and is collected whole before anyone
-            // reads it. A book wins while one is open, because a letter cannot
-            // be open at the same time.
-            const auto& pages = gh->getBookPages();
-            if (!pages.empty()) {
-                const size_t page = static_cast<size_t>(bookPage());
-                lua_pushstring(L, page < pages.size() ? pages[page].text.c_str()
-                                                      : pages.back().text.c_str());
+            // opcodes: a letter's body, which is one page, and a book, whose
+            // pages are asked for as they are turned to. A book wins while one
+            // is open, because a letter cannot be open at the same time.
+            if (gh->book().isOpen()) {
+                lua_pushstring(L, gh->book().text().c_str());
                 return 1;
             }
             lua_pushstring(L, gh->getItemText().c_str());
@@ -5293,32 +5277,24 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, name.c_str());
             return 1;
         }},
-                // A letter is one page and its buttons stay hidden. A book is
-                // as many as its chain has, all of them already fetched, so
-                // turning one is a move through what is in hand rather than a
-                // request - and the frame redraws on ITEM_TEXT_READY, which is
-                // what makes the move visible.
+                // A letter is one page and its buttons stay hidden (0x00589b50,
+                // 0x00589d70, 0x0058a110, 0x0058a150).
                 {"ItemTextGetPage", [](lua_State* L) -> int {
-            lua_pushnumber(L, bookPage() + 1);
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? static_cast<double>(gh->book().page() + 1) : 1.0);
             return 1;
         }},
                 {"ItemTextHasNextPage", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const size_t pages = gh ? gh->getBookPages().size() : 0;
-            luaPushOneOrNil(L, static_cast<size_t>(bookPage() + 1) < pages ? 1 : 0);
+            luaPushOneOrNil(L, gh && gh->book().hasNext() ? 1 : 0);
             return 1;
         }},
                 {"ItemTextPrevPage", [](lua_State* L) -> int {
-            if (bookPage() > 0) { --bookPage(); fireItemTextReady(L); }
+            if (auto* gh = getGameHandler(L)) gh->turnBookPage(false);
             return 0;
         }},
                 {"ItemTextNextPage", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const size_t pages = gh ? gh->getBookPages().size() : 0;
-            if (static_cast<size_t>(bookPage() + 1) < pages) {
-                ++bookPage();
-                fireItemTextReady(L);
-            }
+            if (auto* gh = getGameHandler(L)) gh->turnBookPage(true);
             return 0;
         }},
                 // Closing is a state change this client owns, and the frame
@@ -5331,7 +5307,6 @@ void registerQuestLuaAPI(lua_State* L) {
                 // one was left on and shows nothing until it is paged back.
                 gh->clearBook();
             }
-            bookPage() = 0;
             return 0;
         }},
                 {"SelectQuestLogEntry",     lua_SelectQuestLogEntry},
