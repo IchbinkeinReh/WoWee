@@ -2744,6 +2744,8 @@ void noteClientSettingChanged(const std::string& settingKey, const std::string& 
 
 void applySoundCVarSideEffects(lua_State* L) { applySoundCVars(L); }
 
+bool replayingStoredCVars() { return g_replayingStoredCVars; }
+
 void applyStoredCVarSideEffects(lua_State* L) {
     g_replayingStoredCVars = true;
     for (const auto& [key, value] : cvarStore()) {

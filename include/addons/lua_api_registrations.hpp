@@ -40,6 +40,8 @@ void addTabardModelMethods(lua_State* L);
 /// Re-apply every CVar restored from disk, now that the services behind them
 /// exist. See applyCVarSideEffects.
 void applyStoredCVarSideEffects(lua_State* L);
+/// Whether that is under way.
+bool replayingStoredCVars();
 
 /// Re-apply the sound switches from the cvar store.
 ///

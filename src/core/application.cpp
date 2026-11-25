@@ -153,6 +153,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include <tuple>
 #include <thread>
 #ifdef WOWEE_VR
 #include "ui/scene_pick.hpp"
@@ -1438,7 +1439,12 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
                                                           const std::string& value) {
             if (!uim) return;
             auto& gs = uim->getGameScreen();
-            if (gs.getSettingsPanel().setSettingValue(key, value)) gs.saveSettings();
+            auto& panel = gs.getSettingsPanel();
+            const std::string before = panel.settingValue(key);
+            if (!panel.setSettingValue(key, value)) return;
+            // The stored CVars are put back at every entry: written then only
+            // where one differs, not once for each.
+            if (!addons::replayingStoredCVars() || panel.settingValue(key) != before) gs.saveSettings();
         };
 
         // Every schema key must be answered, or its control is drawn and inert.
@@ -1477,6 +1483,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             auto& gs = uim->getGameScreen();
             auto& sp = gs.getSettingsPanel();
             const int pct = static_cast<int>(std::lround(v * 100.0f));
+            const auto values = [&sp] {
+                return std::tuple(sp.pendingMasterVolume, sp.pendingMusicVolume, sp.pendingAmbientVolume, sp.soundMuted_);
+            };
+            const auto before = values();
             if (key == "master") {
                 sp.pendingMasterVolume = pct;
                 // Raising it means sound is wanted, the same as the slider in
@@ -1487,7 +1497,7 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             } else if (key == "enableall") { sp.soundMuted_ = (v <= 0.0f);
             } else { return; }
             sp.applyAudioVolumes(audioCoordinator_.get());
-            gs.saveSettings();
+            if (!addons::replayingStoredCVars() || values() != before) gs.saveSettings();
         };
         luaSvc.reapplyAudioVolumes = [uim = uiManager.get(), this]() {
             if (!uim) return;
