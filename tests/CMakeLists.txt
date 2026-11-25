@@ -4382,6 +4382,10 @@ wowee_add_test(test_fizzle_sound
 wowee_add_test(test_cvar_ids
     SOURCES test_cvar_ids.cpp)
 
+# ── test_character_config ────────────────────────────────────
+wowee_add_test(test_character_config
+    SOURCES test_character_config.cpp ${CMAKE_SOURCE_DIR}/src/addons/client_cvar_registry.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

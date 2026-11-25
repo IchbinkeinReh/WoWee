@@ -50,6 +50,7 @@
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
 #include "addons/camera_cvar_ranges.hpp"
+#include "addons/character_config.hpp"
 #include "addons/client_cvar_registry.hpp"
 #include "ui/display_modes.hpp"
 #include "ui/fullscreen_scale.hpp"
@@ -914,7 +915,27 @@ static void loadStoredCVars() {
 /// Write them back. Called on every change rather than at shutdown: the file is
 /// a few hundred bytes, and a setting that survives only a clean exit is not
 /// one a player can rely on.
+/// The character whose CVars these are: its file, and what it has.
+static std::string& characterConfigPath() { static std::string path; return path; }
+static std::string& characterConfigWritten() { static std::string text; return text; }
+
+static void writeCharacterConfig() {
+    if (characterConfigPath().empty()) return;
+    std::string text = accountConfigText(true);
+    if (text == characterConfigWritten()) return;
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(characterConfigPath()).parent_path(), ec);
+    std::ofstream out(characterConfigPath(), std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        LOG_WARNING("Could not save the character's CVars to ", characterConfigPath());
+        return;
+    }
+    out << text;
+    characterConfigWritten() = std::move(text);
+}
+
 static void saveStoredCVars() {
+    writeCharacterConfig();
     const std::string path = cvarStorePath();
     std::error_code ec;
     std::filesystem::create_directories(
@@ -2603,35 +2624,48 @@ std::string accountConfigText(bool perCharacter) {
     return out;
 }
 
-void applyAccountConfigText(lua_State* L, bool perCharacter, const std::string& text) {
-    // What the realm keeps wins over what this computer has, one CVar at a
-    // time, and only for a CVar that belongs in that copy.
-    if (!cvarStoreLoaded()) loadStoredCVars();
-    const uint32_t want = perCharacter ? kCVarStoredWithCharacter : kCVarStoredWithAccount;
-    bool changed = false;
-    size_t pos = 0;
-    while (pos < text.size()) {
-        size_t end = text.find('\n', pos);
-        if (end == std::string::npos) end = text.size();
-        std::string line = text.substr(pos, end - pos);
-        pos = end + 1;
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.rfind("SET ", 0) != 0) continue;
-        const size_t sp = line.find(' ', 4);
-        if (sp == std::string::npos) continue;
-        std::string key = line.substr(4, sp - 4);
-        toLowerInPlace(key);
-        std::string value = line.substr(sp + 1);
-        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') value = value.substr(1, value.size() - 2);
-        const auto flags = registeredCVarFlags(key);
-        if (!flags || !(*flags & want)) continue;
-        auto& slot = cvarStore()[key];
-        if (slot == value) continue;
-        slot = value;
-        changed = true;
+/// CVars by lower-case name, and what hangs on them.
+static void takeCVars(lua_State* L, const std::vector<std::pair<std::string, std::string>>& values) {
+    for (const auto& [key, value] : values) {
+        const auto it = cvarStore().find(key);
+        if (it != cvarStore().end() ? it->second == value : clientCVarDefault(key) == std::string_view(value)) continue;
+        cvarStore()[key] = value;
         if (L) applyCVarSideEffects(L, key, value);
     }
-    if (changed) saveStoredCVars();
+}
+
+void applyAccountConfigText(lua_State* L, bool perCharacter, const std::string& text) {
+    // What the realm keeps wins over what this computer has: the account's one
+    // CVar at a time, the character's all of them (0x00518bf0), and only for a
+    // CVar that belongs in that copy.
+    if (!cvarStoreLoaded()) loadStoredCVars();
+    const uint32_t want = perCharacter ? kCVarStoredWithCharacter : kCVarStoredWithAccount;
+    std::vector<std::pair<std::string, std::string>> values;
+    if (perCharacter) values = characterCVars(text);
+    else for (const auto& [key, value] : configCacheValues(text)) values.emplace_back(key, value);
+    std::erase_if(values, [want](const auto& kv) {
+        const auto flags = registeredCVarFlags(kv.first);
+        return !flags || (*flags & want) == 0;
+    });
+    takeCVars(L, values);
+    saveStoredCVars();
+}
+
+bool beginCharacterConfig(lua_State* L, const std::string& path, bool keepWithout) {
+    if (path.empty()) return false;
+    std::error_code ec;
+    if (characterConfigPath() == path) return std::filesystem::exists(path, ec);
+    if (!cvarStoreLoaded()) loadStoredCVars();
+    std::ifstream in(path, std::ios::binary);
+    const bool kept = in.is_open();
+    std::stringstream text;
+    if (kept) text << in.rdbuf();
+    in.close();
+    characterConfigPath() = path;
+    characterConfigWritten() = text.str();
+    if (kept || !keepWithout) applyAccountConfigText(L, true, text.str());
+    else saveStoredCVars();
+    return kept;
 }
 
 void noteClientSettingChanged(const std::string& settingKey, const std::string& value) {

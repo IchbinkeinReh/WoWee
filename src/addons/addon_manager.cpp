@@ -1,3 +1,4 @@
+#include "addons/character_config.hpp"
 #include "addons/addon_load.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "game/expansion_profile.hpp"
@@ -563,6 +564,9 @@ void AddonManager::loadAllAddons() {
         }
     }
     addonsLoaded_ = true;
+    // The character's CVars, where the realm has not begun them.
+    if (lua_State* L = luaEngine_.getState())
+        beginCharacterConfig(L, characterConfigCacheFile(core::getConfigRoot(), characterName_), true);
     // The keys (0x00562d60): the character's own set, or the account's.
     if (lua_State* L = luaEngine_.getState()) beginBindings(L, characterBindingsPath());
     // The frames the player placed, put back once the interface has loaded

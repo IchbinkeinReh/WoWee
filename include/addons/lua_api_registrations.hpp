@@ -85,6 +85,10 @@ void setStoredCVar(const std::string& key, const std::string& value);
 /// the character, as SET lines - and the same text taken back.
 std::string accountConfigText(bool perCharacter);
 void applyAccountConfigText(lua_State* L, bool perCharacter, const std::string& text);
+/// The character that begins has the CVars kept in `path` (character_config.hpp),
+/// its own from here on; without such a file those there are, or their defaults.
+/// Whether there was one.
+bool beginCharacterConfig(lua_State* L, const std::string& path, bool keepWithout);
 
 /// The key bindings kept on the realm (bindings-cache.wtf, account data 2):
 /// a "bind KEY COMMAND" line for each key, and the same text taken back.

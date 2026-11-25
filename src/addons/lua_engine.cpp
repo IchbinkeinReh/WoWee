@@ -11350,6 +11350,9 @@ void LuaEngine::setGameHandler(game::GameHandler* handler) {
         bridge.applyConfig = [this](bool perCharacter, const std::string& text) {
             applyAccountConfigText(L_, perCharacter, text);
         };
+        bridge.beginCharacterConfig = [this](const std::string& path, bool keepWithout) {
+            return beginCharacterConfig(L_, path, keepWithout);
+        };
         bridge.bindings = [](bool perCharacter) { return accountBindingsText(perCharacter); };
         bridge.applyBindings = [this](bool perCharacter, const std::string& text) {
             if (L_) applyAccountBindingsText(L_, perCharacter, text);

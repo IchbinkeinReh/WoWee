@@ -4741,6 +4741,8 @@ public:
     struct AccountDataBridge {
         std::function<std::string(bool perCharacter)> config;
         std::function<void(bool perCharacter, const std::string&)> applyConfig;
+        /// The character's CVars, of the file kept for it; whether there is one.
+        std::function<bool(const std::string& path, bool keepWithout)> beginCharacterConfig;
         std::function<std::string(bool perCharacter)> bindings;
         std::function<void(bool perCharacter, const std::string&)> applyBindings;
         std::function<std::string()> chat;

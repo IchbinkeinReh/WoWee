@@ -173,3 +173,36 @@ TEST_CASE("nothing is written over a character's file before it is read", "[repl
     CHECK(config.read("characters/Anna.cfg").find("Mine") != std::string::npos);
     CHECK(config.read("characters/Anna.cfg").find("action_bar_3_id=133") != std::string::npos);
 }
+
+// 0x00767350, 0x00518c80: the CVars of the character before are none of this one's,
+// and one that has no file here takes the realm's, its time or not.
+TEST_CASE("a character without a config here asks the realm for its own", "[replay][macros]") {
+    ConfigSandbox config;
+    Session s;
+    s.setConnected(true);
+    become(s, "ACC", "Anna", 66);
+    config.write("account_data_times.txt", "ACC:Anna:1=500\n");
+    bool kept = false;
+    std::string begun;
+    GameHandler::AccountDataBridge bridge;
+    bridge.beginCharacterConfig = [&](const std::string& path, bool keepWithout) {
+        begun = path;
+        CHECK_FALSE(keepWithout);
+        return kept;
+    };
+    s.handler().setAccountDataBridge(std::move(bridge));
+    const auto times = [&] {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ACCOUNT_DATA_TIMES));
+        p.writeUInt32(1000);
+        p.writeUInt8(1);
+        p.writeUInt32(0x02);
+        p.writeUInt32(500);
+        s.receive(p);
+        return s.sent().of(Opcode::CMSG_REQUEST_ACCOUNT_DATA).size();
+    };
+    kept = GENERATE(false, true);
+    CHECK(times() == (kept ? 0u : 1u));
+    CHECK(begun.find("characters/Anna.config-cache.wtf") != std::string::npos);
+    CHECK((config.read("account_data_times.txt").find("ACC:Anna:1=0") != std::string::npos) == !kept);
+    s.handler().setAccountDataBridge({});
+}

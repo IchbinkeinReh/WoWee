@@ -12,6 +12,7 @@
 #include "game/game_handler.hpp"
 #include "game/macro_cache.hpp"
 #include "game/macro_slots.hpp"
+#include "addons/character_config.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "core/config_paths.hpp"
 #include "game/character.hpp"
@@ -278,6 +279,13 @@ void GameHandler::handleAccountDataTimes(network::Packet& packet) {
     // that has none yet takes the realm's macros.
     const bool accountMacrosHere = loadAccountMacros();
     if (ch && (data.mask & ~kGlobalMask) != 0 && characterConfigOf_ != playerGuid) loadCharacterConfig();
+    // The character's CVars are none of the one's before (0x00767350); without a
+    // file of its own here it takes the realm's, asked again until they came.
+    if (ch && (data.mask & ~kGlobalMask) != 0 && accountDataBridge_.beginCharacterConfig &&
+        !accountDataBridge_.beginCharacterConfig(addons::characterConfigCacheFile(core::getConfigRoot(), ch->name),
+                                                 !accountDataSynced(1)) &&
+        accountDataSynced(1))
+        setAccountDataLocalTime(1, 0);
     for (uint32_t t = 0; t < kAccountDataTypes; ++t) {
         if ((data.mask & (1u << t)) == 0) continue;
         if (!kTypes[t].global && !getActiveCharacter()) continue;
