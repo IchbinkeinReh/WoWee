@@ -1165,10 +1165,13 @@ public:
     void raise(uint32_t id);
     /// The reverse, for Lower().
     void lower(uint32_t id);
-    /// Shift every descendant that carries its own level, so a raised window
-    /// takes what is inside it along. Public because SetFrameLevel needs the
-    /// same behaviour.
-    void shiftExplicitLevels(uint32_t id, int delta);
+    /// A frame's level, at once, and as much up or down for the frames in it
+    /// that are in its strata (0x004910a0); a script's call raises by 128 at
+    /// most.
+    void setFrameLevel(uint32_t id, int level, bool capped = true);
+    /// A frame's strata, at once, and that of every frame in it, whatever it was
+    /// (0x00491020).
+    void setFrameStrata(uint32_t id, FrameStrata strata);
 
     /// The frame currently following the cursor, if any.
     ///

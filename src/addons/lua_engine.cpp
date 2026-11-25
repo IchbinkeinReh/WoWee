@@ -7861,8 +7861,8 @@ int lua_Frame_SetFrameStrata(lua_State* L) {
         bool known = false;
         for (const char* k : kStrata) known = known || name == k;
         if (!known) return luaL_error(L, "%s:SetFrameStrata(): Unknown frame strata: %s", who, lua_tostring(L, 2));
-        w->strata = wowee::ui::parseStrata(name);
-        w->strataExplicit = true;
+        if (auto* tree = wowee::addons::getWidgetTree(L))
+            tree->setFrameStrata(widgetIdOf(L, 1), wowee::ui::parseStrata(name));
     }
     return 0;
 }
@@ -7875,7 +7875,7 @@ int lua_Frame_SetFrameStrata(lua_State* L) {
 /// deciding from a constant.
 int lua_Frame_GetFrameStrata(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushstring(L, w ? wowee::ui::strataName(w->strata) : "MEDIUM");
+    lua_pushstring(L, w ? wowee::ui::strataName(w->effStrata) : "MEDIUM");
     return 1;
 }
 
@@ -7891,12 +7891,7 @@ int lua_Frame_SetFrameLevel(lua_State* L) {
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFrameLevel(level)", who);
     const int wanted = static_cast<int>(lua_tonumber(L, 2));
     if (wanted < 0) return luaL_error(L, "%s:SetFrameLevel(): Passed negative frame level: %d", who, wanted);
-    // Anything inside that set its own level moves by the same amount, because
-    // a child's level is relative to its parent. Raising a window by hand and
-    // raising it by clicking it must leave the same arrangement behind.
-    if (tree && id) tree->shiftExplicitLevels(id, wanted - w->effLevel);
-    w->level = wanted;
-    w->levelExplicit = true;
+    if (tree && id) tree->setFrameLevel(id, wanted);
     return 0;
 }
 int lua_FontString_SetText(lua_State* L) {

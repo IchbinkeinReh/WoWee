@@ -211,6 +211,13 @@ void WidgetTree::setParent(uint32_t id, uint32_t newParent) {
     }
     w->parent = newParent;
     get(newParent)->children.push_back(id);
+    // 0x004911b0: the new parent's strata and the level above it, with all that
+    // is in it; off every parent MEDIUM, at the bottom.
+    if (w->kind == WidgetKind::Frame) {
+        const Widget* p = get(newParent);
+        setFrameStrata(id, newParent == rootId_ ? FrameStrata::Medium : p->effStrata);
+        setFrameLevel(id, newParent == rootId_ ? 0 : p->effLevel + 1);
+    }
     // Moved under a hidden frame still marked visible: the next pass has to
     // walk whichever hidden subtree it landed in.
     ++visibilityRaises_;
@@ -669,26 +676,38 @@ void WidgetTree::nudge(uint32_t id, float dx, float dy) {
     for (Anchor& a : w->anchors) { a.x += dx / es; a.y += dy / es; }
 }
 
-/// Move every descendant that carries its own level by the same amount.
-///
-/// A child's level is relative to its parent in WoW, and FrameXML sets levels
-/// freely - RaiseFrameLevelByTwo alone is used throughout. Without this, a
-/// raised window keeps its own art in front but leaves anything that set its
-/// own level behind: the character sheet's name label sat at 6 while the panel
-/// it belongs to went to 174, and sorting by level drew the name underneath
-/// the panel, where it cannot be seen.
-void WidgetTree::shiftExplicitLevels(uint32_t id, int delta) {
-    if (delta == 0) return;
-    const Widget* w = get(id);
+void WidgetTree::setFrameLevel(uint32_t id, int level, bool capped) {
+    Widget* w = get(id);
     if (!w) return;
-    // A copy, because get() invalidates nothing but the recursion below may.
+    int delta = std::max(level, 0) - w->effLevel;
+    if (capped) delta = std::min(delta, 0x80);
+    w->level = w->effLevel += delta;
+    w->levelExplicit = true;
+    markLayoutDirty();
+    if (delta == 0) return;
+    // A copy: the calls below may not move it, but none of this says so.
     const std::vector<uint32_t> kids = w->children;
-    for (uint32_t child : kids) {
-        if (Widget* c = get(child)) {
-            if (c->levelExplicit) c->level += delta;
+    for (const uint32_t kid : kids) {
+        Widget* child = get(kid);
+        if (!child || child->kind != WidgetKind::Frame) continue;
+        if (child->effStrata == get(id)->effStrata) {
+            setFrameLevel(kid, child->effLevel + delta);
+        } else {
+            child->level = child->effLevel;
+            child->levelExplicit = true;
         }
-        shiftExplicitLevels(child, delta);
     }
+}
+
+void WidgetTree::setFrameStrata(uint32_t id, FrameStrata strata) {
+    Widget* w = get(id);
+    if (!w) return;
+    w->strata = w->effStrata = strata;
+    w->strataExplicit = true;
+    markLayoutDirty();
+    const std::vector<uint32_t> kids = w->children;
+    for (const uint32_t kid : kids)
+        if (const Widget* child = get(kid); child && child->kind == WidgetKind::Frame) setFrameStrata(kid, strata);
 }
 
 void WidgetTree::raise(uint32_t id) {
@@ -713,10 +732,7 @@ void WidgetTree::raise(uint32_t id) {
     if (w->effLevel > highest) return;
     // Explicit from here on, or the next layout would recompute it from the
     // parent and undo the raise immediately.
-    const int newLevel = highest + 1;
-    shiftExplicitLevels(id, newLevel - w->effLevel);
-    w->level = newLevel;
-    w->levelExplicit = true;
+    setFrameLevel(id, highest + 1, false);
 }
 
 void WidgetTree::lower(uint32_t id) {
@@ -735,10 +751,7 @@ void WidgetTree::lower(uint32_t id) {
     if (lowest == INT_MAX || w->effLevel < lowest) return;
     // Never below zero: a negative level sorts under the root and the frame
     // stops being drawn at all.
-    const int newLevel = (lowest > 0) ? lowest - 1 : 0;
-    shiftExplicitLevels(id, newLevel - w->effLevel);
-    w->level = newLevel;
-    w->levelExplicit = true;
+    setFrameLevel(id, (lowest > 0) ? lowest - 1 : 0, false);
 }
 
 const Anchor* WidgetTree::pointAt(uint32_t id, int index) const {
@@ -1177,22 +1190,6 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // makes a button's own regions land on top of the frame holding it.
     w->effStrata = w->strataExplicit ? w->strata : (parent ? parent->effStrata : FrameStrata::Medium);
     w->effLevel  = w->levelExplicit  ? w->level  : (parent ? parent->effLevel + 1 : 0);
-    // ...and never below the parent, whatever the two lines above worked out.
-    //
-    // The level a child inherits is read off the parent, so a parent raised
-    // after its children were resolved leaves them at a level computed from
-    // where it used to be. A dropdown list is raised as it opens, and its item
-    // buttons kept the old answer: the list came out at level 3 with its
-    // buttons at 2 and its own backdrop at 4. The backdrop then painted over
-    // the items, which is why they looked greyed, and the hit test - which
-    // takes the highest level under the cursor - answered the list rather than
-    // the button, which is why clicking one did nothing.
-    //
-    // Ties are settled by creation order, so a backdrop declared before the
-    // buttons still sits behind them once all three are on the same level.
-    if (parent && w->effLevel < parent->effLevel) {
-        w->effLevel = parent->effLevel + 1;
-    }
     // Multiplied down the chain, so scaling a window scales everything in it.
     w->effScale  = (parent ? parent->effScale : 1.0f) * w->scale;
     const float es = w->effScale;

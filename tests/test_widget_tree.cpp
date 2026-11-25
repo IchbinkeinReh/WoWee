@@ -2712,26 +2712,21 @@ TEST_CASE("An edit box is drawn for its own text, not skipped as a container",
     }
 }
 
-TEST_CASE("A child frame never sits below its parent", "[widget][level]") {
-    // The level a child inherits is read off the parent, so a parent raised
-    // after its children were resolved leaves them at a level computed from
-    // where it used to be. A dropdown list is raised as it opens: the list came
-    // out at 3, its item buttons at 2 and its own backdrop at 4, so the
-    // backdrop painted over the items and the hit test - which takes the
-    // highest level under the cursor - answered the list rather than a button.
+TEST_CASE("A frame raised takes what is in it along", "[widget][level]") {
+    // A dropdown list is raised as it opens, with its item buttons, whose level
+    // was set before: left behind, its backdrop painted over them and the hit
+    // test answered the list rather than a button.
     WidgetTree tree;
+    const uint32_t other = tree.create(WidgetKind::Frame, tree.uiParentId(), "Other");
+    tree.setFrameLevel(other, 7);
     const uint32_t list = tree.create(WidgetKind::Frame, tree.uiParentId(), "List");
     const uint32_t item = tree.create(WidgetKind::Frame, list, "ListItem");
-
-    tree.get(list)->level = 3;
-    tree.get(list)->levelExplicit = true;
-    // As if resolved against the list's older, lower level.
-    tree.get(item)->level = 2;
-    tree.get(item)->levelExplicit = true;
-
+    tree.setFrameLevel(item, 4);
+    const int above = tree.get(item)->effLevel - tree.get(list)->effLevel;
+    tree.raise(list);
     tree.layout(1920.0f, 1080.0f);
-
-    CHECK(tree.get(item)->effLevel > tree.get(list)->effLevel);
+    CHECK(tree.get(list)->effLevel > tree.get(other)->effLevel);
+    CHECK(tree.get(item)->effLevel == tree.get(list)->effLevel + above);
 }
 
 TEST_CASE("Ordinary children still stack one above their parent", "[widget][level]") {
@@ -4061,4 +4056,56 @@ TEST_CASE("a button's state without a picture keeps the one shown", "[widgets][b
     CHECK(shown() == pushed);
     b->pushed = false;
     CHECK(shown() == 0);
+}
+
+// 0x004910a0, 0x00491020, 0x004911b0
+TEST_CASE("a frame's level and strata are those at once, with what is in it", "[widgets][level]") {
+    WidgetTree tree;
+    const auto frame = [&](uint32_t parent) { return tree.create(WidgetKind::Frame, parent, ""); };
+    const uint32_t top = frame(tree.rootId());
+    const uint32_t a = frame(top), b = frame(a), other = frame(a);
+    const auto level = [&](uint32_t id) { return tree.get(id)->effLevel; };
+    const auto strata = [&](uint32_t id) { return tree.get(id)->effStrata; };
+    tree.setFrameLevel(top, 3);
+    CHECK(level(top) == 3);
+    CHECK(level(a) == 4);
+    CHECK(level(b) == 5);
+    const uint32_t made = frame(top);
+    CHECK(level(made) == 4);
+    // One in another strata stays where it is.
+    tree.setFrameStrata(other, FrameStrata::Low);
+    tree.setFrameStrata(made, FrameStrata::Low);
+    tree.setFrameLevel(top, 10);
+    CHECK(level(b) == 12);
+    CHECK(level(other) == 5);
+    tree.layout(800.0f, 600.0f);
+    CHECK(level(b) == 12);
+    CHECK(level(other) == 5);
+    CHECK(level(made) == 4);
+    // One below what it is in, and raised by no more than 128.
+    tree.setFrameLevel(b, 2);
+    tree.layout(800.0f, 600.0f);
+    CHECK(level(b) == 2);
+    tree.setFrameLevel(b, 1000);
+    CHECK(level(b) == 130);
+    tree.setFrameLevel(b, -5);
+    CHECK(level(b) == 0);
+    // The strata goes over every frame in it, whatever that had.
+    tree.setFrameStrata(top, FrameStrata::Dialog);
+    CHECK(strata(a) == FrameStrata::Dialog);
+    CHECK(strata(other) == FrameStrata::Dialog);
+    tree.layout(800.0f, 600.0f);
+    CHECK(strata(other) == FrameStrata::Dialog);
+    // Into another frame: its strata, and the level above it.
+    const uint32_t low = frame(tree.rootId());
+    tree.setFrameStrata(low, FrameStrata::Low);
+    tree.setFrameLevel(low, 20);
+    tree.setParent(a, low);
+    CHECK(strata(a) == FrameStrata::Low);
+    CHECK(strata(other) == FrameStrata::Low);
+    CHECK(level(a) == 21);
+    CHECK(level(other) - level(a) == 5 - 11);
+    tree.setParent(a, 0);
+    CHECK(strata(a) == FrameStrata::Medium);
+    CHECK(level(a) == 0);
 }
