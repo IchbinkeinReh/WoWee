@@ -4345,6 +4345,10 @@ void MovementHandler::loadAreaTriggerDbc() {
 
 void MovementHandler::checkAreaTriggers() {
     if (!owner_.isInWorld()) return;
+    // Nor before a teleport is answered, for which the server has the player
+    // where it was: the client answers from the teleport's own handler
+    // (0x006ed0f0), and asks for the triggers in the updates after it.
+    if (teleportAck_.pending() || worldportAck_.pending()) return;
     if (onTaxiFlight_ || taxiClientActive_) return;
     // The player's object there, and alive (0x006dbe30): not between two maps.
     const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());

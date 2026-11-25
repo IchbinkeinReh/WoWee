@@ -730,13 +730,36 @@ TEST_CASE("a trigger is told of with the place", "[replay][playtest]") {
     h.setPosition(-301.0f, -2300.0f, 10.0f);
     movement->checkAreaTriggers();
     CHECK(told() == 2);
+    // Not while a teleport waits for its answer (T280).
+    h.setPosition(-340.0f, -2300.0f, 10.0f);
+    movement->checkAreaTriggers();
+    h.setWorldEntryCallback([&](uint32_t, float, float, float, bool) { movement->holdTeleportAck(); });
+    wowee::network::Packet teleport(wowee::game::wireOpcode(Opcode::MSG_MOVE_TELEPORT_ACK));
+    teleport.writePackedGuid(Session::kPlayerGuid);
+    teleport.writeUInt32(7);
+    teleport.writeUInt32(0);
+    teleport.writeUInt16(0);
+    teleport.writeUInt32(1000);
+    const glm::vec3 wire = wowee::core::coords::canonicalToServer(glm::vec3(-301.0f, -2300.0f, 10.0f));
+    teleport.writeFloat(wire.x);
+    teleport.writeFloat(wire.y);
+    teleport.writeFloat(wire.z);
+    teleport.writeFloat(1.0f);
+    teleport.writeUInt32(0);
+    s.receive(teleport);
+    h.setWorldEntryCallback({});
+    movement->checkAreaTriggers();
+    CHECK(told() == 2);
+    CHECK(movement->releaseTeleportAck());
+    movement->checkAreaTriggers();
+    CHECK(told() == 3);
     // Not the dead.
     h.setPosition(-340.0f, -2300.0f, 10.0f);
     movement->checkAreaTriggers();
     s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 0}}));
     h.setPosition(-301.0f, -2300.0f, 10.0f);
     movement->checkAreaTriggers();
-    CHECK(told() == 2);
+    CHECK(told() == 3);
 }
 
 TEST_CASE("a trigger's box is turned by its yaw", "[replay][playtest]") {
