@@ -18783,18 +18783,12 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
         if (b.down && !buttonDown_[i]) {
             buttonDown_[i] = true;
             pressedWid_[i] = clickOwnerOf(hit, b.name);
-            // Bring the window to the front, the way clicking one does in WoW.
-            // The nearest frame at or above what was hit that asked to be
-            // toplevel - a click lands on a button inside the window, not on
-            // the window itself, so raising only what was hit would raise
-            // nothing. Done on the press so the frame is already in front
-            // while the click is still being held.
-            for (uint32_t id = hit; id != 0;) {
-                const auto* cand = widgets_.get(id);
-                if (!cand) break;
-                if (cand->topLevel) { widgets_.raise(id); break; }
-                id = cand->parent;
-            }
+            // Bring the window to the front, the way clicking one does in WoW:
+            // the nearest frame at or above what was hit that asked to be
+            // toplevel (raise) - a click lands on a button inside the window,
+            // not on the window itself. Done on the press so the frame is
+            // already in front while the click is still being held.
+            widgets_.raise(hit);
             // Clicking a box is how you type into one.
             //
             // The nearest edit box at or above what was hit, because a click

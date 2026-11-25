@@ -687,26 +687,54 @@ void WidgetTree::settleLevels(const Widget& parent) {
     }
 }
 
+bool WidgetTree::covered(uint32_t id) {
+    // 0x00494d20: some frame that is up in the same strata, at the frame's
+    // level or over it, not itself nor anything inside it, has a rect that
+    // meets the frame's.
+    const Widget* w = get(id);
+    if (!w) return false;
+    resolveWidget(id);
+    const float left = w->left, bottom = w->bottom, right = left + w->rectW, top = bottom + w->rectH;
+    const int level = w->effLevel;
+    const FrameStrata strata = w->effStrata;
+    for (uint32_t other = 1; other < widgets_.size(); ++other) {
+        const Widget& o = widgets_[other];
+        if (other == id || o.kind != WidgetKind::Frame || o.effStrata != strata || o.effLevel < level) continue;
+        // One with no place has no rect.
+        if (other == rootId_ || other == uiParentId_ || o.anchors.empty() || !o.shown || !shownNow(other)) continue;
+        bool inside = false;
+        for (uint32_t up = o.parent; up != 0 && !inside; up = widgets_[up].parent) inside = up == id;
+        if (inside) continue;
+        resolveWidget(other);
+        const Widget& r = widgets_[other];
+        if (std::max(left, r.left) < std::min(right, r.left + r.rectW) &&
+            std::max(bottom, r.bottom) < std::min(top, r.bottom + r.rectH)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void WidgetTree::raise(uint32_t id) {
+    // 0x004951a0: the frame itself or the first one it is in that is toplevel,
+    // and nothing where none is.
+    for (const Widget* at = get(id); at && !at->topLevel; at = get(id)) {
+        id = at->parent;
+        if (id == 0) return;
+    }
     Widget* w = get(id);
-    if (!w) return;
-    // The highest of the *others*, not of everything including this frame.
-    //
-    // Seeded with w->effLevel, a frame already on top still came out one
-    // higher, so every call added one whether or not anything was above it -
-    // and ShowUIPanel raises on every panel open. Levels ratcheted all session:
-    // a quest frame that starts at 3 was found at 344 in a play session, and
-    // two frames raising alternately climb without bound.
+    if (!w || !covered(id)) return;
+    // Over the highest of its strata that is up: a level past all there are
+    // (+8 of the strata, the levels frames have come up at). Only what something covers goes there, so a
+    // frame on top stays at its level however often it is raised: ShowUIPanel
+    // raises on every panel it opens, and a quest frame that starts at 3 was
+    // found at 344. Not done: 0x00495060, which closes the gaps between the
+    // levels first.
     int highest = 0;
     for (const Widget& other : widgets_) {
-        if (other.id == 0 || other.id == id) continue;
-        if (other.effStrata != w->effStrata) continue;
-        if (other.effLevel > highest) highest = other.effLevel;
+        if (other.id == 0 || other.kind != WidgetKind::Frame || other.effStrata != w->effStrata) continue;
+        if (other.effLevel > highest && other.shown && shownNow(other.id)) highest = other.effLevel;
     }
-    // Already above everything: raising is what was asked for and it is
-    // already true, so leave the level alone. Raise has to be idempotent or
-    // repeating it is a slow leak.
-    if (w->effLevel > highest) return;
     // Explicit from here on, or the next layout would recompute it from the
     // parent and undo the raise immediately.
     setLevel(id, highest + 1);

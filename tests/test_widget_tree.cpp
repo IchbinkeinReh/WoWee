@@ -21,6 +21,17 @@ using namespace wowee::ui;
 namespace {
 constexpr float kScreenW = 1024.0f;
 constexpr float kScreenH = 768.0f;
+
+// A window as raising knows one: toplevel, with a place of its own.
+void asWindow(WidgetTree& tree, uint32_t id) {
+    Widget* w = tree.get(id);
+    w->topLevel = true;
+    w->width = w->height = 100.0f;
+    Anchor p;
+    p.point = "CENTER";
+    p.relativePoint = "CENTER";
+    if (w->anchors.empty()) tree.addPoint(id, p);
+}
 }
 
 TEST_CASE("Anchor point names resolve to rect fractions", "[widget][anchor]") {
@@ -1332,6 +1343,8 @@ TEST_CASE("Raise puts a frame in front of its strata", "[widget][layout]") {
     Anchor p; p.point = "CENTER"; p.relativePoint = "CENTER";
     tree.addPoint(a, p);
     tree.addPoint(b, p);
+    asWindow(tree, a);
+    asWindow(tree, b);
     tree.layout(kScreenW, kScreenH);
     REQUIRE(tree.get(a)->effLevel == tree.get(b)->effLevel);
 
@@ -1362,6 +1375,8 @@ TEST_CASE("Raising does not cross a strata boundary", "[widget][layout]") {
     tree.get(low)->strataExplicit  = true;
     tree.get(high)->strata = FrameStrata::Tooltip;
     tree.get(high)->strataExplicit = true;
+    asWindow(tree, low);
+    asWindow(tree, high);
     tree.layout(kScreenW, kScreenH);
 
     tree.raise(low);
@@ -1490,6 +1505,8 @@ TEST_CASE("Raising a window carries its regions with it", "[widget][layout]") {
     tree.addPoint(label, p);
     const uint32_t other = tree.create(WidgetKind::Frame, tree.root(), "Other");
     tree.addPoint(other, p);
+    asWindow(tree, win);
+    asWindow(tree, other);
     tree.layout(kScreenW, kScreenH);
 
     tree.raise(win);
@@ -1509,6 +1526,9 @@ TEST_CASE("A child with its own level still follows when the parent is raised",
     const uint32_t inner = tree.create(WidgetKind::Frame, win, "Inner");
     Anchor p; p.point = "CENTER"; p.relativePoint = "CENTER";
     tree.addPoint(win, p);
+    const uint32_t other = tree.create(WidgetKind::Frame, tree.root(), "Other");
+    asWindow(tree, win);
+    asWindow(tree, other);
     tree.addPoint(inner, p);
     tree.layout(kScreenW, kScreenH);
     // What RaiseFrameLevelByTwo does.
@@ -2308,6 +2328,10 @@ TEST_CASE("Raise and Lower are idempotent", "[widget][level]") {
     const uint32_t root = tree.create(WidgetKind::Frame, 0, "Root");
     const uint32_t a = tree.create(WidgetKind::Frame, root, "A");
     const uint32_t b = tree.create(WidgetKind::Frame, root, "B");
+    asWindow(tree, root);
+    tree.get(root)->topLevel = false;
+    asWindow(tree, a);
+    asWindow(tree, b);
     tree.layout(1920.0f, 1080.0f);
 
     tree.raise(a);
@@ -3982,9 +4006,12 @@ TEST_CASE("a frame's level before the first layout is the one after it", "[widge
 // And raised twice before a layout, a frame took what is inside further than itself.
 TEST_CASE("a frame raised twice before a layout keeps what is inside where it is", "[widget][framelevel]") {
     WidgetTree tree;
+    tree.noteScreenSize(1024.0f, 768.0f);
     const uint32_t other = tree.create(WidgetKind::Frame, tree.root(), "Other");
     tree.setLevel(other, 40);
     const uint32_t win = tree.create(WidgetKind::Frame, tree.root(), "MirrorTimer1");
+    asWindow(tree, other);
+    asWindow(tree, win);
     const uint32_t bar = tree.create(WidgetKind::Frame, win, "MirrorTimer1StatusBar");
     const uint32_t text = tree.create(WidgetKind::FontString, win, "MirrorTimer1Text");
     tree.setLevel(bar, tree.get(bar)->effLevel - 1);
@@ -4077,4 +4104,77 @@ TEST_CASE("a frame with no parent is at the bottom, and SetParent sets the level
     CHECK(tree.get(win)->effLevel == 0);
     CHECK(tree.get(bar)->effLevel == 0);
     CHECK(tree.get(deep)->effLevel == 1);
+}
+
+// P74: two toplevel windows in one place stood in one another; 0x004918f0 raises one that comes
+// up, 0x004951a0 where something covers it (0x00494d20), and Frame:Raise() is the same.
+TEST_CASE("a toplevel window comes up in front of what covers it", "[widget][framelevel][raise]") {
+    WidgetTree tree;
+    tree.noteScreenSize(1024.0f, 768.0f);
+    const auto made = [&](uint32_t parent, const char* name, float x, bool topLevel, bool shown) {
+        const uint32_t id = tree.create(WidgetKind::Frame, parent, name);
+        Widget* w = tree.get(id);
+        w->width = w->height = 100.0f;
+        w->topLevel = topLevel;
+        w->shown = shown;
+        Anchor p;
+        p.point = "CENTER";
+        p.relativePoint = "CENTER";
+        p.x = x;
+        tree.addPoint(id, p);
+        return id;
+    };
+    const uint32_t ui = made(0, "UIParent", 0.0f, false, true);
+    const uint32_t help = made(ui, "HelpFrame", 0.0f, true, true);
+    const uint32_t inHelp = made(help, "HelpFrameTab", 0.0f, false, true);
+    const uint32_t far = made(ui, "Far", 400.0f, true, false);
+    const uint32_t pvp = made(ui, "PVPFrame", 10.0f, true, false);
+    const uint32_t inPvp = made(pvp, "PVPFrameTab", 0.0f, true, true);
+    const uint32_t plain = made(ui, "Plain", 10.0f, false, false);
+    tree.layout(1024.0f, 768.0f);
+    const auto level = [&](uint32_t id) { return tree.get(id)->effLevel; };
+    std::vector<uint32_t> told;
+    const auto show = [&](uint32_t id) {
+        tree.get(id)->shown = true;
+        tree.showNow(id, [&](uint32_t up) { told.push_back(up); });
+    };
+    const auto hide = [&](uint32_t id) {
+        tree.get(id)->shown = false;
+        tree.hideNow(id, [](uint32_t) {});
+    };
+    show(help);  // already up as made: told, and nothing covers it but what is in it
+    REQUIRE(level(help) == 1);
+
+    show(pvp);
+    CHECK(level(pvp) > level(inHelp));
+    CHECK(level(inPvp) > level(pvp));
+    const int front = level(pvp);
+    // Nothing covers it now: shown again it stays where it is.
+    hide(pvp);
+    show(pvp);
+    CHECK(level(pvp) == front);
+    // Another place, another strata, or no window: none is moved.
+    show(far);
+    CHECK(level(far) == 1);
+    show(plain);
+    CHECK(level(plain) == 1);
+    tree.raise(plain);
+    CHECK(level(plain) == 1);
+    tree.get(help)->strata = FrameStrata::Dialog;
+    tree.get(help)->strataExplicit = true;
+    tree.layout(1024.0f, 768.0f);
+    tree.raise(help);
+    CHECK(level(help) == 1);
+    tree.get(help)->strataExplicit = false;
+    tree.layout(1024.0f, 768.0f);
+    // A press in what is inside it, or Raise() on that, is the window's.
+    tree.raise(inHelp);
+    CHECK(level(help) > level(inPvp));
+    CHECK(level(inHelp) == level(help) + 1);
+    // One that has nowhere to be covers nothing.
+    const uint32_t lost = tree.create(WidgetKind::Frame, ui, "Lost");
+    tree.setLevel(lost, 90);
+    const int now = level(help);
+    tree.raise(help);
+    CHECK(level(help) == now);
 }

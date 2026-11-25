@@ -1072,12 +1072,17 @@ public:
     /// Shift every anchor by the same amount, which moves the frame.
     void nudge(uint32_t id, float dx, float dy);
 
-    /// Put a frame in front of everything else in its strata.
+    /// Put a frame in front of everything else in its strata (0x004951a0):
+    /// the frame, or the first it is in, that is toplevel, where something
+    /// covers it. Frame:Raise(), a press in it and its coming up alike.
     ///
     /// Strata come first in the draw order, so this only moves the frame within
     /// its own - a DIALOG frame raised above its peers still sits under a
     /// TOOLTIP one, which is what the strata are for.
     void raise(uint32_t id);
+    /// Whether a frame that is up in the same strata, not under it and not in
+    /// it, meets its rect (0x00494d20).
+    [[nodiscard]] bool covered(uint32_t id);
     /// The reverse, for Lower().
     void lower(uint32_t id);
     /// Shift every descendant that carries its own level, so a raised window
@@ -1281,6 +1286,9 @@ private:
         // not. Those it makes are shown, and told, as they are made.
         for (size_t i = 0; (w = get(id)) != nullptr && w->toldShown && i < w->children.size(); ++i)
             comeUp(w->children[i], tell);
+        // 0x004918f0: a toplevel frame that comes up comes to the front, once
+        // what is in it is up and before its OnShow.
+        if ((w = get(id)) != nullptr && w->toldShown && w->topLevel) raise(id);
         tell(id);
     }
 
