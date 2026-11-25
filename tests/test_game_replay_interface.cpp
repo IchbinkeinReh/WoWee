@@ -132,13 +132,13 @@ TEST_CASE("the wheel reaches the list under its rows", "[replay][interface]") {
 namespace {
 
 // SMSG_ITEM_QUERY_SINGLE_RESPONSE as 0x0098d910 reads it, every number 0.
-void answerItem(Session& s, uint32_t entry, const char* name) {
+void answerItem(Session& s, uint32_t entry, const char* name, uint32_t sellPrice = 0) {
     wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ITEM_QUERY_SINGLE_RESPONSE));
     p.writeUInt32(entry);
     for (int i = 0; i < 3; ++i) p.writeUInt32(0);
     p.writeString(name);
     for (int i = 0; i < 3; ++i) p.writeString("");
-    for (int i = 0; i < 160; ++i) p.writeUInt32(0);
+    for (int i = 0; i < 160; ++i) p.writeUInt32(i == 5 ? sellPrice : 0);
     s.receive(p);
 }
 
@@ -287,6 +287,49 @@ TEST_CASE("the socketing window describes the item itself", "[replay][interface]
     CHECK(all.find("Light-Touched Breastplate of the Gorilla|") == 0);
     CHECK(all.find("Soulbound|") == std::string::npos);
     CHECK(all.find("120") == std::string::npos);
+}
+
+// T282: the enchants' walk of 0x006277f0 is before the price, which FrameXML hangs on the last
+// line there is then; what an item rolled came after it, and after OnTooltipSetItem.
+TEST_CASE("what an item rolled is before its price", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    rollsGorilla(s);
+    answerItem(s, 24021, "Light-Touched Breastplate", 163793);
+    wowee::game::ItemDef item;
+    item.guid = 0x4000000000000777ull;
+    item.itemId = 24021;
+    item.name = "Light-Touched Breastplate";
+    item.stackCount = 1;
+    item.randomPropertyId = -24;
+    s.handler().getInventory().setBackpackSlot(3, item);
+    s.handler().onlineItemsRef()[item.guid].entry = 24021;
+    ui.run("ITEM_MOD_STRENGTH = '%c%d Strength' tip = CreateFrame('GameTooltip', 'PlayRollTip', UIParent) "
+           "tip:SetOwner(UIParent, 'ANCHOR_NONE') "
+           "tip:SetScript('OnTooltipAddMoney', function(self, m) money, lines = m, self:NumLines() end) "
+           "tip:SetScript('OnTooltipSetItem', function(self) ended = self:NumLines() end) ");
+    const auto* w = ui.engine.widgets().findByName("PlayRollTip");
+    REQUIRE(w);
+    const auto text = [&] {
+        std::string all;
+        for (const auto& line : w->tooltipLines) all += line.left + "|";
+        return all;
+    };
+    for (const char* shown : {"tip:SetBagItem(0, 4)", "tip:SetHyperlink('item:24021:0:0:0:0:0:-24:35')"}) {
+        ui.run(std::string("money, lines, ended = nil tip:SetOwner(UIParent, 'ANCHOR_NONE') ") + shown);
+        INFO(shown << " " << text());
+        CHECK(text().find("Light-Touched Breastplate of the Gorilla|") == 0);
+        CHECK(text().find("17 Strength|") != std::string::npos);
+        CHECK(ui.is("money == 163793 and lines == tip:NumLines() and ended == lines"));
+    }
+    // A second time it is named once, and another item is not.
+    ui.run("tip:SetBagItem(0, 4) tip:SetBagItem(0, 4)");
+    CHECK(text().find("of the Gorilla of") == std::string::npos);
+    answerItem(s, 24022, "Scale Leggings", 5);
+    ui.run("tip:SetOwner(UIParent, 'ANCHOR_NONE') tip:SetHyperlink('item:24022:0:0:0:0:0:0:0')");
+    CHECK(text().find("Scale Leggings|") == 0);
+    CHECK(text().find("Strength") == std::string::npos);
 }
 
 // P61: 0x005980d0 goes by the slot an item takes, not by its kind.

@@ -3630,8 +3630,18 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
 static void awaitSetPieces(lua_State* L, game::GameHandler* gh, uint32_t itemId);
 static bool fillTalentTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                               const wowee::addons::TalentTooltipFacts& f);
-static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
-                               const game::ItemDef& item);
+static void putTooltipRoll(wowee::ui::Widget* w, game::GameHandler* gh, uint8_t parts);
+template <typename Fill>
+static bool fillWithRoll(wowee::ui::Widget* w, game::GameHandler* gh, const wowee::ui::Widget::TooltipRoll& roll,
+                         Fill&& fill) {
+    w->tooltipRoll = roll;
+    const bool filled = fill();
+    // The short builder, of an item not known yet, puts none of it in.
+    if (filled) putTooltipRoll(w, gh, wowee::ui::Widget::TooltipRoll::All);
+    w->tooltipRoll.reset();
+    return filled;
+}
+static wowee::ui::Widget::TooltipRoll rollOf(game::GameHandler* gh, const game::ItemDef& item, uint64_t itemGuid);
 static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item);
 
 /// One spell tooltip, for every path that shows one.
@@ -4931,15 +4941,16 @@ static int setHyperlink(lua_State* L, bool again) {
         // before saying ITEM_RANDOM_ENCHANT for the template.
         lua_pushboolean(L, linkRolled ? 1 : 0);
         lua_setfield(L, 1, "__linkRolled");
-        filled = fillItemTooltipById(L, gh, id, nullptr, &linkGems);
-        awaitSetPieces(L, gh, id);
-        lua_pushnil(L);
-        lua_setfield(L, 1, "__linkRolled");
-        if (filled) appendEnchantLineById(w, gh, enchantId);
         // Its name and its stats with what it rolled: 0x006277f0 is given the
         // property and the seed whatever names the item - a letter's
         // attachment (0x0062f9e0, +0x498 and +0x49c), a roll, a link in chat.
-        if (filled) appendRandomSuffix(w, gh, rolled);
+        rolled.itemId = id;
+        wowee::ui::Widget::TooltipRoll roll = rollOf(gh, rolled, 0);
+        roll.permanentEnchant = enchantId;
+        filled = fillWithRoll(w, gh, roll, [&] { return fillItemTooltipById(L, gh, id, nullptr, &linkGems); });
+        awaitSetPieces(L, gh, id);
+        lua_pushnil(L);
+        lua_setfield(L, 1, "__linkRolled");
         // Asked for whether it was found or not: the answer is what turns a
         // name into a tooltip, and the miss is exactly when it is needed.
         gh->ensureItemInfo(id);
@@ -6765,18 +6776,27 @@ static int lua_WoweeTooltipItemBuilt(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t itemId = static_cast<uint32_t>(luaL_optnumber(L, 3, 0));
     if (!w || !gh || !lua_istable(L, 1)) { lua_pushboolean(L, 0); return 1; }
+    // What was held for it (SetBagItem), as far as the builder has not put it in.
+    const auto end = [&] {
+        if (w->tooltipRoll && w->tooltipRoll->itemId == itemId)
+            putTooltipRoll(w, gh, wowee::ui::Widget::TooltipRoll::All);
+        w->tooltipRoll.reset();
+    };
     if (lua_toboolean(L, 2)) {
+        end();
         fireTooltipSetItem(L);
         lua_pushboolean(L, 1);
         return 1;
     }
     if (itemId == 0) { lua_pushboolean(L, 0); return 1; }
     if (fillItemTooltipById(w, gh, itemId)) {
+        end();
         noteTooltipItem(L, itemId);
         fireTooltipSetItem(L);
         lua_pushboolean(L, 1);
         return 1;
     }
+    w->tooltipRoll.reset();
     showItemRetrieving(L, w, gh, itemId, false);
     lua_pushboolean(L, 0);
     return 1;
@@ -6806,98 +6826,74 @@ int lua_Tooltip_SetAuctionItem(lua_State* L) {
     // seventeenth argument, as SetMerchantItem does.
     lua_pushboolean(L, 1);
     lua_setglobal(L, "__WoweeTooltipNoPrice");
-    const bool filled = fillItemTooltipById(L, gh, row.itemEntry);
+    // The suffix it rolled, which for a ring is usually all of its stats: the row's id alone is
+    // the plain base. The id is signed there: a suffix is negative.
+    game::ItemDef def;
+    def.itemId           = row.itemEntry;
+    def.randomPropertyId = static_cast<int32_t>(row.randomPropertyId);
+    def.suffixFactor     = row.suffixFactor;
+    const bool filled = fillWithRoll(w, gh, rollOf(gh, def, 0),
+                                     [&] { return fillItemTooltipById(L, gh, row.itemEntry); });
     lua_pushnil(L);
     lua_setglobal(L, "__WoweeTooltipNoPrice");
-    if (filled) {
-        // The suffix it rolled, which for a ring is usually all of its stats.
-        //
-        // The row was being described by its item id alone, and a suffixed
-        // item's id is the plain base: "Ring of the Whale" is Ring plus a
-        // suffix, and the base has no stats at all. So the tooltip named an
-        // item with nothing on it - reported as rings in the auction house
-        // missing their stats, which is exactly the ones a suffix is on.
-        //
-        // Both halves come off the auction row, which has carried them since
-        // it was parsed, and the id is signed there: a suffix is negative.
-        game::ItemDef def;
-        def.itemId           = row.itemEntry;
-        def.randomPropertyId = static_cast<int32_t>(row.randomPropertyId);
-        def.suffixFactor     = row.suffixFactor;
-        appendRandomSuffix(w, gh, def);
-    }
     luaPushOneOrNil(L, filled ? 1 : 0);
     return 1;
 }
 
-/// The temporary enchantment on one equipped item, as its own line.
-///
-/// A sharpening stone, an oil, a poison or a shaman's imbue live in the item's
-/// *temporary* enchantment slot rather than in any aura, so nothing that reads
-/// the player's buffs can see one. FrameXML's TemporaryEnchantFrame shows the
-/// weapon's own icon for it and asks GameTooltip:SetInventoryItem for the text
-/// - so without this the button came up describing the weapon's built-in
-/// chance-on-hit and said nothing about the stone that put it there, which is
-/// exactly how it was reported.
-///
-/// Green, and after the item's own lines, which is where the real client puts
-/// it. Nothing is added when there is no temporary enchant, so a plain weapon
-/// reads as it did.
-static void appendEnchantLines(wowee::ui::Widget* w, game::GameHandler* gh,
-                               uint64_t itemGuid) {
-    if (!w || !gh || itemGuid == 0) return;
-    const auto [permanentId, temporaryId] = gh->getItemEnchantIds(itemGuid);
-
-    // Green, in the enchant walk where the client writes them - the
-    // permanent, then the temporary, before the sockets (0x006277f0) - at
-    // the place the builder marked, else after the item's own lines.
-    const size_t before = w->tooltipLines.size();
-    appendEnchantLineById(w, gh, permanentId);
-    appendEnchantLineById(w, gh, temporaryId);
-    const int at = w->tooltipEnchantAt;
-    if (at >= 0 && static_cast<size_t>(at) < before) {
-        std::rotate(w->tooltipLines.begin() + at, w->tooltipLines.begin() + static_cast<std::ptrdiff_t>(before),
-                    w->tooltipLines.end());
-    }
-    w->tooltipEnchantAt = -1;
+/// What an item has beside its template: its enchants - a sharpening stone, an oil, a poison
+/// live in the temporary one, which nothing that reads the player's buffs can see - and what it
+/// rolled. `itemGuid` 0 has no enchants.
+static wowee::ui::Widget::TooltipRoll rollOf(game::GameHandler* gh, const game::ItemDef& item, uint64_t itemGuid) {
+    wowee::ui::Widget::TooltipRoll roll;
+    roll.itemId = item.itemId;
+    roll.randomPropertyId = item.randomPropertyId;
+    roll.suffixFactor = item.suffixFactor;
+    if (gh && itemGuid != 0) std::tie(roll.permanentEnchant, roll.temporaryEnchant) = gh->getItemEnchantIds(itemGuid);
+    return roll;
 }
 
-/// __WoweeTooltipMarkEnchantSpot(tooltip): the builder's mark, where the
-/// sockets are about to start.
-int lua_Tooltip_MarkEnchantSpot(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->tooltipEnchantAt = static_cast<int>(w->tooltipLines.size());
-    return 0;
+static void appendRandomStats(wowee::ui::Widget* w, game::GameHandler* gh, const wowee::ui::Widget::TooltipRoll& item);
+
+/// Puts parts of the roll in at the tooltip's end, each once.
+static void putTooltipRoll(wowee::ui::Widget* w, game::GameHandler* gh, uint8_t parts) {
+    using Roll = wowee::ui::Widget::TooltipRoll;
+    if (!w || !gh || !w->tooltipRoll) return;
+    Roll& roll = *w->tooltipRoll;
+    const uint8_t now = static_cast<uint8_t>(parts & ~roll.put);
+    roll.put = static_cast<uint8_t>(roll.put | parts);
+    if ((now & Roll::Title) && roll.randomPropertyId != 0 && !w->tooltipLines.empty()) {
+        // "Bracers of Arcane Protection" is one item to a player and a base item plus an
+        // ItemRandomSuffix.dbc row here.
+        const std::string suffix = gh->getRandomPropertyName(roll.randomPropertyId);
+        // The title as the builder has just written it, or at the end the first line.
+        std::string& title = parts == Roll::Title ? w->tooltipLines.back().left : w->tooltipLines.front().left;
+        if (!suffix.empty()) title += " " + suffix;
+    }
+    if (now & Roll::Enchants) {
+        // Green, the permanent, then the temporary, before the sockets.
+        appendEnchantLineById(w, gh, roll.permanentEnchant);
+        appendEnchantLineById(w, gh, roll.temporaryEnchant);
+    }
+    if (now & Roll::Stats) appendRandomStats(w, gh, roll);
 }
 
-/// The random suffix an instance rolled, on top of a tooltip built from the
-/// item's template.
-///
-/// "Bracers of Arcane Protection" is one item to a player and a base item plus
-/// an ItemRandomSuffix.dbc row here. Both bag and paperdoll tooltips are built
-/// from an item *id* - _WoweePopulateItemTooltip calls GetItemInfo, which
-/// answers for the template - so the name came out as "Bracers" and the stats
-/// the suffix rolled did not appear at all. Neither is reachable from an id,
-/// which is the same gap appendEnchantLines fills for enchants.
-///
-/// The stats are asked for again rather than read off the ItemDef. buildItemDef
-/// folds them into the base figures, and those are not what the tooltip is
-/// showing: it is showing the template's.
-static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
-                               const game::ItemDef& item) {
-    if (!w || !gh || item.randomPropertyId == 0 || w->tooltipLines.empty()) return;
+/// __WoweeTooltipRoll(tooltip, part, itemId): the builder is where that part goes. Answers
+/// whether the item rolled anything.
+int lua_Tooltip_Roll(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const auto itemId = static_cast<uint32_t>(luaL_optnumber(L, 3, 0));
+    const bool held = w && w->tooltipRoll && w->tooltipRoll->itemId == itemId;
+    if (held) putTooltipRoll(w, gh, static_cast<uint8_t>(luaL_optnumber(L, 2, 0)));
+    lua_pushboolean(L, held && w->tooltipRoll->randomPropertyId != 0 ? 1 : 0);
+    return 1;
+}
 
-    const std::string suffix = gh->getRandomPropertyName(item.randomPropertyId);
-    if (!suffix.empty()) {
-        // Appended once. A tooltip is refreshed in place for as long as the
-        // pointer stays on the slot, and only SetText clears the lines, so a
-        // blind append would grow the name on every frame.
-        std::string& title = w->tooltipLines.front().left;
-        const bool already = title.size() >= suffix.size() &&
-            title.compare(title.size() - suffix.size(), suffix.size(), suffix) == 0;
-        if (!already) title += " " + suffix;
-    }
-
-    // After the item's own lines.
+/// The stats an item rolled. Asked for again rather than read off the ItemDef: buildItemDef
+/// folds them into the base figures, and those are not what the tooltip is showing: it is
+/// showing the template's.
+static void appendRandomStats(wowee::ui::Widget* w, game::GameHandler* gh, const wowee::ui::Widget::TooltipRoll& item) {
+    if (item.randomPropertyId == 0) return;
     // A suffix's points from the item's own level, quality and slot, as the
     // client works them out (0x007089b0), where the tables answer.
     const uint32_t points = item.randomPropertyId < 0
@@ -6949,52 +6945,17 @@ static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item
     w->tooltipLines.push_back(std::move(line));
 }
 
-/// _WoweeAppendItemEnchants(self, bag, slot) - the enchants on a bag item.
-///
-/// The bag tooltip is built in Lua and had no way to reach an item's GUID,
-/// which is the only thing the enchant is keyed by - so a bag item never
-/// mentioned its enchant even though the paperdoll's did.
-int lua_Tooltip_AppendItemEnchants(lua_State* L) {
+/// _WoweeHoldItemRoll(self, bag, slot) - what the item of a bag has beside its template, for the
+/// builder, which is about to be called (SetBagItem).
+int lua_Tooltip_HoldItemRoll(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    if (!w || !gh) return 0;
     const int bag = static_cast<int>(luaL_optnumber(L, 2, -1));
     const int slot = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (slot < 1) return 0;
-    // The suffix first, because it renames the line the template put at the
-    // top and the enchants below are appended after it.
-    if (const game::ItemSlot* s =
-            wowee::addons::containerItemSlot(gh->getInventory(), bag, slot);
-        s && !s->empty()) {
-        appendRandomSuffix(w, gh, s->item);
-    }
-    appendEnchantLines(w, gh, wowee::addons::containerSlotGuid(gh, bag, slot));
-    return 0;
-}
-
-/// _WoweeAppendEquippedEnchants(self, slot) - the suffix and enchants on a
-/// worn item, as _WoweeAppendItemEnchants does for one in a bag.
-///
-/// The comparison tooltips are built by _WoweePopulateItemTooltip from the worn
-/// item's id, and an id is a template. Two things live on the instance instead
-/// and so were both absent: the enchant, and the random suffix - which carries
-/// the stats as well as the name. A "Durable Belt of the Eagle" compared as a
-/// plain Durable Belt with no intellect and no stamina on it, because the
-/// template has neither and the suffix is where they are.
-int lua_Tooltip_AppendEquippedEnchants(lua_State* L) {
-    auto* w = widgetOf(L, 1);
-    auto* gh = wowee::addons::getGameHandler(L);
-    if (!w || !gh) return 0;
-    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (slot < 1) return 0;
-    // The suffix first, because it renames the line already at the top and the
-    // enchants are appended below it - the order its sibling uses.
-    if (const game::ItemSlot* s =
-            wowee::addons::inventorySlotItem(gh->getInventory(), slot);
-        s && !s->empty()) {
-        appendRandomSuffix(w, gh, s->item);
-    }
-    appendEnchantLines(w, gh, gh->getEquipSlotGuid(slot - 1));
+    if (!w || !gh || slot < 1) return 0;
+    w->tooltipRoll.reset();
+    if (const game::ItemSlot* s = wowee::addons::containerItemSlot(gh->getInventory(), bag, slot); s && !s->empty())
+        w->tooltipRoll = rollOf(gh, s->item, wowee::addons::containerSlotGuid(gh, bag, slot));
     return 0;
 }
 
@@ -7025,21 +6986,23 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
         game::ItemLinkInstance record;
         uint32_t entry = gh->inspectedItemRecord(guid, slot - 1, record);
         if (entry == 0) gh->visibleItemRecord(guid, slot - 1, entry, record);
-        if (!fillItemTooltipById(L, gh, entry)) {
-            luaPushOneOrNil(L, 0);
-            return 1;
-        }
         // The suffix and its stat lines, from the row's own property and seed -
         // the pair the tooltip feeder reads at record+0x3c and record+0x40.  The
         // word there is a *signed* one for the tooltip (movswl of record+0x3c at
         // 0x0062e424) where the link read it with movzwl, so a prefix id names
         // itself here and prints as 655xx in the link.  That is not an
-        // inconsistency worth inventing; it is what the two readers do.
+        // inconsistency worth inventing; it is what the two readers do. And its
+        // enchant (+0x0c) and gems, as a link has them.
         game::ItemDef def;
         def.itemId = entry;
         def.randomPropertyId = static_cast<int32_t>(static_cast<int16_t>(record.randomPropertyId));
         def.suffixFactor = record.seed;
-        appendRandomSuffix(w, gh, def);
+        wowee::ui::Widget::TooltipRoll roll = rollOf(gh, def, 0);
+        roll.permanentEnchant = record.enchantId;
+        if (!fillWithRoll(w, gh, roll, [&] { return fillItemTooltipById(L, gh, entry, nullptr, &record.gems); })) {
+            luaPushOneOrNil(L, 0);
+            return 1;
+        }
         luaPushOneOrNil(L, 1);
         return 1;
     }
@@ -7059,22 +7022,20 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     // floor: the slot knows the name and quality even for an entry no
     // GetItemInfo has arrived for, and answering nothing there would be worse
     // than answering briefly.
-    if (!fillItemTooltipById(L, gh, s.item.itemId, &s.item)) {
+    // Equipment only: the guid list behind it is one per equipped slot, and a
+    // bank slot's id would read off the end of it.
+    const auto roll = rollOf(gh, s.item, slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS)
+                                             ? gh->getEquipSlotGuid(slot - 1) : 0);
+    if (!fillWithRoll(w, gh, roll, [&] { return fillItemTooltipById(L, gh, s.item.itemId, &s.item); })) {
+        // It has named the suffix and has its stats itself.
         fillItemTooltip(w, s.item, gh);
+        appendEnchantLineById(w, gh, roll.permanentEnchant);
+        appendEnchantLineById(w, gh, roll.temporaryEnchant);
         noteTooltipItem(L, s.item.itemId);
         fireTooltipSetItem(L);
         // Durability lives on the instance. The Lua builder puts it in its
         // place, before the requirements; this short fallback ends with it.
         appendDurabilityLine(w, s.item);
-    } else {
-        // Only on the by-id path. fillItemTooltip builds from the instance and
-        // has named the suffix itself.
-        appendRandomSuffix(w, gh, s.item);
-    }
-    // Equipment only: the guid list behind it is one per equipped slot, and a
-    // bank slot's id would read off the end of it.
-    if (slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS)) {
-        appendEnchantLines(w, gh, gh->getEquipSlotGuid(slot - 1));
     }
     // hasItem, then whether a cooldown is running on it (the paperdoll keeps
     // refreshing the tooltip while one is), then what repairing it costs
@@ -7148,11 +7109,8 @@ int lua_Tooltip_SetSocketedItem(lua_State* L) {
     const uint64_t guid = gh->getSocketItemGuid();
     const auto sockets = wowee::addons::socketsAsTheyWouldBe(gh);
     const auto* item = wowee::addons::heldItem(gh, guid);
-    const bool filled = fillItemTooltipById(L, gh, gh->getSocketItemId(), item, &sockets);
-    if (filled && item) {
-        appendRandomSuffix(w, gh, *item);
-        appendEnchantLines(w, gh, guid);
-    }
+    const auto fill = [&] { return fillItemTooltipById(L, gh, gh->getSocketItemId(), item, &sockets); };
+    const bool filled = item ? fillWithRoll(w, gh, rollOf(gh, *item, guid), fill) : fill();
     lua_pushboolean(L, filled ? 1 : 0);
     return 1;
 }
@@ -7317,16 +7275,14 @@ int lua_Tooltip_SetGuildBankItem(lua_State* L) {
         // With the slot's count (0x006304a0, +0x4b8).
         lua_pushnumber(L, it.stackCount);
         lua_setglobal(L, "__WoweeTooltipItemCount");
-        const bool filled = fillItemTooltipById(L, gh, it.itemEntry);
+        // With what it rolled (+0x498).
+        game::ItemDef rolled;
+        rolled.itemId = it.itemEntry;
+        rolled.randomPropertyId = static_cast<int32_t>(it.randomPropertyId);
+        const bool filled = fillWithRoll(w, gh, rollOf(gh, rolled, 0),
+                                         [&] { return fillItemTooltipById(L, gh, it.itemEntry); });
         lua_pushnil(L);
         lua_setglobal(L, "__WoweeTooltipItemCount");
-        // With what it rolled (+0x498).
-        if (filled) {
-            game::ItemDef rolled;
-            rolled.itemId = it.itemEntry;
-            rolled.randomPropertyId = static_cast<int32_t>(it.randomPropertyId);
-            appendRandomSuffix(w, gh, rolled);
-        }
         lua_pushboolean(L, filled ? 1 : 0);
         return 1;
     }
@@ -12699,8 +12655,7 @@ void LuaEngine::registerCoreAPI() {
         {"SetFont",         lua_FontString_SetFont},
         {"SetTalent",       lua_Tooltip_SetTalent},
         {"SetAuctionItem",  lua_Tooltip_SetAuctionItem},
-        {"_WoweeAppendItemEnchants", lua_Tooltip_AppendItemEnchants},
-        {"_WoweeAppendEquippedEnchants", lua_Tooltip_AppendEquippedEnchants},
+        {"_WoweeHoldItemRoll", lua_Tooltip_HoldItemRoll},
         {"SetTradeSkillItem", lua_Tooltip_SetTradeSkillItem},
         {"SetUnit",         lua_Tooltip_SetUnit},
         {"GetUnit",         lua_Tooltip_GetUnit},
@@ -12979,8 +12934,7 @@ void LuaEngine::registerCoreAPI() {
         lua_Tooltip_SetBackpackToken, lua_Tooltip_SetGuildBankItem, lua_Tooltip_SetSpellByID,
         lua_Tooltip_SetQuestLogRewardSpell, lua_Tooltip_SetEquipmentSet,
         lua_Tooltip_SetLFGCompletionReward, lua_Tooltip_SetGlyph, lua_Tooltip_SetHyperlink, lua_Tooltip_RefillHyperlink,
-        lua_Tooltip_SetTalent, lua_Tooltip_SetAuctionItem, lua_Tooltip_AppendItemEnchants,
-        lua_Tooltip_AppendEquippedEnchants, lua_Tooltip_SetTradeSkillItem, lua_Tooltip_SetUnit,
+        lua_Tooltip_SetTalent, lua_Tooltip_SetAuctionItem, lua_Tooltip_SetTradeSkillItem, lua_Tooltip_SetUnit,
         lua_Tooltip_SetFrameStack, lua_Tooltip_SetUnitAura, lua_Tooltip_SetSendMailItem,
         lua_Tooltip_SetPetAction, lua_Tooltip_SetShapeshift, lua_Tooltip_AddFontStrings,
         lua_Tooltip_SetPossession, lua_Tooltip_SetQuestRewardSpell, lua_Tooltip_SetTotem,
@@ -14475,8 +14429,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
     lua_pushcfunction(L_, lua_Tooltip_FadeOut);
     lua_setglobal(L_, "__WoweeTooltipFadeOut");
-    lua_pushcfunction(L_, lua_Tooltip_MarkEnchantSpot);
-    lua_setglobal(L_, "__WoweeTooltipMarkEnchantSpot");
+    lua_pushcfunction(L_, lua_Tooltip_Roll);
+    lua_setglobal(L_, "__WoweeTooltipRoll");
     lua_pushcfunction(L_, lua_Tooltip_AddFontStrings);
     lua_setglobal(L_, "__WoweeTooltipAddFontStrings");
     lua_pushcfunction(L_, lua_Tooltip_SetPossession);
@@ -15357,6 +15311,11 @@ void LuaEngine::registerCoreAPI() {
         "        self:SetText(CURRENTLY_EQUIPPED or 'Currently Equipped', 0.5, 0.5, 0.5)\n"
         "        self:AddLine(name, c[1], c[2], c[3])\n"
         "    else self:SetText(name, c[1], c[2], c[3]) end\n"
+        // What the item has beside its template goes in where it belongs: its
+        // suffix here, its enchants before the sockets and what it rolled after
+        // them (the enchants' walk of 0x006277f0: 0 and 1, 2 to 6, 7 to 11).
+        "    local function roll(part) return not append and __WoweeTooltipRoll(self, part, itemId) end\n"
+        "    roll(1)\n"
         "    local data = _GetItemTooltipData(itemId)\n"
         // In the socketing window (0x006277f0's tenth argument) nothing is said of
         // what it is bound to down to its lock, of its empty sockets, its durability
@@ -15539,7 +15498,7 @@ void LuaEngine::registerCoreAPI() {
         // follows it, white or grey on its own (0x0061c0b0). The socket bonus
         // closes the block: green when every socket holds a gem of its
         // colour, grey otherwise and always on a bare template.
-        "        if inst then __WoweeTooltipMarkEnchantSpot(self) end\n"
+        "        roll(2)\n"
         "        local gems = inst and inst.gems\n"
         "        local function gemLines(g)\n"
         "            local r, gc, b = 1, 1, 1\n"
@@ -15598,7 +15557,7 @@ void LuaEngine::registerCoreAPI() {
         "        end\n"
         // A template that rolls its stats on drop, seen as a template - not
         // one held, nor a link naming its roll: ITEM_RANDOM_ENCHANT in green.
-        "        if data.randomEnchant and not inst and not rawget(self, '__linkRolled') then\n"
+        "        if not roll(4) and data.randomEnchant and not inst and not rawget(self, '__linkRolled') then\n"
         "            self:AddLine(ITEM_RANDOM_ENCHANT or '<Random enchantment>', 0, 1, 0)\n"
         "        end\n"
         // A gem's own line - what it does once socketed - white, red while
@@ -15877,8 +15836,8 @@ void LuaEngine::registerCoreAPI() {
         // are in before the OnTooltipSetItem it ends with - an addon reading
         // the tooltip from that script sees them.
         "    id = tonumber(id)\n"
+        "    self:_WoweeHoldItemRoll(bag, slot)\n"
         "    local filled = _WoweePopulateItemTooltip(self, id, _WoweeContainerItemInstance(bag, slot))\n"
-        "    if filled then self:_WoweeAppendItemEnchants(bag, slot) end\n"
         "    __WoweeTooltipItemBuilt(self, filled, id)\n"
         // As 0x0062f420 answers: whether the tooltip counts something down
         // (a cooldown running), and what repairing the item costs - the bag

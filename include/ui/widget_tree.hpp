@@ -28,6 +28,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -825,10 +826,17 @@ struct Widget {
         }
     };
     std::vector<TooltipLine> tooltipLines;
-    /// Where an item tooltip's enchants go: the line its sockets start at,
-    /// marked by the builder (0x006277f0 writes the permanent and temporary
-    /// enchants in its enchant walk, before the sockets); -1 for the end.
-    int tooltipEnchantAt = -1;
+    /// What the item an item tooltip is filled with has beside its template - its enchants and
+    /// what it rolled -, for the builder to put in where they belong (0x006277f0).
+    struct TooltipRoll {
+        enum Part : uint8_t { Title = 1, Enchants = 2, Stats = 4, All = 7 };
+        uint32_t itemId = 0;
+        uint32_t permanentEnchant = 0, temporaryEnchant = 0;
+        int32_t randomPropertyId = 0;
+        uint32_t suffixFactor = 0;
+        uint8_t put = 0;   ///< the Parts that are in
+    };
+    std::optional<TooltipRoll> tooltipRoll;
     /// Stand-ins for GameTooltipTextLeft1..N, created on demand by whatever
     /// asks to be anchored to one. FrameXML positions things against a
     /// tooltip's individual lines - SetTooltipMoney hangs the coin frame off
