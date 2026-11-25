@@ -99,6 +99,17 @@ inline void toLowerInPlace(std::string& s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 }
 
+/// The picture of an amount of money (0x007e7cc0): a pile of coins sized by it.
+inline std::string coinIconPath(int64_t copper) {
+    const char* icon = copper < 10       ? "INV_Misc_Coin_05"
+                       : copper < 100    ? "INV_Misc_Coin_06"
+                       : copper < 1000   ? "INV_Misc_Coin_03"
+                       : copper < 10000  ? "INV_Misc_Coin_04"
+                       : copper < 100000 ? "INV_Misc_Coin_01"
+                                         : "INV_Misc_Coin_02";
+    return std::string("Interface\\Icons\\") + icon;
+}
+
 /// The gems socketed into one held item, for _WoweePopulateItemTooltip's
 /// `inst` (lua_socket_api.cpp): sets `gems` (per socket index: the gem's
 /// enchant text, its skill and level requirements and its meta conditions,

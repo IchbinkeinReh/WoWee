@@ -2161,12 +2161,7 @@ static int lua_GetCoinIcon(lua_State* L) {
     // 0x00510bd0 -> 0x007e7cc0: a pile of coins sized by the amount.
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinIcon(amount)");
     const auto amount = static_cast<int32_t>(std::llround(lua_tonumber(L, 1)));
-    const char* icon = amount < 10    ? "INV_Misc_Coin_05"
-                     : amount < 100   ? "INV_Misc_Coin_06"
-                     : amount < 1000  ? "INV_Misc_Coin_03"
-                     : amount < 10000 ? "INV_Misc_Coin_04"
-                     : amount < 100000 ? "INV_Misc_Coin_01" : "INV_Misc_Coin_02";
-    lua_pushstring(L, (std::string("Interface\\Icons\\") + icon).c_str());
+    lua_pushstring(L, coinIconPath(amount).c_str());
     return 1;
 }
 
@@ -5674,14 +5669,7 @@ static int lua_GetLootSlotInfo(lua_State* L) {
         // (0x007e7d80 with "\n"), and quantity and quality both zero - the
         // loot frame draws a count over anything above one, and the copper
         // amount was drawn there.
-        const uint32_t c = static_cast<uint32_t>(loot.gold);
-        const char* coin = c < 10     ? "Interface\\Icons\\INV_Misc_Coin_05"
-                         : c < 100    ? "Interface\\Icons\\INV_Misc_Coin_06"
-                         : c < 1000   ? "Interface\\Icons\\INV_Misc_Coin_03"
-                         : c < 10000  ? "Interface\\Icons\\INV_Misc_Coin_04"
-                         : c < 100000 ? "Interface\\Icons\\INV_Misc_Coin_01"
-                                      : "Interface\\Icons\\INV_Misc_Coin_02";
-        lua_pushstring(L, coin);
+        lua_pushstring(L, coinIconPath(static_cast<int64_t>(loot.gold)).c_str());
         lua_pushstring(L, lootCoinText(loot.gold).c_str());
         lua_pushnumber(L, 0);
         lua_pushnumber(L, 0);

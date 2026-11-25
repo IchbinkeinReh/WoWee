@@ -140,13 +140,18 @@ void setCursorMoney(lua_State* L, uint64_t copper) {
     s_cursorMoney = copper;
     s_cursorMoneyGuildBank = false;
     if (copper == 0) {
-        if (s_cursorType == CursorType::MONEY) setCursorType(L, CursorType::NONE);
+        if (s_cursorType == CursorType::MONEY) {
+            setCursorType(L, CursorType::NONE);
+            wowee::ui::frameXmlSetCursorItem(std::string());
+        }
         return;
     }
     s_cursorId = 0;
     s_cursorSlot = 0;
     s_cursorBag = -1;
     setCursorType(L, CursorType::MONEY);
+    // Its picture, as an item has its own (0x005208f0 -> 0x007e7cc0).
+    wowee::ui::frameXmlSetCursorItem(coinIconPath(static_cast<int64_t>(copper)));
 }
 
 void setCursorGuildBankMoney(lua_State* L, uint64_t copper) {
