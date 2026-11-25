@@ -1015,6 +1015,30 @@ TEST_CASE("an object has the methods of its type", "[replay][interface]") {
     CHECK(ui.is("f2:PlayOwn() == f2 and b.PlayOwn == nil"));
 }
 
+// V339: and an animation those of its kind, a group and a control point theirs.
+TEST_CASE("an animation has the methods of its kind", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("function index(o) return getmetatable(o).__index end "
+           "function count(o) local n = 0 for k, v in pairs(index(o)) do n = n + 1 if type(v) ~= 'function' then n = 1000 end end "
+           "  return n end "
+           "g = CreateFrame('Frame'):CreateAnimationGroup('PlayGroup') function new(kind) return g:CreateAnimation(kind) end "
+           "a, t, r, sc, p, al = new('Animation'), new('Translation'), new('Rotation'), new('Scale'), new('Path'), new('Alpha') "
+           "cp = p:CreateControlPoint()");
+    CHECK(ui.is("count(a) == 35 and count(t) == 37 and count(r) == 41 and count(sc) == 39 and count(p) == 40 and count(al) == 37"));
+    CHECK(ui.is("count(g) == 26 and count(cp) == 9"));
+    CHECK(ui.is("a.SetOffset == nil and sc.SetOffset == nil and t.SetChange == nil and al.SetDegrees == nil and p.SetScale == nil"));
+    CHECK(ui.is("g.Resume == nil and g.SetParent == nil and g.__index == nil and a.__index == nil and a.Resume == nil"));
+    CHECK(ui.is("t.SetOffset and al.SetChange and r.SetDegrees and sc.SetScale and p.SetCurve and cp.SetOffset and true"));
+    CHECK(ui.is("index(a) ~= index(t) and index(t) == index(new('translation'))"));
+    CHECK(ui.is("a:GetObjectType() == 'Animation' and r:GetObjectType() == 'Rotation' and r:IsObjectType('animation') == 1"));
+    CHECK(ui.is("g:GetObjectType() == 'AnimationGroup' and cp:GetObjectType() == 'ControlPoint' and cp:GetParent() == p"));
+    ui.run("index(sc).PlayOwn = function() return 1 end");
+    CHECK(ui.is("sc:PlayOwn() == 1 and r.PlayOwn == nil"));
+    ui.run("other = CreateFrame('Frame'):CreateAnimationGroup() a:SetParent(other) other2 = new('Path') cp:SetParent(other2)");
+    CHECK(ui.is("a:GetParent() == other and cp:GetParent() == other2 and not pcall(cp.SetParent, cp, r)"));
+}
+
 // T278: 0x004fdbc0: what a chat line's event has.
 TEST_CASE("the client's own chat lines are from no one", "[replay][interface]") {
     Session s;

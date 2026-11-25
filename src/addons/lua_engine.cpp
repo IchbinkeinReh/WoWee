@@ -13116,7 +13116,8 @@ void LuaEngine::registerCoreAPI() {
         "    error(usage:format(tostring(self.name or '<unnamed>')), 3)\n"
         "end\n"
         "local animMeta = {}\n"
-        "animMeta.__index = animMeta\n"
+        // A table of methods for each kind (below), as each has in 12340.
+        "local kindMetas = {}\n"
         // SetDuration (0x004a5320): a number.
         "function animMeta:SetDuration(d)\n"
         "    if type(d) ~= 'number' and not tonumber(d) then animUsage(self, 'Usage: %s:SetDuration(durationSec)') end\n"
@@ -13129,8 +13130,6 @@ void LuaEngine::registerCoreAPI() {
         "    self.change = tonumber(c)\n"
         "end\n"
         "function animMeta:GetChange() return self.change end\n"
-        "function animMeta:SetFromAlpha(a) self.fromAlpha = a end\n"
-        "function animMeta:SetToAlpha(a) self.toAlpha = a end\n"
         // SetOffset (0x004a6040): two numbers.
         "function animMeta:SetOffset(x, y)\n"
         "    if not tonumber(x) or not tonumber(y) then animUsage(self, 'Usage: %s:SetOffset(x, y)') end\n"
@@ -13240,7 +13239,6 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function animMeta:GetCurve() return self.curve or 'NONE' end\n"
         "local pointMeta = {}\n"
-        "pointMeta.__index = pointMeta\n"
         // SetOffset (0x004a6980): two numbers. SetOrder (0x004a6b10 ->
         // 0x00499840): a number, held to 1 - 100, the path's points re-sorted.
         "function pointMeta:SetOffset(x, y)\n"
@@ -13260,7 +13258,6 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function pointMeta:GetOrder() return self.order or 1 end\n"
         "function pointMeta:GetParent() return self.path end\n"
-        "function pointMeta:GetRegionParent() return self.path and self.path:GetRegionParent() end\n"
         // A script object's own name (0x0048b540): $parent is the name of the first
         // above it that has one - of an animation its group, of a group its region.
         "local function ownName(name, parent)\n"
@@ -13361,14 +13358,11 @@ void LuaEngine::registerCoreAPI() {
         "    __WoweeRunScriptSlot(self, 'OnStop', true)\n"
         "    if self.group then self.group:Stop(false, self) end\n"
         "end\n"
-        "function animMeta:Resume() if self.group then self.group:Resume() end end\n"
-        "function animMeta:Finish() if self.group then self.group:Finish() end end\n"
         // GetSmoothing (0x004a5810): always a name, NONE when none was set.
         "function animMeta:GetSmoothing() return self.smoothing or 'NONE' end\n"
         "function animMeta:GetOrder() return self.order or 1 end\n"
 
         "local groupMeta = {}\n"
-        "groupMeta.__index = groupMeta\n"
         // The animations of one order set playing as that order starts, each
         // with its OnPlay (0x0049a8f0 calls 0x0049ad80 on each): the given
         // order, or the group's first (its last when playing in reverse).
@@ -13518,7 +13512,7 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function pointMeta:SetParent(p, order)\n"
         "    local path = reparent(self, p, order,\n"
-        "        function(t) return type(t) == 'table' and getmetatable(t) == animMeta and t.kind == 'Path' end,\n"
+        "        function(t) return type(t) == 'table' and getmetatable(t) == kindMetas.Path end,\n"
         "        'Path', function(a, make)\n"
         "            if make and not a.controlPoints then a.controlPoints = {} end\n"
         "            return a.controlPoints\n"
@@ -13534,7 +13528,7 @@ void LuaEngine::registerCoreAPI() {
         "    kind = type(kind) == 'string' and animKinds[kind:lower()] or 'Animation'\n"
         "    name = ownName(name, self)\n"
         "    local a = setmetatable({kind = kind, group = self, name = name,\n"
-        "                            duration = 0, order = 1, startDelay = 0}, animMeta)\n"
+        "                            duration = 0, order = 1, startDelay = 0}, kindMetas[kind])\n"
         "    table.insert(self.animations, a)\n"
         "    if name then __WoweePublish(name, a) end\n"
         "    return a\n"
@@ -13561,7 +13555,6 @@ void LuaEngine::registerCoreAPI() {
         "    if self:GetDuration() <= 0.0001 then return true end\n"
         "    return self.isPlaying ~= true and self.done == true\n"
         "end\n"
-        "function groupMeta:SetParent(p) self.parent = p end\n"
         "function groupMeta:GetParent() return self.parent end\n"
         // GetDuration (0x004a70e0, kept by 0x0049ac80): the orders one after
         // another, each as long as its longest startDelay + duration +
@@ -13694,7 +13687,6 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    __WoweeRunScriptSlot(self, 'OnPause')\n"
         "end\n"
-        "function groupMeta:Resume() self.paused = nil end\n"
 
         // Stop every group on this frame at once. A frame method rather than a
         // group one, and the only animation call FrameXML makes without
@@ -13761,6 +13753,32 @@ void LuaEngine::registerCoreAPI() {
         "    return g\n"
         "end\n"
         "mt.CreateAnimationGroup = __WoweeCreateAnimationGroup\n"
+        // Their methods, a table of its own for each kind (0x008167e0): the
+        // script object's four, an animation's 31 (0x00ac18e0), a Rotation's
+        // (0x00ac19f0), a Scale's (0x00ac1a24), a Path's (0x00ac1a74), a
+        // Translation's (0x004a6040) and an Alpha's (0x004a6da0); a control
+        // point's (0x00ac1a48) and a group's (0x00ac1ab8). One table served
+        // every kind, so a Scale had SetOffset, and what an addon put into it
+        // all of them.
+        "local object = 'GetName GetObjectType IsObjectType GetParent '\n"
+        "local animation = object .. 'GetDuration GetElapsed GetEndDelay GetMaxFramerate GetOrder GetProgress '\n"
+        "    .. 'GetProgressWithDelay GetRegionParent GetScript GetSmoothProgress GetSmoothing GetStartDelay HasScript '\n"
+        "    .. 'HookScript IsDelaying IsDone IsPaused IsPlaying IsStopped Pause Play SetDuration SetEndDelay '\n"
+        "    .. 'SetMaxFramerate SetOrder SetParent SetScript SetSmoothProgress SetSmoothing SetStartDelay Stop '\n"
+        "local ownMethods = {Animation = '', Translation = 'SetOffset GetOffset', Alpha = 'SetChange GetChange',\n"
+        "    Rotation = 'GetDegrees GetOrigin GetRadians SetDegrees SetOrigin SetRadians',\n"
+        "    Scale = 'GetOrigin GetScale SetOrigin SetScale',\n"
+        "    Path = 'CreateControlPoint GetControlPoints GetCurve GetMaxOrder SetCurve'}\n"
+        "local function methodsOf(meta, names)\n"
+        "    local methods = {}\n"
+        "    for name in names:gmatch('%S+') do methods[name] = meta[name] end\n"
+        "    return methods\n"
+        "end\n"
+        "for kind, own in pairs(ownMethods) do kindMetas[kind] = {__index = methodsOf(animMeta, animation .. own)} end\n"
+        "pointMeta.__index = methodsOf(pointMeta, object .. 'GetOffset GetOrder SetOffset SetOrder SetParent')\n"
+        "groupMeta.__index = methodsOf(groupMeta, object .. 'CreateAnimation Finish GetAnimations GetDuration '\n"
+        "    .. 'GetInitialOffset GetLoopState GetLooping GetMaxOrder GetProgress GetScript HasScript HookScript IsDone '\n"
+        "    .. 'IsPaused IsPendingFinish IsPlaying Pause Play SetInitialOffset SetLooping SetScript Stop')\n"
 
         // Advanced once a frame from dispatchOnUpdate.
         // One order at a time: the animations sharing the lowest order play
