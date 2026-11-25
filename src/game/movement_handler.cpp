@@ -1,4 +1,5 @@
 #include "game/movement_handler.hpp"
+#include "game/packet_wait.hpp"
 #include "game/passenger_place.hpp"
 #include "game/mover_mode.hpp"
 #include "game/move_heartbeat.hpp"
@@ -2362,8 +2363,12 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
         }
-        // From now on (0x0098c770), not from the frame before.
-        entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
+        // From when it came (0x0098c770: +0x128, the clock of the frame it is
+        // handled in, 0x006f1490), not from the frame before and not from when
+        // a load let it be handled.
+        const uint32_t waited = packetWaitedMs(packet);
+        entity->moveBeganAfter(owner_.sinceUnitsAdvanced() - static_cast<float>(waited) * 0.001f);
+        if (const auto it = moveSplines_.find(data.guid); it != moveSplines_.end()) it->second.startMs -= waited;
         // The spline takes what the client's own does, at its capped speed
         // (0x0073c8e0 hands 0x006eb680 that time, not the packet's); one too
         // short to start is over at once (0x006f11b0).
@@ -2677,7 +2682,9 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         const float pathLength =
             glm::length(destWorld - glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
         entity->startMoveTo(destWorld.x, destWorld.y, destWorld.z, facingAngle, duration / 1000.0f);
-        entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
+        const uint32_t waited = packetWaitedMs(packet);
+        entity->moveBeganAfter(owner_.sinceUnitsAdvanced() - static_cast<float>(waited) * 0.001f);
+        if (const auto it = moveSplines_.find(moverGuid); it != moveSplines_.end()) it->second.startMs -= waited;
         // Run on the transport, from where the mover is on it now.
         if (entity->isActivelyMoving()) {
             if (const auto from = owner_.getTransportManager()->worldToTransportLocal(

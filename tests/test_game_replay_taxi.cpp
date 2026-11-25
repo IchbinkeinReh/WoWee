@@ -4,6 +4,7 @@
 
 #include "core/coordinates.hpp"
 #include "game_replay.hpp"
+#include "game/transport_manager.hpp"
 #include "game/movement_handler.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
@@ -485,6 +486,70 @@ TEST_CASE("a spline that comes after a load begins at its beginning", "[replay][
     gh.setUnitClock(std::chrono::steady_clock::now() + 2s);
     gh.update(0.016f);
     CHECK(glm::length(placeOf(*drake) - kBorder530) < 22.0f);
+}
+
+// P58. Logged in in flight, the spline waited behind the world's load and began as it was
+// handled: six seconds behind the server, off its mount long before the landing place. The
+// client has its world before it asks for the character (0x00405540, then 0x006b1790).
+TEST_CASE("a spline that waited behind a load is as far as the time it waited", "[replay][taxi]") {
+    using namespace std::chrono_literals;
+    Session s;
+    s.setConnected(true);
+    spawn(s, kTaxiFlag, 1149, kBorder530);
+    auto& gh = s.handler();
+    const auto self = gh.getEntityManager().getEntity(Session::kPlayerGuid);
+    REQUIRE(self);
+    const auto handled = std::chrono::steady_clock::now();
+    gh.setUnitClock(handled);
+    gh.update(0.016f);
+    std::vector<glm::vec3> way;
+    for (int i = 1; i <= 100; ++i) way.push_back(kBorder530 + glm::vec3(10.0f * static_cast<float>(i), 0.0f, 0.0f));
+    const auto readAgo = [](wowee::network::Packet p, int64_t ms) {
+        p.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - ms);
+        return p;
+    };
+    s.receive(readAgo(flight(83, kBorder530, way, 40000), 6000));  // 25 yd/s
+    gh.setUnitClock(std::chrono::steady_clock::now());
+    gh.update(0.016f);
+    CHECK(glm::length(placeOf(*self) - kBorder530) == Catch::Approx(150.0f).margin(3.0f));
+    gh.setUnitClock(handled + 2s);
+    gh.update(0.016f);
+    CHECK(glm::length(placeOf(*self) - kBorder530) == Catch::Approx(200.0f).margin(3.0f));
+    CHECK(gh.onMoveSpline(Session::kPlayerGuid));
+
+    // One whose time went by behind it is at its end, and over.
+    constexpr uint64_t kDrake = 0xF130005490000042ull;
+    s.receive(UpdateObject().create(kDrake, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    const auto drake = gh.getEntityManager().getEntity(kDrake);
+    REQUIRE(drake);
+    const glm::vec3 c = wowee::core::coords::serverToCanonical(kBorder530);
+    drake->setPosition(c.x, c.y, c.z, 0.0f);
+    const glm::vec3 end = kBorder530 + glm::vec3(30.0f, 0.0f, 0.0f);
+    s.receive(readAgo(flight(84, kBorder530, {end}, 3000, 0x0, kDrake), 4000));
+    CHECK_FALSE(gh.onMoveSpline(kDrake));
+    drake->updateMovement(0.01f);
+    CHECK(closeTo(placeOf(*drake), end));
+}
+
+TEST_CASE("an aura's time counts from when its packet came", "[replay][taxi]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}});
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt8(0);
+    p.writeUInt32(20217);
+    p.writeUInt8(0x20 | 0x10 | 0x08 | 0x01);
+    p.writeUInt8(80);
+    p.writeUInt8(0);
+    p.writeUInt32(60000);
+    p.writeUInt32(30000);
+    p.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - 6000);
+    s.receive(p);
+    const auto& auras = s.handler().getPlayerAuras();
+    REQUIRE_FALSE(auras.empty());
+    const auto left = auras[0].getRemainingMs(static_cast<uint64_t>(wowee::game::TransportManager::nowSteadyMs()));
+    CHECK(left <= 24000);
+    CHECK(left > 22000);
 }
 
 TEST_CASE("a flight stays where its spline ends until the server takes the flag", "[replay][taxi]") {

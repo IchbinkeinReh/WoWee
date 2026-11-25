@@ -9,6 +9,7 @@
 #include "addons/tooltip_setter_rules.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
+#include "game/packet_wait.hpp"
 #include "game/cast_failure_names.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/spell_classification.hpp"
@@ -4625,7 +4626,7 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
     playerHistory_.clear();
     {
         loadSpellNameCache();
-        const int64_t now = historyNowMs();
+        const int64_t now = historyNowMs() - packetWaitedMs(packet);
         for (const auto& cd : data.cooldowns) {
             const auto it = owner_.spellNameCacheRef().find(cd.spellId);
             if (it == owner_.spellNameCacheRef().end()) continue;
@@ -5681,6 +5682,8 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
         uint64_t nowMs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
+        // A time counts from when the packet came, whatever kept it.
+        nowMs -= packetWaitedMs(packet);
         // The combat log, from the slots as they were (0x0072f5d0). A whole
         // list logs nothing.
         if (!isAll && isActiveExpansion("wotlk")) logAuraChanges(data.guid, *auraList, data.updates, nowMs);

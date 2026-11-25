@@ -835,7 +835,12 @@ public:
     /// now less the one the spline was started at (0x0098ca00: +0x28 = now -
     /// +0x24, which 0x0098c770 is given the frame's time for) - so a spline
     /// that comes after three seconds of loading starts at its start.
-    void moveBeganAfter(float seconds) { startsIn_ = std::max(seconds, 0.0f); }
+    /// One that came before that moment - its packet waited behind a load - is
+    /// that far along already: the next step begins with it.
+    void moveBeganAfter(float seconds) {
+        startsIn_ = std::max(seconds, 0.0f);
+        if (seconds < 0.0f && isMoving_) moveElapsed_ -= seconds;
+    }
 
     /// The rate its model chases its facing at, in the client's critically
     /// damped spring (0x007160b0), or 0 for the four-sample halving: a
