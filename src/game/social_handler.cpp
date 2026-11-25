@@ -825,7 +825,12 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         if (!packet.hasRemaining(9)) return;
         const uint64_t itemGuid = packet.readUInt64();
         std::string name = packet.readString();
-        if (name.empty() || itemGuid == 0 || petitionInfo_.petitionGuid != itemGuid) return;
+        if (name.empty() || itemGuid == 0) return;
+        if (const auto item = owner_.onlineItemsRef().find(itemGuid); item != owner_.onlineItemsRef().end()) {
+            if (const auto known = petitions_.find(item->second.permanentEnchantId); known != petitions_.end())
+                known->second.name = name;
+        }
+        if (petitionInfo_.petitionGuid != itemGuid) return;
         petitionInfo_.guildName = std::move(name);
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_SHOW", {});
     };
@@ -3936,8 +3941,8 @@ void SocialHandler::closePetitionVendor() {
 void SocialHandler::handlePetitionQueryResponse(network::Packet& packet) {
     auto rem = [&]() { return packet.getRemainingSize(); };
     if (rem() < 12) return;
-    /*uint32_t entry =*/ packet.readUInt32();
-    uint64_t petGuid = packet.readUInt64();
+    const uint32_t id = packet.readUInt32();
+    const uint64_t ownerGuid = packet.readUInt64();
     std::string guildName = packet.readString();
     /*std::string body =*/ packet.readString();
 
@@ -3961,7 +3966,12 @@ void SocialHandler::handlePetitionQueryResponse(network::Packet& packet) {
     }
     packet.skipAll();
 
-    if (petitionInfo_.petitionGuid != petGuid) return;
+    petitions_[id] = {.ownerGuid = ownerGuid, .name = guildName, .isArena = arenaType != 0};
+    petitionsAsked_.erase(id);
+
+    // The one shown, by its number (0x005cea60): the guid is its owner's. It was taken for the
+    // charter's, so the window never opened.
+    if (petitionInfo_.petitionGuid == 0 || petitionInfo_.petitionId != id) return;
     petitionInfo_.guildName = guildName;
     if (needed > 0) petitionInfo_.signaturesRequired = needed;
     petitionInfo_.isArena = arenaType != 0;
@@ -3980,6 +3990,7 @@ void SocialHandler::handlePetitionShowSignatures(network::Packet& packet) {
     petitionInfo_.petitionGuid = packet.readUInt64();
     petitionInfo_.ownerGuid    = packet.readUInt64();
     const uint32_t petEntry    = packet.readUInt32();
+    petitionInfo_.petitionId   = petEntry;
     uint8_t sigCount           = packet.readUInt8();
     petitionInfo_.signatureCount = sigCount;
     petitionInfo_.signatures.reserve(sigCount);
@@ -4009,6 +4020,14 @@ void SocialHandler::handlePetitionShowSignatures(network::Packet& packet) {
     // before them listed its signers as unknown and stayed that way.
     for (const auto& sig : petitionInfo_.signatures) awaitPetitionSigner(sig.playerGuid);
     showPetitionWhenComplete();
+}
+
+const Petition* SocialHandler::petition(uint32_t id, uint64_t itemGuid) {
+    if (id == 0) return nullptr;
+    if (const auto it = petitions_.find(id); it != petitions_.end()) return &it->second;
+    if (owner_.getSocket() && petitionsAsked_.insert(id).second)
+        owner_.getSocket()->send(PetitionQueryPacket::build(id, itemGuid));
+    return nullptr;
 }
 
 bool SocialHandler::petitionComplete() const {

@@ -5674,6 +5674,19 @@ uint64_t GameHandler::getPetitionNpcGuid() const {
     return socialHandler_ ? socialHandler_->getPetitionNpcGuid() : 0;
 }
 
+std::optional<GameHandler::CharterFacts> GameHandler::charterFacts(uint64_t itemGuid, uint32_t itemId) {
+    constexpr uint32_t kPetition = 0x2000;   // what can be signed
+    const auto* info = getItemInfo(itemId);
+    const auto it = onlineItems_.find(itemGuid);
+    if (!socialHandler_ || !info || (info->itemFlags & kPetition) == 0 || it == onlineItems_.end()) return std::nullopt;
+    const auto* petition = socialHandler_->petition(it->second.permanentEnchantId, itemGuid);
+    if (!petition) return std::nullopt;
+    return CharterFacts{.title = petition->name,
+                        .ownerGuid = petition->ownerGuid,
+                        .arena = petition->isArena,
+                        .signatures = it->second.signatures};
+}
+
 const GameHandler::PetitionInfo& GameHandler::getPetitionInfo() const {
     if (socialHandler_) return socialHandler_->getPetitionInfo();
     static const PetitionInfo empty;

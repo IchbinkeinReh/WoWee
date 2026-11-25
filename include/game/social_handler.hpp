@@ -320,6 +320,8 @@ public:
     [[nodiscard]] uint32_t getPetitionCost() const { return petitionCost_; }
     [[nodiscard]] uint64_t getPetitionNpcGuid() const { return petitionNpcGuid_; }
     [[nodiscard]] const PetitionInfo& getPetitionInfo() const { return petitionInfo_; }
+    /// A charter's petition; asked for, once, where it is not known yet.
+    const Petition* petition(uint32_t id, uint64_t itemGuid);
     [[nodiscard]] bool hasPetitionSignaturesUI() const { return petitionInfo_.showUI; }
     void clearPetitionSignaturesUI() { petitionInfo_.showUI = false; }
     void signPetition(uint64_t petitionGuid);
@@ -1015,6 +1017,8 @@ private:
     uint32_t petitionCost_ = 0;
     uint64_t petitionNpcGuid_ = 0;
     PetitionInfo petitionInfo_;
+    std::unordered_map<uint32_t, Petition> petitions_;
+    std::unordered_set<uint32_t> petitionsAsked_;
 
     // Group
     GroupListData partyData;

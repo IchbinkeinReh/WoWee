@@ -512,6 +512,84 @@ TEST_CASE("how long a thing can be handed back", "[replay][playtest]") {
     CHECK(s.handler().itemRefundLeft(kItem) == 0);
 }
 
+// T161: ITEM_FIELD_GIFTCREATOR, for a wrapped item's tooltip.
+TEST_CASE("who wrapped a gift is known", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kGift = 0x4000000000000321ull;
+    s.receive(UpdateObject().create(
+        kGift, wowee::game::ObjectType::ITEM, {{UF::OBJECT_FIELD_ENTRY, 5043}, {UF::ITEM_FIELD_STACK_COUNT, 1}}));
+    CHECK(s.handler().getItemGiftCreatorByGuid(kGift) == 0);
+    s.receive(UpdateObject().create(kGift, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 5043},
+                                     {UF::ITEM_FIELD_STACK_COUNT, 1},
+                                     {UF::ITEM_FIELD_GIFTCREATOR, 0x42}}));
+    CHECK(s.handler().getItemGiftCreatorByGuid(kGift) == 0x42);
+}
+
+// A petition's answer is told by its number (0x005cea60); the guid in it is its owner's.
+// Taken for the charter's, it was nobody's and the window did not open.
+TEST_CASE("a charter's window opens with its petition", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kCharter = 0x4000000000000444ull;
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback(
+        [&](const std::string& name, const std::vector<std::string>&) { events.push_back(name); });
+    const auto shown = [&] { return std::count(events.begin(), events.end(), "PETITION_SHOW"); };
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_PETITION_SHOW_SIGNATURES));
+    list.writeUInt64(kCharter);
+    list.writeUInt64(Session::kPlayerGuid);
+    list.writeUInt32(77);
+    list.writeUInt8(0);
+    s.receive(list);
+    CHECK(s.sent().of(Opcode::CMSG_PETITION_QUERY).size() == 1);
+    CHECK(shown() == 0);
+    const auto answer = [&](uint32_t id, const char* name, uint32_t arena) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_PETITION_QUERY_RESPONSE));
+        p.writeUInt32(id);
+        p.writeUInt64(Session::kPlayerGuid);
+        p.writeString(name);
+        p.writeUInt8(0);
+        p.writeUInt32(9);
+        p.writeUInt32(9);
+        p.writeUInt32(arena);
+        s.receive(p);
+    };
+    answer(78, "Another", 0);
+    CHECK(shown() == 0);
+    answer(77, "The Seven", 0);
+    CHECK(shown() == 1);
+    CHECK(s.handler().getPetitionInfo().guildName == "The Seven");
+    CHECK(s.handler().getPetitionInfo().ownerGuid == Session::kPlayerGuid);
+
+    // And its tooltip (T161): asked for once, then what it is.
+    wowee::network::Packet item(wowee::game::wireOpcode(Opcode::SMSG_ITEM_QUERY_SINGLE_RESPONSE));
+    item.writeUInt32(5863);
+    for (int i = 0; i < 3; ++i) item.writeUInt32(0);
+    item.writeString("Guild Charter");
+    for (int i = 0; i < 3; ++i) item.writeString("");
+    for (int i = 0; i < 160; ++i) item.writeUInt32(i == 2 ? 0x2000u : 0u);
+    s.receive(item);
+    auto& held = s.handler().onlineItemsRef()[kCharter];
+    held.entry = 5863;
+    held.permanentEnchantId = 79;
+    held.signatures = 3;
+    const size_t asked = s.sent().of(Opcode::CMSG_PETITION_QUERY).size();
+    CHECK_FALSE(s.handler().charterFacts(kCharter, 5863));
+    CHECK_FALSE(s.handler().charterFacts(kCharter, 5863));
+    CHECK(s.sent().of(Opcode::CMSG_PETITION_QUERY).size() == asked + 1);
+    answer(79, "Two of us", 2);
+    const auto facts = s.handler().charterFacts(kCharter, 5863);
+    REQUIRE(facts);
+    CHECK(facts->title == "Two of us");
+    CHECK(facts->arena);
+    CHECK(facts->signatures == 3);
+    CHECK(facts->ownerGuid == Session::kPlayerGuid);
+    CHECK_FALSE(s.handler().charterFacts(kCharter, 5043));
+    s.handler().setAddonEventCallback({});
+}
+
 // T279: 0x00741b60 -> 0x00740d30, case 0xc5: no counter before the movement.
 TEST_CASE("another unit is where it is teleported to", "[replay][playtest]") {
     Session s;

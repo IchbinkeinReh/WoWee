@@ -2280,6 +2280,16 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (creatorLoIt != block.fields.end() && creatorHiIt != block.fields.end())
             info.creatorGuid = creatorLoIt->second
                              | (static_cast<uint64_t>(creatorHiIt->second) << 32);
+        if (const uint16_t giver = fieldIndex(UF::ITEM_FIELD_GIFTCREATOR); giver != 0xFFFF) {
+            const auto lo = block.fields.find(giver), hi = block.fields.find(static_cast<uint16_t>(giver + 1u));
+            if (lo != block.fields.end())
+                info.giftCreatorGuid =
+                    lo->second | (hi != block.fields.end() ? static_cast<uint64_t>(hi->second) << 32 : 0ull);
+        }
+        if (enchBase != 0xFFFF) {
+            if (const auto f = block.fields.find(static_cast<uint16_t>(enchBase + 1u)); f != block.fields.end())
+                info.signatures = f->second;
+        }
         auto [itemIt, isNew] = owner_.onlineItemsRef().insert_or_assign(block.guid, info);
         // A CREATE_OBJECT that re-sends an already-tracked item with a changed stack
         // count (AzerothCore does this when crafting consumes a reagent) must still
@@ -2341,6 +2351,7 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
     // ITEM_FIELD_FLAGS (STACK+7) carries the soulbound bit that a BoE item gains on equip;
     // RANDOM_PROPERTIES_ID sits before DURABILITY (DUR-2 pre-WotLK, DUR-1 on WotLK).
     const uint16_t itemFlagsField    = (itemStackField != 0xFFFF) ? (itemStackField + 7u) : 0xFFFF;
+    const uint16_t itemGiverField    = fieldIndex(UF::ITEM_FIELD_GIFTCREATOR);
     const uint16_t itemChargesField  = (itemStackField != 0xFFFF) ? (itemStackField + 2u) : 0xFFFF;
     const uint16_t itemDurationField = (itemStackField != 0xFFFF) ? (itemStackField + 1u) : 0xFFFF;
     const uint16_t itemCreatedField  = (!isPreWotlk() && itemMaxDurField != 0xFFFF) ? (itemMaxDurField + 1u) : 0xFFFF;
@@ -2388,6 +2399,12 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
                 inventoryChanged = true;
                 enchantMoved = true;
             }
+        } else if (isItemInInventory && itemPermEnchField != 0xFFFF && key == itemPermEnchField + 1u) {
+            it->second.signatures = val;
+        } else if (isItemInInventory && itemGiverField != 0xFFFF && (key == itemGiverField || key == itemGiverField + 1u)) {
+            const unsigned shift = key == itemGiverField ? 0u : 32u;
+            uint64_t& giver = it->second.giftCreatorGuid;
+            giver = (giver & ~(0xFFFFFFFFull << shift)) | (static_cast<uint64_t>(val) << shift);
         } else if (isItemInInventory && itemTempEnchField != 0xFFFF && key == itemTempEnchField) {
             if (it->second.temporaryEnchantId != val) {
                 it->second.temporaryEnchantId = val;

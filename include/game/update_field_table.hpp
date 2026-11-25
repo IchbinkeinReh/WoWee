@@ -417,6 +417,7 @@ enum class UF : uint16_t {
     /// (0x0058a480) reads the guid off the item the page came from and names
     /// whoever wrote it.
     ITEM_FIELD_CREATOR,
+    ITEM_FIELD_GIFTCREATOR,   ///< who wrapped it
     ITEM_FIELD_STACK_COUNT,
     ITEM_FIELD_DURABILITY,
     ITEM_FIELD_MAXDURABILITY,

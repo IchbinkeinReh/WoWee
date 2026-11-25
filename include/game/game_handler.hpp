@@ -3328,6 +3328,20 @@ public:
         auto it = onlineItems_.find(guid);
         return it == onlineItems_.end() ? 0u : it->second.creatorGuid;
     }
+    /// Who wrapped it, by the same.
+    uint64_t getItemGiftCreatorByGuid(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it == onlineItems_.end() ? 0u : it->second.giftCreatorGuid;
+    }
+    /// What a charter's tooltip says of it (0x006277f0, 0x0067ef70): nothing for what is none, or
+    /// while its petition is asked for.
+    struct CharterFacts {
+        std::string title;
+        uint64_t ownerGuid = 0;
+        bool arena = false;
+        uint32_t signatures = 0;
+    };
+    std::optional<CharterFacts> charterFacts(uint64_t itemGuid, uint32_t itemId);
     bool supportsEquipmentSets() const;
     bool useEquipmentSet(const std::string& name, bool itemOnCursor);
     /// ignoredSlotMask: bit i set leaves equipment slot i out of the set.
@@ -6531,6 +6545,10 @@ public:
         /// wrote no creator - which is most items - and in the layouts older than
         /// WotLK, which do not name the field.
         uint64_t creatorGuid = 0;
+        uint64_t giftCreatorGuid = 0;     ///< ITEM_FIELD_GIFTCREATOR
+        /// The second word of its first enchant (STACK_COUNT + 9): a charter's signatures,
+        /// as the first is its petition.
+        uint32_t signatures = 0;
     };
     bool isHostileFaction(uint32_t factionTemplateId) const {
         if (const int atWar = factionAtWarLive(factionTemplateId); atWar >= 0) return atWar == 1;

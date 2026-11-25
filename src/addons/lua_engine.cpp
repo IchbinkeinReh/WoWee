@@ -6558,6 +6558,23 @@ void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::I
             }
         }
     }
+    // A charter's petition (0x006277f0).
+    if (const auto charter = gh->charterFacts(instance.guid, itemId)) {
+        lua_newtable(L);
+        lua_pushstring(L, charter->title.c_str());
+        lua_setfield(L, -2, "title");
+        lua_pushboolean(L, charter->arena ? 1 : 0);
+        lua_setfield(L, -2, "arena");
+        lua_pushnumber(L, charter->signatures);
+        lua_setfield(L, -2, "signatures");
+        if (const std::string& owner = gh->lookupName(charter->ownerGuid); !owner.empty()) {
+            lua_pushstring(L, owner.c_str());
+            lua_setfield(L, -2, "creator");
+        } else if (charter->ownerGuid != 0) {
+            gh->queryPlayerName(charter->ownerGuid);
+        }
+        lua_setfield(L, -2, "charter");
+    }
     // Bought with honour or tokens: how long it can be handed back.
     if (const uint32_t left = gh->itemRefundLeft(instance.guid); left > 0) {
         lua_pushnumber(L, left);
@@ -6634,7 +6651,20 @@ void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::I
     // the line in, as the client's callback 0x00626650 does - and
     // whether it was written rather than made (ITEM_FIELD_FLAGS
     // 0x200: ITEM_WRITTEN_BY in place of ITEM_CREATED_BY).
-    if (const uint64_t creator = gh->getItemCreatorByGuid(instance.guid); creator != 0) {
+    // Of a wrapped one (0x8) who gave it, and nothing else: ITEM_WRAPPED_BY.
+    const auto nameAs = [&](uint64_t guid, const char* key) {
+        if (guid == 0) return;
+        const std::string& name = gh->lookupName(guid);
+        if (name.empty()) {
+            gh->queryPlayerName(guid);
+            return;
+        }
+        lua_pushstring(L, name.c_str());
+        lua_setfield(L, -2, key);
+    };
+    if ((gh->getItemFieldFlags(instance.guid) & 0x8u) != 0) {
+        nameAs(gh->getItemGiftCreatorByGuid(instance.guid), "wrappedBy");
+    } else if (const uint64_t creator = gh->getItemCreatorByGuid(instance.guid); creator != 0) {
         const std::string& maker = gh->lookupName(creator);
         if (maker.empty()) {
             gh->queryPlayerName(creator);
@@ -6848,7 +6878,10 @@ static wowee::ui::Widget::TooltipRoll rollOf(game::GameHandler* gh, const game::
     roll.itemId = item.itemId;
     roll.randomPropertyId = item.randomPropertyId;
     roll.suffixFactor = item.suffixFactor;
-    if (gh && itemGuid != 0) std::tie(roll.permanentEnchant, roll.temporaryEnchant) = gh->getItemEnchantIds(itemGuid);
+    if (!gh || itemGuid == 0) return roll;
+    // A charter's first enchant is its petition.
+    if (const auto* info = gh->getItemInfo(item.itemId); info && (info->itemFlags & 0x2000u) != 0) return roll;
+    std::tie(roll.permanentEnchant, roll.temporaryEnchant) = gh->getItemEnchantIds(itemGuid);
     return roll;
 }
 
@@ -15326,7 +15359,7 @@ void LuaEngine::registerCoreAPI() {
         "        for _, k in ipairs({'limitArea', 'limitMap', 'conjured', 'bindType', 'uniqueKey', 'startsQuest', 'lock',\n"
         "            'duration', 'raceClassOnly', 'races', 'classes', 'requiredSkillName', 'processKey', 'spellKnown',\n"
         "            'requiredSpellName', 'requiredFactionName', 'itemSet', 'disenchant'}) do data[k] = nil end\n"
-        "        inst.soulbound, inst.maxDurability, inst.creator, inst.action = nil, nil, nil, nil\n"
+        "        inst.soulbound, inst.maxDurability, inst.creator, inst.wrappedBy, inst.action = nil, nil, nil, nil, nil\n"
         "    end\n"
         // Colour-blind mode names the quality under the title, in white, and a
         // heroic item's as ITEM_HEROIC_EPIC in place of both that and the
@@ -15350,6 +15383,18 @@ void LuaEngine::registerCoreAPI() {
         // Ahead of the binding (0x006277f0): ITEM_SIGNABLE in green for an
         // item to be signed (flag 0x2000), then in white the zone and the
         // instance it works in alone, and ITEM_CONJURED.
+        // A charter's name, its founder and how many have signed, in white.
+        "        local charter = inst and inst.charter\n"
+        "        if charter then\n"
+        "            local arena = charter.arena\n"
+        "            self:AddLine(format(arena and (PETITION_TITLE or 'Petition: %s') or GUILD_CHARTER_TITLE or 'Guild Name: %s', charter.title), 1, 1, 1, 1)\n"
+        "            if charter.creator then\n"
+        "                self:AddLine(format(arena and (PETITION_CREATOR or 'Created by %s') or GUILD_CHARTER_CREATOR or 'Guild Master: %s', charter.creator), 1, 1, 1)\n"
+        "            end\n"
+        "            if charter.signatures > 0 then\n"
+        "                self:AddLine(format(PETITION_NUM_SIGNATURES or '%d |4signature:signatures;', charter.signatures), 1, 1, 1)\n"
+        "            end\n"
+        "        end\n"
         "        if data.signable then self:AddLine(ITEM_SIGNABLE or '<Right Click for Additional Information>', 0, 1, 0) end\n"
         "        if data.limitArea then self:AddLine(data.limitArea, 1, 1, 1) end\n"
         "        if data.limitMap then self:AddLine(data.limitMap, 1, 1, 1) end\n"
@@ -15753,7 +15798,8 @@ void LuaEngine::registerCoreAPI() {
         "        if data.description and not usedDescription then self:AddLine('\"'..data.description..'\"', 1, 0.82, 0, 1) end\n"
         // Who made it, under the flavour text (0x006277f0): ITEM_CREATED_BY,
         // or ITEM_WRITTEN_BY for something written, in white.
-        "        if inst and inst.creator then\n"
+        "        if inst and inst.wrappedBy then self:AddLine(format(ITEM_WRAPPED_BY or '<Gift from %s>', inst.wrappedBy), 1, 1, 1)\n"
+        "        elseif inst and inst.creator then\n"
         "            local key = inst.written and 'ITEM_WRITTEN_BY' or 'ITEM_CREATED_BY'\n"
         "            self:AddLine(format(_G[key] or (inst.written and '<Written by %s>' or '<Made by %s>'), inst.creator), 1, 1, 1)\n"
         "        end\n"

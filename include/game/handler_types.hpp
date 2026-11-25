@@ -316,8 +316,16 @@ struct PetitionSignature {
     std::string playerName;
 };
 
+/// A petition as SMSG_PETITION_QUERY_RESPONSE has told of it (0x0067ef70's cache).
+struct Petition {
+    uint64_t ownerGuid = 0;
+    std::string name;
+    bool isArena = false;
+};
+
 struct PetitionInfo {
-    uint64_t petitionGuid = 0;
+    uint64_t petitionGuid = 0;   ///< the charter
+    uint32_t petitionId = 0;
     uint64_t ownerGuid = 0;
     std::string guildName;
     uint32_t signatureCount = 0;
