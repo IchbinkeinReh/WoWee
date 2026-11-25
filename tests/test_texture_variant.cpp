@@ -19,8 +19,8 @@ TEST_CASE("a texture that repeats is an upload of its own", "[texture_variant]")
     CHECK(textureKey("a", textureVariantOf(w)) == "a|across|down");
     w.repeatAcross = false;
     CHECK(textureKey("a", textureVariantOf(w)) == "a|down");
-    w.blendAdd = w.desaturated = w.emblemMask = true;
-    CHECK(textureKey("a", textureVariantOf(w)) == "a|add|desat|mask|down");
+    w.desaturated = w.emblemMask = true;
+    CHECK(textureKey("a", textureVariantOf(w)) == "a|desat|mask|down");
 }
 
 // 0x004a2e00, 0x004a29d0

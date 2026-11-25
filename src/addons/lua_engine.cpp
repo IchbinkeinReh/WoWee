@@ -7923,21 +7923,14 @@ int lua_Texture_GetTexCoord(lua_State* L) {
     return 8;
 }
 // SetBlendMode("mode") (0x0048c040): one of the five modes by name, any case
-// (0x00814ff0 compares with strnicmp), or the usage error. Drawn: ADD adds;
-// BLEND, MOD, ALPHAKEY and DISABLE are drawn as ordinary blending here.
+// (0x00814ff0 compares with strnicmp), or the usage error.
 int lua_Texture_SetBlendMode(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
-    static constexpr const char* kModes[] = {"DISABLE", "BLEND", "ALPHAKEY", "ADD", "MOD"};
     if (lua_isstring(L, 2)) {
-        std::string mode = lua_tostring(L, 2);
-        for (char& c : mode) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        for (const char* known : kModes) {
-            if (mode == known) {
-                w->blendMode = mode;
-                w->blendAdd = mode == "ADD";
-                return 0;
-            }
+        if (const auto blend = wowee::ui::textureBlendOf(lua_tostring(L, 2))) {
+            w->blend = *blend;
+            return 0;
         }
     }
     return luaL_error(L, "Usage: %s:SetBlendMode(\"mode\")", w->name.empty() ? "<unnamed>" : w->name.c_str());
@@ -7957,7 +7950,7 @@ int lua_Texture_IsDesaturated(lua_State* L) {
 }
 int lua_Texture_GetBlendMode(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    lua_pushstring(L, w ? w->blendMode.c_str() : "BLEND");
+    lua_pushstring(L, wowee::ui::textureBlendName(w ? w->blend : wowee::ui::TextureBlend::Blend));
     return 1;
 }
 int lua_Region_SetVertexColor(lua_State* L) {
@@ -13897,6 +13890,7 @@ void LuaEngine::registerCoreAPI() {
         "    return t == 'string' or t == 'number'\n"
         "end\n"
         "local mt = __WoweeFrameMT\n"
+        "local blends = {DISABLE = 'DISABLE', BLEND = 'BLEND', ALPHAKEY = 'ALPHAKEY', ADD = 'ADD', MOD = 'MOD'}\n"
         // A path is as valid an argument as a texture, and FrameXML uses both:
         // LoadMicroButtonTextures does
         // self:SetDisabledTexture("Interface\\Buttons\\...-Disabled"), then the
@@ -13916,7 +13910,7 @@ void LuaEngine::registerCoreAPI() {
         "        and 'Usage: %s:SetHighlightTexture(texture or \"texture\" or nil [, \"blendmode\")'\n"
         "        or ('Usage: %s:Set' .. slot .. '(texture or \"texture\" or nil)')\n"
         "    mt['Set' .. slot] = function(self, ...)\n"
-        "        local tex = ...\n"
+        "        local tex, mode = ...\n"
         "        local t = type(tex)\n"
         "        if select('#', ...) == 0 or (t ~= 'table' and t ~= 'string' and t ~= 'number' and t ~= 'nil') then\n"
         "            __WoweeUsageError(self, usage)\n"
@@ -13932,11 +13926,24 @@ void LuaEngine::registerCoreAPI() {
         "                error(('%s:Set%s(): Wrong object type, expected texture'):format(name, slot), 0)\n"
         "            end\n"
         "        end\n"
+        // A highlight's second argument: a blend mode's name, ADD where it is none of one
+        // (0x00977d30). Another texture as it is handed over, unless it is the one there is.
+        "        local blend\n"
+        "        if slot == 'HighlightTexture' then\n"
+        "            blend = __WoweeIsText(mode) and blends[tostring(mode):upper()] or 'ADD'\n"
+        "            if t == 'table' and rawequal(tex, self[key]) then return end\n"
+        "        end\n"
+        "        if blend and t == 'table' and tex.SetBlendMode then tex:SetBlendMode(blend) end\n"
         "        if type(tex) == 'string' then\n"
         "            local existing = self[key]\n"
-        "            if type(existing) == 'table' then existing:SetTexture(tex) return end\n"
+        "            if type(existing) == 'table' then\n"
+        "                existing:SetTexture(tex)\n"
+        "                if blend then existing:SetBlendMode(blend) end\n"
+        "                return\n"
+        "            end\n"
         "            local made = self:CreateTexture(nil, layer)\n"
         "            made:SetTexture(tex)\n"
+        "            if blend then made:SetBlendMode(blend) end\n"
         "            made:SetAllPoints(self)\n"
         "            __WoweeSetButtonArt(made, slot)\n"
         "            self[key] = made\n"

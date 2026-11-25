@@ -987,10 +987,10 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // plate (0x0098e910), added (blend mode 3).
         if (&r == glowing) {
             if (VkDescriptorSet glow = plateTexture(assets, "Interface\\Tooltips\\Nameplate-Glow.blp")) {
-                rendering::beginAdditive(drawList);
+                rendering::setImGuiBlend(drawList, rendering::ImGuiBlend::Add);
                 drawList->AddImage((ImTextureID)(uintptr_t)glow, fr0, fr1, ImVec2(0, 0), ImVec2(1, 1),
                                    IM_COL32(255, 255, 255, alpha));
-                rendering::endAdditive(drawList);
+                rendering::setImGuiBlend(drawList, rendering::ImGuiBlend::Blend);
             }
         }
 

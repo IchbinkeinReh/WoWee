@@ -1,7 +1,8 @@
-// The interface's art prepared for additive and desaturated drawing
+// The interface's art prepared for desaturated drawing, and the blend modes' names
 // (ui/texture_variants.hpp; Desaturate.bls, 0x00483060).
 #include <catch_amalgamated.hpp>
 
+#include "ui/texture_blend.hpp"
 #include "ui/texture_variants.hpp"
 
 using namespace wowee::ui;
@@ -20,10 +21,17 @@ TEST_CASE("desaturated: the luminance in all three channels, alpha kept", "[text
     CHECK(px[15] == 0);
 }
 
-TEST_CASE("additive: alpha from brightness", "[texture_variants]") {
-    std::vector<uint8_t> px = {0, 0, 0, 255, 255, 10, 10, 255, 128, 0, 0, 128};
-    prepareAdditive(px);
-    CHECK(px[3] == 0);
-    CHECK(px[7] == 255);
-    CHECK(px[11] == 64);
+// 0x00814ff0, 0x0048c040
+TEST_CASE("the blend modes by their names", "[texture_variants]") {
+    CHECK(textureBlendOf("ADD") == TextureBlend::Add);
+    CHECK(textureBlendOf("add") == TextureBlend::Add);
+    CHECK(textureBlendOf("Mod") == TextureBlend::Mod);
+    CHECK(textureBlendOf("DISABLE") == TextureBlend::Disable);
+    CHECK(textureBlendOf("ALPHAKEY") == TextureBlend::AlphaKey);
+    CHECK(textureBlendOf("BLEND") == TextureBlend::Blend);
+    CHECK_FALSE(textureBlendOf("ADDS"));
+    CHECK_FALSE(textureBlendOf(""));
+    CHECK(static_cast<int>(TextureBlend::Add) == 3);
+    for (const char* name : {"DISABLE", "ALPHAKEY", "BLEND", "ADD", "MOD"})
+        CHECK(std::string(textureBlendName(*textureBlendOf(name))) == name);
 }

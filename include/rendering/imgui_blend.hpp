@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 struct ImDrawList;
 
 namespace wowee {
@@ -7,22 +9,19 @@ namespace rendering {
 
 class VkContext;
 
-/// Interface art the client draws added onto what is under it, blend mode 3
-/// (GxBlend_Add: source by its alpha, plus the destination).
+/// How what is drawn next is put on what is under it. Interface art has five ways
+/// (ui/texture_blend.hpp: GxBlend's); Premultiplied is a picture whose colours have their
+/// alpha in them already, a model frame's (its tint likewise): what is added in it is added
+/// to what is under it.
 ///
 /// ImGui has one pipeline with one blend state, so the draw list is told to
-/// switch: a callback binds a second pipeline - ImGui's own vertex layout,
-/// shaders and pipeline layout, added rather than blended - and ImGui's reset
-/// callback puts its own pipeline back. Everything drawn between
-/// beginAdditive and endAdditive is added.
+/// switch: a callback binds another pipeline - ImGui's own vertex layout,
+/// shaders and pipeline layout, blended otherwise - and for Blend ImGui's reset
+/// callback puts its own pipeline back.
+enum class ImGuiBlend : uint8_t { Blend, Add, Mod, Opaque, AlphaKey, Premultiplied };
 void initImGuiBlend(VkContext* ctx);
 void shutdownImGuiBlend();
-void beginAdditive(ImDrawList* list);
-void endAdditive(ImDrawList* list);
-/// The same for a picture whose colours have their alpha in them already, a model
-/// frame's (its tint likewise): what is added in it is added to what is under it.
-void beginPremultiplied(ImDrawList* list);
-void endPremultiplied(ImDrawList* list);
+void setImGuiBlend(ImDrawList* list, ImGuiBlend blend);
 
 }  // namespace rendering
 }  // namespace wowee

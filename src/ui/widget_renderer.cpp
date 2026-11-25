@@ -183,15 +183,6 @@ VkDescriptorSet WidgetRenderer::texture(const std::string& path, uint8_t variant
         textures_[key] = kMissing;
         return kMissing;
     }
-    if (variant & kVariantAdd) {
-        // Additive blending is not something a single ImGui draw list can be
-        // asked for - it has one pipeline and one blend state. But the art it
-        // is used for is a glow on black, with no alpha channel of its own, and
-        // over a dark scene "add" and "blend with alpha taken from brightness"
-        // put nearly the same pixels on the screen. Black stays invisible,
-        // which is the whole difference between a glow and a slab.
-        prepareAdditive(image.data);
-    }
     // Desaturate.bls reads the texture's own colour and only the vertex
     // alpha, so the draw passes white for the rest (textureColor).
     if (variant & kVariantDesaturate) prepareDesaturated(image.data);
@@ -1349,11 +1340,13 @@ void WidgetRenderer::drawCooldown(ImDrawList* dl, const Widget& w,
         // The star, added on in light blue (0x0050a0ff), for its second.
         const uint32_t elapsed = now - w.cooldown.startMs;
         if (elapsed >= w.cooldown.durationMs) return;
-        const VkDescriptorSet star = resident(kCooldownStar, kVariantAdd);
+        const VkDescriptorSet star = resident(kCooldownStar);
         if (star == kMissing) return;
         const auto f = cooldown_sweep::flash(elapsed);
         const float tint[4] = {80.0f / 255.0f, 160.0f / 255.0f, 1.0f, f.alpha};
+        rendering::setImGuiBlend(dl, rendering::ImGuiBlend::Add);
         quad(star, cooldown_sweep::turned(f.angle, f.scale), packColor(tint, w.drawAlpha));
+        rendering::setImGuiBlend(dl, rendering::ImGuiBlend::Blend);
         return;
     }
     const float progress = cooldown_sweep::progress(w.cooldown, w.cooldownReverse, now);
@@ -2499,7 +2492,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             if (w->isStatusBar) want(w->barTexture);
             if (w->isSlider) want(w->thumbTexture);
             if (w->isCooldown) {
-                want(kCooldownStar, kVariantAdd);
+                want(kCooldownStar);
                 if (w->cooldownDrawEdge) want(kCooldownEdge);
             }
         }
@@ -2560,10 +2553,31 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                      ImVec2(440.0f, 440.0f));
     }
 
+    // A texture is put on what is under it as its blend mode says, all else over it.
+    struct BlendGuard {
+        ImDrawList* dl;
+        rendering::ImGuiBlend now = rendering::ImGuiBlend::Blend;
+        void use(rendering::ImGuiBlend blend) {
+            if (blend != now) rendering::setImGuiBlend(dl, blend);
+            now = blend;
+        }
+        ~BlendGuard() { use(rendering::ImGuiBlend::Blend); }
+    } blending{.dl = dl};
+    const auto blendOf = [](const Widget& w) {
+        if (w.kind != WidgetKind::Texture) return rendering::ImGuiBlend::Blend;
+        switch (w.blend) {
+            case TextureBlend::Disable: return rendering::ImGuiBlend::Opaque;
+            case TextureBlend::AlphaKey: return rendering::ImGuiBlend::AlphaKey;
+            case TextureBlend::Add: return rendering::ImGuiBlend::Add;
+            case TextureBlend::Mod: return rendering::ImGuiBlend::Mod;
+            default: return rendering::ImGuiBlend::Blend;
+        }
+    };
     for (size_t at = 0; at < order.size(); ++at) {
         const Widget* w = order[at];
         // A title region draws nothing; it is only where the frame is held.
         if (w->isTitleRegion) continue;
+        blending.use(blendOf(*w));
         // A tooltip's line font strings hold its lines for the interface to
         // read and write; the tooltip draws those lines itself (see
         // ui/tooltip_line_strings.hpp), so drawn here as well each line would
@@ -2710,7 +2724,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 if (w->externalTexture == 0) return;
                 float tint[4] = {w->color[0], w->color[1], w->color[2], w->color[3]};
                 if (w->externalPremultiplied) {
-                    rendering::beginPremultiplied(dl);
+                    rendering::setImGuiBlend(dl, rendering::ImGuiBlend::Premultiplied);
                     for (int i = 0; i < 3; ++i) tint[i] *= w->color[3] * w->drawAlpha;
                 }
                 // NOLINTNEXTLINE(performance-no-int-to-ptr) - the widget holds
@@ -2722,7 +2736,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                              ImVec2(x1 + w->modelPad * s, y1 + w->modelPad * s),
                              ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                              packColor(tint, w->drawAlpha));
-                if (w->externalPremultiplied) rendering::endPremultiplied(dl);
+                if (w->externalPremultiplied) rendering::setImGuiBlend(dl, rendering::ImGuiBlend::Blend);
             };
             if (!w->hasBackdrop) drawModel();
             // A tooltip's rows, counted once: the box below is drawn to hold

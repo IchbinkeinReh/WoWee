@@ -9,8 +9,6 @@
 
 namespace wowee::ui {
 
-/// Additive art: alpha from its brightness.
-inline constexpr uint8_t kVariantAdd = 1;
 /// Texture:SetDesaturated: the art's luminance (0.299, 0.587, 0.114) in all
 /// three channels, as the interface's Desaturate.bls draws it (CSimpleTop,
 /// 0x00483060).
@@ -24,8 +22,7 @@ inline constexpr uint8_t kVariantRepeatDown = 16;
 
 /// A texture region's.
 [[nodiscard]] inline uint8_t textureVariantOf(const Widget& w) {
-    return static_cast<uint8_t>((w.blendAdd ? kVariantAdd : 0) | (w.desaturated ? kVariantDesaturate : 0) |
-                                (w.emblemMask ? kVariantAlphaMask : 0) |
+    return static_cast<uint8_t>((w.desaturated ? kVariantDesaturate : 0) | (w.emblemMask ? kVariantAlphaMask : 0) |
                                 (w.repeatAcross ? kVariantRepeatAcross : 0) |
                                 (w.repeatDown ? kVariantRepeatDown : 0));
 }
@@ -46,7 +43,6 @@ inline constexpr uint8_t kVariantRepeatDown = 16;
 [[nodiscard]] inline std::string textureKey(const std::string& path, uint8_t variant) {
     if (variant == 0) return path;
     std::string key = path;
-    if (variant & kVariantAdd) key += "|add";
     if (variant & kVariantDesaturate) key += "|desat";
     if (variant & kVariantAlphaMask) key += "|mask";
     if (variant & kVariantRepeatAcross) key += "|across";

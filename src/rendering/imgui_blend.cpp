@@ -3,7 +3,9 @@
 #include <imgui.h>
 #include <backends/imgui_impl_vulkan.h>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include "core/logger.hpp"
@@ -25,7 +27,7 @@ struct Extra {
 };
 struct BlendState {
     VkContext* ctx = nullptr;
-    Extra additive, premultiplied;
+    std::array<Extra, 6> extra;   // by ImGuiBlend
     // Pipelines built for a render pass since replaced. A frame in flight may
     // still use one, so they go when the interface does.
     std::vector<VkPipeline> retired;
@@ -33,9 +35,8 @@ struct BlendState {
 BlendState g_blend;
 
 VkPipeline build(VkDevice device, VkRenderPass pass, VkPipelineLayout layout,
-                 const VkPipelineColorBlendAttachmentState& blend) {
-    ShaderPair shaders = loadShaderPair(device, "assets/shaders/imgui_add.vert.spv",
-                                        "assets/shaders/imgui_add.frag.spv", "additive interface");
+                 const VkPipelineColorBlendAttachmentState& blend, const char* fragment) {
+    ShaderPair shaders = loadShaderPair(device, "assets/shaders/imgui_add.vert.spv", fragment, "interface");
     if (!shaders) return VK_NULL_HANDLE;
     // ImDrawVert, as imgui_impl_vulkan.cpp lays it out.
     const std::vector<VkVertexInputBindingDescription> bindings = {
@@ -61,17 +62,38 @@ VkPipeline build(VkDevice device, VkRenderPass pass, VkPipelineLayout layout,
         .build(device);
 }
 
-void bind(Extra& extra, const VkPipelineColorBlendAttachmentState& blend) {
+VkPipelineColorBlendAttachmentState stateOf(ImGuiBlend blend) {
+    switch (blend) {
+        case ImGuiBlend::Add: return PipelineBuilder::blendAdditive();
+        case ImGuiBlend::Premultiplied: return PipelineBuilder::blendPremultiplied();
+        case ImGuiBlend::Mod: {
+            // GxBlend_Mod: what is there, times it; its alpha says nothing.
+            VkPipelineColorBlendAttachmentState state = PipelineBuilder::blendAdditive();
+            state.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+            state.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+            state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            return state;
+        }
+        default: return PipelineBuilder::blendDisabled();
+    }
+}
+
+void bindBlend(const ImDrawList*, const ImDrawCmd* cmd) {
+    const auto blend = static_cast<ImGuiBlend>(reinterpret_cast<uintptr_t>(cmd->UserCallbackData));
+    Extra& extra = g_blend.extra[static_cast<size_t>(blend)];
     auto* rs = static_cast<ImGui_ImplVulkan_RenderState*>(ImGui::GetPlatformIO().Renderer_RenderState);
     if (!rs || !g_blend.ctx || extra.failed) return;
     const VkRenderPass pass = g_blend.ctx->getOverlayRenderPass();
     if (extra.pipeline == VK_NULL_HANDLE || extra.builtFor != pass || extra.builtWith != rs->PipelineLayout) {
         if (extra.pipeline != VK_NULL_HANDLE) g_blend.retired.push_back(extra.pipeline);
-        extra.pipeline = build(g_blend.ctx->getDevice(), pass, rs->PipelineLayout, blend);
+        extra.pipeline = build(g_blend.ctx->getDevice(), pass, rs->PipelineLayout, stateOf(blend),
+                               blend == ImGuiBlend::AlphaKey ? "assets/shaders/imgui_key.frag.spv"
+                                                             : "assets/shaders/imgui_add.frag.spv");
         extra.builtFor = pass;
         extra.builtWith = rs->PipelineLayout;
         if (extra.pipeline == VK_NULL_HANDLE) {
-            LOG_ERROR("An interface pipeline could not be built; glows are blended instead");
+            LOG_ERROR("An interface pipeline could not be built; what it is for is blended instead");
             extra.failed = true;
             return;
         }
@@ -81,11 +103,6 @@ void bind(Extra& extra, const VkPipelineColorBlendAttachmentState& blend) {
     vkCmdBindPipeline(rs->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, extra.pipeline);
 }
 
-void bindAdditive(const ImDrawList*, const ImDrawCmd*) { bind(g_blend.additive, PipelineBuilder::blendAdditive()); }
-void bindPremultiplied(const ImDrawList*, const ImDrawCmd*) {
-    bind(g_blend.premultiplied, PipelineBuilder::blendPremultiplied());
-}
-
 }  // namespace
 
 void initImGuiBlend(VkContext* ctx) { g_blend.ctx = ctx; }
@@ -93,19 +110,16 @@ void initImGuiBlend(VkContext* ctx) { g_blend.ctx = ctx; }
 void shutdownImGuiBlend() {
     if (!g_blend.ctx) return;
     VkDevice device = g_blend.ctx->getDevice();
-    for (const Extra* e : {&g_blend.additive, &g_blend.premultiplied})
-        if (e->pipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, e->pipeline, nullptr);
+    for (const Extra& e : g_blend.extra)
+        if (e.pipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, e.pipeline, nullptr);
     for (VkPipeline p : g_blend.retired) vkDestroyPipeline(device, p, nullptr);
     g_blend = BlendState{};
 }
 
-void beginAdditive(ImDrawList* list) { list->AddCallback(bindAdditive, nullptr); }
-
-void endAdditive(ImDrawList* list) { list->AddCallback(ImDrawCallback_ResetRenderState, nullptr); }
-
-void beginPremultiplied(ImDrawList* list) { list->AddCallback(bindPremultiplied, nullptr); }
-
-void endPremultiplied(ImDrawList* list) { list->AddCallback(ImDrawCallback_ResetRenderState, nullptr); }
+void setImGuiBlend(ImDrawList* list, ImGuiBlend blend) {
+    if (blend == ImGuiBlend::Blend) list->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+    else list->AddCallback(bindBlend, reinterpret_cast<void*>(static_cast<uintptr_t>(blend)));
+}
 
 }  // namespace rendering
 }  // namespace wowee

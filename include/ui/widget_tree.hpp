@@ -34,6 +34,7 @@
 
 #include "core/platform.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "ui/texture_blend.hpp"
 #include "ui/button_art.hpp"
 #include "ui/cooldown_sweep.hpp"
 #include "ui/edit_history.hpp"
@@ -1021,14 +1022,8 @@ struct Widget {
     /// flag 0x10 of +0xd8, 0x004a11d0).
     bool nonBlocking = false;
     bool joystickEnabled = false;
-    /// Drawn added to what is under it rather than over it. Art authored for
-    /// this has no alpha channel at all - it is a glow on black, and black is
-    /// what adds nothing. Drawn the ordinary way it is a black slab instead,
-    /// which is what covered the player frame while it pulsed.
-    bool blendAdd = false;
-    /// The blend mode by its name (SetBlendMode, 0x0048c040): DISABLE, BLEND,
-    /// ALPHAKEY, ADD or MOD, what GetBlendMode answers.
-    std::string blendMode = "BLEND";
+    /// SetBlendMode (0x0048c040), alphaMode.
+    TextureBlend blend = TextureBlend::Blend;
     /// Texture:SetDesaturated - drawn as its luminance, untinted
     /// (Desaturate.bls, CSimpleTop's 0x00483060).
     bool desaturated = false;

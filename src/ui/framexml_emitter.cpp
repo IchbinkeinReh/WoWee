@@ -577,7 +577,10 @@ struct Emitter {
             if (!child) continue;
             const std::string regionVar =
                 emitRegion(*child, var, name, slot.layer, slot.isTexture);
-            line(var + ":" + slot.setter + "(" + regionVar + ")");
+            // A highlight keeps its own blend mode (0x0096f3c0 with the texture's +0xd8).
+            const bool highlight = std::string_view(slot.element) == "HighlightTexture";
+            line(var + ":" + slot.setter + "(" + regionVar +
+                 (highlight ? ", " + regionVar + ":GetBlendMode())" : std::string(")")));
         }
     }
 

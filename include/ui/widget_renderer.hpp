@@ -83,8 +83,8 @@ private:
     /// VK_NULL_HANDLE for anything missing, and remembers the failure so a
     /// mistyped path is not re-read every frame.
     ///
-    /// `variant` picks how the art is prepared (kVariantAdd,
-    /// kVariantDesaturate), each its own upload.
+    /// `variant` picks how the art is prepared (kVariantDesaturate and the
+    /// others), each its own upload.
     VkDescriptorSet texture(const std::string& path, uint8_t variant = 0);
     /// Already-uploaded texture for a path, without triggering an upload.
     [[nodiscard]] VkDescriptorSet resident(const std::string& path, uint8_t variant = 0) const;
