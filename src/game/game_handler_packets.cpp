@@ -606,10 +606,6 @@ void GameHandler::registerCoreOpcodes() {
             // The server's time against the client's, which the world state
             // frame's countdowns run by (0x005486e0).
             worldStateTimeOffset_ = static_cast<int64_t>(serverTime) - static_cast<int64_t>(std::time(nullptr));
-            // The world state timer bar counts from this and had nothing to
-            // count from - it was read and logged and dropped.
-            if (addonEventCallback_)
-                addonEventCallback_("WORLD_STATE_UI_TIMER_UPDATE", {std::to_string(serverTime)});
             LOG_DEBUG("SMSG_WORLD_STATE_UI_TIMER_UPDATE: serverTime=", serverTime);
         }
     };

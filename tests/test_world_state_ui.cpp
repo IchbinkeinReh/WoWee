@@ -27,6 +27,15 @@ TEST_CASE("Rows are shown by map, area, phase and type", "[world_state_ui]") {
     CHECK(ws::shownRows(rows, place) == std::vector<size_t>{0, 1});
 }
 
+TEST_CASE("A shown row of type 3 is drawn again every second", "[world_state_ui]") {
+    std::vector<ws::Row> rows(3);
+    rows[1].type = 1;
+    rows[2].type = 3;
+    CHECK(ws::anyTimed(rows, {0, 2}));
+    CHECK_FALSE(ws::anyTimed(rows, {0, 1}));
+    CHECK_FALSE(ws::anyTimed(rows, {}));
+}
+
 TEST_CASE("A line's text takes the world states it names", "[world_state_ui]") {
     const std::map<uint32_t, uint32_t> states = {{1581, 2}, {4248, 1000 + 125}};
     const ws::StateValue value = [&](uint32_t id) {

@@ -59,6 +59,14 @@ inline std::vector<size_t> shownRows(const std::vector<Row>& rows, const Place& 
     return out;
 }
 
+/// 0x005488f0: whether a shown row is one whose time left is drawn again
+/// every second (Type 3, +0x20).
+inline bool anyTimed(const std::vector<Row>& rows, const std::vector<size_t>& shown) {
+    for (const size_t i : shown)
+        if (i < rows.size() && rows[i].type == 3) return true;
+    return false;
+}
+
 /// The world states the two Wintergrasp bindings read, by number.
 ///
 /// Both server packets fill one map with bare id/value pairs - SMSG_INIT_WORLD_STATES

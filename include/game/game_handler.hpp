@@ -3675,6 +3675,11 @@ public:
     /// The world state frame's lines from WorldStateUI.dbc (0x005487d0) -
     /// nullopt where this install has no such file to read.
     std::optional<std::vector<const world_state_ui::Row*>> worldStateUiLines();
+    /// WorldStateUI.dbc's rows, for a test that has no files.
+    void setWorldStateUiRows(std::vector<world_state_ui::Row> rows);
+    /// 0x005488f0, every frame of the world: WORLD_STATE_UI_TIMER_UPDATE (event 0x28b) once a
+    /// second while a timed row is shown, and the server's time asked for every twenty.
+    void tickWorldStateUi();
     /// The client's time for a world state that counts down: now, moved by
     /// what SMSG_WORLD_STATE_UI_TIMER_UPDATE said the server's is (0x00548700).
     [[nodiscard]] int64_t worldStateNow() const;
@@ -7498,6 +7503,7 @@ private:
     bool entryQueueStatusPending_ = false;
     std::chrono::steady_clock::time_point nextLoadingKeepAlive_{};  ///< 0xb2fe70
     std::chrono::steady_clock::time_point nextWorldStateTimerQuery_{};  ///< 0xbe8f40
+    std::chrono::steady_clock::time_point nextWorldStateTimerEvent_{};  ///< 0xbe8f48
     cast_visual::Roster castVisuals_;
     mutable std::unordered_map<uint32_t, bool> precastKitAnimates_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958

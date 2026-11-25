@@ -668,6 +668,60 @@ TEST_CASE("a teleport is the named unit's", "[replay][playtest]") {
     CHECK(eye->getY() == Catch::Approx(600.0f));
 }
 
+// U7: 0x005488f0. Wintergrasp's "next battle" stood still between the server's answers.
+TEST_CASE("a world state's time left is drawn again every second", "[replay][playtest]") {
+    Session s;
+    s.setConnected(true);
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    wowee::game::world_state_ui::Row row;
+    row.mapId = -1;
+    row.type = 3;
+    gh.setWorldStateUiRows({row});
+    int fired = 0;
+    size_t arguments = 0;
+    gh.setAddonEventCallback([&](const std::string& e, const std::vector<std::string>& args) {
+        if (e != "WORLD_STATE_UI_TIMER_UPDATE") return;
+        ++fired;
+        arguments += args.size();
+    });
+    const auto run = [&](double seconds) {
+        fired = 0;
+        for (double t = 0.0; t < seconds - 0.01; t += 0.1) {
+            wowee::core::advanceTestClock(0.1);
+            gh.tickWorldStateUi();
+        }
+        return fired;
+    };
+    wowee::core::advanceTestClock(2.0);
+    gh.tickWorldStateUi();
+    CHECK(fired == 1);
+    const int five = run(5.0);
+    CHECK(five >= 4);   // by tenths of a second
+    CHECK(five <= 5);
+    CHECK(arguments == 0);
+    // The server's answer is none.
+    fired = 0;
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_WORLD_STATE_UI_TIMER_UPDATE));
+    answer.writeUInt32(1700000000u);
+    s.receive(answer);
+    CHECK(fired == 0);
+    // Not while loading, and not without such a row.
+    gh.setWorldLoadingProbe([] { return true; });
+    CHECK(run(5.0) == 0);
+    gh.setWorldLoadingProbe({});
+    CHECK(run(5.0) >= 4);
+    row.type = 0;
+    gh.setWorldStateUiRows({row});
+    CHECK(run(5.0) == 0);
+    // Nor one of another place.
+    row.type = 3;
+    row.mapId = 489;
+    gh.setWorldStateUiRows({row});
+    CHECK(run(5.0) == 0);
+    gh.setAddonEventCallback({});
+}
+
 // What is read of a packet is counted: too little or too much of it.
 TEST_CASE("packets read short or past their end are counted", "[replay][playtest]") {
     Session s;

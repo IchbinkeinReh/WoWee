@@ -1,8 +1,10 @@
 // game_handler_world_state_ui.cpp - The world state frame's lines as the
 // client chooses them from WorldStateUI.dbc (WorldStateUI.cpp 0x00548570-
 // 0x00548d40), and the phases and server time that bear on them.
+#include "core/app_clock.hpp"
 #include "game/game_handler.hpp"
 #include "network/packet.hpp"
+#include "network/world_socket.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 
@@ -68,6 +70,30 @@ std::optional<std::vector<const world_state_ui::Row*>> GameHandler::worldStateUi
     lines.reserve(worldStateUiShown_.size());
     for (size_t i : worldStateUiShown_) lines.push_back(&worldStateUiRows_[i]);
     return lines;
+}
+
+void GameHandler::setWorldStateUiRows(std::vector<world_state_ui::Row> rows) {
+    worldStateUiLoaded_ = true;
+    worldStateUiRows_ = std::move(rows);
+    worldStateUiShown_ = world_state_ui::shownRows(worldStateUiRows_, worldStateUiPlace_);
+}
+
+void GameHandler::tickWorldStateUi() {
+    // The world frame's (0x004fa5f0), so not behind a loading screen.
+    if (state != WorldState::IN_WORLD || (worldLoadingProbe_ && worldLoadingProbe_())) return;
+    const auto now = core::steadyNow();
+    // CMSG_WORLD_STATE_UI_TIMER_UPDATE (0x00548760), answered with the
+    // server's time, which the countdowns run by; the answer raises nothing
+    // (0x00526530 case 0x4f7).
+    if (wireOpcode(Opcode::CMSG_WORLD_STATE_UI_TIMER_UPDATE) != 0xFFFF && now >= nextWorldStateTimerQuery_) {
+        nextWorldStateTimerQuery_ = now + std::chrono::seconds(20);
+        network::Packet query(wireOpcode(Opcode::CMSG_WORLD_STATE_UI_TIMER_UPDATE));
+        if (socket) socket->send(query);
+    }
+    if (now < nextWorldStateTimerEvent_) return;
+    nextWorldStateTimerEvent_ = now + std::chrono::seconds(1);
+    loadWorldStateUi();
+    if (world_state_ui::anyTimed(worldStateUiRows_, worldStateUiShown_)) fireAddonEvent("WORLD_STATE_UI_TIMER_UPDATE", {});
 }
 
 int64_t GameHandler::worldStateNow() const {
