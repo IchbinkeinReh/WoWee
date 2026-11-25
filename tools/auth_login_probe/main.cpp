@@ -48,12 +48,6 @@ static std::vector<uint8_t> hexToBytes(const std::string& hex) {
     return out;
 }
 
-static std::string upperAscii(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    return s;
-}
-
 enum class ProofFormat { Auto, Legacy, V8 };
 enum class CrcAFormat { Wire, BigEndian };
 enum class WireAFormat { Little, Big };
