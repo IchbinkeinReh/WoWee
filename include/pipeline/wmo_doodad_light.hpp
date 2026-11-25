@@ -24,6 +24,7 @@
 /// written by its handler (0x0078ded0) and read nowhere; no M2 takes a WMO's
 /// MOLT lights.
 
+#include <array>
 #include <glm/glm.hpp>
 
 #include <algorithm>
@@ -325,6 +326,23 @@ inline BatchLights batchLights(const GroupDraw& g, BatchKind kind, uint32_t mate
     out.outsidePass = out.insidePass;
     out.outsideShadowed = out.insideShadowed;
     return out;
+}
+
+/// The light a room is painted with over one of its triangles, for the probes
+/// of the ray traced lighting: the mean of its corners' colours as a unit
+/// standing there takes them (unitFloorColor), `mocv` the group's loaded
+/// vertex colours. None where the batch is not drawn by that light - outside
+/// groups, groups without vertex colours, windows and what else is lit as the
+/// open air, and a transition batch, which is partly the outside's.
+inline std::optional<glm::ivec3> roomLight(const GroupDraw& g, BatchKind kind, uint32_t materialFlags,
+                                           const std::array<glm::vec3, 3>& mocv, uint32_t mohdFlags,
+                                           const glm::vec4& mohdAmbient) {
+    if (!g.vertexColors || (g.groupFlags & kOutsideGroupFlags) != 0 || kind == BatchKind::Transition) return std::nullopt;
+    const BatchLight lit = batchLights(g, kind, materialFlags).insidePass;
+    if (lit != BatchLight::Unlit && lit != BatchLight::Interior) return std::nullopt;
+    glm::ivec3 sum(0);
+    for (const glm::vec3& c : mocv) sum += unitFloorColor(c, mohdFlags, mohdAmbient);
+    return (sum + 1) / 3;
 }
 
 /// The pixel program a WMO batch is drawn with: MOMT's shader as an index

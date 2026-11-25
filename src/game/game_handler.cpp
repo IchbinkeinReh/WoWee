@@ -9,6 +9,7 @@
 
 #include "game/item_text.hpp"
 #include "game/difficulty_change.hpp"
+#include "game/dressing_room.hpp"
 #include "game/achievement_criteria.hpp"
 #include "game/game_utils.hpp"
 #include "rendering/world_map/map_resolver.hpp"
@@ -50,6 +51,7 @@
 #include "rendering/animation/animation_ids.hpp"
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
+#include <utility>
 #include <cmath>
 #include <cctype>
 #include <ctime>
@@ -221,6 +223,12 @@ void GameHandler::leaveWorldState(bool wasInWorld, const char* why) {
     // The combat and chat log files closed and their logging off (0x005072b0).
     if (combatLogFeed_) combatLogFeed_->closeLogFile();
     if (chatHandler_) chatHandler_->closeChatLog();
+    // A flight is of the world it was in, and so are the splines of its units.
+    // The next character in glided on along the last one's way.
+    if (movementHandler_) {
+        movementHandler_->forgetTaxi();
+        movementHandler_->forgetMoveSplines();
+    }
     if (wasInWorld) {
         closeCraftingWindow();
         onLeaveWorld(/*worldport=*/false);
@@ -622,6 +630,25 @@ float GameHandler::facingChaseRate(const Entity& entity) {
     return 0.0f;
 }
 
+// The clock's time since the last update that was given one. By this clock
+// and not by the frames' lengths: a map's load runs updates of its own behind
+// the loading screen, and the frame after it is as long as all of them - they
+// were counted twice, and the load's whole length, with the part of it before
+// the world's units came, was given to their moves. A flight over a map's
+// border was four seconds ahead of the server from there to its end.
+float GameHandler::takeUnitClock(float deltaTime) {
+    const auto now = std::exchange(unitClockNow_, std::nullopt);
+    if (!now) return deltaTime;
+    const auto since = std::exchange(unitClockTaken_, now);
+    if (!since) return deltaTime;
+    return std::clamp(std::chrono::duration<float>(*now - *since).count(), 0.0f, 3600.0f);
+}
+
+float GameHandler::sinceUnitsAdvanced() const {
+    if (!unitsAdvancedTo_) return 0.0f;
+    return std::max(std::chrono::duration<float>(std::chrono::steady_clock::now() - *unitsAdvancedTo_).count(), 0.0f);
+}
+
 void GameHandler::updateEntityInterpolation(float deltaTime) {
 // Advance every server-tracked unit once per frame. This is intentionally not
 // selected-target or distance gated: the spatial query is indexed by each
@@ -633,7 +660,13 @@ void GameHandler::updateEntityInterpolation(float deltaTime) {
 // By the frame's real length (update), not the capped delta: a stall of a few
 // seconds left every moving unit that far behind where the server had it, and
 // its next move's start - the server's position - put it right in one frame,
-// 13 to 35 yards at a run.
+// 13 to 35 yards at a run. By the clock itself where there is one, since a move
+// that began after the last of it is told how long after (sinceUnitsAdvanced).
+if (unitClockTaken_) {
+    if (unitsAdvancedTo_ && *unitClockTaken_ >= *unitsAdvancedTo_)
+        deltaTime = std::min(std::chrono::duration<float>(*unitClockTaken_ - *unitsAdvancedTo_).count(), 3600.0f);
+    unitsAdvancedTo_ = unitClockTaken_;
+}
 for (const auto& [guid, entity] : entityController_->getEntityManager().getEntities()) {
     (void)guid;
     if (entity && entity->isUnit()) {
@@ -824,15 +857,15 @@ void GameHandler::update(float deltaTime) {
     // had set the flag this waited on for long enough that the three members
     // behind it were never written at all. A block that cannot run, guarding a
     // deferral that no longer happens, reads as though both still do.
+    // Everything here goes by the clock (setUnitClock), not the capped frame:
+    // the server's clock ran on through a slow frame. A taxi flew a third
+    // slower than its 32 yards a second at ten frames, and the server set the
+    // player down 1100 yards behind it. Taken before anything returns: a time
+    // without a connection is nobody's.
+    deltaTime = takeUnitClock(deltaTime);
     if (!socket) {
         return;
     }
-    // Everything here goes by the frame's real length (setUnitClockSeconds), not
-    // the capped one: the server's clock ran on through a slow frame. A taxi
-    // flew a third slower than its 32 yards a second at ten frames, and the
-    // server set the player down 1100 yards behind it.
-    deltaTime = unitClockSeconds_.value_or(deltaTime);
-    unitClockSeconds_.reset();
 
     updateNetworking();
     if (!socket) return;  // disconnect() may have been called
@@ -1126,6 +1159,21 @@ void GameHandler::updateClientTaxi(float deltaTime) {
 
 void GameHandler::closeTaxi() {
     if (movementHandler_) movementHandler_->closeTaxi();
+}
+
+uint32_t GameHandler::creatureTypeFlags(uint32_t creatureType) const {
+    if (!creatureTypeFlagsLoaded_) {
+        auto* am = services_.assetManager;
+        if (!am || !am->isInitialized()) return 0;
+        creatureTypeFlagsLoaded_ = true;
+        if (auto dbc = am->loadDBCOptional("CreatureType.dbc"); dbc && dbc->getFieldCount() >= 2) {
+            const uint32_t last = dbc->getFieldCount() - 1;
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                creatureTypeFlags_[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, last);
+        }
+    }
+    const auto it = creatureTypeFlags_.find(creatureType);
+    return it != creatureTypeFlags_.end() ? it->second : 0;
 }
 
 const TaxiMap& GameHandler::getTaxiMap() const {
@@ -2795,16 +2843,16 @@ void GameHandler::ensureAchievementCategoriesLoaded() {
         // exist. Kept both ways round because the panel walks it backwards to
         // list a finished chain and forwards to find the step still open.
         const uint32_t supercedes = dbc->getUInt32(i, 3);
+        achievementRows_.push_back({.id = id,
+                                    .faction = getAchievementFaction(id),
+                                    .previous = supercedes,
+                                    .category = category,
+                                    .flags = getAchievementFlags(id),
+                                    .order = getAchievementUiOrder(id)});
         if (supercedes != 0) {
             achievementSupercedes_[id] = supercedes;
             achievementSupercededBy_[supercedes] = id;
         }
-        achievementRows_.push_back({.id = id,
-                                    .faction = getAchievementFaction(id),
-                                    .supercedes = supercedes,
-                                    .category = static_cast<int32_t>(category),
-                                    .flags = getAchievementFlags(id),
-                                    .order = getAchievementUiOrder(id)});
     }
 
     // Achievement_Category.dbc: id, parent, then the localised names. A parent
@@ -2991,7 +3039,18 @@ void GameHandler::loadFactionNameCache() const {
 
     auto dbc = am->loadDBC("Faction.dbc");
     if (!dbc || !dbc->isLoaded()) return;
+    readFactionTable(*dbc);
+}
 
+const std::string& GameHandler::getFactionDescription(uint32_t factionId) const {
+    static const std::string kNone;
+    loadFactionNameCache();
+    const auto it = factionDescriptions_.find(factionId);
+    return it != factionDescriptions_.end() ? it->second : kNone;
+}
+
+void GameHandler::readFactionTable(const pipeline::DBCFile& table) const {
+    const pipeline::DBCFile* dbc = &table;
     // Faction.dbc WotLK 3.3.5a field layout:
     //   0: ID
     //   1: ReputationListID  (-1 / 0xFFFFFFFF = no reputation tracking)
@@ -3003,6 +3062,8 @@ void GameHandler::loadFactionNameCache() const {
     //  19-20: SpilloverRateIn, SpilloverRateOut (floats)
     //  21-22: SpilloverMaxRankIn, SpilloverMaxRankOut
     //  23:    Name (English locale, string ref)
+    //  40:    Description, after the name's sixteen locales and its flags
+    constexpr uint32_t DESCRIPTION_FIELD = 40;
     constexpr uint32_t ID_FIELD      = 0;
     constexpr uint32_t REPLIST_FIELD = 1;
     constexpr uint32_t PARENT_FIELD  = 18;
@@ -3029,10 +3090,12 @@ void GameHandler::loadFactionNameCache() const {
             if (!name.empty()) {
                 factionNameCache_[factionId] = std::move(name);
             }
-            // The description is the second localised string, as long as the first.
-            const uint32_t descField = nameField + (dbc->getFieldCount() - nameField) / 2;
-            std::string desc = descField > nameField ? dbc->getString(i, descField) : std::string();
-            if (!desc.empty()) factionDescriptionCache_[factionId] = std::move(desc);
+        }
+        // 3.3.5's 57 fields: the shorter tables of the older expansions have
+        // their own columns there.
+        if (dbc->getFieldCount() == 57) {
+            std::string description = dbc->getString(i, DESCRIPTION_FIELD);
+            if (!description.empty()) factionDescriptions_[factionId] = std::move(description);
         }
         if (hasParentField) {
             const uint32_t parentId = dbc->getUInt32(i, PARENT_FIELD);
@@ -3443,7 +3506,6 @@ void GameHandler::setFactionAtWar(uint32_t repListId, bool atWar) {
     // the realm either way.
     if (atWar && !isFactionPeaceForced(repListId)) initialFactions_[repListId].flags |= FACTION_FLAG_AT_WAR;
     else initialFactions_[repListId].flags &= ~FACTION_FLAG_AT_WAR;
-    reputationListChanged();
     if (!isInWorld() || !socket) return;
     // CMSG_SET_FACTION_ATWAR: uint32 repListId + uint8 flag
     network::Packet pkt(wireOpcode(Opcode::CMSG_SET_FACTION_ATWAR));
@@ -3456,31 +3518,25 @@ void GameHandler::setFactionAtWar(uint32_t repListId, bool atWar) {
 void GameHandler::setFactionInactive(uint32_t repListId, bool inactive) {
     if (repListId >= initialFactions_.size()) return;
     // No SMSG confirmation is sent for inactive, so update the local flag directly.
+    // 0x005d1c10: the flag, the request, and then the rows made anew and told
+    // of (0x005d1880, event 0x16a).
     if (inactive) initialFactions_[repListId].flags |=  FACTION_FLAG_INACTIVE;
     else          initialFactions_[repListId].flags &= ~FACTION_FLAG_INACTIVE;
-    reputationListChanged();
-    if (!isInWorld() || !socket) return;
-    // CMSG_SET_FACTION_INACTIVE: uint32 repListId + uint8 flag
-    network::Packet pkt(wireOpcode(Opcode::CMSG_SET_FACTION_INACTIVE));
-    pkt.writeUInt32(repListId);
-    pkt.writeUInt8(inactive ? 1u : 0u);
-    socket->send(pkt);
-    LOG_DEBUG("CMSG_SET_FACTION_INACTIVE: repListId=", repListId, " inactive=", inactive);
-    fireAddonEvent("UPDATE_FACTION", {});  // 0x005d1880
+    if (isInWorld() && socket) {
+        // CMSG_SET_FACTION_INACTIVE: uint32 repListId + uint8 flag
+        network::Packet pkt(wireOpcode(Opcode::CMSG_SET_FACTION_INACTIVE));
+        pkt.writeUInt32(repListId);
+        pkt.writeUInt8(inactive ? 1u : 0u);
+        socket->send(pkt);
+        LOG_DEBUG("CMSG_SET_FACTION_INACTIVE: repListId=", repListId, " inactive=", inactive);
+    }
+    fireAddonEvent("UPDATE_FACTION", {});
 }
 
 std::string GameHandler::getFactionName(uint32_t factionId) const {
     auto it = factionNameCache_.find(factionId);
     if (it != factionNameCache_.end()) return it->second;
     return "faction #" + std::to_string(factionId);
-}
-
-const std::string& GameHandler::getFactionDescription(uint32_t factionId) const {
-    loadFactionNameCache();
-    const auto it = factionDescriptionCache_.find(factionId);
-    if (it != factionDescriptionCache_.end()) return it->second;
-    static const std::string empty;
-    return empty;
 }
 
 const std::string& GameHandler::getFactionNamePublic(uint32_t factionId) const {
@@ -4038,8 +4094,54 @@ const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
 }
 
 bool GameHandler::formSpellInEffect(uint32_t spellId) const {
-    return formSpellActive(getPlayerAuras(), spellId,
-                           shapeshiftFormPending_ && spellAppliesAura(spellId, kAuraModShapeshift));
+    if (shapeshiftFormPending_ && spellAppliesAura(spellId, kAuraModShapeshift)) return false;
+    if (isPreWotlk()) return formSpellActive(getPlayerAuras(), spellId);
+    return unitSpellInEffect(playerGuid, spellId, getPlayerAuras());
+}
+
+std::vector<uint32_t> GameHandler::stanceBarSpells() const {
+    if (!isPreWotlk()) return spellHandler_ ? spellHandler_->stanceBarSpells() : std::vector<uint32_t>{};
+    std::vector<uint32_t> spells;
+    for (const ShapeshiftForm& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
+        spells.push_back(form.spellId);
+    return spells;
+}
+
+void GameHandler::castStanceBarSpell(size_t index) {
+    const auto spells = stanceBarSpells();
+    if (index >= spells.size()) return;
+    useSpell(spells[index], 0);
+}
+
+void GameHandler::useSpell(uint32_t spellId, uint64_t targetGuid) {
+    const auto it = spellNameCache_.find(spellId);
+    if (isPreWotlk() || it == spellNameCache_.end() || !formSpellInEffect(spellId)) {
+        castSpell(spellId, targetGuid);
+        return;
+    }
+    // 0x00802f80 sends a companion away (CMSG_DISMISS_CRITTER) and gets the
+    // player off a mount (0x00740450): castSpell does both.
+    const auto& spell = it->second;
+    if (spell.effectIds[0] == 0x1c || spell.effectAuraIds[0] == 78) {
+        castSpell(spellId, targetGuid);
+        return;
+    }
+    // 0x0080da80: taken off, not within 1.5 s of its cooldown beginning with
+    // secureAbilityToggle on (0x00807d40) - and not cast again either way.
+    if (spellHandler_ && spellHandler_->toggleHeld(spellId)) return;
+    // 0x00802f80: not while the player is charmed, and only a spell that puts
+    // an aura on (0x007fdf20, the effects 0x0076be10 names).
+    const uint16_t charmedBy = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
+    if (auto self = getEntityManager().getEntity(playerGuid);
+        self && charmedBy != 0xFFFF &&
+        (self->getField(charmedBy) | self->getField(static_cast<uint16_t>(charmedBy + 1))) != 0)
+        return;
+    const auto appliesAura = [](uint32_t effect) {
+        return effect == 0x06 || effect == 0x23 || effect == 0x41 || effect == 0x77 || effect == 0x80 ||
+               effect == 0x81 || effect == 0x8f;
+    };
+    if (std::none_of(std::begin(spell.effectIds), std::end(spell.effectIds), appliesAura)) return;
+    cancelAura(spellId);
 }
 
 bool GameHandler::isCurrentSpell(uint32_t spellId) const {
@@ -4505,6 +4607,11 @@ void GameHandler::updatePetActionBar() {
     }
     const uint32_t before = getBonusActionBarOffset();
     petActionsOnBonusBar_ = on;
+    // Put there anew each time (0x005ab800 with 0x005d3240): twelve slots, of
+    // which each is said (0x005aae80 -> 0x005aa390). A button redraws for that
+    // alone once its number is the one it had - the bonus bar keeps its last.
+    for (int i = 0; on && i < 12; ++i)
+        fireAddonEvent("ACTIONBAR_SLOT_CHANGED", {std::to_string(kBonusPetSlotFirst + i + 1)});
     // 0x005a83c0: the page changes back from the pet's bar.
     for (const char* event : bonusBarOffsetEvents(before, getBonusActionBarOffset())) {
         fireAddonEvent(event, {});
@@ -4908,6 +5015,12 @@ std::vector<GameHandler::CalendarEventTexture> GameHandler::calendarEventTexture
     return out;
 }
 
+void GameHandler::openCalendarRow(const CalendarOpenRow& row, const char* type) {
+    if (calendarActionPending_) return;
+    calendarOpenRow_ = row;
+    fireAddonEvent("CALENDAR_OPEN_EVENT", {type});
+}
+
 bool GameHandler::openCalendarNewEvent(CalendarNewKind kind) {
     if (!isInWorld() || !entityController_->getEntityManager().getEntity(playerGuid)) return false;
     if (kind != CalendarNewKind::Player && getEntityGuildId(playerGuid) == 0) {
@@ -4919,6 +5032,7 @@ bool GameHandler::openCalendarNewEvent(CalendarNewKind kind) {
     calendarEventDetail_ = calendarNewEvent(kind, playerGuid,
                                             static_cast<uint8_t>(serverPlayerLevel_));
     calendarDraftOpen_ = true;
+    calendarOpenRow_ = {};
     if (kind == CalendarNewKind::Player)
         fireAddonEvent("CALENDAR_UPDATE_INVITE_LIST", {"1"});
     return true;
@@ -6157,28 +6271,65 @@ bool GameHandler::playerCanDualWield() const {
     return false;
 }
 
+namespace {
+constexpr uint32_t kEffectLearnSpell = 36;
+
+/// The spell an item's teaching spell teaches: the effect's trigger spell,
+/// else the item's spell with the learn trigger (6).
+uint32_t spellTaughtBy(const GameHandler::SpellNameEntry& lesson, const ItemQueryResponseData& item) {
+    constexpr uint32_t kItemSpellTriggerLearn = 6;
+    if (lesson.effectTriggerSpell[0] != 0) return lesson.effectTriggerSpell[0];
+    for (const auto& s : item.spells) {
+        if (s.spellTrigger == kItemSpellTriggerLearn) return s.spellId;
+    }
+    return 0;
+}
+}  // namespace
+
+bool GameHandler::itemFitsOffHand(uint32_t itemId) const {
+    const auto* item = itemId != 0 ? getItemInfo(itemId) : nullptr;
+    if (!item) return false;
+    return dressing_room::itemFitsOffHand(
+        item->itemClass, item->subClass, static_cast<uint8_t>(item->inventoryType), item->itemFlags,
+        [this](uint32_t itemClass, uint32_t subClass) {
+            loadSpellNameCache();
+            for (const uint32_t spellId : getKnownSpells()) {
+                const auto it = spellNameCache_.find(spellId);
+                if (it == spellNameCache_.end()) continue;
+                const auto& grip = it->second;
+                if (grip.effectIds[0] == SpellEffect::TITAN_GRIP && (grip.attr & 0x20u) == 0 &&
+                    grip.equippedItemClass == static_cast<int32_t>(itemClass) &&
+                    (grip.equippedItemSubClassMask & (1u << (subClass & 31u))) != 0)
+                    return true;
+            }
+            return false;
+        });
+}
+
+uint32_t GameHandler::itemMadeByRecipe(const ItemQueryResponseData& item) const {
+    constexpr uint32_t kEffectCreateItem = 24;
+    if (item.inventoryType != 0) return 0;
+    loadSpellNameCache();
+    for (const auto& s : item.spells) {
+        const auto lesson = s.spellId != 0 ? spellNameCache_.find(s.spellId) : spellNameCache_.end();
+        if (lesson == spellNameCache_.end() || lesson->second.effectIds[0] != kEffectLearnSpell) continue;
+        const auto taught = spellNameCache_.find(spellTaughtBy(lesson->second, item));
+        if (taught != spellNameCache_.end() && taught->second.effectIds[0] == kEffectCreateItem)
+            return taught->second.effectItemType0;
+    }
+    return 0;
+}
+
 bool GameHandler::itemSpellAlreadyKnown(const ItemQueryResponseData& item) const {
     // 0x006277f0, after the skill line: the item's first spell, when it is one
     // that teaches (SPELL_EFFECT_LEARN_SPELL, 36, as its first effect).
-    constexpr uint32_t kEffectLearnSpell = 36;
-    constexpr uint32_t kItemSpellTriggerLearn = 6;
     constexpr uint32_t kTargetPet = 5;
     const uint32_t first = item.spells[0].spellId;
     if (first == 0) return false;
     loadSpellNameCache();
     const auto it = spellNameCache_.find(first);
     if (it == spellNameCache_.end() || it->second.effectIds[0] != kEffectLearnSpell) return false;
-    // The spell taught: the effect's trigger spell, else the item's spell with
-    // the learn trigger (6).
-    uint32_t taught = it->second.effectTriggerSpell[0];
-    if (taught == 0) {
-        for (const auto& s : item.spells) {
-            if (s.spellTrigger == kItemSpellTriggerLearn) {
-                taught = s.spellId;
-                break;
-            }
-        }
-    }
+    const uint32_t taught = spellTaughtBy(it->second, item);
     if (taught == 0) return false;
     // Aimed at the pet, the pet's spells are asked; there being no pet, no line.
     if (it->second.implicitTargetsA[0] == kTargetPet || it->second.implicitTargetsB[0] == kTargetPet) {
@@ -6239,7 +6390,22 @@ int32_t GameHandler::getFactionStanding(uint32_t factionId) const {
 const std::vector<GameHandler::ReputationEntry>& GameHandler::getReputationList() const {
     // Nothing to resolve until the server has sent the standings, and building
     // an empty list once would keep it empty for the session.
-    if (reputationListBuilt_ || initialFactions_.empty()) return reputationList_;
+    if (initialFactions_.empty()) return reputationList_;
+
+    // Built anew when a flag is another: it was built once, so a faction met
+    // in the session was not among them until the next, nor one put away or
+    // taken to war said to be.
+    const auto flagsAre = [this] {
+        if (reputationListFlags_.size() != initialFactions_.size()) return false;
+        for (size_t i = 0; i < initialFactions_.size(); ++i)
+            if (reputationListFlags_[i] != initialFactions_[i].flags) return false;
+        return true;
+    };
+    if (flagsAre()) return reputationList_;
+    reputationListFlags_.clear();
+    for (const auto& standing : initialFactions_) reputationListFlags_.push_back(standing.flags);
+    reputationList_.clear();
+    reputationRowsDirty_ = true;
 
     // The reputation index to faction id mapping already exists: the faction
     // name cache reads it out of Faction.dbc and keeps both directions. Reading
@@ -6247,9 +6413,6 @@ const std::vector<GameHandler::ReputationEntry>& GameHandler::getReputationList(
     // holds the index, and the two could disagree.
     // getFactionIdByRepListId loads the cache itself on the first ask, so there
     // is nothing to prime here.
-    reputationListBuilt_ = true;
-    reputationList_.clear();
-
     for (size_t repIndex = 0; repIndex < initialFactions_.size(); ++repIndex) {
         const auto& standing = initialFactions_[repIndex];
         // Hidden factions are never shown, and one the player has not met yet
@@ -6361,34 +6524,14 @@ const std::vector<GameHandler::ReputationRow>& GameHandler::getReputationRows() 
     if (flat.empty()) return reputationRows_;
     reputationRowsDirty_ = false;
 
-    namespace tree = reputation_tree;
-    std::unordered_map<uint32_t, const ReputationEntry*> byId;
-    std::vector<tree::Known> known;
-    for (const auto& e : flat) {
-        byId[e.factionId] = &e;
-        known.push_back({e.factionId, (e.flags & FACTION_FLAG_INACTIVE) != 0});
-    }
-    const auto nameOf = [this](uint32_t id) {
-        if (id == tree::kOther) return interfaceString("FACTION_OTHER", "Other");
-        if (id == tree::kInactive) return interfaceString("FACTION_INACTIVE", "Inactive");
-        return getFactionNamePublic(id);
-    };
-    for (const tree::Row& at : tree::rows(known, {.parent = [this](uint32_t id) { return getFactionParentId(id); },
-                                                  .name = nameOf,
-                                                  .collapsed = [this](uint32_t id) { return isFactionCollapsed(id); }})) {
-        ReputationRow row;
-        row.factionId = at.id;
-        row.isHeader = at.header;
-        row.isChild = at.child;
-        row.name = nameOf(at.id);
-        if (const auto entry = byId.find(at.id); entry != byId.end()) {
-            row.reputationIndex = entry->second->reputationIndex;
-            row.name = entry->second->name;
-            row.flags = entry->second->flags;
-            row.hasRep = true;
-        }
-        reputationRows_.push_back(std::move(row));
-    }
+    reputationRows_ = reputation_tree::rows(
+        flat, [this](uint32_t id) { return getFactionParentId(id); },
+        [this](uint32_t id) {
+            if (id == reputation_tree::kInactive) return interfaceString("FACTION_INACTIVE", "Inactive");
+            if (id == reputation_tree::kOther) return interfaceString("FACTION_OTHER", "Other");
+            return getFactionNamePublic(id);
+        },
+        [this](uint32_t id) { return isFactionCollapsed(id); });
     return reputationRows_;
 }
 
@@ -6550,8 +6693,11 @@ const QuestRequestItemsData& GameHandler::getQuestRequestItems() const {
 int GameHandler::getSelectedQuestLogIndex() const {
     return questHandler_ ? questHandler_->getSelectedQuestLogIndex() : 0;
 }
-void GameHandler::setSelectedQuestLogIndex(int idx) {
-    if (questHandler_) questHandler_->setSelectedQuestLogIndex(idx);
+const GameHandler::QuestLogEntry* GameHandler::getSelectedQuest() const {
+    return questHandler_ ? questHandler_->selectedQuest() : nullptr;
+}
+void GameHandler::selectQuestLogRow(int index) {
+    if (questHandler_) questHandler_->selectQuestLogRow(index);
 }
 uint32_t GameHandler::getSharedQuestId() const {
     return questHandler_ ? questHandler_->getSharedQuestId() : 0;

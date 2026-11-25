@@ -441,13 +441,22 @@ public:
     /// radius, and whether the place is out of the spell's reach.
     void setSpellTargetCircle(const glm::vec3& pos, float radius, bool unacceptable);
     void clearSpellTargetCircle();
-    /// The first terrain, building or doodad surface along a ray from the
-    /// camera, renderer coordinates - the ground a click on the world lands
-    /// on (CWorld's intersect, 0x004f66c0's place).
-    /// wmoInstanceId, where given, is the building the place is on, 0 for
-    /// none.
+    /// How far along a ray from the camera (renderer coordinates, `dir` of
+    /// length 1) the first thing of the world that is seen there is: the
+    /// terrain, a building's opaque face, a doodad's opaque triangle, with
+    /// `liquid` a liquid's surface. Whatever is farther is hidden from the
+    /// pointer (0x004f9930's first trace, pointer_pick.hpp).
+    [[nodiscard]] std::optional<float> pointerBlockedAt(const glm::vec3& origin, const glm::vec3& dir,
+                                                        float maxDistance, bool liquid,
+                                                        uint32_t* wmoInstanceId = nullptr) const;
+    /// The place on the ground the pointer is at, renderer coordinates
+    /// (0x004f9930 with a ground flag): what it is blocked at, or before that
+    /// the first surface of the trace 0x100151 - the terrain, a building's
+    /// collision, the models'. wmoInstanceId, where given, is the building
+    /// the place is on, 0 for none.
     [[nodiscard]] std::optional<glm::vec3> pickGround(const glm::vec3& origin, const glm::vec3& dir,
-                                                      float maxDistance, uint32_t* wmoInstanceId = nullptr) const;
+                                                      float maxDistance, bool liquid,
+                                                      uint32_t* wmoInstanceId = nullptr) const;
     /// How far from `from` to `to` (0..1) the first surface is, either
     /// side: the world's intersect with 0x120111 (0x007a3b70) - the
     /// terrain, the buildings and the doodads' collision. Renderer
@@ -587,6 +596,8 @@ private:
         uint32_t instanceId = 0;
     };
     std::vector<SkyLayerInstance> skyLayers_;
+    /// The light's sky model has an instance to draw.
+    [[nodiscard]] bool skyLayerDrawn(const std::string& lightPath) const;
     /// Sky models already uploaded, by path, so one that fades out and back in
     /// is not read off disk again.
     std::unordered_map<std::string, uint32_t> loadedSkyModels_;
@@ -878,6 +889,10 @@ public:
     /// The /mem report. `extra`: owners the renderer cannot see (the Lua
     /// state, the audio caches), listed with the world's.
     [[nodiscard]] std::vector<std::string> memoryReport(const std::vector<MemoryEntry>& extra = {}) const;
+    /// The same as entries: the process, its heaps, Vulkan's, every owner.
+    [[nodiscard]] std::vector<MemoryEntry> memoryOwners(const std::vector<MemoryEntry>& extra = {}) const;
+    [[nodiscard]] std::vector<MemoryEntry> memoryOfWorld(const std::vector<MemoryEntry>& extra) const;
+    [[nodiscard]] std::vector<MemoryEntry> memoryOfRt() const;
     /// The memory in use and to spare now (rt_memory_guard.hpp). Overridden
     /// for testing by WOWEE_FAKE_GPU_FREE_MB (the graphics budget left),
     /// WOWEE_FAKE_AVAIL_MB (the system's available RAM) and WOWEE_FAKE_UNIFIED.

@@ -56,6 +56,9 @@ void applySoundCVarSideEffects(lua_State* L);
 /// no such key, so a fresh install gets the default rather than nothing.
 std::string storedCVarValue(const std::string& key, const std::string& fallback);
 
+/// Money in coins' icons (0x007e7e10), through the interface's global strings.
+std::string coinTextureText(lua_State* L, int32_t amount, int height);
+
 /// Tell the CVar store that a setting it drives has been changed elsewhere.
 ///
 /// Six settings are driven by a Blizzard control through kClientCVars, and

@@ -107,6 +107,77 @@ public:
         return *this;
     }
 
+    // A unit of the WotLK realm's walking its path (UPDATEFLAG_LIVING, with
+    // MOVEMENTFLAG_SPLINE_ENABLED), as Unit::BuildMovementUpdate and
+    // PacketBuilder::WriteCreate write it.
+    UpdateObject& walking(uint64_t guid, const Fields& fields, const glm::vec3& at,
+                          const std::vector<glm::vec3>& points, uint32_t splineFlags = 0, uint8_t mode = 0,
+                          const glm::vec3& end = glm::vec3(0.0f)) {
+        Spline spline;
+        spline.at = at;
+        spline.points = points;
+        spline.flags = splineFlags;
+        spline.mode = mode;
+        spline.end = end;
+        return onSpline(guid, fields, spline);
+    }
+
+    // The same with all it says.
+    struct Spline {
+        wowee::game::UpdateType type = wowee::game::UpdateType::CREATE_OBJECT;
+        wowee::game::ObjectType objectType = wowee::game::ObjectType::UNIT;
+        uint32_t moveFlags = 0x08000001;
+        uint64_t transport = 0;  // with ONTRANSPORT, and its place there
+        glm::vec3 onTransport{0.0f};
+        uint8_t seat = 0xff;
+        glm::vec3 at{0.0f};
+        float facing = 0.5f;
+        uint32_t flags = 0;
+        float finalAngle = 1.0f;
+        uint64_t finalTarget = 0;
+        uint32_t passed = 500, duration = 600000, id = 77;
+        float factor = 1.0f, nextFactor = 1.0f;
+        float acceleration = 0.0f;
+        uint32_t arcStart = 0;
+        std::vector<glm::vec3> points;
+        uint8_t mode = 0;
+        glm::vec3 end{0.0f};
+    };
+    UpdateObject& onSpline(uint64_t guid, const Fields& fields, const Spline& s) {
+        ++blocks_;
+        body_.writeUInt8(static_cast<uint8_t>(s.type));
+        body_.writePackedGuid(guid);
+        if (s.type != wowee::game::UpdateType::MOVEMENT) body_.writeUInt8(static_cast<uint8_t>(s.objectType));
+        body_.writeUInt16(s.objectType == wowee::game::ObjectType::PLAYER ? 0x0061 : 0x0060);
+        body_.writeUInt32(s.moveFlags);
+        body_.writeUInt16(0);
+        body_.writeUInt32(1000);
+        for (float f : {s.at.x, s.at.y, s.at.z, s.facing}) body_.writeFloat(f);
+        if (s.moveFlags & 0x200u) {
+            body_.writePackedGuid(s.transport);
+            for (float f : {s.onTransport.x, s.onTransport.y, s.onTransport.z, s.facing}) body_.writeFloat(f);
+            body_.writeUInt32(0);
+            body_.writeUInt8(s.seat);
+        }
+        body_.writeUInt32(0);
+        for (int i = 0; i < 9; ++i) body_.writeFloat(7.0f);
+        if (s.moveFlags & 0x08000000u) {
+            body_.writeUInt32(s.flags);
+            if (s.flags & 0x20000u) body_.writeFloat(s.finalAngle);
+            else if (s.flags & 0x10000u) body_.writeUInt64(s.finalTarget != 0 ? s.finalTarget : guid);
+            else if (s.flags & 0x8000u) for (int i = 0; i < 3; ++i) body_.writeFloat(1.0f);
+            for (uint32_t v : {s.passed, s.duration, s.id}) body_.writeUInt32(v);
+            for (float f : {s.factor, s.nextFactor, s.acceleration}) body_.writeFloat(f);
+            body_.writeUInt32(s.arcStart);
+            body_.writeUInt32(static_cast<uint32_t>(s.points.size()));
+            for (const auto& p : s.points) for (float f : {p.x, p.y, p.z}) body_.writeFloat(f);
+            body_.writeUInt8(s.mode);
+            for (float f : {s.end.x, s.end.y, s.end.z}) body_.writeFloat(f);
+        }
+        if (s.type != wowee::game::UpdateType::MOVEMENT) writeFields(fields);
+        return *this;
+    }
+
     // Fields changing on something already there.
     UpdateObject& values(uint64_t guid, const Fields& fields) {
         ++blocks_;

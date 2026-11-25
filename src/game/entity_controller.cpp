@@ -490,7 +490,13 @@ void EntityController::updateNonPlayerTransportAttachment(const UpdateBlock& blo
             roster.setPitch(block.guid, block.pitch);
         }
     }
-    if (block.guid == owner_.getPlayerGuid()) return;
+    if (block.guid == owner_.getPlayerGuid()) {
+        // Its place in its vehicle, as the others' attachments have theirs.
+        if ((block.updateFlags & 0x0020) && block.onTransport && owner_.getMovementHandler())
+            owner_.getMovementHandler()->noteSeatOffset(
+                block.guid, block.transportGuid, glm::vec3(block.transportX, block.transportY, block.transportZ));
+        return;
+    }
     // A dynamic object rides one too (UPDATEFLAG_POSITION, 0x004d3890): its
     // place is its offset there (0x00705230 -> 0x004f4230).
     if (entityType != ObjectType::UNIT && entityType != ObjectType::GAMEOBJECT &&
@@ -611,7 +617,11 @@ void EntityController::detectPlayerMountChange(uint32_t newMountDisplayId,
     // same as the SMSG_DISMOUNT guard: still set means premature (ignore,
     // let the client spline finish naturally); already cleared means the
     // server considers the flight over (honor it now).
-    const bool onRealTaxiFlight = owner_.getMovementHandler() && owner_.getMovementHandler()->isOnTaxiFlight();
+    //
+    // A 3.3.5 flight runs on the server's own spline and the mount field is
+    // taken as it comes, as the client takes it.
+    const bool onRealTaxiFlight = isPreWotlk() && owner_.getMovementHandler() &&
+                                  owner_.getMovementHandler()->isOnTaxiFlight();
     if (onRealTaxiFlight && newMountDisplayId == 0) {
         bool serverStillTaxiing = false;
         auto playerEntity = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
@@ -658,7 +668,15 @@ void EntityController::detectPlayerMountChange(uint32_t newMountDisplayId,
     if (newMountDisplayId != old && owner_.mountCallbackRef()) owner_.mountCallbackRef()(newMountDisplayId);
     if (newMountDisplayId != old)
         pendingEvents_.emit("UNIT_MODEL_CHANGED", {"player"});
-    if (old == 0 && newMountDisplayId != 0) {
+    // A flight's mount is no aura's: there is none to look for, nor one to take
+    // off the player when the flight is over.
+    const uint16_t flagsField = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const bool flightMount =
+        (mh && mh->isOnTaxiFlight()) ||
+        (self && flagsField != 0xFFFF && (self->getField(flagsField) & UNIT_FLAG_TAXI_FLIGHT) != 0);
+    if (old == 0 && newMountDisplayId != 0 && flightMount) owner_.mountAuraSpellIdRef() = 0;
+    if (old == 0 && newMountDisplayId != 0 && !flightMount) {
         // Just mounted - find the mount aura (indefinite duration, self-cast).
         // Prefer the spell the player just cast: the blind scan below keeps the
         // last matching aura, which is as likely to be a racial or a tracking
@@ -1578,6 +1596,14 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         owner_.addonEventCallbackRef()("UNIT_PET_EXPERIENCE", {"pet"});
     }
     applyPlayerShapeshiftForm(block);
+    // The rescan 0x0053cf10 where the player's flags, its health or its
+    // PLAYER_FLAGS decide what may be cast (0x0073c330, 0x0073f330,
+    // 0x006e0fd0): the stance bar, when a button of it changed.
+    if (block.guid == owner_.getPlayerGuid() && !isPreWotlk() &&
+        (block.fields.find(ufi.flags) != block.fields.end() || block.fields.find(ufi.health) != block.fields.end() ||
+         block.fields.find(fieldIndex(UF::PLAYER_FLAGS)) != block.fields.end()) &&
+        owner_.shapeshiftCastabilityChanged())
+        pendingEvents_.emit("UPDATE_SHAPESHIFT_USABLE", {});
     notePlayerPvpByte(block, false);
     // The pet tab redraws its stat block on these, named for the pet.
     if (petStatsChanged && owner_.addonEventCallbackRef()) {
@@ -2636,6 +2662,10 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         // The active player made: 0x006e6150 -> 0x00528010 -> 0x005cb900,
         // the guild rights asked for with PLAYER_GUILDID now known.
         owner_.onPlayerEnteredWorldGuild();
+        // The time played, asked for quietly (0x006e6b40): what is refundable
+        // and what an item says of it count from the answer. The earlier
+        // clients' answer has no byte that keeps it from the chat.
+        if (!isPreWotlk()) owner_.requestPlayedTime(false);
         // ...and, from the unit's own creation (0x0072e3a0 -> 0x006d66e0),
         // PVPQUEUE_ANYWHERE_UPDATE_AVAILABLE (event 0x26f): the battleground
         // queue can be asked about from anywhere again.
@@ -2660,7 +2690,7 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         if ((unit->getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0 && owner_.taxiLandingCooldownRef() <= 0.0f) {
             owner_.taxiStartGraceRef() = std::max(owner_.taxiStartGraceRef(), 2.0f);
             owner_.sanitizeMovementForTaxi();
-            if (owner_.getMovementHandler()) owner_.getMovementHandler()->applyTaxiMountForCurrentNode();
+            if (isPreWotlk() && owner_.getMovementHandler()) owner_.getMovementHandler()->applyTaxiMountForCurrentNode();
         }
     }
     if (block.guid == owner_.getPlayerGuid()) {
@@ -3966,8 +3996,15 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     // 3a: Create entity from block type
     std::shared_ptr<Entity> entity = createEntityFromBlock(block);
 
+    // The player's own, made again while a spline carries it: its movement
+    // block is not taken (0x004d63b0 hands 0x0073c260 that it is the player)
+    // and it goes on as it was.
+    const auto before = block.guid == owner_.getPlayerGuid() ? entityManager.getEntity(block.guid) : nullptr;
+    const bool keepsMoving = before && before->isUnit() && owner_.onMoveSpline(block.guid);
+    if (keepsMoving) *entity = *before;
+
     // Set position from movement block (server → canonical)
-    if (block.hasMovement) {
+    if (block.hasMovement && !keepsMoving) {
         glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
         float oCanonical = blockCanonicalFacing(block);
         entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
@@ -4002,6 +4039,8 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     auto* handler = getTypeHandler(block.objectType);
     if (handler) handler->onCreate(block, entity, newItemCreated);
 
+    if (!keepsMoving) takeBlockSpline(block, entity);
+
     // UNIT_PET for whoever charmed the unit, and for who summoned it
     // (0x0073fcc0): its owner's fields may have come before it.
     if (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) {
@@ -4021,6 +4060,13 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     }
 
     flushPendingEvents();
+}
+
+void EntityController::takeBlockSpline(const UpdateBlock& block, const std::shared_ptr<Entity>& entity) {
+    auto* movement = owner_.getMovementHandler();
+    if (!movement) return;
+    const int64_t queued = TransportManager::nowSteadyMs() - currentUpdateSampleSteadyMs();
+    movement->takeBlockSpline(block, entity, static_cast<uint32_t>(std::max<int64_t>(queued, 0)));
 }
 
 void EntityController::handleValuesUpdate(const UpdateBlock& block) {
@@ -4272,6 +4318,8 @@ void EntityController::handleMovementUpdate(const UpdateBlock& block) {
                     owner_.creatureMoveCallbackRef()) {
                     owner_.creatureMoveCallbackRef()(block.guid, pos.x, pos.y, pos.z, 0);
                 }
+                // Not the player's own block (0x004d6da0).
+                if (block.guid != owner_.getPlayerGuid()) takeBlockSpline(block, entity);
             } else {
                 LOG_WARNING("MOVEMENT update for unknown entity: 0x", std::hex, block.guid, std::dec);
             }

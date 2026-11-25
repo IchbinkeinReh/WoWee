@@ -1320,42 +1320,60 @@ void WidgetRenderer::drawMovie(ImDrawList* dl, const Widget& w, float x0, float 
     dl->AddImage(reinterpret_cast<ImTextureID>(movieTexture_->descriptorSet), ImVec2(dx, dy), ImVec2(dx + dw, dy + dh));
 }
 
-namespace {
-const std::string kCooldownStar = "Interface\\Cooldown\\star4";
-const std::string kCooldownEdge = "Interface\\Cooldown\\edge";
-}  // namespace
+// The pictures of a cooldown (0x00ad139c, 0x00ad13a0).
+static const std::string kCooldownStar = "Interface\\Cooldown\\star4.blp";
+static const std::string kCooldownEdge = "Interface\\Cooldown\\edge.blp";
 
 void WidgetRenderer::drawCooldown(ImDrawList* dl, const Widget& w,
                                   float x0, float y0, float x1, float y1) {
-    if (!w.cooldownClock.runs()) return;
-    const float passed = w.cooldownClock.passed(core::appTimeSeconds());
-    // A whole texture over the frame, its corners sampled as they are turned.
-    const auto turned = [&](VkDescriptorSet tex, float turn, float extent, ImU32 colour) {
-        if (tex == kMissing) return;
-        const auto uv = cooldown::turnedCorners(turn, extent);
-        dl->AddImageQuad(reinterpret_cast<ImTextureID>(tex), ImVec2(x0, y0), ImVec2(x1, y0), ImVec2(x1, y1),
-                         ImVec2(x0, y1), ImVec2(uv[0].x, uv[0].y), ImVec2(uv[1].x, uv[1].y),
-                         ImVec2(uv[3].x, uv[3].y), ImVec2(uv[2].x, uv[2].y), colour);
+    if (!w.cooldown.drawn) return;
+    const uint32_t now = cooldown_sweep::msOf(core::appTimeSeconds());
+    const auto at = [&](const cooldown_sweep::Point& p) {
+        return ImVec2(x0 + (x1 - x0) * p.u, y0 + (y1 - y0) * p.v);
     };
-    const auto alpha = [&](float of) { return static_cast<int>(std::clamp(w.drawAlpha * of, 0.0f, 1.0f) * 255.0f + 0.5f); };
-    if (w.cooldownClock.flash) {
-        const auto flash = cooldown::flashAt(passed);
-        turned(resident(kCooldownStar, kVariantAdd), flash.turn, flash.extent,
-               IM_COL32(0x50, 0xa0, 0xff, alpha(flash.alpha)));
+    const auto quad = [&](VkDescriptorSet tex, const std::array<cooldown_sweep::Point, 4>& uv, uint32_t col) {
+        dl->AddImageQuad(reinterpret_cast<ImTextureID>(tex), ImVec2(x0, y0), ImVec2(x1, y0), ImVec2(x1, y1),
+                         ImVec2(x0, y1), ImVec2(uv[0].u, uv[0].v), ImVec2(uv[1].u, uv[1].v),
+                         ImVec2(uv[3].u, uv[3].v), ImVec2(uv[2].u, uv[2].v), col);
+    };
+    if (w.cooldown.flashing) {
+        // The star, added on in light blue (0x0050a0ff), for its second.
+        const uint32_t elapsed = now - w.cooldown.startMs;
+        if (elapsed >= w.cooldown.durationMs) return;
+        const VkDescriptorSet star = resident(kCooldownStar, kVariantAdd);
+        if (star == kMissing) return;
+        const auto f = cooldown_sweep::flash(elapsed);
+        const float tint[4] = {80.0f / 255.0f, 160.0f / 255.0f, 1.0f, f.alpha};
+        quad(star, cooldown_sweep::turned(f.angle, f.scale), packColor(tint, w.drawAlpha));
         return;
     }
-    // The shade: the rim and the middle, as triangles side by side - without
-    // the smoothing of their edges, which would show between them.
-    const auto at = [&](const cooldown::Point& p) { return ImVec2(x0 + (x1 - x0) * p.x, y0 + (y1 - y0) * p.y); };
-    const ImVec2 middle = at({0.5f, 0.5f});
-    const auto rim = cooldown::covered(passed, w.cooldownReverse);
-    const ImU32 shade = IM_COL32(0, 0, 0, alpha(cooldown::kShade));
-    const ImDrawListFlags flags = dl->Flags;
-    dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;
-    for (size_t i = 0; i + 1 < rim.size(); ++i) dl->AddTriangleFilled(middle, at(rim[i]), at(rim[i + 1]), shade);
-    dl->Flags = flags;
+    const float progress = cooldown_sweep::progress(w.cooldown, w.cooldownReverse, now);
+    if (progress < 0.0f) return;
+
+    // The shade, a fan round the middle: straight to the rect's own sides, so
+    // there is nothing to clip, and no softened edges to show where its
+    // triangles meet. Black at 0xa0 of the frame's alpha (0x005ec790).
+    std::array<cooldown_sweep::Point, 10> rim;
+    const int n = cooldown_sweep::rim(progress, w.cooldownReverse, rim);
+    const float shade[4] = {0.0f, 0.0f, 0.0f, 160.0f / 255.0f};
+    const uint32_t col = packColor(shade, w.drawAlpha);
+    const ImVec2 white = ImGui::GetFontTexUvWhitePixel();
+    dl->PrimReserve((n - 1) * 3, n + 1);
+    const unsigned int first = dl->_VtxCurrentIdx;
+    dl->PrimWriteVtx(at({0.5f, 0.5f}), white, col);
+    for (int i = 0; i < n; ++i) dl->PrimWriteVtx(at(rim[i]), white, col);
+    for (int i = 1; i < n; ++i) {
+        dl->PrimWriteIdx(static_cast<ImDrawIdx>(first));
+        dl->PrimWriteIdx(static_cast<ImDrawIdx>(first + i));
+        dl->PrimWriteIdx(static_cast<ImDrawIdx>(first + i + 1));
+    }
+
     if (w.cooldownDrawEdge) {
-        turned(resident(kCooldownEdge), passed * -6.2831855f, w.effScale, IM_COL32(255, 255, 255, alpha(1.0f)));
+        if (const VkDescriptorSet edge = resident(kCooldownEdge); edge != kMissing) {
+            const float full[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            quad(edge, cooldown_sweep::turned(cooldown_sweep::edgeAngle(progress), w.effScale > 0.0f ? w.effScale : 1.0f),
+                 packColor(full, w.drawAlpha));
+        }
     }
 }
 

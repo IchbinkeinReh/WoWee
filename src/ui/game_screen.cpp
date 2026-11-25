@@ -58,6 +58,8 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/pvp_flags.hpp"
 #include "game/game_utils.hpp"
+#include "game/game_object_type.hpp"
+#include "game/world_pick.hpp"
 #include "core/logger.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1635,16 +1637,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
         }
 
         if (!textFocus) {
-            // Toggle character screen (C) and inventory/bags (I)
-            if (KeybindingManager::getInstance().isActionPressed(KeybindingManager::Action::TOGGLE_CHARACTER_SCREEN)) {
-                // The route table in application.cpp calls ToggleCharacter for
-                // this key. Calling it here as well was the whole of a bug
-                // reported three times: IsKeyPressed does not consume, so both
-                // sites saw the same press and toggled in the same frame -
-                // open, then shut, and nothing on screen.
-                if (gameHandler.isConnected()) gameHandler.requestPlayedTime();
-            }
-
+            // Inventory/bags (I). The character screen (C) is the route table's
+            // in application.cpp alone, as TOGGLECHARACTER0 in bindings.xml is
+            // a ToggleCharacter and nothing more.
             if (KeybindingManager::getInstance().isActionPressed(KeybindingManager::Action::TOGGLE_INVENTORY)) {
                 // ToggleAllBags is a later addition and is not in this
                 // FrameXML, so this key did nothing at all once the bags were
@@ -1784,7 +1779,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     mousePos.x, mousePos.y, static_cast<float>(window->getWidth()),
                     static_cast<float>(window->getHeight()));
                 uint32_t building = 0;
-                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building);
+                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance,
+                                                         (gameHandler.worldPickFlags() & game::world_pick::kLiquid) != 0,
+                                                         &building);
                 const auto aim = gameHandler.aimGroundTarget(
                     ground ? std::optional<game::ground_target::Place>(groundPlaceAt(gameHandler, *ground, building))
                            : std::nullopt);
@@ -1949,7 +1946,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 // (0x00527360 -> 0x0080c340).
                 if (gameHandler.isGroundTargeting()) {
                     uint32_t building = 0;
-                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building)) {
+                    if (auto ground = renderer->pickGround(
+                            ray.origin, ray.direction, kGroundPickDistance,
+                            (gameHandler.worldPickFlags() & game::world_pick::kLiquid) != 0, &building)) {
                         gameHandler.placeGroundTarget(groundPlaceAt(gameHandler, *ground, building));
                     }
                     return;
@@ -2236,7 +2235,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     // on (0x005278c0 -> 0x0072f040, kind 8). Without it the
                     // click does nothing.
                     uint32_t building = 0;
-                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building)) {
+                    if (auto ground = renderer->pickGround(
+                            ray.origin, ray.direction, kGroundPickDistance,
+                            (gameHandler.worldPickFlags() & game::world_pick::kLiquid) != 0, &building)) {
                         gameHandler.clickToMoveTo(groundPlaceAt(gameHandler, *ground, building).canonical);
                     } else {
                         gameHandler.clickToMoveFaceDirection(core::coords::renderToCanonical(ray.direction));
@@ -2282,8 +2283,8 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 // Skip chairs: auto-sit must only happen when the chair is
                 // under the cursor, never as a side effect of right-click.
                 auto go = std::static_pointer_cast<game::GameObject>(target);
-                auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
-                if (!goInfo || goInfo->type != 7) {
+                const auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
+                if (game::gameObjectTypeOf(*go, goInfo) != 7) {
                     gameHandler.interactWithGameObject(target->getGuid());
                 }
             }

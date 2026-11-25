@@ -5,6 +5,7 @@
 // file it wrote spells those defaults out, so the file has to be moved as well.
 #include <catch_amalgamated.hpp>
 
+#include "test_support.hpp"
 #include "ui/keybinding_manager.hpp"
 
 #include <cstdio>
@@ -64,4 +65,48 @@ TEST_CASE("a key the player chose is kept", "[keybindings]") {
     CHECK(k.getKeyForAction(Action::TOGGLE_INVENTORY) == ImGuiKey_I);
     std::remove(path.c_str());
     k.resetToDefaults();
+}
+
+// P68: a key a frame takes goes nowhere else (0x004943c0). The world map closes on its M in
+// OnKeyDown, and the press opened it again; only Escape, Enter and Tab were said to be taken.
+TEST_CASE("a key taken by a frame is taken whatever key it is", "[keybindings]") {
+    using namespace wowee::ui;
+    clearInterfaceConsumedKeys();
+    CHECK_FALSE(interfaceConsumedKey(ImGuiKey_M));
+    noteInterfaceConsumedKeycode('m');
+    CHECK(interfaceConsumedKey(ImGuiKey_M));
+    CHECK_FALSE(interfaceConsumedKey(ImGuiKey_N));
+    clearInterfaceConsumedKeys();
+    noteInterfaceConsumedKeycode(0);
+    CHECK_FALSE(interfaceConsumedKey(ImGuiKey_None));
+    CHECK(imguiKeyOf('0') == ImGuiKey_0);
+    CHECK(imguiKeyOf(27) == ImGuiKey_Escape);
+    CHECK(imguiKeyOf('\r') == ImGuiKey_Enter);
+    CHECK(imguiKeyOf(0x40000058) == ImGuiKey_Enter);
+    CHECK(imguiKeyOf(0x4000003A) == ImGuiKey_F1);
+    CHECK(imguiKeyOf(0x40000045) == ImGuiKey_F12);
+    CHECK(imguiKeyOf(0x4000004F) == ImGuiKey_RightArrow);
+    CHECK(imguiKeyOf(0x7F) == ImGuiKey_Delete);
+    CHECK(imguiKeyOf('-') == ImGuiKey_Minus);
+
+    // Both ways the pump has of taking one say so.
+    const std::string src = wowee::test::slurp("src/core/application.cpp");
+    const auto takes = [&src](const std::string& call) {
+        const auto at = src.find(call);
+        REQUIRE(at != std::string::npos);
+        const auto end = src.find("continue;", at);
+        return src.substr(at, end - at).find("noteInterfaceConsumedKeycode(") != std::string::npos;
+    };
+    CHECK(takes("engine->dispatchFrameKey(event.key.key, true, event.key.repeat)"));
+    // And what reads the keyboard itself, which moving does (P75).
+    const auto spends = [&src](const std::string& call) {
+        const auto at = src.find(call);
+        REQUIRE(at != std::string::npos);
+        const auto end = src.find("continue;", at);
+        return src.substr(at, end - at).find("setKeySpent(event.key.scancode)") != std::string::npos;
+    };
+    CHECK(spends("engine->dispatchFrameKey(event.key.key, true, event.key.repeat)"));
+    CHECK(src.find("setKeySpent(event.key.scancode);\n                        engine->dispatchKey(") !=
+          std::string::npos);
+    CHECK(takes("engine->dispatchBindingKey(\n                                event.key.key,\n"));
 }

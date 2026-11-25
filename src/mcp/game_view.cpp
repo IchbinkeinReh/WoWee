@@ -1,5 +1,9 @@
 #include "mcp/game_view.hpp"
 
+#include "mcp/entity_pick.hpp"
+
+#include <limits>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -416,20 +420,24 @@ std::shared_ptr<game::Entity> findEntity(ToolContext& context, const json& args)
     if (wanted.empty()) return nullptr;
     const glm::vec3 me = playerAt(context);
     std::shared_ptr<game::Entity> best;
-    float bestDistance = 1e30f;
+    float bestRank = std::numeric_limits<float>::infinity();
+    const std::string state = args.value("state", std::string());
+    const bool livingFirst = !args.value("nearest", false);
     for (const auto& [guid, entity] : manager.getEntities()) {
         if (!entity || guid == gh->getPlayerGuid()) continue;
         const std::string name = lower(entityName(context, *entity));
         if (name.empty() || name.find(wanted) == std::string::npos) continue;
-        float d = glm::length(entityAt(context, *entity) - me);
-        // The whole name before a part of one, the living before the dead.
-        if (name != wanted) d += 1000.0f;
-        if (entity->getType() == game::ObjectType::UNIT &&
-            static_cast<const game::Unit&>(*entity).getHealth() == 0) {
-            d += 500.0f;
+        PickCandidate c;
+        c.wholeName = name == wanted;
+        c.distance = glm::length(entityAt(context, *entity) - me);
+        if (entity->getType() == game::ObjectType::UNIT) {
+            const auto& u = static_cast<const game::Unit&>(*entity);
+            c.unit = true;
+            c.dead = u.getHealth() == 0;
+            c.lootable = c.dead && (u.getDynamicFlags() & game::UNIT_DYNFLAG_LOOTABLE) != 0;
         }
-        if (d < bestDistance) {
-            bestDistance = d;
+        if (const float rank = pickRank(c, state, livingFirst); rank < bestRank) {
+            bestRank = rank;
             best = entity;
         }
     }

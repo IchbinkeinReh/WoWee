@@ -30,6 +30,6 @@ void main() {
     results[i * 2u] = e;
     float lift = texelFetch(uAtlas, GI_EXPOSURE_TEXEL, 0).r;
     results[i * 2u + 1u] = vec4(giAmbientRatio(e, c.sky.rgb, c.ground.rgb, n, c.sky.w, c.ground.w,
-                                               c.params.x, lift > 0.0 ? lift : 1.0),
+                                               c.params.x, lift > 0.0 ? lift : 1.0, 0.0),
                                 lift);
 }

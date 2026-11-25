@@ -2,6 +2,9 @@
 // game_replay.hpp.
 #include <catch_amalgamated.hpp>
 
+#include <optional>
+
+#include "game/game_object_type.hpp"
 #include "game_replay.hpp"
 #include "game/combat_handler.hpp"
 #include "game/idle_steps.hpp"
@@ -1009,6 +1012,148 @@ TEST_CASE("the equipment manager hears of every change at once", "[replay][playt
     CHECK_FALSE(gh.useEquipmentSet("Mend", false));   // the first is not answered
 }
 
+// A forced change answered while the player's own unit is not there yet went out
+// with the movement of none: 0/0/0 facing 1.5707964, where the server then had
+// the character until it moved. 0x00732450 looks the unit up for every one of
+// them and leaves the packet be where there is none.
+TEST_CASE("a forced movement change is answered by a unit that is there", "[replay][playtest]") {
+    struct Forced {
+        Opcode op;
+        Opcode ack;
+        std::vector<float> floats;
+        bool extraByte = false;
+    };
+    const Forced forced = GENERATE(
+        Forced{Opcode::SMSG_FORCE_RUN_SPEED_CHANGE, Opcode::CMSG_FORCE_RUN_SPEED_CHANGE_ACK, {8.05f}, true},
+        Forced{Opcode::SMSG_FORCE_SWIM_SPEED_CHANGE, Opcode::CMSG_FORCE_SWIM_SPEED_CHANGE_ACK, {4.7f}},
+        Forced{Opcode::SMSG_FORCE_MOVE_ROOT, Opcode::CMSG_FORCE_MOVE_ROOT_ACK, {}},
+        Forced{Opcode::SMSG_FORCE_MOVE_UNROOT, Opcode::CMSG_FORCE_MOVE_UNROOT_ACK, {}},
+        Forced{Opcode::SMSG_MOVE_SET_CAN_FLY, Opcode::CMSG_MOVE_SET_CAN_FLY_ACK, {}},
+        Forced{Opcode::SMSG_MOVE_WATER_WALK, Opcode::CMSG_MOVE_WATER_WALK_ACK, {}},
+        Forced{Opcode::SMSG_MOVE_SET_COLLISION_HGT, Opcode::CMSG_MOVE_SET_COLLISION_HGT_ACK, {2.0f}},
+        Forced{Opcode::SMSG_MOVE_KNOCK_BACK, Opcode::CMSG_MOVE_KNOCK_BACK_ACK, {1.0f, 0.0f, 5.0f, -5.0f}});
+    const auto packet = [&] {
+        wowee::network::Packet p(wowee::game::wireOpcode(forced.op));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt32(7);
+        if (forced.extraByte) p.writeUInt8(1);
+        for (float f : forced.floats) p.writeFloat(f);
+        return p;
+    };
+    Session s;
+    s.receive(packet());
+    CHECK(s.sent().of(forced.ack).empty());
+
+    spawnPlayer(s);
+    s.receive(packet());
+    REQUIRE(s.sent().of(forced.ack).size() == 1);
+    auto ack = s.sent().of(forced.ack).front();
+    CHECK(ack.readPackedGuid() == Session::kPlayerGuid);
+    CHECK(ack.readUInt32() == 7);
+    ack.readUInt32();
+    ack.readUInt16();
+    ack.readUInt32();
+    CHECK(ack.readFloat() == -2337.2f);
+    CHECK(ack.readFloat() == -356.4f);
+    CHECK(ack.readFloat() == -8.7f);
+
+    // Between two worlds there is none either (0x004d6750 took it away).
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    for (float f : {-2328.0f, -358.0f, -8.7f, 0.4f}) world.writeFloat(f);
+    s.receive(world);
+    s.receive(packet());
+    CHECK(s.sent().of(forced.ack).size() == 1);
+}
+
+// P49: a creature with a path of over 256 points took the rest of the packet
+// with it.
+TEST_CASE("a long walk in a create block loses nothing after it", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    const auto guid = [](uint32_t i) { return 0xF130004B00000000ull + i; };
+    const glm::vec3 at(-1834.0f, 5299.0f, -12.4f);
+    UpdateObject packet;
+    uint32_t count = 0;
+    const auto stands = [&] {
+        ++count;
+        packet.create(guid(count), wowee::game::ObjectType::UNIT,
+                      {{UF::UNIT_FIELD_HEALTH, 10 + count}, {UF::UNIT_FIELD_MAXHEALTH, 500}});
+    };
+    const auto walks = [&](const std::vector<glm::vec3>& way, uint32_t flags, const glm::vec3& end) {
+        ++count;
+        packet.walking(guid(count), {{UF::UNIT_FIELD_HEALTH, 10 + count}, {UF::UNIT_FIELD_MAXHEALTH, 500}}, at, way,
+                       flags, 1, end);
+    };
+    for (const uint32_t flags : {0x0u, 0x8000u, 0x10000u, 0x20000u}) {
+        std::vector<glm::vec3> way;
+        for (int i = 0; i < 300; ++i) way.push_back(at + glm::vec3(static_cast<float>(i), 0.0f, 0.0f));
+        for (int i = 0; i < 20; ++i) stands();
+        walks(way, flags, way.back());
+    }
+    // A cyclic one's end point is the origin.
+    walks({at, at + glm::vec3(1.0f)}, 0x180000u, glm::vec3(0.0f));
+    for (int i = 0; i < 20; ++i) stands();
+    s.receive(packet);
+    uint32_t there = 0;
+    for (uint32_t i = 1; i <= count; ++i) {
+        const auto unit = std::dynamic_pointer_cast<wowee::game::Unit>(s.handler().getEntityManager().getEntity(guid(i)));
+        if (unit && unit->getHealth() == 10 + i) ++there;
+    }
+    CHECK(there == count);
+}
+
+// P47: the character window, the portraits and the dressing room dress their
+// model from here, and 0x005975e0 duplicates the one in the world.
+TEST_CASE("a helm or cloak not shown is not on the player's model anywhere", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FLAGS, 0}});
+    const auto wear = [&](wowee::game::EquipSlot slot, uint32_t display, uint8_t type) {
+        wowee::game::ItemDef item;
+        item.itemId = display;
+        item.displayInfoId = display;
+        item.inventoryType = type;
+        s.handler().getInventory().setEquipSlot(slot, item);
+    };
+    wear(wowee::game::EquipSlot::HEAD, 501, 1);
+    wear(wowee::game::EquipSlot::BACK, 502, 16);
+    wear(wowee::game::EquipSlot::CHEST, 503, 5);
+    const auto shown = [&](int slot) {
+        std::array<uint32_t, 19> ids{};
+        std::array<uint8_t, 19> types{};
+        REQUIRE(s.handler().getOtherPlayerEquipment(Session::kPlayerGuid, ids, types));
+        return ids[static_cast<size_t>(slot)];
+    };
+    CHECK(shown(0) == 501u);
+    CHECK(shown(14) == 502u);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0x400}}));
+    CHECK(shown(0) == 0u);
+    CHECK(shown(14) == 502u);
+    CHECK(shown(4) == 503u);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0xc00}}));
+    CHECK(shown(14) == 0u);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0}}));
+    CHECK(shown(0) == 501u);
+    CHECK(shown(14) == 502u);
+}
+
+// P57: the character window asked the flag, the model in the world was not
+// told: ShowCloak's 0x006e0ef0 and 0x006dd1b0 dress and undress it at once.
+TEST_CASE("showing or hiding the helm or the cloak dresses the model anew", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FLAGS, 0}});
+    auto& gh = s.handler();
+    for (int i = 0; i < 2; ++i) {
+        (void)gh.consumeOnlineEquipmentDirty();
+        gh.toggleCloak();
+        CHECK(gh.consumeOnlineEquipmentDirty());
+        gh.toggleHelm();
+        CHECK(gh.consumeOnlineEquipmentDirty());
+    }
+    CHECK(s.sent().of(Opcode::CMSG_SHOWING_CLOAK).size() == 2);
+    CHECK(s.sent().of(Opcode::CMSG_SHOWING_HELM).size() == 2);
+}
+
 // The vendors on the player's own mount stayed, for the game, where they got on.
 TEST_CASE("a vehicle's passenger goes where it goes", "[replay][playtest]") {
     Session s;
@@ -1544,4 +1689,160 @@ TEST_CASE("a frame handles every packet there is", "[replay][playtest]") {
     Access::frame(s.handler());
     CHECK(Access::queued(s.handler()) == 0);
     CHECK(me->getHealth() == 50);
+}
+
+// P60: a chair that became the player's kept its old name on the target frame.
+TEST_CASE("a pet's name is told by every token it has", "[replay][playtest]") {
+    constexpr uint64_t kPet = 0xF15000880700042Aull;
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kPet, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    auto& gh = s.handler();
+    gh.setTarget(kPet);
+    gh.setFocus(kPet);
+    gh.getSpellHandler()->requestPetName(kPet);
+    REQUIRE_FALSE(s.sent().of(Opcode::CMSG_PET_NAME_QUERY).empty());
+    const uint32_t key = s.sent().of(Opcode::CMSG_PET_NAME_QUERY).back().readUInt32();
+    std::vector<std::string> told;
+    gh.setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event == "UNIT_NAME_UPDATE") told.push_back(args.empty() ? "-" : args[0]);
+    });
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_PET_NAME_QUERY_RESPONSE));
+    answer.writeUInt32(key);
+    answer.writeString("The Cranberry Chair");
+    answer.writeUInt32(0);
+    answer.writeUInt8(0);
+    s.receive(answer);
+    CHECK(std::count(told.begin(), told.end(), "target") == 1);
+    CHECK(std::count(told.begin(), told.end(), "focus") == 1);
+    CHECK(told.size() == 2);
+    gh.setAddonEventCallback({});
+}
+
+// P59: the player stayed, for the game, where it got on, and stood there when it was let go;
+// jumped onto it, it fell on from there.
+TEST_CASE("the player in a vehicle's seat is its place there, and is let go at it", "[replay][playtest]") {
+    constexpr uint64_t kChair = 0xF15000880700042Aull;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    auto* mh = gh.getMovementHandler();
+    s.receive(UpdateObject().create(kChair, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    const auto chair = gh.getEntityManager().getEntity(kChair);
+    REQUIRE(chair);
+    chair->setPosition(gh.movementInfoRef().x + 5.0f, gh.movementInfoRef().y + 2.0f, gh.movementInfoRef().z,
+                       wowee::core::coords::serverToCanonicalYaw(0.0f));
+    auto& move = gh.movementInfoRef();
+    move.flags |= static_cast<uint32_t>(wowee::game::MovementFlags::FALLING);
+    move.z += 1.5f;
+    // SMSG_MONSTER_MOVE_TRANSPORT to seat 0: a yard ahead on the chair, half a yard up.
+    wowee::network::Packet in(wowee::game::wireOpcode(Opcode::SMSG_MONSTER_MOVE_TRANSPORT));
+    in.writePackedGuid(Session::kPlayerGuid);
+    in.writePackedGuid(kChair);
+    in.writeUInt8(0);
+    in.writeUInt8(0);
+    for (float v : {1.0f, 0.0f, 0.5f}) in.writeFloat(v);
+    in.writeUInt32(1);
+    in.writeUInt8(1);
+    s.receive(in);
+    CHECK((gh.movementInfoRef().flags & static_cast<uint32_t>(wowee::game::MovementFlags::FALLING)) == 0);
+    const auto self = gh.getEntityManager().getEntity(Session::kPlayerGuid);
+    REQUIRE(self);
+    const auto isAt = [&](const glm::vec3& place) {
+        CHECK(gh.movementInfoRef().x == Catch::Approx(place.x).margin(0.01f));
+        CHECK(gh.movementInfoRef().y == Catch::Approx(place.y).margin(0.01f));
+        CHECK(gh.movementInfoRef().z == Catch::Approx(place.z).margin(0.01f));
+        CHECK(self->getX() == Catch::Approx(place.x).margin(0.01f));
+        CHECK(self->getY() == Catch::Approx(place.y).margin(0.01f));
+    };
+    const auto seatNow = [&] { return glm::vec3(chair->getX(), chair->getY() + 1.0f, chair->getZ() + 0.5f); };
+    mh->updateAttachedTransportChildren(0.016f);
+    isAt(seatNow());
+    chair->setPosition(chair->getX() + 30.0f, chair->getY(), chair->getZ() + 4.0f, chair->getOrientation());
+    mh->updateAttachedTransportChildren(0.016f);
+    isAt(seatNow());
+    const auto seat = mh->seatPlace(Session::kPlayerGuid);
+    REQUIRE(seat);
+    CHECK(seat->x == Catch::Approx(seatNow().x));
+
+    // Off it (0x006ec400): where it sat, in the world.
+    const glm::vec3 last = seatNow();
+    gh.vehicleRoster().leave(Session::kPlayerGuid);
+    chair->setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    mh->updateAttachedTransportChildren(0.016f);
+    isAt(last);
+    CHECK_FALSE(mh->seatPlace(Session::kPlayerGuid));
+}
+
+// Logged in on one, the create block says where.
+TEST_CASE("a player made in a vehicle's seat is there", "[replay][playtest]") {
+    constexpr uint64_t kChair = 0xF15000880700042Aull;
+    Session s;
+    s.receive(UpdateObject().create(kChair, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    UpdateObject::Spline self;
+    self.objectType = wowee::game::ObjectType::PLAYER;
+    self.moveFlags = 0x200u;
+    self.transport = kChair;
+    self.onTransport = {1.0f, 0.0f, 0.5f};
+    self.seat = 0;
+    s.receive(UpdateObject().onSpline(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 10}}, self));
+    const auto chair = s.handler().getEntityManager().getEntity(kChair);
+    REQUIRE(chair);
+    chair->setPosition(100.0f, 200.0f, 30.0f, wowee::core::coords::serverToCanonicalYaw(0.0f));
+    s.handler().getMovementHandler()->updateAttachedTransportChildren(0.016f);
+    CHECK(s.handler().movementInfoRef().x == Catch::Approx(100.0f).margin(0.01f));
+    CHECK(s.handler().movementInfoRef().y == Catch::Approx(201.0f).margin(0.01f));
+    CHECK(s.handler().movementInfoRef().z == Catch::Approx(30.5f).margin(0.01f));
+}
+
+// P79: the open doors of an instance were solid for the whole first visit: whether one is a door was
+// asked of its template, which is not there yet. 0x00714250 takes the field's type.
+TEST_CASE("a game object's type is its field's, with its template there or not", "[replay][gameobject]") {
+    namespace game = wowee::game;
+    Session s;
+    game::GameObject door(0xF1100002C633ull);
+    const uint16_t bytes1 = game::fieldIndex(UF::GAMEOBJECT_BYTES_1);
+    REQUIRE(bytes1 != 0xFFFF);
+    const auto collides = [&](uint32_t bytes, const game::GameObjectQueryResponseData* info) {
+        door.setField(bytes1, bytes);
+        const auto state = static_cast<uint8_t>(bytes & 0xFF);
+        return game::stateCollides(game::gameObjectTypeOf(door, info), state,
+                                   game::go_interaction::stateForChange(state, state));
+    };
+    // Animation progress, art kit, type, state.
+    CHECK(collides(0xFF000000u, nullptr) == false);  // an open door
+    CHECK(collides(0xFF000001u, nullptr) == true);   // a shut one
+    CHECK(collides(0xFF000002u, nullptr) == false);  // a broken one
+    CHECK(collides(0xFF002300u, nullptr) == false);  // an open trapdoor
+    CHECK(collides(0xFF002301u, nullptr) == true);
+    CHECK(collides(0xFF000300u, nullptr) == std::nullopt);  // an open chest is one to walk into
+    // The template says nothing about it, whatever it holds.
+    game::GameObjectQueryResponseData chest;
+    chest.type = 3;
+    CHECK(collides(0xFF000000u, &chest) == false);
+    CHECK(game::gameObjectTypeOf(door, &chest) == 0);
+}
+
+// P79: a door that closes was in the way from the first frame of it. 0x0070d8d0 has it so in Closed alone,
+// and Close (Rebuild, for a broken one) goes there as it has played (0x0070d7e0).
+TEST_CASE("a closing door is in the way once it is shut", "[replay][gameobject]") {
+    namespace game = wowee::game;
+    namespace gi = wowee::game::go_interaction;
+    for (const uint8_t from : {uint8_t{0}, uint8_t{2}}) {
+        CAPTURE(from);
+        const uint8_t closing = gi::stateForChange(from, 1);
+        CHECK(game::stateCollides(0, 1, closing) == false);
+        const auto shut = gi::stateAfter(closing);
+        REQUIRE(shut);
+        CHECK(game::stateCollides(0, 1, *shut) == true);
+        CHECK(gi::collidesAfterEntering(0, *shut) == true);
+    }
+    // One that opens or breaks lets through at once.
+    CHECK(game::stateCollides(0, 0, gi::stateForChange(1, 0)) == false);
+    CHECK(game::stateCollides(0, 2, gi::stateForChange(1, 2)) == false);
+    // Where it came into view shut, it is.
+    CHECK(game::stateCollides(0, 1, gi::stateForChange(1, 1)) == true);
 }

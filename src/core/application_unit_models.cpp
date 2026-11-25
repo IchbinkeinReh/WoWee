@@ -5,10 +5,13 @@
 #include "core/application.hpp"
 
 #include "addons/addon_manager.hpp"
+#include "addons/lua_api_helpers.hpp"
 #include "addons/lua_engine.hpp"
 #include "core/entity_spawner.hpp"
 #include "game/character.hpp"
+#include "game/dressing_room.hpp"
 #include "game/game_handler.hpp"
+#include "game/player_display_flags.hpp"
 #include "game/update_field_table.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "rendering/figure_camera.hpp"
@@ -25,16 +28,53 @@ namespace wowee::core {
 
 namespace {
 
-std::vector<game::EquipmentItem> visiblyWorn(const game::GameHandler& gameHandler, uint64_t guid) {
-    std::vector<game::EquipmentItem> worn;
+/// What a player is seen to wear, by slot; `known` once any of it is.
+struct SeenEquipment {
+    bool known = false;
     std::array<uint32_t, 19> displayIds{};
     std::array<uint8_t, 19> invTypes{};
-    if (!gameHandler.getOtherPlayerEquipment(guid, displayIds, invTypes)) return worn;
-    for (size_t slot = 0; slot < displayIds.size(); ++slot) {
-        if (displayIds[slot] == 0) continue;
-        worn.push_back({.displayModel = displayIds[slot], .inventoryType = invTypes[slot], .enchantment = 0u});
+};
+
+SeenEquipment seenEquipment(const game::GameHandler& gameHandler, uint64_t guid) {
+    SeenEquipment seen;
+    seen.known = gameHandler.getOtherPlayerEquipment(guid, seen.displayIds, seen.invTypes);
+    return seen;
+}
+
+/// What the player's own flags hide (PLAYER_FLAGS): another's helm and cloak are left out
+/// of what is seen of it already.
+uint32_t hiddenOf(const game::GameHandler& gameHandler) {
+    return game::player_display::hideBits(gameHandler.isHelmVisible(), gameHandler.isCloakVisible());
+}
+
+/// A dressing room's figure (game/dressing_room.hpp): the unit's own slot by slot
+/// (0x005989e0), and what is tried on put where it belongs (0x005980d0).
+std::vector<game::EquipmentItem> dressedFor(const game::GameHandler& gameHandler, const ui::Widget& frame) {
+    namespace room = game::dressing_room;
+    const uint64_t guid = frame.modelUnit;
+    const bool self = guid == gameHandler.getPlayerGuid();
+    const SeenEquipment seen = seenEquipment(gameHandler, guid);
+    static const std::vector<game::EquipmentItem> kNone;
+    const auto listed = [&]() -> const std::vector<game::EquipmentItem>& {
+        for (const auto& c : gameHandler.getCharacters())
+            if (self && c.guid == guid) return c.equipment;
+        return kNone;
+    };
+    const auto own = game::player_display::wornBySlot(seen.known, seen.displayIds, seen.invTypes, listed(),
+                                                      self ? hiddenOf(gameHandler) : 0u);
+    std::array<room::Item, 19> bySlot{};
+    for (size_t slot = 0; slot < bySlot.size(); ++slot) {
+        bySlot[slot] = {.display = own[slot].displayModel, .inventoryType = own[slot].inventoryType};
+        if (self)
+            bySlot[slot].itemId =
+                gameHandler.getInventory().getEquipSlot(static_cast<game::EquipSlot>(slot)).item.itemId;
     }
-    return worn;
+    std::vector<room::Item> tried;
+    for (const auto& t : frame.tryOnItems)
+        tried.push_back({.itemId = t.itemId, .display = t.displayInfoId, .inventoryType = t.inventoryType});
+    return room::dressed(bySlot, frame.undressed, tried,
+                         {.dualWield = [&] { return self && gameHandler.playerCanDualWield(); },
+                          .fitsOffHand = [&](uint32_t itemId) { return self && gameHandler.itemFitsOffHand(itemId); }});
 }
 
 }  // namespace
@@ -86,7 +126,8 @@ ui::UnitLook Application::unitLook(uint64_t guid) {
     const uint32_t display = field(game::UF::UNIT_FIELD_DISPLAYID);
     const uint32_t native = field(game::UF::UNIT_FIELD_NATIVEDISPLAYID);
     const bool player = self || (entity && entity->getType() == game::ObjectType::PLAYER);
-    if (ui::drawnAsCharacter(player, display, native)) {
+    // Or in a body of another's it wears its own things in (0x0071a430).
+    if (ui::drawnAsCharacter(player, display, native) || (player && gameHandler->getShownBody(guid))) {
         if (self) {
             // The character list is where the player's own appearance is
             // described. What it wears is the inventory's, not the list's,
@@ -95,26 +136,29 @@ ui::UnitLook Application::unitLook(uint64_t guid) {
             for (const auto& c : gameHandler->getCharacters()) {
                 if (c.guid != guid) continue;
                 look.character = true;
-                look.race = static_cast<uint8_t>(c.race);
-                look.gender = static_cast<uint8_t>(c.gender);
-                look.femaleModel = c.useFemaleModel;
+                const game::Character shown = gameHandler->getShownCharacter(c);
+                look.race = static_cast<uint8_t>(shown.race);
+                look.gender = static_cast<uint8_t>(shown.gender);
+                look.femaleModel = shown.useFemaleModel;
                 look.classId = static_cast<uint8_t>(c.characterClass);
                 look.appearance = c.appearanceBytes;
                 look.facialFeatures = c.facialFeatures;
-                look.worn = visiblyWorn(*gameHandler, guid);
-                if (look.worn.empty()) look.worn = c.equipment;
+                const SeenEquipment seen = seenEquipment(*gameHandler, guid);
+                look.worn = game::player_display::wornByPlayer(seen.known, seen.displayIds, seen.invTypes, c.equipment,
+                                                               hiddenOf(*gameHandler));
                 // The guild tabard's design (0x006db510): the guild's, once
                 // known, or the tabard designer's while it is open (0x004ec1c0).
                 look.emblem = gameHandler->getPlayerTabardEmblem();
                 look.tabardDesigner = gameHandler->getTabardVendorGuid() != 0;
                 return look;
             }
-        } else if (gameHandler->getPlayerAppearance(guid, look.race, look.gender, look.appearance,
-                                                    look.facialFeatures)) {
+        } else if (gameHandler->getShownPlayerAppearance(guid, look.race, look.gender, look.appearance,
+                                                         look.facialFeatures)) {
             look.character = true;
             look.femaleModel = look.gender == 1;
             look.classId = gameHandler->lookupPlayerClass(guid);
-            look.worn = visiblyWorn(*gameHandler, guid);
+            const SeenEquipment seen = seenEquipment(*gameHandler, guid);
+            look.worn = game::player_display::wornByPlayer(seen.known, seen.displayIds, seen.invTypes, {}, 0u);
             look.emblem = gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(guid));
             return look;
         }
@@ -152,10 +196,10 @@ void Application::drawUnitModels(ui::WidgetTree& widgets, float screenW, float s
                 frame->externalTexture = 0;
                 continue;
             }
-            if (look.character && frame->objectType == "DressUpModel")
-                look.worn = ui::wornWithTriedOn(std::move(look.worn), frame->undressed, frame->tryOnItems,
-                                                frame->modelUnit == gameHandler->getPlayerGuid() &&
-                                                    !frame->tryOnItems.empty() && gameHandler->playerCanDualWield());
+            if (frame->objectType == "DressUpModel") addons::tryOnAskedItems(*frame, gameHandler.get());
+            if (look.character && frame->objectType == "DressUpModel" &&
+                frame->modelSource == ui::Widget::ModelSource::Unit)
+                look.worn = dressedFor(*gameHandler, *frame);
             frame->modelShown = look.character
                                     ? game::getPlayerModelPath(static_cast<game::Race>(look.race),
                                                                static_cast<game::Gender>(look.gender), look.femaleModel)

@@ -440,10 +440,15 @@ public:
     static constexpr uint32_t kSkyboxFlagCombineProcedural = 0x2;
     /// Whether the procedural sky - the dome, the sun and moons, the clouds -
     /// stays down under these models: some model is up past 0.99 without
-    /// flag 0x2, or the death model is (0x007f09b0, 0x007efd00).
-    [[nodiscard]] static bool skyboxHidesProceduralSky(const std::vector<SkyboxLayer>& layers) {
+    /// flag 0x2, or the death model is (0x007f09b0, 0x007efd00). Only one that
+    /// is there to be drawn counts: 0x007f09b0 asks each whether it is loaded
+    /// (0x00824fc0) before it lets it take the dome away. `drawn` says so.
+    template <typename Drawn>
+    [[nodiscard]] static bool skyboxHidesProceduralSky(const std::vector<SkyboxLayer>& layers,
+                                                       Drawn&& drawn) {
         for (const auto& l : layers) {
-            if (l.weight > 0.99f && (l.deathOverride || (l.flags & kSkyboxFlagCombineProcedural) == 0)) {
+            if (l.weight > 0.99f && (l.deathOverride || (l.flags & kSkyboxFlagCombineProcedural) == 0) &&
+                drawn(l)) {
                 return true;
             }
         }

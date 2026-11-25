@@ -32,6 +32,7 @@
 #include "core/go_state_player.hpp"
 #include "game/go_interaction_anim.hpp"
 #include "game/game_services.hpp"
+#include "game/game_object_type.hpp"
 #include "game/game_utils.hpp"
 #include "game/transport_manager.hpp"
 
@@ -2382,17 +2383,8 @@ enum GoAnimState : uint8_t {
     kGoClose = 4, kGoDestroy = 5, kGoDestroyed = 6, kGoRebuild = 7,
 };
 
-// FUN_0070d690: a change of the server's GOState (0 ACTIVE, 1 READY,
-// 2 ACTIVE_ALTERNATIVE) from `from` to `to`. The client also checks an
-// animation-progress value it is sent; it is unset (0xFFFF) outside a
-// transition in progress, which is what this assumes.
-GoAnimState goAnimStateFor(uint8_t from, uint8_t to) {
-    switch (to) {
-        case 0:  return from != 1 ? kGoOpened : kGoOpen;
-        case 1:  return from == 0 ? kGoClose : (from == 2 ? kGoRebuild : kGoClosed);
-        default: return from != 1 ? kGoDestroyed : kGoDestroy;
-    }
-}
+static_assert(game::go_interaction::stateForChange(0, 1) == kGoClose &&
+              game::go_interaction::stateForChange(1, 0) == kGoOpen);
 
 // 0x0070d510: a transition that reverses one still playing - Open and
 // Close, Destroy and Rebuild - is to start where that one got to, read
@@ -2453,7 +2445,7 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     if (!first && prevIt->second == goState) return;
     const uint8_t from = first ? goState : prevIt->second;
     gameObjectServerState_[guid] = goState;
-    const GoAnimState state = goAnimStateFor(from, goState);
+    const auto state = static_cast<GoAnimState>(game::go_interaction::stateForChange(from, goState));
 
     // Whether an open pose should also stop blocking.
     //
@@ -2464,20 +2456,22 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     // them blocked by UNDEADELEVATORDOOR with nothing else in the way. Only
     // for the types that are actually a way through - a chest with its lid up
     // is still a chest to walk into.
-    uint32_t goType = 0xFFFFFFFFu;
+    //
+    // By its own field's type, not the template's: the template is not there
+    // the first time an entry is met, and the state said again is nothing, so
+    // the open doors of an instance stayed shut for the whole first visit.
+    // And by the state it plays: one that closes is in the way as that has
+    // played (enterGameObjectAnimState), not from its first frame.
+    uint32_t goType = game::kGameObjectTypeUnknown;
     if (gameHandler_) {
-        if (auto entity = gameHandler_->getEntityManager().getEntity(guid)) {
-            if (entity->getType() == game::ObjectType::GAMEOBJECT) {
-                const uint32_t entry =
-                    std::static_pointer_cast<game::GameObject>(entity)->getEntry();
-                if (const auto* info = gameHandler_->getCachedGameObjectInfo(entry)) {
-                    goType = info->type;
-                }
-            }
+        if (auto entity = gameHandler_->getEntityManager().getEntity(guid);
+            entity && entity->getType() == game::ObjectType::GAMEOBJECT) {
+            const uint32_t entry = std::static_pointer_cast<game::GameObject>(entity)->getEntry();
+            goType = game::gameObjectTypeOf(*entity, gameHandler_->getCachedGameObjectInfo(entry));
         }
     }
-    if (goType == 0u || goType == 35u) {   // DOOR, TRAPDOOR
-        m2->setSkipCollision(instanceId, goState == 0);
+    if (const auto collides = game::stateCollides(goType, goState, state)) {
+        m2->setSkipCollision(instanceId, !*collides);
         // Said for the first few, because a door that never opens and a door
         // the server never tells us to open look identical from in front of
         // it. A lift door is meant to cycle at each level; if these lines
@@ -2488,7 +2482,7 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
             ++saidDoor;
             LOG_WARNING("Door state: guid=0x", std::hex, guid, std::dec,
                         " type=", goType, " state=", static_cast<int>(goState),
-                        (goState == 0 ? " (open)" : " (shut)"));
+                        (*collides ? " (shut)" : " (open)"));
         }
     }
 
@@ -2529,9 +2523,10 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
     if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return;
     const uint32_t entry = std::static_pointer_cast<game::GameObject>(entity)->getEntry();
     const auto* info = gameHandler_->getCachedGameObjectInfo(entry);
-    if (!info) return;   // no template, no type to ask
+    const uint32_t goType = game::gameObjectTypeOf(*entity, info);
+    if (goType == game::kGameObjectTypeUnknown) return;
     // The template's data fields, none while it is not cached (+0x1a4).
-    const uint32_t* data = info->hasData ? info->data : nullptr;
+    const uint32_t* data = info && info->hasData ? info->data : nullptr;
 
     if (modelLoading) {
         // 0x0070fe10 and 0x0070c9f0 ask for the model before anything. A
@@ -2540,7 +2535,7 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
         // (0x0070d510, +0x10), but the model's arrival enters the server
         // state's pose over it (slot 0x94, 0x0070d600), so nothing is kept.
         if (open) {
-            const gi::Step step = gi::onOpen(info->type, data);
+            const gi::Step step = gi::onOpen(goType, data);
             if (step.action == gi::Action::PlayCustom) gameObjectPendingCustomAnim_[guid] = step.state;
         }
         return;
@@ -2551,7 +2546,7 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
     auto curIt = gameObjectAnimState_.find(guid);
     const uint8_t current = curIt != gameObjectAnimState_.end() ? curIt->second : static_cast<uint8_t>(kGoClosed);
 
-    const gi::Step step = open ? gi::onOpen(info->type, data) : gi::onClose(info->type, data, current);
+    const gi::Step step = open ? gi::onOpen(goType, data) : gi::onClose(goType, data, current);
     switch (step.action) {
         case gi::Action::None:
             return;

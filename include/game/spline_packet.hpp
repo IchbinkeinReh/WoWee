@@ -36,8 +36,14 @@ struct SplineBlockData {
     // Timing (movement update only)
     uint32_t timePassed = 0;
     uint32_t splineId = 0;
+    // WotLK's create block: what its duration is multiplied by, and what a
+    // cyclic one's next round's is (+0x204, +0x208; 0x0098ca00).
+    float durationFactor = 1.0f;
+    float nextDurationFactor = 1.0f;
 
-    // Waypoints (server coordinates, decoded from packed-delta if compressed)
+    // Waypoints (server coordinates, decoded from packed-delta if compressed).
+    // A WotLK create block's are the spline's points as the client keeps them
+    // (0x004c3830), its first and last among them.
     std::vector<glm::vec3> waypoints;
     glm::vec3 destination{0};
     bool hasDest = false;
@@ -99,7 +105,12 @@ namespace SplineFlagWotlk {
     constexpr uint32_t FROZEN          = 0x00400000;
     constexpr uint32_t ORIENT_INVERSED = 0x08000000;
 
-    // Every point a float3 (0x0073c8e0: 0x42000); the cyclic flags alone do not.
+    /// Either of these and SMSG_MONSTER_MOVE's points are whole, twelve bytes
+    /// each; without both, the last is and the others are packed (0x0073cbcb
+    /// tests 0x42000 and nothing else). CYCLIC only closes the path in the
+    /// whole branch (0x0073cecf), ENTER_CYCLE is asked after nowhere in it. A
+    /// flight and a flying creature are FLYING alone: read as packed, their
+    /// points were somewhere within 256 yards of the way.
     constexpr uint32_t UNCOMPRESSED_MASK = FLYING | CATMULLROM;
 } // namespace SplineFlagWotlk
 
@@ -167,11 +178,10 @@ enum class SplineFlagSet { PreWotlk, Wotlk };
 
 /// Parse a WotLK movement update spline block.
 /// Format: splineFlags, FINAL_POINT/TARGET/ANGLE, timePassed, duration, splineId,
-/// then WotLK header (durationMod, durationModNext, [Animation], [Parabolic],
-/// pointCount, splineMode, endPoint) with multi-strategy fallback.
+/// durationMod, durationModNext, vertical acceleration and its start, pointCount,
+/// the points (12 bytes each), splineMode, endPoint (0x004f4a50, 0x004f4b50).
 [[nodiscard]] bool parseWotlkMoveUpdateSpline(
     network::Packet& packet,
-    SplineBlockData& out,
-    const glm::vec3& entityPos = glm::vec3(0));
+    SplineBlockData& out);
 
 } // namespace wowee::game

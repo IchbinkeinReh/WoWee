@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -94,6 +95,16 @@ struct Anchor {
 /// agree: an axis that reports a span here and is then solved some other way,
 /// or the reverse, is a region sized twice or not at all.
 bool anchorsSpanAxis(const std::vector<Anchor>& anchors, bool xAxis);
+
+struct Widget;
+
+/// How far left and right of the place its anchors give a font string without a
+/// width its text reaches, of a text this wide: all of it right of a left edge,
+/// left of a right one, half and half round a centre.
+struct FontStringReach {
+    float left = 0.0f, right = 0.0f;
+};
+FontStringReach fontStringReach(const std::vector<Anchor>& anchors, float textWidth);
 
 /// A set of widget ids, one bit each, read back in ascending order.
 ///
@@ -532,6 +543,8 @@ struct Widget {
     /// The range last reported to the interface. A scroll bar sizes and
     /// enables itself from OnScrollRangeChanged, so the change has to be
     /// noticed and announced rather than merely being true.
+    /// The scroll range as last worked out (0x0096b4c0: +0x2a8, +0x2a4), which
+    /// is also what the getters answer.
     float reportedRangeX = -1.0f, reportedRangeY = -1.0f;
 
     bool  isEditBox = false;
@@ -614,11 +627,12 @@ struct Widget {
     bool  isCooldown = false;
     /// A MovieFrame: draws its movie (WidgetRenderer::drawMovie).
     bool  isMovieFrame = false;
-    cooldown::Clock cooldownClock;
-    /// The shaded wedge grows instead of shrinking. An ability's cooldown
-    /// shrinks as it becomes usable again; an aura's timer on a unit frame
-    /// grows as the aura runs out, and the target frame and the totem bar both
-    /// ask for that.
+    /// Its time and its star's (ui/cooldown_sweep.hpp).
+    cooldown_sweep::State cooldown;
+    /// The shade grows instead of shrinking. An ability's cooldown shrinks as
+    /// it becomes usable again; an aura's timer on a unit frame grows as the
+    /// aura runs out, and the target frame and the totem bar both ask for
+    /// that.
     bool  cooldownReverse = false;
     /// A bright line along the sweeping edge, which the target frame and the
     /// rune bar ask for.
@@ -855,8 +869,11 @@ struct Widget {
     /// and inventory type. The dressing room's contents belong to the frame
     /// rather than to the application: a second one would have its own, and
     /// closing this one is what empties it.
-    struct TryOnItem { uint32_t displayInfoId; uint8_t inventoryType; bool offHand = false; };
+    struct TryOnItem { uint32_t displayInfoId; uint8_t inventoryType; uint32_t itemId = 0; };
     std::vector<TryOnItem> tryOnItems;
+    /// Items asked for and not known yet: tried on as the server answers
+    /// (0x005980b0).
+    std::vector<uint32_t> tryOnAsked;
     /// Undress was asked (0x00597ba0): the frame's own figure has every item
     /// slot and both hands emptied, under whatever is tried on after. Dress,
     /// RefreshUnit and SetUnit build the figure from the unit again
@@ -1200,7 +1217,8 @@ public:
     /// Raise() (0x004951a0): the window a frame is in - the nearest toplevel one,
     /// itself or above it; none, nothing - comes over all of its strata, where
     /// something shown covers it. The levels no frame of the strata has go first
-    /// (0x00495060), so the window stands on the level after the highest.
+    /// (0x00495060), so the window stands on the level after the highest. Frame:Raise(),
+    /// a press in it and its coming up alike.
     void raise(uint32_t id);
     /// Whether a frame shown in its strata, none of those in it, is on its level
     /// or above and shares a place with it (0x00494d20).
@@ -1211,6 +1229,10 @@ public:
     /// A frame's strata, at once, and that of every frame in it, whatever it was
     /// (0x00491020).
     void setFrameStrata(uint32_t id, FrameStrata strata);
+    /// The level a frame in `parent` has where it set none: one over its
+    /// parent's, and 0 for one with no parent, which here is in the screen
+    /// (0x004911b0). UIParent is one of those, so all that is in it is at 1.
+    [[nodiscard]] int levelIn(const Widget& parent) const { return parent.id == rootId_ ? 0 : parent.effLevel + 1; }
 
     /// The frame currently following the cursor, if any.
     ///
@@ -1446,6 +1468,9 @@ private:
         // not. Those it makes are shown, and told, as they are made.
         for (size_t i = 0; (w = get(id)) != nullptr && w->toldShown && i < w->children.size(); ++i)
             comeUp(w->children[i], tell);
+        // 0x004918f0: a toplevel frame that comes up comes to the front, once
+        // what is in it is up and before its OnShow.
+        if ((w = get(id)) != nullptr && w->toldShown && w->topLevel) raise(id);
         tell(id);
     }
 
@@ -1690,6 +1715,10 @@ public:
     /// same omission and new ones would arrive with the same bug.
     void hideOrphanedTooltips();
     [[nodiscard]] const std::vector<uint32_t>& scrollFrames() const { return scrollFrames_; }
+    /// Makes a frame a Cooldown. The client's own update runs on every one
+    /// that is visible (tickCooldowns in lua_engine.cpp).
+    void markCooldownFrame(uint32_t id);
+    [[nodiscard]] const std::vector<uint32_t>& cooldownFrames() const { return cooldownFrames_; }
     [[nodiscard]] const std::vector<uint32_t>& playerPortraits() const { return portraitsFor("player"); }
 
     /// The widget published under this name, or null. Names are unique in
@@ -1711,8 +1740,10 @@ public:
     /// UIPanelScrollFrameTemplate asks for only the first - it declares
     /// OnMouseWheel and never enables the mouse. Asking the plain hit test
     /// meant no scroll frame in the interface was ever found under the cursor,
-    /// so the wheel fell through to the camera and nothing scrolled.
-    [[nodiscard]] uint32_t hitTestWheel(float x, float y) const;
+    /// so the wheel fell through to the camera and nothing scrolled. All of
+    /// them, the topmost first: the wheel goes down the list until one takes
+    /// it (0x00494890), and a frame that takes only the mouse is not in it.
+    [[nodiscard]] std::vector<uint32_t> wheelFramesAt(float x, float y) const;
 
     /// Widgets to draw, in the order to draw them. Only those that resolved to a
     /// visible, non-empty rect. Valid until the next layout().
@@ -1721,9 +1752,8 @@ public:
     [[nodiscard]] DrawPart drawPart(size_t at) const { return drawParts_[at]; }
 
 private:
-    /// Both hit tests, which differ only in whether a frame that took the
-    /// wheel without taking the mouse counts as under the cursor.
-    [[nodiscard]] uint32_t hitTestFor(float x, float y, bool forWheel) const;
+    /// Every frame under the cursor that takes the mouse, or the wheel.
+    void framesAt(float x, float y, bool forWheel, const std::function<void(const Widget&)>& take) const;
     std::vector<LinkRect> linkRects_;
     void layoutWidget(uint32_t id, float screenW, float screenH);
     /// Clear the drawing and running flags under a hidden frame without
@@ -1817,6 +1847,8 @@ public:
     /// anything - not a guess. The next full pass overwrites both values as it
     /// always did.
     void noteScreenSize(float pixelW, float pixelH);
+    /// The screen's rect, and UIParent's in it, from the size last noted.
+    void placeScreen();
 
 private:
 
@@ -1851,6 +1883,7 @@ private:
     bool floatingChatUpdateDue_ = false;
     float safeLeft_ = 0.0f, safeRight_ = 0.0f, safeTop_ = 0.0f, safeBottom_ = 0.0f;
     std::vector<uint32_t> scrollFrames_;
+    std::vector<uint32_t> cooldownFrames_;
     /// Which unit each portrait texture is showing, and the reverse. Two maps
     /// rather than one because both questions are asked every frame: the draw
     /// loop wants every texture for a unit, and a claim wants the unit a
@@ -1869,6 +1902,8 @@ private:
 
     /// Whether a state texture should be drawn given what the mouse is doing.
     [[nodiscard]] bool buttonArtVisible(const Widget& w) const;
+    /// The owner has a state picture of its own of this kind.
+    [[nodiscard]] bool hasButtonArt(const Widget& owner, ButtonArt kind) const;
     std::deque<Widget> widgets_;   ///< Index 0 is a placeholder; id == index.
     /// What findByName last answered for a name, and how far up widgets_ it
     /// had looked: the next lookup reads only the widgets made since. The

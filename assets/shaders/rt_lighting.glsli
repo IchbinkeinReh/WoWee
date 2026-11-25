@@ -37,7 +37,7 @@
 //     vec4 giVolumeMod[2];
 //     vec4 giSky;        // w = strength
 //     vec4 giGround;     // w = largest ratio
-//     vec4 giParams;     // x = on, y = debug view, z = chroma
+//     vec4 giParams;     // x = on, y = debug view, z = chroma, w the least ratio
 //     vec4 rtTune;       // x shadow darkness, y point lights, z baked-lamp
 //                        // shadows; w 1 when these three blocks are set
 //     vec4 lightTune;    // x baked light, y traced sun shadows, z point
@@ -50,6 +50,7 @@
 #include "rt_gi.glsli"
 #include "rt_gbuffer.glsli"
 #include "rt_upsample.glsli"
+#include "rt_sun_shade.glsli"
 
 // A pipeline built for the G-buffer pass (PipelineBuilder::setGbufferOutputs).
 layout(constant_id = 0) const bool kGbuffer = false;
@@ -233,15 +234,18 @@ RtLight rtLightAt(vec3 worldPos) {
 // A unit drawn see-through finds nothing of itself in the result: it is not
 // in the G-buffer, and where it stands the result holds what shows through
 // it. Lit as the result would light it, without what the result holds of
-// it: the shadow map's shadow at the traced shadow's strength, no
-// occlusion, and the point lights of what stands right behind it, which it
-// shares a place with - not the light without the tracing, whose weaker
-// shadow and missing torchlight would change the body's light the moment it
-// begins to fade. Where it does find its own texels (never, unless something
-// of it is opaque there), those.
-RtLight rtLightBehind(vec3 worldPos) {
+// it: the shadow map's shadow for the traced one, at the traced shadow's
+// strength, no occlusion, and the point lights of what stands right behind it,
+// which it shares a place with - not the light without the tracing, whose
+// weaker shadow and missing torchlight would change the body's light the
+// moment it begins to fade. Where it does find its own texels (never, unless
+// something of it is opaque there), those. `seeThrough`: none of its own, so
+// the caller puts the map's light in the place of the sun's visibility, which
+// is the behind's until then (rtSeeThroughSun).
+RtLight rtLightBehind(vec3 worldPos, out bool seeThrough) {
     RtLight own = rtLightAt(worldPos);
-    if (own.weight > 0.0 || rtMode() < 0.5) return own;
+    seeThrough = own.weight <= 0.0 && rtMode() >= 0.5;
+    if (!seeThrough) return own;
     RtLight r = RtLight(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 1.0);
     vec4 clip = projection * (view * vec4(worldPos, 1.0));
     if (clip.w <= 0.0) return own;
@@ -264,6 +268,7 @@ RtLight rtLightBehind(vec3 worldPos) {
     r.weight = 1.0;
     if (wsum > 0.0) {
         RtLight behind = rtLightFrom(1.0, wsum, sunAo, point, bakedDark);
+        r.sun = behind.sun;
         r.point = behind.point;
         r.pointOwn = behind.pointOwn;
     }
@@ -338,7 +343,16 @@ float rtInteriorBakedShade(RtLight r) {
 const float RT_SHADOW_STRENGTH = 0.6;
 float rtShadowScale(RtLight r, float shadow) {
     float k = rtTune.w > 0.5 ? rtTune.x : RT_SHADOW_STRENGTH;
-    return mix(0.7 + 0.3 * shadow, (1.0 - k) + k * shadow, r.weight);
+    return rtShadeScale(r.weight, shadow, k);
+}
+
+// rtShadowScale for a colour lit by `ambient` and `direct`, each as the light
+// is (direct times its N.L). In the G-buffer pass the plain scale, for the
+// apply pass does the rest there; without a result of its own, likewise.
+vec3 rtSunShade(RtLight r, float shadow, vec3 ambient, vec3 direct) {
+    float k = rtShadowScale(r, shadow);
+    if (kGbuffer || r.weight <= 0.0) return vec3(k);
+    return rtDirectShade(r.weight, shadow, k, ambient, direct);
 }
 
 // The flat ambient darkened by the traced occlusion: for what the probes must
@@ -364,7 +378,7 @@ vec3 rtGiRatio(vec3 worldPos, vec3 n) {
                           worldPos, n, v);
     float lift = texelFetch(uRtGiProbes, GI_EXPOSURE_TEXEL, 0).r;
     vec3 ratio = giAmbientRatio(e, giSky.rgb, giGround.rgb, n, giSky.w, giGround.w, giParams.z,
-                                lift > 0.0 ? lift : 1.0);
+                                lift > 0.0 ? lift : 1.0, giParams.w);
     ratio = mix(vec3(1.0), ratio, rtBounceStrength());
 
     int debugView = int(giParams.y + 0.5);

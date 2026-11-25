@@ -4,7 +4,9 @@
 #pragma once
 
 #include "addons/spell_call.hpp"
+#include "addons/header_fold.hpp"
 #include "addons/macro_icon_lists.hpp"
+#include "addons/optional_unit_arg.hpp"
 #include "addons/unit_token.hpp"
 #include <array>
 #include <functional>
@@ -843,8 +845,8 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
 /// and nothing is to be done where it is no unit's.
 inline std::optional<uint64_t> unitAskedOrTarget(lua_State* L, game::GameHandler* gh, int index) {
     if (!gh) return std::nullopt;
-    const char* text = index > 0 ? lua_tostring(L, index) : nullptr;
-    return text && *text ? unitAsked(gh, text) : std::optional<uint64_t>(gh->getTargetGuid());
+    return optionalUnitArg(L, index, gh->getTargetGuid(),
+                           [gh](const std::string& token) { return unitAsked(gh, token); });
 }
 
 /// The same of an item's use, with 0 for no argument - the item goes where it
@@ -1002,6 +1004,9 @@ uint32_t itemUseSpell(game::GameHandler* gh, uint32_t itemId);
 /// The enchantments of the sockets on screen as they would be with the gems put
 /// in so far: theirs, else those already there (0x006301a0).
 std::array<uint32_t, 3> socketsAsTheyWouldBe(game::GameHandler* gh);
+/// Defined in lua_inventory_api.cpp: what a dressing room was asked to show and did not
+/// know, once it does.
+void tryOnAskedItems(ui::Widget& w, game::GameHandler* gh);
 /// The quest's item the player carries or wears and can use (0x005e0da0).
 QuestSpecialItem questSpecialItemAt(game::GameHandler* gh, int questIndex);
 
@@ -1045,20 +1050,6 @@ inline int pushFactionInfo(lua_State* L, game::GameHandler* gh,
     return 13;
 }
 
-/// Open or close the group at a drawn-row index. Shared because the two verbs
-/// differ only in the boolean, and because the index has to be resolved the
-/// same way both times - against the rows, which is what FrameXML counted.
-inline int factionHeaderSetCollapsed(lua_State* L, bool collapsed) {
-    auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || index < 1) return 0;
-    const auto& rows = gh->getReputationRows();
-    if (index > static_cast<int>(rows.size())) return 0;
-    const auto& row = rows[static_cast<size_t>(index) - 1];
-    if (row.isHeader) gh->setFactionCollapsed(row.factionId, collapsed);
-    return 0;
-}
-
 /// Every top-level group opened or closed at once.
 inline int allTopFactionHeadersSetCollapsed(lua_State* L, bool collapsed) {
     auto* gh = getGameHandler(L);
@@ -1067,12 +1058,45 @@ inline int allTopFactionHeadersSetCollapsed(lua_State* L, bool collapsed) {
     for (const auto& row : rows)
         if (row.isHeader && !row.isChild && gh->isFactionCollapsed(row.factionId) != collapsed)
             gh->setFactionCollapsed(row.factionId, collapsed);
+    gh->fireAddonEvent("UPDATE_FACTION", {});
+    return 0;
+}
+
+/// Open or close the group at a drawn-row index. Shared because the two verbs
+/// differ only in the boolean, and because the index has to be resolved the
+/// same way both times - against the rows, which is what FrameXML counted.
+inline int factionHeaderSetCollapsed(lua_State* L, bool collapsed) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const long index = std::lround(lua_tonumber(L, 1));
+    const auto& rows = gh->getReputationRows();
+    std::vector<bool> headers;
+    headers.reserve(rows.size());
+    for (const auto& row : rows) headers.push_back(row.isHeader);
+    if (factionFold(headers, index) == FoldReach::All) return allTopFactionHeadersSetCollapsed(L, collapsed);
+    gh->setFactionCollapsed(rows[static_cast<size_t>(index) - 1].factionId, collapsed);
+    gh->fireAddonEvent("UPDATE_FACTION", {});
     return 0;
 }
 
 /// The same thirteen for a drawn row, which knows its place in the tree.
 inline int pushFactionRow(lua_State* L, game::GameHandler* gh,
                           const game::GameHandler::ReputationRow& row) {
+    // The two groups of no faction (0x005d0da0): a name, an empty description,
+    // standing 1 of nothing, a heading that is open or closed.
+    if (row.factionId == game::reputation_tree::kInactive || row.factionId == game::reputation_tree::kOther) {
+        lua_pushstring(L, row.name.c_str());
+        lua_pushstring(L, "");
+        lua_pushnumber(L, 1);
+        for (int i = 0; i < 3; ++i) lua_pushnumber(L, 0);
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 1);
+        if (gh->isFactionCollapsed(row.factionId)) lua_pushnumber(L, 1);
+        else lua_pushnil(L);
+        for (int i = 0; i < 3; ++i) lua_pushnil(L);
+        return 13;
+    }
     game::GameHandler::ReputationEntry e;
     e.factionId = row.factionId;
     e.reputationIndex = row.reputationIndex;

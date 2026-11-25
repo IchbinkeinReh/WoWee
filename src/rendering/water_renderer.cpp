@@ -1821,6 +1821,45 @@ std::optional<float> WaterRenderer::getWaterHeightAt(float glX, float glY) const
     return best;
 }
 
+std::optional<float> WaterRenderer::raySurfaceHit(const glm::vec3& origin, const glm::vec3& dir, float maxT) const {
+    if (std::abs(dir.z) < 1e-5f) return std::nullopt;
+    std::optional<float> best;
+    float limit = maxT;
+    for (const auto& surface : surfaces) {
+        if (surface.heights.empty()) continue;
+        const auto [lo, hi] = std::minmax_element(surface.heights.begin(), surface.heights.end());
+        // Only between the surface's lowest and highest is there any of it.
+        float t0 = (*lo - origin.z) / dir.z, t1 = (*hi - origin.z) / dir.z;
+        if (t0 > t1) std::swap(t0, t1);
+        t0 = std::max(t0 - 0.05f, 0.0f);
+        t1 = std::min(t1 + 0.05f, limit);
+        if (t0 > t1) continue;
+        const auto over = [&](float t) -> std::optional<float> {
+            const glm::vec3 p = origin + dir * t;
+            const auto grid = wateredGridPosition(surface, p.x, p.y);
+            if (!grid) return std::nullopt;
+            const auto h = sampleGridHeight(surface.heights, surface.width, surface.height, grid->x, grid->y);
+            if (!h) return std::nullopt;
+            return p.z - *h;
+        };
+        const int steps = std::clamp(static_cast<int>(std::ceil(t1 - t0)), 1, 64);
+        std::optional<float> before = over(t0);
+        float from = t0;
+        for (int i = 1; i <= steps; ++i) {
+            const float t = t0 + (t1 - t0) * static_cast<float>(i) / static_cast<float>(steps);
+            const auto now = over(t);
+            if (before && now && (*before > 0.0f) != (*now > 0.0f)) {
+                limit = from + (t - from) * (*before / (*before - *now));
+                best = limit;
+                break;
+            }
+            before = now;
+            from = t;
+        }
+    }
+    return best;
+}
+
 void WaterRenderer::fillWaveSpectra() {
     const wave_surface::WaveSettings settings = waveSettings();
     // A lake's (liquid type 1, water) and the open sea's (2, ocean).

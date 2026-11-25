@@ -1,5 +1,6 @@
 // lua_social_api.cpp - Chat, guild, friends, ignore, gossip, party management, and emotes Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "addons/row_selection.hpp"
 #include "addons/unit_or_name.hpp"
 #include "game/mail_text.hpp"
 #include "game/packed_time.hpp"
@@ -1387,13 +1388,13 @@ static void setGroupAssistantByName(lua_State* L, bool apply) {
 }
 
 
-/// Which guild roster row is selected. Panel state with no counterpart in the
-/// game, so it lives here - the same shape as selectedFriend and selectedSkill.
-///
-/// The getter answered a flat zero and the setter forgot, which is what killed
-/// note editing: every dialog that edits a note reads the selection to know
-/// whose note it is, and index zero is nobody.
-int& selectedGuildRosterRow() { static int row = 0; return row; }
+/// The selected guild member, as its guid (0x00c22ac0, 0x005caf40). Every dialog
+/// that edits a note reads the selection to know whose note it is.
+RowSelection<uint64_t>& selectedGuildMember() {
+    static RowSelection<uint64_t> selected;
+    return selected;
+}
+uint64_t guildMemberKey(const game::GuildRosterMember* m) { return m ? m->guid : 0; }
 
 /// The name in a guild roster row, or empty. The note calls take an index and
 /// the client's own verbs take a name, so this is where the two meet.
@@ -1409,12 +1410,12 @@ std::string guildRosterNameAt(game::GameHandler* gh, int index) {
 /// the menu that shows a tick beside it.
 bool& optOutOfLoot() { static bool out = false; return out; }
 
-/// Which row the panel has selected. The client has no opinion - it is what
-/// the player last clicked - so it lives here rather than being invented.
-int& selectedFaction() {
-    static int selected = 1;
+/// The selected faction, as its id (0x00c2347c, 0x005d07b0).
+RowSelection<uint32_t>& selectedFaction() {
+    static RowSelection<uint32_t> selected;
     return selected;
 }
+uint32_t factionRowKey(const game::GameHandler::ReputationRow& row) { return row.factionId; }
 
 }  // namespace
 
@@ -3752,11 +3753,11 @@ void registerSocialLuaAPI(lua_State* L) {
             // 0x005caf40
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: SetGuildRosterSelection(index)");
-            selectedGuildRosterRow() = static_cast<int>(luaL_optnumber(L, 1, 0));
+            selectedGuildMember().select(guildRosterView(getGameHandler(L)), luaToClientInt(L, 1), guildMemberKey);
             return 0;
         }},
                 {"GetGuildRosterSelection", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedGuildRosterRow());
+            lua_pushnumber(L, selectedGuildMember().index(guildRosterView(getGameHandler(L)), guildMemberKey));
             return 1;
         }},
                 // The two note editors. Both dialogs read the selection to
@@ -4358,7 +4359,8 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto& rows = gh->getReputationRows();
             if (index <= static_cast<int>(rows.size())) {
                 const auto& row = rows[static_cast<size_t>(index) - 1];
-                if (row.hasRep) gh->setFactionInactive(row.reputationIndex, false);
+                // Not a group (0x005d1c10): it goes nowhere.
+                if (row.hasRep && !row.isHeader) gh->setFactionInactive(row.reputationIndex, false);
             }
             return 0;
         }},
@@ -4372,18 +4374,11 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto& rows = gh->getReputationRows();
             if (index <= static_cast<int>(rows.size())) {
                 const auto& row = rows[static_cast<size_t>(index) - 1];
-                if (row.hasRep) gh->setFactionInactive(row.reputationIndex, true);
+                if (row.hasRep && !row.isHeader) gh->setFactionInactive(row.reputationIndex, true);
             }
             return 0;
         }},
-                // GetFactionInfo reports every row as isHeader false, because
-                // the list it walks is flat - the client does not read each
-                // faction's parent to build categories. With no headers there
-                // is nothing to open or close, and the tab calls these from a
-                // row's click handler regardless of what the row is.
-                // Opening and closing a group. FrameXML calls these from a
-                // row's click handler regardless of what the row is, so a
-                // non-header index is ignored rather than refused.
+                // Opening and closing a group (header_fold.hpp).
                 {"ExpandFactionHeader", [](lua_State* L) -> int {
             // 0x005d2000
             if (!lua_isnumber(L, 1))
@@ -4421,14 +4416,16 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetSelectedFaction", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedFaction());
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? selectedFaction().index(gh->getReputationRows(), factionRowKey) : 0);
             return 1;
         }},
                 {"SetSelectedFaction", [](lua_State* L) -> int {
             // 0x005d07b0
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: SetSelectedFaction(index)");
-            selectedFaction() = static_cast<int>(luaL_checknumber(L, 1));
+            if (auto* gh = getGameHandler(L))
+                selectedFaction().select(gh->getReputationRows(), luaToClientInt(L, 1), factionRowKey);
             return 0;
         }},
                 // ForceGossip() is a question and not an instruction, whatever

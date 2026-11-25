@@ -39,6 +39,7 @@ struct ShapeshiftForm {
 
 /// Every form the given class has, in the order the bar shows them.
 ///
+/// Before WotLK only: from WotLK on the list is the spellbook's (StanceBar).
 /// Unfiltered: this is what the class can ever have, not what a character has
 /// learned. `knownShapeshiftForms` is what a binding wants.
 std::vector<ShapeshiftForm> allShapeshiftForms(uint8_t classId);
@@ -114,8 +115,67 @@ struct MountShownInput {
     return (in.modelFlags & kModelFlagMountable) != 0 || (in.raceFlags & kRaceFlagMountable) != 0;
 }
 
+/// CreatureModelData Flags 0x4: a character model.
+inline constexpr uint32_t kModelFlagCharacter = 0x4;
+/// CreatureDisplayInfoExtra Flags 0x1 (+0x4c).
+inline constexpr uint32_t kExtraFlagOwnEquipment = 0x1;
+
+/// 0x0071a430, for a player shown as another display: whether it is dressed as
+/// itself - a character model whose CreatureDisplayInfoExtra row has the flag.
+/// It is then the row's race and sex with the player's own skin, face and hair
+/// (0x0071d010) and its own items (0x006e09e0, 0x007202c0): the illusions of
+/// the Caverns of Time. The rows name no items of their own.
+[[nodiscard]] constexpr bool wearsOwnEquipment(uint32_t modelFlags, bool hasExtra, uint32_t extraFlags) {
+    return hasExtra && (modelFlags & kModelFlagCharacter) != 0 && (extraFlags & kExtraFlagOwnEquipment) != 0;
+}
+
 /// SPELL_AURA_MOD_SHAPESHIFT, the aura a form's spell applies (0x24).
 inline constexpr uint32_t kAuraModShapeshift = 36;
+
+/// What 0x00542030 reads of a learned spell's row for the stance bar.
+struct StanceBarRow {
+    uint32_t effectAuras[3] = {0, 0, 0};  ///< EffectApplyAuraName (+0x17c)
+    uint32_t attrEx2 = 0;                 ///< AttributesEx2 (+0x18)
+    int32_t order = 0;                    ///< StanceBarOrder (+0x25c), what 0x0053c680 sorts by
+};
+/// AttributesEx2 0x10: on the stance bar without shapeshifting - a paladin's
+/// auras, a death knight's presences.
+inline constexpr uint32_t kAttrEx2StanceBar = 0x10;
+/// AttributesEx2 0x2: not on it, shapeshift or not - Ghost Wolf.
+inline constexpr uint32_t kAttrEx2NoStanceBar = 0x2;
+
+/// 0x00542470: whether a learned spell goes on the stance bar - one that
+/// shapeshifts (any effect's aura 36) or has AttributesEx2 0x10, and not 0x2.
+[[nodiscard]] bool onStanceBar(const StanceBarRow& row);
+
+/// The stance bar's spells in bar order (0x00be8e2c, DAT_00be8e28 of them),
+/// as the spellbook fills it whatever the player's class. Each change is the
+/// client's event 0x178, UPDATE_SHAPESHIFT_FORMS.
+class StanceBar {
+public:
+    /// 0x00542542: a spell learned. One the bar has already stays where it
+    /// is; a new one goes to the end and the bar is sorted (0x0053c680).
+    /// True when the bar changed.
+    bool learned(uint32_t spellId, const StanceBarRow& row);
+    /// 0x005424c5: a spell learned in another's place, which takes over that
+    /// one's button unsorted, where there is one. True when the bar changed.
+    bool superseded(uint32_t oldSpellId, uint32_t spellId, const StanceBarRow& row);
+    /// 0x0053fda8: a spell forgotten leaves the bar. True when it was on it.
+    bool removed(uint32_t spellId);
+    /// 0x0053ec40: the book emptied.
+    void clear() { entries_.clear(); }
+    [[nodiscard]] std::vector<uint32_t> spells() const;
+
+private:
+    struct Entry {
+        uint32_t spellId;
+        StanceBarRow row;
+    };
+    static int compare(const Entry& a, const Entry& b);
+    void sort();
+    std::vector<Entry> entries_;
+};
+
 /// SpellShapeshiftForm Flags 0x1: a stance, which 0x00721ca0 does not count
 /// as a form.
 inline constexpr uint32_t kFormFlagStance = 0x1;

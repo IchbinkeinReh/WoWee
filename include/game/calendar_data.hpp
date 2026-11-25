@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -104,26 +105,36 @@ struct CalendarHoliday {
     uint32_t calendarFilterType = 0;
     uint32_t dates[kNumDates] = {};
     uint32_t durations[kNumDurations] = {};
+    /// Per stage, who sees it on the calendar: 1 the Alliance, 2 the Horde.
     uint32_t calendarFlags[kNumFlags] = {};
     std::string textureFilename;
 };
 
-/// A holiday's days round one of them: the first minute of its run and the
-/// last, counted as dayNumber() * 1440.
-struct CalendarHolidaySpan {
-    int64_t first = 0;
-    int64_t last = 0;
+/// A month as the calendar shows it and who looks (0x005c23c0).
+struct CalendarView {
+    int month = 0;  ///< 1-12; 0 for the month of the day asked about
+    int year = 0;
+    uint32_t teamMask = 3;  ///< CalendarHoliday::calendarFlags' bits (0x006d6e90)
+    WowDate now;            ///< what a date leaves open is taken from
+    uint64_t player = 0;
 };
 
-/// The run of a holiday's stage that a day lies in (0x005c04f0, 0x005bfab0).
-///
-/// Its durations are stages one after the other from each of its dates, in
-/// hours, a first of none being a day; a later one of none is not there. A date
-/// with a weekday and no day, month or year is every week's, one without a year
-/// every year's; a looping holiday starts again when all of its stages are
-/// over. A run that ends at midnight ends on the day before.
-bool holidayRunOnDay(const CalendarHoliday& holiday, int stage, int year, int month, int day,
-                     CalendarHolidaySpan& out);
+/// One showing of a holiday: a stage of it, from its start to its end, in
+/// minutes since 1970 (0x005bfab0).
+struct CalendarHolidayRun {
+    int64_t start = 0;
+    int64_t end = 0;
+    /// The days its record covers (0x005c2030, +0xc8).
+    uint32_t days = 1;
+};
+
+/// The showings of a holiday in the six weeks a month is shown with, which are
+/// those from six days before its first: each stage whose flags name the
+/// viewer's side, after the stages before it, once - by the first of the dates
+/// that reaches into the weeks - or every week for a date that is a weekday
+/// alone, or every turn of the stages for a looping one.
+std::vector<CalendarHolidayRun> calendarHolidayRuns(const CalendarHoliday& holiday, int month, int year,
+                                                    const CalendarView& view);
 
 /// Everything the packet carried.
 struct CalendarData {
@@ -243,6 +254,17 @@ constexpr uint32_t kRaidLockout     = 0x0080;
 constexpr uint32_t kRaidReset       = 0x0200;
 constexpr uint32_t kGuildEvent      = 0x0400;
 }  // namespace calendar_flag
+
+/// CalendarGetDayEvent's texture (0x005c0fb0), always a string: a holiday's
+/// own, the dungeon's of an event of players or a guild that names one, else
+/// none. `dungeonTexture(id)` answers "" for a dungeon there is not.
+template <typename DungeonTexture>
+[[nodiscard]] std::string calendarRowTexture(uint32_t flags, int32_t dungeonId, const std::string& holidayTexture,
+                                             DungeonTexture&& dungeonTexture) {
+    if (flags & calendar_flag::kHoliday) return holidayTexture;
+    if ((flags & 0x543u) != 0 && dungeonId >= 0) return dungeonTexture(dungeonId);
+    return {};
+}
 
 /// CalendarInviteStatus values the handlers act on.
 namespace calendar_status {
@@ -539,6 +561,25 @@ struct CalendarDayEntry {
     uint32_t numSequenceDays = 1;
 };
 
+/// The row the interface has open (0x00c20f78..): an event by its id, or a
+/// holiday or a lockout by its day, its row's id (+0x94) and - a lockout -
+/// its difficulty (+0x90). Nothing open with neither.
+struct CalendarOpenRow {
+    uint64_t eventId = 0;
+    int year = 0, month = 0, day = 0;
+    CalendarEntryKind kind = CalendarEntryKind::Event;
+    uint32_t id = 0;
+    uint32_t difficulty = 0;
+};
+/// A day's row as the open one, and its kind as CALENDAR_OPEN_EVENT names it
+/// (0x005b9310, 0x005b7fd0). Not for a row the server is asked about
+/// (flags 0x543): that one is opened by the answer, and is none here.
+std::optional<std::pair<CalendarOpenRow, const char*>> calendarOpenedRow(const CalendarData& data,
+                                                                         const CalendarDayEntry& row, int year,
+                                                                         int month, int day);
+/// Whether a day's row is the open one (0x005b9000, the day aside).
+bool calendarIsOpenRow(const CalendarData& data, const CalendarDayEntry& row, const CalendarOpenRow& open);
+
 /**
  * The rows for one day, holidays first and then events by time.
  *
@@ -546,7 +587,7 @@ struct CalendarDayEntry {
  * heads the day and the player's own events follow underneath.
  *
  * A holiday's stage is there for a side whose bit its calendarFlags have
- * (0x005c04f0); its runs are holidayRunOnDay's.
+ * (0x005c04f0); its runs are calendarHolidayRuns'.
  */
 /// Which kinds of row the calendarShow* CVars let into a day (0x005c0240).
 ///
@@ -561,9 +602,6 @@ struct CalendarShowFilter {
     bool battlegrounds = true;
     bool lockouts = true;
     bool resets = true;
-    /// The player's side among calendarFlags: 1 the Alliance, 2 the Horde; 0
-    /// takes every stage.
-    uint32_t side = 0;
 
     /// Whether a holiday with that calendar filter type is shown.
     bool showsHoliday(uint32_t calendarFilterType) const {
@@ -579,7 +617,15 @@ struct CalendarShowFilter {
 std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
                                                     int month, int day,
                                                     int year,
-                                                    const CalendarShowFilter& filter = {});
+                                                    const CalendarShowFilter& filter = {},
+                                                    const CalendarView& view = {});
+
+/// The holidays the calendar shows: Holidays.dbc's rows, the server's record in
+/// the place of the row with its id (0x005c04f0 walks the table and asks for
+/// the record by id). `region` 0 is every one's, and the client's own is not
+/// known here.
+std::vector<CalendarHoliday> calendarMergedHolidays(const std::vector<CalendarHoliday>& table,
+                                                    const std::vector<CalendarHoliday>& server);
 
 }  // namespace game
 }  // namespace wowee

@@ -102,9 +102,9 @@ the server uses the mouse, the real pointer is kept out; somebody who moves it o
 it back.
 
 Two things are no act of a player's and are not pressed: `gm` sends its whisper by the interface's own
-`SendChatMessage`, so that no dialog or edit box is in its way, and selects the character itself for a command that
-wants a player (`on` says otherwise), with what was selected selected again after; `record` starts and stops the
-recorder.
+`SendChatMessage`, so that no dialog or edit box is in its way, and selects the character itself first, but for a
+command that only tells (`on` says otherwise), with what was selected selected again after; `record` starts and stops
+the recorder.
 
 Calls are put in a queue by the connection's thread and run by the game's loop, for at most four milliseconds a frame
 (always one step of one call). During a loading screen the loop does not run; a call waits, and says so when its time
@@ -150,8 +150,12 @@ A whisper to the own character goes out. One that is a game master's command has
 .unaura .learn .unlearn ID|all`, `.additem ID`, `.morph ID`, `.go xyz|creature|gameobject|...`, `.tele PLACE`, `.gm
 on|off|fly|visible`, `.modify ...`, `.quest add|complete|remove|reward ID`, `.npc info|near`, `.gobject
 info|near|target`, `.cast ID|self|back`, `.lookup` (not `player`), `.server info|motd`, `.instance listbinds|unbind`,
-`.help`, `.commands`. None of them with another player, or their pet, selected; those given with the character itself
-selected (above) are judged by that.
+`.help`, `.commands`. None of them with another player, or their pet, selected; and with anything else selected but the
+character itself - a creature, a mount, its own pet - only those that tell and do nothing: `.npc info|near`, `.gobject
+info|near|target`, `.gps`, `.lookup`, `.distance`, `.help`, `.commands`, `.server`. Selected is what the client has
+selected and what the last `CMSG_SET_SELECTION` told the realm, both. The packet is where it is decided, so `.aura` by
+`slash`, a macro or an addon is refused like `gm`'s; `gm` selects the character itself before (above) and is judged by
+that.
 
 Never sent, whatever is allowed: deleting, creating or renaming characters, destroying items, abandoning a pet,
 unlearning a profession, the game masters' and developers' own packets. Quitting from inside the game is refused; the

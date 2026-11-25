@@ -145,6 +145,18 @@ struct Step {
 /// not a door to a player's ghost (0x0075e3d0 asks with 0x8000).
 [[nodiscard]] constexpr bool inTheWay(uint32_t goType, bool ghost) { return !ghost || goType != 0; }
 
+/// 0x0070d690: the state a change of the server's GOState (0 ACTIVE, 1 READY,
+/// 2 ACTIVE_ALTERNATIVE) from `from` to `to` is played as. The client also asks
+/// an animation progress it is sent; it is unset (0xFFFF) outside a transition
+/// under way, which is what this assumes.
+[[nodiscard]] constexpr uint8_t stateForChange(uint8_t from, uint8_t to) {
+    switch (to) {
+        case 0:  return from != 1 ? kStateOpened : kStateOpen;
+        case 1:  return from == 0 ? kStateClose : (from == 2 ? kStateRebuild : kStateClosed);
+        default: return from != 1 ? kStateDestroyed : kStateDestroy;
+    }
+}
+
 /// A door's (type 0) state entry, 0x0070d8d0 - its handler's slot 0xb0 -
 /// also sets whether it collides (GameObject_C +0x20c, which 0x0070f550
 /// gives the world's collision queries, 0x004f6560): only in Closed (1), so

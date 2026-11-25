@@ -92,6 +92,38 @@ QuestGiverStatus QuestHandler::getQuestGiverStatus(uint64_t guid) const {
     return (it != npcQuestStatus_.end()) ? it->second : QuestGiverStatus::NONE;
 }
 
+void QuestHandler::questItemAnswered(uint32_t itemId) {
+    if (questItemsAwaited_.erase(itemId) == 0) return;
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_ITEM_UPDATE", {});
+}
+
+QuestLogRows<QuestHandler::QuestLogEntry> QuestHandler::questLogRows() const {
+    const auto titleOf = [this](int32_t group) {
+        if (group > 0) return owner_.getWhoAreaName(static_cast<uint32_t>(group));
+        if (group < 0) return std::string(owner_.getQuestSortName(static_cast<uint32_t>(-group)));
+        return std::string(kQuestLogNoHeader);
+    };
+    return wowee::game::questLogRows(questLog_, collapsedQuestGroups_, titleOf,
+                                     static_cast<int32_t>(owner_.getPlayerLevel()));
+}
+
+void QuestHandler::selectQuestLogRow(int index) {
+    const auto rows = questLogRows();
+    if (index < 1 || static_cast<size_t>(index) > rows.rows.size()) {
+        selectedQuestId_ = 0;
+    } else if (const QuestLogEntry* q = rows.rows[static_cast<size_t>(index) - 1].quest) {
+        selectedQuestId_ = q->questId;
+    }
+}
+
+const QuestHandler::QuestLogEntry* QuestHandler::selectedQuest() const {
+    if (selectedQuestId_ == 0) return nullptr;
+    for (const QuestLogEntry& q : questLog_) {
+        if (q.questId == selectedQuestId_) return &q;
+    }
+    return questCacheRecord(selectedQuestId_);
+}
+
 void QuestHandler::reconcileItemObjectivesFromInventory(
     const std::unordered_map<uint32_t, uint32_t>& carriedCounts) {
     bool changedAny = false;
@@ -803,11 +835,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                         owner_.questProgressCallbackRef()(quest.title, creatureName, count, reqCount);
                     }
                     if (owner_.addonEventCallbackRef()) {
-                        // The log INDEX, not the quest id. QuestLog_OnEvent
-                        // hands arg1 straight to GetNumQuestLeaderBoards and
-                        // AddQuestWatch, both of which count positions in the
-                        // log - so a quest id addressed whichever quest
-                        // happened to sit at that position, or none.
+                        // The log index, headers counted, not the quest id:
+                        // QuestLog_OnEvent hands arg1 straight to
+                        // GetNumQuestLeaderBoards and AddQuestWatch.
                         owner_.addonEventCallbackRef()("QUEST_WATCH_UPDATE",
                             {std::to_string(questLogIndexOf(questId))});
                         owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
@@ -994,6 +1024,55 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                   "ch objParse valid=", objs.valid);
         const QuestQueryRewardsData rwds = QuestQueryRewardsParser::parse(packet.getData(), questLogStride);
         if (!texts.endText.empty()) questEndTexts()[questId] = texts.endText;
+        const auto put = [&](QuestLogEntry& q) {
+            if (questLevel != 0) q.level = questLevel;
+            if (zoneOrSort != 0) q.zoneOrSort = zoneOrSort;
+            applyQuestQueryTexts(q, texts);
+            if (objs.valid) {
+                for (int i = 0; i < 4; ++i) {
+                    q.killObjectives[i].npcOrGoId = objs.kills[i].npcOrGoId;
+                    q.killObjectives[i].required  = objs.kills[i].required;
+                    q.objectiveSourceItems[i] = objs.kills[i].sourceItem;
+                    q.objectiveSourceCounts[i] = objs.kills[i].sourceCount;
+                    q.objectiveTexts[i] = objs.texts[i];
+                }
+                for (int i = 0; i < 6; ++i) {
+                    q.itemObjectives[i].itemId   = objs.items[i].itemId;
+                    q.itemObjectives[i].required = objs.items[i].required;
+                }
+            }
+            if (!rwds.valid) return;
+            q.rewardMoney = rwds.rewardMoney;
+            q.rewardMoneyMaxLevel = rwds.rewardMoneyMaxLevel;
+            if (rwds.rewardSpellId != 0) q.rewardSpellId = rwds.rewardSpellId;
+            if (rwds.rewardSpellCastId != 0) q.rewardSpellCastId = rwds.rewardSpellCastId;
+            if (rwds.xpId != 0) q.rewardXPId = rwds.xpId;
+            q.rewardHonor = rwds.rewardHonor;
+            q.rewardHonorMultiplier = rwds.rewardHonorMultiplier;
+            q.rewardTalents = rwds.bonusTalents;
+            q.rewardArenaPoints = rwds.arenaPoints;
+            if (rwds.rewardTitleId != 0) q.rewardTitleId = rwds.rewardTitleId;
+            for (size_t i = 0; i < 5; ++i) {
+                q.factionRewards[i].factionId = rwds.factionId[i];
+                q.factionRewards[i].valueId   = rwds.factionValueId[i];
+                q.factionRewards[i].override  = rwds.factionValueOverride[i];
+            }
+            q.reputationMask = rwds.reputationMask;
+            q.sourceItemId = rwds.sourceItemId;
+            q.questFlags = rwds.questFlags;
+            q.playersSlain = rwds.playersSlain;
+            q.repObjectiveFaction = rwds.repObjectiveFaction;
+            q.repObjectiveFaction2 = rwds.repObjectiveFaction2;
+            q.repObjectiveValue = rwds.repObjectiveValue;
+            for (int i = 0; i < 4; ++i) {
+                q.rewardItems[i].itemId = rwds.itemId[i];
+                q.rewardItems[i].count  = (rwds.itemId[i] != 0) ? rwds.itemCount[i] : 0;
+            }
+            for (int i = 0; i < 6; ++i) {
+                q.rewardChoiceItems[i].itemId = rwds.choiceItemId[i];
+                q.rewardChoiceItems[i].count  = (rwds.choiceItemId[i] != 0) ? rwds.choiceItemCount[i] : 0;
+            }
+        };
         {
             // QuestInfo (+0x14, the sixth word in WotLK's layout).
             QueriedQuest& known = queriedQuests_[questId];
@@ -1002,131 +1081,20 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             if (questLogStride >= 5 && packet.getData().size() >= 28)
                 known.suggestedPlayers = network::wire::loadLE32(packet.getData(), 24);
             if (!texts.title.empty()) known.title = texts.title;
-            // The cache record a quest link's tooltip reads (0x00622960),
-            // whether or not the quest is in the log.
-            QuestLogEntry& rec = known.record;
-            rec.questId = questId;
-            applyQuestQueryTexts(rec, texts);
-            if (questLevel != 0) rec.level = questLevel;
-            if (objs.valid) {
-                for (int i = 0; i < 4; ++i) {
-                    rec.killObjectives[i].npcOrGoId = objs.kills[i].npcOrGoId;
-                    rec.killObjectives[i].required = objs.kills[i].required;
-                    rec.objectiveSourceItems[i] = objs.kills[i].sourceItem;
-                    rec.objectiveSourceCounts[i] = objs.kills[i].sourceCount;
-                    rec.objectiveTexts[i] = objs.texts[i];
-                }
-                for (int i = 0; i < 6; ++i) {
-                    rec.itemObjectives[i].itemId = objs.items[i].itemId;
-                    rec.itemObjectives[i].required = objs.items[i].required;
-                }
-            }
-            if (rwds.valid) {
-                rec.sourceItemId = rwds.sourceItemId;
-                rec.questFlags = rwds.questFlags;
-                rec.playersSlain = rwds.playersSlain;
-                rec.repObjectiveFaction = rwds.repObjectiveFaction;
-                rec.repObjectiveFaction2 = rwds.repObjectiveFaction2;
-                rec.repObjectiveValue = rwds.repObjectiveValue;
-            }
+            // The cache record (0x0067de90): what a quest link's tooltip reads
+            // (0x00622960) whether or not the quest is in the log, and what the
+            // log's own is when the quest is taken again.
+            known.record.questId = questId;
+            put(known.record);
         }
 
         for (auto& q : questLog_) {
             if (q.questId != questId) continue;
 
-            if (questLevel != 0) q.level = questLevel;
-            if (zoneOrSort != 0) q.zoneOrSort = zoneOrSort;
-
-            applyQuestQueryTexts(q, texts);
-
-            // Store structured kill/item objectives for later kill-count restoration.
-            if (objs.valid) {
-                std::unordered_set<uint32_t> validKillKeys;
-                std::unordered_set<uint32_t> validItemKeys;
-                for (int i = 0; i < 4; ++i) {
-                    q.killObjectives[i].npcOrGoId = objs.kills[i].npcOrGoId;
-                    q.killObjectives[i].required  = objs.kills[i].required;
-                    q.objectiveSourceItems[i] = objs.kills[i].sourceItem;
-                    q.objectiveSourceCounts[i] = objs.kills[i].sourceCount;
-                    q.objectiveTexts[i] = objs.texts[i];
-                    if (objs.kills[i].npcOrGoId != 0 && objs.kills[i].required != 0) {
-                        validKillKeys.insert(static_cast<uint32_t>(
-                            objs.kills[i].npcOrGoId > 0 ? objs.kills[i].npcOrGoId
-                                                       : -objs.kills[i].npcOrGoId));
-                    }
-                }
-                for (int i = 0; i < 6; ++i) {
-                    q.itemObjectives[i].itemId   = objs.items[i].itemId;
-                    q.itemObjectives[i].required = objs.items[i].required;
-                    if (objs.items[i].itemId != 0 && objs.items[i].required != 0)
-                        validItemKeys.insert(objs.items[i].itemId);
-                }
-                // Remove entries produced by an earlier malformed/heuristic decode while
-                // retaining live progress for objectives that are still part of the quest.
-                std::erase_if(q.killCounts, [&](const auto& value) {
-                    return validKillKeys.count(value.first) == 0;
-                });
-                std::erase_if(q.itemCounts, [&](const auto& value) {
-                    return validItemKeys.count(value.first) == 0;
-                });
-                std::erase_if(q.requiredItemCounts, [&](const auto& value) {
-                    return validItemKeys.count(value.first) == 0;
-                });
-                applyPackedKillCountsFromFields(q);
-                for (int i = 0; i < 4; ++i) {
-                    int32_t id = objs.kills[i].npcOrGoId;
-                    if (id == 0 || objs.kills[i].required == 0) continue;
-                    if (id > 0) owner_.queryCreatureInfo(static_cast<uint32_t>(id), 0);
-                    else        owner_.queryGameObjectInfo(static_cast<uint32_t>(-id), 0);
-                }
-                for (int i = 0; i < 6; ++i) {
-                    if (objs.items[i].itemId != 0 && objs.items[i].required != 0)
-                        owner_.queryItemInfo(objs.items[i].itemId, 0);
-                }
-                LOG_DEBUG("Quest ", questId, " objectives parsed: kills=[",
-                          objs.kills[0].npcOrGoId, "/", objs.kills[0].required, ", ",
-                          objs.kills[1].npcOrGoId, "/", objs.kills[1].required, ", ",
-                          objs.kills[2].npcOrGoId, "/", objs.kills[2].required, ", ",
-                          objs.kills[3].npcOrGoId, "/", objs.kills[3].required, "]");
-            }
-
-            // Store reward data and pre-fetch item info for icons.
-            if (rwds.valid) {
-                q.rewardMoney = rwds.rewardMoney;
-                q.rewardMoneyMaxLevel = rwds.rewardMoneyMaxLevel;
-                if (rwds.rewardSpellId != 0) q.rewardSpellId = rwds.rewardSpellId;
-                if (rwds.rewardSpellCastId != 0) q.rewardSpellCastId = rwds.rewardSpellCastId;
-                if (rwds.xpId != 0) q.rewardXPId = rwds.xpId;
-                q.rewardHonor = rwds.rewardHonor;
-                q.rewardHonorMultiplier = rwds.rewardHonorMultiplier;
-                q.rewardTalents = rwds.bonusTalents;
-                q.rewardArenaPoints = rwds.arenaPoints;
-                if (rwds.rewardTitleId != 0) q.rewardTitleId = rwds.rewardTitleId;
-                for (size_t i = 0; i < 5; ++i) {
-                    q.factionRewards[i].factionId = rwds.factionId[i];
-                    q.factionRewards[i].valueId   = rwds.factionValueId[i];
-                    q.factionRewards[i].override  = rwds.factionValueOverride[i];
-                }
-                q.reputationMask = rwds.reputationMask;
-                q.sourceItemId = rwds.sourceItemId;
-                q.questFlags = rwds.questFlags;
-                q.playersSlain = rwds.playersSlain;
-                q.repObjectiveFaction = rwds.repObjectiveFaction;
-                q.repObjectiveFaction2 = rwds.repObjectiveFaction2;
-                q.repObjectiveValue = rwds.repObjectiveValue;
-                // The watch frame needs its name and icon to draw a button.
-                if (q.sourceItemId != 0) owner_.queryItemInfo(q.sourceItemId, 0);
-                for (int i = 0; i < 4; ++i) {
-                    q.rewardItems[i].itemId = rwds.itemId[i];
-                    q.rewardItems[i].count  = (rwds.itemId[i] != 0) ? rwds.itemCount[i] : 0;
-                    if (rwds.itemId[i] != 0) owner_.queryItemInfo(rwds.itemId[i], 0);
-                }
-                for (int i = 0; i < 6; ++i) {
-                    q.rewardChoiceItems[i].itemId = rwds.choiceItemId[i];
-                    q.rewardChoiceItems[i].count  = (rwds.choiceItemId[i] != 0) ? rwds.choiceItemCount[i] : 0;
-                    if (rwds.choiceItemId[i] != 0) owner_.queryItemInfo(rwds.choiceItemId[i], 0);
-                }
-            }
+            put(q);
+            if (objs.valid) keepQuestProgressWithin(q);
+            applyPackedKillCountsFromFields(q);
+            queryQuestNames(q);
 
             // The response arrives a beat after the log panel already drew,
             // so the title, objectives and description it just filled in reach
@@ -1748,13 +1716,60 @@ int QuestHandler::findQuestLogSlotIndexFromServer(uint32_t questId) const {
     return -1;
 }
 
+void QuestHandler::keepQuestProgressWithin(QuestLogEntry& q) {
+    // Progress of what is not an objective of the quest goes; that of what is
+    // stays.
+    std::unordered_set<uint32_t> kills;
+    std::unordered_set<uint32_t> items;
+    for (const auto& kill : q.killObjectives) {
+        if (kill.npcOrGoId != 0 && kill.required != 0)
+            kills.insert(static_cast<uint32_t>(std::abs(kill.npcOrGoId)));
+    }
+    for (const auto& item : q.itemObjectives) {
+        if (item.itemId != 0 && item.required != 0) items.insert(item.itemId);
+    }
+    std::erase_if(q.killCounts, [&](const auto& value) { return kills.count(value.first) == 0; });
+    std::erase_if(q.itemCounts, [&](const auto& value) { return items.count(value.first) == 0; });
+    std::erase_if(q.requiredItemCounts, [&](const auto& value) { return items.count(value.first) == 0; });
+}
+
+void QuestHandler::queryQuestNames(const QuestLogEntry& q) {
+    for (const auto& kill : q.killObjectives) {
+        if (kill.npcOrGoId == 0 || kill.required == 0) continue;
+        if (kill.npcOrGoId > 0) owner_.queryCreatureInfo(static_cast<uint32_t>(kill.npcOrGoId), 0);
+        else owner_.queryGameObjectInfo(static_cast<uint32_t>(-kill.npcOrGoId), 0);
+    }
+    for (const auto& item : q.itemObjectives) {
+        if (item.itemId != 0 && item.required != 0) owner_.queryItemInfo(item.itemId, 0);
+    }
+    // The watch frame needs its name and icon to draw a button.
+    if (q.sourceItemId != 0) owner_.queryItemInfo(q.sourceItemId, 0);
+    for (const auto& item : q.rewardItems) {
+        if (item.itemId != 0) owner_.queryItemInfo(item.itemId, 0);
+    }
+    for (const auto& item : q.rewardChoiceItems) {
+        if (item.itemId != 0) owner_.queryItemInfo(item.itemId, 0);
+    }
+}
+
 void QuestHandler::addQuestToLocalLogIfMissing(uint32_t questId, const std::string& title, const std::string& objectives) {
     if (questId == 0 || hasQuestInLog(questId)) return;
     QuestLogEntry entry;
+    // One known already is what its record says at once: the log reads the
+    // cache (0x0067de90), and nothing is asked of the server again.
+    const auto known = queriedQuests_.find(questId);
+    const bool fromRecord = known != queriedQuests_.end() && known->second.record.questId == questId;
+    if (fromRecord) entry = known->second.record;
     entry.questId = questId;
-    entry.title = title.empty() ? ("Quest #" + std::to_string(questId))
-                                : normalizeQuestText(title, true);
-    entry.objectives = normalizeQuestText(objectives, false);
+    if (!fromRecord || entry.title.empty()) {
+        entry.title = title.empty() ? ("Quest #" + std::to_string(questId))
+                                    : normalizeQuestText(title, true);
+        entry.objectives = normalizeQuestText(objectives, false);
+    }
+    if (fromRecord) {
+        applyPackedKillCountsFromFields(entry);
+        queryQuestNames(entry);
+    }
     questLog_.push_back(std::move(entry));
     if (owner_.addonEventCallbackRef()) {
         // QUEST_ACCEPTED is announceQuestAdded's, with the log index.
@@ -1993,20 +2008,17 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
                 // Its title and objectives, for one the log has not had.
                 if (before.count(q.questId) == 0) requestQuestQuery(q.questId, false);
             }
+            // One that has left the log is watched no more (0x005e6940 goes
+            // through the watch list with 0x005dea60).
+            for (uint32_t id : before) {
+                if (after.count(id) == 0) owner_.setQuestTracked(id, false);
+            }
             for (uint32_t id : after) {
                 if (before.count(id) == 0) announceQuestLogChanged(id);
             }
         }
     }
     for (uint32_t questId : added) noteQuestAdded(questId);
-}
-
-int QuestHandler::questLogIndexOf(uint32_t questId) const {
-    if (const auto& row = owner_.questLogRowLookup()) return row(questId);
-    for (size_t i = 0; i < questLog_.size(); ++i) {
-        if (questLog_[i].questId == questId) return static_cast<int>(i) + 1;
-    }
-    return 0;
 }
 
 void QuestHandler::noteQuestAdded(uint32_t questId) {

@@ -742,6 +742,9 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     movementInfo.flags2 = 0;
     if (movementHandler_) {
         movementHandler_->resetMovementClock();
+        movementHandler_->forgetMoveSplines();
+        movementHandler_->forgetTaxi();
+        movementHandler_->noteServerPlace(canonical);
         movementHandler_->dropTeleportAck();
         movementHandler_->forgetCollisionHeight();
     }
@@ -2132,8 +2135,8 @@ uint32_t GameHandler::getSecondsUntilDailyReset() const {
     return socialHandler_ ? socialHandler_->getSecondsUntilDailyReset() : 0u;
 }
 
-void GameHandler::requestPlayedTime() {
-    if (socialHandler_) socialHandler_->requestPlayedTime();
+void GameHandler::requestPlayedTime(bool forChat) {
+    if (socialHandler_) socialHandler_->requestPlayedTime(forChat);
 }
 
 void GameHandler::queryWho(const std::string& playerName) {
@@ -3288,12 +3291,19 @@ void GameHandler::updatePossessSpell() {
 
 bool GameHandler::petSpellInEffect(uint32_t spell) {
     // 0x00802cb0 on the pet: its toggle spells, companions and mounts.
-    if (spell == 0 || petGuid_ == 0) return false;
+    if (petGuid_ == 0) return false;
+    static const std::vector<AuraSlot> kNoAuras;
+    const auto* auras = getUnitAuras(petGuid_);
+    return unitSpellInEffect(petGuid_, spell, auras ? *auras : kNoAuras);
+}
+
+bool GameHandler::unitSpellInEffect(uint64_t guid, uint32_t spell, const std::vector<AuraSlot>& auras) const {
+    if (spell == 0) return false;
     loadSpellNameCache();
     const auto it = spellNameCache_.find(spell);
     if (it == spellNameCache_.end()) return false;
-    auto petUnit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(petGuid_));
-    if (!petUnit) return false;
+    auto self = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));
+    if (!self) return false;
     pet::ToggleSpell toggle;
     toggle.id = spell;
     toggle.activeIconId = it->second.activeIconId;
@@ -3304,17 +3314,17 @@ bool GameHandler::petSpellInEffect(uint32_t spell) {
     }
     toggle.miscB0 = it->second.effectMiscValuesB[0];
     pet::ToggleUnit unit;
-    const uint64_t critter = guidFieldOf(*petUnit, UF::UNIT_FIELD_CRITTER);
+    const uint64_t critter = guidFieldOf(*self, UF::UNIT_FIELD_CRITTER);
     unit.critterEntry = static_cast<uint32_t>((critter >> 24) & 0xFFFFFFFu);  // its entry bits
-    if (const auto p = vehicleRoster_.passenger(petGuid_)) {
+    if (const auto p = vehicleRoster_.passenger(guid)) {
         if (auto v = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(p->vehicleGuid))) {
             unit.vehicleEntry = v->getEntry();
             unit.vehicleMadeByPlayer = guidFieldOf(*v, UF::UNIT_FIELD_CREATEDBY) == playerGuid;
         }
     }
-    auto* am = services_.assetManager;
-    auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
     const auto slotOf = [&](uint32_t row) -> uint32_t {
+        auto* am = services_.assetManager;
+        auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
         const int32_t r = props && props->getFieldCount() > 4 ? props->findRecordById(row) : -1;
         return r >= 0 ? props->getUInt32(static_cast<uint32_t>(r), 4) : 0u;
     };
@@ -3323,9 +3333,7 @@ bool GameHandler::petSpellInEffect(uint32_t spell) {
         if (m == spellNameCache_.end()) return {0u, 0u};
         return {m->second.effectAuraIds[0], m->second.effectMiscValues[0]};
     };
-    static const std::vector<AuraSlot> kNoAuras;
-    const auto* auras = getUnitAuras(petGuid_);
-    return pet::spellInEffectOn(toggle, unit, slotOf, auras ? *auras : kNoAuras, mountOf);
+    return pet::spellInEffectOn(toggle, unit, slotOf, auras, mountOf);
 }
 
 void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
@@ -6422,31 +6430,29 @@ const std::string& GameHandler::getSkillLineName(uint32_t skillLineId) const {
 }
 
 
-void GameHandler::addHolidayRows() {
-    // 0x005c04f0: every Holidays.dbc row is on the calendar; what the server
-    // sends takes the place of one (0x006f6020).
+const std::vector<CalendarHoliday>& GameHandler::holidayTable() {
     auto* am = services_.assetManager;
-    const auto dbc = am && am->isInitialized() ? am->loadDBCOptional("Holidays.dbc") : nullptr;
-    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 55) return;
-    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+    if (holidayTableRead_ || !am || !am->isInitialized()) return holidayTable_;
+    holidayTableRead_ = true;
+    const auto rows = am->loadDBCOptional("Holidays.dbc");
+    const auto names = am->loadDBCOptional("HolidayNames.dbc");
+    if (!rows || !names || rows->getFieldCount() < 54 || names->getFieldCount() < 2) return holidayTable_;
+    for (uint32_t i = 0; i < rows->getRecordCount(); ++i) {
+        const int32_t name = names->findRecordById(rows->getUInt32(i, 49));
+        if (name < 0 || names->getString(static_cast<uint32_t>(name), 1).empty()) continue;
         CalendarHoliday h;
-        h.id = dbc->getUInt32(i, 0);
-        const auto sent = std::any_of(calendarData_.holidays.begin(), calendarData_.holidays.end(),
-                                      [&h](const CalendarHoliday& other) { return other.id == h.id; });
-        if (sent) continue;
-        for (int k = 0; k < CalendarHoliday::kNumDurations; ++k)
-            h.durations[k] = dbc->getUInt32(i, static_cast<uint32_t>(1 + k));
-        for (int k = 0; k < CalendarHoliday::kNumDates; ++k)
-            h.dates[k] = dbc->getUInt32(i, static_cast<uint32_t>(11 + k));
-        h.region = dbc->getUInt32(i, 37);
-        h.looping = dbc->getUInt32(i, 38);
-        for (int k = 0; k < CalendarHoliday::kNumFlags; ++k)
-            h.calendarFlags[k] = dbc->getUInt32(i, static_cast<uint32_t>(39 + k));
-        h.textureFilename = dbc->getString(i, 51);
-        h.priority = dbc->getUInt32(i, 52);
-        h.calendarFilterType = dbc->getUInt32(i, 53);
-        calendarData_.holidays.push_back(std::move(h));
+        h.id = rows->getUInt32(i, 0);
+        for (uint32_t k = 0; k < 10; ++k) h.durations[k] = rows->getUInt32(i, 1 + k);
+        for (uint32_t k = 0; k < 26; ++k) h.dates[k] = rows->getUInt32(i, 11 + k);
+        h.region = rows->getUInt32(i, 37);
+        h.looping = rows->getUInt32(i, 38);
+        for (uint32_t k = 0; k < 10; ++k) h.calendarFlags[k] = rows->getUInt32(i, 39 + k);
+        h.textureFilename = rows->getString(i, 51);
+        h.priority = rows->getUInt32(i, 52);
+        h.calendarFilterType = rows->getUInt32(i, 53);
+        holidayTable_.push_back(std::move(h));
     }
+    return holidayTable_;
 }
 
 void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& packet) {
@@ -6464,11 +6470,22 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
         packet.skipAll();
         return;
     }
+    // An event opened - not one just made - is the open row (0x005bed20), and
+    // one taken away is no more (0x005c0ae0, 0x005c0cf0).
+    if (which == CalendarPacket::SendEvent && calendarEventDetail_.sendType != 1 && calendarEventDetail_.sendType != 2) {
+        calendarOpenRow_ = {};
+        calendarOpenRow_.eventId = calendarEventDetail_.eventId;
+    } else if (calendarOpenRow_.eventId != 0 && calendarEventDetail_.eventId == 0 &&
+               (which == CalendarPacket::EventRemovedAlert || which == CalendarPacket::InviteRemovedAlert)) {
+        calendarOpenRow_ = {};
+    }
+    // The server sends the holidays it has changed; the rest are the table's.
+    if (which == CalendarPacket::SendCalendar)
+        calendarData_.holidays = calendarMergedHolidays(holidayTable(), calendarData_.holidays);
     packet.skipAll();
     // An event sent in full is the open one now, in place of a new one
     // (0x005bed20).
     if (which == CalendarPacket::SendEvent) calendarDraftOpen_ = false;
-    if (which == CalendarPacket::SendCalendar) addHolidayRows();
     // Every path that stores an event record re-arms that record's
     // fifteen-minutes-before reminder (0x005b79b0, called by the calendar list,
     // by an event added and by an event updated - and by the last two with the
@@ -6582,6 +6599,52 @@ std::optional<uint32_t> GameHandler::displayModelFlags(uint32_t displayId) const
     const int32_t mrow = models->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 1));
     if (mrow < 0 || models->getFieldCount() <= 1) return std::nullopt;
     return models->getUInt32(static_cast<uint32_t>(mrow), 1);
+}
+
+std::optional<GameHandler::ShownBody> GameHandler::ownEquipmentDisplay(uint32_t displayId) const {
+    auto* am = services_.assetManager;
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CreatureDisplayInfoExtra")
+                                                        : nullptr;
+    if (displayId == 0 || !am || !am->isInitialized() || !layout) return std::nullopt;
+    const uint32_t flagsField = layout->tryField("Flags");
+    const auto displays = am->loadDBCOptional("CreatureDisplayInfo.dbc");
+    const auto extras = am->loadDBCOptional("CreatureDisplayInfoExtra.dbc");
+    if (flagsField == 0xFFFFFFFFu || !displays || !extras || displays->getFieldCount() <= 3 ||
+        extras->getFieldCount() <= flagsField)
+        return std::nullopt;
+    const int32_t drow = displays->findRecordById(displayId);
+    if (drow < 0) return std::nullopt;
+    const int32_t erow = extras->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 3));
+    if (erow < 0) return std::nullopt;
+    const auto row = static_cast<uint32_t>(erow);
+    if (!wearsOwnEquipment(displayModelFlags(displayId).value_or(0), true, extras->getUInt32(row, flagsField)))
+        return std::nullopt;
+    return ShownBody{.displayId = displayId,
+                     .race = static_cast<uint8_t>(extras->getUInt32(row, (*layout)["RaceID"])),
+                     .sex = static_cast<uint8_t>(extras->getUInt32(row, (*layout)["SexID"]))};
+}
+
+std::optional<GameHandler::ShownBody> GameHandler::getShownBody(uint64_t guid) const {
+    const auto unit = getEntityManager().getEntity(guid);
+    if (!unit || unit->getType() != ObjectType::PLAYER) return std::nullopt;
+    const auto field = [&](UF f) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? unit->getField(i) : 0u;
+    };
+    const uint32_t display = field(UF::UNIT_FIELD_DISPLAYID);
+    const uint32_t native = field(UF::UNIT_FIELD_NATIVEDISPLAYID);
+    if (display == 0 || native == 0 || display == native) return std::nullopt;
+    return ownEquipmentDisplay(display);
+}
+
+Character GameHandler::getShownCharacter(const Character& character) const {
+    Character shown = character;
+    if (const auto body = getShownBody(playerGuid)) {
+        shown.race = static_cast<Race>(body->race);
+        shown.gender = body->sex == 1 ? Gender::FEMALE : Gender::MALE;
+        shown.useFemaleModel = body->sex == 1;
+    }
+    return shown;
 }
 
 bool GameHandler::mayMountAsShown() const {

@@ -10,6 +10,7 @@
 #include "addons/tooltip_setter_rules.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
+#include "game/packet_wait.hpp"
 #include "game/cast_failure_names.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/spell_classification.hpp"
@@ -397,7 +398,7 @@ bool SpellHandler::resolveUnitPosition(uint64_t guid, glm::vec3& outPos) {
     }
     auto entity = owner_.getEntityManager().getEntity(guid);
     if (!entity) return false;
-    glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
+    glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
     outPos = core::coords::canonicalToRender(canonical);
     return true;
 }
@@ -891,13 +892,18 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
         if (!unit) return;
         unit->setName(name);
         LOG_INFO("Pet name: 0x", std::hex, guid, std::dec, " is '", name, "'");
-        // Both, because the two frames listen for different ones: the pet
-        // frame redraws its name from UNIT_NAME_UPDATE, and the pet bar and
-        // anything else keyed on the pet rebuild from PET_UI_UPDATE.
-        if (guid == owner_.petGuidRef()) {
-            owner_.fireAddonEvent("UNIT_NAME_UPDATE", {"pet"});
-            owner_.fireAddonEvent("PET_UI_UPDATE", {});
+        // UNIT_NAME_UPDATE for every token the unit has (0x00728ca0 ->
+        // 0x00512b00 -> 0x0060bf10), whoever's pet it is: a chair that became
+        // the player's kept its old name on the target frame. A totem's slot
+        // is redrawn with the name (0x005139b0), and the pet bar from
+        // PET_UI_UPDATE.
+        for (const auto& unitId : owner_.unitTokensForGuid(guid))
+            owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
+        for (int slot = 0; slot < GameHandler::NUM_TOTEM_SLOTS; ++slot) {
+            if (owner_.getTotemSlot(slot).guid == guid)
+                owner_.fireAddonEvent("PLAYER_TOTEM_UPDATE", {std::to_string(slot + 1)});
         }
+        if (guid == owner_.petGuidRef()) owner_.fireAddonEvent("PET_UI_UPDATE", {});
     };
 
     table[Opcode::SMSG_INITIAL_SPELLS] = [this](network::Packet& packet) { handleInitialSpells(packet); };
@@ -2129,7 +2135,7 @@ void SpellHandler::playerCooldownsChanged() {
     // GetShapeshiftFormCooldown, which WoWee already answers from the spell's
     // own cooldown. So a stance or a bonus-bar ability came off its cooldown
     // with the swirl still cut into the button until the bar was next rebuilt.
-    if (!knownShapeshiftForms(owner_.getPlayerClass(), owner_.getKnownSpells()).empty())
+    if (!owner_.stanceBarSpells().empty())
         owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_COOLDOWN", {});
     owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
 }
@@ -2271,6 +2277,12 @@ bool SpellHandler::petToggleHeld(uint32_t spellId) const {
     // player turns it off.
     return addons::storedCVarValue("secureAbilityToggle", "1") != "0" &&
            petHistory_.startedRecently(spellId, historyNowMs());
+}
+
+bool SpellHandler::toggleHeld(uint32_t spellId) const {
+    // 0x0080da80: the cvar, then the player's list.
+    return addons::storedCVarValue("secureAbilityToggle", "1") != "0" &&
+           playerHistory_.startedRecently(spellId, historyNowMs());
 }
 
 void SpellHandler::notePetActionCast(uint32_t spellId, uint64_t pet) {
@@ -4711,7 +4723,7 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
     playerHistory_.clear();
     {
         loadSpellNameCache();
-        const int64_t now = historyNowMs();
+        const int64_t now = historyNowMs() - packetWaitedMs(packet);
         for (const auto& cd : data.cooldowns) {
             const auto it = owner_.spellNameCacheRef().find(cd.spellId);
             if (it == owner_.spellNameCacheRef().end()) continue;
@@ -4741,7 +4753,7 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("SPELLS_CHANGED", {});
         // The stance bar's list, built from the spellbook (event 0x178).
-        if (!knownShapeshiftForms(owner_.getPlayerClass(), knownSpells_).empty()) {
+        if (!owner_.stanceBarSpells().empty()) {
             owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
         }
         // A crafting window's recipes are the spells that just changed, and
@@ -5525,6 +5537,17 @@ void SpellHandler::handleCooldownEvent(network::Packet& packet) {
 /// soon as they clicked on them, and a buff cast on them while they were
 /// targeted never appeared there at all - which reads exactly like the buff
 /// being cancelled, or never landing.
+const std::vector<AuraSlot>& SpellHandler::getTargetAuras() const {
+    const uint64_t player = owner_.getPlayerGuid();
+    return player != 0 && owner_.getTargetGuid() == player ? playerAuras_ : targetAuras_;
+}
+
+const std::vector<AuraSlot>* SpellHandler::getUnitAuras(uint64_t guid) const {
+    if (guid != 0 && guid == owner_.getPlayerGuid()) return &playerAuras_;
+    auto it = unitAurasCache_.find(guid);
+    return (it != unitAurasCache_.end()) ? &it->second : nullptr;
+}
+
 void SpellHandler::mirrorAurasByGuid(uint64_t guid, const std::vector<AuraSlot>& auras) {
     if (guid == 0 || guid == owner_.getPlayerGuid()) return;
     auto& cached = unitAurasCache_[guid];
@@ -5765,6 +5788,8 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
         uint64_t nowMs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
+        // A time counts from when the packet came, whatever kept it.
+        nowMs -= packetWaitedMs(packet);
         // The combat log, from the slots as they were (0x0072f5d0). A whole
         // list logs nothing.
         if (!isAll && isActiveExpansion("wotlk")) logAuraChanges(data.guid, *auraList, data.updates, nowMs);
@@ -5859,14 +5884,14 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
         }
 
         // 0x00722090 / 0x00727760: an aura of a stance bar spell that is no
-        // shapeshift (aura 36) - Stealth, a presence - came or went. A real
-        // form says so through its form field instead (0x006da130).
+        // shapeshift (aura 36) - a paladin's aura, a presence - came or went. A
+        // real form says so through its form field instead (0x006da130).
         if (!playerAuraChanges.empty() && owner_.addonEventCallbackRef()) {
-            const auto forms = knownShapeshiftForms(owner_.getPlayerClass(), owner_.getKnownSpells());
-            const bool barSpellChanged = std::any_of(forms.begin(), forms.end(), [&](const ShapeshiftForm& f) {
-                return std::find(playerAuraChanges.begin(), playerAuraChanges.end(), f.spellId) !=
+            const auto forms = owner_.stanceBarSpells();
+            const bool barSpellChanged = std::any_of(forms.begin(), forms.end(), [&](uint32_t spell) {
+                return std::find(playerAuraChanges.begin(), playerAuraChanges.end(), spell) !=
                            playerAuraChanges.end() &&
-                       !owner_.spellAppliesAura(f.spellId, 36);
+                       !owner_.spellAppliesAura(spell, kAuraModShapeshift);
             });
             if (barSpellChanged) owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORM", {});
         }
@@ -5906,8 +5931,8 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
 }
 
 namespace {
-// Whether a spell is one of the stance bar's (0x0053bd40), as the class has them.
-bool isStanceBarSpell(uint8_t classId, uint32_t spellId) {
+// Whether a spell is one of the stance bar's before WotLK, as the class has them.
+bool isLegacyStanceBarSpell(uint8_t classId, uint32_t spellId) {
     for (const ShapeshiftForm& form : allShapeshiftForms(classId)) {
         if (form.spellId == spellId || form.supersededBy == spellId) return true;
     }
@@ -5925,7 +5950,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
     knownSpells_.insert(spellId);
     markInterruptMasksDirty();
     noteLearnOrder(spellId);
-    noteBookLearned(spellId);  // 0x00542030
+    const bool stanceBarChanged = noteBookLearned(spellId);  // 0x00542030
     LOG_INFO("Learned spell: ", spellId, alreadyKnown ? " (already known)" : "");
     if (isPreWotlk()) {
         loadTalentDbc();
@@ -6022,7 +6047,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
         }
         owner_.addonEventCallbackRef()("SPELLS_CHANGED", {});
         // The stance bar's list took it (0x00542563 -> event 0x178).
-        if (isStanceBarSpell(owner_.getPlayerClass(), spellId)) {
+        if (isPreWotlk() ? isLegacyStanceBarSpell(owner_.getPlayerClass(), spellId) : stanceBarChanged) {
             owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
         }
         // A crafting window's recipes are the spells that just changed, and
@@ -6055,7 +6080,7 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
     const bool companion = knownSpells_.count(spellId) != 0 && inCompanions();
     knownSpells_.erase(spellId);
     markInterruptMasksDirty();
-    noteBookRemoved(spellId);  // 0x0053fad0
+    const bool stanceBarChanged = noteBookRemoved(spellId);  // 0x0053fad0
     syncPreWotlkTalentsFromKnownSpells();
     LOG_INFO("Removed spell: ", spellId);
     // Braced. The two lines below were indented as though they sat inside the
@@ -6064,8 +6089,8 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
     // throws rather than doing nothing.
     if (owner_.addonEventCallbackRef()) {
         const bool left = !owner_.getCompanions(false).empty() || !owner_.getCompanions(true).empty();
-        for (const std::string& event :
-             removedSpellEvents(isStanceBarSpell(owner_.getPlayerClass(), spellId), companion, left))
+        const bool stance = isPreWotlk() ? isLegacyStanceBarSpell(owner_.getPlayerClass(), spellId) : stanceBarChanged;
+        for (const std::string& event : removedSpellEvents(stance, companion, left))
             owner_.addonEventCallbackRef()(event, {});
         // A crafting window's recipes are the spells that just changed, and
         // it refreshes on its own event rather than on that one.
@@ -6119,8 +6144,9 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
     knownSpells_.erase(oldSpellId);
     // 0x006e7e00: the old rank forgotten (0x0053fad0), the new one learned
     // (0x00542030).
-    noteBookRemoved(oldSpellId);
-    noteBookLearned(newSpellId);
+    noteBookRemoved(oldSpellId, true);
+    // The new rank takes the old one's button (0x005424c5 -> event 0x178).
+    const bool stanceBarChanged = noteBookLearned(newSpellId, oldSpellId);
     // The new rank takes the old one's place in the list.
     if (const auto old = learnOrder_.find(oldSpellId); old != learnOrder_.end()) {
         learnOrder_[newSpellId] = old->second;
@@ -6158,6 +6184,8 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
     // announced by the SMSG_LEARNED_SPELL that follows. This printed
     // "Upgraded to X" in English.
     (void)newSpellAlreadyAnnounced;
+    if (stanceBarChanged && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
 }
 
 void SpellHandler::handleUnlearnSpells(network::Packet& packet) {
@@ -6165,12 +6193,12 @@ void SpellHandler::handleUnlearnSpells(network::Packet& packet) {
     uint32_t spellCount = packet.readUInt32();
     LOG_INFO("Unlearning ", spellCount, " spells");
 
-    bool barChanged = false;
+    bool barChanged = false, stanceBarChanged = false;
     for (uint32_t i = 0; i < spellCount && packet.getRemainingSize() >= 4; ++i) {
         uint32_t spellId = packet.readUInt32();
         knownSpells_.erase(spellId);
         markInterruptMasksDirty();
-        noteBookRemoved(spellId);  // 0x0053fad0
+        stanceBarChanged |= noteBookRemoved(spellId);  // 0x0053fad0
         LOG_INFO("  Unlearned spell: ", spellId);
         for (auto& slot : owner_.actionBarRef()) {
             if (slot.type == ActionBarSlot::SPELL && slot.id == spellId) {
@@ -6180,6 +6208,8 @@ void SpellHandler::handleUnlearnSpells(network::Packet& packet) {
         }
     }
     if (barChanged) owner_.saveCharacterConfig();
+    if (stanceBarChanged && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
     // No line: 0x006e2240 only keeps the list. This printed "Unlearned N
     // spells" in English.
 }
@@ -6879,30 +6909,47 @@ spell_book::Row bookRow(const Entry& e) {
     row.misc0 = static_cast<int32_t>(e.effectMiscValues[0]);
     return row;
 }
+template <class Entry>
+StanceBarRow stanceBarRow(const Entry& e) {
+    StanceBarRow row;
+    for (int k = 0; k < 3; ++k) row.effectAuras[k] = e.effectAuraIds[k];
+    row.attrEx2 = e.attrEx2;
+    row.order = e.stanceBarOrder;
+    return row;
+}
 }  // namespace
 
-void SpellHandler::noteBookLearned(uint32_t spellId) {
+bool SpellHandler::noteBookLearned(uint32_t spellId, uint32_t supersedes) {
     // 0x00542030: the spell's row (0x004cfd20); none, nothing noted.
     loadSpellNameCache();
     const auto& cache = owner_.spellNameCacheRef();
     if (cache.empty()) {
         bookRecordsStale_ = true;
-        return;
+        return false;
     }
     const auto it = cache.find(spellId);
-    if (it == cache.end()) return;
+    if (it == cache.end()) return false;
     bookRecords_.learned(spellId, bookRow(it->second));
+    const StanceBarRow row = stanceBarRow(it->second);
+    return supersedes != 0 ? stanceBar_.superseded(supersedes, spellId, row) : stanceBar_.learned(spellId, row);
 }
 
-void SpellHandler::noteBookRemoved(uint32_t spellId) {
-    // 0x0053fad0.
+bool SpellHandler::noteBookRemoved(uint32_t spellId, bool replaced) {
+    // 0x0053fad0; its second argument leaves the stance bar alone.
     bookRecords_.removed(spellId);
+    return !replaced && stanceBar_.removed(spellId);
 }
 
 void SpellHandler::clearBookRecords() {
     // 0x0053ec40.
     bookRecords_.clear();
+    stanceBar_.clear();
     bookRecordsStale_ = false;
+}
+
+std::vector<uint32_t> SpellHandler::stanceBarSpells() const {
+    (void)spellBookRecords();
+    return stanceBar_.spells();
 }
 
 const spell_book::Records& SpellHandler::spellBookRecords() const {
@@ -6916,9 +6963,12 @@ const spell_book::Records& SpellHandler::spellBookRecords() const {
             std::sort(book.begin(), book.end(),
                       [this](uint32_t a, uint32_t b) { return learnOrder(a) < learnOrder(b); });
             bookRecords_.clear();
+            stanceBar_.clear();
             for (const uint32_t id : book) {
                 const auto it = cache.find(id);
-                if (it != cache.end()) bookRecords_.learned(id, bookRow(it->second));
+                if (it == cache.end()) continue;
+                bookRecords_.learned(id, bookRow(it->second));
+                stanceBar_.learned(id, stanceBarRow(it->second));
             }
             bookRecordsStale_ = false;
         }
@@ -6993,6 +7043,9 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t attrEx5Field = spellL ? spellL->tryField("AttributesEx5") : 0xFFFFFFFF;
     const uint32_t attrEx6Field = spellL ? spellL->tryField("AttributesEx6") : 0xFFFFFFFF;
     const uint32_t activeIconField = spellL ? spellL->tryField("ActiveIconID") : 0xFFFFFFFF;
+    // Column 215 of 3.3.5a's Spell.dbc, for a layout file older than its name.
+    uint32_t stanceOrderField = spellL ? spellL->tryField("StanceBarOrder") : 0xFFFFFFFF;
+    if (stanceOrderField == 0xFFFFFFFF && !isPreWotlk() && dbc->getFieldCount() == 234) stanceOrderField = 215;
     const uint32_t familyField = spellL ? spellL->tryField("SpellFamilyName") : 0xFFFFFFFF;
     const uint32_t familyFlagsField = spellL ? spellL->tryField("SpellFamilyFlags") : 0xFFFFFFFF;
     const uint32_t familyFlagWords = isPreWotlk() ? 2u : 3u;
@@ -7243,6 +7296,8 @@ void SpellHandler::loadSpellNameCache() const {
             if (attrEx5Field < fieldCount) entry.attrEx5 = dbc->getUInt32(i, attrEx5Field);
             if (attrEx6Field < fieldCount) entry.attrEx6 = dbc->getUInt32(i, attrEx6Field);
             if (activeIconField < fieldCount) entry.activeIconId = dbc->getUInt32(i, activeIconField);
+            if (stanceOrderField < fieldCount)
+                entry.stanceBarOrder = static_cast<int32_t>(dbc->getUInt32(i, stanceOrderField));
             if (familyField < fieldCount) entry.spellFamily = dbc->getUInt32(i, familyField);
             // A uint64 before WotLK, three words since (groups 0-63, 0-95).
             for (uint32_t w = 0; w < familyFlagWords; ++w) {
@@ -8442,7 +8497,7 @@ void SpellHandler::handlePlaySpellVisual(network::Packet& packet) {
     } else {
         auto entity = owner_.getEntityManager().getEntity(casterGuid);
         if (!entity) return;
-        glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
+        glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
         spawnPos = core::coords::canonicalToRender(canonical);
     }
     // The packet names a SpellVisualKit, played on the unit as type 0

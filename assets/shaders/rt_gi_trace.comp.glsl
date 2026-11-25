@@ -89,13 +89,27 @@ void main() {
         if (any(isnan(hn)) || dot(hn, hn) < 0.5) hn = -rayDir;
         vec3 hp = origin + rayDir * t;
         vec3 L = normalize(pass.sunDir.xyz);
-        vec3 light = bounceAt(hp, hn, -rayDir);
+        // A room's own painted light, which nothing traced holds: the light
+        // that is in the room, as the client takes it for a unit from the
+        // floor (0x007c7fe0, 0x007a0d60) - not what the wall throws back of
+        // it. The probes then hold it wherever they are in the room, and it
+        // fades into the open air's through a door with no step in it. The
+        // sun that comes in is not painted and goes on top.
+        vec3 room;
+        bool painted = rtFaceRoomLight(rtTris[rtHitTri].v1.w, room);
+        // A room lit as the open air: what the open air's light is, as a ray
+        // that leaves the scene brings it (the client lights it by the zone).
+        if (rtFaceOpenAir(rtTris[rtHitTri].v1.w)) {
+            painted = true;
+            room = rayDir.z >= 0.0 ? pass.giSky.rgb : pass.giGround.rgb;
+        }
+        vec3 light = painted ? vec3(0.0) : bounceAt(hp, hn, -rayDir);
         float ndl = dot(hn, L);
         if (pass.sunColor.w > 0.5 && ndl > 0.0 &&
             !rtOccluded(hp + hn * rtSurfaceOffset(t), L, pass.params.w, rng)) {
             light += pass.sunColor.rgb * ndl;
         }
-        radiance = hs.rgb * light;
+        radiance = hs.rgb * light + (painted ? room : vec3(0.0));
     } else {
         radiance = rayDir.z >= 0.0 ? pass.giSky.rgb : pass.giGround.rgb;
     }

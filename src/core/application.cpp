@@ -3,6 +3,7 @@
 #include "core/pointer_speed.hpp"
 #include "core/platform.hpp"
 #include "core/application.hpp"
+#include "rendering/frustum.hpp"
 #include "rendering/vk_utils.hpp"
 #include "rendering/model_frame_view.hpp"
 #include "core/rt_session_marker.hpp"
@@ -12,7 +13,11 @@
 #include "core/cinematic_player.hpp"
 #include "game/mount_special.hpp"
 #include "game/mover_keys.hpp"
+#include "game/game_utils.hpp"
 #include "game/mover_mode.hpp"
+#include "game/dressing_room.hpp"
+#include "game/player_display_flags.hpp"
+#include "game/protocol_constants.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
 #include "core/frame_pacer.hpp"
@@ -166,9 +171,6 @@
 #include <mach/thread_policy.h>
 #include <pthread.h>
 #endif
-
-// The backend's, which its header leaves out.
-ImGuiKey ImGui_ImplSDL3_KeyEventToImGuiKey(SDL_Keycode keycode, SDL_Scancode scancode);
 
 namespace wowee {
 namespace core {
@@ -1307,6 +1309,11 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         });
         gameHandler->setPlacedFallCallback([this] {
             if (renderer && renderer->getCameraController()) renderer->getCameraController()->queuePlacedFall();
+            ++playerSplineMoves_;
+        });
+        gameHandler->setFallEndsCallback([this] {
+            ++playerSplineMoves_;
+            if (renderer && renderer->getCameraController()) renderer->getCameraController()->endFall();
         });
         // SMSG_OVERRIDE_LIGHT into the lighting (0x007f10a0, 0x007f11a0).
         gameHandler->setOverrideLightCallback([this](uint32_t areaLight, uint32_t overrideLight, uint32_t ms) {
@@ -1881,9 +1888,6 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             gameHandler->setUnitTooltipCallback([this](uint64_t guid) {
                 if (addonManager_ && addonsLoaded_)
                     if (auto* engine = addonManager_->getLuaEngine()) engine->unitTooltipChanged(guid);
-            });
-            gameHandler->setQuestLogRowLookup([handler = gameHandler.get()](uint32_t questId) {
-                return addons::questLogRowForQuest(handler, questId);
             });
             // Wire generic game events to addon dispatch
             gameHandler->setAddonEventCallback([this](const std::string& event, const std::vector<std::string>& args) {
@@ -2500,9 +2504,8 @@ void Application::run() {
         // integrates over it.
         const float deltaTime = FramePacer::toSeconds(deltaNs);
         // But the units on their moves go by the clock, as the client's
-        // splines do (GameHandler::setUnitClockSeconds); capped only where
-        // a float of seconds stays exact enough.
-        if (gameHandler) gameHandler->setUnitClockSeconds(FramePacer::toSeconds(deltaNs, 3600.0f));
+        // splines do (GameHandler::setUnitClock).
+        if (gameHandler) gameHandler->setUnitClock(std::chrono::steady_clock::now());
         // And the player's own steps, up to a second of them.
         if (auto* cc = renderer ? renderer->getCameraController() : nullptr)
             cc->setFrameSeconds(FramePacer::toSeconds(deltaNs, 1.0f));
@@ -2863,7 +2866,6 @@ void Application::run() {
             // CLICK binding, which acts as the key comes up (0x00563150). The
             // press is what recorded it, so a release nothing pressed is
             // passed by.
-            if (event.type == SDL_EVENT_KEY_UP) Input::getInstance().setKeySpent(event.key.scancode, false);
             if (event.type == SDL_EVENT_KEY_UP && addonManager_ && addonsLoaded_) {
                 if (auto* engine = addonManager_->getLuaEngine()) {
                     // A frame listening for keys has the release too, as it
@@ -2871,9 +2873,9 @@ void Application::run() {
                     // frame acts on the release (MovieFrame_OnKeyUp: Escape
                     // closes it, Space and Enter stop the movie), and with
                     // only presses reaching frames the movie could not be
-                    // skipped.
-                    if ((!engine->editBoxHasFocus() || engine->keyIsTheGames(event.key.key, event.key.mod)) &&
-                        engine->dispatchFrameKey(event.key.key, false)) continue;
+                    // skipped. Its own press's alone, whatever has the
+                    // keyboard by then (0x00494490).
+                    if (engine->dispatchFrameKey(event.key.key, false)) continue;
                     (void)engine->dispatchBindingKey(event.key.key, false, false, false,
                                                      false, false);
                 }
@@ -2924,6 +2926,9 @@ void Application::run() {
                             default: break;
                         }
                         const bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+                        // The box's until it is let go of, also where the box
+                        // gives the keyboard up before that.
+                        if (!event.key.repeat) Input::getInstance().setKeySpent(event.key.scancode);
                         engine->dispatchKey(event.key.key, ctrl, shift);
                         continue;
                     }
@@ -2933,15 +2938,21 @@ void Application::run() {
                     // actually takes it, so with nothing up the movement
                     // keys and every binding carry on exactly as before.
                     if (auto* engine = addonManager_->getLuaEngine()) {
-                        if (engine->dispatchFrameKey(event.key.key, true)) {
-                            // Taken (0x0048fb80), so not also acted on by what
-                            // reads the same press otherwise: the movie frame's
-                            // Escape went on to toggle the game menu, C opened the
-                            // character window and W walked.
-                            ui::noteInterfaceConsumedKey(
-                                ImGui_ImplSDL3_KeyEventToImGuiKey(event.key.key, event.key.scancode));
-                            if (event.key.key == SDLK_KP_ENTER) ui::noteInterfaceConsumedKey(ImGuiKey_Enter);
-                            if (!event.key.repeat) Input::getInstance().setKeySpent(event.key.scancode, true);
+                        if (engine->dispatchFrameKey(event.key.key, true, event.key.repeat)) {
+                            // Taken, so not also acted on by the ImGui side
+                            // of the chain (GameScreen reads the same press):
+                            // a key a frame takes goes nowhere else (0x004943c0
+                            // stops at the one that does, 0x0048fb80). The
+                            // movie frame's Escape went on to toggle the game
+                            // menu, and the world map's M, which closes it in
+                            // its OnKeyDown, opened it again.
+                            ui::noteInterfaceConsumedKeycode(static_cast<int>(event.key.key));
+                            // Nor by what reads the keyboard itself, as long
+                            // as it is held: moving and jumping are bindings
+                            // in the client, and the character walked and
+                            // jumped under the open world map. One held from
+                            // before goes on until it is let go of.
+                            if (!event.key.repeat) Input::getInstance().setKeySpent(event.key.scancode);
                             // Escape says so, because "Escape does nothing"
                             // is a live report and this is one of the three
                             // ways the press can end before the chain that
@@ -2979,9 +2990,7 @@ void Application::run() {
                                 (mods & SDL_KMOD_ALT) != 0, true,
                                 event.key.repeat)) {
                             // Not the client's own panels' as well.
-                            if (event.key.key >= SDLK_A && event.key.key <= SDLK_Z)
-                                ui::noteInterfaceConsumedKey(
-                                    static_cast<ImGuiKey>(ImGuiKey_A + static_cast<int>(event.key.key - SDLK_A)));
+                            ui::noteInterfaceConsumedKeycode(static_cast<int>(event.key.key));
                             // The fourth way a press can end in the pump - an
                             // interface key binding claimed it - which had no
                             // line. For the DEFAULT Escape this does not fire:
@@ -3772,7 +3781,7 @@ std::vector<rendering::SpellVisualSystem::CollisionUnit> missileCollisionUnits(
             c.shape.position = renderer->getCharacterPosition();
         else
             c.shape.position =
-                core::coords::canonicalToRender(glm::vec3(e.getLatestX(), e.getLatestY(), e.getLatestZ()));
+                core::coords::canonicalToRender(glm::vec3(e.getX(), e.getY(), e.getZ()));
         // Its scale (vtable +0x7c) and CreatureModelData row (0x00717a20).
         c.shape.scale = entitySpawner ? entitySpawner->unitModelScale(guid) : 1.0f;
         const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
@@ -4119,7 +4128,7 @@ void Application::connectSpellVisualHooks() {
             auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
             if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
             const glm::vec3 at = core::coords::canonicalToRender(
-                glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+                glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
             frame = glm::rotate(glm::translate(glm::mat4(1.0f), at),
                                 entity->getOrientation() + glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
             return true;
@@ -4141,7 +4150,7 @@ void Application::connectSpellVisualHooks() {
                 auto entity = gameHandler->getEntityManager().getEntity(guid);
                 if (!entity || !entity->isUnit()) return false;
                 end.position = core::coords::canonicalToRender(
-                    glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+                    glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
             }
             end.renderInstanceId = gameHandler->resolveUnitRenderInstance(guid);
             return true;
@@ -4346,6 +4355,17 @@ void Application::connectWorldHooks() {
         });
         // A unit's ammunition (0x007206a0): from a ranged spell's start, or
         // the player's PLAYER_AMMO_ID.
+        // In the view: the sphere round its model against the frustum.
+        gameHandler->setUnitDrawnCallback([this](uint64_t guid) {
+            glm::vec3 centre;
+            float radius = 0.0f;
+            if (!getRenderBoundsForGuid(guid, centre, radius)) return false;
+            const auto* camera = renderer ? renderer->getCamera() : nullptr;
+            if (!camera) return true;
+            rendering::Frustum frustum;
+            frustum.extractFromMatrix(camera->getViewProjectionMatrix());
+            return frustum.intersectsSphere(centre, radius);
+        });
         gameHandler->setUnitAmmoCallback([this](uint64_t guid, uint32_t value, uint32_t ask, bool isItemEntry) {
             if (!gameHandler || !entitySpawner_) return;
             uint32_t inst = 0;
@@ -4634,6 +4654,39 @@ void Application::processDeferredLeaveWorld() {
     const LeaveTo to = *leaveWorldPending_;
     leaveWorldPending_.reset();
     performLeaveWorld(to);
+}
+
+std::vector<rendering::MemoryEntry> Application::memoryExtras(bool collectLuaFirst) {
+    std::vector<rendering::MemoryEntry> extra;
+    char name[192];
+    if (addonManager_) {
+        if (auto* engine = addonManager_->getLuaEngine(); engine && engine->getState()) {
+            lua_State* L = engine->getState();
+            if (collectLuaFirst) lua_gc(L, LUA_GCCOLLECT, 0);
+            const uint64_t kb = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNT, 0));
+            const uint64_t rest = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNTB, 0));
+            extra.push_back({"Lua state", 0, kb * 1024 + rest});
+        }
+    }
+    const auto wav = audio::AudioEngine::decodedCacheStats();
+    std::snprintf(name, sizeof(name), "Decoded sounds (%zu)", wav.sounds);
+    extra.push_back({name, 0, wav.bytes});
+    if (audioCoordinator_) {
+        if (auto* music = audioCoordinator_->getMusicManager()) {
+            std::snprintf(name, sizeof(name), "Music files kept (%zu)", music->cachedMusicCount());
+            extra.push_back({name, 0, music->cachedMusicBytes()});
+        }
+    }
+    if (entitySpawner_) entitySpawner_->memoryReport(extra);
+    return extra;
+}
+
+void Application::logMemory(const char* stage, const std::string& what) {
+    if (!renderer) return;
+    const auto lines = memoryGrowth_.note(stage, renderer->memoryOwners(memoryExtras(false)));
+    LOG_WARNING("Memory, ", what, " (entities ",
+                gameHandler ? gameHandler->getEntityManager().getEntities().size() : size_t{0}, "):");
+    for (const std::string& line : lines) LOG_WARNING("Memory [", stage, "]: ", line);
 }
 
 void Application::fireInterfaceLeaving() {
@@ -5026,6 +5079,7 @@ void Application::applyServerMovementState(float deltaTime) {
             // camera's character is the driven unit where it stands and
             // faces, turned with it.
             cc->clearMovementInputs();
+            cc->newMover();
             if (drivenEntity) {
                 renderer->getCharacterPosition() = core::coords::canonicalToRender(
                     glm::vec3(drivenEntity->getX(), drivenEntity->getY(), drivenEntity->getZ()));
@@ -5033,6 +5087,10 @@ void Application::applyServerMovementState(float deltaTime) {
                 cc->turnWithVehicle(facing - cc->getFacingYaw());
                 cc->setFacingYaw(facing);
                 renderer->setCharacterYaw(facing);
+            } else if (activeMover == gameHandler->getPlayerGuid() && !drivenPossessedLastFrame_) {
+                // Out of what it drove, at its seat's place.
+                const auto& own = gameHandler->getMovementInfo();
+                renderer->getCharacterPosition() = core::coords::canonicalToRender(glm::vec3(own.x, own.y, own.z));
             }
             drivenUnitLastFrame_ = drivenUnit;
         }
@@ -5042,6 +5100,7 @@ void Application::applyServerMovementState(float deltaTime) {
             // target goes back to the player (0x006e2880 -> 0x005186a0) and
             // the keys move it from there.
             cc->clearMovementInputs();
+            cc->newMover();
             const auto& own = gameHandler->getMovementInfo();
             renderer->getCharacterPosition() = core::coords::canonicalToRender(glm::vec3(own.x, own.y, own.z));
             const float facing = core::coords::canonicalToCharacterYawDeg(own.orientation);
@@ -5137,7 +5196,13 @@ void Application::applyServerMovementState(float deltaTime) {
         renderer->getCameraController()->clearMovementInputs();
         // Keep clamping until terrain loads at landing position.
         // Timer only counts down once a valid floor is found.
-        if (worldEntryCallbacks_) {
+        //
+        // Before WotLK, where the flight is this client's own and ends on the
+        // node. The 3.3.5 client has nothing of the kind: the unit falls from
+        // its spline's last point (0x006eae70 -> 0x0098b710,
+        // MovementHandler::updateMoverSplineDone), and the step that does it
+        // lands it.
+        if (worldEntryCallbacks_ && game::isPreWotlk()) {
             worldEntryCallbacks_->setTaxiLandingClampTimer(2.0f);
             // Capture where the flight itself left the player, before terrain/WMO
             // streaming has a chance to move things around - this is the ground
@@ -5300,6 +5365,13 @@ void Application::applyServerMovementState(float deltaTime) {
     // coordinates - for as long as the load took.
     const bool enteringWorld = worldLoader_ && worldLoader_->isWorldEntryUnderway();
     if (enteringWorld) lastSentCanonicalYaw_ = kFacingFromServer;
+    // Whether what the camera looks at is on a flight path (0x00606f90 asks
+    // the unit it looks at; with none it is not run).
+    if (renderer && renderer->getCameraController() && gameHandler && !enteringWorld) {
+        if (const auto unit = std::dynamic_pointer_cast<game::Unit>(
+                gameHandler->getEntityManager().getEntity(gameHandler->cameraTarget())))
+            renderer->getCameraController()->setOnFlight((unit->getUnitFlags() & game::UNIT_FLAG_TAXI_FLIGHT) != 0);
+    }
     if (renderer && gameHandler && !enteringWorld) {
     // For position sync branching, only WMO transports use the dedicated
     // onTransport branch. M2 transports use the normal movement else branch
@@ -5557,6 +5629,15 @@ void Application::applyServerMovementState(float deltaTime) {
         lastWMORideTransportGuid_ = 0;
         lastWMORideMapId_ = 0xFFFFFFFFu;
         deckFloorPending_ = false;
+        // In a vehicle's seat the player is its place there (0x004f4460), and
+        // stands there when it is let go: what the camera's character and the
+        // keys had was the place it got on at.
+        if (gameHandler->activeMover() == 0 || gameHandler->activeMover() == gameHandler->getPlayerGuid()) {
+            if (auto* movement = gameHandler->getMovementHandler()) {
+                if (const auto seat = movement->seatPlace(gameHandler->getPlayerGuid()))
+                    renderer->getCharacterPosition() = core::coords::canonicalToRender(*seat);
+            }
+        }
         glm::vec3 renderPos = renderer->getCharacterPosition();
 
         // M2 transport riding: resolve in canonical space and lock once per frame.
@@ -5888,9 +5969,9 @@ void Application::syncPlayerDisplayModel(const game::Unit& self) {
     const uint32_t want = display != 0 && native != 0 && display != native ? display : 0;
     if (want == shownPlayerDisplay_) return;
     const glm::vec3 pos = renderer->getCharacterPosition();
-    if (want == 0) {
-        // Back to the character: built again from the look, with its gear.
-        shownPlayerDisplay_ = 0;
+    // The character, or one of another race's body that wears the player's own
+    // things (0x0071a430): built again from the look, with its gear.
+    if (want == 0 || gameHandler->ownEquipmentDisplay(want)) {
         if (const uint32_t old = renderer->getCharacterInstanceId(); old != 0) {
             renderer->setCharacterFollow(0);
             cr->removeInstance(old);
@@ -5939,7 +6020,7 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
     // The mount under it, which plays what the player is asked (0x007385c0).
     cr->setRiderMount(instanceId, u.riding && entitySpawner_ ? entitySpawner_->getMountInstanceId() : 0u);
     cr->setUnitAnimationState(instanceId, u);
-    const PlayerAnimationSeen now{.instanceId = instanceId,
+    const rendering::PlayerAnimationSeen now{.instanceId = instanceId,
                                   .fellFar = (u.moveFlags & kMoveFallingFar) != 0,
                                   .turning = u.turningInPlace,
                                   .turningLeft = u.turningLeft,
@@ -5948,8 +6029,9 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
                                   .stealthed = u.stealthed,
                                   .autoAttacking = u.autoAttacking,
                                   .swimming = (u.moveFlags & rendering::upper_body::kMoveSwimOrFly) != 0,
-                                  .onFlightPath = u.splineFlying};
-    const PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
+                                  .onFlightPath = u.splineFlying,
+                                  .splineMoves = playerSplineMoves_};
+    const rendering::PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
     // A new instance starts on Stand. Made after the swim began, at a teleport
     // into water across maps, no movement event comes to ask again, and the
     // character stood in the water until the next one. Nor for one built anew in
@@ -5958,12 +6040,7 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
         if (now.swimming || u.standState != 0) cr->playBaseAnimation(instanceId);
         return;
     }
-    const bool changed = now.turning != before.turning ||
-                         now.turningLeft != before.turningLeft || now.alive != before.alive ||
-                         now.looting != before.looting || now.stealthed != before.stealthed ||
-                         now.autoAttacking != before.autoAttacking || now.swimming != before.swimming ||
-                         now.onFlightPath != before.onFlightPath;
-    if (changed) cr->playBaseAnimation(instanceId);
+    if (rendering::asksBaseAgain(before, now)) cr->playBaseAnimation(instanceId);
     if (now.fellFar && !before.fellFar && now.alive) cr->playAnimation(instanceId, rendering::anim::FALL, true);
 }
 
@@ -6101,22 +6178,18 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             // A unit, or a player drawn as its display (a form or a morph).
             if (!entity || !entity->isUnit()) continue;
 
-            // Distance check uses getLatestX/Y/Z (server-authoritative destination) to
-            // avoid false-culling entities that moved while getX/Y/Z was stale.
-            // Position sync still uses getX/Y/Z to preserve smooth interpolation for
-            // nearby entities; distant entities (> 150u) have planarDist≈0 anyway
-            // so the renderer remains driven correctly by creatureMoveCallback_.
-            glm::vec3 latestCanonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
+            // By where it is, not by where its path ends: the end of one that
+            // goes round a city is out of the radius while the unit walks by.
+            const glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             float canonDistSq = 0.0f;
             if (havePlayerPos) {
-                glm::vec3 d = latestCanonical - playerPos;
+                glm::vec3 d = canonical - playerPos;
                 canonDistSq = glm::dot(d, d);
                 const bool activeCombatTarget =
                     guid == currentTargetGuid || guid == autoAttackGuid;
                 if (canonDistSq > syncRadiusSq && !activeCombatTarget) continue;
             }
 
-            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             auto posIt = _creatureRenderPosCache.find(guid);
             const std::optional<glm::vec3> previousRenderPos =
@@ -6171,11 +6244,9 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 const bool deadOrCorpse = unitPtr->getHealth() == 0;
                 const bool largeCorrection = (planarDistSq > 36.0f) || (dz > 3.0f);
                 // Use isActivelyMoving() so Run/Walk animation stops when the
-                // creature reaches its destination. Don't use position-change
-                // (planarDistSq) as a movement indicator when the entity is in
-                // the dead-reckoning overrun window - the residual velocity
-                // drift would keep the walk/run animation playing long after
-                // the creature has actually arrived. Only fall back to position-
+                // creature reaches its destination, and not the change of
+                // position (planarDistSq) while it has a move of its own. Only
+                // fall back to position-
                 // change detection for entities with no active movement tracking
                 // (e.g. teleports or position-only updates from the server).
                 const bool entityIsMoving = entity->isActivelyMoving();
@@ -6359,16 +6430,15 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             auto entity = gameHandler->getEntityManager().getEntity(guid);
             if (!entity || entity->getType() != game::ObjectType::PLAYER) continue;
 
-            // Distance cull
+            // Distance cull, by where it is (as above).
+            const glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             if (havePPos) {
-                glm::vec3 latestCanonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
-                glm::vec3 d = latestCanonical - pPos;
+                glm::vec3 d = canonical - pPos;
                 const bool activeCombatTarget =
                     guid == playerTargetGuid || guid == playerAutoAttackGuid;
                 if (glm::dot(d, d) > pSyncRadiusSq && !activeCombatTarget) continue;
             }
 
-            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             auto posIt = _pCreatureRenderPosCache.find(guid);
             const std::optional<glm::vec3> previousRenderPos =
@@ -8135,9 +8205,13 @@ void Application::setupUICallbacks() {
 void Application::spawnPlayerCharacter() {
     if (playerCharacterSpawned) return;
     // The character, whatever the display: a form or a morph is put back on
-    // it by syncPlayerDisplayModel the next frame.
+    // it by syncPlayerDisplayModel the next frame. In the body of a display it
+    // wears its own things in, it is that one's character (0x0071d010).
     if (renderer) renderer->setCharacterShownAsDisplay(false);
-    shownPlayerDisplay_ = 0;
+    const auto body = gameHandler ? gameHandler->getShownBody(gameHandler->getPlayerGuid()) : std::nullopt;
+    shownPlayerDisplay_ = body ? body->displayId : 0;
+    const game::Race race = body ? static_cast<game::Race>(body->race) : playerRace_;
+    const game::Gender gender = !body ? playerGender_ : body->sex == 1 ? game::Gender::FEMALE : game::Gender::MALE;
     if (!renderer || !renderer->getCharacterRenderer() || !renderer->getCamera()) return;
 
     auto* charRenderer = renderer->getCharacterRenderer();
@@ -8149,13 +8223,13 @@ void Application::spawnPlayerCharacter() {
     // character screen showed the body the player picked and the world showed
     // the other one. The voice below already resolves it this way.
     bool useFemaleModel = false;
-    if (playerGender_ == game::Gender::NONBINARY && gameHandler) {
+    if (gender == game::Gender::NONBINARY && gameHandler) {
         if (const game::Character* ch = gameHandler->getActiveCharacter()) {
             useFemaleModel = ch->useFemaleModel;
         }
     }
     std::string m2Path =
-        game::getPlayerModelPath(playerRace_, playerGender_, useFemaleModel);
+        game::getPlayerModelPath(race, gender, useFemaleModel);
 
     // Try loading selected character model from MPQ
     if (assetManager && assetManager->isInitialized()) {
@@ -8192,7 +8266,7 @@ void Application::spawnPlayerCharacter() {
                         }
                     }
                     texInfo = appearanceComposer_->resolvePlayerTextures(
-                        model, playerRace_, playerGender_, appearanceBytes, useFemaleModel, facialHairId);
+                        model, race, gender, appearanceBytes, useFemaleModel, facialHairId);
                 }
 
                 // Load external .anim files for sequences with external data.
@@ -8289,8 +8363,8 @@ void Application::spawnPlayerCharacter() {
 	        if (appearanceComposer_ && gameHandler) {
 	            if (const game::Character* ch = gameHandler->getActiveCharacter()) {
 	                charRenderer->setActiveGeosets(
-	                    instanceId, appearanceComposer_->playerGeosets(appearanceComposer_->playerLook(*ch),
-	                                                                   instanceId));
+	                    instanceId, appearanceComposer_->playerGeosets(
+	                                    appearanceComposer_->playerLook(gameHandler->getShownCharacter(*ch)), instanceId));
 	            }
 	        }
 	        // The player's type 8 slot is filled from CharSections by

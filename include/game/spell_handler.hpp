@@ -19,6 +19,7 @@
 #include "game/spell_unit_target.hpp"
 #include "game/shown_cast.hpp"
 #include "game/spell_book_records.hpp"
+#include "game/shapeshift_forms.hpp"
 #include "game/handler_types.hpp"
 #include "network/packet.hpp"
 #include <glm/glm.hpp>
@@ -174,6 +175,8 @@ public:
     /// cooldown began under 1.5 s ago (0x00807d40) - its button does not
     /// turn it off.
     [[nodiscard]] bool petToggleHeld(uint32_t spellId) const;
+    /// The same for the player's own (0x0080da80).
+    [[nodiscard]] bool toggleHeld(uint32_t spellId) const;
     /// 0x00805d70: a pet's spell sent as CMSG_PET_ACTION starts its global
     /// cooldown in the pet's history.
     void notePetActionCast(uint32_t spellId, uint64_t pet);
@@ -261,6 +264,8 @@ public:
     /// (0x00542030, 0x0053fad0, 0x0053ec40): the ranged attack (0x00be5d84),
     /// the skinning spells (0x00be5d6c..0x00be5d7c).
     [[nodiscard]] const spell_book::Records& spellBookRecords() const;
+    /// The stance bar's spells in bar order (0x00be8e2c).
+    [[nodiscard]] std::vector<uint32_t> stanceBarSpells() const;
 
     // Cast state
     [[nodiscard]] bool isCasting() const { return casting_; }
@@ -517,7 +522,8 @@ public:
 
     // Auras
     [[nodiscard]] const std::vector<AuraSlot>& getPlayerAuras() const { return playerAuras_; }
-    [[nodiscard]] const std::vector<AuraSlot>& getTargetAuras() const { return targetAuras_; }
+    /// The target's; the player's own where the player is the target.
+    [[nodiscard]] const std::vector<AuraSlot>& getTargetAuras() const;
     /// 0x00727e70's bit for `auraType`: an aura of the unit's with an effect
     /// of the type on.
     [[nodiscard]] bool unitHasAuraType(uint64_t guid, uint32_t auraType) const;
@@ -605,10 +611,9 @@ public:
     /// The item the running cast was cast from (SMSG_SPELL_START's caster
     /// where it is not the unit), 0 for none (0x00805fc0).
     [[nodiscard]] uint64_t currentCastItemGuid() const { return casting_ ? castItemGuid_ : 0; }
-    [[nodiscard]] const std::vector<AuraSlot>* getUnitAuras(uint64_t guid) const {
-        auto it = unitAurasCache_.find(guid);
-        return (it != unitAurasCache_.end()) ? &it->second : nullptr;
-    }
+    /// A unit's, the player's own among them: every token that names the
+    /// player is the player (0x0060abf0).
+    [[nodiscard]] const std::vector<AuraSlot>* getUnitAuras(uint64_t guid) const;
 
     // Spell book tabs
     const std::vector<SpellBookTab>& getSpellBookTabs();
@@ -934,8 +939,14 @@ private:
     /// from the book in the order it was learned.
     mutable spell_book::Records bookRecords_;
     mutable bool bookRecordsStale_ = false;
-    void noteBookLearned(uint32_t spellId);
-    void noteBookRemoved(uint32_t spellId);
+    /// The stance bar (0x00be8e2c), noted down with the book.
+    mutable StanceBar stanceBar_;
+    /// A spell learned, in `supersedes`' place where that is one; true when
+    /// the stance bar changed (event 0x178).
+    bool noteBookLearned(uint32_t spellId, uint32_t supersedes = 0);
+    /// A spell forgotten, or (`replaced`) one another takes the place of,
+    /// which keeps its button until then; true when the stance bar changed.
+    bool noteBookRemoved(uint32_t spellId, bool replaced = false);
     void clearBookRecords();
     uint8_t castCount_ = 0;
     AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter

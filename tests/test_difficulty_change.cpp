@@ -183,3 +183,13 @@ TEST_CASE("A DUNGEON_DIFFICULTY object is shown only at its difficulty (0x00710a
     CHECK(difficultyObjectShown(2, icc));
     CHECK_FALSE(difficultyObjectShown(0, icc));
 }
+
+TEST_CASE("the difficulty is written once, by whoever draws the minimap", "[difficulty][minimap]") {
+    // Sunwell: a raid of 25.
+    const auto raid = dc::instanceBanner("raid", 2, 25, 0, false);
+    REQUIRE(raid.shown);
+    CHECK_FALSE(dc::ownDifficultyLabel(true, raid, true));
+    CHECK(dc::ownDifficultyLabel(true, raid, false));
+    CHECK_FALSE(dc::ownDifficultyLabel(false, raid, false));
+    CHECK_FALSE(dc::ownDifficultyLabel(true, dc::instanceBanner("party", 1, 5, 0, false), false));
+}

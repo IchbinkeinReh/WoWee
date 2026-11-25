@@ -566,6 +566,7 @@ enum class UpdateType : uint8_t;
 /**
  * Update block for a single object in SMSG_UPDATE_OBJECT
  */
+struct SplineBlockData;
 struct UpdateBlock {
     UpdateType updateType;
     uint64_t guid = 0;
@@ -592,6 +593,8 @@ struct UpdateBlock {
     uint32_t moveFlags = 0;
     uint16_t moveFlags2 = 0;  ///< WotLK's LIVING block
     float pitch = 0.0f;       ///< swimming, flying or flags2 0x20
+    uint32_t fallTime = 0;            ///< WotLK's LIVING block, in ms
+    float fallVerticalSpeed = 0.0f;   ///< with FALLING
 
     // UPDATEFLAG_TRANSPORT: the server's clock in ms when it built the block
     // (getMSTime), which the client keeps a transport's path time by.
@@ -613,6 +616,10 @@ struct UpdateBlock {
     /// keeps it (0x004d3890, +0x2d0) - game_object_rotation::unpack.
     bool hasRotation = false;
     uint64_t packedRotation = 0;
+
+    /// MOVEMENTFLAG_SPLINE_ENABLED: the spline the unit is on, WotLK's block
+    /// only (0x004f5090 -> 0x004f4b50).
+    std::shared_ptr<const SplineBlockData> spline;
 
     // Field data (for VALUES and CREATE updates) - sorted flat vector instead of
     // std::map to drop the per-field heap allocation on every UPDATE_OBJECT block.
@@ -2324,6 +2331,9 @@ struct MonsterMoveData {
     // Destination (final point of the spline, server coords)
     float destX = 0, destY = 0, destZ = 0;
     bool hasDest = false;
+    /// Parabolic (WotLK): the arc's acceleration and when it starts (0x006e96c0).
+    float verticalAcceleration = 0.0f;
+    uint32_t parabolicStartTime = 0;
     // Intermediate waypoints along the path (server coords, excludes start & final dest)
     struct Point { float x, y, z; };
     std::vector<Point> waypoints;
@@ -3857,6 +3867,8 @@ struct MailAttachment {
     uint32_t itemGuidLow = 0;
     uint32_t itemId = 0;
     uint32_t enchantId = 0;
+    /// The sockets' enchantments, the third to the fifth of the seven.
+    std::array<uint32_t, 3> gems{};
     uint32_t randomPropertyId = 0;
     uint32_t randomSuffix = 0;
     uint32_t stackCount = 1;

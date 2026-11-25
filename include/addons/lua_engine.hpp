@@ -251,10 +251,16 @@ public:
     /// A key that is not text: backspace, the arrows, enter, escape.
     /// Shift extends the selection with the caret keys.
     void dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld = false);
+    /// The caret of an edit box to where a press at (x, y), in the tree's units, is in its
+    /// text, its selection gone (0x00967cd0, 0x00964790); and as the press is held and the
+    /// pointer moves, what is between the press and there selected (0x00965660).
+    void pressInEditBox(uint32_t wid, float x, float y);
+    void dragInEditBox(float x, float y);
     /// A key for a frame rather than an edit box. Returns true when a frame
     /// took it, so the caller knows not to also treat it as a movement key or
-    /// a binding - which is the whole reason a dialog can be typed into.
-    bool dispatchFrameKey(int sdlKeycode, bool down);
+    /// a binding - which is the whole reason a dialog can be typed into. A
+    /// repeat is the frame's that holds the key and runs nothing.
+    bool dispatchFrameKey(int sdlKeycode, bool down, bool repeat = false);
 
     /// A typed character, for a frame that asked for the keyboard and is not an
     /// edit box. OnChar is where a dialog reads digits: StackSplitFrame's own
@@ -478,23 +484,12 @@ public:
     void unitTooltipChanged(uint64_t guid) { changedTooltipUnits_.insert(guid); }
     /// An edit box made.
     void noteEditBox(uint32_t wid) { editBoxes_.push_back(wid); }
-    /// A Cooldown frame made.
-    void noteCooldown(uint32_t wid) { cooldowns_.push_back(wid); }
 private:
     void refreshUnitTooltip();
-    /// Cooldown frames whose time is up flash, and hide once they have
-    /// (0x005ec8f0).
-    void advanceCooldowns();
     /// A multi-line edit box takes the height of its text.
     void fitEditBox(uint32_t wid);
-    /// The mouse pressed in an edit box, and moved while it is held.
-    void pressInEditBox(uint32_t wid, float x, float y);
-    void dragInEditBox(float x, float y);
     std::string addonName_;   ///< whose files run, and its table in the registry
     int addonTable_ = -2;
-    uint32_t editDragWid_ = 0;
-    size_t editDragFrom_ = 0;
-    std::vector<uint32_t> cooldowns_;
     std::set<uint64_t> changedTooltipUnits_;
     std::vector<uint32_t> editBoxes_;
     std::vector<uint32_t> attributesAllowed_;
@@ -554,6 +549,8 @@ private:
     /// whole drag, so sliding from one onto the other does not switch which is
     /// being moved.
     uint32_t pickerPart_ = 0;
+    /// The edit box a held press selects in, 0 for none.
+    uint32_t editDragWid_ = 0;
     bool frameAcceptsClick(uint32_t wid, const char* button);
     /// The nearest frame at or above `wid` registered for this button, or `wid`
     /// itself when none is. A click lands on the topmost frame taking the

@@ -105,6 +105,12 @@ void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posit
     const glm::vec3 oldBoundsMin = inst.worldBoundsMin;
     const glm::vec3 oldBoundsMax = inst.worldBoundsMax;
 
+    // And the place it is filed under: a sky model follows the camera, and
+    // its entry stayed where the camera was when it was made. Landing at that
+    // place again was given the id of the one removed since, and the sky
+    // there was black.
+    instanceDedup_.move(inst.modelId, inst.position, position, instanceId);
+
     inst.position = position;
     inst.updateModelMatrix();
     markRtUnsettled(inst);
@@ -679,24 +685,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
     // of its own. Both hulls then wrote their transform to the one instance, so
     // it rendered at whichever ship updated last, and whichever hull unloaded
     // first destroyed it for the other.
-    if (!inst.cachedIsGroundDetail) {
-        auto keyFor = [&](const glm::vec3& p) {
-            return DedupKey{.modelId = inst.modelId,
-                            .qx = static_cast<int32_t>(std::round(p.x * 10.0f)),
-                            .qy = static_cast<int32_t>(std::round(p.y * 10.0f)),
-                            .qz = static_cast<int32_t>(std::round(p.z * 10.0f))};
-        };
-        const DedupKey oldKey = keyFor(oldPosition);
-        const DedupKey newKey = keyFor(inst.position);
-        if (!(oldKey == newKey)) {
-            auto oldIt = instanceDedupMap_.find(oldKey);
-            // Only drop the entry if it still names this instance.
-            if (oldIt != instanceDedupMap_.end() && oldIt->second == instanceId) {
-                instanceDedupMap_.erase(oldIt);
-            }
-            instanceDedupMap_.emplace(newKey, instanceId);
-        }
-    }
+    instanceDedup_.move(inst.modelId, oldPosition, inst.position, instanceId);
 
     // Update bounds via the cached model pointer
     if (inst.cachedModel) {
@@ -726,14 +715,7 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
     // Remove from spatial grid incrementally (same pattern as the move-update path)
     eraseBounds(spatialGrid, inst.worldBoundsMin, inst.worldBoundsMax, instanceId);
 
-    // Remove from dedup map
-    if (!inst.cachedIsGroundDetail) {
-        DedupKey dk{.modelId = inst.modelId,
-                    .qx = static_cast<int32_t>(std::round(inst.position.x * 10.0f)),
-                    .qy = static_cast<int32_t>(std::round(inst.position.y * 10.0f)),
-                    .qz = static_cast<int32_t>(std::round(inst.position.z * 10.0f))};
-        instanceDedupMap_.erase(dk);
-    }
+    instanceDedup_.forget(inst.modelId, inst.position, instanceId);
 
     destroyInstanceBones(inst, /*defer=*/true);
     // Out of the traced scene now (the sync no longer sweeps for it).
@@ -815,16 +797,7 @@ void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
             for (int y = minCell.y; y <= maxCell.y; y++)
                 for (int x = minCell.x; x <= maxCell.x; x++)
                     touchedCells.insert(GridCell{.x = x, .y = y, .z = z});
-        if (!inst.cachedIsGroundDetail) {
-            DedupKey dk{.modelId = inst.modelId,
-                        .qx = static_cast<int32_t>(std::round(inst.position.x * 10.0f)),
-                        .qy = static_cast<int32_t>(std::round(inst.position.y * 10.0f)),
-                        .qz = static_cast<int32_t>(std::round(inst.position.z * 10.0f))};
-            auto dedupIt = instanceDedupMap_.find(dk);
-            if (dedupIt != instanceDedupMap_.end() && dedupIt->second == id) {
-                instanceDedupMap_.erase(dedupIt);
-            }
-        }
+        instanceDedup_.forget(inst.modelId, inst.position, id);
         destroyInstanceBones(inst, /*defer=*/true);
         releaseRtOf(inst);
         forgetRtLit(inst);
@@ -949,7 +922,7 @@ void M2Renderer::clear() {
     spatialGrid.clear();
     instanceIndexById.clear();
     boneSeedInstanceByModel_.clear();
-    instanceDedupMap_.clear();
+    instanceDedup_.clear();
     animatedInstanceIndices_.clear();
     particleOnlyInstanceIndices_.clear();
     particleInstanceIndices_.clear();
@@ -983,7 +956,7 @@ void M2Renderer::clearInstances() {
     spatialGrid.clear();
     instanceIndexById.clear();
     boneSeedInstanceByModel_.clear();
-    instanceDedupMap_.clear();
+    instanceDedup_.clear();
     animatedInstanceIndices_.clear();
     particleOnlyInstanceIndices_.clear();
     particleInstanceIndices_.clear();
@@ -1003,7 +976,6 @@ void M2Renderer::rebuildSpatialIndex() {
     spatialGrid.clear();
     instanceIndexById.clear();
     boneSeedInstanceByModel_.clear();
-    instanceDedupMap_.clear();
     instanceIndexById.reserve(instances.size());
     animatedInstanceIndices_.clear();
     particleOnlyInstanceIndices_.clear();
@@ -1016,15 +988,6 @@ void M2Renderer::rebuildSpatialIndex() {
         // Re-cache model pointer (may have changed after model map modifications)
         auto mdlIt = models.find(inst.modelId);
         inst.cachedModel = (mdlIt != models.end()) ? &mdlIt->second : nullptr;
-
-        // Rebuild dedup map (skip ground detail)
-        if (!inst.cachedIsGroundDetail) {
-            DedupKey dk{.modelId = inst.modelId,
-                        .qx = static_cast<int32_t>(std::round(inst.position.x * 10.0f)),
-                        .qy = static_cast<int32_t>(std::round(inst.position.y * 10.0f)),
-                        .qz = static_cast<int32_t>(std::round(inst.position.z * 10.0f))};
-            instanceDedupMap_[dk] = inst.id;
-        }
 
         if (inst.cachedHasParticleEmitters) {
             particleInstanceIndices_.push_back(i);
@@ -1519,6 +1482,39 @@ void M2Renderer::gatherCollisionTriangles(const glm::vec3& boxMin, const glm::ve
             out.push_back(wc);
         }
     }
+}
+
+std::optional<float> M2Renderer::rayHitDrawnDoodad(const glm::vec3& origin, const glm::vec3& direction,
+                                                   float maxDistance) const {
+    const glm::vec3 end = origin + direction * maxDistance;
+    std::vector<size_t> candidates;
+    gatherCandidates(glm::min(origin, end), glm::max(origin, end), candidates);
+    static const std::vector<glm::mat4> kBindPose;
+    std::optional<float> best;
+    float limit = maxDistance;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        if (!instance.cachedModel || instance.detailDoodad || instance.isGameObject) continue;
+        const M2ModelGPU& model = *instance.cachedModel;
+        if (model.pickMesh.empty() || model.isInvisibleTrap || model.isSpellEffect) continue;
+        if (instance.scale <= 0.001f || instance.fade <= 0.0f) continue;
+        // 0x0081cff0: the models whose bounding sphere the ray meets.
+        const glm::vec3 toCenter = instance.cachedCullCenter - origin;
+        const float along = glm::dot(toCenter, direction);
+        const float r = instance.cachedVisualRadius;
+        if (along + r < 0.0f || along - r > limit) continue;
+        if (glm::dot(toCenter, toCenter) - along * along > r * r) continue;
+        // Not what the frame has culled (+0x25, set by 0x00791cb0's distance).
+        if (instanceDistanceFade(instance, glm::dot(toCenter, toCenter)) <= 0.0f) continue;
+        const bool posed = instance.cachedHasAnimation && !instance.cachedDisableAnimation;
+        const auto t = pointer_pick::rayHitDoodad(model.pickMesh, posed ? instance.boneMatrices : kBindPose,
+                                                  instance.drawMatrix(), origin, direction, limit);
+        if (t && *t > 0.0f) {
+            limit = *t;
+            best = *t;
+        }
+    }
+    return best;
 }
 
 std::string M2Renderer::describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {

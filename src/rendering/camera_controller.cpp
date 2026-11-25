@@ -137,6 +137,12 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // Up to ten yards a step: a lift running at 27 yd/s through a slow frame.
     if (m.falling && portLastOutValid_ && glm::length(from - portLastOut_) <= 10.0f) {
         m.fallStartZ += from.z - portLastOut_.z;
+    } else if (m.falling && portLastOutValid_) {
+        // Further: put there by something, which ends the fall it was in, and
+        // it falls from where it is put (0x0098ba90 -> 0x00988490, then
+        // 0x0098b710).
+        collision::startFall(m);
+        airborneSeconds_ = 0.0f;
     }
     m.pos = from;
     const uint32_t ms = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(dt * 1000.0f)));
@@ -3040,6 +3046,27 @@ void CameraController::startFollowSmoothing(camera_smooth::State state, bool pit
     viewBlending_ = viewDistance_.easing() || viewPitch_.easing() || viewYaw_.easing();
 }
 
+void CameraController::faceInFlight(float yawDegrees) {
+    turnWithVehicle(std::remainder(yawDegrees - facingYaw, 360.0f));
+    setFacingYaw(yawDegrees);
+}
+
+void CameraController::setOnFlight(bool onFlight) {
+    if (onFlight && !onFlight_) {
+        const float from = std::remainder(yaw - facingYaw, 360.0f);
+        const bool easingThere = viewYaw_.easing() && std::fabs(viewYaw_.to) < camera_smooth::kAtRest;
+        if (std::fabs(from) >= camera_smooth::kAtRest && !easingThere) {
+            viewYaw_.startMs = viewYaw_.endMs;
+            viewYaw_.value = from;
+            viewYawApplied_ = from;
+            viewYaw_.set(0.0f, cameraClockMs_,
+                         cameraClockMs_ + static_cast<uint32_t>(std::fabs(from) / camera_smooth::kYawSpeed * 1000.0f));
+            viewBlending_ = viewDistance_.easing() || viewPitch_.easing() || viewYaw_.easing();
+        }
+    }
+    onFlight_ = onFlight;
+}
+
 void CameraController::lookBy(float yawDegrees, float pitchDegrees) {
     viewMovedByPlayer_ = true;  // 0x006020b0
     // 0x005fe5f0: the yaw being eased to turns with the camera. The ease is
@@ -3637,6 +3664,25 @@ void CameraController::applyKnockBack(float vcos, float vsin, float hspeed, floa
     verticalVelocity = -vspeed;
     grounded = false;
     airborneSeconds_ = 0.0f;
+}
+
+void CameraController::endFall() {
+    collision::land(portMover_);
+    portMover_.stepping = false;
+    portPlacedFall_ = false;
+    portLastOutValid_ = false;
+    if (!swimming) grounded = true;
+    verticalVelocity = 0.0f;
+    jumpLocked_ = false;
+    airborneSeconds_ = 0.0f;
+    lastFallDrop_ = 0.0f;
+}
+
+void CameraController::newMover() {
+    const bool fell = portMover_.falling;
+    const bool placed = portPlacedFall_;
+    endFall();
+    portPlacedFall_ = fell || placed;
 }
 
 void CameraController::setBarberShopView(bool on) {

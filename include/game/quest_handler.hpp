@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/daily_quests.hpp"
+#include "game/quest_log_rows.hpp"
 #include "game/quest_progress.hpp"
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
@@ -12,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -215,12 +217,19 @@ public:
     /// drawn without a running realm. Not used on the live path.
     std::vector<QuestLogEntry>& questLogRef() { return questLog_; }
 
-    /// Where a quest sits in the log as the interface counts, or zero if it is
-    /// not in it. This is what the interface means by a quest index - every
-    /// quest log API takes it, and QUEST_ACCEPTED and QUEST_WATCH_UPDATE carry
-    /// it - and it is not the quest id, nor the place among the quests alone:
-    /// the headers are entries of the list too.
-    [[nodiscard]] int questLogIndexOf(uint32_t questId) const;
+    /// GetQuestItemInfo asked for an item whose record is still out: its answer
+    /// raises QUEST_ITEM_UPDATE (0x0058d190 hands its lookup 0x0058b8f0 to call
+    /// back). Nobody else's answer does - the frame takes the event as a reason
+    /// to draw its rewards again, with none of them chosen.
+    void awaitQuestItem(uint32_t itemId) { questItemsAwaited_.insert(itemId); }
+    void questItemAnswered(uint32_t itemId);
+    /// The log as the interface counts it, headers and all (quest_log_rows.hpp).
+    [[nodiscard]] QuestLogRows<QuestLogEntry> questLogRows() const;
+    /// The headers folded away, by zoneOrSort.
+    std::set<int32_t>& collapsedQuestGroups() { return collapsedQuestGroups_; }
+    /// A quest's place there, from one, or zero if it is not in the log: what
+    /// QUEST_WATCH_UPDATE and QUEST_ACCEPTED name it by (0x005deeb0).
+    [[nodiscard]] int questLogIndexOf(uint32_t questId) const { return questLogRows().indexOf(questId); }
     // Seconds left on every timed quest, paired with its quest id, in quest log
     // order. The last field of each PLAYER_QUEST_LOG slot is when the quest
     // fails, as a Unix timestamp; zero means the quest is not timed.
@@ -260,8 +269,20 @@ public:
     /// value index (row 1 for a gain, row 2 for a loss), the same as
     /// AzerothCore's Player::RewardReputation display value.
     int32_t getQuestRewardReputation(int32_t valueId, int32_t override);
-    [[nodiscard]] int getSelectedQuestLogIndex() const { return selectedQuestLogIndex_; }
-    void setSelectedQuestLogIndex(int idx) { selectedQuestLogIndex_ = idx; }
+    /// SelectQuestLogEntry (0x005dffa0): the selection is the quest's id
+    /// (0x00c23ad8), that of the quest in the row - a header's leaves it as it
+    /// is, and a row off either end clears it. What happens to the list after
+    /// that (0x005e6940) does not touch it.
+    void selectQuestLogRow(int index);
+    [[nodiscard]] uint32_t selectedQuestId() const { return selectedQuestId_; }
+    /// The selected quest's place in the list as it is now, from one; 0 for
+    /// none and for one no longer in it (0x005debd0).
+    [[nodiscard]] int getSelectedQuestLogIndex() const {
+        return selectedQuestId_ != 0 ? questLogIndexOf(selectedQuestId_) : 0;
+    }
+    /// The selected quest: its entry in the log, or what the quest cache has
+    /// of it (0x0067de90). Null for none.
+    [[nodiscard]] const QuestLogEntry* selectedQuest() const;
     void abandonQuest(uint32_t questId);
     void shareQuestWithParty(uint32_t questId);
     bool requestQuestQuery(uint32_t questId, bool force = false);
@@ -294,6 +315,10 @@ public:
     // --- Internal helpers called from GameHandler ---
     [[nodiscard]] bool hasQuestInLog(uint32_t questId) const;
     [[nodiscard]] int findQuestLogSlotIndexFromServer(uint32_t questId) const;
+    /// Progress kept for objectives the quest turns out not to have, dropped.
+    void keepQuestProgressWithin(QuestLogEntry& q);
+    /// The names and icons the log draws a quest with, asked for.
+    void queryQuestNames(const QuestLogEntry& q);
     void addQuestToLocalLogIfMissing(uint32_t questId, const std::string& title, const std::string& objectives);
     bool resyncQuestLogFromServerSlots(bool forceQueryMetadata);
     void applyQuestStateFromFields(const FlatFieldMap& fields);
@@ -345,8 +370,10 @@ public:
         slotQuestStates_.fill(0);
         slotsSeen_ = false;
         questSlotWatch_.clear();
+        questItemsAwaited_.clear();
         pendingQuestAddedNotices_.clear();
         questLog_.clear();
+        selectedQuestId_ = 0;  // 0x005e71a0
         pendingQuestQueryIds_.clear();
         npcQuestStatus_.clear();
     }
@@ -426,6 +453,8 @@ private:
     std::array<uint32_t, 25> slotQuestStates_{};
     bool slotsSeen_ = false;
     QuestSlotWatch questSlotWatch_;
+    std::unordered_set<uint32_t> questItemsAwaited_;
+    std::set<int32_t> collapsedQuestGroups_;
     /// What SMSG_QUEST_QUERY_RESPONSE told of a quest: its QuestInfo type
     /// (+0x14) and title.
     struct QueriedQuest {
@@ -448,7 +477,7 @@ private:
 
     // Quest log
     std::vector<QuestLogEntry> questLog_;
-    int selectedQuestLogIndex_ = 0;
+    uint32_t selectedQuestId_ = 0;
     std::unordered_set<uint32_t> pendingQuestQueryIds_;
 
     // Quest giver status per NPC

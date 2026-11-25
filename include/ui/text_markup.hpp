@@ -501,6 +501,18 @@ inline EditCaret moveCaret(size_t caret, const EditSelection& sel, size_t target
     return out;
 }
 
+/// The selection as the pointer drags the caret from `caret` to `target`
+/// (0x009631a0): toward the text's start it moves the selection's start where
+/// that lies past it, and its end otherwise; toward the end likewise. So step
+/// by step it runs from where the press was, and a bound past that leaves the
+/// end it was at behind.
+inline EditSelection dragSelection(size_t caret, EditSelection sel, size_t target) {
+    if (target < caret) (target < sel.start ? sel.start : sel.stop) = target;
+    else if (target > caret) (target <= sel.stop ? sel.start : sel.stop) = target;
+    sel.active = sel.stop > sel.start;
+    return sel;
+}
+
 /// The start of the line the caret is on: back until the character before it
 /// is a line break (0x00964200, plain Home).
 inline size_t caretLineStart(const std::string& s, size_t at) {

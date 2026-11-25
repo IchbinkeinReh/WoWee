@@ -21,6 +21,17 @@ using namespace wowee::ui;
 namespace {
 constexpr float kScreenW = 1024.0f;
 constexpr float kScreenH = 768.0f;
+
+// A window as raising knows one: toplevel, with a place of its own.
+void asWindow(WidgetTree& tree, uint32_t id) {
+    Widget* w = tree.get(id);
+    w->topLevel = true;
+    w->width = w->height = 100.0f;
+    Anchor p;
+    p.point = "CENTER";
+    p.relativePoint = "CENTER";
+    if (w->anchors.empty()) tree.addPoint(id, p);
+}
 }
 
 TEST_CASE("Anchor point names resolve to rect fractions", "[widget][anchor]") {
@@ -1454,12 +1465,8 @@ TEST_CASE("Raise puts a frame in front of its strata", "[widget][layout]") {
     Anchor p; p.point = "CENTER"; p.relativePoint = "CENTER";
     tree.addPoint(a, p);
     tree.addPoint(b, p);
-    tree.setWidth(a, 50.0f);
-    tree.setHeight(a, 50.0f);
-    tree.get(a)->topLevel = true;
-    tree.setWidth(b, 50.0f);
-    tree.setHeight(b, 50.0f);
-    tree.get(b)->topLevel = true;
+    asWindow(tree, a);
+    asWindow(tree, b);
     tree.layout(kScreenW, kScreenH);
     REQUIRE(tree.get(a)->effLevel == tree.get(b)->effLevel);
 
@@ -1490,12 +1497,8 @@ TEST_CASE("Raising does not cross a strata boundary", "[widget][layout]") {
     tree.get(low)->strataExplicit  = true;
     tree.get(high)->strata = FrameStrata::Tooltip;
     tree.get(high)->strataExplicit = true;
-    tree.setWidth(low, 50.0f);
-    tree.setHeight(low, 50.0f);
-    tree.get(low)->topLevel = true;
-    tree.setWidth(high, 50.0f);
-    tree.setHeight(high, 50.0f);
-    tree.get(high)->topLevel = true;
+    asWindow(tree, low);
+    asWindow(tree, high);
     tree.layout(kScreenW, kScreenH);
 
     tree.raise(low);
@@ -1613,12 +1616,8 @@ TEST_CASE("Raising a window carries its regions with it", "[widget][layout]") {
     tree.addPoint(label, p);
     const uint32_t other = tree.create(WidgetKind::Frame, tree.root(), "Other");
     tree.addPoint(other, p);
-    tree.setWidth(win, 50.0f);
-    tree.setHeight(win, 50.0f);
-    tree.get(win)->topLevel = true;
-    tree.setWidth(other, 50.0f);
-    tree.setHeight(other, 50.0f);
-    tree.get(other)->topLevel = true;
+    asWindow(tree, win);
+    asWindow(tree, other);
     tree.layout(kScreenW, kScreenH);
 
     tree.raise(win);
@@ -1638,6 +1637,9 @@ TEST_CASE("A child with its own level still follows when the parent is raised",
     const uint32_t inner = tree.create(WidgetKind::Frame, win, "Inner");
     Anchor p; p.point = "CENTER"; p.relativePoint = "CENTER";
     tree.addPoint(win, p);
+    const uint32_t other = tree.create(WidgetKind::Frame, tree.root(), "Other");
+    asWindow(tree, win);
+    asWindow(tree, other);
     tree.addPoint(inner, p);
     const uint32_t over = tree.create(WidgetKind::Frame, tree.root(), "Over");
     tree.addPoint(over, p);
@@ -2128,7 +2130,77 @@ TEST_CASE("The wheel finds a frame that took the wheel and not the mouse",
     // Invisible to the mouse, which is correct and is why it must not be the
     // test the wheel uses.
     REQUIRE(tree.hitTest(50.0f, 50.0f) != scroll);
-    REQUIRE(tree.hitTestWheel(50.0f, 50.0f) == scroll);
+    REQUIRE(tree.wheelFramesAt(50.0f, 50.0f) == std::vector<uint32_t>{scroll});
+
+    // P51: a list's rows are buttons beside the scroll frame, over it, and
+    // take only the mouse. The client's wheel list has no such frame in it
+    // (0x00494890); every frame that takes the wheel is, the topmost first.
+    const uint32_t row = tree.create(WidgetKind::Frame, tree.root(), "Row");
+    tree.get(row)->mouseEnabled = true;
+    tree.get(row)->level = 9;
+    tree.get(row)->levelExplicit = true;
+    tree.get(row)->width = 100.0f;
+    tree.get(row)->height = 20.0f;
+    tree.addPoint(row, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 40.0f});
+    const uint32_t inner = tree.create(WidgetKind::Frame, scroll, "Inner");
+    tree.get(inner)->wheelEnabled = true;
+    tree.get(inner)->width = 100.0f;
+    tree.get(inner)->height = 100.0f;
+    tree.addPoint(inner, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 0.0f});
+    tree.layout(kScreenW, kScreenH);
+    CHECK(tree.hitTest(50.0f, 50.0f) == row);
+    CHECK(tree.wheelFramesAt(50.0f, 50.0f) == std::vector<uint32_t>{inner, scroll});
+}
+
+// P36: a frame is a level above the whole of its parent, so what it paints
+// itself is over its parent's regions, OVERLAY among them; a model goes with
+// its frame's ARTWORK, after the regions there (0x00960240).
+TEST_CASE("What a child frame paints is over its parent's regions", "[widget][draworder]") {
+    WidgetTree tree;
+    const auto frame = [&](uint32_t parent, const char* name) {
+        const uint32_t id = tree.create(WidgetKind::Frame, parent, name);
+        tree.get(id)->width = 100.0f;
+        tree.get(id)->height = 100.0f;
+        tree.addPoint(id, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 0.0f});
+        return id;
+    };
+    const auto region = [&](uint32_t parent, const char* name, DrawLayer layer) {
+        const uint32_t id = tree.create(WidgetKind::Texture, parent, name);
+        tree.get(id)->width = 100.0f;
+        tree.get(id)->height = 100.0f;
+        tree.get(id)->layer = layer;
+        tree.get(id)->texturePath = "DressUpBackground-BloodElf1";
+        tree.addPoint(id, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 0.0f});
+        return id;
+    };
+    const uint32_t window = frame(tree.root(), "Window");
+    const uint32_t model = frame(window, "Model");
+    const uint32_t box = frame(window, "Box");
+    tree.get(model)->externalTexture = 1;
+    tree.get(box)->hasBackdrop = true;
+    const uint32_t picture = region(window, "Picture", DrawLayer::Overlay);
+    const uint32_t under = region(model, "Under", DrawLayer::Background);
+    const uint32_t beside = region(model, "Beside", DrawLayer::Artwork);
+    const uint32_t over = region(model, "Over", DrawLayer::Overlay);
+    const uint32_t inBox = region(box, "InBox", DrawLayer::Background);
+    const uint32_t button = frame(model, "Button");
+    const uint32_t art = region(button, "Art", DrawLayer::Background);
+    tree.layout(kScreenW, kScreenH);
+    const auto at = [&](uint32_t id) {
+        const auto& order = tree.drawOrder();
+        for (size_t i = 0; i < order.size(); ++i)
+            if (order[i]->id == id) return static_cast<int>(i);
+        return -1;
+    };
+    REQUIRE(at(model) >= 0);
+    REQUIRE(at(box) >= 0);
+    CHECK(at(picture) < at(model));
+    CHECK(at(picture) < at(box));
+    CHECK(at(under) < at(model));
+    CHECK(at(beside) < at(model));
+    CHECK(at(model) < at(over));
+    CHECK(at(model) < at(art));
+    CHECK(at(box) < at(inBox));
 }
 
 // A measurement taken between two moves.
@@ -3629,6 +3701,135 @@ TEST_CASE("A key goes to the topmost frame that has a script for it", "[widget][
     CHECK(topKeyboardFrame(tree, anyOf({under, popup})) == 0);
 }
 
+TEST_CASE("a string without a width reaches as far as its text", "[widgets][fontstring]") {
+    using wowee::ui::fontStringReach;
+    Anchor a;
+    a.point = "LEFT";
+    CHECK(fontStringReach({a}, 120.0f).right == 120.0f);
+    CHECK(fontStringReach({a}, 120.0f).left == 0.0f);
+    a.point = "BOTTOMRIGHT";
+    CHECK(fontStringReach({a}, 120.0f).left == 120.0f);
+    CHECK(fontStringReach({a}, 120.0f).right == 0.0f);
+    a.point = "TOP";
+    CHECK(fontStringReach({a}, 120.0f).left == 60.0f);
+    CHECK(fontStringReach({}, 120.0f).right == 60.0f);
+}
+
+TEST_CASE("A running cooldown is drawn over its button's own art", "[widget][draworder][cooldown]") {
+    WidgetTree tree;
+    const uint32_t button = tree.create(WidgetKind::Frame, 0, "B");
+    tree.get(button)->width = tree.get(button)->height = 36.0f;
+    tree.addPoint(button, Anchor{});
+    const uint32_t cooldown = tree.create(WidgetKind::Frame, button, "BCooldown");
+    tree.setAllPoints(cooldown, button);
+    tree.markCooldownFrame(cooldown);
+    // Made after it, as a NormalTexture is, and in the layer over the icon's.
+    const uint32_t icon = tree.create(WidgetKind::Texture, button, "BIcon");
+    tree.setAllPoints(icon, button);
+    tree.get(icon)->solidColor = true;
+    const uint32_t border = tree.create(WidgetKind::Texture, button, "BBorder");
+    tree.setAllPoints(border, button);
+    tree.get(border)->solidColor = true;
+    tree.get(border)->layer = DrawLayer::Overlay;
+
+    // Until SetCooldown there is nothing to draw.
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().size() == 2);
+
+    cooldown_sweep::set(tree.get(cooldown)->cooldown, 1.0, 1.5);
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().size() == 3);
+    REQUIRE(tree.drawOrder().back()->id == cooldown);
+    REQUIRE(tree.cooldownFrames() == std::vector<uint32_t>{cooldown});
+}
+
+TEST_CASE("A slider's grip given as a file is drawn", "[widget][draworder]") {
+    WidgetTree tree;
+    const uint32_t slider = tree.create(WidgetKind::Frame, 0, "S");
+    tree.get(slider)->width = 16.0f;
+    tree.get(slider)->height = 100.0f;
+    tree.addPoint(slider, Anchor{});
+    tree.get(slider)->isSlider = true;
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().empty());
+    tree.get(slider)->thumbTexture = "Interface/Buttons/UI-ScrollBar-Knob";
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().size() == 1);
+    // With a grip of its own, that one is what is drawn.
+    tree.get(slider)->thumbRegion = tree.create(WidgetKind::Texture, slider, "SThumb");
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().empty());
+}
+
+TEST_CASE("A cooldown runs, shines for a second and hides", "[cooldown]") {
+    using namespace cooldown_sweep;
+    State s;
+    set(s, 10.0, 1.5);
+    REQUIRE_FALSE(update(s, false, 10000));
+    REQUIRE(progress(s, false, 10750) == Catch::Approx(0.5f));
+    REQUIRE_FALSE(update(s, false, 11499));
+    REQUIRE_FALSE(s.flashing);
+    REQUIRE(progress(s, false, 11500) < 0.0f);
+    REQUIRE_FALSE(update(s, false, 11500));
+    REQUIRE(s.flashing);
+    REQUIRE_FALSE(update(s, false, 12499));
+    REQUIRE(update(s, false, 12500));
+    REQUIRE_FALSE(s.flashing);
+
+    // A reversed one stays full and stays shown.
+    set(s, 10.0, 1.5);
+    REQUIRE_FALSE(update(s, true, 99999));
+    REQUIRE_FALSE(s.flashing);
+    REQUIRE(progress(s, true, 99999) == Catch::Approx(1499.0f / 1500.0f));
+
+    // Set again while it shines, it is a cooldown again.
+    set(s, 10.0, 1.0);
+    update(s, false, 11000);
+    REQUIRE(s.flashing);
+    set(s, 11.2, 5.0);
+    REQUIRE_FALSE(s.flashing);
+    REQUIRE(s.durationMs == 5000);
+}
+
+TEST_CASE("The shade uncovers clockwise from the top", "[cooldown]") {
+    using namespace cooldown_sweep;
+    std::array<Point, 10> p;
+    // Whole: from the top middle all the way round.
+    REQUIRE(rim(0.0f, false, p) == 9);
+    REQUIRE(p[0].u == Catch::Approx(0.5f));
+    REQUIRE(p[1].u == Catch::Approx(1.0f));
+    // A quarter gone: the edge is at the right middle, what is left is below
+    // and to the left of it.
+    const int n = rim(0.25f, false, p);
+    REQUIRE(n == 7);
+    REQUIRE(p[0].u == Catch::Approx(1.0f));
+    REQUIRE(p[0].v == Catch::Approx(0.5f));
+    REQUIRE(p[n - 1].u == Catch::Approx(0.5f));
+    REQUIRE(p[n - 1].v == Catch::Approx(0.0f));
+    // Reversed it is the quarter that has passed.
+    const int r = rim(0.25f, true, p);
+    REQUIRE(p[0].v == Catch::Approx(0.0f));
+    REQUIRE(p[1].u == Catch::Approx(1.0f));
+    REQUIRE(p[r - 1].u == Catch::Approx(1.0f));
+    REQUIRE(p[r - 1].v == Catch::Approx(0.5f));
+    // Along a side it goes evenly: a sixteenth is half of the top's right half.
+    rim(1.0f / 16.0f, false, p);
+    REQUIRE(p[0].u == Catch::Approx(0.75f));
+    REQUIRE(p[0].v == Catch::Approx(0.0f));
+    // The edge's line points where the edge is: at a quarter the right side
+    // looks up the picture's top.
+    const auto uv = turned(edgeAngle(0.25f), 1.0f);
+    REQUIRE(uv[1].u == Catch::Approx(0.0f).margin(1e-5));
+    REQUIRE(uv[1].v == Catch::Approx(0.0f).margin(1e-5));
+    REQUIRE(uv[3].u == Catch::Approx(1.0f));
+    REQUIRE(uv[3].v == Catch::Approx(0.0f).margin(1e-5));
+    // The star's second.
+    REQUIRE(flash(0).alpha == Catch::Approx(0.0f));
+    REQUIRE(flash(333).alpha == Catch::Approx(1.0f).margin(0.01));
+    REQUIRE(flash(1000).alpha == Catch::Approx(0.0f).margin(0.01));
+    REQUIRE(flash(1000).angle == Catch::Approx(-0.7853982f));
+}
+
 namespace {
 
 // Show() and Hide() as the interface calls them, with what is told noted.
@@ -3722,6 +3923,30 @@ TEST_CASE("A handler that hides what it is in stops the rest coming up", "[widge
     CHECK_FALSE(tree.get(panel)->shown);
     CHECK_FALSE(tree.get(panel)->toldShown);
     CHECK_FALSE(tree.get(second)->toldShown);
+}
+
+// Hidden by what the pointer leaves and filled and shown by what it enters, in
+// one frame: GameTooltip_OnHide, run after that, took the flight map's price.
+TEST_CASE("A tooltip's OnHide is run in Hide and not owed again", "[widget][visibility]") {
+    WidgetTree tree;
+    Told told{tree, {}, {}};
+    const uint32_t tip = tree.create(WidgetKind::Frame, tree.uiParentId(), "Tip");
+    tree.get(tip)->objectType = "GameTooltip";
+    tree.get(tip)->shown = false;
+    told.show(tip);
+    CHECK(told.take() == "+Tip");
+    told.hide(tip);
+    CHECK(told.take() == "-Tip");
+    told.show(tip);
+    CHECK(told.take() == "+Tip");
+    CHECK(tree.get(tip)->toldShown);
+    // Hidden for good, it is said once, in Hide - and not where it was not up.
+    told.hide(tip);
+    CHECK(told.take() == "-Tip");
+    CHECK_FALSE(tree.get(tip)->toldShown);
+    tree.get(tip)->shown = true;
+    told.hide(tip);
+    CHECK(told.take().empty());
 }
 
 TEST_CASE("A frame goes with one that was never told it is up", "[widget][visibility]") {
@@ -4566,4 +4791,266 @@ TEST_CASE("a long list of rows held by two points is placed at once", "[widgets]
     CHECK(tree.placed(before));
     tree.layout(kScreenW, kScreenH);
     CHECK(tree.get(before)->visible);
+}
+
+// P64: 0x00494af0 puts a level's layer in one batch, 0x00484b00 draws its pictures, then its
+// strings, then the models.
+TEST_CASE("a layer's strings are over its pictures", "[widget][draworder]") {
+    WidgetTree tree;
+    const uint32_t win = tree.create(WidgetKind::Frame, tree.root(), "Detail");
+    tree.get(win)->width = tree.get(win)->height = 100.0f;
+    const uint32_t name = tree.create(WidgetKind::FontString, win, "DetailName");
+    const uint32_t paper = tree.create(WidgetKind::Texture, win, "DetailPaper");
+    const uint32_t model = tree.create(WidgetKind::Frame, tree.root(), "DetailModel");
+    tree.get(name)->text = "Thrallmar";
+    tree.get(paper)->texturePath = "paper";
+    tree.get(model)->externalTexture = 1;
+    for (const uint32_t id : {name, paper, model}) {
+        tree.get(id)->layer = DrawLayer::Artwork;
+        tree.get(id)->width = tree.get(id)->height = 50.0f;
+    }
+    for (const uint32_t id : {win, name, paper, model})
+        tree.get(id)->anchors.push_back({});
+    tree.layout(1024.0f, 768.0f);
+    const auto& order = tree.drawOrder();
+    const auto at = [&](uint32_t id) {
+        return std::find_if(order.begin(), order.end(), [&](const Widget* w) { return w->id == id; }) - order.begin();
+    };
+    REQUIRE(order.size() == 3);
+    CHECK(at(paper) < at(name));
+    CHECK(at(name) < at(model));
+}
+
+// 0x00962340: the check mark of one that is disabled where there is no disabled one.
+TEST_CASE("a disabled check box without a mark of its own keeps the one it has", "[widget][buttonart]") {
+    WidgetTree tree;
+    const uint32_t box = tree.create(WidgetKind::Frame, tree.uiParentId(), "AtWar");
+    const auto art = [&](ButtonArt kind) {
+        const uint32_t id = tree.create(WidgetKind::Texture, box, "");
+        tree.get(id)->texturePath = "art";
+        tree.get(id)->buttonArt = kind;
+        tree.get(id)->width = tree.get(id)->height = 30.0f;
+        tree.get(id)->anchors.push_back({});
+        return id;
+    };
+    tree.get(box)->width = tree.get(box)->height = 30.0f;
+    tree.get(box)->anchors.push_back({});
+    tree.get(box)->checked = true;
+    const auto shown = [&](uint32_t id) {
+        tree.layout(1024.0f, 768.0f);
+        const auto& order = tree.drawOrder();
+        return std::any_of(order.begin(), order.end(), [&](const Widget* w) { return w->id == id; });
+    };
+    const uint32_t check = art(ButtonArt::Checked);
+    CHECK(shown(check));
+    tree.get(box)->enabled = false;
+    CHECK(shown(check));
+    const uint32_t greyCheck = art(ButtonArt::DisabledChecked);
+    CHECK_FALSE(shown(check));
+    CHECK(shown(greyCheck));
+}
+// P66: the breath bar's OnLoad sets it on its frame's own level (LowerFrameLevel), so that the
+// word on the frame is over it. Asked before the first layout, the levels were one too high.
+TEST_CASE("a frame's level before the first layout is the one after it", "[widget][framelevel]") {
+    WidgetTree tree;
+    const auto made = [&](WidgetKind kind, uint32_t parent, const char* name) {
+        const uint32_t id = tree.create(kind, parent, name);
+        tree.get(id)->width = tree.get(id)->height = 20.0f;
+        tree.get(id)->anchors.push_back({});
+        return id;
+    };
+    const uint32_t win = made(WidgetKind::Frame, tree.uiParentId(), "MirrorTimer1");
+    const uint32_t text = made(WidgetKind::FontString, win, "MirrorTimer1Text");
+    tree.get(text)->layer = DrawLayer::Overlay;
+    tree.get(text)->text = "Breath";
+    const uint32_t bar = made(WidgetKind::Frame, win, "MirrorTimer1StatusBar");
+    tree.get(bar)->isStatusBar = true;
+    tree.get(bar)->barTexture = "bar";
+    const int before = tree.get(win)->effLevel;
+    CHECK(before == 1);
+    tree.setFrameLevel(bar, tree.get(bar)->effLevel - 1);
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.get(tree.uiParentId())->effLevel == 0);
+    CHECK(tree.get(win)->effLevel == before);
+    CHECK(tree.get(bar)->effLevel == before);
+    const auto& order = tree.drawOrder();
+    REQUIRE(order.size() == 2);
+    CHECK(order[0]->id == bar);
+    CHECK(order[1]->id == text);
+}
+
+// And raised twice before a layout, a frame took what is inside further than itself.
+TEST_CASE("a frame raised twice before a layout keeps what is inside where it is", "[widget][framelevel]") {
+    WidgetTree tree;
+    const uint32_t other = tree.create(WidgetKind::Frame, tree.root(), "Other");
+    tree.setFrameLevel(other, 40);
+    const uint32_t win = tree.create(WidgetKind::Frame, tree.root(), "MirrorTimer1");
+    asWindow(tree, other);
+    asWindow(tree, win);
+    tree.layout(1024.0f, 768.0f);
+    const uint32_t bar = tree.create(WidgetKind::Frame, win, "MirrorTimer1StatusBar");
+    const uint32_t text = tree.create(WidgetKind::FontString, win, "MirrorTimer1Text");
+    tree.setFrameLevel(bar, tree.get(bar)->effLevel - 1);
+    CHECK(tree.get(bar)->effLevel == tree.get(win)->effLevel);
+    tree.raise(win);
+    const int once = tree.get(win)->effLevel;
+    CHECK(once > tree.get(other)->effLevel);
+    CHECK(tree.get(bar)->effLevel == once);
+    tree.raise(win);
+    tree.raise(win);
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.get(win)->effLevel > tree.get(other)->effLevel);
+    CHECK(tree.get(bar)->effLevel == tree.get(win)->effLevel);
+    CHECK(tree.get(text)->effLevel == tree.get(win)->effLevel + 1);
+}
+
+// P70: after /reload the objectives were closed for good. WatchFrame_Update asks WatchFrame for its
+// top and its bottom as the world is entered, before the new interface's first layout, and what
+// hangs between the minimap at the screen's top and something at its bottom had no screen to
+// hang in.
+TEST_CASE("a rect asked for before the first layout hangs in the screen", "[widget][resolve]") {
+    WidgetTree tree;
+    for (int interface = 0; interface < 2; ++interface) {
+        if (interface == 1) tree.reset();  // /reload
+        tree.noteScreenSize(1024.0f, 768.0f);
+        const uint32_t cluster = tree.create(WidgetKind::Frame, tree.uiParentId(), "MinimapCluster");
+        tree.get(cluster)->width = tree.get(cluster)->height = 192.0f;
+        tree.get(cluster)->anchors.push_back({.point = "TOPRIGHT", .relativePoint = "TOPRIGHT"});
+        const uint32_t watch = tree.create(WidgetKind::Frame, tree.uiParentId(), "WatchFrame");
+        tree.get(watch)->width = 204.0f;
+        tree.get(watch)->anchors.push_back(
+            {.point = "TOPRIGHT", .relativeTo = cluster, .relativePoint = "BOTTOMRIGHT"});
+        tree.get(watch)->anchors.push_back({.point = "BOTTOM", .relativePoint = "BOTTOM", .y = 100.0f});
+        tree.resolveWidget(watch);
+        const float tall = tree.get(watch)->rectH;
+        CHECK(tall == Catch::Approx(768.0f - 192.0f - 100.0f));
+        // And the first layout puts it nowhere else.
+        tree.layout(1024.0f, 768.0f);
+        CHECK(tree.get(watch)->rectH == Catch::Approx(tall));
+    }
+}
+
+// P66 again: the interface's UIParent is a frame with no parent, as the breath bar is until its
+// template's parent is given to it - one level under what the bar was then laid out at.
+TEST_CASE("a frame with no parent is at the bottom, and SetParent sets the level at once", "[widget][framelevel]") {
+    WidgetTree tree;
+    const auto made = [&](WidgetKind kind, uint32_t parent, const char* name) {
+        const uint32_t id = tree.create(kind, parent, name);
+        tree.get(id)->width = tree.get(id)->height = 20.0f;
+        tree.get(id)->anchors.push_back({});
+        return id;
+    };
+    const uint32_t ui = made(WidgetKind::Frame, 0, "UIParent");
+    const uint32_t win = made(WidgetKind::Frame, 0, "MirrorTimer1");
+    CHECK(tree.get(ui)->effLevel == 0);
+    CHECK(tree.get(win)->effLevel == 0);
+    tree.setParent(win, ui);
+    CHECK(tree.get(win)->effLevel == 1);
+    const uint32_t text = made(WidgetKind::FontString, win, "MirrorTimer1Text");
+    tree.get(text)->layer = DrawLayer::Overlay;
+    tree.get(text)->text = "Breath";
+    const uint32_t bar = made(WidgetKind::Frame, win, "MirrorTimer1StatusBar");
+    tree.get(bar)->isStatusBar = true;
+    tree.get(bar)->barTexture = "bar";
+    tree.setFrameLevel(bar, tree.get(bar)->effLevel - 1);  // LowerFrameLevel
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.get(ui)->effLevel == 0);
+    CHECK(tree.get(win)->effLevel == 1);
+    CHECK(tree.get(bar)->effLevel == 1);
+    const auto& order = tree.drawOrder();
+    REQUIRE(order.size() == 2);
+    CHECK(order[0]->id == bar);
+    CHECK(order[1]->id == text);
+
+    // 0x004911b0: at once, what is inside with it, and no level of its own any more.
+    const uint32_t deep = made(WidgetKind::Frame, bar, "Deep");
+    tree.setFrameLevel(win, 30);
+    CHECK(tree.get(deep)->effLevel == 31);
+    tree.setParent(win, deep);  // inside itself: refused
+    CHECK(tree.get(win)->effLevel == 30);
+    const uint32_t other = made(WidgetKind::Frame, ui, "Other");
+    tree.setFrameLevel(other, 7);
+    tree.setParent(win, other);
+    CHECK(tree.get(win)->effLevel == 8);
+    CHECK(tree.get(bar)->effLevel == 8);
+    CHECK(tree.get(deep)->effLevel == 9);
+    tree.setParent(win, 0);
+    CHECK(tree.get(win)->effLevel == 0);
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.get(win)->effLevel == 0);
+    CHECK(tree.get(bar)->effLevel == 0);
+    CHECK(tree.get(deep)->effLevel == 1);
+}
+
+// P74: two toplevel windows in one place stood in one another; 0x004918f0 raises one that comes
+// up, 0x004951a0 where something covers it (0x00494d20), and Frame:Raise() is the same.
+TEST_CASE("a toplevel window comes up in front of what covers it", "[widget][framelevel][raise]") {
+    WidgetTree tree;
+    tree.noteScreenSize(1024.0f, 768.0f);
+    const auto made = [&](uint32_t parent, const char* name, float x, bool topLevel, bool shown) {
+        const uint32_t id = tree.create(WidgetKind::Frame, parent, name);
+        Widget* w = tree.get(id);
+        w->width = w->height = 100.0f;
+        w->topLevel = topLevel;
+        w->shown = shown;
+        Anchor p;
+        p.point = "CENTER";
+        p.relativePoint = "CENTER";
+        p.x = x;
+        tree.addPoint(id, p);
+        return id;
+    };
+    const uint32_t ui = made(0, "UIParent", 0.0f, false, true);
+    const uint32_t help = made(ui, "HelpFrame", 0.0f, true, true);
+    const uint32_t inHelp = made(help, "HelpFrameTab", 0.0f, false, true);
+    const uint32_t far = made(ui, "Far", 400.0f, true, false);
+    const uint32_t pvp = made(ui, "PVPFrame", 10.0f, true, false);
+    const uint32_t inPvp = made(pvp, "PVPFrameTab", 0.0f, true, true);
+    const uint32_t plain = made(ui, "Plain", 10.0f, false, false);
+    tree.layout(1024.0f, 768.0f);
+    const auto level = [&](uint32_t id) { return tree.get(id)->effLevel; };
+    std::vector<uint32_t> told;
+    const auto show = [&](uint32_t id) {
+        tree.get(id)->shown = true;
+        tree.showNow(id, [&](uint32_t up) { told.push_back(up); });
+    };
+    const auto hide = [&](uint32_t id) {
+        tree.get(id)->shown = false;
+        tree.hideNow(id, [](uint32_t) {});
+    };
+    show(help);  // already up as made: told, and nothing covers it but what is in it
+    REQUIRE(level(help) == 1);
+
+    show(pvp);
+    CHECK(level(pvp) > level(inHelp));
+    CHECK(level(inPvp) > level(pvp));
+    const int front = level(pvp);
+    // Nothing covers it now: shown again it stays where it is.
+    hide(pvp);
+    show(pvp);
+    CHECK(level(pvp) == front);
+    // Another place, another strata, or no window: none is moved.
+    show(far);
+    CHECK(level(far) == 1);
+    show(plain);
+    CHECK(level(plain) == 1);
+    tree.raise(plain);
+    CHECK(level(plain) == 1);
+    tree.get(help)->strata = FrameStrata::Dialog;
+    tree.get(help)->strataExplicit = true;
+    tree.layout(1024.0f, 768.0f);
+    tree.raise(help);
+    CHECK(level(help) == 1);
+    tree.get(help)->strataExplicit = false;
+    tree.layout(1024.0f, 768.0f);
+    // A press in what is inside it, or Raise() on that, is the window's.
+    tree.raise(inHelp);
+    CHECK(level(help) > level(inPvp));
+    CHECK(level(inHelp) == level(help) + 1);
+    // One that has nowhere to be covers nothing.
+    const uint32_t lost = tree.create(WidgetKind::Frame, ui, "Lost");
+    tree.setFrameLevel(lost, 90);
+    const int now = level(help);
+    tree.raise(help);
+    CHECK(level(help) == now);
 }

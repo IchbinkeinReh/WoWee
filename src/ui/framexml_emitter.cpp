@@ -1439,7 +1439,7 @@ struct Emitter {
             node.name == "TabardModel" || node.name == "CinematicModel") {
             if (const std::string* file = node.attr("file"); file && !file->empty())
                 line(var + ":SetModel(" + quote(*file) + ")");
-            if (const std::string* sc = node.attr("scale"))
+            if (const std::string* sc = node.attr("scale"); sc && std::strtof(sc->c_str(), nullptr) > 0.0f)
                 line(var + ":SetModelScale(" + *sc + ")");
             // fogNear and fogFar, at least 0, and a FogColor child that turns
             // the fog on (0x0095f800).

@@ -360,6 +360,7 @@ bool PacketParsers::parseMailList(network::Packet& packet, std::vector<MailMessa
                 packet.readUInt32(); // duration
                 packet.readUInt32(); // charges
                 if (e == 0) att.enchantId = enchId;
+                if (e >= 2 && e <= 4) att.gems[static_cast<size_t>(e - 2)] = enchId;
             }
             att.randomPropertyId = packet.readUInt32();
             att.randomSuffix = packet.readUInt32();

@@ -62,8 +62,10 @@ public:
             trimInPlace(spellArg);
         }
 
-        // Strip leading '!' (force recast)
-        if (!spellArg.empty() && spellArg.front() == '!') spellArg.erase(spellArg.begin());
+        // "!Name" casts it whether it is on or not; a name on its own takes off
+        // one that is (0x00540310 -> 0x0080da40 and 0x0080da80).
+        const bool outright = !spellArg.empty() && spellArg.front() == '!';
+        if (outright) spellArg.erase(spellArg.begin());
 
         // Numeric spell ID
         uint32_t numId = parseNumericSpellId(spellArg);
@@ -81,7 +83,8 @@ public:
             uint64_t targetGuid = (castTargetOverride != static_cast<uint64_t>(-1))
                 ? castTargetOverride
                 : (ctx.gameHandler.hasTarget() ? ctx.gameHandler.getTargetGuid() : 0);
-            ctx.gameHandler.castSpell(bestSpellId, targetGuid);
+            if (outright) ctx.gameHandler.castSpell(bestSpellId, targetGuid);
+            else ctx.gameHandler.useSpell(bestSpellId, targetGuid);
         } else {
             // Build error message
             std::string spellName = spellArg;
@@ -210,7 +213,8 @@ public:
         // Cast the selected spell
         std::string ssLow = seqSpell;
         for (char& c : ssLow) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (!ssLow.empty() && ssLow.front() == '!') ssLow.erase(ssLow.begin());
+        const bool outright = !ssLow.empty() && ssLow.front() == '!';
+        if (outright) ssLow.erase(ssLow.begin());
 
         uint64_t seqTargetGuid = (seqTgtOver != static_cast<uint64_t>(-1) && seqTgtOver != 0)
             ? seqTgtOver : (ctx.gameHandler.hasTarget() ? ctx.gameHandler.getTargetGuid() : 0);
@@ -220,7 +224,8 @@ public:
             ctx.gameHandler.castSpell(numId, seqTargetGuid);
         } else {
             uint32_t best = resolveSpellByName(ctx.gameHandler, ssLow);
-            if (best) ctx.gameHandler.castSpell(best, seqTargetGuid);
+            if (best && outright) ctx.gameHandler.castSpell(best, seqTargetGuid);
+            else if (best) ctx.gameHandler.useSpell(best, seqTargetGuid);
         }
         return {};
     }

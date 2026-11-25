@@ -4,6 +4,7 @@
 // not say so starts to swim.
 #include <catch_amalgamated.hpp>
 
+#include "rendering/player_animation_seen.hpp"
 #include "rendering/mover_report.hpp"
 
 using namespace wowee::rendering;
@@ -69,4 +70,21 @@ TEST_CASE("a swim is told where the flags say otherwise, not where it began", "[
     s.saidSwimming = true;
     s.carried = true;
     CHECK(swimChange(s) == SwimChange::None);
+}
+
+// P48: a fall a spline cut short has no landing, and Fall played on.
+TEST_CASE("the base animation is asked again as a spline takes the player or lets it go", "[mover_report]") {
+    using wowee::rendering::PlayerAnimationSeen;
+    using wowee::rendering::asksBaseAgain;
+    const PlayerAnimationSeen before{.instanceId = 1, .fellFar = true};
+    PlayerAnimationSeen now = before;
+    CHECK_FALSE(asksBaseAgain(before, now));
+    // The fall's own end is the landing's to play.
+    now.fellFar = false;
+    CHECK_FALSE(asksBaseAgain(before, now));
+    now.splineMoves = 1;
+    CHECK(asksBaseAgain(before, now));
+    now = before;
+    now.onFlightPath = true;
+    CHECK(asksBaseAgain(before, now));
 }

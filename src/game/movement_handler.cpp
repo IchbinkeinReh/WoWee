@@ -1,4 +1,5 @@
 #include "game/movement_handler.hpp"
+#include "game/packet_wait.hpp"
 #include "game/passenger_place.hpp"
 #include "game/mover_mode.hpp"
 #include "game/move_heartbeat.hpp"
@@ -42,6 +43,19 @@ namespace wowee {
 namespace game {
 
 namespace {
+
+/// The bank of a unit on a flying spline (0x0098ca00, spline flag 0x2000):
+/// twice the level angle from the way it goes to the place it is in a second,
+/// at most a quarter turn, into the turn. In the renderer's axes, where a
+/// positive roll tilts to the right.
+float flightBank(const glm::vec3& tangent, const glm::vec3& ahead) {
+    const glm::vec2 a(tangent.x, tangent.y), b(ahead.x, ahead.y);
+    const float la = glm::length(a), lb = glm::length(b);
+    if (la < 4.8828125e-4f || lb < 4.8828125e-4f) return 0.0f;
+    const float angle = std::acos(std::clamp(glm::dot(a, b) / (la * lb), -1.0f, 1.0f));
+    const float cross = a.x * b.y - a.y * b.x;
+    return std::clamp(2.0f * (cross < 0.0f ? angle : -angle), -1.5707964f, 1.5707964f);
+}
 
 /// A taxi refusal as the original shows it: its ERR_TAXI* string, through
 /// UI_ERROR_MESSAGE or UI_INFO_MESSAGE as the game error table at 0x00ac8af0
@@ -644,6 +658,15 @@ std::optional<uint32_t> MovementHandler::endFallTimer() {
     return fellMs;
 }
 
+namespace {
+/// 0x009904e0, of what is sent here: swimming begun and left, flying set. (The
+/// others of its eight are vehicle requests and cheats.)
+bool splineLetsThrough(Opcode opcode) {
+    return opcode == Opcode::MSG_MOVE_START_SWIM || opcode == Opcode::MSG_MOVE_STOP_SWIM ||
+           opcode == Opcode::CMSG_MOVE_SET_FLY || opcode == Opcode::CMSG_MOVE_SPLINE_DONE;
+}
+}  // namespace
+
 void MovementHandler::setFlightAirborne(bool airborne) {
     const uint32_t canFly = static_cast<uint32_t>(MovementFlags::CAN_FLY);
     const uint32_t flying = static_cast<uint32_t>(MovementFlags::FLYING);
@@ -721,9 +744,24 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
     const bool moverIsPlayer = mover == owner_.getPlayerGuid();
     if (mover == 0) {
         heldReason = "no unit is the active mover";
+    } else if (!isPreWotlk() && !(moverIsPlayer && onTaxiFlight_) && onMoveSpline(mover) &&
+               !splineLetsThrough(opcode)) {
+        // 0x0071ef20, for any spline the server moves the mover along - a
+        // charge, a pull, a leap into a seat: what is over is none, as the
+        // client marks it (flag 0x400, 0x006eae70 and 0x006eaf50) and then
+        // lets everything by. A flight is held below, its end included.
+        heldReason = "a spline carries the mover";
     } else if (!moverIsPlayer) {
         if (!unitHasClientControl(mover)) heldReason = "the server has not given control of the unit";
-    } else if (!taxiAllowed) {
+    } else if (onTaxiFlight_ && !isPreWotlk()) {
+        // 0x0071ef20: while a spline carries the mover nothing of its own
+        // movement goes out (0x009904e0 lets a swim's start and stop and
+        // CMSG_MOVE_SET_FLY by, which a flight has no use for), and what ends
+        // it, CMSG_MOVE_SPLINE_DONE, is asked after the spline is marked over
+        // (0x006eae70). Held back with the rest, the server never heard that
+        // the player had come to the border of a map and left them there.
+        if (opcode != Opcode::CMSG_MOVE_SPLINE_DONE) heldReason = "a taxi flight is in progress";
+    } else if (!taxiAllowed && opcode != Opcode::CMSG_MOVE_SPLINE_DONE) {
         if (!serverMovementAllowed_) heldReason = "the server has not given control of the character";
         else if (onTaxiFlight_) heldReason = "a taxi flight is in progress";
         else if (taxiMountActive_) heldReason = "a taxi mount is on";
@@ -1146,6 +1184,14 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         }
     }
 
+    // Where the spline that lets this by has the mover (movementNow).
+    if (const MovementInfo now = movementNow(mover); !isPreWotlk() && !taxiClientActive_) {
+        movementInfo.x = now.x;
+        movementInfo.y = now.y;
+        movementInfo.z = now.z;
+    }
+    if (moverIsPlayer) noteOutgoingPlace(wireOpcode(opcode), movementInfo);
+
     // Convert canonical → server coordinates for the wire
     MovementInfo wireInfo = movementInfo;
     glm::vec3 serverPos = core::coords::canonicalToServer(glm::vec3(wireInfo.x, wireInfo.y, wireInfo.z));
@@ -1324,7 +1370,9 @@ void MovementHandler::setPosition(float x, float y, float z) {
     // (the Eye of Kilrogg flies off, the warlock keeps channelling).
     if (moverPossessed()) return;
     if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
-        player->setPosition(x, y, z, movementInfo.orientation);
+        // Driving, it is on its seat and not where the vehicle is.
+        const glm::vec3 at = seatPlace(owner_.getPlayerGuid()).value_or(glm::vec3(x, y, z));
+        player->setPosition(at.x, at.y, at.z, movementInfo.orientation);
     }
 }
 
@@ -1384,6 +1432,35 @@ void MovementHandler::dismount() {
 // root, flag, collision-height, knockback) require the same ACK structure:
 // GUID + counter + movement payload with server-space coordinates. Centralised
 // here so transport coordinate conversion can't diverge between handlers.
+bool MovementHandler::unitForForcedChange(uint64_t guid, const char* name) {
+    if (guid != 0 && owner_.getEntityManager().getEntity(guid)) return true;
+    // Answered all the same, the answer had the movement of no unit at all:
+    // before the first world of a client that is the origin, facing
+    // 1.5707964 on the wire, and the server may take it at its word - with
+    // the player out of sight of everything until they moved.
+    static core::LogBudget budget(20, "Forced movement change");
+    if (budget.take()) {
+        LOG_WARNING("Forced movement change ", name, " for 0x", std::hex, guid, std::dec, guid == owner_.getPlayerGuid() ? " (the player)" : "",
+                    " not answered: the unit is not there, state=", static_cast<int>(owner_.getState()));
+    }
+    return false;
+}
+
+void MovementHandler::noteOutgoingPlace(uint16_t wireOp, const MovementInfo& canonical) {
+    const glm::vec3 at(canonical.x, canonical.y, canonical.z);
+    constexpr float kFar = 300.0f;
+    if (wireOp != wireOpcode(Opcode::CMSG_MOVE_SPLINE_DONE) && knownPlace_ && glm::length(at - *knownPlace_) > kFar) {
+        static core::LogBudget budget(20, "Outgoing place");
+        if (budget.take()) {
+            LOG_WARNING("Outgoing packet 0x", std::hex, wireOp, std::dec, " places the player ",
+                        glm::length(at - *knownPlace_), " yd from where the server had them: canonical ", at.x, ", ",
+                        at.y, ", ", at.z, " facing ", canonical.orientation, " for ", knownPlace_->x, ", ",
+                        knownPlace_->y, ", ", knownPlace_->z);
+        }
+    }
+    knownPlace_ = at;
+}
+
 network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counter, uint64_t guid) {
     // The unit the change was for and its movement (0x0071ef80): the
     // player's, or the unit the client moves in its stead.
@@ -1398,8 +1475,9 @@ network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counte
     }
     ack.writeUInt32(counter);
 
-    MovementInfo wire = movementOf(guid);
+    MovementInfo wire = movementNow(guid);
     wire.time = nextMovementTimestampMs();
+    if (guid == owner_.getPlayerGuid()) noteOutgoingPlace(wireOpcode(ackOpcode), wire);
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         wire.transportTime = wire.time;
         wire.transportTime2 = wire.time;
@@ -1446,6 +1524,8 @@ void MovementHandler::handleForceSpeedChange(network::Packet& packet, const char
 
     LOG_INFO("SMSG_FORCE_", name, "_CHANGE: guid=0x", std::hex, guid, std::dec,
              " counter=", counter, " speed=", newSpeed);
+
+    if (!unitForForcedChange(guid, name)) return;
 
     // The player's, or the unit the client moves in its stead (a driven
     // vehicle's): any unit's change lands on its movement (0x00732450 ->
@@ -1497,6 +1577,7 @@ void MovementHandler::handleForceMoveRootState(network::Packet& packet, bool roo
     LOG_INFO(rooted ? "SMSG_FORCE_MOVE_ROOT" : "SMSG_FORCE_MOVE_UNROOT",
              ": guid=0x", std::hex, guid, std::dec, " counter=", counter);
 
+    if (!unitForForcedChange(guid, rooted ? "MOVE_ROOT" : "MOVE_UNROOT")) return;
     MovementInfo* info = movementFor(guid);
     if (!info) return;
 
@@ -1524,6 +1605,7 @@ void MovementHandler::handleForceMoveFlagChange(network::Packet& packet, const c
 
     LOG_INFO("SMSG_FORCE_", name, ": guid=0x", std::hex, guid, std::dec, " counter=", counter);
 
+    if (!unitForForcedChange(guid, name)) return;
     MovementInfo* info = movementFor(guid);
     if (!info) return;
 
@@ -1563,7 +1645,7 @@ void MovementHandler::handleMoveSetCollisionHeight(network::Packet& packet) {
     LOG_INFO("SMSG_MOVE_SET_COLLISION_HGT: guid=0x", std::hex, guid, std::dec,
              " counter=", counter, " height=", height);
 
-    if (guid != owner_.getPlayerGuid()) return;
+    if (guid != owner_.getPlayerGuid() || !unitForForcedChange(guid, "COLLISION_HGT")) return;
     // 0x006ef860 event 0x3a -> 0x006e9600: the body's height (+0xcc) from
     // here on. A mount's comes this way (0x0073d5d0 sets none for a player
     // that mounts in the world: 0x006e9570 with its last argument 0), and a
@@ -1606,7 +1688,7 @@ void MovementHandler::handleMoveKnockBack(network::Packet& packet) {
              " counter=", counter, " vcos=", vcos, " vsin=", vsin,
              " hspeed=", hspeed, " vspeed=", vspeed);
 
-    if (guid != owner_.getPlayerGuid()) return;
+    if (guid != owner_.getPlayerGuid() || !unitForForcedChange(guid, "KNOCK_BACK")) return;
 
     if (owner_.knockBackCallbackRef()) {
         owner_.knockBackCallbackRef()(vcos, vsin, hspeed, vspeed);
@@ -1841,6 +1923,7 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         entity->startMoveTo(canonical.x, canonical.y, canonical.z, canYaw, entityDuration);
         if (measuredSpeed >= 0.0f) entity->setMoveSpeed(measuredSpeed);
     }
+    entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
 
     if (owner_.creatureMoveCallbackRef()) {
         const uint32_t notifyDuration = isStopOpcode && !underWay ? 0u : durationMs;
@@ -2273,15 +2356,51 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
                 path.push_back({wpCanonical.x, wpCanonical.y, wpCanonical.z});
             }
             path.push_back({destCanonical.x, destCanonical.y, destCanonical.z});
+            const std::optional<float> fallTop = entity->reportedFallTop();
             entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth,
-                                       /*clientCurve=*/wotlkSplineFlags);
+                                       /*clientCurve=*/wotlkSplineFlags,
+                                       (moveSplineFlags & SplineFlagWotlk::CYCLIC) != 0,
+                                       (moveSplineFlags & SplineFlagWotlk::ENTER_CYCLE) != 0);
+            // 0x006e96c0: its arc, over the time the spline takes here.
+            if ((moveSplineFlags & SplineFlagWotlk::PARABOLIC) != 0) {
+                if (const auto ms = entity->pathDurationMs())
+                    entity->setSplineArc(data.verticalAcceleration, data.parabolicStartTime, *ms);
+            } else if ((moveSplineFlags & SplineFlagWotlk::FALLING) != 0) {
+                entity->setSplineFall(fallTop);
+            }
         } else {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
         }
+        // From when it came (0x0098c770: +0x128, the clock of the frame it is
+        // handled in, 0x006f1490), not from the frame before and not from when
+        // a load let it be handled.
+        const uint32_t waited = packetWaitedMs(packet);
+        entity->moveBeganAfter(owner_.sinceUnitsAdvanced() - static_cast<float>(waited) * 0.001f);
+        if (const auto it = moveSplines_.find(data.guid); it != moveSplines_.end()) it->second.startMs -= waited;
+        // The spline takes what the client's own does, at its capped speed
+        // (0x0073c8e0 hands 0x006eb680 that time, not the packet's); one too
+        // short to start is over at once (0x006f11b0).
+        if (clientRoute) {
+            if (const auto it = moveSplines_.find(data.guid); it != moveSplines_.end()) {
+                if (const auto ms = entity->pathDurationMs()) it->second.durationMs = *ms;
+                else if (pathLength <= monster_move::kMinSplineLength) it->second.durationMs = 0;
+            }
+        }
         entity->faceAlongMove(finalFacing,
                               keepsFacing ? std::optional<float>(facingBefore) : std::nullopt,
                               inverted);
+        // The target as it stands where the move ends (0x006eb0b0).
+        if (data.moveType == 3 && wotlkSplineFlags) {
+            entity->faceOnArrival([this, guid = data.facingTarget](const glm::vec3& at) -> std::optional<float> {
+                const auto target = owner_.getEntityManager().getEntity(guid);
+                if (!target) return std::nullopt;
+                const float dx = target->getX() - at.x;
+                const float dy = target->getY() - at.y;
+                if (std::abs(dx) <= 0.01f && std::abs(dy) <= 0.01f) return std::nullopt;
+                return std::atan2(-dy, dx);
+            });
+        }
         // Forward along it - backward on an inverted one - until it ends,
         // unless it is cyclic (0x006eb680, 0x006eb0b0).
         entity->setMonsterMoveFlags(
@@ -2322,6 +2441,22 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
                 float orientation = std::atan2(-dy, dx);
                 entity->setOrientation(orientation);
             }
+        }
+    }
+    // The mover's stop is reported as its spline's end is, with the stop's
+    // own id (0x006f11b0 -> 0x006eae70 -> 0x0071f210) - a flight the server
+    // breaks off among them - and the player is where it says.
+    if (!data.hasDest && !isPreWotlk() && data.guid == activeMover()) {
+        moveSplines_[data.guid] =
+            vehicle::MoveSpline{.startMs = movementClockMs(), .durationMs = 0, .splineId = data.splineId};
+        if (data.moveType == 1 && data.guid == owner_.getPlayerGuid()) {
+            const glm::vec3 at(entity->getX(), entity->getY(), entity->getZ());
+            const glm::vec3 here(movementInfo.x, movementInfo.y, movementInfo.z);
+            movementInfo.x = at.x;
+            movementInfo.y = at.y;
+            movementInfo.z = at.z;
+            if (glm::length(at - here) > 0.1f && owner_.playerPositionCorrectionCallbackRef())
+                owner_.playerPositionCorrectionCallbackRef()(at.x, at.y, at.z);
         }
     }
     // A stop, or no path: every way it moved stops (0x006f11b0 ->
@@ -2401,6 +2536,7 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
             entity->setPosition(vehicle->getX(), vehicle->getY(), vehicle->getZ(), entity->getOrientation());
         }
         // Where the move ends in it: the seat's offset.
+        endFallForServerMove(moverGuid, true);
         SeatOffset& seat = seatOffsets_[moverGuid];
         seat = {.vehicle = transportGuid, .offset = glm::vec3(localX, localY, localZ)};
         if (packet.hasRemaining(5)) {
@@ -2555,6 +2691,9 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         const float pathLength =
             glm::length(destWorld - glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
         entity->startMoveTo(destWorld.x, destWorld.y, destWorld.z, facingAngle, duration / 1000.0f);
+        const uint32_t waited = packetWaitedMs(packet);
+        entity->moveBeganAfter(owner_.sinceUnitsAdvanced() - static_cast<float>(waited) * 0.001f);
+        if (const auto it = moveSplines_.find(moverGuid); it != moveSplines_.end()) it->second.startMs -= waited;
         // Run on the transport, from where the mover is on it now.
         if (entity->isActivelyMoving()) {
             if (const auto from = owner_.getTransportManager()->worldToTransportLocal(
@@ -2734,6 +2873,14 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         // send them again, and water walking went at every .go with the buff
         // still on.
         placeMover(movementInfo, endFallTimer());
+        // Off the spline that carried it (0x0098b730 lets it go, unreported),
+        // and a flight's camera follows the unit: it is here now as well.
+        moveSplines_.erase(guid);
+        forgetTaxi();
+        noteServerPlace(canonical);
+        if (auto self = owner_.getEntityManager().getEntity(guid)) {
+            self->setPosition(canonical.x, canonical.y, canonical.z, movementInfo.orientation);
+        }
         // Off whatever transport it was on, or onto the one the teleport
         // names. Kept, the old one went on placing the player by its offset
         // on it, so a .go away from a lift left them riding it.
@@ -3040,14 +3187,14 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     serverMovementAllowed_ = true;
     owner_.resurrectPendingRef() = false;
     owner_.resurrectRequestPendingRef() = false;
-    onTaxiFlight_ = false;
-    taxiMountActive_ = false;
-    taxiActivatePending_ = false;
-    taxiClientActive_ = false;
-    taxiClientPath_.clear();
-    taxiServerCompletionPending_ = false;
-    taxiRecoverPending_ = false;
-    taxiStartGrace_ = 0.0f;
+    // A flight on the map left behind is over here; one that goes on has its
+    // flag on the player made anew and its own spline on this map. The splines
+    // went with the objects they moved (0x004d6750).
+    forgetTaxi();
+    moveSplines_.clear();
+    // A ride's coordinates are its offset on the transport.
+    if (crossMapTransportTransfer) knownPlace_.reset();
+    else noteServerPlace(canonical);
     owner_.currentMountDisplayIdRef() = 0;
     if (owner_.mountCallbackRef()) {
         owner_.mountCallbackRef()(0);
@@ -3666,6 +3813,10 @@ void MovementHandler::updateClientTaxi(float deltaTime) {
         }
     }
 
+    if (!isPreWotlk()) {
+        updateServerTaxi(deltaTime);
+        return;
+    }
     if (!taxiClientActive_ || taxiClientPath_.size() < 2) return;
     auto playerEntity = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
 
@@ -3778,6 +3929,90 @@ void MovementHandler::updateClientTaxi(float deltaTime) {
     }
 }
 
+void MovementHandler::forgetTaxi() {
+    onTaxiFlight_ = false;
+    taxiFlagSeen_ = false;
+    taxiFlagWait_ = 0.0f;
+    taxiMountActive_ = false;
+    taxiActivatePending_ = false;
+    taxiActivateTimer_ = 0.0f;
+    taxiClientActive_ = false;
+    taxiClientPath_.clear();
+    taxiServerCompletionPending_ = false;
+    taxiRecoverPending_ = false;
+    taxiStartGrace_ = 0.0f;
+}
+
+bool MovementHandler::playerTaxiFlag() const {
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    return player && player->isUnit() &&
+           (static_cast<const Unit&>(*player).getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0;
+}
+
+void MovementHandler::updateServerTaxi(float deltaTime) {
+    const bool flagged = playerTaxiFlag();
+    if (flagged && !onTaxiFlight_) {
+        // Taken up here as well where no request was made from here: a login
+        // in flight, and the far side of a map's border.
+        onTaxiFlight_ = true;
+        sanitizeMovementForTaxi();
+        LOG_INFO("Taxi flight under way");
+    }
+    if (!onTaxiFlight_) return;
+    if (flagged) taxiFlagSeen_ = true;
+
+    const uint64_t guid = owner_.getPlayerGuid();
+    const auto player = owner_.getEntityManager().getEntity(guid);
+    const bool carried = onMoveSpline(guid);
+    if (player) {
+        // The movement kept goes with the unit; the unit is not set, which
+        // would end its spline.
+        movementInfo.x = player->getX();
+        movementInfo.y = player->getY();
+        movementInfo.z = player->getZ();
+        movementInfo.orientation = player->getOrientation();
+        if (const auto heading = player->pathHeading(); heading && owner_.taxiOrientationCallbackRef()) {
+            const glm::vec3 tangent = core::coords::canonicalToRender(heading->tangent);
+            if (glm::dot(tangent, tangent) > 1e-8f) {
+                const glm::vec3 ahead = core::coords::canonicalToRender(heading->ahead);
+                const float pitch = std::asin(std::clamp(tangent.z / glm::length(tangent), -1.0f, 1.0f));
+                owner_.taxiOrientationCallbackRef()(std::atan2(tangent.y, tangent.x), pitch,
+                                                    flightBank(tangent, ahead));
+            }
+        }
+    }
+    if (flagged || carried) return;
+    // Over once the server has taken the flag back and the last spline has
+    // run out - or where a flight it accepted never came.
+    if (!taxiFlagSeen_) {
+        taxiFlagWait_ -= deltaTime;
+        if (taxiFlagWait_ > 0.0f) return;
+    }
+    endServerTaxi();
+}
+
+void MovementHandler::endServerTaxi() {
+    onTaxiFlight_ = false;
+    taxiFlagSeen_ = false;
+    taxiDestNodeId_ = 0;
+    taxiLandingCooldown_ = 2.0f;
+    sanitizeMovementForTaxi();
+    // Some servers carry the taxi mount in the vehicle data.
+    owner_.vehicleIdRef() = 0;
+    // Where the last spline ended; nothing puts the player on the flight
+    // master's place.
+    if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        player->setPosition(player->getLatestX(), player->getLatestY(), player->getLatestZ(),
+                            player->getOrientation());
+        movementInfo.x = player->getX();
+        movementInfo.y = player->getY();
+        movementInfo.z = player->getZ();
+        if (owner_.playerPositionCorrectionCallbackRef())
+            owner_.playerPositionCorrectionCallbackRef()(movementInfo.x, movementInfo.y, movementInfo.z);
+    }
+    LOG_INFO("Taxi flight over");
+}
+
 void MovementHandler::handleActivateTaxiReply(network::Packet& packet) {
     ActivateTaxiReplyData data;
     if (!ActivateTaxiReplyParser::parse(packet, data)) {
@@ -3813,6 +4048,15 @@ void MovementHandler::handleActivateTaxiReply(network::Packet& packet) {
         }
         taxiActivatePending_ = false;
         taxiActivateTimer_ = 0.0f;
+        if (!isPreWotlk()) {
+            // The answer only lets the flight map go (0x006cee90 ->
+            // 0x00590ba0). The mount, the flag and the spline are the
+            // server's to send.
+            taxiFlagSeen_ = false;
+            taxiFlagWait_ = 5.0f;
+            LOG_INFO("Taxi flight accepted");
+            return;
+        }
         applyTaxiMountForCurrentNode();
         // Now that the server has confirmed, actually move the player to the path
         // start and start advancing the spline (see activateTaxi()'s comment).
@@ -4048,7 +4292,7 @@ void MovementHandler::activateTaxi(uint32_t destNodeId) {
     if (owner_.taxiFlightStartCallbackRef()) {
         owner_.taxiFlightStartCallbackRef()();
     }
-    startClientTaxiPath(path);
+    if (isPreWotlk()) startClientTaxiPath(path);
 }
 
 // ============================================================
@@ -4163,37 +4407,59 @@ void MovementHandler::clearTransportAttachment(uint64_t childGuid) {
     owner_.transportAttachmentsRef().erase(childGuid);
 }
 
+void MovementHandler::noteSeatOffset(uint64_t guid, uint64_t vehicle, const glm::vec3& wireOffset) {
+    seatOffsets_[guid] = {.vehicle = vehicle, .offset = wireOffset};
+}
+
+std::optional<glm::vec3> MovementHandler::seatPlace(uint64_t guid) const {
+    const uint64_t player = owner_.getPlayerGuid();
+    const auto passenger = owner_.vehicleRoster().passenger(guid);
+    if (!passenger || passenger->vehicleGuid == 0) return std::nullopt;
+    const auto vehicle = owner_.getEntityManager().getEntity(passenger->vehicleGuid);
+    if (!vehicle || !vehicle->isUnit()) return std::nullopt;
+    glm::vec3 at(vehicle->getX(), vehicle->getY(), vehicle->getZ());
+    float yaw = vehicle->getOrientation();
+    if (passenger->vehicleGuid == player && owner_.activeMover() == player) {
+        at = glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
+        yaw = movementInfo.orientation;
+    }
+    glm::vec3 offset(0.0f);
+    if (const auto seat = seatOffsets_.find(guid); seat != seatOffsets_.end() &&
+                                                   seat->second.vehicle == passenger->vehicleGuid) {
+        offset = seat->second.offset;
+    } else if (guid == player) {
+        return std::nullopt;
+    } else if (const auto held = owner_.transportAttachmentsRef().find(guid);
+               held != owner_.transportAttachmentsRef().end() &&
+               held->second.transportGuid == passenger->vehicleGuid) {
+        // The create block's, as it came.
+        offset = held->second.offsetNeedsTransportResolution
+                     ? held->second.localOffset
+                     : transport_local::toWire(false, held->second.localOffset);
+    }
+    return passengerPlace(at, yaw, offset);
+}
+
 void MovementHandler::carryVehiclePassengers() {
     // A passenger is its place on its vehicle wherever that goes (0x004f4460):
-    // its distance, its click and its sounds were left where it got on.
+    // its distance, its click and its sounds were left where it got on. The
+    // player's own as well, and what it is taken off the vehicle with: leaving
+    // a transport takes the place through it into the world (0x006ec400 ->
+    // 0x00722010).
     const uint64_t player = owner_.getPlayerGuid();
     for (const auto& [guid, passenger] : owner_.vehicleRoster().passengers()) {
-        if (guid == player || passenger.vehicleGuid == 0) continue;
         const auto entity = owner_.getEntityManager().getEntity(guid);
-        const auto vehicle = owner_.getEntityManager().getEntity(passenger.vehicleGuid);
-        if (!entity || !vehicle || !vehicle->isUnit() || entity->isActivelyMoving()) continue;
-        glm::vec3 at(vehicle->getX(), vehicle->getY(), vehicle->getZ());
-        float yaw = vehicle->getOrientation();
-        if (passenger.vehicleGuid == player && owner_.activeMover() == player) {
-            at = glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
-            yaw = movementInfo.orientation;
+        if (!entity || entity->isActivelyMoving()) continue;
+        const auto place = seatPlace(guid);
+        if (!place) continue;
+        if (guid == player && moverInfoOwner_ == 0) {
+            movementInfo.x = place->x;
+            movementInfo.y = place->y;
+            movementInfo.z = place->z;
         }
-        glm::vec3 offset(0.0f);
-        if (const auto seat = seatOffsets_.find(guid); seat != seatOffsets_.end() &&
-                                                       seat->second.vehicle == passenger.vehicleGuid) {
-            offset = seat->second.offset;
-        } else if (const auto held = owner_.transportAttachmentsRef().find(guid);
-                   held != owner_.transportAttachmentsRef().end() &&
-                   held->second.transportGuid == passenger.vehicleGuid) {
-            // The create block's, as it came.
-            offset = held->second.offsetNeedsTransportResolution
-                         ? held->second.localOffset
-                         : transport_local::toWire(false, held->second.localOffset);
-        }
-        const glm::vec3 place = passengerPlace(at, yaw, offset);
         const glm::vec3 was(entity->getX(), entity->getY(), entity->getZ());
-        if (glm::dot(place - was, place - was) > 0.0001f)
-            entity->setPosition(place.x, place.y, place.z, entity->getOrientation());
+        if (glm::dot(*place - was, *place - was) > 0.0001f)
+            entity->setPosition(place->x, place->y, place->z, entity->getOrientation());
     }
     std::erase_if(seatOffsets_, [this](const auto& seat) {
         const auto passenger = owner_.vehicleRoster().passenger(seat.first);
@@ -4249,7 +4515,9 @@ void MovementHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
         // (0x004f4460). So its ends go where the transport is now, and a
         // move on a moving deck stays on it.
         if (entity->isActivelyMoving() && onMoveSpline(childGuid)) {
-            if (attachment.moveFromLocal) {
+            if (entity->onFramedPath()) {
+                if (const auto frame = transportFrame(attachment.transportGuid)) entity->setMoveFrame(*frame);
+            } else if (attachment.moveFromLocal) {
                 auto* transports = owner_.getTransportManager();
                 entity->setMoveEnds(
                     transports->getPlayerWorldPosition(attachment.transportGuid, *attachment.moveFromLocal),
@@ -4412,8 +4680,26 @@ bool MovementHandler::unitHasClientControl(uint64_t guid) const {
     return it != unitControl_.end() && it->second;
 }
 
+void MovementHandler::endFallForServerMove(uint64_t guid, bool hasPath) {
+    // A move of the server's ends the fall the unit is in, unless it is on one
+    // already (0x0073c8e0 -> 0x006ed7e0(0, 0) -> 0x006e9980 -> 0x00988490); a
+    // stop in any case (0x006f11b0 -> 0x006ed7e0(0, 1)). What steps the player
+    // - or what it drives - is told.
+    const uint64_t stepped = activeMover() != 0 ? activeMover() : owner_.getPlayerGuid();
+    if (guid == stepped && (!hasPath || !onMoveSpline(guid))) {
+        // Its flags with it, without a landing said or played.
+        if ((movementInfo.flags & (static_cast<uint32_t>(MovementFlags::FALLING) |
+                                   static_cast<uint32_t>(MovementFlags::FALLINGFAR))) != 0) {
+            movementInfo.time = movementClockMs();
+            endFall(movementInfo, endFallTimer());
+        }
+        if (owner_.fallEndsCallbackRef()) owner_.fallEndsCallbackRef()();
+    }
+}
+
 void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs,
                                      uint32_t splineId) {
+    endFallForServerMove(guid, hasPath);
     const uint32_t now = movementClockMs();
     if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now)) {
         spline->splineId = splineId;
@@ -4424,6 +4710,141 @@ void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splin
     // Those that ran out are of no more use.
     if (moveSplines_.size() > 256)
         std::erase_if(moveSplines_, [now](const auto& kv) { return !vehicle::moveSplineRunning(kv.second, now); });
+}
+
+std::optional<glm::mat4> MovementHandler::transportFrame(uint64_t transportGuid) const {
+    auto* transports = owner_.getTransportManager();
+    if (!transports || !transports->getTransport(transportGuid)) return std::nullopt;
+    const auto at = [&](const glm::vec3& wire) {
+        return transports->getPlayerWorldPosition(transportGuid, transports->serverToTransportLocal(transportGuid, wire));
+    };
+    const glm::vec3 origin = at(glm::vec3(0.0f));
+    glm::mat4 frame(1.0f);
+    frame[0] = glm::vec4(at(glm::vec3(1.0f, 0.0f, 0.0f)) - origin, 0.0f);
+    frame[1] = glm::vec4(at(glm::vec3(0.0f, 1.0f, 0.0f)) - origin, 0.0f);
+    frame[2] = glm::vec4(at(glm::vec3(0.0f, 0.0f, 1.0f)) - origin, 0.0f);
+    frame[3] = glm::vec4(origin, 1.0f);
+    return frame;
+}
+
+void MovementHandler::takeBlockSpline(const UpdateBlock& block, const std::shared_ptr<Entity>& entity,
+                                      uint32_t queuedMs) {
+    if (isPreWotlk() || !entity || !entity->isUnit() || !block.hasMovement) return;
+    // Whatever it was on is gone (0x006f1520: 0x0098b730, or overwritten).
+    moveSplines_.erase(block.guid);
+    if (!block.spline) return;
+    const SplineBlockData& spline = *block.spline;
+    const bool self = block.guid == owner_.getPlayerGuid();
+    // Only a unit whose flags say forward or back is moved along it
+    // (0x0098ca00); without any way of moving it is not stepped at all
+    // (0x006f1520 -> 0x006eaf50(1)).
+    if ((block.moveFlags & 0x3u) == 0) return;
+    // On a transport the points are on it. A vehicle's passenger is drawn in
+    // its seat, and the player's own riding is its own.
+    const bool onTransport = block.onTransport && block.transportGuid != 0;
+    if (onTransport) {
+        const auto carrier = owner_.getEntityManager().getEntity(block.transportGuid);
+        if (self || (carrier && carrier->isUnit()) || vehicle::isVehicleGuid(block.transportGuid) ||
+            vehicle::isPlayerGuid(block.transportGuid)) {
+            return;
+        }
+    }
+
+    const auto place = [onTransport](const glm::vec3& wire) {
+        return onTransport ? wire : core::coords::serverToCanonical(wire);
+    };
+    Entity::BlockSpline run;
+    run.points.reserve(spline.waypoints.size());
+    for (const glm::vec3& point : spline.waypoints) run.points.push_back(place(point));
+    run.endPoint = place(spline.endPoint);
+    run.curved = (spline.splineFlags & SplineFlagWotlk::UNCOMPRESSED_MASK) != 0;
+    run.curvedLengths = spline.splineMode != 0;
+    run.cyclic = (spline.splineFlags & SplineFlagWotlk::CYCLIC) != 0;
+    run.enterCycle = run.cyclic && (spline.splineFlags & SplineFlagWotlk::ENTER_CYCLE) != 0;
+    run.framed = onTransport;
+    run.durationMs = spline.duration;
+    run.durationFactor = spline.durationFactor;
+    run.nextDurationFactor = spline.nextDurationFactor;
+    // It began as long before the block was read as the block says
+    // (0x004f4b50: +0x24 = now - passed).
+    run.passedMs = spline.timePassed + queuedMs;
+    run.arcs = spline.hasParabolic;
+    run.arcAcceleration = spline.verticalAcceleration;
+    run.arcStartMs = spline.parabolicStartTime;
+    if ((spline.splineFlags & (SplineFlagWotlk::FALLING | SplineFlagWotlk::PARABOLIC)) == SplineFlagWotlk::FALLING) {
+        // From where its fall began (+0x84), which only a block with FALLING
+        // says (0x00988990); without it the unit is at the end at once.
+        if (block.moveFlags & static_cast<uint32_t>(MovementFlags::FALLING)) {
+            run.fallTop = (onTransport ? block.transportZ : block.z) +
+                          fallDistance(static_cast<float>(block.fallTime) * 0.001f, block.fallVerticalSpeed, false);
+        } else {
+            run.over = true;
+        }
+    }
+    const uint32_t durationMs = Entity::scaledDuration(run.durationMs, run.durationFactor);
+    if (run.over) run.passedMs = std::max(run.passedMs, durationMs);
+
+    noteMoveSpline(block.guid, true, spline.splineFlags, durationMs, spline.splineId);
+    const auto kept = moveSplines_.find(block.guid);
+    if (kept == moveSplines_.end()) return;  // let go already (0x400)
+    kept->second.startMs -= run.passedMs;
+    // A frozen one is kept and goes nowhere (0x0098ca00).
+    if ((spline.splineFlags & SplineFlagWotlk::FROZEN) != 0) {
+        kept->second.cyclic = true;
+        return;
+    }
+
+    const float facingBefore = entity->getOrientation();
+    entity->startBlockSpline(run);
+    entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
+    const bool keepsFacing =
+        (spline.splineFlags & (SplineFlagWotlk::FALLING | SplineFlagWotlk::ORIENT_FIXED)) != 0;
+    const auto frame = onTransport ? transportFrame(block.transportGuid) : std::nullopt;
+    if (frame) entity->setMoveFrame(*frame);
+    entity->faceAlongMove(std::nullopt,
+                          keepsFacing || spline.waypoints.size() < 3 ? std::optional<float>(facingBefore) : std::nullopt,
+                          (spline.splineFlags & SplineFlagWotlk::ORIENT_INVERSED) != 0);
+    // Along the path once the transport it lies on is there.
+    if (onTransport && !frame) entity->setOrientation(facingBefore);
+    if (onTransport) {
+        auto* transports = owner_.getTransportManager();
+        const bool there = transports && transports->getTransport(block.transportGuid);
+        const glm::vec3 end = entity->framedEnd();
+        owner_.setTransportAttachment(block.guid, entity->getType(), block.transportGuid,
+                                      there ? transports->serverToTransportLocal(block.transportGuid, end) : end,
+                                      spline.hasFinalAngle, spline.finalAngle, !there);
+    }
+    // What it faces at the end (0x006eb0b0), the target as it is then.
+    const auto facingTo = [](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+        const float dx = to.x - from.x;
+        const float dy = to.y - from.y;
+        if (std::abs(dx) <= 0.01f && std::abs(dy) <= 0.01f) return std::nullopt;
+        return std::atan2(-dy, dx);
+    };
+    const uint64_t transportGuid = onTransport ? block.transportGuid : 0;
+    if (spline.hasFinalAngle) {
+        entity->faceOnArrival([this, transportGuid, angle = spline.finalAngle](const glm::vec3&) -> std::optional<float> {
+            if (transportGuid == 0) return core::coords::serverToCanonicalYaw(angle);
+            auto* transports = owner_.getTransportManager();
+            return transport_local::worldYaw(
+                transports ? transports->transportFacing(transportGuid).value_or(0.0f) : 0.0f, angle);
+        });
+    } else if (spline.hasFinalTarget) {
+        entity->faceOnArrival([this, facingTo, guid = spline.finalTarget](const glm::vec3& at) -> std::optional<float> {
+            const auto target = owner_.getEntityManager().getEntity(guid);
+            if (!target) return std::nullopt;
+            return facingTo(at, glm::vec3(target->getX(), target->getY(), target->getZ()));
+        });
+    } else if (spline.hasFinalPoint) {
+        entity->faceOnArrival([this, facingTo, transportGuid, spot = spline.finalPoint](const glm::vec3& at) -> std::optional<float> {
+            if (transportGuid == 0) return facingTo(at, core::coords::serverToCanonical(spot));
+            const auto frame = transportFrame(transportGuid);
+            if (!frame) return std::nullopt;
+            return facingTo(at, glm::vec3(*frame * glm::vec4(spot, 1.0f)));
+        });
+    }
+    // Its flags are the block's, and arriving takes forward and back off.
+    entity->setMonsterMoveFlags(block.moveFlags, !run.cyclic);
 }
 
 bool MovementHandler::onMoveSpline(uint64_t guid) {
@@ -4449,6 +4870,21 @@ void MovementHandler::updateMoverSplineDone() {
     if (it == moveSplines_.end() || vehicle::moveSplineRunning(it->second, movementClockMs())) return;
     const uint32_t splineId = it->second.splineId;
     moveSplines_.erase(it);
+    // Where it ended (0x006e9470): the player's own movement is the last
+    // frame's. On a flight the unit stays there, and does not drift on, until
+    // the server moves it.
+    if (mover == owner_.getPlayerGuid()) {
+        if (auto player = owner_.getEntityManager().getEntity(mover)) {
+            const glm::vec3 end(player->getLatestX(), player->getLatestY(), player->getLatestZ());
+            if (onTaxiFlight_) player->setPosition(end.x, end.y, end.z, player->getOrientation());
+            movementInfo.x = end.x;
+            movementInfo.y = end.y;
+            movementInfo.z = end.z;
+        }
+    }
+    // It falls from there (0x006eae70: the spline freed, then 0x0098b710) -
+    // onto the ground right under it, or from as high as the spline left it.
+    if (owner_.placedFallCallbackRef()) owner_.placedFallCallbackRef()();
     // 0x0071f210: the mover's movement block and the spline's id.
     if (owner_.getSocket()) sendMovement(Opcode::CMSG_MOVE_SPLINE_DONE, splineId);
 }
@@ -4516,6 +4952,27 @@ const MovementInfo& MovementHandler::movementOf(uint64_t guid) const {
     const uint64_t owner = moverInfoOwner_ != 0 ? moverInfoOwner_ : player;
     if (guid == player && owner != player) return heldPlayerMovement_;
     return movementInfo;
+}
+
+MovementInfo MovementHandler::movementNow(uint64_t guid) const {
+    // A forced change is answered from the unit's movement as it stands at
+    // that moment - 0x006ed0f0 answers it where the step has brought the unit
+    // to, and 0x00990420 lets the answers by while a spline carries it. What
+    // is kept here is a frame old; and where a load came between, as old as
+    // the load: the answer to the collision height of a dismount put a flight
+    // two hundred yards back, on the server.
+    MovementInfo info = movementOf(guid);
+    // One run out and reported (updateMoverSplineDone) carries it no more.
+    if (info.hasFlag(MovementFlags::ONTRANSPORT) || !moveSplines_.count(guid)) return info;
+    const auto unit = owner_.getEntityManager().getEntity(guid);
+    if (!unit) return info;
+    if (const auto at = unit->splinePlaceAfter(owner_.sinceUnitsAdvanced())) {
+        info.x = at->position.x;
+        info.y = at->position.y;
+        info.z = at->position.z;
+        info.orientation = at->orientation;
+    }
+    return info;
 }
 
 MovementInfo* MovementHandler::movementFor(uint64_t guid) {
@@ -4598,12 +5055,14 @@ void MovementHandler::setActiveMover(uint64_t guid) {
         if (owner == player) heldPlayerMovement_ = movementInfo;
         if (guid == player) {
             movementInfo = heldPlayerMovement_;
-            // A vehicle carried the player to where it stopped; a possessed
-            // unit went off without it, and the player is where it stood.
+            // A vehicle carried the player to where it stopped, on its seat;
+            // a possessed unit went off without it, and the player is where
+            // it stood.
             if (!moverPossessed_) {
-                movementInfo.x = last.x;
-                movementInfo.y = last.y;
-                movementInfo.z = last.z;
+                const auto self = entities.getEntity(player);
+                movementInfo.x = self ? self->getX() : last.x;
+                movementInfo.y = self ? self->getY() : last.y;
+                movementInfo.z = self ? self->getZ() : last.z;
             }
             movementInfo.flags &= ~kTransient;
             moverInfoOwner_ = 0;
@@ -4740,7 +5199,7 @@ float MovementHandler::transportFacingToWire(uint64_t transportGuid, float canon
 }
 
 MovementInfo MovementHandler::moverWireInfo() {
-    MovementInfo wire = movementInfo;
+    MovementInfo wire = movementNow(moverInfoOwner_ != 0 ? moverInfoOwner_ : owner_.getPlayerGuid());
     wire.time = nextMovementTimestampMs();
     const glm::vec3 serverPos = core::coords::canonicalToServer(glm::vec3(wire.x, wire.y, wire.z));
     wire.x = serverPos.x;

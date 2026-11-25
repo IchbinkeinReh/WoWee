@@ -686,6 +686,8 @@ bool MonsterMoveParser::parse(network::Packet& packet, MonsterMoveData& data) {
                                         SplineFlagSet::Wotlk)) {
             return false;
         }
+        data.verticalAcceleration = spline.verticalAcceleration;
+        data.parabolicStartTime = spline.parabolicStartTime;
         data.duration = spline.duration;
         if (spline.hasDest) {
             data.destX = spline.destination.x;

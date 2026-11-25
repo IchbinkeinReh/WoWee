@@ -20,6 +20,7 @@
 #include "ui/edit_lines.hpp"
 #include "ui/interface_file.hpp"
 #include "ui/link_hit.hpp"
+#include "ui/edit_lines.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
 #include "game/game_utils.hpp"
@@ -2008,10 +2009,23 @@ static float ownUnits(const wowee::ui::Widget* w, float v) {
     const float es = (w && w->effScale > 0.0f) ? w->effScale : 1.0f;
     return v / es;
 }
+/// The reach of a string's text where it has no width yet, which is the moment
+/// after SetWidth(0): QuestLogTitleButton_Resize reads GetRight then, to cut the
+/// title where the tag beside it begins. Its rect is a point until the next
+/// measure, and answering that point cut nothing.
+wowee::ui::FontStringReach unmeasuredReach(const wowee::ui::Widget* w) {
+    if (!w || w->kind != wowee::ui::WidgetKind::FontString || w->text.empty() || w->width > 0.0f ||
+        w->rectW > 0.0f || wowee::ui::anchorsSpanAxis(w->anchors, true)) {
+        return {};
+    }
+    return wowee::ui::fontStringReach(w->anchors,
+                                      static_cast<float>(measureTextWidth(w->text, w->fontFace, w->fontHeight, w->effScale)));
+}
+
 int lua_Region_GetLeft(lua_State* L) {
     const auto* w = placedWidgetOf(L, 1);
     if (!w) return luaReturnNil(L);
-    lua_pushnumber(L, ownUnits(w, w->left));
+    lua_pushnumber(L, ownUnits(w, w->left) - unmeasuredReach(w).left);
     return 1;
 }
 /// GetCenter() - the middle of the frame, in the same screen units GetLeft and
@@ -2113,7 +2127,7 @@ static int lua_Region_GetParent(lua_State* L) {
 int lua_Region_GetRight(lua_State* L) {
     const auto* w = placedWidgetOf(L, 1);
     if (!w) return luaReturnNil(L);
-    lua_pushnumber(L, ownUnits(w, w->left + w->rectW));
+    lua_pushnumber(L, ownUnits(w, w->left + w->rectW) + unmeasuredReach(w).right);
     return 1;
 }
 int lua_Region_GetBottom(lua_State* L) {
@@ -2625,35 +2639,20 @@ int lua_ScrollFrame_SetScrollChild(lua_State* L) {
     return 0;
 }
 
-/// How far the child can move before its far edge reaches the frame's. Zero
-/// when the child fits, which is how a scroll bar knows to disable itself.
+/// How far the child can move before its far edge reaches the frame's, as the
+/// last pass had it (0x00972690, 0x009726f0 read +0x2a4 and +0x2a8, which
+/// 0x0096b5a0 works out in the frame's own update and then tells of with
+/// OnScrollRangeChanged).
+///
+/// Not worked out as it is asked for. A range known before it has been told of
+/// is one the scroll bar does not have yet: a long macro's text scrolled to its
+/// end (ScrollingEdit_OnUpdate, which waits for a range over nought) while the
+/// bar still went from 0 to 0 and took none of it, and the next, short macro
+/// was left scrolled out of the window.
 static float scrollRange(wowee::ui::WidgetTree& tree, uint32_t id, bool vertical) {
     const auto* w = tree.get(id);
     if (!w || w->scrollChild == 0) return 0.0f;
-    // Both rects resolved first, the same way the measuring getters do it.
-    //
-    // Only matters for a scroll child whose height comes out of the solver -
-    // one anchored TOP and BOTTOM to something rather than given a height.
-    // SetHeight writes the rect directly, so a stated size was always readable
-    // here; a solved one was not, and answered zero.
-    //
-    // Which was worse than a wrong number, because the two disagreed: the
-    // child answered its full height when asked directly and the range
-    // answered nothing, and a range of nothing is how a scroll bar decides it
-    // is not needed.
-    const uint32_t childId = w->scrollChild;
-    tree.resolveWidget(id);
-    tree.resolveWidget(childId);
-    w = tree.get(id);
-    const auto* child = tree.get(childId);
-    if (!w || !child) return 0.0f;
-    // What the child actually holds, not what it declares. Nothing in FrameXML
-    // sizes the talent tree's scroll child - the client does - so the declared
-    // 50 gave a range of zero on a tree eleven rows deep.
-    float contentW = child->rectW, contentH = child->rectH;
-    tree.scrollContentExtent(childId, contentW, contentH);
-    const float over = vertical ? (contentH - w->rectH) : (contentW - w->rectW);
-    return over > 0.0f ? over : 0.0f;
+    return std::max(vertical ? w->reportedRangeY : w->reportedRangeX, 0.0f);
 }
 
 /// A scroll offset from a script, with NaN read as no offset.
@@ -2818,6 +2817,9 @@ int lua_Texture_SetButtonArt(lua_State* L) {
     else if (slot == "DisabledTexture")        w->buttonArt = ButtonArt::Disabled;
     else if (slot == "CheckedTexture")         w->buttonArt = ButtonArt::Checked;
     else if (slot == "DisabledCheckedTexture") w->buttonArt = ButtonArt::DisabledChecked;
+    // Taken off its button: the client frees it (0x0096f920, 0x009623f0), and
+    // a state without one keeps the picture of the one before.
+    else if (slot.empty())                     w->buttonArt = ButtonArt::None;
     // 0x0096f920: the picture of the state the button is in is shown at once.
     using Shown = wowee::ui::ButtonArtShown;
     if (auto* tree = wowee::addons::getWidgetTree(L))
@@ -4786,6 +4788,9 @@ static int setHyperlink(lua_State* L, bool again) {
     uint32_t enchantId = 0;
     std::array<uint32_t, 3> linkGems{};
     bool linkRolled = false;
+    // And the last two: what the item rolled, and its seed.
+    game::ItemDef rolled;
+    rolled.itemId = id;
     if (kind == "item") {
         size_t at = colon + 1;
         while (at < link.size() && link[at] >= '0' && link[at] <= '9') ++at;
@@ -4800,6 +4805,11 @@ static int setHyperlink(lua_State* L, bool again) {
             if (f != std::string::npos && f < link.size()) {
                 const char* p = link.c_str() + f + 1;
                 linkRolled = *p != '\0' && *p != ':' && std::strtol(p, nullptr, 10) != 0;
+                // Signed, sixteen bits of it: a suffix is below nought, and
+                // some links have it written without its sign.
+                rolled.randomPropertyId = static_cast<int16_t>(std::strtol(p, nullptr, 10));
+                if (const size_t seed = link.find(':', f + 1); seed != std::string::npos)
+                    rolled.suffixFactor = static_cast<uint32_t>(std::strtoul(link.c_str() + seed + 1, nullptr, 10));
             }
         }
         for (int field = 0; field < 4 && at < link.size() && link[at] == ':'; ++field) {
@@ -4830,6 +4840,10 @@ static int setHyperlink(lua_State* L, bool again) {
         lua_pushnil(L);
         lua_setfield(L, 1, "__linkRolled");
         if (filled) appendEnchantLineById(w, gh, enchantId);
+        // Its name and its stats with what it rolled: 0x006277f0 is given the
+        // property and the seed whatever names the item - a letter's
+        // attachment (0x0062f9e0, +0x498 and +0x49c), a roll, a link in chat.
+        if (filled) appendRandomSuffix(w, gh, rolled);
         // Asked for whether it was found or not: the answer is what turns a
         // name into a tooltip, and the miss is exactly when it is needed.
         gh->ensureItemInfo(id);
@@ -4916,9 +4930,9 @@ static int lua_Tooltip_SetShapeshift(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (!w || !gh || index < 1) return 0;
-    const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
+    const auto forms = gh->stanceBarSpells();
     if (static_cast<size_t>(index) > forms.size()) return 0;
-    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, forms[static_cast<size_t>(index) - 1].spellId, !uberTooltips(L), true)
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, forms[static_cast<size_t>(index) - 1], !uberTooltips(L), true)
                            ? 1 : 0);
     return 1;
 }
@@ -5262,10 +5276,7 @@ int lua_Tooltip_SetQuestLogRewardSpell(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     uint32_t spellId = 0;
     if (gh) {
-        // Through the row mapper: the selected index is a display index into a
-        // log grouped under zone headers, not a position in getQuestLog().
-        if (const auto* q = wowee::addons::questAtLogRow(gh, gh->getSelectedQuestLogIndex()))
-            spellId = q->rewardSpellId;
+        if (const auto* q = gh->getSelectedQuest()) spellId = q->rewardSpellId;
     }
     lua_pushboolean(L, spellId && fillSpellTooltip(L, w, gh, spellId) ? 1 : 0);
     return 1;
@@ -6170,7 +6181,7 @@ void hideFrameByWid(lua_State* L, uint32_t wid) {
     if (!lua_isfunction(L, -1)) { lua_pop(L, 3); return; }
     lua_pushvalue(L, -2);
     if (lua_pcall(L, 1, 0, 0) != 0) {
-        LOG_WARNING("tooltip fade: ", luaL_optstring(L, -1, "?"));
+        LOG_WARNING("Hide: ", luaL_optstring(L, -1, "?"));
         lua_pop(L, 1);
     }
     lua_pop(L, 2);
@@ -6214,6 +6225,21 @@ void tickTooltipFades(lua_State* L, float elapsed) {
             w->alpha = 1.0f;
             hideFrameByWid(L, wid);
         }
+    }
+}
+
+/// Each frame: the visible Cooldown frames' own update (0x005ec8f0), which
+/// runs where an OnUpdate would. One whose star is over hides itself.
+void tickCooldowns(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (!tree) return;
+    const uint32_t now = wowee::ui::cooldown_sweep::msOf(core::appTimeSeconds());
+    // By index: an OnHide is free to make frames.
+    for (size_t i = 0; i < tree->cooldownFrames().size(); ++i) {
+        const uint32_t wid = tree->cooldownFrames()[i];
+        auto* w = tree->get(wid);
+        if (!w || !w->visibleChain) continue;
+        if (wowee::ui::cooldown_sweep::update(w->cooldown, w->cooldownReverse, now)) hideFrameByWid(L, wid);
     }
 }
 }  // namespace
@@ -7011,11 +7037,21 @@ int lua_Tooltip_SetExistingSocketGem(lua_State* L) {
 /// SetSocketedItem() - the item whose sockets are on screen, which the panel
 /// keeps below the sockets as its description pane.
 int lua_Tooltip_SetSocketedItem(lua_State* L) {
+    auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    if (!widgetOf(L, 1) || !gh) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+    // The item itself and not its template (0x006301a0 gives 0x006277f0 the object's
+    // guid): bound or not, its durability, what it rolled, its enchantments - the sockets'
+    // as they would be.
+    const uint64_t guid = gh->getSocketItemGuid();
     const auto sockets = wowee::addons::socketsAsTheyWouldBe(gh);
-    const auto* item = wowee::addons::heldItem(gh, gh->getSocketItemGuid());
-    lua_pushboolean(L, fillItemTooltipById(L, gh, gh->getSocketItemId(), item, &sockets) ? 1 : 0);
+    const auto* item = wowee::addons::heldItem(gh, guid);
+    const bool filled = fillItemTooltipById(L, gh, gh->getSocketItemId(), item, &sockets);
+    if (filled && item) {
+        appendRandomSuffix(w, gh, *item);
+        appendEnchantLines(w, gh, guid);
+    }
+    lua_pushboolean(L, filled ? 1 : 0);
     return 1;
 }
 
@@ -7182,6 +7218,13 @@ int lua_Tooltip_SetGuildBankItem(lua_State* L) {
         const bool filled = fillItemTooltipById(L, gh, it.itemEntry);
         lua_pushnil(L);
         lua_setglobal(L, "__WoweeTooltipItemCount");
+        // With what it rolled (+0x498).
+        if (filled) {
+            game::ItemDef rolled;
+            rolled.itemId = it.itemEntry;
+            rolled.randomPropertyId = static_cast<int32_t>(it.randomPropertyId);
+            appendRandomSuffix(w, gh, rolled);
+        }
         lua_pushboolean(L, filled ? 1 : 0);
         return 1;
     }
@@ -10264,23 +10307,23 @@ int lua_MovieFrame_EnableSubtitles(lua_State* L) {
 int lua_Cooldown_SetCooldown(lua_State* L) {
     // 0x005ece80
     if (!requireNumbers(L, 2, 2, "Usage: %s:SetCooldown(start, duration)")) return 0;
-    auto* w = widgetOf(L, 1);
-    if (!w) return 0;
-    // In whole milliseconds, and the frame is shown by it (0x005ecd70).
-    const auto ms = [L](int i) { return std::round(lua_tonumber(L, i) * 1000.0) / 1000.0; };
-    w->cooldownClock = {.start = ms(2), .duration = ms(3), .flash = false};
-    lua_settop(L, 1);
-    return lua_Region_Show(L);
+    if (auto* w = widgetOf(L, 1)) {
+        wowee::ui::cooldown_sweep::set(w->cooldown, luaL_optnumber(L, 2, 0.0), luaL_optnumber(L, 3, 0.0));
+        // And it shows the frame (0x005ecd70 ends in 0x0048f660).
+        lua_settop(L, 1);
+        lua_Region_Show(L);
+    }
+    return 0;
 }
 int lua_Cooldown_GetCooldownTimes(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     // Milliseconds, which is what this one answers in.
-    lua_pushnumber(L, w ? w->cooldownClock.start * 1000.0 : 0.0);
-    lua_pushnumber(L, w ? w->cooldownClock.duration * 1000.0 : 0.0);
+    lua_pushnumber(L, w ? static_cast<lua_Number>(w->cooldown.startMs) : 0.0);
+    lua_pushnumber(L, w ? static_cast<lua_Number>(w->cooldown.durationMs) : 0.0);
     return 2;
 }
 int lua_Cooldown_Clear(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->cooldownClock = {};
+    if (auto* w = widgetOf(L, 1)) w->cooldown = {};
     return 0;
 }
 
@@ -11250,9 +11293,7 @@ static int lua_CreateFrame(lua_State* L) {
             // explicit SetOrientation from the XML still overrides this, since
             // the emitter writes it after the frame is created.
             if (w->isSlider) w->barVertical = true;
-            w->isCooldown = (ft == "Cooldown");
-            if (w->isCooldown)
-                if (auto* engine = engineFrom(L)) engine->noteCooldown(id);
+            if (ft == "Cooldown") tree->markCooldownFrame(id);
             w->isMovieFrame = (ft == "MovieFrame");
             // Marked at creation rather than only when a child is set, so a
             // scroll frame clips what is under it even while it is empty.
@@ -11616,7 +11657,6 @@ void LuaEngine::shutdown() {
         editBoxes_.clear();
         attributesAllowed_.clear();
         changedTooltipUnits_.clear();
-        cooldowns_.clear();
         editDragWid_ = 0;
         toldOnce_ = false;
         hoverWid_ = 0;
@@ -13908,7 +13948,7 @@ void LuaEngine::registerCoreAPI() {
         // its icon and a letter that had been sent kept all of them.
         "        if tex == nil or tex == false then\n"
         "            local existing = self[key]\n"
-        "            if type(existing) == 'table' then existing:SetTexture(nil) end\n"
+        "            if type(existing) == 'table' then existing:SetTexture(nil) __WoweeSetButtonArt(existing, '') end\n"
         "        end\n"
         "        self[key] = tex\n"
         "    end\n"
@@ -17009,27 +17049,35 @@ void LuaEngine::fireCursorChanged(uint32_t wid) {
 
 void LuaEngine::pressInEditBox(uint32_t wid, float x, float y) {
     // 0x00967cd0: the caret where it was pressed, and the highlight begun there.
+    settleTextChanged(wid);   // 0x00967020
+    widgets_.resolveWidget(wid);
     auto* w = widgets_.get(wid);
-    if (!w || w->rectW <= 0.0f) return;
+    if (!w || !w->isEditBox || w->rectW <= 0.0f || w->rectH <= 0.0f) return;
     w->cursorPos = wowee::ui::editBoxPlaceAt(*w, x, y);
     w->hasSelection = false;
     editDragWid_ = wid;
-    editDragFrom_ = w->cursorPos;
     fireCursorChanged(wid);
 }
 
 void LuaEngine::dragInEditBox(float x, float y) {
     auto* w = widgets_.get(editDragWid_);
-    if (!w || editDragWid_ != focusedWid_ || !w->visible) {
+    if (!w || !w->visible) {
         editDragWid_ = 0;
         return;
     }
-    const size_t at = wowee::ui::editBoxPlaceAt(*w, x, y);
-    if (at == w->cursorPos) return;
-    w->cursorPos = at;
-    w->selStart = std::min(at, editDragFrom_);
-    w->selEnd = std::max(at, editDragFrom_);
-    w->hasSelection = w->selEnd > w->selStart;
+    // While the pointer is over it (0x00965660; 0x0048f950 -> 0x0048f730).
+    if (x < w->left || x > w->left + w->rectW || y < w->bottom || y > w->bottom + w->rectH) return;
+    const size_t len = w->editText.size();
+    const size_t caret = std::min(w->cursorPos, len);
+    const size_t target = wowee::ui::editBoxPlaceAt(*w, x, y);
+    if (target == caret) return;
+    ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
+    if (!sel.active || sel.stop <= sel.start || sel.stop > len) sel = {true, caret, caret};
+    sel = ui::dragSelection(caret, sel, target);
+    w->cursorPos = target;   // 0x00963350
+    w->hasSelection = sel.active;
+    w->selStart = sel.start;
+    w->selEnd = sel.stop;
     fireCursorChanged(editDragWid_);
 }
 
@@ -18094,7 +18142,7 @@ void LuaEngine::dispatchFrameChar(const char* utf8) {
     }
 }
 
-bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
+bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down, bool repeat) {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return false;
     const std::string key = wowKeyName(sdlKeycode);
@@ -18111,6 +18159,11 @@ bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
         callFrameScript(id, "OnKeyUp", key.c_str());
         return true;
     }
+
+    // 0x00494530: a repeat goes to the frame that took the press (+0x9c,
+    // which for a frame does nothing, 0x004899f0) and to no other. Each one
+    // was a press of its own, and M held opened the world map and closed it.
+    if (repeat) return frameKeysHeld_.count(sdlKeycode) != 0;
 
     // 0x0048fb80: one with a script for the press or for the release.
     const uint32_t id = topKeyboardFrame("OnKeyDown", "OnKeyUp");
@@ -18505,9 +18558,6 @@ void LuaEngine::tellVisibility(uint32_t id, bool up, bool shown) {
         lua_settop(L_, top);
     }
     if (auto* button = widgets_.get(id); button && !up) button->mouseButtonState(false);   // 0x0096f410
-    // A toplevel frame comes to the front as it is shown, before its OnShow
-    // (0x00490410).
-    if (const auto* window = widgets_.get(id); up && window && window->topLevel) widgets_.raise(id);
     if (auto* model = widgets_.get(id); model && model->isPlayerModel()) {
         widgets_.modelFrameVisible(id, up);
         if (up && model->modelSource == ui::Widget::ModelSource::Unit)
@@ -18653,23 +18703,18 @@ bool LuaEngine::dispatchMouseWheel(float x, float y, float delta) {
     if (delta == 0.0f) return false;
     const float travel = delta * wheelSensitivity_;
 
-    // Up from whatever is under the cursor to the first frame that asked for
-    // the wheel. WoW works the same way: a scroll frame's child fills it and
-    // takes the hit, and the scroll frame above is what handles the wheel.
-    // The wheel's own hit test. A scroll frame enables the wheel and not the
-    // mouse - UIPanelScrollFrameTemplate declares OnMouseWheel and never calls
-    // EnableMouse - so the plain hit test could not see one, and this walk
-    // started from whatever mouse-enabled child happened to be under the
-    // cursor or, over the empty parts of a panel, from nothing at all. The
-    // talent tree is all empty parts between its buttons.
+    // Down the frames that take the wheel, the topmost first, to one that has
+    // an OnMouseWheel (0x00494890 -> 0x0048f730, then +0xb4: 0x0048fdb0, which
+    // says no without one). What takes only the mouse is not in that list and
+    // covers nothing: a list's rows are buttons beside the scroll frame and
+    // not in it, and the wheel over one of them went up its parents, past the
+    // scroll frame under the cursor.
     //
     // Taken even when this event made no whole notch: it is still the
     // interface's travel, and the camera must not zoom on it.
-    uint32_t wid = widgets_.hitTestWheel(x, y);
-    while (wid != 0) {
+    for (const uint32_t wid : widgets_.wheelFramesAt(x, y)) {
         const auto* w = widgets_.get(wid);
-        if (!w) break;
-        if (w->wheelEnabled) {
+        if (w && frameHasScript(wid, "OnMouseWheel")) {
             // A frame whose scroll bar has been seen moving glides it, by
             // fractions of a notch - see glideWheel.
             if (glideWheel(wid, travel)) {
@@ -18731,7 +18776,6 @@ bool LuaEngine::dispatchMouseWheel(float x, float y, float delta) {
             }
             return true;
         }
-        wid = w->parent;
     }
     // Nothing here to scroll: what was gathered belongs to no window.
     wheelCarry_ = 0.0f;
@@ -18762,6 +18806,10 @@ bool LuaEngine::glideWheel(uint32_t wheelFrame, float notches) {
         wheelBindings_.erase(it);
         return false;
     }
+    // A bar that is not shown is the handler's business: one that scrolls by a
+    // shown bar leaves alone a list without one (hybridscrollframe.lua 46), and
+    // gliding the bar behind its back scrolled a short list into the empty.
+    if (!bar->visible) return false;
     const float from = wheelGlide_.slider == binding.slider ? wheelGlide_.target : bar->barValue;
     const float lo = std::min(bar->barMin, bar->barMax);
     const float hi = std::max(bar->barMin, bar->barMax);
@@ -19080,7 +19128,9 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                                  : (i == 1) ? cand->dragRight
                                             : false;
                 if (takes) { owner = id; break; }
-                if (cand->isSlider) { stoppedAtSlider = true; break; }
+                // An edit box likewise: it selects (0x00965660), and what it
+                // is in stays where it is.
+                if (cand->isSlider || cand->isEditBox) { stoppedAtSlider = true; break; }
                 id = cand->parent;
             }
             const float mx = x - pressX_[i], my = y - pressY_[i];
@@ -19124,11 +19174,9 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
         }
     }
 
-    // An edit box's highlight follows it too, from where it was pressed.
-    if (editDragWid_ != 0) {
-        if (buttonDown_[0]) dragInEditBox(x, y);
-        else editDragWid_ = 0;
-    }
+    // An edit box selects from where the press was to where the pointer is,
+    // for as long as that is held (+0x2ec from 0x00967cd0 to 0x00962c80).
+    if (buttonDown_[0] && buttons.left && editDragWid_ != 0 && draggingWid_ == 0) dragInEditBox(x, y);
 
     // A slider follows the cursor for as long as it is held, which is the only
     // widget where what happens between press and release is the point. The
@@ -19245,12 +19293,15 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             // Escape and Enter are what give the keyboard back, as they do in
             // WoW.
             if (b.name && std::strcmp(b.name, "LeftButton") == 0) {
+                editDragWid_ = 0;
                 for (uint32_t id = hit; id != 0;) {
                     const auto* cand = widgets_.get(id);
                     if (!cand) break;
+                    // The caret goes where the press is, before the box gets
+                    // the keyboard (0x00967cd0).
                     if (cand->isEditBox && cand->visible) {
-                        setEditFocus(id);
                         pressInEditBox(id, x, y);
+                        setEditFocus(id);
                         break;
                     }
                     id = cand->parent;
@@ -19318,6 +19369,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             }
         } else if (!b.down && buttonDown_[i]) {
             buttonDown_[i] = false;
+            if (i == 0) editDragWid_ = 0;
             if (worldPresses_.up(static_cast<size_t>(i)))
                 if (const auto* world = widgets_.findByName("WorldFrame"); world && world->visible)
                     callFrameScript(world->id, "OnMouseUp", b.name);
@@ -19725,24 +19777,6 @@ void LuaEngine::settleTextChanged(uint32_t wid) {
     if (const auto userInput = textChanges_.takeOf(wid)) fireTextChanged(wid, *userInput);
 }
 
-void LuaEngine::advanceCooldowns() {
-    const double now = core::appTimeSeconds();
-    for (const uint32_t id : cooldowns_) {
-        auto* w = widgets_.get(id);
-        if (!w || !w->visibleChain || !ui::cooldown::advance(w->cooldownClock, w->cooldownReverse, now)) continue;
-        // Its flash is over (0x0048f620).
-        taint::Scope secure(0);
-        const int top = lua_gettop(L_);
-        pushFrameByWid(L_, id);
-        if (lua_istable(L_, -1)) {
-            lua_getfield(L_, -1, "Hide");
-            lua_pushvalue(L_, -2);
-            if (taint::callProtected(L_, 1, 0, 0) != 0) recordScriptError(L_, "Cooldown:Hide");
-        }
-        lua_settop(L_, top);
-    }
-}
-
 void LuaEngine::refreshUnitTooltip() {
     // 0x00512ab0: while it shows one of them and is not fading.
     const auto changed = std::exchange(changedTooltipUnits_, {});
@@ -19804,9 +19838,9 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     drainPendingTextChanged();
     for (const uint32_t id : editBoxes_)
         if (const auto* w = widgets_.get(id); w && w->editMultiLine && w->visibleChain) fitEditBox(id);
-    advanceCooldowns();
     advanceWheelGlide(elapsed);
     tickTooltipFades(L_, elapsed);
+    tickCooldowns(L_);
     tickDestructibleBar(L_);
 
     // The action bars' usability, rewritten and announced on a change

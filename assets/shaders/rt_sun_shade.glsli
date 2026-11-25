@@ -1,0 +1,27 @@
+// How the sun's (or the moon's) shadow scales a colour lit by it, for what is
+// drawn after the trace; rt_apply does the same to what the G-buffer holds.
+// Only what GLSL and GLM write alike, so that the unit test runs this file
+// itself (test_rt_gbuffer).
+
+// The shadow variants' scale of the whole colour: 0.7 + 0.3 x the light let
+// through as the client has it, (1 - k) + k x it where it is traced.
+float rtShadeScale(float weight, float shadow, float k) {
+    return mix(0.7 + 0.3 * shadow, (1.0 - k) + k * shadow, weight);
+}
+
+// That scale with the direct light's share of the colour - the direct light
+// over it and the ambient - going by the traced light alone: where the sun
+// does not reach there is none of it, and the rest keeps the darkening
+// (rt_apply's tune6).
+vec3 rtDirectShade(float weight, float shadow, float scale, vec3 ambient, vec3 direct) {
+    vec3 share = clamp(direct / max(ambient + direct, vec3(1e-4)), vec3(0.0), vec3(1.0));
+    return mix(vec3(scale), vec3(mix(scale, shadow, weight)), share);
+}
+
+// The sun's visibility at a unit drawn see-through, which the trace holds
+// nothing of: the shadow map's light at its fragment, whole, as the traced
+// visibility would be - not the map's strength, which keeps a fifth of the sun
+// in every shadow - or without a map what the trace found right behind it.
+float rtSeeThroughSun(bool mapOn, float map, float behind) {
+    return mapOn ? map : behind;
+}

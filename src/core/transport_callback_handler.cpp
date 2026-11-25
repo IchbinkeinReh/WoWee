@@ -50,7 +50,8 @@ void TransportCallbackHandler::setupCallbacks() {
         if (renderer_.getCameraController()) {
             // Taxi callback now provides render-space yaw directly.
             float yawDegrees = glm::degrees(yaw);
-            renderer_.getCameraController()->setFacingYaw(yawDegrees);
+            // The camera's yaw is off the facing, and turns with it.
+            renderer_.getCameraController()->faceInFlight(yawDegrees);
             renderer_.setCharacterYaw(yawDegrees);
             // Set mount pitch and roll for realistic flight animation
             if (auto* ac = renderer_.getAnimationController()) ac->setMountPitchRoll(pitch, roll);

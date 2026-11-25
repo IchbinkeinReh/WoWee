@@ -573,6 +573,9 @@ struct LootRollEntry {
     uint32_t slot          = 0;
     uint32_t itemId        = 0;
     std::string itemName;
+    /// What the item rolled (+0x20, +0x24).
+    int32_t  randomPropertyId = 0;
+    uint32_t randomSuffix  = 0;
     uint8_t  itemQuality   = 0;
     uint32_t rollCountdownMs = 60000;
     uint8_t  voteMask      = 0xFF;

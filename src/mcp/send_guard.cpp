@@ -407,26 +407,44 @@ std::vector<std::string> gmWords(std::string_view text) {
 
 }  // namespace
 
-bool gmCommandWantsPlayer(std::string_view text) {
+bool gmCommandOnlyTells(std::string_view text) {
     const std::vector<std::string> words = gmWords(text);
     if (words.empty()) return false;
     const std::string sub = words.size() > 1 ? words[1] : std::string();
-    if (isOneOf(words[0], {"learn", "unlearn", "levelup", "maxskill", "cooldown", "revive", "additem", "quest", "save",
-                           "combatstop"})) {
-        return true;
-    }
-    if (words[0] == "modify" || words[0] == "mod") {
-        return isOneOf(sub, {"money", "honor", "reputation", "talentpoints", "drunk"});
-    }
+    if (isOneOf(words[0], {"gps", "lookup", "distance", "help", "commands", "server"})) return true;
+    if (words[0] == "npc") return isOneOf(sub, {"info", "near"});
+    if (words[0] == "gobject" || words[0] == "gobj") return isOneOf(sub, {"info", "near", "target"});
     return false;
+}
+
+std::optional<uint64_t> selectionOf(std::string_view opcode, std::span<const uint8_t> payload) {
+    if (opcode != "CMSG_SET_SELECTION") return std::nullopt;
+    Reader r(payload);
+    const uint64_t guid = r.u64();
+    // One that cannot be read selects somebody, as far as anybody here knows.
+    return r.ok() ? guid : ~uint64_t{0};
 }
 
 Verdict judgeGmCommand(std::string_view text, const GuardContext& context) {
     const std::vector<std::string> words = gmWords(text);
     if (words.empty()) return never("an empty command");
     // Where somebody else is selected, a command is about them.
-    if (aimsAtOther(context.targetGuid, context)) {
-        return never("a command would be about the selected player; clear the target first");
+    const std::array<uint64_t, 2> selected = {context.targetGuid, context.selectedOnRealm};
+    for (const uint64_t guid : selected) {
+        if (aimsAtOther(guid, context)) {
+            return never("a command would be about the selected player; clear the target first");
+        }
+    }
+    // Nor about anything else that is selected: a creature takes an aura, a
+    // morph or a blow as a player does.
+    if (!gmCommandOnlyTells(text)) {
+        for (const uint64_t guid : selected) {
+            if (guid != 0 && guid != context.ownGuid) {
+                return never("the command ." + words[0] +
+                             " would be about what is selected; select the character itself (on=self) or clear the "
+                             "target first");
+            }
+        }
     }
     if (!gmWordsAllowed(words, context.ownName)) {
         return never("the command ." + words[0] + (words.size() > 1 ? " " + words[1] : std::string()) +

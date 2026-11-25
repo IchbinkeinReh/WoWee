@@ -1,4 +1,5 @@
 #include "game/replace_enchant.hpp"
+#include "game/quest_handler.hpp"
 #include "game/inventory_handler.hpp"
 #include "game/mail_ignore.hpp"
 #include "game/stationery.hpp"
@@ -564,8 +565,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         }
         uint32_t lootSlot = packet.readUInt32();
         uint32_t itemId   = packet.readUInt32();
-        /*uint32_t randSuffix =*/ packet.readUInt32();
-        (void)packet.readUInt32(); // random property
+        const uint32_t randomSuffix = packet.readUInt32();
+        const auto randomProperty = static_cast<int32_t>(packet.readUInt32());
         const uint32_t itemCount = hasItemCount ? packet.readUInt32() : 1;
         uint32_t countdown = packet.readUInt32();
         uint8_t  voteMask  = packet.readUInt8();
@@ -582,6 +583,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         LootRollEntry& roll = beginLootRoll(objectGuid, lootSlot);
         roll.itemId = itemId;
         roll.itemName = itemName;
+        roll.randomPropertyId = randomProperty;
+        roll.randomSuffix = randomSuffix;
         roll.itemQuality = quality;
         roll.rollCountdownMs = countdown;
         roll.voteMask = voteMask;
@@ -6528,24 +6531,8 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             if (wanted) owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
         }
 
-        // A quest's item icons are drawn before their items are known - the
-        // query goes out when the panel opens and lands after it has drawn - so
-        // without this they stayed blank until something else redrew them.
-        // Fired only while a quest window is up: the query runs hundreds of
-        // times over a login, and the handler is only interesting when there is
-        // a panel to refresh.
-        //
-        // All four panels, not two. The progress page is the one that shows
-        // what a quest is asking for, and it was the one missing - worse, it
-        // clears the details and gossip flags as it opens, so neither of the
-        // two that were listed could stand in for it. Its required item was a
-        // blank square for as long as the window stayed up.
-        if (owner_.isQuestDetailsOpen() || owner_.isGossipWindowOpen() ||
-            owner_.isQuestRequestItemsOpen() || owner_.isQuestOfferRewardOpen()) {
-            if (owner_.addonEventCallbackRef()) {
-                owner_.addonEventCallbackRef()("QUEST_ITEM_UPDATE", {});
-            }
-        }
+        // A quest window's item drawn before its record was there.
+        if (auto* quests = owner_.getQuestHandler()) quests->questItemAnswered(data.entry);
 
         // Mail rows that were waiting on this item, told again
         // (MAIL_INBOX_UPDATE): an auction subject names an item entry rather
@@ -7915,6 +7902,9 @@ bool InventoryHandler::resolvePlayerEquipment(
         invTypes[static_cast<size_t>(slot)] = invType;
         ++resolved;
     }
+    // Drawn as the unit in the world is: without a helm or a cloak not shown.
+    player_display::applyHidden(player_display::hideBits(owner_.isHelmVisible(), owner_.isCloakVisible()), displayIds,
+                                invTypes);
     return resolved > 0;
 }
 

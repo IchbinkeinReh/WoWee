@@ -85,9 +85,10 @@ std::vector<size_t> editLines(const std::string& s, float width, Measure measure
 }
 
 /// The place in a line `x` from its start (0x00482510): after the letters that
-/// fit before it.
+/// fit before it; to the left of it, the text's start (0x00964790).
 template <typename Measure>
 size_t editPlaceIn(const std::string& s, const std::vector<size_t>& starts, size_t line, float x, Measure measure) {
+    if (x < 0.0f) return 0;
     const size_t start = starts[std::min(line, starts.size() - 1)];
     const size_t end = editLineEnd(s, starts, std::min(line, starts.size() - 1));
     const bool wrapped = line + 1 < starts.size() && end == starts[line + 1];

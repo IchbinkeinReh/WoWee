@@ -65,8 +65,14 @@ public:
     void checkAreaTriggers();
 
     // Transport attachment
-    /// Each vehicle's passengers where it carries them (passengerPlace).
+    /// Each vehicle's passengers where it carries them (passengerPlace), the
+    /// player too.
     void carryVehiclePassengers();
+    /// The place on its vehicle a passenger holds, in the world; none for one
+    /// in no vehicle, or whose place in it is not known.
+    [[nodiscard]] std::optional<glm::vec3> seatPlace(uint64_t guid) const;
+    /// The place a create block gives the player on its vehicle.
+    void noteSeatOffset(uint64_t guid, uint64_t vehicle, const glm::vec3& wireOffset);
     void setTransportAttachment(uint64_t childGuid, ObjectType type, uint64_t transportGuid,
                                 const glm::vec3& localOffset, bool hasLocalOrientation,
                                 float localOrientation,
@@ -87,6 +93,10 @@ public:
     [[nodiscard]] bool farSightAnnounced() const { return farSightAnnounced_; }
     /// Whether a unit's move spline from its monster move still runs (+0xbc).
     [[nodiscard]] bool onMoveSpline(uint64_t guid);
+    /// The spline in a unit's create or movement block, or none: the one it
+    /// was on goes either way (0x006f1520). `queuedMs`: how long ago the
+    /// block was read.
+    void takeBlockSpline(const UpdateBlock& block, const std::shared_ptr<Entity>& entity, uint32_t queuedMs);
     /// The flags of a unit's move spline while it still runs.
     [[nodiscard]] std::optional<uint32_t> moveSplineFlags(uint64_t guid);
     /// The flags of the unit's move spline as the client keeps it (+0xbc),
@@ -188,7 +198,7 @@ public:
     /// after the request, and taking that at face value re-mounts them.
     [[nodiscard]] bool isDismountPending() const { return dismountGraceRemaining_ > 0.0f; }
     void clearDismountPending() { dismountGraceRemaining_ = 0.0f; }
-    [[nodiscard]] bool isTaxiMountActive() const { return taxiMountActive_; }
+    [[nodiscard]] bool isTaxiMountActive() const { return taxiMountActive_ || onTaxiFlight_; }
     [[nodiscard]] bool isTaxiActivationPending() const { return taxiActivatePending_; }
     void forceClearTaxiAndMovementState();
     [[nodiscard]] const std::string& getTaxiDestName() const { return taxiDestName_; }
@@ -258,6 +268,14 @@ public:
     }
 
     void updateClientTaxi(float deltaTime);
+    /// Off any flight and off any route of one, as a login or another map
+    /// finds the player; the server says again when it has them fly.
+    void forgetTaxi();
+    /// The splines of a world left: their clock and their units are gone.
+    void forgetMoveSplines() { moveSplines_.clear(); }
+    /// Where the server put the player, canonical: what the next packet with a
+    /// place in it is measured by (noteOutgoingPlace).
+    void noteServerPlace(const glm::vec3& canonical) { knownPlace_ = canonical; }
     // Ends the active client-simulated taxi flight. See the definition in
     // movement_handler.cpp for what snapToFinalWaypoint means - callers outside
     // MovementHandler (SMSG_DISMOUNT / UNIT_FIELD_MOUNTDISPLAYID handlers reacting
@@ -386,6 +404,8 @@ private:
         glm::vec3 offset{0.0f};
     };
     std::unordered_map<uint64_t, SeatOffset> seatOffsets_;
+    /// 0x0073c8e0 -> 0x006ed7e0: a server's move ends the fall the mover is in.
+    void endFallForServerMove(uint64_t guid, bool hasPath);
     void sendWorldportAck();
     void sendTeleportAck(const TeleportAckGate::Ack& pending);
 
@@ -415,6 +435,9 @@ private:
     /// The movement a forced change of `guid` lands on: the mover's, or the
     /// player's held one while another unit moves; none for another unit.
     [[nodiscard]] MovementInfo* movementFor(uint64_t guid);
+    /// Its movement as it goes out now: while a spline carries the unit, at
+    /// the place the spline has it at this moment.
+    [[nodiscard]] MovementInfo movementNow(uint64_t guid) const;
     void handleForceMoveRootState(network::Packet& packet, bool rooted);
     void handleMoveKnockBack(network::Packet& packet);
     /// An event of the player's own movement, handed to its animation
@@ -430,6 +453,9 @@ private:
     [[nodiscard]] uint64_t playerFarsight() const;
     /// A unit's move spline from its monster move (+0xbc, 0x0098c770), and
     /// whether it still runs: not let go (+0x20 0x400) nor run out.
+    /// How a transport's axes - the wire's - lie in the world now; none where
+    /// it is not there.
+    [[nodiscard]] std::optional<glm::mat4> transportFrame(uint64_t transportGuid) const;
     void noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs,
                         uint32_t splineId = 0);
     /// The movement of `guid` as the client keeps it: movementInfo for the
@@ -457,6 +483,21 @@ private:
     // to the path start and sets taxiClientActive_. Only called once
     // SMSG_ACTIVATETAXIREPLY confirms success - see activateTaxi()'s comment.
     void beginTaxiFlightMotion();
+    /// A 3.3.5 flight is the server's: UNIT_FLAG_TAXI_FLIGHT says the player
+    /// is on one, and the splines of SMSG_MONSTER_MOVE carry them along it
+    /// (0x0073c8e0), each reported with CMSG_MOVE_SPLINE_DONE as it ends. A
+    /// flight to another map is two of them: the server moves the player over
+    /// on the first one's report. The route in the tables is never flown.
+    void updateServerTaxi(float deltaTime);
+    void endServerTaxi();
+    /// Whether the unit a forced change names is there to take it and answer
+    /// it. 0x00732450, the handler of all of them, looks it up (0x004d4db0)
+    /// and has nothing to do with one that is not: no answer goes out.
+    [[nodiscard]] bool unitForForcedChange(uint64_t guid, const char* name);
+    /// Says so in the log when a place about to be told the server is nowhere
+    /// near the last one it or we named.
+    void noteOutgoingPlace(uint16_t wireOp, const MovementInfo& canonical);
+    [[nodiscard]] bool playerTaxiFlag() const;
     bool restoreWorldTransferFallbackIfNearOrigin(const char* context);
 
     GameHandler& owner_;
@@ -539,6 +580,11 @@ private:
     ShowTaxiNodesData currentTaxiData_;
     uint64_t taxiNpcGuid_ = 0;
     bool onTaxiFlight_ = false;
+    /// The flight's UNIT_FLAG_TAXI_FLIGHT has been there (updateServerTaxi);
+    /// until then the accepted request stands for it, for so long.
+    bool taxiFlagSeen_ = false;
+    std::optional<glm::vec3> knownPlace_;
+    float taxiFlagWait_ = 0.0f;
     std::string taxiDestName_;
     // Set in activateTaxi(); used by finishClientTaxiFlight() to snap to the
     // destination TaxiNodes.dbc entry's own registered position rather than

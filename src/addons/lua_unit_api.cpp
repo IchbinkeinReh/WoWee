@@ -3863,27 +3863,49 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"GetShapeshiftFormInfo", [](lua_State* L) -> int {
             // GetShapeshiftFormInfo(index) → icon, name, isActive, isCastable
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || index < 1) { return luaReturnNil(L); }
-            uint8_t classId = gh->getPlayerClass();
-            uint8_t currentForm = gh->getShapeshiftFormId();
+            const double asked = lua_isnumber(L, 1) ? lua_tonumber(L, 1) : 0.0;
+            if (asked == 0.0) return luaL_error(L, "Usage: GetShapeshiftFormInfo(index)");
+            const int index = static_cast<int>(asked);
+            if (!gh || index < 1) return 0;
 
             // The one table CastShapeshiftForm and GetNumShapeshiftForms
             // also read, filtered the same way. The bar walks
             // 1..GetNumShapeshiftForms() and asks about each index, so all
             // three have to be looking at the same list in the same order.
-            const auto forms = game::knownShapeshiftForms(classId, gh->getKnownSpells());
-            if (static_cast<size_t>(index) > forms.size()) { return luaReturnNil(L); }
-            const auto& fi = forms[static_cast<size_t>(index) - 1];
-            // 0x0053de90: active is 0x00802cb0's answer, the form's spell's
-            // aura on the player - not a form id, which a stance or presence
-            // may not even set.
-            const bool active = game::isPreWotlk() ? currentForm == fi.formId
-                                                   : gh->formSpellInEffect(fi.spellId);
-            lua_pushstring(L, fi.icon);                          // icon
-            lua_pushstring(L, fi.name);                          // name
-            luaPushOneOrNil(L, active ? 1 : 0);                  // isActive
-            luaPushOneOrNil(L, 1);                               // isCastable
+            const auto spells = gh->stanceBarSpells();
+            if (static_cast<size_t>(index) > spells.size()) return 0;
+            const uint32_t spell = spells[static_cast<size_t>(index) - 1];
+            if (game::isPreWotlk()) {
+                const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
+                const auto& fi = forms[static_cast<size_t>(index) - 1];
+                lua_pushstring(L, fi.icon);
+                lua_pushstring(L, fi.name);
+                luaPushOneOrNil(L, gh->getShapeshiftFormId() == fi.formId ? 1 : 0);
+                luaPushOneOrNil(L, 1);
+                return 4;
+            }
+            // 0x0053de90: active is 0x00802cb0's answer - not a form id, which
+            // a presence or an aura does not set. Active, the spell shows its
+            // ActiveIconID's icon, else its own; its name is Spell.dbc's.
+            // Castable is active, or usable (0x0080b5d0) and paid for
+            // (0x008017e0).
+            const bool active = gh->formSpellInEffect(spell);
+            const auto& cache = gh->spellNameCacheRef();
+            const auto it = cache.find(spell);
+            const uint32_t activeIcon = active && it != cache.end() ? it->second.activeIconId : 0;
+            const std::string icon = activeIcon != 0 ? gh->getIconPath(activeIcon) : gh->getSpellIconPath(spell);
+            bool castable = active;
+            if (!castable) {
+                auto* sh = gh->getSpellHandler();
+                const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+                castable = sh && player && player->isUnit() && sh->spellUsable(spell, nullptr) &&
+                           sh->enoughPower(spell, static_cast<const game::Unit&>(*player));
+            }
+            if (icon.empty()) lua_pushnil(L);
+            else lua_pushstring(L, icon.c_str());
+            lua_pushstring(L, gh->getSpellName(spell).c_str());
+            luaPushOneOrNil(L, active ? 1 : 0);
+            luaPushOneOrNil(L, castable ? 1 : 0);
             return 4;
         }},
                 {"UnitIsPVP", [](lua_State* L) -> int {

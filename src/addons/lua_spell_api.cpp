@@ -893,6 +893,9 @@ static int lua_CastSpellByName(lua_State* L) {
     if (!gh) return 0;
     const char* name = luaL_checkstring(L, 1);
     if (!name || !*name) return 0;
+    // "!Name" casts it whether it is on or not (0x00540310 -> 0x0080da40).
+    const bool outright = *name == '!';
+    if (outright) ++name;
 
     const uint32_t bestId = highestKnownRankByName(gh, name);
     if (bestId != 0) {
@@ -903,8 +906,11 @@ static int lua_CastSpellByName(lua_State* L) {
         // or the cursor holds the spell for "none"), and what is no unit at
         // all casts nothing.
         const auto target = unitAskedOrTarget(L, gh, 2);
-        // 0x00540310 -> 0x0080da40 -> 0x0080cce0, which asks the taint check.
-        if (target && spellCastAllowed(L, gh, bestId)) gh->castSpell(bestId, *target);
+        // 0x00540310 -> 0x0080da80 -> 0x0080cce0, which asks the taint check.
+        if (target && spellCastAllowed(L, gh, bestId)) {
+            if (outright) gh->castSpell(bestId, *target);
+            else gh->useSpell(bestId, *target);
+        }
     }
     return 0;
 }
@@ -1107,9 +1113,10 @@ static int lua_CastSpell(lua_State* L) {
     // named outright rather than spelled as a zero target, which is how some of
     // the self-casts here ask.
     const bool selfCast = lua_toboolean(L, 3) != 0;
-    // 0x00541250 -> 0x0053bc40 -> 0x0080cce0, which asks the taint check.
+    // 0x00541250 -> 0x0053bc40 -> 0x0080da80 -> 0x0080cce0, which asks the
+    // taint check.
     if (id != 0 && spellCastAllowed(L, gh, id))
-        gh->castSpell(id, selfCast ? gh->getPlayerGuid() : gh->getTargetGuid());
+        gh->useSpell(id, selfCast ? gh->getPlayerGuid() : gh->getTargetGuid());
     return 0;
 }
 
@@ -1381,26 +1388,6 @@ static uint64_t& targetDirectionChosen() {
     return chosen;
 }
 
-/// CreatureType.dbc's flag 1 (critters, companions, gas clouds): never chosen.
-static bool creatureTypeSkipped(game::GameHandler* gh, uint32_t creatureType) {
-    static std::unordered_map<uint32_t, uint32_t> flags;
-    static bool loaded = false;
-    if (!loaded) {
-        auto* am = gh ? gh->services().assetManager : nullptr;
-        if (am && am->isInitialized()) {
-            loaded = true;
-            if (auto dbc = am->loadDBCOptional("CreatureType.dbc"); dbc && dbc->getFieldCount() >= 2) {
-                const uint32_t last = dbc->getFieldCount() - 1;
-                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
-                    flags[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, last);
-                }
-            }
-        }
-    }
-    auto it = flags.find(creatureType);
-    return it != flags.end() && (it->second & 1u) != 0;
-}
-
 static int targetDirection(lua_State* L, bool enemy) {
     if (!lua_isnumber(L, 1)) {
         return luaL_error(L, enemy ? "Usage: TargetDirectionEnemy(facing)"
@@ -1457,7 +1444,7 @@ static int targetDirection(lua_State* L, bool enemy) {
             if (!gh->unitMayAssist(playerGuid, guid) || unit->getHealth() < 1) continue;
         }
         if (entity->getType() == game::ObjectType::UNIT &&
-            creatureTypeSkipped(gh, gh->getCreatureType(unit->getEntry()))) {
+            (gh->creatureTypeFlags(gh->getCreatureType(unit->getEntry())) & 1u) != 0) {
             continue;
         }
         candidates.push_back({guid, worldOf(*entity)});
@@ -1967,16 +1954,12 @@ void registerSpellLuaAPI(lua_State* L) {
         }},
                 {"CastShapeshiftForm", [](lua_State* L) -> int {
             // CastShapeshiftForm(index) (0x0053c0f0): a non-zero number or the
-            // usage line, rounded; the spell for that form slot.
+            // usage line, its fraction dropped; the spell of that place.
             const double asked = lua_isnumber(L, 1) ? lua_tonumber(L, 1) : 0.0;
             if (asked == 0.0) return luaL_error(L, "Usage: CastShapeshiftForm(index)");
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(std::lround(asked));
-            if (!gh || index < 1) return 0;
-            uint8_t classId = gh->getPlayerClass();
-            const auto forms = game::knownShapeshiftForms(classId, gh->getKnownSpells());
-            if (static_cast<size_t>(index) > forms.size()) return 0;
-            gh->castSpell(forms[static_cast<size_t>(index) - 1].spellId, 0);
+            const int index = static_cast<int>(asked);
+            if (gh && index >= 1) gh->castStanceBarSpell(static_cast<size_t>(index) - 1);
             return 0;
         }},
                 {"CancelShapeshiftForm", [](lua_State* L) -> int {
@@ -2004,25 +1987,21 @@ void registerSpellLuaAPI(lua_State* L) {
             // field is clear.
             const uint8_t formField = gh->getShapeshiftFormId();
             if (lua_toboolean(L, 1) && formField == 0) return luaReturnZero(L);
-            const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
+            const auto forms = gh->stanceBarSpells();
             std::vector<bool> active;
             active.reserve(forms.size());
-            for (const auto& form : forms) active.push_back(gh->formSpellInEffect(form.spellId));
+            for (const uint32_t form : forms) active.push_back(gh->formSpellInEffect(form));
             lua_pushnumber(L, game::activeShapeshiftIndex(active, formField));
             return 1;
         }},
                 {"GetNumShapeshiftForms", [](lua_State* L) -> int {
-            // Return count based on player class
             auto* gh = getGameHandler(L);
             if (!gh) { return luaReturnZero(L); }
-            uint8_t classId = gh->getPlayerClass();
-            // Only the forms this character has actually learned, from the
-            // one table GetShapeshiftFormInfo and CastShapeshiftForm also read.
-            // The bar walks 1..this and asks the other two about each index, so
-            // a count taken from a different list describes one form and casts
-            // another.
-            lua_pushnumber(L, static_cast<double>(
-                game::knownShapeshiftForms(classId, gh->getKnownSpells()).size()));
+            // 0x0053c0b0: the list GetShapeshiftFormInfo and CastShapeshiftForm
+            // also read. The bar walks 1..this and asks the other two about
+            // each index, so a count taken from a different list describes one
+            // form and casts another.
+            lua_pushnumber(L, static_cast<double>(gh->stanceBarSpells().size()));
             return 1;
         }},
     };

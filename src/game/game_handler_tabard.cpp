@@ -54,10 +54,10 @@ void GameHandler::tabardFromGuildRegistrar() {
 }
 
 bool GameHandler::canShowTabard() const {
-    // 0x007202c0 for the active player: a form on its way counts as able;
-    // so does a model whose extra display (CreatureDisplayInfoExtra Flags 1)
-    // is of a race that shows tabards (ChrRaces Flags 4); else only the
-    // player's own model - the display its native one.
+    // 0x007202c0 for the active player: a form on its way counts as able; so
+    // does a display it wears its own things in (0x0071a430: the model's
+    // CreatureModelData Flags 4 at +0x970, the extra row's Flags 1); else only
+    // the player's own model - the display its native one.
     if (shapeshiftFormPending_) return true;
     const auto me = getEntityManager().getEntity(playerGuid);
     if (!me) return false;
@@ -66,21 +66,7 @@ bool GameHandler::canShowTabard() const {
         return i != 0xFFFF ? me->getField(i) : 0u;
     };
     const uint32_t display = field(UF::UNIT_FIELD_DISPLAYID);
-    if (display == field(UF::UNIT_FIELD_NATIVEDISPLAYID)) return true;
-    auto* am = services_.assetManager;
-    if (!am || !am->isInitialized()) return false;
-    const auto displays = am->loadDBCOptional("CreatureDisplayInfo.dbc");
-    const auto extras = am->loadDBCOptional("CreatureDisplayInfoExtra.dbc");
-    const auto races = am->loadDBCOptional("ChrRaces.dbc");
-    if (!displays || !extras || !races) return false;
-    const int32_t drow = displays->findRecordById(display);
-    if (drow < 0 || displays->getFieldCount() <= 3) return false;
-    const int32_t erow = extras->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 3));
-    if (erow < 0 || extras->getFieldCount() <= 19) return false;
-    if ((extras->getUInt32(static_cast<uint32_t>(erow), 19) & 0x1u) == 0) return false;
-    const int32_t rrow = races->findRecordById(extras->getUInt32(static_cast<uint32_t>(erow), 1));
-    return rrow >= 0 && races->getFieldCount() > 1 &&
-           (races->getUInt32(static_cast<uint32_t>(rrow), 1) & 0x4u) != 0;
+    return display == field(UF::UNIT_FIELD_NATIVEDISPLAYID) || ownEquipmentDisplay(display).has_value();
 }
 
 void GameHandler::activateTabardVendor(uint64_t npc) {

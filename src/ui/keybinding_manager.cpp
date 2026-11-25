@@ -126,6 +126,62 @@ void noteInterfaceConsumedKey(ImGuiKey key) {
 
 void clearInterfaceConsumedKeys() { consumedKeys().clear(); }
 
+ImGuiKey imguiKeyOf(int sdlKeycode) {
+    // SDL numbers a key that types a character by the character, and the rest
+    // by their scancode with bit 30 set.
+    if (sdlKeycode >= 'a' && sdlKeycode <= 'z') return static_cast<ImGuiKey>(ImGuiKey_A + (sdlKeycode - 'a'));
+    if (sdlKeycode >= '0' && sdlKeycode <= '9') return static_cast<ImGuiKey>(ImGuiKey_0 + (sdlKeycode - '0'));
+    constexpr int kScancode = 1 << 30;
+    const int scancode = (sdlKeycode & kScancode) != 0 ? sdlKeycode & ~kScancode : 0;
+    if (scancode >= 0x3A && scancode <= 0x45) return static_cast<ImGuiKey>(ImGuiKey_F1 + (scancode - 0x3A));
+    if (scancode >= 0x59 && scancode <= 0x61) return static_cast<ImGuiKey>(ImGuiKey_Keypad1 + (scancode - 0x59));
+    switch (scancode) {
+        case 0x46: return ImGuiKey_PrintScreen;
+        case 0x49: return ImGuiKey_Insert;
+        case 0x4A: return ImGuiKey_Home;
+        case 0x4B: return ImGuiKey_PageUp;
+        case 0x4C: return ImGuiKey_Delete;
+        case 0x4D: return ImGuiKey_End;
+        case 0x4E: return ImGuiKey_PageDown;
+        case 0x4F: return ImGuiKey_RightArrow;
+        case 0x50: return ImGuiKey_LeftArrow;
+        case 0x51: return ImGuiKey_DownArrow;
+        case 0x52: return ImGuiKey_UpArrow;
+        case 0x54: return ImGuiKey_KeypadDivide;
+        case 0x55: return ImGuiKey_KeypadMultiply;
+        case 0x56: return ImGuiKey_KeypadSubtract;
+        case 0x57: return ImGuiKey_KeypadAdd;
+        case 0x58: return ImGuiKey_Enter;  // the keypad's
+        case 0x62: return ImGuiKey_Keypad0;
+        case 0x63: return ImGuiKey_KeypadDecimal;
+        default: break;
+    }
+    switch (sdlKeycode) {
+        case 27: return ImGuiKey_Escape;
+        case '\r': return ImGuiKey_Enter;
+        case '\t': return ImGuiKey_Tab;
+        case '\b': return ImGuiKey_Backspace;
+        case 0x7F: return ImGuiKey_Delete;
+        case ' ': return ImGuiKey_Space;
+        case '\'': return ImGuiKey_Apostrophe;
+        case ',': return ImGuiKey_Comma;
+        case '-': return ImGuiKey_Minus;
+        case '.': return ImGuiKey_Period;
+        case '/': return ImGuiKey_Slash;
+        case ';': return ImGuiKey_Semicolon;
+        case '=': return ImGuiKey_Equal;
+        case '[': return ImGuiKey_LeftBracket;
+        case ']': return ImGuiKey_RightBracket;
+        case '`': return ImGuiKey_GraveAccent;
+        case 92: return ImGuiKey_Backslash;
+        default: return ImGuiKey_None;
+    }
+}
+
+void noteInterfaceConsumedKeycode(int sdlKeycode) {
+    if (const ImGuiKey key = imguiKeyOf(sdlKeycode); key != ImGuiKey_None) noteInterfaceConsumedKey(key);
+}
+
 namespace {
 /// Pumps left in which a '/' text event still counts as the echo of the key
 /// that opened the box. Two, because the event arrives in the same pump or the

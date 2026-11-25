@@ -11,9 +11,11 @@
 // It went unnoticed because the function lived inside widget_renderer.cpp with
 // ImGui, where nothing could reach it.
 #include "catch_amalgamated.hpp"
+#include "ui/edit_lines.hpp"
 #include "ui/text_markup.hpp"
 
 #include <string>
+#include <vector>
 
 using wowee::ui::parseMarkup;
 using wowee::ui::WrapRun;
@@ -629,4 +631,27 @@ TEST_CASE("the size of a picture in a text", "[markup]") {
         CHECK(r.texX == 2.0f);
         CHECK(r.texY == -1.0f);
     }
+}
+
+// 0x009631a0: the pointer dragged step by step selects from where the press was.
+TEST_CASE("dragging selects from the press to the pointer", "[markup][editbox]") {
+    size_t caret = 5;
+    wowee::ui::EditSelection sel{true, 5, 5};
+    const auto drag = [&](size_t to) {
+        sel = wowee::ui::dragSelection(caret, sel, to);
+        caret = to;
+        return std::vector<size_t>{sel.start, sel.stop};
+    };
+    using V = std::vector<size_t>;
+    CHECK(drag(6) == V{5, 6});
+    CHECK(drag(9) == V{5, 9});
+    CHECK(drag(7) == V{5, 7});
+    CHECK(drag(5) == V{5, 5});
+    CHECK_FALSE(sel.active);
+    CHECK(drag(3) == V{3, 5});
+    CHECK(drag(1) == V{1, 5});
+    CHECK(drag(4) == V{4, 5});
+    CHECK(drag(5) == V{5, 5});
+    CHECK(drag(8) == V{5, 8});
+    CHECK(sel.active);
 }

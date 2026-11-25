@@ -745,6 +745,17 @@ add_test(NAME addon_xml_compiles COMMAND framexml_compile_check
          ${CMAKE_SOURCE_DIR}/Data/interface/addons)
 set_tests_properties(addon_xml_compiles PROPERTIES SKIP_RETURN_CODE 77)
 
+# ── test_quest_log_rows ─────────────────────────────────────
+# The quest log's display list, which every quest log index counts. Header-only.
+wowee_add_test(test_quest_log_rows SOURCES test_quest_log_rows.cpp)
+
+# ── test_nearest_target_cycle ───────────────────────────────
+# Which targets the target keys go through, and in which order. Header-only.
+wowee_add_test(test_nearest_target_cycle SOURCES test_nearest_target_cycle.cpp)
+
+# Which entity a name means to the MCP tools. Header-only.
+wowee_add_test(test_mcp_pick SOURCES test_mcp_pick.cpp)
+
 # ── test_taxi_map ───────────────────────────────────────────
 # The flight map's nodes, their places and the routes over them. Header-only.
 wowee_add_test(test_taxi_map SOURCES test_taxi_map.cpp)
@@ -964,6 +975,24 @@ wowee_add_test(test_tooltip_line_strings SOURCES
     test_tooltip_line_strings.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/tooltip_line_strings.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/widget_tree.cpp
+)
+
+# ── test_memory_growth ──────────────────────────────────────
+# Which owners of memory keep growing from one map change to the next.
+wowee_add_test(test_memory_growth SOURCES
+    test_memory_growth.cpp
+)
+
+# ── test_achievement_lists ──────────────────────────────────
+# What the achievement and statistics windows list, and their numbers' text.
+wowee_add_test(test_achievement_lists SOURCES
+    test_achievement_lists.cpp
+)
+
+# ── test_row_selection ──────────────────────────────────────
+# What a list's selection is of, rather than where it was.
+wowee_add_test(test_row_selection SOURCES
+    test_row_selection.cpp
 )
 
 # ── test_text_edit ──────────────────────────────────────────
@@ -1722,6 +1751,8 @@ wowee_add_test(test_rt_reconstruct
 # the apply pass over it, against the forward shaders' own lighting formulas.
 wowee_add_test(test_rt_gbuffer
     SOURCES test_rt_gbuffer.cpp)
+target_compile_definitions(test_rt_gbuffer PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_rt_upsample ─────────────────────────────────────────
 # Header-only: how a pixel finds its own surface among the half-resolution
@@ -3564,6 +3595,13 @@ wowee_add_test(test_liquid_place
 target_compile_definitions(test_liquid_place PRIVATE
     WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
+# ── test_stream_times ────────────────────────────────────────
+# The length shown of a stream is not asked of the decoder the audio thread
+# reads. The audio library without a device.
+wowee_add_test(test_stream_times
+    SOURCES test_stream_times.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_polygon_triangulate ─────────────────────────────────
 # Ear clipping for quest blob outlines, which are regularly concave. The
 # check is that the triangles cover the ring's own area and no more.
@@ -3912,6 +3950,11 @@ if(NOT ANDROID)
     target_sources(test_game_replay PRIVATE test_game_replay_energize.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_playtest.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_quests.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_threat.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_stance_bar.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_taxi.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_spline.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_interface.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_macros.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_owner.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_pet.cpp)
@@ -4289,11 +4332,6 @@ wowee_add_test(test_glyph_socket
 wowee_add_test(test_stat_tables
     SOURCES test_stat_tables.cpp)
 
-# ── test_cooldown_sweep ──────────────────────────────────────
-wowee_add_test(test_cooldown_sweep
-    SOURCES test_cooldown_sweep.cpp
-            ${CMAKE_SOURCE_DIR}/src/ui/widget_tree.cpp)
-
 # ── test_interface_file ──────────────────────────────────────
 wowee_add_test(test_interface_file
     SOURCES test_interface_file.cpp)
@@ -4394,10 +4432,6 @@ wowee_add_test(test_loading_tip
 wowee_add_test(test_trade_skill_verb
     SOURCES test_trade_skill_verb.cpp)
 
-# ── test_reputation_tree ─────────────────────────────────────
-wowee_add_test(test_reputation_tree
-    SOURCES test_reputation_tree.cpp)
-
 # ── test_edit_typing ─────────────────────────────────────────
 # Header-only; SDL3 for the key codes it is held against.
 add_executable(test_edit_typing test_edit_typing.cpp)
@@ -4411,10 +4445,6 @@ register_test_target(test_edit_typing)
 wowee_add_test(test_item_delta_lines
     SOURCES test_item_delta_lines.cpp)
 
-# ── test_quest_log_rows ──────────────────────────────────────
-wowee_add_test(test_quest_log_rows
-    SOURCES test_quest_log_rows.cpp)
-
 # ── test_achievement_progress ────────────────────────────────
 wowee_add_test(test_achievement_progress
     SOURCES test_achievement_progress.cpp)
@@ -4422,10 +4452,6 @@ wowee_add_test(test_achievement_progress
 # ── test_skill_list ──────────────────────────────────────────
 wowee_add_test(test_skill_list
     SOURCES test_skill_list.cpp)
-
-# ── test_achievement_category ────────────────────────────────
-wowee_add_test(test_achievement_category
-    SOURCES test_achievement_category.cpp)
 
 # ── test_font_flags ──────────────────────────────────────────
 wowee_add_test(test_font_flags
@@ -4657,6 +4683,8 @@ target_include_directories(test_keybinding_defaults SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/extern/imgui
 )
 target_link_libraries(test_keybinding_defaults PRIVATE catch2_main imgui)
+target_compile_definitions(test_keybinding_defaults PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME keybinding_defaults COMMAND test_keybinding_defaults)
 register_test_target(test_keybinding_defaults)
 

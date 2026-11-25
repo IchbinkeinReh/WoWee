@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <functional>
 #include <string>
 #include <array>
 #include <vector>
@@ -155,6 +156,17 @@ enum class MoveOpcodeKind : uint8_t {
     return (0.5f * kGravity * toTerminal + v0) * toTerminal + (t - toTerminal) * terminal;
 }
 
+/// How long a fall from rest takes over a distance (0x00988220), the other
+/// way round from fallDistance.
+[[nodiscard]] inline float fallTime(float distance) noexcept {
+    constexpr float kGravity = 19.291105f;
+    constexpr float kTerminal = 60.148003f;
+    if (distance <= 0.0f) return 0.0f;
+    const float toTerminal = kTerminal * kTerminal / kGravity * 0.5f;
+    if (distance >= toTerminal) return kTerminal / kGravity + (distance - toTerminal) / kTerminal;
+    return std::sqrt(2.0f * distance / kGravity);
+}
+
 /// The jump or fall a movement packet with FALLING (0x1000) carries - its
 /// fall time and jump block - as Entity::startMoveByFlags takes it, in
 /// canonical axes.
@@ -253,7 +265,8 @@ public:
     /// `clientCurve`: the spline as the WotLK client builds it - a curve by
     /// startCurvedPath, a straight one from the packet's start.
     void startMoveAlongPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration,
-                            bool smooth = true, bool clientCurve = false) {
+                            bool smooth = true, bool clientCurve = false, bool cyclic = false,
+                            bool entersCycle = false) {
         if (packetPath.empty()) return;
         if (packetPath.size() == 1 || totalDuration <= 0.0f) {
             startMoveTo(packetPath.back()[0], packetPath.back()[1], packetPath.back()[2], destO, totalDuration);
@@ -261,7 +274,7 @@ public:
         }
         resetMotionExtras();
         if (smooth && clientCurve) {
-            startCurvedPath(packetPath, destO, totalDuration);
+            startCurvedPath(packetPath, destO, totalDuration, cyclic, entersCycle);
             return;
         }
         curvePoints_.clear();
@@ -339,12 +352,142 @@ public:
         moveEndX_ = path.back()[0]; moveEndY_ = path.back()[1]; moveEndZ_ = path.back()[2];
         moveDuration_ = totalDuration;
         moveElapsed_ = 0.0f;
+        rawDurationMs_ = nextDurationMs_ = durationMs;
+        splineCyclic_ = cyclic && clientCurve;
         // The spline's length over its duration: what the client's
         // CMovement::GetCurrentSpeed (FUN_00987570) answers for a unit on one.
         moveSpeed_ = totalDist / totalDuration;
         orientation = destO;
         isMoving_ = true;
         usePathMode_ = true;
+    }
+
+    /// A spline the unit was already on as its create or movement block came
+    /// (0x004f4b50 reads it into the block, 0x006f1520 -> 0x006f1240 makes it
+    /// the unit's). Nothing is worked out from it as a monster move's is: its
+    /// duration is the block's and its points are the client's whole array,
+    /// of which the first and the last are pads whichever kind it is - both
+    /// the curve and the straight line run from point i + 1 to i + 2
+    /// (0x004c3fd0) - so a straight one the server writes without a pad
+    /// before it is run from its second point, and one of three points stands
+    /// at its end. Straight or curved goes by the flags (0x006f1520 sets +500
+    /// by 0x42000), the segments' lengths by the block's mode (0x004f4ae0).
+    struct BlockSpline {
+        std::vector<glm::vec3> points;    // canonical, or the transport's axes (framed)
+        glm::vec3 endPoint{0.0f};         // +0x1f8
+        bool curved = false;
+        bool curvedLengths = false;
+        bool cyclic = false;
+        bool enterCycle = false;
+        bool over = false;                // run out already, whatever its time
+        bool framed = false;              // on a transport: placed by setMoveFrame
+        uint32_t durationMs = 0;          // +0x2c
+        float durationFactor = 1.0f;      // +0x204, what it is multiplied by
+        float nextDurationFactor = 1.0f;  // +0x208, the next round's
+        uint32_t passedMs = 0;
+        // Parabolic: the arc's acceleration and when it starts (+0x20c, +0x210).
+        bool arcs = false;
+        float arcAcceleration = 0.0f;
+        uint32_t arcStartMs = 0;
+        // Falling: the height the fall began at.
+        std::optional<float> fallTop;
+    };
+    void startBlockSpline(const BlockSpline& s) {
+        resetMotionExtras();
+        usePathMode_ = false;
+        activeSpline_.reset();
+        linearKeys_.clear();
+        const size_t n = s.points.size();
+        splineFramed_ = s.framed;
+        splineCyclic_ = s.cyclic;
+        splineEntersCycle_ = s.enterCycle;
+        rawDurationMs_ = s.durationMs;
+        nextDurationMs_ = scaledDuration(s.durationMs, s.enterCycle ? 1.0f : s.nextDurationFactor);
+        splineDurationMs_ = scaledDuration(s.durationMs, s.durationFactor);
+        // Where it ends is its last point, or the block's end point where that
+        // is three yards off and more (0x006e9470).
+        pathEnd_ = s.endPoint;
+        if (n >= 3) {
+            const glm::vec3 last = s.points[n == 3 ? 2 : n - 2];
+            if (s.cyclic || glm::dot(last - pathEnd_, last - pathEnd_) < 9.0f) pathEnd_ = last;
+        }
+        float length = 0.0f;
+        if (n >= 3) {
+            curvePoints_ = s.points;
+            curveLinear_ = !s.curved;
+            length = measureCurve(s.curvedLengths);
+            keepCurveKeys(length);
+            usePathMode_ = true;
+        } else {
+            curvePoints_.clear();
+            curveLengths_.clear();
+        }
+        // Arcs by the spline's time against its unmultiplied duration (0x00987d20).
+        if (s.arcs) setSplineArc(s.arcAcceleration, s.arcStartMs, s.durationMs);
+        fallTop_ = s.fallTop;
+        moveStartX_ = x; moveStartY_ = y; moveStartZ_ = z;
+        if (s.framed) { moveEndX_ = x; moveEndY_ = y; moveEndZ_ = z; }
+        else { moveEndX_ = pathEnd_.x; moveEndY_ = pathEnd_.y; moveEndZ_ = pathEnd_.z; }
+        moveDuration_ = static_cast<float>(splineDurationMs_) / 1000.0f;
+        moveElapsed_ = static_cast<float>(s.passedMs) / 1000.0f;
+        if (s.over || n < 3) moveElapsed_ = std::max(moveElapsed_, moveDuration_);
+        endAtFloor();
+        // 0x00987570: its length over its duration.
+        moveSpeed_ = s.durationMs > 0 ? length / (static_cast<float>(s.durationMs) / 1000.0f) : 0.0f;
+        isMoving_ = true;
+    }
+
+    /// The transport a spline on one is run on, as its axes lie in the world
+    /// now: the spline's place is the one on the transport, put through it
+    /// each frame (0x004f4460). Until it is given the unit stays where it is.
+    void setMoveFrame(const glm::mat4& frame) {
+        if (!isMoving_ || !splineFramed_) return;
+        moveFrame_ = frame;
+        const glm::vec3 end(frame * glm::vec4(pathEnd_, 1.0f));
+        moveEndX_ = end.x; moveEndY_ = end.y; moveEndZ_ = end.z;
+        if (moveElapsed_ >= moveDuration_) { x = end.x; y = end.y; z = end.z; }
+        else if (usePathMode_) placeOnPath();
+    }
+    [[nodiscard]] bool onFramedPath() const { return isMoving_ && splineFramed_; }
+    /// Where it ends, on its transport.
+    [[nodiscard]] glm::vec3 framedEnd() const { return pathEnd_; }
+
+    /// 0x0098ca00: a spline's duration, rounded after its factor.
+    [[nodiscard]] static uint32_t scaledDuration(uint32_t ms, float factor) {
+        const float scaled = static_cast<float>(ms) * factor + 0.5f;
+        return std::isfinite(scaled) && scaled > 0.0f && scaled < 4.0e9f ? static_cast<uint32_t>(scaled) : 0u;
+    }
+
+    /// A parabolic spline's arc (0x006e96c0): from `startMs` on the unit is
+    /// over the path by what 0x00987d20 gives for the time, coming down on it
+    /// as the spline ends. Call after the move is started.
+    void setSplineArc(float acceleration, uint32_t startMs, uint32_t durationMs) {
+        arcAcceleration_ = acceleration;
+        arcStartMs_ = startMs;
+        arcDurationMs_ = durationMs;
+    }
+
+    /// A falling spline (0x200, and not 0x800 with it): the unit is along the
+    /// path as its time says and under `top` by what a fall from rest takes
+    /// (0x00987d20 -> 0x00986f00), no lower than the path's end - and there
+    /// it is over, whatever of its time is left (0x0098ca00). `top` is where
+    /// its fall began (+0x84): told with the FALLING of a packet before, else
+    /// where it stands. Call after the move is started.
+    [[nodiscard]] std::optional<float> reportedFallTop() const {
+        return isMoving_ && movingByFlags_ && falling_ ? std::optional<float>(fallTopZ_) : std::nullopt;
+    }
+    void setSplineFall(std::optional<float> top) {
+        if (!isMoving_ || movingByFlags_ || !usePathMode_ || splineCyclic_) return;
+        fallTop_ = top.value_or(z);
+        pathEnd_ = {moveEndX_, moveEndY_, moveEndZ_};
+        endAtFloor();
+    }
+
+    /// Whom the move ends facing, asked where it ends and not before
+    /// (0x006eb0b0 looks the target up then). Call after faceAlongMove.
+    using FacingFrom = std::function<std::optional<float>(const glm::vec3& at)>;
+    void faceOnArrival(FacingFrom ask) {
+        if (isMoving_ && !movingByFlags_) arrivalFacing_ = std::move(ask);
     }
 
     // Movement interpolation (syncs entity position with renderer during movement)
@@ -613,7 +756,8 @@ public:
             orientation = *fixedFacing;
         } else if (usePathMode_ && activeSpline_) {
             faceAlongPath_ = true;
-            const math::SplineEvalResult start = pathEval(0);
+            const math::SplineEvalResult start =
+                pathEval(std::min(static_cast<uint32_t>(moveElapsed_ * 1000.0f), splineDurationMs_));
             faceDirection(start.tangent.x, start.tangent.y);
         } else {
             faceDirection(moveEndX_ - moveStartX_, moveEndY_ - moveStartY_);
@@ -671,17 +815,89 @@ public:
         return way * (moveSpeed_ / length);
     }
 
+    /// How long the path under way takes, as the client's own spline does
+    /// (0x0098c770 takes the length over the capped speed, not the packet's
+    /// duration); none where no path runs.
+    [[nodiscard]] std::optional<uint32_t> pathDurationMs() const {
+        if (!isMoving_ || !usePathMode_ || !activeSpline_) return std::nullopt;
+        if (fallTop_) return std::min(splineDurationMs_, static_cast<uint32_t>(std::lround(moveDuration_ * 1000.0f)));
+        return splineDurationMs_;
+    }
+
+    /// The path's direction now and to the place it has the unit a second on
+    /// (0x0098ca00, which banks a unit on a flying spline by the two); none
+    /// where no path runs.
+    struct PathHeading {
+        glm::vec3 tangent;
+        glm::vec3 ahead;
+    };
+    [[nodiscard]] std::optional<PathHeading> pathHeading() const {
+        if (!isMoving_ || !usePathMode_ || !activeSpline_ || splineDurationMs_ == 0 || moveElapsed_ >= moveDuration_)
+            return std::nullopt;
+        const uint32_t now = std::min(static_cast<uint32_t>(moveElapsed_ * 1000.0f), splineDurationMs_ - 1);
+        const math::SplineEvalResult at = pathEval(now);
+        const math::SplineEvalResult next =
+            pathEval(splineCyclic_ ? (now + 1000u) % splineDurationMs_ : std::min(now + 1000u, splineDurationMs_));
+        return PathHeading{.tangent = at.tangent, .ahead = next.position - at.position};
+    }
+
+    /// Where the spline carrying the unit has it `seconds` on from the moment
+    /// the unit was last moved on to; its end once that is past. None where no
+    /// spline does.
+    struct SplinePlace {
+        glm::vec3 position;
+        float orientation;
+    };
+    [[nodiscard]] std::optional<SplinePlace> splinePlaceAfter(float seconds) const {
+        if (!isMoving_ || movingByFlags_ || (splineFramed_ && !moveFrame_)) return std::nullopt;
+        float t = moveElapsed_ + std::max(seconds - startsIn_, 0.0f);
+        if (splineCyclic_ && moveDuration_ > 0.0f) t = std::fmod(t, moveDuration_);
+        if (t >= moveDuration_)
+            return SplinePlace{.position = {moveEndX_, moveEndY_, moveEndZ_},
+                               .orientation = finalFacing_.value_or(orientation)};
+        if (usePathMode_ && activeSpline_ && splineDurationMs_ > 0) {
+            const math::SplineEvalResult at =
+                pathEval(std::min(static_cast<uint32_t>(t * 1000.0f), splineDurationMs_ - 1));
+            return SplinePlace{.position = at.position,
+                               .orientation = faceAlongPath_
+                                                  ? facingAlong(at.tangent.x, at.tangent.y).value_or(orientation)
+                                                  : orientation};
+        }
+        const float share = t / moveDuration_;
+        return SplinePlace{.position = {moveStartX_ + (moveEndX_ - moveStartX_) * share,
+                                        moveStartY_ + (moveEndY_ - moveStartY_) * share,
+                                        moveStartZ_ + (moveEndZ_ - moveStartZ_) * share},
+                           .orientation = orientation};
+    }
+
     void updateMovement(float deltaTime) {
+        // What of this step lies before the move under way began.
+        const float before = std::clamp(deltaTime, 0.0f, startsIn_);
+        startsIn_ -= before;
+        const float gone = deltaTime - before;
         if (turnRate_ != 0.0f) {
-            turnElapsed_ += deltaTime;
+            turnElapsed_ += gone;
             orientation = wrapAngle(turnBase_ + turnRate_ * turnElapsed_);
         }
         if (isMoving_) {
-            if (movingByFlags_) advanceByFlags(deltaTime);
-            else advanceSegment(deltaTime);
+            if (movingByFlags_) advanceByFlags(gone);
+            else advanceSegment(gone);
         }
         arriveSplineFlags();
         updateModelFacing(deltaTime);
+    }
+
+    /// The move just started began this long after the moment the unit was
+    /// last moved on to (GameHandler::sinceUnitsAdvanced): so much of the next
+    /// step is not the move's. The client's splines go by the clock - the time
+    /// now less the one the spline was started at (0x0098ca00: +0x28 = now -
+    /// +0x24, which 0x0098c770 is given the frame's time for) - so a spline
+    /// that comes after three seconds of loading starts at its start.
+    /// One that came before that moment - its packet waited behind a load - is
+    /// that far along already: the next step begins with it.
+    void moveBeganAfter(float seconds) {
+        startsIn_ = std::max(seconds, 0.0f);
+        if (seconds < 0.0f && isMoving_) moveElapsed_ -= seconds;
     }
 
     /// The rate its model chases its facing at, in the client's critically
@@ -704,6 +920,8 @@ public:
             x = start.x + (end.x - start.x) * t;
             y = start.y + (end.y - start.y) * t;
             z = start.z + (end.z - start.z) * t;
+        } else {
+            x = end.x; y = end.y; z = end.z;
         }
     }
 
@@ -712,9 +930,10 @@ public:
         return isMoving_ && (moveElapsed_ < moveDuration_ || movingByFlags_);
     }
 
-    // Returns the latest server-authoritative position: destination if moving, current if not.
-    // Unlike getX/Y/Z (which only update via updateMovement), this always reflects the
-    // last known server position regardless of distance culling.
+    // Where the move under way ends; where it stands if there is none. Not
+    // where the unit is: a path may end hundreds of yards from there, and
+    // whoever asks how far a unit is, or draws it, asks getX/Y/Z, which is
+    // moved on for every unit each frame.
     [[nodiscard]] float getLatestX() const { return isMoving_ ? moveEndX_ : x; }
     [[nodiscard]] float getLatestY() const { return isMoving_ ? moveEndY_ : y; }
     [[nodiscard]] float getLatestZ() const { return isMoving_ ? moveEndZ_ : z; }
@@ -764,6 +983,7 @@ protected:
     float moveEndX_ = 0, moveEndY_ = 0, moveEndZ_ = 0;
     float moveDuration_ = 0;
     float moveElapsed_ = 0;
+    float startsIn_ = 0;                    // moveBeganAfter
     float moveSpeed_ = 0;                   // Current movement's speed; see getMoveSpeed
     // CatmullRom spline for multi-segment path movement (replaces linear pathPoints_/pathSegDists_)
     std::optional<math::CatmullRomSpline> activeSpline_;
@@ -773,7 +993,22 @@ protected:
     // and the running curve length at the end of each segment; else empty.
     std::vector<glm::vec3> curvePoints_;
     std::vector<float> curveLengths_;
+    bool curveLinear_ = false;              // curvePoints_ run straight (startBlockSpline)
     uint32_t splineDurationMs_ = 0;
+    // A cyclic spline's: its duration without a factor, and its next round's.
+    uint32_t rawDurationMs_ = 0;
+    uint32_t nextDurationMs_ = 0;
+    bool splineCyclic_ = false;
+    bool splineEntersCycle_ = false;
+    // A spline on a transport (setMoveFrame); pathEnd_ is its end there.
+    bool splineFramed_ = false;
+    std::optional<glm::mat4> moveFrame_;
+    glm::vec3 pathEnd_{0.0f};
+    // setSplineArc; none with a duration of 0.
+    float arcAcceleration_ = 0.0f;
+    uint32_t arcStartMs_ = 0;
+    uint32_t arcDurationMs_ = 0;
+    std::optional<float> fallTop_;
 
 private:
     static constexpr float kPi = 3.14159265f;
@@ -810,19 +1045,118 @@ private:
         turnRate_ = 0.0f;
         faceAlongPath_ = false;
         finalFacing_.reset();
+        arrivalFacing_ = nullptr;
+        splineCyclic_ = false;
+        splineEntersCycle_ = false;
+        splineFramed_ = false;
+        moveFrame_.reset();
+        curveLinear_ = false;
+        arcDurationMs_ = 0;
+        fallTop_.reset();
+    }
+
+    /// 0x0098ca00: a fall that has come down to the path's end is over.
+    void endAtFloor() {
+        if (fallTop_) moveDuration_ = std::min(moveDuration_, fallTime(*fallTop_ - pathEnd_.z));
+    }
+
+    /// curveLengths_ for curvePoints_: each segment's - straight from point to
+    /// point, or its curve's over 20 steps (0x004c40b0, 0x004c3b10).
+    float measureCurve(bool curved) {
+        curveLengths_.clear();
+        float run = 0.0f;
+        if (curvePoints_.size() == 3) curveLengths_.push_back(0.0f);
+        for (size_t seg = 0; seg + 3 < curvePoints_.size(); ++seg) {
+            glm::vec3 prev = curvePoints_[seg + 1];
+            if (!curved) {
+                run += glm::length(curvePoints_[seg + 2] - prev);
+            } else {
+                for (int k = 1; k <= 20; ++k) {
+                    const glm::vec3 at = curveAt(seg, 0.05f * static_cast<float>(k)).position;
+                    run += glm::length(at - prev);
+                    prev = at;
+                }
+            }
+            curveLengths_.push_back(run);
+        }
+        return run;
+    }
+
+    /// The curve's points as the spline's keys too, for what reads them.
+    void keepCurveKeys(float length) {
+        if (length <= 1e-6f) length = 1.0f;
+        std::vector<math::SplineKey> keys;
+        for (size_t i = 1; i + 1 < curvePoints_.size(); ++i) {
+            math::SplineKey k;
+            k.timeMs = i == 1 ? 0u
+                              : static_cast<uint32_t>(curveLengths_[i - 2] / length *
+                                                      static_cast<float>(splineDurationMs_));
+            k.position = curvePoints_[i];
+            keys.push_back(k);
+        }
+        activeSpline_.emplace(std::move(keys), /*timeClosed=*/false);
+    }
+
+    /// A cyclic spline that has run out begins again with what is over
+    /// (0x0098ca00); one entering its cycle leaves its first point out from
+    /// then on (0x0098c940).
+    void wrapCycle() {
+        moveElapsed_ -= moveDuration_;
+        if (splineEntersCycle_ && curvePoints_.size() > 4) {
+            curvePoints_.erase(curvePoints_.begin());
+            curvePoints_[0] = curvePoints_[curvePoints_.size() - 3];
+            const float length = measureCurve(!curveLinear_);
+            keepCurveKeys(length);
+            if (rawDurationMs_ > 0) moveSpeed_ = length / (static_cast<float>(rawDurationMs_) / 1000.0f);
+        }
+        splineEntersCycle_ = false;
+        splineDurationMs_ = nextDurationMs_;
+        nextDurationMs_ = rawDurationMs_;
+        moveDuration_ = static_cast<float>(splineDurationMs_) / 1000.0f;
+        if (moveDuration_ > 0.0f && moveElapsed_ >= moveDuration_) moveElapsed_ = std::fmod(moveElapsed_, moveDuration_);
+    }
+
+    /// The path's place now, and the facing along it.
+    void placeOnPath() {
+        if (splineFramed_ && !moveFrame_) return;
+        uint32_t pathTimeMs = static_cast<uint32_t>(moveElapsed_ * 1000.0f);
+        if (pathTimeMs >= splineDurationMs_) pathTimeMs = splineDurationMs_ - 1;
+        const math::SplineEvalResult eval = pathEval(pathTimeMs);
+        x = eval.position.x;
+        y = eval.position.y;
+        z = eval.position.z;
+        if (faceAlongPath_) faceDirection(eval.tangent.x, eval.tangent.y);
     }
 
     void faceDirection(float dx, float dy) {
+        if (const auto facing = facingAlong(dx, dy)) orientation = *facing;
+    }
+    [[nodiscard]] std::optional<float> facingAlong(float dx, float dy) const {
         constexpr float kMinTangentSq = 0.0018490001f;  // FUN_0098ca00
-        if (dx * dx + dy * dy > kMinTangentSq) {
-            orientation = wrapAngle(std::atan2(-dy, dx) + pathFacingOffset_);
-        }
+        if (dx * dx + dy * dy <= kMinTangentSq) return std::nullopt;
+        return wrapAngle(std::atan2(-dy, dx) + pathFacingOffset_);
     }
 
     /// The path at `ms`: the curve, or straight between its points when the
     /// spline is linear (startMoveAlongPath).
     [[nodiscard]] math::SplineEvalResult pathEval(uint32_t ms) const {
-        if (curvePoints_.size() >= 4 && !curveLengths_.empty() && splineDurationMs_ > 0) {
+        math::SplineEvalResult r = flatPathEval(ms);
+        // 0x00987d20, up while the spline still runs.
+        if (arcDurationMs_ > 0 && ms > arcStartMs_ && ms < arcDurationMs_) {
+            const float t = static_cast<float>(ms - arcStartMs_) * 0.001f;
+            const float whole = static_cast<float>(arcDurationMs_ - arcStartMs_) * 0.001f;
+            r.position.z += 0.5f * arcAcceleration_ * (whole - t) * t;
+        }
+        if (fallTop_ && ms > 0)
+            r.position.z = std::max(pathEnd_.z, *fallTop_ - fallDistance(static_cast<float>(ms) * 0.001f, 0.0f, false));
+        if (moveFrame_) {
+            r.position = glm::vec3(*moveFrame_ * glm::vec4(r.position, 1.0f));
+            r.tangent = glm::mat3(*moveFrame_) * r.tangent;
+        }
+        return r;
+    }
+    [[nodiscard]] math::SplineEvalResult flatPathEval(uint32_t ms) const {
+        if (curvePoints_.size() >= 3 && !curveLengths_.empty() && splineDurationMs_ > 0) {
             // As the client's spline (FUN_004c3bd0): the share of the time
             // gone is the share of the curve's length; the segment is found by
             // the running lengths and its parameter by its own length.
@@ -834,6 +1168,12 @@ private:
             const float before = seg > 0 ? curveLengths_[seg - 1] : 0.0f;
             const float len = curveLengths_[seg] - before;
             const float u = len > 1e-6f ? std::clamp((s - before) / len, 0.0f, 1.0f) : 1.0f;
+            if (curveLinear_ || curvePoints_.size() == 3) {
+                math::SplineEvalResult r;
+                r.tangent = curvePoints_[seg + 2] - curvePoints_[seg + 1];
+                r.position = curvePoints_[seg + 1] + r.tangent * (curvePoints_.size() == 3 ? share : u);
+                return r;
+            }
             return curveAt(seg, u);
         }
         if (linearKeys_.size() < 2) return activeSpline_->evaluate(ms);
@@ -875,7 +1215,10 @@ private:
     /// is the points' polyline length over the packet's duration, at most
     /// 50 yd/s, and its duration that length at that speed. A segment's length
     /// is its curve's, summed over 20 steps (FUN_004c3b10).
-    void startCurvedPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration) {
+    /// A cyclic one is closed instead with its points after the unit's own
+    /// place, the first two of them again, and ends on the first (0x0073cecf).
+    void startCurvedPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration,
+                         bool cyclic, bool entersCycle) {
         constexpr float kSameStartDistanceSq = 0.00077160494f;
         constexpr float kFlyingSpeedCap = 50.0f;
         std::vector<glm::vec3> pts;
@@ -892,8 +1235,10 @@ private:
             }
             pts.push_back(p);
         }
-        const glm::vec3 dest = pts.back();
+        const bool closes = cyclic && pts.size() >= 4;
+        const glm::vec3 dest = closes ? pts[2] : pts.back();
         pts.push_back(dest);
+        if (closes) pts.push_back(glm::vec3(pts[3]));
         float chord = 0.0f;
         for (size_t i = 2; i + 1 < pts.size(); ++i) chord += glm::length(pts[i] - pts[i - 1]);
         if (pts.size() < 4 || chord <= 0.16666667f) {
@@ -909,31 +1254,12 @@ private:
         const float duration = static_cast<float>(durationMs) / 1000.0f;
 
         curvePoints_ = std::move(pts);
-        curveLengths_.clear();
-        float run = 0.0f;
-        for (size_t seg = 0; seg + 3 < curvePoints_.size(); ++seg) {
-            glm::vec3 prev = curvePoints_[seg + 1];
-            for (int k = 1; k <= 20; ++k) {
-                const glm::vec3 at = curveAt(seg, 0.05f * static_cast<float>(k)).position;
-                run += glm::length(at - prev);
-                prev = at;
-            }
-            curveLengths_.push_back(run);
-        }
-        if (run <= 1e-6f) run = 1.0f;
-        // The curve's points as the spline's keys too, for what reads them.
-        std::vector<math::SplineKey> keys;
-        keys.reserve(curvePoints_.size() - 2);
-        for (size_t i = 1; i + 1 < curvePoints_.size(); ++i) {
-            math::SplineKey k;
-            k.timeMs = i == 1 ? 0u
-                              : static_cast<uint32_t>(curveLengths_[i - 2] / run * static_cast<float>(durationMs));
-            k.position = curvePoints_[i];
-            keys.push_back(k);
-        }
         linearKeys_.clear();
-        activeSpline_.emplace(std::move(keys), /*timeClosed=*/false);
         splineDurationMs_ = durationMs;
+        keepCurveKeys(measureCurve(true));
+        rawDurationMs_ = nextDurationMs_ = durationMs;
+        splineCyclic_ = cyclic;
+        splineEntersCycle_ = cyclic && entersCycle;
 
         moveEndX_ = dest.x; moveEndY_ = dest.y; moveEndZ_ = dest.z;
         moveDuration_ = duration;
@@ -946,16 +1272,10 @@ private:
 
     void advanceSegment(float deltaTime) {
         moveElapsed_ += deltaTime;
+        if (splineCyclic_ && usePathMode_ && moveDuration_ > 0.0f && moveElapsed_ >= moveDuration_) wrapCycle();
         if (moveElapsed_ < moveDuration_) {
             if (usePathMode_ && activeSpline_) {
-                // Along the path: curved or straight (pathEval)
-                uint32_t pathTimeMs = static_cast<uint32_t>(moveElapsed_ * 1000.0f);
-                if (pathTimeMs >= splineDurationMs_) pathTimeMs = splineDurationMs_ - 1;
-                const math::SplineEvalResult eval = pathEval(pathTimeMs);
-                x = eval.position.x;
-                y = eval.position.y;
-                z = eval.position.z;
-                if (faceAlongPath_) faceDirection(eval.tangent.x, eval.tangent.y);
+                placeOnPath();  // Along the path: curved or straight (pathEval)
             } else {
                 // Single-segment linear interpolation
                 float t = moveElapsed_ / moveDuration_;
@@ -971,8 +1291,15 @@ private:
             orientation = *finalFacing_;
             finalFacing_.reset();
         }
-        // And it stands there: a spline that is over puts its unit at its last
-        // point (0x00987b50) and carries it no further.
+        if (arrivalFacing_) {
+            if (const auto facing = std::exchange(arrivalFacing_, nullptr)(glm::vec3(moveEndX_, moveEndY_, moveEndZ_)))
+                orientation = *facing;
+        }
+        // And it stands there: a spline flown out is marked over (0x0098ca00's
+        // 0x100, 0x006eae70's 0x400), puts its unit on its last point
+        // (0x00987b50) and carries it no further. It ran on at its speed for
+        // as long again - drawn at the end all the same, but told of, aimed at
+        // and, in flight, flown out there: 60 yards past the flight master.
         x = moveEndX_;
         y = moveEndY_;
         z = moveEndZ_;
@@ -1077,6 +1404,7 @@ private:
     bool faceAlongPath_ = false;
     float pathFacingOffset_ = 0;
     std::optional<float> finalFacing_;
+    std::function<std::optional<float>(const glm::vec3&)> arrivalFacing_;
     // The drawn facing; see getModelFacing.
     float modelFacing_ = 0;
     bool modelFacingSet_ = false;

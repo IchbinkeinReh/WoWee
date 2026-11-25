@@ -16,9 +16,6 @@ public:
 
     // Keyboard
     [[nodiscard]] bool isKeyPressed(SDL_Scancode key) const;
-    /// A key that a frame of the interface has taken is not held to anyone else, until
-    /// it is let go.
-    void setKeySpent(SDL_Scancode key, bool spent);
 
     /// Holds a key down from somewhere that is not a keyboard.
     ///
@@ -46,6 +43,12 @@ public:
     /// Reads a button as up, wherever it is held from, until it is let go of:
     /// its press has been spent on something that nothing else may hear.
     void setMouseButtonSpent(int button, bool spent);
+    /// Reads a key as up, wherever it is held from, until it is let go of: a
+    /// frame of the interface or an edit box has taken its press, and a key
+    /// that one takes goes nowhere else (0x004943c0, with the release going to
+    /// the same one, 0x00494490). Only the state read here - what is told of
+    /// the press and of the release still is.
+    void setKeySpent(SDL_Scancode key);
     /// Where a scripted test run puts the pointer (__WoweeTestMouse, only
     /// with WOWEE_AUTO_LUA), or the MCP server's mouse does, read in place of
     /// the device's; cleared to give the device's back.
@@ -80,8 +83,8 @@ private:
     static constexpr int NUM_MOUSE_BUTTONS = 8;
 
     std::array<bool, NUM_KEYS> currentKeyState = {};
-    std::array<bool, NUM_KEYS> spentKeyState = {};
     std::array<bool, NUM_KEYS> virtualKeyState = {};
+    std::array<bool, NUM_KEYS> spentKeyState = {};
     std::array<bool, NUM_KEYS> previousKeyState = {};
 
     std::array<bool, NUM_MOUSE_BUTTONS> currentMouseState = {};

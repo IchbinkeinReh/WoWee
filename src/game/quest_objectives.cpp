@@ -4,6 +4,9 @@
 #include "game/interface_text.hpp"
 #include "game/reputation_standing.hpp"
 
+#include "ui/chat/chat_utils.hpp"
+
+#include <algorithm>
 #include <cstdlib>
 
 namespace wowee {
@@ -48,8 +51,10 @@ QuestObjective killObjectiveLine(GameHandler& gh, const GameHandler::QuestLogEnt
 
 QuestObjective itemObjectiveLine(GameHandler& gh, const GameHandler::QuestLogEntry& q, size_t slot) {
     const auto& item = q.itemObjectives[slot];
-    uint32_t current = 0;
-    if (auto it = q.itemCounts.find(item.itemId); it != q.itemCounts.end()) current = it->second;
+    // Off the inventory, up to what is wanted (0x00754d00(item, 8)) - of a quest
+    // that is complete as well, which the counts kept for the progress lines
+    // are not filled for.
+    const uint32_t current = std::min(gh.countItemInBags(item.itemId), item.required);
     // By name; the number stands in while the item query is out, and the
     // answer lands with a QUEST_LOG_UPDATE behind it.
     std::string name;
@@ -110,7 +115,7 @@ bool questObjectiveSlotLine(GameHandler& gh, const GameHandler::QuestLogEntry& q
         for (size_t i = 0; i < q.itemObjectives.size(); ++i) {
             const auto& item = q.itemObjectives[i];
             if (item.itemId != wanted) continue;
-            if (item.itemId == q.sourceItemId && item.required <= 1) continue;
+            if (!isListedItemObjective(q, item)) continue;
             out = itemObjectiveLine(gh, q, i);
             return true;
         }
@@ -144,9 +149,7 @@ std::vector<QuestObjective> questObjectives(GameHandler& gh,
         out.push_back(killObjectiveLine(gh, q, slot));
     }
     for (size_t slot = 0; slot < q.itemObjectives.size(); ++slot) {
-        if (!isQuestObjective(static_cast<int32_t>(q.itemObjectives[slot].itemId),
-                              q.itemObjectives[slot].required))
-            continue;
+        if (!isListedItemObjective(q, q.itemObjectives[slot])) continue;
         out.push_back(itemObjectiveLine(gh, q, slot));
     }
     // Then one line for each item the quest hands over for an objective - the
@@ -207,6 +210,13 @@ std::vector<QuestObjective> questObjectives(GameHandler& gh,
                                      label(q.repObjectiveValue), interfaceString);
         line.type = "reputation";
         line.finished = have >= q.repObjectiveValue;
+        out.push_back(std::move(line));
+    } else if (out.empty() && q.complete && !questRequiresNothing(q)) {
+        // The last of 0x005e1460: met with nothing to list, the sentence.
+        QuestObjective line;
+        line.text = ui::chat_utils::replaceGenderPlaceholders(q.objectives, gh);
+        line.type = "log";
+        line.finished = true;
         out.push_back(std::move(line));
     }
     return out;

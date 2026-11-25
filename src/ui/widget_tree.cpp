@@ -73,6 +73,14 @@ bool anchorsSpanAxis(const std::vector<Anchor>& anchors, bool xAxis) {
     return lo < 0.01f && hi > 0.99f;
 }
 
+FontStringReach fontStringReach(const std::vector<Anchor>& anchors, float textWidth) {
+    for (const Anchor& a : anchors) {
+        if (a.point.find("LEFT") != std::string::npos) return {0.0f, textWidth};
+        if (a.point.find("RIGHT") != std::string::npos) return {textWidth, 0.0f};
+    }
+    return {textWidth * 0.5f, textWidth * 0.5f};
+}
+
 DrawLayer parseDrawLayer(const std::string& rawName) {
     const std::string n = upper(rawName);
     if (n == "BACKGROUND") return DrawLayer::Background;
@@ -120,6 +128,7 @@ void WidgetTree::reset() {
     drawOrder_.clear();
     linkRects_.clear();
     scrollFrames_.clear();
+    cooldownFrames_.clear();
     ownedTooltips_.clear();
     portraitsByUnit_.clear();
     portraitUnitOf_.clear();
@@ -182,7 +191,7 @@ uint32_t WidgetTree::create(WidgetKind kind, uint32_t parent, const std::string&
         // itself to 1 rather than to one above its parent, its buttons
         // followed, and the bar they sit on stayed above all of them and took
         // every click. Elsewhere the same sum went negative.
-        w.effLevel = widgets_[parent].effLevel + 1;
+        w.effLevel = levelIn(widgets_[parent]);
         w.effStrata = widgets_[parent].effStrata;
     }
     return id;
@@ -217,11 +226,11 @@ void WidgetTree::setParent(uint32_t id, uint32_t newParent) {
     w->parent = newParent;
     get(newParent)->children.push_back(id);
     // 0x004911b0: the new parent's strata and the level above it, with all that
-    // is in it; off every parent MEDIUM, at the bottom.
+    // is in it, whatever it had set itself; off every parent MEDIUM, at the bottom.
     if (w->kind == WidgetKind::Frame) {
         const Widget* p = get(newParent);
         setFrameStrata(id, newParent == rootId_ ? FrameStrata::Medium : p->effStrata);
-        setFrameLevel(id, newParent == rootId_ ? 0 : p->effLevel + 1);
+        setFrameLevel(id, levelIn(*p));
     }
     // Moved under a hidden frame still marked visible: the next pass has to
     // walk whichever hidden subtree it landed in.
@@ -233,6 +242,13 @@ void WidgetTree::markScrollFrame(uint32_t id) {
     if (!w || w->isScrollFrame) return;
     w->isScrollFrame = true;
     scrollFrames_.push_back(id);
+}
+
+void WidgetTree::markCooldownFrame(uint32_t id) {
+    Widget* w = get(id);
+    if (!w || w->isCooldown) return;
+    w->isCooldown = true;
+    cooldownFrames_.push_back(id);
 }
 
 void WidgetTree::setTooltipOwner(uint32_t tooltipId, uint32_t ownerId) {
@@ -573,8 +589,6 @@ void WidgetTree::placeNearest(uint32_t id) {
     Widget* w = get(id);
     const Widget* screen = get(rootId_);
     if (!w || !screen || id == rootId_ || !placed(id)) return;
-    static constexpr const char* kPoints[9] = {"TOPLEFT", "TOP", "TOPRIGHT", "LEFT", "CENTER",
-                                               "RIGHT", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT"};
     const float es = w->effScale > 0.0f ? w->effScale : 1.0f;
     float nearest = std::numeric_limits<float>::max();
     Anchor a;
@@ -585,7 +599,7 @@ void WidgetTree::placeNearest(uint32_t id) {
         const float apart = x * x + y * y;
         if (!(apart < nearest)) continue;
         nearest = apart;
-        a.point = a.relativePoint = kPoints[i];
+        a.point = a.relativePoint = layout_cache::kPoints[static_cast<size_t>(i)];
         a.x = x / es;
         a.y = y / es;
     }
@@ -947,6 +961,37 @@ void WidgetTree::noteScreenSize(float pixelW, float pixelH) {
     // pass is in the units everything else will be in.
     uiScale_ = (pixelH / kInterfaceHeight) * userScale_;
     markLayoutDirty();
+    // And what everything is measured from: a rect asked for before the first
+    // pass walks up to the screen and UIParent and takes them as they stand.
+    placeScreen();
+}
+
+void WidgetTree::placeScreen() {
+    const float units = uiScale_ > 0.0f ? uiScale_ : 1.0f;
+    const float screenW = lastPixelW_ / units;
+    const float screenH = lastPixelH_ / units;
+    if (Widget* screen = get(rootId_)) {
+        screen->left = screen->bottom = 0.0f;
+        if (screen->rectW != screenW || screen->rectH != screenH) markResizePending(rootId_);
+        screen->rectW = screenW;
+        screen->rectH = screenH;
+        screen->effScale = 1.0f;
+    }
+    // UIParent inside the safe area, where the display has one: in landscape
+    // an iPhone's notch covers one side and its home indicator the bottom.
+    if (Widget* ui = get(uiParentId_); ui && uiParentId_ != rootId_) {
+        const float insetL = safeLeft_ / units, insetR = safeRight_ / units;
+        const float insetT = safeTop_ / units, insetB = safeBottom_ / units;
+        const float uiW = std::max(1.0f, screenW - insetL - insetR);
+        const float uiH = std::max(1.0f, screenH - insetT - insetB);
+        if (ui->left != insetL || ui->bottom != insetB) ++layoutGeneration_;
+        ui->left = insetL;
+        ui->bottom = insetB;
+        if (ui->rectW != uiW || ui->rectH != uiH) markResizePending(ui->id);
+        ui->rectW = uiW;
+        ui->rectH = uiH;
+        ui->effScale = 1.0f;
+    }
 }
 
 void WidgetTree::sizeTooltip(uint32_t id) {
@@ -1048,39 +1093,20 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     visibleThisPass_ = 0;
     ++placedKey_;
 
+    placeScreen();
     Widget& rootW = widgets_[rootId_];
-    rootW.left = 0.0f;
-    rootW.bottom = 0.0f;
-    if (rootW.rectW != screenW || rootW.rectH != screenH) markResizePending(rootId_);
-    rootW.rectW = screenW;
-    rootW.rectH = screenH;
     if ((!rootW.visibleChain || !rootW.visible) && rootW.shown) ++visibilityRaises_;
     rootW.visibleChain = rootW.shown;
     setVisible(rootW, rootW.shown);
     if (rootW.visible) mayBeVisible_.set(rootId_);
     rootW.effStrata = rootW.strata;
     rootW.effLevel = 0;
-    rootW.effScale = 1.0f;
 
     // UIParent fills the screen and is laid out here rather than by anchors:
     // it is created before any XML is read, so it has none, and a frame with
     // no anchors is not displayed. Its own shown flag still decides whether
     // anything under it is, which is the whole point of it being a frame.
-    //
-    // Inside the safe area, where the display has one: in landscape an
-    // iPhone's notch covers one side and its home indicator the bottom.
     if (Widget* ui = get(uiParentId_); ui && ui != &rootW) {
-        const float toUnits = (uiScale_ > 0.0f) ? 1.0f / uiScale_ : 1.0f;
-        const float insetL = safeLeft_ * toUnits, insetR = safeRight_ * toUnits;
-        const float insetT = safeTop_ * toUnits, insetB = safeBottom_ * toUnits;
-        const float uiW = std::max(1.0f, screenW - insetL - insetR);
-        const float uiH = std::max(1.0f, screenH - insetT - insetB);
-        if (ui->left != insetL || ui->bottom != insetB) ++layoutGeneration_;
-        ui->left = insetL;
-        ui->bottom = insetB;
-        if (ui->rectW != uiW || ui->rectH != uiH) markResizePending(ui->id);
-        ui->rectW = uiW;
-        ui->rectH = uiH;
         const bool uiVisible = rootW.visible && ui->shown;
         if (uiVisible && (!ui->visibleChain || !ui->visible)) ++visibilityRaises_;
         ui->visibleChain = uiVisible;
@@ -1088,7 +1114,6 @@ void WidgetTree::layout(float pixelW, float pixelH) {
         if (ui->visible) mayBeVisible_.set(ui->id);
         ui->effStrata = ui->strata;
         ui->effLevel = 0;
-        ui->effScale = 1.0f;
         for (uint32_t child : ui->children) layoutWidget(child, screenW, screenH);
     }
 
@@ -1248,7 +1273,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // frame sits one level above its parent so it draws over it, which is what
     // makes a button's own regions land on top of the frame holding it.
     w->effStrata = w->strataExplicit ? w->strata : (parent ? parent->effStrata : FrameStrata::Medium);
-    w->effLevel  = w->levelExplicit  ? w->level  : (parent ? parent->effLevel + 1 : 0);
+    w->effLevel  = w->levelExplicit  ? w->level  : (parent ? levelIn(*parent) : 0);
     // Multiplied down the chain, so scaling a window scales everything in it.
     w->effScale  = (parent ? parent->effScale : 1.0f) * w->scale;
     const float es = w->effScale;
@@ -1484,16 +1509,36 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     if (w->rectW != oldRectW || w->rectH != oldRectH) resizePending_.set(id);
 }
 
+namespace {
+/// Whether `a` is above `b`: the draw order's comparison read the other way
+/// round, the last thing painted being the first reached.
+bool drawnAbove(const Widget& a, const Widget& b) {
+    const int sa = strataRank(a.effStrata), sb = strataRank(b.effStrata);
+    if (sa != sb) return sa > sb;
+    if (a.effLevel != b.effLevel) return a.effLevel > b.effLevel;
+    return a.creationOrder > b.creationOrder;
+}
+}  // namespace
+
 uint32_t WidgetTree::hitTest(float x, float y) const {
-    return hitTestFor(x, y, false);
-}
-
-uint32_t WidgetTree::hitTestWheel(float x, float y) const {
-    return hitTestFor(x, y, true);
-}
-
-uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
     const Widget* best = nullptr;
+    framesAt(x, y, false, [&](const Widget& w) {
+        if (!best || drawnAbove(w, *best)) best = &w;
+    });
+    return best ? best->id : 0;
+}
+
+std::vector<uint32_t> WidgetTree::wheelFramesAt(float x, float y) const {
+    std::vector<const Widget*> found;
+    framesAt(x, y, true, [&](const Widget& w) { found.push_back(&w); });
+    std::sort(found.begin(), found.end(), [](const Widget* a, const Widget* b) { return drawnAbove(*a, *b); });
+    std::vector<uint32_t> ids;
+    ids.reserve(found.size());
+    for (const Widget* w : found) ids.push_back(w->id);
+    return ids;
+}
+
+void WidgetTree::framesAt(float x, float y, bool forWheel, const std::function<void(const Widget&)>& take) const {
     // Over the widgets that may be visible, in id order as the walk over all
     // of them went: only a visible frame takes the mouse, and touching every
     // one of 28,000 widgets to find the few hundred was ~1.4 ms a frame.
@@ -1502,10 +1547,10 @@ uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
         const Widget& w = widgets_[id];
         if (w.id == 0 || w.kind != WidgetKind::Frame) continue;
         if (!w.visible) continue;
-        // The wheel is enabled separately from the mouse and a scroll frame
-        // asks for only the wheel, so requiring mouseEnabled for both hid
-        // every one of them from the cursor.
-        if (!w.mouseEnabled && !(forWheel && w.wheelEnabled)) continue;
+        // The wheel is enabled separately from the mouse, and one is nothing
+        // to the other: the client keeps a list of frames for each kind of
+        // event (0x00495880) and the wheel goes down its own.
+        if (forWheel ? !w.wheelEnabled : !w.mouseEnabled) continue;
         if (w.rectW <= 0.0f || w.rectH <= 0.0f) continue;
         // A rect with a NaN in it matches *everything*. Every comparison
         // against a NaN is false, so both `x < left` and `x > right` are false
@@ -1538,15 +1583,15 @@ uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
                 continue;
             }
         }
-        if (!best) { best = &w; continue; }
-        // Same comparison the draw order uses, read the other way round: the
-        // last thing painted is the first thing clicked.
-        const int sa = strataRank(w.effStrata), sb = strataRank(best->effStrata);
-        if (sa != sb) { if (sa > sb) best = &w; continue; }
-        if (w.effLevel != best->effLevel) { if (w.effLevel > best->effLevel) best = &w; continue; }
-        if (w.creationOrder > best->creationOrder) best = &w;
+        take(w);
     }
-    return best ? best->id : 0;
+}
+
+bool WidgetTree::hasButtonArt(const Widget& owner, ButtonArt kind) const {
+    return std::any_of(owner.children.begin(), owner.children.end(), [&](uint32_t id) {
+        const Widget* region = get(id);
+        return region && region->buttonArt == kind;
+    });
 }
 
 bool WidgetTree::buttonArtVisible(const Widget& w) const {
@@ -1582,10 +1627,18 @@ bool WidgetTree::buttonArtVisible(const Widget& w) const {
         case ButtonArt::Disabled:        return owner->artShown.shown() == ButtonArtShown::Disabled;
         case ButtonArt::Pushed:          return owner->artShown.shown() == ButtonArtShown::Pushed;
         case ButtonArt::Normal:          return owner->artShown.shown() == ButtonArtShown::Normal;
-        case ButtonArt::Checked:         return owner->checked && usable;
+        // The check mark where there is no disabled one, too (0x00962340).
+        case ButtonArt::Checked:
+            return owner->checked && (usable || !hasButtonArt(*owner, ButtonArt::DisabledChecked));
         case ButtonArt::DisabledChecked: return owner->checked && !usable;
         default:                         return true;
     }
+}
+
+/// A slider whose grip was given as a file (0x0096bfe0): it paints the grip
+/// itself, where one with a region has that drawn like any other.
+static bool paintsThumb(const Widget& w) {
+    return w.isSlider && w.thumbRegion == 0 && !w.thumbTexture.empty();
 }
 
 void WidgetTree::collectDrawOrder() {
@@ -1625,7 +1678,12 @@ void WidgetTree::collectDrawOrder() {
         // listening, and an empty box still has to show it.
         if (w.kind == WidgetKind::Frame && !w.hasBackdrop && !w.isStatusBar &&
             !w.isEditBox && w.externalTexture == 0 && !w.isMovieFrame &&
-            !(w.isCooldown && w.cooldownClock.runs()) &&
+            // A cooldown paints its shade and its star (0x005ebd20). It was
+            // missing here, so no sweep was ever drawn: the frames were shown,
+            // sized and timed, and never reached the renderer.
+            !(w.isCooldown && w.cooldown.drawn) &&
+            // And a slider whose grip is a file rather than a region.
+            !paintsThumb(w) &&
             !(w.isSimpleHtml && !w.text.empty()) &&
             !(w.isMessageFrame && !w.messages.empty()) &&
             !(w.isTooltip && !w.tooltipLines.empty())) continue;
@@ -1681,6 +1739,10 @@ void WidgetTree::collectDrawOrder() {
         if (w->kind != WidgetKind::Frame)
             return {2 * w->effLevel - 1, layerRank(w->layer), w->kind == WidgetKind::FontString ? kString : kTexture};
         if (w->isStatusBar && !w->barTexture.empty()) return {2 * w->effLevel + 1, layerRank(w->barLayer), kTexture};
+        // A cooldown's shade and star (0x005ebd20, layer 2), over all that the button under it
+        // owns; a slider's grip given as a file is a texture in OVERLAY (0x0096bfe0).
+        if (w->isCooldown) return {2 * w->effLevel + 1, artwork, kTexture};
+        if (paintsThumb(*w)) return {2 * w->effLevel + 1, layerRank(DrawLayer::Overlay), kTexture};
         if (w->isEditBox || w->isMessageFrame || w->isSimpleHtml || (w->isTooltip && w->objectType == "GameTooltip"))
             return {2 * w->effLevel + 1, artwork, kString};
         if (w->externalTexture != 0) return {2 * w->effLevel + 1, artwork, kCallback};

@@ -262,17 +262,19 @@ TEST_CASE("A day's rows are holidays first, then events by time", "[calendar]") 
     // Three days from 11 August 2026, 00:00.
     festival.dates[0] = (26u << 24) | (7u << 20) | (10u << 14);
     festival.durations[0] = 72;
+    festival.calendarFlags[0] = 3;
     cal.holidays = {festival};
 
     const auto rows = calendarEntriesForDay(cal, 8, 12, 2026);
     REQUIRE(rows.size() == 3);
-    CHECK(rows[0].kind == CalendarEntryKind::Holiday);
+    // The player's events come before the holidays (0x005bfd20).
+    CHECK(rows[0].kind == CalendarEntryKind::Event);
+    CHECK(cal.events[rows[0].index].title == "Early");
+    CHECK(cal.events[rows[1].index].title == "Late");
+    CHECK(rows[2].kind == CalendarEntryKind::Holiday);
     // The 12th is the holiday's second day, so its name is drawn once on the
     // 11th and this row is skipped - FrameXML tests sequenceType ~= "ONGOING".
-    CHECK(rows[0].ongoing);
-    CHECK(rows[1].kind == CalendarEntryKind::Event);
-    CHECK(cal.events[rows[1].index].title == "Early");
-    CHECK(cal.events[rows[2].index].title == "Late");
+    CHECK(rows[2].ongoing);
 
     // The first day of the holiday is not ongoing, and has no events.
     const auto first = calendarEntriesForDay(cal, 8, 11, 2026);
@@ -284,7 +286,7 @@ TEST_CASE("A day's rows are holidays first, then events by time", "[calendar]") 
     CHECK(after.empty());
     const auto tomorrow = calendarEntriesForDay(cal, 8, 13, 2026);
     REQUIRE(tomorrow.size() == 2);   // holiday's third day, plus the event
-    CHECK(cal.events[tomorrow[1].index].title == "Tomorrow");
+    CHECK(cal.events[tomorrow[0].index].title == "Tomorrow");
 
     // A different year is a different day, even on the same date.
     CHECK(calendarEntriesForDay(cal, 8, 12, 2027).empty());
@@ -297,6 +299,7 @@ TEST_CASE("A holiday with no duration still happens on its day", "[calendar]") {
     CalendarHoliday oneOff;
     oneOff.dates[0] = (26u << 24) | (7u << 20) | (10u << 14);
     oneOff.durations[0] = 0;
+    oneOff.calendarFlags[0] = 3;
     cal.holidays = {oneOff};
 
     CHECK(calendarEntriesForDay(cal, 8, 11, 2026).size() == 1);
@@ -419,6 +422,7 @@ TEST_CASE("The calendarShow filters hide holidays by type and lockouts", "[calen
     CalendarHoliday h;
     h.dates[0] = (26u << 24) | (7u << 20) | (10u << 14);  // 11 August 2026
     h.durations[0] = 24;
+    h.calendarFlags[0] = 3;
     for (uint32_t type : {0u, 1u, 2u, 3u}) {
         h.calendarFilterType = type;
         cal.holidays.push_back(h);
@@ -1361,112 +1365,146 @@ TEST_CASE("Only an event the player said yes to gets a reminder", "[calendar]") 
 }
 
 namespace {
-uint32_t packed(int year, int month, int day, int hour, int minute) {
-    WowDate d;
-    d.yearSince2000 = year - 2000;
-    d.month = month;
-    d.day = day;
-    d.hour = hour;
-    d.minute = minute;
-    return packWowPackedTime(d);
+
+/// A date as Holidays.dbc packs it; 0xFF for an open field.
+uint32_t holidayDate(int year, int month, int day, int hour, int minute, int weekday = -1) {
+    const auto f = [](int v, uint32_t ones) { return v < 0 ? ones : static_cast<uint32_t>(v); };
+    return f(minute, 0x3F) | (f(hour, 0x1F) << 6) | (f(weekday, 7) << 11) |
+           (f(day < 0 ? -1 : day - 1, 0x3F) << 14) | (f(month < 0 ? -1 : month - 1, 0xF) << 20) |
+           (f(year < 0 ? -1 : year - 2000, 0x1F) << 24);
 }
+
+std::vector<int> daysOf(const CalendarData& cal, int month, int year, int fromDay, int toDay,
+                        const CalendarView& view = {}) {
+    std::vector<int> out;
+    for (int d = fromDay; d <= toDay; ++d) {
+        for (const auto& row : calendarEntriesForDay(cal, month, d, year, {}, view)) {
+            if (row.kind == CalendarEntryKind::Holiday) out.push_back(d);
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
-TEST_CASE("a holiday's durations are its stages, for each of its dates", "[calendar]") {
+// Holidays.dbc as 3.3.5 has them (0x005bfab0).
+TEST_CASE("A holiday's durations are its stages, not its dates'", "[calendar]") {
+    CalendarView view;
+    view.teamMask = 1;
+    view.month = 11;
+    view.year = 2026;
+
+    // Pilgrim's Bounty (404): 167 hours from one in the morning, its date the
+    // last of several - 22 to 28 November.
     CalendarData cal;
-    CalendarHoliday feast;   // Pilgrim's Bounty: a date for each year, one stage of 167 hours
-    feast.id = 404;
-    feast.dates[0] = packed(2025, 11, 23, 1, 0);
-    feast.dates[1] = packed(2026, 11, 22, 1, 0);
-    feast.durations[0] = 167;
-    feast.calendarFlags[0] = 3;
-    cal.holidays = {feast};
-    CHECK(calendarEntriesForDay(cal, 11, 21, 2026).empty());
-    const auto first = calendarEntriesForDay(cal, 11, 22, 2026);
+    CalendarHoliday pilgrims;
+    pilgrims.id = 404;
+    pilgrims.dates[0] = holidayDate(2009, 11, 22, 1, 0, 0);
+    pilgrims.dates[1] = holidayDate(2026, 11, 22, 1, 0, 0);
+    pilgrims.durations[0] = 167;
+    pilgrims.calendarFlags[0] = 3;
+    cal.holidays = {pilgrims};
+    CHECK(daysOf(cal, 11, 2026, 1, 30, view) == std::vector<int>{22, 23, 24, 25, 26, 27, 28});
+    const auto first = calendarEntriesForDay(cal, 11, 22, 2026, {}, view);
     REQUIRE(first.size() == 1);
     CHECK(first[0].sequenceIndex == 0);
-    CHECK(first[0].numSequenceDays == 7);   // to the 29th at midnight, which is the 28th
+    CHECK(first[0].numSequenceDays == 7);
     CHECK(first[0].hour == 1);
-    const auto third = calendarEntriesForDay(cal, 11, 24, 2026);
-    REQUIRE(third.size() == 1);
-    CHECK(third[0].ongoing);
-    CHECK(third[0].sequenceIndex == 2);
-    CHECK(third[0].hour == 1);
-    const auto last = calendarEntriesForDay(cal, 11, 28, 2026);
-    REQUIRE(last.size() == 1);
+    const auto last = calendarEntriesForDay(cal, 11, 28, 2026, {}, view);
     CHECK(last[0].sequenceIndex == 6);
     CHECK(last[0].hour == 23);
     CHECK(last[0].minute == 59);
-    CHECK(calendarEntriesForDay(cal, 11, 29, 2026).empty());
-    CHECK(calendarEntriesForDay(cal, 11, 23, 2025).size() == 1);
-}
 
-TEST_CASE("a holiday's stages follow one another, each for its sides", "[calendar]") {
+    // The Day of the Dead (409): every year, 47 hours from the first at one.
+    CalendarHoliday dead;
+    dead.id = 409;
+    dead.dates[0] = holidayDate(-1, 11, 1, 1, 0);
+    dead.durations[0] = 47;
+    dead.calendarFlags[0] = 3;
+    cal.holidays = {dead};
+    CHECK(daysOf(cal, 11, 2026, 1, 30, view) == std::vector<int>{1, 2});
+
+    // The Darkmoon Faire (376): two days of setting up nobody is told of, then
+    // its week. The thirteenth date, and the first whose weeks these are.
     CalendarHoliday faire;
-    faire.dates[0] = packed(2026, 8, 3, 0, 1);
-    faire.durations[0] = 72;    // set up
-    faire.durations[1] = 168;   // open
-    faire.calendarFlags[0] = 0;
-    faire.calendarFlags[1] = 2;
-    CalendarData cal;
+    faire.id = 376;
+    faire.dates[0] = holidayDate(2007, 11, 2, 0, 1);
+    faire.dates[12] = holidayDate(2026, 11, 6, 0, 1);
+    faire.durations[0] = 48;
+    faire.durations[1] = 168;
+    faire.calendarFlags[1] = 3;
+    faire.priority = 1;
     cal.holidays = {faire};
-    CalendarShowFilter horde;
-    horde.side = 2;
-    CHECK(calendarEntriesForDay(cal, 8, 4, 2026, horde).empty());
-    const auto open = calendarEntriesForDay(cal, 8, 6, 2026, horde);
-    REQUIRE(open.size() == 1);
-    CHECK(open[0].sequenceIndex == 0);
-    CHECK(open[0].numSequenceDays == 8);   // the 6th 00:01 to the 13th 00:01
-    CHECK(calendarEntriesForDay(cal, 8, 13, 2026, horde).size() == 1);
-    CHECK(calendarEntriesForDay(cal, 8, 14, 2026, horde).empty());
-    CalendarShowFilter alliance;
-    alliance.side = 1;
-    CHECK(calendarEntriesForDay(cal, 8, 6, 2026, alliance).empty());
-    // A stage of none after the first is not there.
-    CalendarHolidaySpan span;
-    CHECK_FALSE(holidayRunOnDay(faire, 2, 2026, 8, 13, span));
+    CHECK(daysOf(cal, 11, 2026, 1, 30, view) == std::vector<int>{8, 9, 10, 11, 12, 13, 14, 15});
+    faire.dates[12] = holidayDate(2026, 11, 6, 0, 0);
+    cal.holidays = {faire};
+    CHECK(daysOf(cal, 11, 2026, 1, 30, view) == std::vector<int>{8, 9, 10, 11, 12, 13, 14});
+
+    // One side's alone.
+    dead.calendarFlags[0] = 2;
+    cal.holidays = {dead};
+    CHECK(daysOf(cal, 11, 2026, 1, 30, view).empty());
+    view.teamMask = 2;
+    CHECK(daysOf(cal, 11, 2026, 1, 30, view).size() == 2);
 }
 
-TEST_CASE("holidays that come again", "[calendar]") {
-    CalendarHolidaySpan span;
-    // Every Sunday from 14:00, two hours.
-    CalendarHoliday derby;
-    derby.dates[0] = (31u << 24) | (15u << 20) | (63u << 14) | (0u << 11) | (14u << 6);
-    derby.durations[0] = 2;
-    CHECK(holidayRunOnDay(derby, 0, 2026, 11, 22, span));   // a Sunday
-    CHECK(span.first % 1440 == 14 * 60);
-    CHECK(span.last - span.first == 120);
-    CHECK_FALSE(holidayRunOnDay(derby, 0, 2026, 11, 23, span));
-    CHECK(holidayRunOnDay(derby, 0, 2026, 11, 29, span));
-    // Every week from Friday for four days.
-    CalendarHoliday weekend;
-    weekend.dates[0] = (31u << 24) | (15u << 20) | (63u << 14) | (5u << 11);
-    weekend.durations[0] = 96;
-    CHECK(holidayRunOnDay(weekend, 0, 2026, 11, 20, span));
-    CHECK(holidayRunOnDay(weekend, 0, 2026, 11, 23, span));   // the Monday after
-    CHECK_FALSE(holidayRunOnDay(weekend, 0, 2026, 11, 24, span));
-    // A stage of it that begins days after the weekday.
-    weekend.durations[0] = 120;
-    weekend.durations[1] = 72;
-    CHECK(holidayRunOnDay(weekend, 1, 2026, 11, 27, span));   // Wednesday to Friday
-    CHECK_FALSE(holidayRunOnDay(weekend, 1, 2026, 11, 28, span));
-    // Every year on 31 December, two days.
-    CalendarHoliday eve;
-    eve.dates[0] = (31u << 24) | (11u << 20) | (30u << 14) | (7u << 11);
-    eve.durations[0] = 48;
-    CHECK(holidayRunOnDay(eve, 0, 2026, 12, 31, span));
-    CHECK(holidayRunOnDay(eve, 0, 2027, 1, 1, span));
-    CHECK_FALSE(holidayRunOnDay(eve, 0, 2027, 1, 2, span));
-    // Looping: four days, then three weeks and three days until the next.
-    CalendarHoliday call;
-    call.looping = 1;
-    call.dates[0] = packed(2010, 5, 7, 0, 1);
-    call.durations[0] = 96;
-    call.durations[1] = 576;
-    CHECK(holidayRunOnDay(call, 0, 2010, 5, 7, span));
-    CHECK_FALSE(holidayRunOnDay(call, 0, 2010, 5, 12, span));
-    CHECK(holidayRunOnDay(call, 0, 2010, 6, 4, span));   // 28 days on
-    CHECK_FALSE(holidayRunOnDay(call, 0, 2010, 6, 3, span));
-    CHECK(holidayRunOnDay(call, 0, 2010, 6, 8, span));
-    CHECK_FALSE(holidayRunOnDay(call, 0, 2010, 4, 9, span));   // not before it begins
+TEST_CASE("Weekly and looping holidays come round", "[calendar]") {
+    CalendarView view;
+    view.month = 11;
+    view.year = 2026;
+    CalendarData cal;
+    // The fishing contest (301): Sundays at two, two hours.
+    CalendarHoliday fishing;
+    fishing.id = 301;
+    fishing.dates[0] = holidayDate(-1, -1, -1, 14, 0, 0);
+    fishing.durations[0] = 2;
+    fishing.calendarFlags[0] = 3;
+    cal.holidays = {fishing};
+    CHECK(daysOf(cal, 11, 2026, 1, 30, view) == std::vector<int>{1, 8, 15, 22, 29});
+    // A call to arms (283): four days of every six weeks, from 26 October 2007.
+    CalendarHoliday arms;
+    arms.id = 283;
+    arms.looping = 1;
+    arms.dates[0] = holidayDate(2007, 10, 26, 0, 0);
+    arms.durations[0] = 96;
+    arms.durations[1] = 912;
+    arms.calendarFlags[0] = 3;
+    cal.holidays = {arms};
+    std::vector<int> days = daysOf(cal, 11, 2026, 1, 30, view);
+    view.month = 12;
+    const auto december = daysOf(cal, 12, 2026, 1, 31, view);
+    days.insert(days.end(), december.begin(), december.end());
+    // 2007-10-26 + 42 n: 27 November 2026, and 8 January after it.
+    CHECK(days == std::vector<int>{27, 28, 29, 30});
+}
+
+TEST_CASE("The table's holidays stand beside the ones the server sends", "[calendar]") {
+    CalendarHoliday a, b, changed, abroad, unknown;
+    a.id = 1;
+    b.id = 2;
+    b.textureFilename = "Table";
+    changed.id = 2;
+    changed.textureFilename = "Server";
+    abroad.id = 3;
+    abroad.region = 1;
+    unknown.id = 99;
+    const auto out = calendarMergedHolidays({a, b, abroad}, {unknown, changed});
+    REQUIRE(out.size() == 2);
+    CHECK(out[0].id == 1);
+    CHECK(out[1].textureFilename == "Server");
+    // Without the table, what the server sends.
+    CHECK(calendarMergedHolidays({}, {unknown}).size() == 1);
+}
+
+TEST_CASE("A day's row names its texture, never a number", "[calendar]") {
+    // 0x005c0fb0
+    const auto dungeon = [](int32_t id) { return id == 214 ? std::string("Naxxramas") : std::string(); };
+    CHECK(calendarRowTexture(calendar_flag::kHoliday, 214, "Calendar_ThanksGiving", dungeon) ==
+          "Calendar_ThanksGiving");
+    CHECK(calendarRowTexture(calendar_flag::kPlayer, 214, "", dungeon) == "Naxxramas");
+    CHECK(calendarRowTexture(calendar_flag::kGuildEvent, 214, "", dungeon) == "Naxxramas");
+    CHECK(calendarRowTexture(calendar_flag::kPlayer, 999, "", dungeon).empty());
+    CHECK(calendarRowTexture(calendar_flag::kPlayer, -1, "x", dungeon).empty());
+    CHECK(calendarRowTexture(calendar_flag::kRaidLockout, 214, "x", dungeon).empty());
+    CHECK(calendarRowTexture(calendar_flag::kSystem, 214, "x", dungeon).empty());
 }

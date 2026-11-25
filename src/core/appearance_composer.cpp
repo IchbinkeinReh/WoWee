@@ -373,8 +373,9 @@ void AppearanceComposer::loadEquippedHelm(game::Inventory& inventory) {
     uint8_t raceId = 0;
     uint8_t genderId = 0;
     if (const auto* ch = gameHandler_->getActiveCharacter()) {
-        raceId = static_cast<uint8_t>(ch->race);
-        genderId = static_cast<uint8_t>(ch->gender);
+        const game::Character shown = gameHandler_->getShownCharacter(*ch);
+        raceId = static_cast<uint8_t>(shown.race);
+        genderId = static_cast<uint8_t>(shown.gender);
     }
 
     const core::HelmVisual helm =

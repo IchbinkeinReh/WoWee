@@ -140,7 +140,7 @@ void AudioCallbackHandler::setupCallbacks() {
             return;
         }
         if (entity) {
-            glm::vec3 canonical{entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()};
+            glm::vec3 canonical{entity->getX(), entity->getY(), entity->getZ()};
             glm::vec3 pos = core::coords::canonicalToRender(canonical);
             // A row naming an advanced kit is turned away while another play of that
             // kit is still going within sqrt(6) yards of here (audio/advanced_kit.hpp:

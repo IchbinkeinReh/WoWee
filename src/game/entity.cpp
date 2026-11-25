@@ -65,8 +65,8 @@ void EntityManager::getEntitiesNear(float x, float y, float radius,
         for (const auto& [guid, entity] : entities) {
             (void)guid;
             if (!entity) continue;
-            const int32_t cx = static_cast<int32_t>(std::floor(entity->getLatestX() / kSpatialCellSize));
-            const int32_t cy = static_cast<int32_t>(std::floor(entity->getLatestY() / kSpatialCellSize));
+            const int32_t cx = static_cast<int32_t>(std::floor(entity->getX() / kSpatialCellSize));
+            const int32_t cy = static_cast<int32_t>(std::floor(entity->getY() / kSpatialCellSize));
             spatialCells_[cellKey(cx, cy)].push_back(entity);
         }
         lastSpatialRebuild_ = now;
@@ -89,8 +89,8 @@ void EntityManager::getEntitiesNear(float x, float y, float radius,
             auto it = spatialCells_.find(cellKey(cx, cy));
             if (it == spatialCells_.end()) continue;
             for (const auto& entity : it->second) {
-                const float dx = entity->getLatestX() - x;
-                const float dy = entity->getLatestY() - y;
+                const float dx = entity->getX() - x;
+                const float dy = entity->getY() - y;
                 if (dx * dx + dy * dy <= radiusSq) result.push_back(entity);
             }
         }

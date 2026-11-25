@@ -523,7 +523,7 @@ int main(int argc, char** argv) {
                     q.rewardTitleId = 6;  // CharTitles.dbc id 6 = "Knight %s"
                     q.factionRewards[0] = {69, 5, 0};  // faction 69, value idx 5 -> 250 rep
                     log.push_back(q);
-                    gh.setSelectedQuestLogIndex(1);
+                    gh.selectQuestLogRow(2);  // the first is its header
                 }
             }
             if (auto* engine = mgr.getLuaEngine()) engine->setGameHandler(&gh);
@@ -753,6 +753,7 @@ int main(int argc, char** argv) {
             // just started drawing again.
             else if (w->kind == wowee::ui::WidgetKind::Frame && !w->hasBackdrop &&
                      !w->isStatusBar && !w->isEditBox && w->externalTexture == 0 &&
+                     !(w->isCooldown && w->cooldown.drawn) &&
                      !(w->isMessageFrame && !w->messages.empty()) &&
                      !(w->isTooltip && !w->tooltipLines.empty()))
                 why = "a frame with nothing of its own to paint (no backdrop, no "

@@ -148,6 +148,12 @@ inline InstanceBanner instanceBanner(std::string_view instanceType, uint32_t dif
     return b;
 }
 
+/// Whether this client writes the difficulty on its own minimap: never beside
+/// the interface's, whose flag says the same (minimap.xml has no text for it).
+inline bool ownDifficultyLabel(bool instanceKnown, const InstanceBanner& banner, bool interfaceMinimap) {
+    return instanceKnown && banner.shown && !interfaceMinimap;
+}
+
 /// How 0x00524780 words a raid difficulty that changed.
 enum class RaidChangeWords : uint8_t {
     Lockout,         ///< on a dynamic-difficulty map: ERR_RAID_LOCKOUT_CHANGED_S with RAID_DIFFICULTY<n>,

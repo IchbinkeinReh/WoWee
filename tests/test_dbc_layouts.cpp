@@ -335,3 +335,15 @@ TEST_CASE("The glyph socket fields sit where the client reads them", "[update_fi
     CHECK(j["PLAYER_NO_REAGENT_COST_1"].get<uint32_t>() + 3 ==
           j["PLAYER_FIELD_GLYPH_SLOTS_1"].get<uint32_t>());
 }
+
+// Field 19, between the eleven NPCItemDisplays and the bake's name: bit 0 is a
+// player's own equipment (+0x4c, 0x0071a430).
+TEST_CASE("The display extras name their flags", "[dbc][layout]") {
+    DBCLayout layout;
+    REQUIRE(layout.loadFromJson(layoutPath("wotlk")));
+    const auto* extra = layout.getLayout("CreatureDisplayInfoExtra");
+    REQUIRE(extra != nullptr);
+    CHECK(extra->tryField("Flags") == 19);
+    CHECK(extra->tryField("EquipDisplay10") == 18);
+    CHECK(extra->tryField("BakeName") == 20);
+}

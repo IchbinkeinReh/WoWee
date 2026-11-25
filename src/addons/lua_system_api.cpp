@@ -153,7 +153,7 @@ static std::unordered_map<std::string, std::string>& cvarStore();
 
 /// The calendarShow* CVars as the day lists read them (0x005c0240): the
 /// stored value, else the client's default, and 0 hides that kind of row.
-static wowee::game::CalendarShowFilter calendarShowFilter(const wowee::game::GameHandler& gh) {
+static wowee::game::CalendarShowFilter calendarShowFilter() {
     auto on = [](const char* lower) {
         std::string v;
         if (auto it = cvarStore().find(lower); it != cvarStore().end()) {
@@ -169,8 +169,6 @@ static wowee::game::CalendarShowFilter calendarShowFilter(const wowee::game::Gam
     f.battlegrounds = on("calendarshowbattlegrounds");
     f.lockouts = on("calendarshowlockouts");
     f.resets = on("calendarshowresets");
-    // The player's side (0x006d6e90) among the stages' flags (0x005c04f0).
-    f.side = gh.isPlayerAlliance() ? 1 : 2;
     return f;
 }
 
@@ -180,6 +178,20 @@ static wowee::game::CalendarShowFilter calendarShowFilter(const wowee::game::Gam
 /// same list, so resolving it lives here once - three getters computing "which
 /// month is offset -1 of the viewed one" separately is how they would drift
 /// apart on the first month that ends on a Sunday.
+/// What the month shown is looked at as: its date, the player's side
+/// (0x006d6e90: 1 the Alliance, 2 the Horde), the game's date.
+static wowee::game::CalendarView calendarView(const wowee::game::GameHandler& gh) {
+    const auto viewed = calendarViewedMonth();
+    wowee::game::CalendarView view;
+    view.month = viewed.first;
+    view.year = viewed.second;
+    const int team = wowee::game::bg_flag::raceTeam(gh.getPlayerRace());
+    view.teamMask = team == 1 ? 1u : team == 0 ? 2u : 0u;
+    if (const auto now = gh.getGameDate()) view.now = *now;
+    view.player = gh.getPlayerGuid();
+    return view;
+}
+
 static std::vector<wowee::game::CalendarDayEntry> calendarDayRows(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return {};
@@ -191,7 +203,7 @@ static std::vector<wowee::game::CalendarDayEntry> calendarDayRows(lua_State* L) 
                                                    monthOffset);
     if (day > info.numDays) return {};
     return wowee::game::calendarEntriesForDay(gh->getCalendarData(), info.month,
-                                              day, info.year, calendarShowFilter(*gh));
+                                              day, info.year, calendarShowFilter(), calendarView(*gh));
 }
 
 /// The event being built up before it is sent.
@@ -239,7 +251,7 @@ static std::vector<wowee::game::CalendarDayEntry> calendarRowsFor(
                                                    monthOffset);
     if (day > info.numDays) return {};
     return wowee::game::calendarEntriesForDay(gh.getCalendarData(), info.month,
-                                              day, info.year, calendarShowFilter(gh));
+                                              day, info.year, calendarShowFilter(), calendarView(gh));
 }
 
 /// Which of the six kinds of row this event is, as the string the interface
@@ -4148,9 +4160,6 @@ static int lua_ReturnFalse(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 static int lua_ReturnNil(lua_State* L)   { lua_pushnil(L); return 1; }
 static int lua_ReturnZero(lua_State* L)  { lua_pushnumber(L, 0.0); return 1; }
 
-/// Which row the skill list has selected, which is UI state rather than
-/// anything the game knows. Same shape as selectedFriend and selectedIgnore.
-static int& selectedSkill() { static int v = 0; return v; }
 static int lua_ReturnNothing(lua_State*) { return 0; }
 
 /// Which channel the channel-list panel has highlighted. Panel state with no
@@ -9228,10 +9237,18 @@ void registerSystemLuaAPI(lua_State* L) {
             const auto& list = gh->getCompanions(mounts);
             if (index > static_cast<int>(list.size())) return luaReturnNil(L);
             const auto& c = list[static_cast<size_t>(index) - 1];
-            // The creature's entry, for either kind (0x0053e2c0): what
-            // SetCreature takes, and what the companion tab finds it by.
+            // The creature itself, for a critter and a mount alike, and its
+            // name - nil until the cache has it, which is asked here
+            // (0x0053e2c0 -> 0x0067b6a0). What it looks like is SetCreature's
+            // to find out; this answered its display, which was 0 until the
+            // answer came, and 0 is what the window took for the creature
+            // shown and never asked again.
+            gh->getCreatureDisplayIdForEntry(c.creatureId);
             lua_pushnumber(L, c.creatureId);
-            lua_pushstring(L, c.name.c_str());
+            if (const std::string name = gh->getCachedCreatureName(c.creatureId); !name.empty())
+                lua_pushstring(L, name.c_str());
+            else
+                lua_pushnil(L);
             lua_pushnumber(L, c.spellId);
             lua_pushstring(L, gh->getSpellIconPath(c.spellId).c_str());
             // Whether it is out. A mount is an aura on the player; a critter is
@@ -10204,8 +10221,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 // the list is one-based: SkillFrame_SetStatusBar compares each
                 // row against this to decide which border to light, so nothing
                 // ever looked selected however many times it was clicked.
-                {"GetSelectedSkill", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedSkill()); return 1; }},
                 // Whether the floors being named sit under a surface level,
                 // which decides whether the level dropdown names its entries by
                 // the floor or by one below it (WorldMapLevelDropDown_Initialize
@@ -10652,11 +10667,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 // verbs for those (ShowWorldMapArrowFrame and
                 // PositionWorldMapArrowFrame, above) are both answered.
                 {"UpdateWorldMapArrowFrames",   lua_UpdateWorldMapArrowFrames},
-                {"SetSelectedSkill", [](lua_State* L) -> int {
-            // 0x005cd860
-            if (!lua_isnumber(L, 1))
-                return luaL_error(L, "Usage: SetSelectedSkill(index)");
-            selectedSkill() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
                 {"Sound_GameSystem_GetOutputDriverNameByIndex", lua_Sound_GetOutputDriverNameByIndex},
                 {"PlaySound",           lua_PlaySound},
                 {"PlaySoundFile",       lua_PlaySoundFile},
@@ -11731,25 +11741,25 @@ void registerSystemLuaAPI(lua_State* L) {
                 //   inviteType, sequenceIndex, numSequenceDays, difficultyName
                 //
                 // A nil title is how the list ends - the interface tests
-                // `if ( title and sequenceType ~= "ONGOING" )` - so an index
-                // past the day's rows answers nothing at all rather than a row
-                // of blanks, which would draw an empty button on every day.
+                // `if ( title and sequenceType ~= "ONGOING" )` - with the other
+                // fourteen blank (0x005c1070).
                 {"CalendarGetDayEvent", [](lua_State* L) -> int {
-            // 0x005c1070
             if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
                 return luaL_error(L, "Usage: CalendarGetDayEvent([-1.0.1], monthDay, index)");
-            const auto rows = calendarDayRows(L);
-            const int index = luaToClientInt(L, 3);
-            auto* gh = getGameHandler(L);
-            if (!gh || index < 1 || static_cast<size_t>(index) > rows.size()) {
+            const auto none = [L]() {
                 lua_pushnil(L);
-                for (const char v : {'0', '0', 'e', 'e', '0', 'e', 'e', '0', 'e', '0', '0', '0', '0', 'e'}) {
-                    if (v == 'e') lua_pushstring(L, "");
-                    else lua_pushnumber(L, 0);
+                for (const char v : std::string_view("00ss0ss0s0000s")) {
+                    if (v == '0') lua_pushnumber(L, 0);
+                    else lua_pushstring(L, "");
                 }
                 return 15;
-            }
+            };
+            const auto rows = calendarDayRows(L);
+            const int index = luaToClientInt(L, 3);
+            if (index < 1 || static_cast<size_t>(index) > rows.size()) return none();
             const auto& row = rows[static_cast<size_t>(index) - 1];
+            auto* gh = getGameHandler(L);
+            if (!gh) return none();
             const wowee::game::CalendarData& cal = gh->getCalendarData();
 
             if (row.kind == wowee::game::CalendarEntryKind::RaidLockout) {
@@ -11768,9 +11778,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 lua_pushnumber(L, 1);              // inviteType
                 lua_pushnumber(L, row.sequenceIndex + 1);
                 lua_pushnumber(L, row.numSequenceDays);
-                lua_pushstring(L, "");             // difficultyName
+                lua_pushstring(L, gh->savedInstanceDifficultyName(lock.mapId, lock.difficulty).c_str());
                 return 15;
             }
+            const auto texture = [gh](uint32_t flags, int32_t dungeonId, const std::string& holiday) {
+                return wowee::game::calendarRowTexture(flags, dungeonId, holiday, [gh](int32_t id) {
+                    for (const auto& d : gh->getLfgDungeons())
+                        if (d.id == static_cast<uint32_t>(id)) return d.texture;
+                    return std::string();
+                });
+            };
             if (row.kind == wowee::game::CalendarEntryKind::Holiday) {
                 const auto& holiday = cal.holidays[row.index];
                 // Its HolidayNames name (0x005b9430).
@@ -11786,10 +11803,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 lua_pushstring(L, calendarSequenceType(wowee::game::calendar_flag::kHoliday, row.sequenceIndex,
                                                        row.numSequenceDays));
                 lua_pushnumber(L, 0);              // eventType
-                // Its picture, by name (0x005c0fb0): the server's, else the
-                // row's own; the calendar puts Start, Ongoing or End to it.
-                lua_pushstring(L, !holiday.textureFilename.empty() ? holiday.textureFilename.c_str()
-                                  : text ? text->texture.c_str() : "");
+                lua_pushstring(L, texture(wowee::game::calendar_flag::kHoliday, -1,
+                                          holiday.textureFilename.empty() && text ? text->texture
+                                                                                  : holiday.textureFilename).c_str());
                 lua_pushstring(L, "");             // modStatus
                 lua_pushnumber(L, 1);              // inviteStatus
                 lua_pushstring(L, "");             // invitedBy
@@ -11815,17 +11831,10 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushstring(L, calendarTypeName(ev));
             lua_pushstring(L, "");                 // sequenceType: single day
             lua_pushnumber(L, static_cast<double>(ev.type) + 1);
-            // The raid's or dungeon's picture, by name (0x005c0fb0).
-            {
-                std::string texture;
-                for (int kind = 1; ev.dungeonId >= 0 && texture.empty() && kind <= 2; ++kind)
-                    for (const auto& r : gh->calendarEventTextures(kind))
-                        if (static_cast<int32_t>(r.dungeonId) == ev.dungeonId) texture = r.texture;
-                lua_pushstring(L, texture.c_str());
-            }
+            lua_pushstring(L, texture(ev.flags, ev.dungeonId, {}).c_str());
             lua_pushstring(L, calendarModeratorText(rec.invite.flags));
             lua_pushnumber(L, rec.invite.status + 1);
-            lua_pushstring(L, "");                 // invitedBy
+            lua_pushstring(L, gh->lookupName(ev.creatorGuid).c_str());   // invitedBy (0x0067d770)
             lua_pushnumber(L, 0);                  // difficulty
             lua_pushnumber(L, calendarInviteType(rec));
             lua_pushnumber(L, row.sequenceIndex + 1);
@@ -11961,12 +11970,20 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             if (!gh || index < 1 || static_cast<size_t>(index) > rows.size()) return 0;
             const auto& row = rows[static_cast<size_t>(index) - 1];
-            if (row.kind != wowee::game::CalendarEntryKind::Event) return 0;
+            // A holiday, a lockout or a reset is opened as it stands (0x005b9310).
+            const auto viewed = calendarViewedMonth();
+            const auto info = wowee::game::calendarMonthAt(viewed.first, viewed.second,
+                                                           static_cast<int>(luaL_optnumber(L, 1, 0)));
+            if (const auto opened = wowee::game::calendarOpenedRow(gh->getCalendarData(), row, info.year, info.month,
+                                                                   static_cast<int>(luaL_optnumber(L, 2, 0)))) {
+                gh->openCalendarRow(opened->first, opened->second);
+                return 0;
+            }
             gh->requestCalendarEvent(gh->getCalendarData().events[row.index].eventId);
             return 0;
         }},
                 {"CalendarCloseEvent", [](lua_State* L) -> int {
-            (void)L;
+            if (auto* gh = getGameHandler(L)) gh->closeCalendarRow();
             return 0;
         }},
                 // Twenty-five values, in the order the view frame unpacks
@@ -12915,16 +12932,18 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 {"CalendarGetEventIndex", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh && gh->isCalendarEventOpen()) {
-                const uint64_t open = gh->getCalendarEventDetail().eventId;
+            const auto open = gh ? gh->getCalendarOpenRow() : wowee::game::CalendarOpenRow{};
+            if (open.eventId != 0 || open.day != 0) {
                 const auto viewed = calendarViewedMonth();
-                for (int offset = -1; offset <= 1 && open; ++offset) {
+                for (int offset = -1; offset <= 1; ++offset) {
                     const auto info = wowee::game::calendarMonthAt(viewed.first, viewed.second, offset);
+                    // A holiday's or a lockout's day is its own.
+                    if (open.day != 0 && (info.month != open.month || info.year != open.year)) continue;
                     for (int day = 1; day <= info.numDays; ++day) {
+                        if (open.day != 0 && day != open.day) continue;
                         const auto rows = calendarRowsFor(*gh, offset, day);
                         for (size_t i = 0; i < rows.size(); ++i) {
-                            if (rows[i].kind != wowee::game::CalendarEntryKind::Event) continue;
-                            if (gh->getCalendarData().events[rows[i].index].eventId != open) continue;
+                            if (!wowee::game::calendarIsOpenRow(gh->getCalendarData(), rows[i], open)) continue;
                             lua_pushinteger(L, offset);
                             lua_pushinteger(L, day);
                             lua_pushinteger(L, static_cast<lua_Integer>(i + 1));

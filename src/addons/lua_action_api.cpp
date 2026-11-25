@@ -621,7 +621,12 @@ public:
     bool stealthed() override { return units_.isStealthed(); }
     bool inParty() override { return gh_.isInGroup(); }
     bool inRaid() override { return gh_.isInGroup() && game::groupIsRaid(gh_.getPartyData().groupType); }
-    int shapeshiftForm() override { return globalNumber(L_, "GetShapeshiftForm"); }
+    // [stance] and [form] (0x005eefb0) ask 0x0053d4b0 with 1: a place on the
+    // bar only while the form field is set, so no aura or presence counts.
+    int shapeshiftForm() override {
+        if (!game::isPreWotlk() && gh_.getShapeshiftFormId() == 0) return 0;
+        return globalNumber(L_, "GetShapeshiftForm");
+    }
     bool pet(std::string& name, std::string& family) override {
         if (!globalTruth(L_, "UnitExists", {"pet"})) return false;
         name = globalString(L_, "UnitName", {"pet"});
@@ -864,8 +869,8 @@ static std::string macroTexture(lua_State* L, game::GameHandler* gh, uint32_t id
         const auto spell = static_cast<uint32_t>(m->result.spell);
         const auto it = gh->spellNameCacheRef().find(spell);
         if (it != gh->spellNameCacheRef().end() && it->second.activeIconId != 0 && !m->result.petSpell) {
-            for (const auto& form : game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells())) {
-                if (form.spellId == spell && gh->formSpellInEffect(spell)) {
+            for (const uint32_t form : gh->stanceBarSpells()) {
+                if (form == spell && gh->formSpellInEffect(spell)) {
                     const std::string active = gh->getIconPath(it->second.activeIconId);
                     if (!active.empty()) return active;
                     break;
@@ -1457,7 +1462,7 @@ static int lua_UseAction(lua_State* L) {
         } else if (const uint32_t itemForSpell = gh->getItemIdForSpell(action.id)) {
             gh->useItemById(itemForSpell, *target);
         } else {
-            gh->castSpell(action.id, *target);
+            gh->useSpell(action.id, *target);  // 0x005abbc0 -> 0x0080da80
         }
     } else if (action.type == game::ActionBarSlot::ITEM && action.id != 0) {
         const auto unit = unitUsedOn(L, gh, 2);
@@ -4086,10 +4091,33 @@ static int lua_WoweeBindDefault(lua_State* L) {
     return 0;
 }
 
-// RunBinding(command, keystate) → runs what bindings.xml says the command does
+// RunBinding(command, keystate) → runs what bindings.xml says the command does.
+//
+// 0x0055fad0: "up", whatever its case, is a release; anything else and nothing
+// at all a press. 0x0055f860 then runs a release only of a binding declared
+// runOnUp (+0x20). The stack splitter runs the binding of each key it does not
+// use itself, press and release, and a window's key opened it and closed it.
 static int lua_RunBinding(lua_State* L) {
-    const std::string command = luaL_checkstring(L, 1);
-    const char* keystate = lua_isnoneornil(L, 2) ? "down" : luaL_checkstring(L, 2);
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: RunBinding(\"COMMAND\")");
+    const std::string command = lua_tostring(L, 1);
+    bool up = false;
+    if (lua_isstring(L, 2)) {
+        std::string state = lua_tostring(L, 2);
+        toLowerInPlace(state);
+        up = state == "up";
+    }
+    if (up) {
+        taint::Quiet quiet;
+        lua_getglobal(L, "__WoweeBindingRunOnUp");
+        bool onUp = false;
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, command.c_str());
+            onUp = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+        if (!onUp) return 0;
+    }
 
     // Run under the caller's own taint (0x0055fad0 hands 0x0055f860 the
     // running one), the script found without tainting it further.
@@ -4101,7 +4129,7 @@ static int lua_RunBinding(lua_State* L) {
         lua_getfield(L, -1, command.c_str());
         if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return 0; }
     }
-    lua_pushstring(L, keystate);
+    lua_pushstring(L, up ? "up" : "down");
     int rc = 0;
     {
         taint::Scope binding(caller);

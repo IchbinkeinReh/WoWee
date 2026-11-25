@@ -725,45 +725,15 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
     return true;
 }
 
-bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& equipment, bool paintArmour) {
-    // As the world has the unit: the first main-hand kind in the right hand,
-    // the first off-hand kind in the left - a shield at the shield point.
-    std::vector<game::EquipmentItem> worn;
-    std::vector<core::PreviewWeapon> held;
-    uint32_t head = 0;
-    bool haveMain = false, haveOff = false;
-    for (const auto& it : equipment) {
-        if (it.displayModel == 0) continue;
-        switch (it.inventoryType) {
-            case 1: if (head == 0) head = it.displayModel; break;
-            case 13: case 15: case 17: case 21: case 25: case 26:
-                if (!haveMain) {
-                    held.push_back({.display = it.displayModel, .enchant = it.enchantment,
-                                    .point = core::attachment::kHandRight});
-                    haveMain = true;
-                }
-                break;
-            case 14: case 22: case 23:
-                if (!haveOff) {
-                    const bool shield = it.inventoryType == 14;
-                    held.push_back({.display = it.displayModel, .enchant = it.enchantment,
-                                    .point = shield ? core::attachment::kShield : core::attachment::kHandLeft,
-                                    .shield = shield});
-                    haveOff = true;
-                }
-                break;
-            default: worn.push_back(it); break;
-        }
-    }
-    return dress(worn, head, held, {}, paintArmour);
-}
-
 namespace {
 std::vector<core::PreviewItem> previewItems(const std::vector<game::EquipmentItem>& items) {
     std::vector<core::PreviewItem> out;
     out.reserve(items.size());
     for (const auto& it : items) {
-        out.push_back({.display = it.displayModel, .inventoryType = it.inventoryType, .enchant = it.enchantment});
+        out.push_back({.display = it.displayModel, .inventoryType = it.inventoryType, .enchant = it.enchantment,
+                       .hand = it.hand == game::EquipmentItem::Hand::Main  ? core::PreviewItem::Hand::Main
+                               : it.hand == game::EquipmentItem::Hand::Off ? core::PreviewItem::Hand::Off
+                                                                           : core::PreviewItem::Hand::ByKind});
     }
     return out;
 }
@@ -776,6 +746,11 @@ std::vector<game::EquipmentItem> equipmentItems(const std::vector<core::PreviewI
     return out;
 }
 }  // namespace
+
+bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& equipment, bool paintArmour) {
+    const core::PreviewDress d = core::wornDress(previewItems(equipment));
+    return dress(equipmentItems(d.worn), d.head, d.held, {}, paintArmour);
+}
 
 bool CharacterPreview::applyCharacterSelectEquipment(const std::vector<game::EquipmentItem>& slots,
                                                      uint32_t characterFlags) {

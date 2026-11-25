@@ -9,6 +9,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/camera_controller.hpp"
+#include "rendering/camera_entry.hpp"
 
 using wowee::rendering::CameraController;
 using Catch::Matchers::WithinAbs;
@@ -166,4 +167,23 @@ TEST_CASE("looking up puts the camera near the ground, and lifts it") {
     // swung far.
     CHECK(CameraController::terrainPivotLift(pivotZ, -0.4f, 1.0f, 0.0f)
           == Catch::Approx(0.0f).margin(0.001f));
+}
+
+TEST_CASE("the camera is read from the CVars at the login and kept over a map change") {
+    // 0x005ff3e0 runs as the character's CVars are read, which a map change
+    // does not do.
+    const wowee::rendering::CameraStand kept{.distance = 17.0f, .pitchDown = 20.0f};
+    int asked = 0;
+    const auto stored = [&asked] {
+        ++asked;
+        return wowee::rendering::CameraStand{.distance = 6.0f, .pitchDown = 0.0f};
+    };
+    const auto after = wowee::rendering::cameraStandOnEntry(true, kept, stored);
+    CHECK_THAT(after.distance, WithinAbs(17.0f, 1e-6f));
+    CHECK_THAT(after.pitchDown, WithinAbs(20.0f, 1e-6f));
+    CHECK(asked == 0);
+    const auto login = wowee::rendering::cameraStandOnEntry(false, kept, stored);
+    CHECK_THAT(login.distance, WithinAbs(6.0f, 1e-6f));
+    CHECK_THAT(login.pitchDown, WithinAbs(0.0f, 1e-6f));
+    CHECK(asked == 1);
 }

@@ -1,8 +1,9 @@
 #pragma once
 
-#include "game/achievement_category.hpp"
 #include "game/item_book.hpp"
 #include "game/stat_tables.hpp"
+#include "game/reputation_tree.hpp"
+#include "game/achievement_list.hpp"
 #include "game/macro_list.hpp"
 #include "game/pet_action.hpp"
 #include "game/achievement_tracking.hpp"
@@ -97,6 +98,7 @@ namespace wowee::game {
 namespace wowee {
 namespace network { class WorldSocket; class Packet; }
 namespace audio { enum class PlayerErrorSpeech : uint8_t; }
+namespace pipeline { class DBCFile; }
 
 namespace game {
 
@@ -418,6 +420,18 @@ public:
         return entityController_->getPlayerAppearance(guid, race, gender,
                                                       appearanceBytes, facial);
     }
+    /// The same as it is shown: the race and sex of a display it wears its own
+    /// things in, which is what a portrait or a model view of it is made from
+    /// (0x005975e0 duplicates the unit's model).
+    bool getShownPlayerAppearance(uint64_t guid, uint8_t& race, uint8_t& gender,
+                                  uint32_t& appearanceBytes, uint8_t& facial) const {
+        if (!getPlayerAppearance(guid, race, gender, appearanceBytes, facial)) return false;
+        if (const auto body = getShownBody(guid)) {
+            race = body->race;
+            gender = body->sex;
+        }
+        return true;
+    }
     EntityManager& getEntityManager() override { return entityController_->getEntityManager(); }
     const EntityManager& getEntityManager() const override { return entityController_->getEntityManager(); }
 
@@ -517,12 +531,6 @@ public:
     void noteUnitTooltip(uint64_t guid) const {
         if (unitTooltipCallback_ && guid != 0) unitTooltipCallback_(guid);
     }
-
-    /// Where a quest stands in the interface's list of the log, headers counted
-    /// with it, from one; 0 for one that is not in it (0x005deeb0).
-    using QuestLogRowLookup = std::function<int(uint32_t questId)>;
-    void setQuestLogRowLookup(QuestLogRowLookup lookup) { questLogRowLookup_ = std::move(lookup); }
-    [[nodiscard]] const QuestLogRowLookup& questLogRowLookup() const { return questLogRowLookup_; }
 
     /// One combat log entry announced (0x0074f910): its arguments, and
     /// whether a filter took it - COMBAT_LOG_EVENT then, and
@@ -878,7 +886,7 @@ public:
     void sendZoneUpdate(uint32_t zoneId);
     /// Seconds until the daily quest reset, or 0 if the server has not said.
     uint32_t getSecondsUntilDailyReset() const;
-    void requestPlayedTime();
+    void requestPlayedTime(bool forChat = true);
     void queryWho(const std::string& playerName = "");
     uint32_t getTotalTimePlayed() const;
     /// 0x006cf440: played time now, -1 before SMSG_PLAYED_TIME has come.
@@ -1168,6 +1176,12 @@ public:
     /// A player's name has arrived: an open event may have been waiting on
     /// it (0x005f1b10).
     void onCalendarNameKnown(uint64_t guid);
+    /// CalendarOpenEvent (0x005b9310) of a row the server is not asked about:
+    /// the open one from now on, and said so; nothing while a request is out.
+    void openCalendarRow(const CalendarOpenRow& row, const char* type);
+    /// CalendarCloseEvent (0x005b84a0): no row is the open one.
+    void closeCalendarRow() { calendarOpenRow_ = {}; }
+    const CalendarOpenRow& getCalendarOpenRow() const { return calendarOpenRow_; }
     void requestCalendar(); ///< Send CMSG_CALENDAR_GET_CALENDAR to the server
     /// The calendar the server last sent, empty until it has answered one.
     const CalendarData& getCalendarData() const { return calendarData_; }
@@ -1762,6 +1776,8 @@ public:
     /// Whether a pet spell is in effect on the pet, so that its button takes
     /// it off rather than casting it and shows its ActiveIconID (0x00802cb0).
     [[nodiscard]] bool petSpellInEffect(uint32_t spellId);
+    /// The same for any unit, with its auras (0x00802cb0).
+    [[nodiscard]] bool unitSpellInEffect(uint64_t guid, uint32_t spellId, const std::vector<AuraSlot>& auras) const;
     const std::unordered_set<uint32_t>& getKnownSpells() const {
         static const std::unordered_set<uint32_t> empty;
         return spellHandler_ ? spellHandler_->getKnownSpells() : empty;
@@ -1825,6 +1841,12 @@ public:
     /// the item's learn-trigger spell, known by the pet when the effect is
     /// aimed at the pet (implicit target 5) and by the player otherwise.
     [[nodiscard]] bool itemSpellAlreadyKnown(const ItemQueryResponseData& item) const;
+    /// The item a recipe's lesson makes, which a dressing room shows for it
+    /// (0x005980d0), or 0: something never worn, the first of whose spells
+    /// that teaches (Effect[0] 36) teaches one that creates (Effect[0] 24).
+    [[nodiscard]] uint32_t itemMadeByRecipe(const ItemQueryResponseData& item) const;
+    /// 0x007082b0 with the off hand's slot (game/dressing_room.hpp).
+    [[nodiscard]] bool itemFitsOffHand(uint32_t itemId) const;
 
     // Minimap pings from party members
     struct MinimapPing {
@@ -2105,6 +2127,14 @@ public:
     using PlayerModelRebuildCallback = std::function<void()>;
     void setPlayerModelRebuildCallback(PlayerModelRebuildCallback cb) { playerModelRebuildCallback_ = std::move(cb); }
 
+    /// Whether a unit's model is drawn (0x0077f0b0: not culled), which the
+    /// target keys ask. Without a renderer everything is.
+    using UnitDrawnCallback = std::function<bool(uint64_t guid)>;
+    void setUnitDrawnCallback(UnitDrawnCallback cb) { unitDrawnCallback_ = std::move(cb); }
+    [[nodiscard]] bool unitDrawn(uint64_t guid) const { return !unitDrawnCallback_ || unitDrawnCallback_(guid); }
+    /// CreatureType.dbc's flags for a type: 1 for critters, companions, gas
+    /// clouds - those no target key picks.
+    [[nodiscard]] uint32_t creatureTypeFlags(uint32_t creatureType) const;
 
     // Snap the character to face the camera's current look direction and return the
     // resulting canonical orientation. Used by fishing so the bobber lands in front of
@@ -2178,6 +2208,11 @@ public:
     /// The placed fall queued for the player (0x006eccf0, event 9).
     using PlacedFallCallback = std::function<void()>;
     void setPlacedFallCallback(PlacedFallCallback cb) { placedFallCallback_ = std::move(cb); }
+    PlacedFallCallback& placedFallCallbackRef() { return placedFallCallback_; }
+    /// The active mover's fall is over (0x006e9980 -> 0x00988490): a spline
+    /// takes it.
+    void setFallEndsCallback(PlacedFallCallback cb) { fallEndsCallback_ = std::move(cb); }
+    PlacedFallCallback& fallEndsCallbackRef() { return fallEndsCallback_; }
     /// A vehicle unit went away (0x007576e0): its riders let go of it.
     void vehicleGone(uint64_t vehicleGuid);
     /// The camera's unit taken off its transport: the camera lets go of the
@@ -2302,6 +2337,10 @@ public:
     /// The skill's SkillRaceClassInfo row for this race and class, the
     /// tables read first (0x00810ed0).
     const SkillUps::RaceClassInfo* skillRaceClassInfo(uint32_t skillId);
+    /// Whether the skill is on the skills tab (SkillUps::listed). Every one is
+    /// before WotLK, whose tables were not looked into, and where the table
+    /// cannot be read.
+    bool skillListed(uint32_t skillId);
     /// The player's skill points, PLAYER_CHARACTER_POINTS2 (0x005cd970(1)).
     uint32_t getSkillPoints() const;
     /// GetAdjustedSkillPoints (0x005ce540): the points less those pending.
@@ -3485,14 +3524,11 @@ public:
     /// The quest cache's record for a quest whose query answered (0x0067de90),
     /// null otherwise.
     const QuestLogEntry* questCacheRecord(uint32_t questId) const;
+    /// The quest log's selection, which is a quest and not a row
+    /// (QuestHandler::selectQuestLogRow).
     int getSelectedQuestLogIndex() const;
-    // Writes through to the QuestHandler, which is where getSelectedQuestLogIndex
-    // reads it from. The two used to touch different variables - the setter this
-    // GameHandler's own copy, the getter the decomposed QuestHandler's - so
-    // SelectQuestLogEntry set a selection the quest log never saw: the index
-    // read back 0, GetQuestLogQuestText answered nil for both description and
-    // objectives, and every quest's detail pane drew blank.
-    void setSelectedQuestLogIndex(int idx);
+    const QuestLogEntry* getSelectedQuest() const;
+    void selectQuestLogRow(int index);
     void abandonQuest(uint32_t questId);
     void shareQuestWithParty(uint32_t questId);  // CMSG_PUSHQUESTTOPARTY
     bool requestQuestQuery(uint32_t questId, bool force = false);
@@ -3679,8 +3715,21 @@ public:
     /// The player's object made anew: CGUnit_C's constructor (0x0073f660)
     /// starts +0x9f4 clear, so no cancel carries over to it.
     void clearShapeshiftFormPending() { shapeshiftFormPending_ = false; }
-    /// 0x00802cb0 for the player: whether a form's spell is in effect.
+    /// 0x00802cb0 for the player: whether a spell is in effect - a form, an
+    /// aura or a presence, the mount ridden, the companion out.
     bool formSpellInEffect(uint32_t spellId) const;
+    /// The stance bar's spells, in bar order (0x00be8e2c): what
+    /// GetNumShapeshiftForms counts and every index of the bar means.
+    std::vector<uint32_t> stanceBarSpells() const;
+    /// CastShapeshiftForm (0x0053c0f0 -> 0x0080da80): the spell of that place
+    /// on the bar, from 0, cast - or, in effect, taken off.
+    void castStanceBarSpell(size_t index);
+    /// A spell pressed, as the action bar (0x005abbc0), the spellbook
+    /// (0x0053bc40), CastSpellByName without "!" (0x00540310) and the stance
+    /// bar press one: 0x0080da80. One in effect - of those with an icon for
+    /// it, 0x00802cb0 - is taken off, any other cast. CastSpellByID, the
+    /// tracking menu and CallCompanion cast outright (0x0080da40).
+    void useSpell(uint32_t spellId, uint64_t targetGuid);
     /// Whether a spell is current (0x00806030): IsCurrentSpell and the spell
     /// leg of IsCurrentAction (0x005aa240).
     bool isCurrentSpell(uint32_t spellId) const;
@@ -3717,6 +3766,20 @@ public:
     /// CreatureModelData Flags of a display's model, none where a table or
     /// row is missing.
     std::optional<uint32_t> displayModelFlags(uint32_t displayId) const;
+    /// The body a player is shown in under a display other than its own.
+    struct ShownBody {
+        uint32_t displayId = 0;
+        uint8_t race = 0;
+        uint8_t sex = 0;
+    };
+    /// What a display makes of a player that is dressed as itself in it
+    /// (wearsOwnEquipment), none for a display that is not such a one.
+    std::optional<ShownBody> ownEquipmentDisplay(uint32_t displayId) const;
+    /// The same for the player's display as it is now; none while that is its
+    /// own (UNIT_FIELD_NATIVEDISPLAYID) or one that is worn as it is.
+    std::optional<ShownBody> getShownBody(uint64_t guid) const;
+    /// The player's character in the body it is shown in.
+    Character getShownCharacter(const Character& character) const;
     /// The player's UNIT_FIELD_BYTES_2 byte 3 changed (0x006da130): the
     /// form, its preset spells, and the events to fire, in order.
     std::vector<const char*> setPlayerShapeshiftForm(uint8_t form);
@@ -3921,14 +3984,10 @@ public:
     /// that is not the faction id - and only Faction.dbc knows which faction
     /// each index belongs to. Resolved here rather than in a window, because
     /// the original interface asks the same question through GetFactionInfo.
-    struct ReputationEntry {
-        uint32_t factionId = 0;
-        uint32_t reputationIndex = 0;
-        std::string name;
-        uint8_t flags = 0;
-    };
-    /// Visible factions in the server's own order. Empty until the standings
-    /// arrive, and built once after they do.
+    using ReputationEntry = reputation_tree::Entry;
+    /// Visible factions in the server's own order, as their flags are now:
+    /// one the player meets joins them, one put away or at war says so. Empty
+    /// until the standings arrive.
     const std::vector<ReputationEntry>& getReputationList() const;
     /// The player's current standing with a faction, which moves after the
     /// list is built and so is not stored in it.
@@ -3942,17 +4001,7 @@ public:
     /// ParentFactionID, and a header is simply a faction that some visible
     /// faction descends from. A header may have a standing of its own (Alliance
     /// does), which is why hasRep is a separate answer from isHeader.
-    struct ReputationRow {
-        uint32_t factionId = 0;
-        /// The server's repListId, and 0 for a header the player has no
-        /// standing with - such a row is drawn but cannot be acted on.
-        uint32_t reputationIndex = 0;
-        std::string name;
-        uint8_t flags = 0;
-        bool isHeader = false;    ///< something below it descends from this
-        bool isChild = false;     ///< drawn indented, under a header
-        bool hasRep = false;      ///< the player has a standing to show
-    };
+    using ReputationRow = reputation_tree::Row;
     /// The rows currently on screen: headers, plus the children of every header
     /// that is not collapsed. This is what GetNumFactions counts and what
     /// GetFactionInfo indexes, so every binding taking a "faction index" must
@@ -3962,16 +4011,12 @@ public:
         return collapsedFactionIds_.count(factionId) > 0;
     }
     void setFactionCollapsed(uint32_t factionId, bool collapsed);
-    /// The factions or their flags are others: the list is made anew when it is
-    /// next asked for (0x005d1880).
-    void reputationListChanged() {
-        reputationListBuilt_ = false;
-        reputationRowsDirty_ = true;
-    }
-    /// Faction.dbc's description, "" for one without.
-    const std::string& getFactionDescription(uint32_t factionId) const;
     /// The faction this one is grouped under, or 0 for a top-level one.
     uint32_t getFactionParentId(uint32_t factionId) const;
+    /// What Faction.dbc says of it (+0x60 of the client's row), "" for nothing.
+    const std::string& getFactionDescription(uint32_t factionId) const;
+    /// Faction.dbc's rows: names, descriptions, parents, the reputation list.
+    void readFactionTable(const pipeline::DBCFile& dbc) const;
 
     const std::vector<FactionStandingInit>& getInitialFactions() const { return initialFactions_; }
     const std::unordered_map<uint32_t, int32_t>& getFactionStandings() const { return factionStandings_; }
@@ -4388,8 +4433,6 @@ public:
         auto it = achievementCategoryInfo_.find(categoryId);
         return it != achievementCategoryInfo_.end() ? &it->second : nullptr;
     }
-    /// Every achievement as Achievement.dbc has them, one after the other.
-    const std::vector<achievement_category::Row>& achievementRows() const { return achievementRows_; }
     uint32_t getAchievementCategory(uint32_t achievementId) const {
         auto it = achievementCategoryCache_.find(achievementId);
         return it != achievementCategoryCache_.end() ? it->second : 0u;
@@ -4400,6 +4443,8 @@ public:
     /// "Expert Cook" behind "Journeyman Cook". The achievement panel walks it
     /// backwards to build a completed chain and forwards to find the step in
     /// progress, so both directions are kept.
+    /// Achievement.dbc in its own order (ensureAchievementCategoriesLoaded).
+    const std::vector<AchievementRow>& getAchievementRows() const { return achievementRows_; }
     uint32_t getAchievementSupercedes(uint32_t achievementId) const {
         auto it = achievementSupercedes_.find(achievementId);
         return it != achievementSupercedes_.end() ? it->second : 0u;
@@ -5626,13 +5671,17 @@ public:
     void updateNetworking();
     void updateTimers(float deltaTime);
     void updateEntityInterpolation(float deltaTime);
-    /// The frame's real length, uncapped, for the next update - its timers,
-    /// the taxi, the units on their moves. The client runs a unit's spline by
-    /// the clock - its elapsed time is now less the time it started
-    /// (FUN_0098ca00: spline +0x28 = now - +0x24, +0x24 set to the world time
-    /// by FUN_0098c770) - so a long frame moves it as far as the time that
-    /// passed. Without it, the update's own delta is used.
-    void setUnitClockSeconds(float seconds) { unitClockSeconds_ = seconds; }
+    /// The time now, for the next update: it goes by the clock's time since
+    /// the last one - its timers, the taxi, the units on their moves. The
+    /// client runs a unit's spline by the clock - its elapsed time is now less
+    /// the time it started (FUN_0098ca00: spline +0x28 = now - +0x24, +0x24
+    /// set to the world time by FUN_0098c770) - so a long frame moves it as
+    /// far as the time that passed. Without it, the update's own delta is used.
+    void setUnitClock(std::chrono::steady_clock::time_point now) { unitClockNow_ = now; }
+    /// How long ago by the clock the units' moves stand where they do: since
+    /// the time they were last moved on to (updateEntityInterpolation). 0
+    /// where nothing gives the updates a clock.
+    [[nodiscard]] float sinceUnitsAdvanced() const;
     void updateTaxiAndMountState(float deltaTime);
     void updateAutoAttack();
 
@@ -5891,10 +5940,7 @@ public:
     auto& playerExploredZonesRef() { return playerExploredZones_; }
     auto& hasPlayerExploredZonesRef() { return hasPlayerExploredZones_; }
     auto& factionStandingsRef() { return factionStandings_; }
-    auto& initialFactionsRef() {
-        reputationListChanged();
-        return initialFactions_;
-    }
+    auto& initialFactionsRef() { return initialFactions_; }
 
     // ── Corpse & Home Bind ───────────────────────────────────────────
     auto& corpseGuidRef() { return corpseGuid_; }
@@ -6239,6 +6285,9 @@ public:
         /// Spell.dbc ActiveIconID (+0x218): a spell shown as in effect,
         /// which its button turns off (0x00802cb0).
         uint32_t activeIconId = 0;
+        /// Spell.dbc StanceBarOrder (+0x25c): its place on the stance bar
+        /// (0x0053c680), -1 for last.
+        int32_t stanceBarOrder = 0;
         uint32_t spellFamily = 0;
         uint32_t spellFamilyFlags[3] = {0, 0, 0};
         // Spell.dbc Targets bitmask (SpellCastTargetFlags) - 0x10 = TARGET_FLAG_ITEM
@@ -6493,8 +6542,12 @@ public:
     }
 
 private:
-    /// setUnitClockSeconds: the frame's real length, until an update takes it.
-    std::optional<float> unitClockSeconds_;
+    /// setUnitClock, until an update takes it, and the last one taken.
+    std::optional<std::chrono::steady_clock::time_point> unitClockNow_;
+    std::optional<std::chrono::steady_clock::time_point> unitClockTaken_;
+    /// The time of it the units' moves were last run to.
+    std::optional<std::chrono::steady_clock::time_point> unitsAdvancedTo_;
+    float takeUnitClock(float deltaTime);
     /// unitsCooperate, with unitMayAttack(a, b) asked only when not given.
     [[nodiscard]] bool unitsCooperateGiven(uint64_t a, uint64_t b, std::optional<bool> aMayAttackB) const;
     bool autoRepeating_ = false;
@@ -6789,7 +6842,6 @@ private:
     // Chat (state lives in ChatHandler; callbacks remain here for cross-domain access)
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
-    QuestLogRowLookup questLogRowLookup_;
     UnitTooltipCallback unitTooltipCallback_;
     /// A server's movie is playing (DAT_00bd0800).
     bool moviePlaying_ = false;
@@ -7169,7 +7221,7 @@ private:
     std::unordered_map<uint32_t, int32_t> factionStandings_;
     // Faction name cache (factionId → name), populated lazily from Faction.dbc
     mutable std::unordered_map<uint32_t, std::string> factionNameCache_;
-    mutable std::unordered_map<uint32_t, std::string> factionDescriptionCache_;
+    mutable std::unordered_map<uint32_t, std::string> factionDescriptions_;
     // repListId → factionId mapping (populated with factionNameCache)
     mutable std::unordered_map<uint32_t, uint32_t> factionRepListToId_;
     // factionId → repListId reverse mapping
@@ -7331,8 +7383,8 @@ private:
 
     // Quest log. The entries and the selection both live in QuestHandler now;
     // the GameHandler selection copy this comment used to describe was dead -
-    // written by setSelectedQuestLogIndex, read by nobody, while the getter went
-    // to the QuestHandler - and has been removed.
+    // written by its setter, read by nobody, while the getter went to the
+    // QuestHandler - and has been removed.
     std::unordered_set<uint32_t> pendingQuestQueryIds_;
     std::unordered_set<uint32_t> trackedQuestIds_;
     std::vector<uint32_t> questWatchOrder_;  ///< trackedQuestIds_ in watch order
@@ -7390,6 +7442,7 @@ private:
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     OverrideLightCallback overrideLightCallback_;
     PlacedFallCallback placedFallCallback_;
+    PlacedFallCallback fallEndsCallback_;
     CameraTransportClearedCallback cameraTransportClearedCallback_;
     bool petActionsOnBonusBar_ = false;
     bool overrideBarActive_ = false;
@@ -7530,12 +7583,13 @@ private:
     mutable std::unordered_map<uint32_t, ExtendedCostEntry> extendedCostCache_;
     mutable bool extendedCostCacheLoaded_ = false;
     mutable std::vector<ReputationEntry> reputationList_;
-    mutable bool reputationListBuilt_ = false;
+    /// The flags reputationList_ was built from, one per repListId.
+    mutable std::vector<uint8_t> reputationListFlags_;
     /// factionId → the faction it is grouped under, from Faction.dbc field 18.
     /// Filled by loadFactionNameCache alongside the names and the repList map.
     mutable std::unordered_map<uint32_t, uint32_t> factionParent_;
-    /// The drawn rows, rebuilt whenever the collapse set changes rather than
-    /// on every ask - the reputation panel calls GetFactionInfo once per row
+    /// The drawn rows, rebuilt whenever the list or the collapse set changes
+    /// rather than on every ask - the reputation panel calls GetFactionInfo once per row
     /// per redraw.
     mutable std::vector<ReputationRow> reputationRows_;
     mutable bool reputationRowsDirty_ = true;
@@ -7561,10 +7615,10 @@ private:
     std::unordered_map<uint32_t, uint32_t>    achievementCategoryCache_;  // achievementId → Achievement_Category.dbc ID
     // Achievement ids per category, in the DBC's own order - the panel lists a
     // category by index, so the order has to be stable across calls.
-    std::vector<achievement_category::Row> achievementRows_;
     std::unordered_map<uint32_t, AchievementCategoryInfo> achievementCategoryInfo_;
     std::vector<uint32_t> achievementCategoryOrder_;
     std::vector<uint32_t> statisticCategoryOrder_;
+    std::vector<AchievementRow> achievementRows_;
     std::unordered_map<uint32_t, uint32_t> achievementSupercedes_;
     std::unordered_map<uint32_t, uint32_t> achievementSupercededBy_;
     bool achievementCategoriesLoaded_ = false;
@@ -7762,6 +7816,9 @@ private:
     DifficultyLoadingScreenCallback difficultyLoadingScreenCallback_;
     AppearanceChangedCallback appearanceChangedCallback_;
     PlayerModelRebuildCallback playerModelRebuildCallback_;
+    UnitDrawnCallback unitDrawnCallback_;
+    mutable std::unordered_map<uint32_t, uint32_t> creatureTypeFlags_;
+    mutable bool creatureTypeFlagsLoaded_ = false;
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
     UnitAmmoCallback unitAmmoCallback_;
@@ -7974,8 +8031,6 @@ private:
     /// One calendar packet, read and applied as 0x005c3fe0 does, and the
     /// events it raises fired.
     void handleCalendarPacket(CalendarPacket which, network::Packet& packet);
-    /// The holidays of Holidays.dbc the server has not sent its own of.
-    void addHolidayRows();
     /// Whether a calendar request may go out now: in the world, and none
     /// already pending. Every sender asks first and, having sent, marks it
     /// pending (0x005b9310, 0x005b9860 and the rest).
@@ -8015,6 +8070,10 @@ private:
                              const std::vector<std::string>& args = {});
     /// The whole calendar, as of the server's last answer to a request for it.
     CalendarData calendarData_;
+    /// Holidays.dbc's rows that have a name (0x005c23c0), read once.
+    const std::vector<CalendarHoliday>& holidayTable();
+    std::vector<CalendarHoliday> holidayTable_;
+    bool holidayTableRead_ = false;
     /// The reminders armed against that calendar, re-armed by every calendar
     /// packet that lands. The client keeps one scheduled callback per event
     /// record (its handle at `+0xc0`, armed by 0x005b79b0); these are the same
@@ -8028,6 +8087,7 @@ private:
     void sayCalendarAlarms(const WowDate& now);
     /// One event in full, as of the last one opened.
     CalendarEventDetail calendarEventDetail_;
+    CalendarOpenRow calendarOpenRow_;  // 0x00c20f78
 
     // ---- Spell modifiers (SMSG_SET_FLAT_SPELL_MODIFIER / SMSG_SET_PCT_SPELL_MODIFIER) ----
     // Keyed by (SpellModOp, groupIndex); cleared on logout/character change.

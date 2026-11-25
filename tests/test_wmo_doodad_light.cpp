@@ -4,7 +4,9 @@
 // direction, with no sun (0x007bef40, 0x007c1ad0, 0x007c1150, 0x007a0d60,
 // 0x007c7fe0). WoWee lit them by the outdoor sun and its shadow map.
 #include <catch_amalgamated.hpp>
+#include <array>
 
+#include "pipeline/wmo_open_air_room.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 
 #include <string>
@@ -373,4 +375,52 @@ TEST_CASE("a world object off a floor takes the zone's light as the frame dims i
     CHECK(drawnObjectLight(eased, true, -1.0f) == glm::vec3(0.0f));
     // On an interior floor its baked colour is no light of the zone's.
     CHECK(drawnObjectLight(eased, false, 0.65f) == eased);
+}
+
+TEST_CASE("A room's faces carry the light it is painted with", "[wmo][light]") {
+    using K = wl::BatchKind;
+    const std::array<glm::vec3, 3> mocv = {glm::vec3(60.0f, 10.0f, 10.0f), glm::vec3(90.0f, 10.0f, 10.0f),
+                                           glm::vec3(120.0f, 40.0f, 10.0f)};
+    const glm::vec4 ambient(0.2f, 0.0f, 0.0f, 1.0f);
+    const wl::GroupDraw room{.unified = false, .vertexColors = true, .groupFlags = 0x2004};
+    // As a unit on the floor takes it: the mean of the doubled corners.
+    const auto plain = wl::roomLight(room, K::Interior, 0, mocv, 0, ambient);
+    REQUIRE(plain.has_value());
+    CHECK(*plain == glm::ivec3(180, 40, 20));
+    // MOHD 0x2 adds the WMO's ambient, held to a byte.
+    wl::GroupDraw unified = room;
+    unified.unified = true;
+    const auto lit = wl::roomLight(unified, K::Exterior, 0, mocv, 0x2, ambient);
+    REQUIRE(lit.has_value());
+    CHECK(*lit == glm::ivec3(219, 40, 20));
+    // What is lit as the open air is no room's light: a window, a doorway's
+    // transition, an averaged batch, a group outside, one without colours.
+    CHECK_FALSE(wl::roomLight(room, K::Exterior, 0, mocv, 0, ambient).has_value());
+    CHECK_FALSE(wl::roomLight(room, K::Transition, 0, mocv, 0, ambient).has_value());
+    CHECK_FALSE(wl::roomLight(unified, K::Exterior, 0x20, mocv, 0x2, ambient).has_value());
+    wl::GroupDraw outside = room;
+    outside.groupFlags = 0xC;
+    CHECK_FALSE(wl::roomLight(outside, K::Interior, 0, mocv, 0, ambient).has_value());
+    wl::GroupDraw bare = room;
+    bare.vertexColors = false;
+    CHECK_FALSE(wl::roomLight(bare, K::Interior, 0, mocv, 0, ambient).has_value());
+}
+
+TEST_CASE("A room lit as the open air is one that is indoors, lit by the zone and unpainted", "[wmo]") {
+    // silvermoon_city_01: 2ndAH and TowersFlight; AH_Interior is painted, extleft outside.
+    CHECK(wowee::pipeline::isOpenAirRoom(0xa841));
+    CHECK_FALSE(wowee::pipeline::isOpenAirRoom(0x2805));
+    CHECK_FALSE(wowee::pipeline::isOpenAirRoom(0x8809));
+    CHECK(wowee::pipeline::isOpenAirRoom(0x12041));
+    // A room of 20 by 20 with its roof at 10, beside a yard.
+    const std::vector<glm::vec3> v = {{0, 0, 0}, {40, 0, 0}, {40, 20, 0}, {0, 20, 0},
+                                      {0, 0, 10}, {20, 0, 10}, {20, 20, 10}, {0, 20, 10}};
+    const std::vector<uint16_t> idx = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+    const wowee::pipeline::RoofColumns roof(v, idx);
+    const glm::vec3 up(0, 0, 1), side(1, 0, 0), down(0, 0, -1);
+    CHECK(roof.inside({5, 5, 0}, {6, 5, 0}, {5, 6, 0}, up));       // its floor
+    CHECK(roof.inside({1, 5, 3}, {1, 6, 3}, {1, 5, 5}, side));     // its wall
+    CHECK(roof.inside({5, 5, 10}, {6, 5, 10}, {5, 6, 10}, down));  // its ceiling
+    CHECK_FALSE(roof.inside({5, 5, 10}, {6, 5, 10}, {5, 6, 10}, up));  // the roof
+    CHECK_FALSE(roof.inside({30, 5, 0}, {31, 5, 0}, {30, 6, 0}, up));  // the yard
 }

@@ -6,6 +6,7 @@
 #include "game/item_text.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/dressing_room.hpp"
 #include "game/text_tokens.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
@@ -880,14 +881,44 @@ static int lua_GetItemIcon(lua_State* L) {
 //
 // Armour and weapons only: everything else has no display slot, and the frame
 // opens an empty preview for anything that answers yes.
+/// 0x005980d0: a recipe is what it makes, and one not known yet waits for the
+/// server's answer (0x005980b0).
+static void tryOnItem(ui::Widget& w, game::GameHandler& gh, uint32_t itemId, int depth = 0) {
+    namespace room = game::dressing_room;
+    if (itemId == 0 || depth > 4) return;
+    const auto* info = gh.getItemInfo(itemId);
+    if (!info) {
+        if (std::find(w.tryOnAsked.begin(), w.tryOnAsked.end(), itemId) == w.tryOnAsked.end())
+            w.tryOnAsked.push_back(itemId);
+        gh.ensureItemInfo(itemId);
+        return;
+    }
+    if (info->displayInfoId == 0) return;
+    if (const uint32_t made = gh.itemMadeByRecipe(*info)) {
+        tryOnItem(w, gh, made, depth + 1);
+        return;
+    }
+    const uint8_t type = static_cast<uint8_t>(info->inventoryType);
+    switch (room::tryOnKind(type)) {
+        case room::TryOn::Worn: w.tryOnItems.push_back({info->displayInfoId, type, itemId}); break;
+        case room::TryOn::NothingToShow: break;
+        case room::TryOn::NotEquippable: gh.sayGameError(game::server_notice::kNotEquippable); break;
+    }
+}
+
+void tryOnAskedItems(ui::Widget& w, game::GameHandler* gh) {
+    if (!gh || w.tryOnAsked.empty()) return;
+    const std::vector<uint32_t> asked = std::exchange(w.tryOnAsked, {});
+    for (const uint32_t itemId : asked) tryOnItem(w, *gh, itemId);
+}
+
 /// __WoweeTryOn(frame, itemLinkOrId) - put an item on a model frame.
 ///
 /// DressUpModel:TryOn(link) is the "try on" every item link and auction row
 /// offers. The list belongs to the frame rather than to the application: a
 /// second dressing room would have its own, and closing one is what empties it.
 ///
-/// An item already on the same inventory slot is replaced, because trying on
-/// two chests means wearing the second.
+/// What it takes the place of is the figure's to say (game/dressing_room.hpp).
 static int lua_WoweeTryOn(lua_State* L) {
     auto* gh = getGameHandler(L);
     auto* tree = getWidgetTree(L);
@@ -947,68 +978,7 @@ static int lua_WoweeTryOn(lua_State* L) {
         gh->sayGameError(game::server_notice::kNotEquippable);
         return 0;
     }
-    const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
-    // A recipe shows what it teaches to make (0x005980d0): the spell its own teaches,
-    // or the one of trigger 6, where that makes an item.
-    if (info && info->inventoryType == 0) {
-        gh->loadSpellNameCache();
-        const auto& cache = gh->spellNameCacheRef();
-        uint32_t made = 0;
-        for (const auto& spell : info->spells) {
-            const auto own = spell.spellId != 0 ? cache.find(spell.spellId) : cache.end();
-            if (own == cache.end() || own->second.effectIds[0] != 36) continue;
-            uint32_t teach = own->second.effectTriggerSpell[0];
-            if (teach == 0) {
-                for (const auto& other : info->spells)
-                    if (other.spellTrigger == 6) {
-                        teach = other.spellId;
-                        break;
-                    }
-            }
-            const auto taught = cache.find(teach);
-            if (taught != cache.end() && taught->second.effectIds[0] == 24) made = taught->second.effectItemType0;
-            if (made != 0) break;
-        }
-        if (made != 0) {
-            itemId = made;
-            info = gh->getItemInfo(made);
-        }
-    }
-    if (itemId != 0 && (!info || !info->valid)) gh->ensureItemInfo(itemId);
-    if (!info || info->displayInfoId == 0) return 0;
-
-    const auto type = static_cast<uint8_t>(info->inventoryType);
-    const int place = ui::dressPlace(type);
-    if (place == ui::kDressNowhere) {
-        // Not a word for what is worn unseen, a ring or a trinket.
-        if (type != 2 && type != 11 && type != 12 && type != 28) gh->sayGameError(game::server_notice::kNotEquippable);
-        return 0;
-    }
-    // A one-hand weapon goes into the main hand, or by turns into both where the
-    // player's own figure has one there and can hold two (0x00acf548).
-    static bool nextInOffHand = false;
-    bool offHand = place == ui::kDressOffHand;
-    if (type == 13) {
-        const auto holds = [](uint8_t t) { return t == 13 || t == 17 || t == 21; };
-        bool held = false;
-        for (const auto& tried : w->tryOnItems)
-            if (!tried.offHand && ui::dressPlace(tried.inventoryType) == ui::kDressMainHand) held = holds(tried.inventoryType);
-        if (!held && !w->undressed) {
-            const auto& hand = gh->getInventory().getEquipSlot(game::EquipSlot::MAIN_HAND);
-            held = !hand.empty() && holds(static_cast<uint8_t>(hand.item.inventoryType));
-        }
-        if (held && w->modelUnit == gh->getPlayerGuid() && gh->playerCanDualWield()) {
-            offHand = nextInOffHand;
-            nextInOffHand = !nextInOffHand;
-        }
-    } else if (place == ui::kDressMainHand || offHand) {
-        nextInOffHand = false;
-    }
-    const int where = offHand ? ui::kDressOffHand : place;
-    std::erase_if(w->tryOnItems, [where](const auto& tried) {
-        return (tried.offHand ? ui::kDressOffHand : ui::dressPlace(tried.inventoryType)) == where;
-    });
-    w->tryOnItems.push_back({info->displayInfoId, type, offHand});
+    tryOnItem(*w, *gh, itemId);
     return 0;
 }
 
@@ -2048,6 +2018,7 @@ static int lua_GetInboxItemLink(lua_State* L) {
     }
     game::ItemLinkInstance inst;
     inst.enchantId = att->enchantId;
+    inst.gems = att->gems;
     inst.randomPropertyId = static_cast<int32_t>(att->randomPropertyId);
     inst.seed = att->randomSuffix;
     const std::string link = game::itemChatLink(att->itemId, static_cast<uint32_t>(info->quality),
@@ -2223,10 +2194,7 @@ static int lua_GetCoinIcon(lua_State* L) {
 // and its siblings with (count, height, height), joined by one space. Zero
 // is COPPER_AMOUNT_TEXTURE with 0. The height is 14 unless given. The usage
 // line is the client's, naming GetCoinText.
-static int lua_GetCoinTextureString(lua_State* L) {
-    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinText(amount, fontHeight)");
-    const int height = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) : 14;
-    int32_t amount = static_cast<int32_t>(std::llround(lua_tonumber(L, 1)));
+std::string coinTextureText(lua_State* L, int32_t amount, int height) {
     const auto piece = [L, height](const char* key, int32_t count) {
         lua_getglobal(L, "string");
         lua_getfield(L, -1, "format");
@@ -2241,10 +2209,7 @@ static int lua_GetCoinTextureString(lua_State* L) {
         lua_pop(L, 1);
         return out;
     };
-    if (amount == 0) {
-        lua_pushstring(L, piece("COPPER_AMOUNT_TEXTURE", 0).c_str());
-        return 1;
-    }
+    if (amount == 0) return piece("COPPER_AMOUNT_TEXTURE", 0);
     static constexpr std::pair<const char*, int32_t> kCoins[3] = {
         {"GOLD_AMOUNT_TEXTURE", 10000}, {"SILVER_AMOUNT_TEXTURE", 100}, {"COPPER_AMOUNT_TEXTURE", 1}};
     std::string out;
@@ -2255,7 +2220,13 @@ static int lua_GetCoinTextureString(lua_State* L) {
         if (!out.empty()) out += ' ';
         out += piece(key, count);
     }
-    lua_pushstring(L, out.c_str());
+    return out;
+}
+
+static int lua_GetCoinTextureString(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinText(amount, fontHeight)");
+    const int height = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) : 14;
+    lua_pushstring(L, coinTextureText(L, static_cast<int32_t>(std::llround(lua_tonumber(L, 1))), height).c_str());
     return 1;
 }
 
@@ -5950,7 +5921,7 @@ static int lua_GetLootRollItemInfo(lua_State* L) {
     const auto* info = gh->getItemInfo(roll->itemId);
     if (!info || !info->valid) return 0;
     lua_pushstring(L, gh->getItemIconPath(info->displayInfoId).c_str());
-    lua_pushstring(L, roll->itemName.c_str());
+    lua_pushstring(L, gh->itemNameWithProperty(roll->itemName, roll->randomPropertyId).c_str());   // 0x00706d70
     lua_pushnumber(L, roll->itemCount);
     lua_pushnumber(L, info->quality);
     luaPushOneOrNil(L, info->bindType == 1);
@@ -5969,8 +5940,13 @@ static int lua_GetLootRollItemLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) { return luaReturnNil(L); }
-    lua_pushstring(L, game::buildItemLink(roll->itemId, roll->itemQuality,
-                                          roll->itemName, gh->getPlayerLevel()).c_str());
+    // 0x00588c00 -> 0x0061e360 with the roll's property and seed.
+    game::ItemLinkInstance inst;
+    inst.randomPropertyId = roll->randomPropertyId;
+    inst.seed = roll->randomSuffix;
+    lua_pushstring(L, game::itemChatLink(roll->itemId, roll->itemQuality,
+                                         gh->itemNameWithProperty(roll->itemName, roll->randomPropertyId), inst,
+                                         gh->getPlayerLevel()).c_str());
     return 1;
 }
 
@@ -7135,8 +7111,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             // The same shape GetContainerItemLink builds, so a link from
             // the guild bank behaves like one from a bag everywhere it is
             // handed on to.
+            // Named with what it rolled (0x0061e290 -> 0x00706d70).
             const std::string link = game::itemChatLink(
-                it.itemEntry, info->quality, info->name, game::ItemLinkInstance{
+                it.itemEntry, info->quality,
+                gh->itemNameWithProperty(info->name, static_cast<int32_t>(it.randomPropertyId)), game::ItemLinkInstance{
                     it.enchantId, {}, static_cast<int32_t>(it.randomPropertyId), 0},
                 gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());

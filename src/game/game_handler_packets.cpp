@@ -328,9 +328,8 @@ void GameHandler::predictedPowerUsability() {
             fireAddonEvent("COMBAT_TEXT_UPDATE", {"SPELL_ACTIVE", getSpellName(spell)});
     // The forms the same way, UPDATE_SHAPESHIFT_USABLE (0x17a).
     bool forms = false;
-    for (const auto& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
-        forms |= power_prediction::noteShort(formShortOfPower_[form.spellId],
-                                             !spellHandler_->enoughPower(form.spellId, *player));
+    for (const uint32_t form : stanceBarSpells())
+        forms |= power_prediction::noteShort(formShortOfPower_[form], !spellHandler_->enoughPower(form, *player));
     if (forms) fireAddonEvent("UPDATE_SHAPESHIFT_USABLE", {});
 }
 
@@ -344,9 +343,8 @@ bool GameHandler::shapeshiftCastabilityChanged() {
     // the bar, not once per button (0x0053cf10 sets one flag over the whole loop
     // and fires after it).
     bool changed = false;
-    for (const auto& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
-        changed |= power_prediction::noteShort(formCastable_[form.spellId],
-                                               spellHandler_->spellUsable(form.spellId, nullptr));
+    for (const uint32_t form : stanceBarSpells())
+        changed |= power_prediction::noteShort(formCastable_[form], spellHandler_->spellUsable(form, nullptr));
     return changed;
 }
 
@@ -1217,7 +1215,9 @@ void GameHandler::registerCoreOpcodes() {
         // premature-estimate quirk (ignore, let updateClientTaxi() finish
         // naturally); already cleared means the server considers the flight
         // genuinely over (honor it now instead of waiting on our own spline).
-        const bool onTaxiFlight = movementHandler_ && movementHandler_->isOnTaxiFlight();
+        // Neither is asked of a 3.3.5 flight, which runs on the server's own
+        // spline and is over when its flag is (updateServerTaxi).
+        const bool onTaxiFlight = isPreWotlk() && movementHandler_ && movementHandler_->isOnTaxiFlight();
         bool serverStillTaxiing = false;
         if (onTaxiFlight) {
             auto playerEntity = entityController_->getEntityManager().getEntity(playerGuid);
@@ -3207,7 +3207,7 @@ void GameHandler::registerRemainingOpcodes() {
         } else {
             auto entity = entityController_->getEntityManager().getEntity(impTargetGuid);
             if (!entity) return;
-            glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
+            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             spawnPos = core::coords::canonicalToRender(canonical);
         }
         if (auto* sv = renderer->getSpellVisualSystem())

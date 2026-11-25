@@ -4,6 +4,7 @@
 
 #include <catch_amalgamated.hpp>
 
+#include "rendering/pointer_pick.hpp"
 #include "rendering/ray_mesh.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -102,4 +103,64 @@ TEST_CASE("of two units in one another the one in front at the pointer is picked
     // Where the ray meets neither, nothing: the spheres decide.
     CHECK_FALSE(nearestPrecise(hits(glm::vec3(-5, 3, 1), glm::vec3(1, 0, 0))));
     CHECK_FALSE(nearestPrecise({}));
+}
+
+// What hides an object from the pointer (0x004f9930, playtest P78): what is
+// drawn, not what only stands in the way.
+TEST_CASE("the pointer goes through a building's collision faces, not its drawn ones", "[ray_mesh][pointer]") {
+    namespace pp = wowee::rendering::pointer_pick;
+    // 0x007ae140, read off its instructions for the traces the client makes.
+    CHECK(pp::buildingFaceMask(pp::kTraceSeen) == 0x188);
+    CHECK(pp::buildingFaceMask(pp::kTraceSeenLiquid) == 0x188);
+    CHECK(pp::buildingFaceMask(pp::kTraceGround) == 0x86);
+    CHECK(pp::buildingFaceMask(0x120111) == 0x84);  // movement and sight
+    CHECK(pp::buildingFaceMask(0x100171) == 0x82);  // the camera
+    CHECK(pp::buildingFaceMask(0x220122) == 0x88);  // the weather
+
+    const uint32_t seen = pp::buildingFaceMask(pp::kTraceSeen);
+    CHECK_FALSE(pp::buildingFaceHit(seen, 0x08, false));  // collision alone
+    CHECK_FALSE(pp::buildingFaceHit(seen, 0x48, false));
+    CHECK(pp::buildingFaceHit(seen, 0x20, false));  // drawn
+    CHECK(pp::buildingFaceHit(seen, 0x22, false));  // ...that the camera goes through
+    CHECK(pp::buildingFaceHit(seen, 0x24, false));  // ...a detail
+    CHECK_FALSE(pp::buildingFaceHit(seen, 0x20, true));  // ...in glass
+    const uint32_t ground = pp::buildingFaceMask(pp::kTraceGround);
+    CHECK(pp::buildingFaceHit(ground, 0x08, false));
+    CHECK(pp::buildingFaceHit(ground, 0x20, true));
+    CHECK_FALSE(pp::buildingFaceHit(ground, 0x22, false));
+    CHECK_FALSE(pp::buildingFaceHit(ground, 0x24, false));
+    // The movement's faces are as they were.
+    CHECK(pp::buildingFaceHit(0x04, 0x08, false));
+    CHECK(pp::buildingFaceHit(0x04, 0x20, true));
+    CHECK_FALSE(pp::buildingFaceHit(0x04, 0x24, false));
+}
+
+TEST_CASE("a doodad hides what is behind its opaque triangles alone", "[ray_mesh][pointer]") {
+    namespace pp = wowee::rendering::pointer_pick;
+    CHECK(pp::doodadBatchHides(0x10, 0, 0, 0x0, true));
+    CHECK_FALSE(pp::doodadBatchHides(0x10, 0, 1, 0x0, true));  // leaves
+    CHECK_FALSE(pp::doodadBatchHides(0x10, 0, 2, 0x0, true));  // glass
+    CHECK(pp::doodadBatchHides(0x10, 0, 2, 0x20, true));
+    CHECK_FALSE(pp::doodadBatchHides(0x10, 1, 0, 0x0, true));  // a second layer
+    CHECK_FALSE(pp::doodadBatchHides(0x18, 0, 0, 0x0, true));
+    CHECK_FALSE(pp::doodadBatchHides(0x10, 0, 0, 0x0, false));  // of no alpha
+
+    // A post a yard wide and two tall, and beside it, along y, a pane.
+    auto v = body();
+    for (const auto& c : body()) {
+        v.push_back(c);
+        v.back().position.y += 5.0f;
+    }
+    const std::vector<uint16_t> indices = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+    const glm::mat4 at = glm::translate(glm::mat4(1.0f), glm::vec3(10, 0, 0));
+    const auto mesh = pp::doodadMesh(v, indices, {{0u, 6u}});
+    CHECK(mesh.vertices.size() == 4);
+    CHECK(mesh.indices.size() == 6);
+    const auto t = pp::rayHitDoodad(mesh, {}, at, glm::vec3(0, 0, 1), glm::vec3(1, 0, 0), 100.0f);
+    REQUIRE(t);
+    CHECK(*t == Catch::Approx(10.0f));
+    CHECK_FALSE(pp::rayHitDoodad(mesh, {}, at, glm::vec3(0, 5, 1), glm::vec3(1, 0, 0), 100.0f));
+    CHECK_FALSE(pp::rayHitDoodad(mesh, {}, at, glm::vec3(0, 0, 1), glm::vec3(1, 0, 0), 9.0f));
+    // A model of collision alone draws nothing, and so hides nothing.
+    CHECK(pp::doodadMesh(v, indices, {}).empty());
 }

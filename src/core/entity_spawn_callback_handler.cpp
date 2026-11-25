@@ -80,7 +80,15 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
                 if (raw != 0 && f > 0.01f && f < 100.0f) scale = f;
             }
         }
-        if (displayId != 0 && nativeDisplay != 0 && displayId != nativeDisplay) {
+        // Or, in one it wears its own things in (0x0071a430), as a character of
+        // that display's race and sex.
+        const bool asDisplay = displayId != 0 && nativeDisplay != 0 && displayId != nativeDisplay;
+        const auto body = asDisplay ? gameHandler_.ownEquipmentDisplay(displayId) : std::nullopt;
+        if (body) {
+            raceId = body->race;
+            genderId = body->sex;
+        }
+        if (asDisplay && !body) {
             if (entitySpawner_.isPlayerSpawned(guid) || entitySpawner_.isPlayerPending(guid))
                 entitySpawner_.despawnPlayer(guid);
             if (entitySpawner_.isCreatureSpawned(guid)) {
@@ -99,6 +107,10 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
             // the creature never got as far as drawing.
             wasDisplay = true;
             entitySpawner_.despawnCreature(guid);
+        } else if (!entitySpawner_.isPlayerOfBody(guid, raceId, genderId)) {
+            // Into another body, or back out of it.
+            wasDisplay = true;
+            entitySpawner_.despawnPlayer(guid);
         }
         if (entitySpawner_.isPlayerSpawned(guid)) return;
         if (entitySpawner_.isPlayerPending(guid)) return;

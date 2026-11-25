@@ -25,7 +25,7 @@ namespace game {
 
 struct QuestObjective {
     std::string text;
-    /// "event", "monster", "object", "item", "player" or "reputation": what
+    /// "event", "monster", "object", "item", "player", "reputation" or "log": what
     /// GetQuestLogLeaderBoard answers as the line's kind. "object" (0x009f6f35),
     /// "item" (0x009f6f44) and "player" (0x009f6f50) are entries in one .rdata
     /// block beside "unknown"; the walk hands out "monster", "reputation" and
@@ -41,6 +41,29 @@ struct QuestObjective {
 /// such quest one more line than it has, and the extra one answered "0/0",
 /// which reads as finished.
 inline bool isQuestObjective(int32_t id, uint32_t required) { return id != 0 && required > 0; }
+
+/// Whether a required item has a line of its own: 0x005e1300 and 0x005e1460
+/// leave out the quest's own item (+0x4c) wanted once - what the giver handed
+/// over to be carried - and nothing else that names an item.
+inline bool isListedItemObjective(const QuestHandler::QuestLogEntry& q,
+                                  const QuestHandler::QuestLogEntry::ItemObjective& item) {
+    return item.itemId != 0 && (item.itemId != q.sourceItemId || item.required > 1);
+}
+
+/// 0x005e0ea0's early no: a quest that requires nothing is never met by that
+/// test, whatever its slot says.
+inline bool questRequiresNothing(const QuestHandler::QuestLogEntry& q) {
+    if ((q.questFlags & 6u) != 0 || q.repObjectiveFaction != 0 || q.repObjectiveFaction2 != 0 ||
+        q.rewardMoney != 0 || q.playersSlain != 0)
+        return false;
+    for (const auto& kill : q.killObjectives) {
+        if (kill.npcOrGoId != 0) return false;
+    }
+    for (const auto& item : q.itemObjectives) {
+        if (item.itemId != 0) return false;
+    }
+    return true;
+}
 
 /// How many lines questObjectives answers, without asking for any names. Note
 /// that this counts lines, not things there is to do: the client's own "does this
@@ -62,7 +85,7 @@ inline int questObjectiveCount(const GameHandler::QuestLogEntry& q) {
         if (isQuestObjective(kill.npcOrGoId, kill.required)) ++count;
     }
     for (const auto& item : q.itemObjectives) {
-        if (isQuestObjective(static_cast<int32_t>(item.itemId), item.required)) ++count;
+        if (isListedItemObjective(q, item)) ++count;
     }
     // The source items questObjectives gives a line to are not counted here,
     // and that is the reference's own arithmetic rather than something to even
@@ -72,6 +95,8 @@ inline int questObjectiveCount(const GameHandler::QuestLogEntry& q) {
     // line - which is what the client on the other end of the wire does.
     if (q.playersSlain > 0) ++count;
     else if (q.repObjectiveFaction != 0) ++count;
+    // Nothing to list and met all the same: the objectives sentence (0x005e1300).
+    if (count == 0 && q.complete && !questRequiresNothing(q)) count = 1;
     return count;
 }
 
@@ -117,7 +142,7 @@ inline int questTooltipRequirementCount(const QuestHandler::QuestLogEntry& q, bo
         if (kill.npcOrGoId != 0) ++n;
     }
     for (const auto& item : q.itemObjectives) {
-        if (item.itemId > 0 && (item.itemId != q.sourceItemId || item.required > 1)) ++n;
+        if (isListedItemObjective(q, item)) ++n;
     }
     if (q.repObjectiveFaction != 0) ++n;
     if (q.playersSlain != 0) ++n;
@@ -159,7 +184,7 @@ inline std::string questTooltipRequirementLine(const QuestHandler::QuestLogEntry
                                         {name, required});
     }
     for (const auto& item : q.itemObjectives) {
-        if (item.itemId < 1 || (item.itemId == q.sourceItemId && item.required < 2)) continue;
+        if (!isListedItemObjective(q, item)) continue;
         if (++at != index) continue;
         return chat_channels::luaFormat(look.text("QUEST_ITEMS_NEEDED_NOPROGRESS", "%s x %d"),
                                         {shown(look.itemName ? look.itemName(item.itemId) : std::string()),

@@ -3,8 +3,11 @@
 
 #include "game_replay.hpp"
 #include "game/quest_handler.hpp"
+#include "game/quest_objectives.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -139,32 +142,6 @@ TEST_CASE("any word of a quest's slot is news to the interface", "[replay][quest
     s.handler().setAddonEventCallback(nullptr);
 }
 
-// questlogframe.lua:260 watches the entry QUEST_ACCEPTED names; the list has
-// the headers in it (0x005deeb0).
-TEST_CASE("the events name a quest by its place in the interface's list", "[replay][quest]") {
-    std::vector<std::pair<std::string, std::string>> events;
-    Session s;
-    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
-    s.handler().setQuestLogRowLookup([](uint32_t questId) { return questId == 9387 ? 5 : 0; });
-    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>& args) {
-        if (name == "QUEST_ACCEPTED" || name == "QUEST_WATCH_UPDATE")
-            events.emplace_back(name, args.empty() ? std::string() : args[0]);
-    });
-    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 9387}}));
-    s.receive(questAnswer(9387, "wotlk"));
-    const auto said = [&](const char* name) {
-        return std::find_if(events.begin(), events.end(), [&](const auto& e) { return e.first == name; });
-    };
-    REQUIRE(said("QUEST_ACCEPTED") != events.end());
-    CHECK(said("QUEST_ACCEPTED")->second == "5");
-    CHECK(s.handler().getQuestHandler()->questLogIndexOf(9387) == 5);
-    CHECK(s.handler().getQuestHandler()->questLogIndexOf(1) == 0);
-    for (const auto& e : events) CHECK(e.second == "5");
-    s.handler().setQuestLogRowLookup(nullptr);
-    CHECK(s.handler().getQuestHandler()->questLogIndexOf(9387) == 1);
-    s.handler().setAddonEventCallback(nullptr);
-}
-
 // 0x006d8030: the quest's own text for the objective first, whatever the creature
 // or object that carries it is called; nothing for one that has failed.
 TEST_CASE("a credit is named by the quest's objective", "[replay][quest]") {
@@ -232,4 +209,228 @@ TEST_CASE("how many daily quests are left is said as one is done", "[replay][que
     CHECK(line.changed(0) == 25);
     CHECK_FALSE(line.changed(0).has_value());
     CHECK(line.changed(1) == 24);
+}
+
+// Quest 10120 in the bags as the server leaves it: the report handed over, the
+// slot complete. And an ordinary item of a complete quest, counted all the same.
+TEST_CASE("item objectives are counted off the bags and leave out the quest's own", "[replay][quest]") {
+    constexpr uint64_t kItem = 0x4000000000000099ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 10120}}));
+    s.receive(questAnswer(10120, "wotlk", 28024, 28024, 1));
+    s.receive(UpdateObject().create(kItem, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 28024}, {UF::ITEM_FIELD_STACK_COUNT, 1}}));
+    const uint16_t pack = wowee::game::fieldIndex(UF::PLAYER_FIELD_PACK_SLOT_1);
+    // Complete before the bags are known to hold it.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 1, 5), 1}}));
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid,
+                                      {{pack, static_cast<uint32_t>(kItem)},
+                                       {static_cast<uint16_t>(pack + 1), static_cast<uint32_t>(kItem >> 32)}}));
+    REQUIRE(questOf(s, 10120));
+    REQUIRE(s.handler().countItemInBags(28024) == 1);
+    auto lines = wowee::game::questObjectives(s.handler(), *questOf(s, 10120));
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].text == "Besorgt 20 Kalynastachel.");
+    CHECK(lines[0].finished);
+    CHECK(wowee::game::questObjectiveCount(*questOf(s, 10120)) == 1);
+
+    s.receive(questAnswer(10120, "wotlk", 0, 28024, 1));
+    lines = wowee::game::questObjectives(s.handler(), *questOf(s, 10120));
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].text.find("1/1") != std::string::npos);
+    CHECK(lines[0].finished);
+}
+
+// Not a quest's, but of the same kind: what the client asks by itself. The time
+// played went to the chat at every press of the character window's key.
+TEST_CASE("the time played is asked for quietly as the player is made", "[replay][played]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    auto sent = s.sent().of(Opcode::CMSG_PLAYED_TIME);
+    REQUIRE(sent.size() == 1);
+    REQUIRE(sent[0].getData().size() == 1);
+    CHECK(sent[0].getData()[0] == 0);
+
+    s.handler().requestPlayedTime();   // RequestTimePlayed
+    sent = s.sent().of(Opcode::CMSG_PLAYED_TIME);
+    REQUIRE(sent.size() == 2);
+    CHECK(sent[1].getData()[0] == 1);
+}
+
+// In the 12340 interface RequestTimePlayed is /played's alone (chatframe.lua).
+TEST_CASE("no key asks for the time played", "[replay][played]") {
+    std::ifstream in(std::string(WOWEE_SOURCE_DIR) + "/src/ui/game_screen.cpp");
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    REQUIRE(text.size() > 1000);
+    CHECK(text.find("requestPlayedTime") == std::string::npos);
+}
+
+// Quest 9340 under its zone's header, with 9387 before it: the interface counts
+// the header as well.
+TEST_CASE("a quest is named by its row in the log, headers counted", "[replay][quest]") {
+    std::vector<std::pair<std::string, std::string>> events;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 9387}, {slotField(1, 0, 5), 9340}}));
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>& args) {
+        if (name == "QUEST_WATCH_UPDATE") events.emplace_back(name, args.empty() ? std::string() : args[0]);
+    });
+    auto* quests = s.handler().getQuestHandler();
+    for (auto& q : quests->questLogRef()) {
+        q.zoneOrSort = 3483;
+        q.level = q.questId == 9387 ? 60 : 61;
+    }
+    CHECK(quests->questLogIndexOf(9387) == 2);
+    CHECK(quests->questLogIndexOf(9340) == 3);
+    CHECK(quests->questLogIndexOf(1) == 0);
+
+    wowee::network::Packet kill(wowee::game::wireOpcode(Opcode::SMSG_QUESTUPDATE_ADD_KILL));
+    kill.writeUInt32(9340);
+    kill.writeUInt32(16927);
+    kill.writeUInt32(2);
+    kill.writeUInt32(8);
+    kill.writeUInt64(0xF130004221000099ull);
+    s.receive(kill);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].second == "3");
+
+    // Folded away, they keep places behind what is shown.
+    quests->collapsedQuestGroups().insert(3483);
+    CHECK(quests->questLogRows().visible == 1);
+    CHECK(quests->questLogIndexOf(9340) == 3);
+    s.handler().setAddonEventCallback(nullptr);
+}
+
+// The reward chosen on the frame was let go by every item answer that came in
+// while a quest window was open.
+TEST_CASE("only an item the quest window waits for is its news", "[replay][quest]") {
+    int updates = 0;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>&) {
+        if (name == "QUEST_ITEM_UPDATE") ++updates;
+    });
+    // SMSG_ITEM_QUERY_SINGLE_RESPONSE as 0x0098d910 reads it, every number 0.
+    const auto answer = [&](uint32_t entry) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ITEM_QUERY_SINGLE_RESPONSE));
+        p.writeUInt32(entry);
+        for (int i = 0; i < 3; ++i) p.writeUInt32(0);
+        p.writeString("Item");
+        for (int i = 0; i < 3; ++i) p.writeString("");
+        for (int i = 0; i < 160; ++i) p.writeUInt32(0);
+        s.receive(p);
+    };
+    // A reward page, opened with a gossip behind it: any window will do.
+    wowee::network::Packet offer(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_OFFER_REWARD));
+    offer.writeUInt64(0xF130000BEC00150Eull);
+    offer.writeUInt32(9387);
+    offer.writeString("Title");
+    offer.writeString("Text");
+    offer.writeUInt8(0);
+    for (int i = 0; i < 60; ++i) offer.writeUInt32(0);
+    s.receive(offer);
+    REQUIRE(s.handler().isQuestOfferRewardOpen());
+
+    auto* quests = s.handler().getQuestHandler();
+    answer(25001);   // a comparison tooltip's
+    CHECK(updates == 0);
+    quests->awaitQuestItem(25002);
+    answer(25002);
+    CHECK(updates == 1);
+    answer(25002);
+    CHECK(updates == 1);
+    s.handler().setAddonEventCallback(nullptr);
+}
+
+// Taken, dropped and taken again at its giver: the log had a title and a
+// sentence, level 0, no zone and nothing to do - and the tracker a quest done.
+TEST_CASE("a quest known already is whole when it is taken again", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    auto* quests = s.handler().getQuestHandler();
+    quests->addQuestToLocalLogIfMissing(10086, "Quest #10086", "");
+    s.receive(questAnswer(10086, "wotlk", 0, 25802, 8));
+    REQUIRE(questOf(s, 10086));
+    REQUIRE(questOf(s, 10086)->level == 60);
+
+    quests->questLogRef().clear();
+    quests->addQuestToLocalLogIfMissing(10086, "Ich arbeite...", "Ein Satz.");
+    const auto* q = questOf(s, 10086);
+    REQUIRE(q);
+    CHECK(q->title == kTitle);
+    CHECK(q->level == 60);
+    CHECK(q->description == kDetails);
+    CHECK(q->itemObjectives[0].itemId == 25802);
+    CHECK(wowee::game::questObjectiveCount(*q) == 1);
+    CHECK_FALSE(q->complete);
+}
+
+TEST_CASE("a quest the server takes out of its slot is watched no more", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 9387}, {slotField(1, 0, 5), 9340}}));
+    s.handler().setQuestTracked(9387, true);
+    s.handler().setQuestTracked(9340, true);
+    REQUIRE(s.handler().getQuestWatchOrder().size() == 2);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 0}}));
+    CHECK(s.handler().getQuestWatchOrder() == std::vector<uint32_t>{9340});
+}
+
+TEST_CASE("quests without a zone stand under the client's own header", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 8021}}));
+    const auto rows = s.handler().getQuestHandler()->questLogRows();
+    REQUIRE(rows.rows.size() == 2);
+    CHECK(rows.rows[0].headerTitle == "Missing header! (quest designers)");
+}
+
+// The selection was a row: with a quest gone from above it, or a header folded
+// away, it was another quest's.
+TEST_CASE("the quest log's selection is a quest, wherever its row goes", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 9387},
+                                                             {slotField(1, 0, 5), 9340},
+                                                             {slotField(2, 0, 5), 9360}}));
+    auto& gh = s.handler();
+    auto* quests = gh.getQuestHandler();
+    for (auto& q : quests->questLogRef()) {
+        q.zoneOrSort = 3483;
+        q.level = q.questId == 9387 ? 60 : q.questId == 9340 ? 61 : 62;
+    }
+    CHECK(gh.getSelectedQuestLogIndex() == 0);
+    CHECK(gh.getSelectedQuest() == nullptr);
+    gh.selectQuestLogRow(3);
+    REQUIRE(gh.getSelectedQuest() != nullptr);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    CHECK(gh.getSelectedQuestLogIndex() == 3);
+    // The one above it goes (0x005e6940 leaves 0x00c23ad8 alone).
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 0, 5), 0}}));
+    CHECK(gh.getSelectedQuestLogIndex() == 2);
+    REQUIRE(gh.getSelectedQuest() != nullptr);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    // One comes in above it.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(3, 0, 5), 9399}}));
+    for (auto& q : quests->questLogRef()) {
+        if (q.questId != 9399) continue;
+        q.zoneOrSort = 3483;
+        q.level = 1;
+    }
+    CHECK(gh.getSelectedQuestLogIndex() == 3);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    // A header's row leaves it as it is (0x005dffe0), one off the end clears it.
+    gh.selectQuestLogRow(1);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    // Folded away it is still the quest, in the place it has there.
+    quests->collapsedQuestGroups().insert(3483);
+    CHECK(gh.getSelectedQuest()->questId == 9340);
+    CHECK(gh.getSelectedQuestLogIndex() == quests->questLogIndexOf(9340));
+    quests->collapsedQuestGroups().clear();
+    // Gone itself, it has no row any more.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(1, 0, 5), 0}}));
+    CHECK(gh.getSelectedQuestLogIndex() == 0);
+    gh.selectQuestLogRow(99);
+    CHECK(gh.getSelectedQuest() == nullptr);
 }

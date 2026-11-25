@@ -487,10 +487,14 @@ public:
     /// How far from `from` to `to` (0..1) the first WMO collision face is,
     /// either side, as the world's intersect asks with 0x120111
     /// (0x007a3b70 -> 0x007a30d0): every group, no detail face. `skipFaces`
-    /// is the MOPY mask 0x007ae140 makes of the trace's flags: 0x04 for
-    /// 0x120111, 0x08 for the weather's 0x220122 (0x007ade10).
+    /// is the mask 0x007ae140 makes of the trace's flags
+    /// (pointer_pick::buildingFaceMask): 0x04 for 0x120111, 0x08 for the
+    /// weather's 0x220122 (0x007ade10), 0x108 for the pointer's 0x1000124
+    /// (0x100: no face whose material blends). `hitInstanceId`: the building
+    /// met, left alone where none is.
     [[nodiscard]] std::optional<float> segmentHit(const glm::vec3& from, const glm::vec3& to,
-                                                  uint8_t skipFaces = 0x04) const;
+                                                  uint32_t skipFaces = 0x04,
+                                                  uint32_t* hitInstanceId = nullptr) const;
 
     /**
      * Check if a position is inside any WMO
@@ -654,8 +658,7 @@ public:
      * @param maxDistance Maximum ray distance to check
      * @return Distance to first intersection, or maxDistance if no hit
      */
-    float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                               bool ignoreCollisionFocus = false, uint32_t* hitInstanceId = nullptr) const;
+    float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
     /// WOWEE_CAMCOL_DIAG: every building face the segment crosses, nearest
     /// first, unfiltered, as "dist:wmoId/group/MOPY/mat/texture".
     [[nodiscard]] std::string describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;

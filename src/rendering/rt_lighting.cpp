@@ -824,7 +824,7 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
         const RtGiProbes::ConsumerData open = mode_ == Mode::Full ? probes_.consumerData() : RtGiProbes::ConsumerData{};
         d.giOpenSky = open.sky;
         d.giOpenGround = open.ground;
-        d.giOpenParams = open.params;
+        d.giOpenParams = glm::vec4(glm::vec3(open.params), in.minBrightness);
     }
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {

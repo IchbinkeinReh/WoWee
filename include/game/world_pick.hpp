@@ -8,10 +8,11 @@
 /// and the spell held are the caller's.
 ///
 /// The ray pick itself, 0x004f9930, runs in this order:
-///  1. the world (CWorld::Intersect, 0x0077f310, flags 0x1000124 - terrain
-///     and buildings, with 0x20000 the liquid surface besides when the flags
-///     ask for liquid) from the near plane to the far plane, shortening the
-///     ray to its first hit;
+///  1. the world (CWorld::Intersect, 0x0077f310, flags 0x1000124 - the
+///     terrain and what buildings and doodads draw opaque, not their
+///     collision, rendering/pointer_pick.hpp; with 0x20000 the liquid surface
+///     besides when the flags ask for liquid) from the near plane to the far
+///     plane, shortening the ray to its first hit;
 ///  2. with any object flag (0x7c), the nearest model of an object these
 ///     filters take along what is left of the ray (0x004f9550);
 ///  3. with a ground flag (0x3), the world again (flags 0x100151) for the

@@ -133,6 +133,10 @@ public:
     void restoreSaved(float distance, float pitchDeg) {
         userTargetDistance = currentDistance = clampedZoomDistance(std::clamp(distance, 0.0f, 50.0f));
         pitch = pitchDeg;
+        // The view is only turned where something turns it: reset() had turned
+        // it to the spawn's own pitch, and it stayed there while the camera
+        // was kept, and read, at this one until the first turn by the mouse.
+        if (camera) camera->setRotation(yaw, pitch);
     }
     /// Put the unit at `pos`; it then falls from there unless on ground
     /// (portMove), not when `onTransport` - 0x00988370 starts no fall for a
@@ -188,6 +192,16 @@ public:
     /// on its next step it starts to fall from where it is unless it stands
     /// on ground, swims, flies or is rooted.
     void queuePlacedFall() { portPlacedFall_ = true; }
+    /// Whatever fall it was in is over, with no landing (0x00988490, which
+    /// clears FALLING and FALLING_FAR): a spline takes it (0x006ed7e0 ->
+    /// 0x006e9980 ahead of 0x006eb680), or it is put somewhere else. Where
+    /// and when the fall began goes with it: kept, the fall went on after a
+    /// flight as the client's curve has it from there - back up to within ten
+    /// yards of the height it had begun at, forty over the landing place.
+    void endFall();
+    /// The unit the keys move is another from here: a fall under way was the
+    /// other one's.
+    void newMover();
 
     // Call every frame while riding a transport that forces Z to a locked value
     // externally (e.g. the Deeprun Tram, which has no real floor mid-tunnel).
@@ -529,6 +543,17 @@ public:
         // fixed in the world while the deck turned under it.
         if (camera) camera->setRotation(yaw, pitch);
     }
+    /// A flight path turns the character: the camera's yaw is kept off the
+    /// facing (+0x11c, with +0xac 0), so it turns along. Only a unit on a
+    /// spline that is not a flight's has the camera keep its own heading
+    /// (0x00606f90 calls 0x00602eb0 with 1 where a spline runs and the unit's
+    /// flag 0x100000 is off; 0x006019b0 adds the facing to +0x11c).
+    void faceInFlight(float yawDegrees);
+    /// The unit the camera looks at has UNIT_FLAG_TAXI_FLIGHT: as it gets it
+    /// (+0x2a4, the last frame's) the yaw eases to straight behind, at the
+    /// yaw's smooth speed and whatever the following style (0x00606f90 ->
+    /// 0x00601410(0, 0, 1)); after that it is where the player turns it.
+    void setOnFlight(bool onFlight);
     /// The driver's camera turns with its vehicle camera's facing, not with
     /// the keys (0x00604490 adds +0x84): the turn keys turn the vehicle
     /// alone, and the camera follows its facing as it is chased (0x0075a1c0).
@@ -574,7 +599,10 @@ public:
     [[nodiscard]] bool viewMovedByPlayer() const { return viewMovedByPlayer_; }
     /// FlipCameraYaw(degrees) (0x005ff2c0): the camera turned about the
     /// character by that much.
-    void flipYaw(float degrees) { yaw += degrees; }
+    void flipYaw(float degrees) {
+        yaw += degrees;
+        if (camera) camera->setRotation(yaw, pitch);
+    }
     /// MoveView{In,Out,Left,Right,Up,Down}Start (0x005ff000): the view
     /// moves one way - 0 in, 1 out, 2 left, 3 right, 4 up, 5 down - from
     /// now (camera +0x164), at `speed` times `rate` a second (+0x1ac; the
@@ -807,6 +835,7 @@ private:
     float currentDistance = 10.0f;      // Smoothed actual distance
     float collisionDistance = 10.0f;    // Max allowed by collision
     bool externalFollow_ = false;
+    bool onFlight_ = false;  ///< setOnFlight
     std::optional<glm::vec3> vehiclePivot_;
     std::optional<CameraFadeTarget> cameraFadeTarget_;
     std::optional<glm::vec3> vehicleCollisionOrigin_;

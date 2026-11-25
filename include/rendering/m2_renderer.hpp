@@ -3,7 +3,9 @@
 #include "rendering/memory_report.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/collision_facets.hpp"
+#include "rendering/pointer_pick.hpp"
 #include "rendering/client_ribbon.hpp"
+#include "rendering/instance_dedup.hpp"
 #include "rendering/spatial_grid.hpp"
 #include "rendering/shadow_params.hpp"
 
@@ -209,6 +211,8 @@ struct M2ModelGPU {
         [[nodiscard]] bool valid() const { return triCount > 0; }
     };
     CollisionMesh collision;
+    /// What of it hides from the pointer what is behind it (pointer_pick.hpp).
+    pointer_pick::DoodadMesh pickMesh;
 
     std::string name;
 
@@ -971,6 +975,13 @@ public:
     void gatherCollisionTriangles(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                   std::vector<glm::vec3>& out, bool facingUpOnly = false,
                                   bool includeGameObjects = false) const;
+    /// How far along the ray the first opaque triangle a doodad draws is, no
+    /// farther than `maxDistance`: what hides an object from the pointer
+    /// (trace flag 0x4 with 0x1000000, 0x007a2760, 0x0081daf0). The map's
+    /// doodads the frame draws at that distance from the eye, which is where
+    /// the ray starts; no game object's model, no ground cover.
+    [[nodiscard]] std::optional<float> rayHitDrawnDoodad(const glm::vec3& origin, const glm::vec3& direction,
+                                                         float maxDistance) const;
     /// WOWEE_CAMCOL_DIAG: every doodad whose box the segment crosses, as
     /// "tEnter:name/collision/gameObject/skip".
     [[nodiscard]] std::string describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
@@ -1528,24 +1539,8 @@ private:
     std::vector<uint32_t> reapedModelIds_;
     std::vector<M2Instance> instances;
 
-    // O(1) dedup: key = (modelId, quantized x, quantized y, quantized z) → instanceId
-    struct DedupKey {
-        uint32_t modelId;
-        int32_t qx, qy, qz; // position quantized to 0.1 units
-        bool operator==(const DedupKey& o) const {
-            return modelId == o.modelId && qx == o.qx && qy == o.qy && qz == o.qz;
-        }
-    };
-    struct DedupHash {
-        size_t operator()(const DedupKey& k) const {
-            size_t h = std::hash<uint32_t>()(k.modelId);
-            h ^= std::hash<int32_t>()(k.qx) * 2654435761u;
-            h ^= std::hash<int32_t>()(k.qy) * 40503u;
-            h ^= std::hash<int32_t>()(k.qz) * 12289u;
-            return h;
-        }
-    };
-    std::unordered_map<DedupKey, uint32_t, DedupHash> instanceDedupMap_;
+    // Which instance of a model stands at a place.
+    InstanceDedup instanceDedup_;
 
     uint32_t nextInstanceId = 1;
     /// The instances that are game objects, by id, for refreshGameObjectLights:

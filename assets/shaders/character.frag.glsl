@@ -422,7 +422,8 @@ void main() {
         // the trace - see-through, or a blended batch - with what it finds
         // of itself in this frame's result, or what stands behind it
         // (rtLightBehind): a unit drawn see-through is in no G-buffer.
-        RtLight rt = kGbuffer ? rtNeutral() : rtLightBehind(FragPos);
+        bool seeThrough = false;
+        RtLight rt = kGbuffer ? rtNeutral() : rtLightBehind(FragPos, seeThrough);
         // Its light as refreshInteriorLights samples it at its feet, as a
         // game object's (model_light.glsli): w 2 on an interior floor, 1 the
         // zone's light eased in, 0 not known yet (the zone's as it is). The
@@ -450,6 +451,7 @@ void main() {
                                     true, rtSurface);
         } else {
             float shadow = 1.0;
+            float mapLight = 1.0;
             if (shadowParams.x > 0.5) {
                 // The interpolated vertex normal, not the normal-mapped one, for
                 // the normal offset: a map's per-texel tilt moves the sample
@@ -469,8 +471,14 @@ void main() {
                 // a roof, a tree, a cliff - shadows a character.
                 bias = max(bias, pc.lightFlags.z * cascadeInfo.w);
                 shadow = csmShadow(uShadowMap, FragPos, vertexNormal, nl, bias);
+                mapLight = shadow;
                 shadow = mix(1.0, shadow, shadowParams.y);
             }
+            // Nothing of it in the trace: the map says what the sun reaches,
+            // whole. With a fifth of the sun left in the map's shadow, and
+            // that share of the direct light with it, a body in the dark lit
+            // up as the camera closed in on it.
+            if (seeThrough) rt.sun = rtSeeThroughSun(shadowParams.x > 0.5, mapLight, rt.sun);
             const vec3 ambient = (known ? pc.interiorAmbient.rgb : ambientColor.rgb) + highlightAmbient;
             light = modelZoneLight(rt, norm, FragPos, shadow, ambient, direct, rtSurface);
         }

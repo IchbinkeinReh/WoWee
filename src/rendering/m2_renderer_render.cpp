@@ -237,14 +237,7 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     // Uses hash map for O(1) lookup instead of O(N) scan.
     // Spell effects are exempt - transient visuals must always create fresh instances.
     if (allowPositionDedup && !mdlRef.isGroundDetail && !mdlRef.isSpellEffect) {
-        DedupKey dk{.modelId = modelId,
-                    .qx = static_cast<int32_t>(std::round(position.x * 10.0f)),
-                    .qy = static_cast<int32_t>(std::round(position.y * 10.0f)),
-                    .qz = static_cast<int32_t>(std::round(position.z * 10.0f))};
-        auto dit = instanceDedupMap_.find(dk);
-        if (dit != instanceDedupMap_.end()) {
-            return dit->second;
-        }
+        if (const uint32_t there = instanceDedup_.find(modelId, position)) return there;
     }
 
     M2Instance instance;
@@ -288,11 +281,7 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     // Register in dedup map before pushing (uses original position, not ground-adjusted)
     // Spell effects are exempt from dedup tracking (transient, overlapping allowed).
     if (allowPositionDedup && !mdlRef.isGroundDetail && !mdlRef.isSpellEffect) {
-        DedupKey dk{.modelId = modelId,
-                    .qx = static_cast<int32_t>(std::round(position.x * 10.0f)),
-                    .qy = static_cast<int32_t>(std::round(position.y * 10.0f)),
-                    .qz = static_cast<int32_t>(std::round(position.z * 10.0f))};
-        instanceDedupMap_[dk] = instance.id;
+        instanceDedup_.file(modelId, position, instance.id);
     }
 
     // WOWEE_M2_CENSUS: what the model is drawn at, beside what it was
@@ -348,14 +337,7 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
 
     // Deduplicate: O(1) hash lookup
     {
-        DedupKey dk{.modelId = modelId,
-                    .qx = static_cast<int32_t>(std::round(position.x * 10.0f)),
-                    .qy = static_cast<int32_t>(std::round(position.y * 10.0f)),
-                    .qz = static_cast<int32_t>(std::round(position.z * 10.0f))};
-        auto dit = instanceDedupMap_.find(dk);
-        if (dit != instanceDedupMap_.end()) {
-            return dit->second;
-        }
+        if (const uint32_t there = instanceDedup_.find(modelId, position)) return there;
     }
 
     M2Instance instance;
@@ -400,11 +382,7 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
 
     // Register in dedup map
     {
-        DedupKey dk{.modelId = modelId,
-                    .qx = static_cast<int32_t>(std::round(position.x * 10.0f)),
-                    .qy = static_cast<int32_t>(std::round(position.y * 10.0f)),
-                    .qz = static_cast<int32_t>(std::round(position.z * 10.0f))};
-        instanceDedupMap_[dk] = instance.id;
+        instanceDedup_.file(modelId, position, instance.id);
     }
 
     // WOWEE_M2_CENSUS: what the model is drawn at, beside what it was
