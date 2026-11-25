@@ -331,7 +331,7 @@ struct Emitter {
     /// button in the interface was ever given its label. The character sheet's
     /// tabs show what that costs twice over: unlabelled, and - because a tab is
     /// sized from the width of its own text - collapsed to slivers as well.
-    void emitTextAttr(const XmlNode& node, const std::string& var) {
+    void emitTextAttr(const XmlNode& node, const std::string& var, bool ofString) {
         const std::string* text = node.attr("text");
         if (!text) return;
         bool looksLikeKey = !text->empty();
@@ -341,11 +341,9 @@ struct Emitter {
                 break;
             }
         }
-        if (looksLikeKey) {
-            line(var + ":SetText(_G[" + quote(*text) + "] or " + quote(*text) + ")");
-        } else {
-            line(var + ":SetText(" + quote(*text) + ")");
-        }
+        const std::string said = looksLikeKey ? "_G[" + quote(*text) + "] or " + quote(*text) : quote(*text);
+        // A font string's whether it has its font yet or not (0x00483910).
+        line(ofString ? "__WoweeSetStringText(" + var + ", " + said + ")" : var + ":SetText(" + said + ")");
     }
 
     /// What a FontString's element says of its text besides its place
@@ -410,12 +408,6 @@ struct Emitter {
         // object, which is where its size and colour come from, but FrameXML
         // also declares virtual FontStrings. Asking which it is at runtime is
         // the only way to tell, and cheaper than deciding here.
-        // Declared opacity. SetAlpha is bound and the renderer multiplies every
-        // colour by it; only the XML attribute went unread, so a texture meant
-        // to sit at half strength drew solid.
-        if (const std::string* a = node.attr("alpha")) {
-            line(var + ":SetAlpha(" + *a + ")");
-        }
         if (const std::string* inh = node.attr("inherits"); inh && !inh->empty()) {
             if (isTexture) {
                 line("if __WoweeTemplates[" + quote(*inh) + "] then __WoweeTemplates[" +
@@ -450,7 +442,7 @@ struct Emitter {
             line(var + ":SetGradientAlpha(" + quote(grad->attrOr("orientation", "HORIZONTAL")) + ", " + rgba(mn) +
                  ", " + rgba(mx) + ")");
         }
-        emitTextAttr(node, var);
+        emitTextAttr(node, var, !isTexture);
         if (const std::string* jv = node.attr("justifyV")) {
             line(var + ":SetJustifyV(" + quote(*jv) + ")");
         }
@@ -461,7 +453,16 @@ struct Emitter {
             line(var + ":SetHorizTile(" + (node.attrBool("horizTile") ? "true" : "false") + ")");
         if (isTexture && node.attr("vertTile"))
             line(var + ":SetVertTile(" + (node.attrBool("vertTile") ? "true" : "false") + ")");
-        if (!isTexture) emitFontStringAttributes(node, var);
+        // A string's alpha before its colour, which has one of its own (0x004872f0); a texture's
+        // after everything else (0x00485f40).
+        const std::string* alpha = node.attr("alpha");
+        const auto emitAlpha = [&] {
+            if (alpha && !alpha->empty()) line(var + ":SetAlpha(" + *alpha + ")");
+        };
+        if (!isTexture) {
+            emitFontStringAttributes(node, var);
+            emitAlpha();
+        }
         if (node.attrBool("setAllPoints")) {
             line("__WoweeXmlSetAllPoints(" + var + ", " + parentVar + ")");
         }
@@ -497,6 +498,7 @@ struct Emitter {
                 line(var + ":SetVertexColor(" + args + ")");
             }
         }
+        if (isTexture) emitAlpha();
         if (const XmlNode* anchors = node.child("Anchors"))
             emitAnchors(*anchors, var, parentVar, parentName);
         // A texture may animate itself. See emitAnimations: the achievement
@@ -1733,7 +1735,7 @@ struct Emitter {
         // and an OnLoad reading its own label both find something there.
         emitButtonRegions(node, var, name);
         // To the <ButtonText> it has got now.
-        emitTextAttr(node, var);
+        emitTextAttr(node, var, false);
         // A check button can come checked (0x00960000's loader, 1757).
         if (node.name == "CheckButton" && node.attr("checked"))
             line(var + ":SetChecked(" + (node.attrBool("checked") ? "true" : "false") + ")");

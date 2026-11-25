@@ -1673,6 +1673,11 @@ void WidgetTree::collectDrawOrder() {
         const Widget& w = *wp;
         w.drawAlpha = effectiveAlpha(w);
         if (w.drawAlpha <= 0.001f) continue;
+        // A texture or a string whose own colour lets nothing be seen; what does not blend by it
+        // is there all the same.
+        if (w.kind != WidgetKind::Frame && !w.gradient && w.color[3] <= 0.001f &&
+            (w.kind == WidgetKind::FontString || w.blend == TextureBlend::Blend || w.blend == TextureBlend::Add))
+            continue;
         // Frames are containers, except when they carry a backdrop or are a
         // status bar - then the frame itself has something to paint, and it
         // paints underneath its own regions because they sit a level above it.

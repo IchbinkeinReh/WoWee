@@ -2,6 +2,7 @@
 #include <cstring>
 #include "pipeline/tga_image.hpp"
 #include "ui/alpha_gradient.hpp"
+#include "ui/region_colour.hpp"
 #include "ui/tooltip_layout.hpp"
 #include "ui/texture_variant.hpp"
 #include "ui/interface_file.hpp"
@@ -65,6 +66,13 @@ uint32_t textureColor(const Widget& w) {
     return packColor(white, w.drawAlpha);
 }
 
+
+/// The shadow under words of this alpha (region_colour.hpp).
+uint32_t shadowColor(const Widget& w, float words) {
+    const float rgba[4] = {w.shadowColor[0], w.shadowColor[1], w.shadowColor[2],
+                           region_colour::shadow(w.shadowColor[3], words)};
+    return packColor(rgba, w.drawAlpha);
+}
 
 /// WoW's inline markup, split into runs of text that share a colour.
 ///
@@ -889,20 +897,18 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
             y += dh;
             continue;
         }
-        if (w.hasShadow) {
-            float sc[4] = {w.shadowColor[0], w.shadowColor[1],
-                           w.shadowColor[2], w.shadowColor[3]};
-            drawMarkupText(dl, font, size, w.effScale,
-                           ImVec2(x0 + w.shadowX * ws, y - w.shadowY * ws),
-                           packColor(sc, w.drawAlpha * w.shadowColor[3]), w.drawAlpha,
-                           b.text, wrapW, false, align.c_str(), true, nullptr, 0, 0.0f, spacing);
-        }
         // A heading in its own colour where one was set for it.
         const float* color = (b.element >= 1 && b.element <= 3 && w.htmlHeadingColorSet[b.element - 1])
                                  ? w.htmlHeadingColor[b.element - 1]
                                  : w.color;
+        if (w.hasShadow) {
+            drawMarkupText(dl, font, size, w.effScale,
+                           ImVec2(x0 + w.shadowX * ws, y - w.shadowY * ws),
+                           shadowColor(w, color[3]), w.drawAlpha,
+                           b.text, wrapW, false, align.c_str(), true, nullptr, 0, 0.0f, spacing);
+        }
         float h = drawMarkupText(dl, font, size, w.effScale, ImVec2(x0, y),
-                                 packColor(color, w.drawAlpha), w.drawAlpha, b.text,
+                                 packColor(color, w.drawAlpha), w.drawAlpha * color[3], b.text,
                                  wrapW, false, align.c_str(), false, &tree, w.id, 0.0f, spacing);
         // A break at the end of a block finishes its last line rather than
         // opening another: "text<BR/></P>" is one line, and a lone <BR/>
@@ -2985,12 +2991,10 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // The lines scrolled past are outside the frame: cut there.
                     if (passedOver > 0) dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
                     if (w->hasShadow) {
-                        float sc[4] = {w->shadowColor[0], w->shadowColor[1],
-                                       w->shadowColor[2], w->shadowColor[3]};
                         // Fading with its line, not left behind it.
                         drawMarkupText(dl, font, size, w->effScale,
                                        ImVec2(bx + shadowPx(w->shadowX * s), by - shadowPx(w->shadowY * s)),
-                                       packColor(sc, w->drawAlpha * w->shadowColor[3] * rgba[3]),
+                                       shadowColor(*w, rgba[3]),
                                        w->drawAlpha, m.text, wrapW, false,
                                        w->justifyH.c_str(), true, nullptr, 0,
                                        (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f), lineH - size);
@@ -3004,7 +3008,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // errors that are centred only when they are long.
                     // ChatFrameTemplate declares LEFT, so chat is unchanged.
                     drawMarkupText(dl, font, size, w->effScale, ImVec2(bx, by),
-                                   packColor(rgba, w->drawAlpha), w->drawAlpha, m.text,
+                                   packColor(rgba, w->drawAlpha), w->drawAlpha * rgba[3], m.text,
                                    wrapW, false, w->justifyH.c_str(), false, &tree, w->id,
                                    (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f), lineH - size);
                     if (passedOver > 0) dl->PopClipRect();
@@ -3092,16 +3096,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // The shadow under the words, the single offset copy a font
                 // string draws, for the same reason it does.
                 if (w->hasShadow) {
-                    float sc[4] = {w->shadowColor[0], w->shadowColor[1],
-                                   w->shadowColor[2], w->shadowColor[3]};
                     drawMarkupText(dl, font, size, w->effScale,
                                    ImVec2(x0 + w->shadowX * s, y0 - w->shadowY * s),
-                                   packColor(sc, w->drawAlpha * w->shadowColor[3]),
+                                   shadowColor(*w, w->color[3]),
                                    w->drawAlpha, w->text, wrapW, false,
                                    w->justifyH.c_str(), true);
                 }
                 drawMarkupText(dl, font, size, w->effScale, ImVec2(x0, y0),
-                               packColor(w->color, w->drawAlpha), w->drawAlpha, w->text,
+                               packColor(w->color, w->drawAlpha), w->drawAlpha * w->color[3], w->text,
                                wrapW, false, w->justifyH.c_str(), false,
                                &tree, w->id);
             }
@@ -3163,19 +3165,18 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         // is. ChatFontNormal declares one and every edit box in
                         // the interface inherits it.
                         if (w->hasShadow) {
-                            float sc[4] = {w->shadowColor[0], w->shadowColor[1],
-                                           w->shadowColor[2], w->shadowColor[3]};
                             drawMarkupText(dl, font, size, w->effScale,
                                            ImVec2(x0 + pad + w->shadowX * s,
                                                   lineTop(line) - w->shadowY * s),
-                                           packColor(sc, w->drawAlpha * w->shadowColor[3]),
+                                           shadowColor(*w, w->color[3]),
                                            w->drawAlpha, text, 0.0f, false,
                                            nullptr, true);
                         }
                         // Through the markup parser like everything else:
                         // shift-clicking a link puts the whole
                         // "|Hitem:3299|h[Fractured Canine]|h" into the box.
-                        drawMarkupText(dl, font, size, w->effScale, ImVec2(x0 + pad, lineTop(line)), col, w->drawAlpha, text);
+                        drawMarkupText(dl, font, size, w->effScale, ImVec2(x0 + pad, lineTop(line)), col,
+                                       w->drawAlpha * w->color[3], text);
                     }
                 }
                 if (w->editFocused && caretBlinkOn(*w)) {
@@ -3556,6 +3557,19 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             else if (w->justifyV == "BOTTOM") ty = y1 - extent.y;
             tx += pushX;
             ty += pushY;
+            // A button's label takes its colour from the button's state. The
+            // colour lives on the parent because that is where the template
+            // declares it; only the colour changes, never the size, or a label
+            // would jump about as the cursor crossed it.
+            float textColor[4] = {w->color[0], w->color[1], w->color[2], w->color[3]};
+            if (const Widget* owner = tree.get(w->parent); owner && (w->fontOwn & font_follow::kColor) == 0) {
+                const float* state = nullptr;
+                if (!owner->enabled && owner->hasDisabledColor) state = owner->disabledColor;
+                else if (owner->enabled && owner->hasHighlightColor && owner->id == tree.hoveredWidget())
+                    state = owner->highlightColor;
+                for (int i = 0; state && i < 4; ++i) textColor[i] = i < 3 ? state[i] : state[i] * w->color[3];
+            }
+            const float textAlpha = w->drawAlpha * textColor[3];
             // An outline is drawn as the same glyphs in black around the text.
             // ImGui has no outlined draw, and offsetting a few copies is what
             // the effect amounts to at these sizes - it is what keeps a
@@ -3563,7 +3577,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             if (w->fontOutline.find("OUTLINE") != std::string::npos) {
                 const float d = w->fontOutline.find("THICKOUTLINE") != std::string::npos ? 2.0f : 1.0f;
                 const uint32_t shadow = IM_COL32(0, 0, 0,
-                    static_cast<int>(std::clamp(w->drawAlpha, 0.0f, 1.0f) * 255.0f));
+                    static_cast<int>(std::clamp(textAlpha, 0.0f, 1.0f) * 255.0f));
                 const ImVec2 around[8] = {
                     {-d, 0}, {d, 0}, {0, -d}, {0, d},
                     {-d, -d}, {d, -d}, {-d, d}, {d, d},
@@ -3574,7 +3588,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // copy of the words in a darker shade, out of line with
                     // the ones on top of it.
                     drawMarkupText(dl, font, size, w->effScale, ImVec2(tx + o.x, ty + o.y),
-                                   shadow, w->drawAlpha, shown, wrapW,
+                                   shadow, textAlpha, shown, wrapW,
                                    w->nonSpaceWrap, w->justifyH.c_str(), true,
                                    nullptr, 0, indent, spacing);
                 }
@@ -3584,29 +3598,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // interface units like everything the font object states, so it
             // scales with the rest.
             if (w->hasShadow) {
-                float sc[4] = {w->shadowColor[0], w->shadowColor[1],
-                               w->shadowColor[2], w->shadowColor[3]};
                 drawMarkupText(dl, font, size, w->effScale,
                                ImVec2(tx + w->shadowX * s, ty - w->shadowY * s),
-                               packColor(sc, w->drawAlpha * w->shadowColor[3]),
-                               w->drawAlpha, shown, wrapW, w->nonSpaceWrap,
+                               shadowColor(*w, textColor[3]),
+                               textAlpha, shown, wrapW, w->nonSpaceWrap,
                                w->justifyH.c_str(), true, nullptr, 0, indent, spacing);
             }
-            // A button's label takes its colour from the button's state. The
-            // colour lives on the parent because that is where the template
-            // declares it; only the colour changes, never the size, or a label
-            // would jump about as the cursor crossed it.
-            const float* textColor = w->color;
-            if (const Widget* owner = tree.get(w->parent); owner && (w->fontOwn & font_follow::kColor) == 0) {
-                if (!owner->enabled && owner->hasDisabledColor) {
-                    textColor = owner->disabledColor;
-                } else if (owner->enabled && owner->hasHighlightColor &&
-                           owner->id == tree.hoveredWidget()) {
-                    textColor = owner->highlightColor;
-                }
-            }
             drawMarkupText(dl, font, size, w->effScale, ImVec2(tx, ty),
-                           packColor(textColor, w->drawAlpha), w->drawAlpha, shown,
+                           packColor(textColor, w->drawAlpha), textAlpha, shown,
                            wrapW, w->nonSpaceWrap, w->justifyH.c_str(), false,
                            &tree, w->id, indent, spacing);
         }

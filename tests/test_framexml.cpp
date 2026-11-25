@@ -1288,6 +1288,25 @@ TEST_CASE("A frame with no Backdrop emits no SetBackdrop", "[framexml][emit]") {
     REQUIRE_FALSE(has(r.lua, "SetBackdrop"));
 }
 
+// 0x00485f40: a texture's alpha comes after all else; 0x004872f0: a string's before its colour.
+TEST_CASE("a region's alpha is set in its place", "[framexml][emit]") {
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"Dim\"><Layers><Layer>"
+        "<Texture name=\"A\" file=\"x\" alpha=\"0.25\" inherits=\"T\"><Color r=\"1\" g=\"0\" b=\"0\"/></Texture>"
+        "<FontString name=\"B\" alpha=\"0.75\" inherits=\"F\"><Color r=\"0\" g=\"1\" b=\"0\"/></FontString>"
+        "</Layer></Layers></Frame></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    const auto at = [&](const char* what) {
+        const size_t i = r.lua.find(what);
+        REQUIRE(i != std::string::npos);
+        return i;
+    };
+    CHECK(at(":SetVertexColor(") < at(":SetAlpha(0.25)"));
+    CHECK(at("__WoweeTemplates[\"T\"](") < at(":SetAlpha(0.25)"));
+    CHECK(at("SetFontObject(\"F\")") < at(":SetAlpha(0.75)"));
+    CHECK(at(":SetAlpha(0.75)") < at(":SetTextColor("));
+}
+
 TEST_CASE("A declared alpha reaches SetAlpha", "[framexml][emit]") {
     XmlNode root = parseOrFail(
         "<Ui><Frame name=\"Dim\" alpha=\"0.5\">"

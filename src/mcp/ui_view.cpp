@@ -160,7 +160,8 @@ json widgetJson(ToolContext& context, const ui::Widget& widget) {
         out["value"] = rounded(widget.barValue, 3);
         out["range"] = json::array({rounded(widget.barMin, 3), rounded(widget.barMax, 3)});
     }
-    if (widget.alpha < 0.99f) out["alpha"] = rounded(widget.alpha, 2);
+    const float ownAlpha = widget.kind == ui::WidgetKind::Frame ? widget.alpha : widget.color[3];
+    if (ownAlpha < 0.99f) out["alpha"] = rounded(ownAlpha, 2);
     return out;
 }
 

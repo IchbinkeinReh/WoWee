@@ -2,6 +2,7 @@
 #include "addons/saved_variables.hpp"
 #include "addons/chat_bubble_lua.hpp"
 #include "addons/nameplate_lua.hpp"
+#include "ui/region_colour.hpp"
 #include "ui/nameplate_view.hpp"
 #include "addons/chunk_name.hpp"
 #include "addons/lua_engine.hpp"
@@ -1716,6 +1717,7 @@ int lua_Frame_SetMaxResize(lua_State* L) {
 /// bgTextureBottom:SetPoint("TOP", bgTextureMiddle:GetName(), "BOTTOM") anchored
 /// a bag's bottom edge to nothing, which put it across the top of the bag.
 int lua_FontString_SetText(lua_State* L);
+static void raiseWithoutFont(lua_State* L, const char* method);
 
 /// SetFormattedText(fmt, ...) on a region.
 ///
@@ -1724,6 +1726,7 @@ int lua_FontString_SetText(lua_State* L);
 /// placeholder its XML carried. The character sheet went on reading "Level level
 /// race class" for exactly that reason.
 int lua_FontString_SetFormattedText(lua_State* L) {
+    raiseWithoutFont(L, "SetFormattedText");
     const int n = lua_gettop(L);
     if (n < 2 || !lua_isstring(L, 2)) return 0;
 
@@ -7756,16 +7759,39 @@ int lua_Region_SetAlpha(lua_State* L) {
     if (std::isnan(alpha)) alpha = 0.0;  // the FPU's integer indefinite, low byte 0
     if (w->kind != wowee::ui::WidgetKind::FontString) alpha = (alpha >= 0.0 && alpha < 1.0) ? alpha : (alpha >= 1.0 ? 1.0 : 0.0);
     const double scaled = alpha * 255.0;
-    // Out of an int's reach the FPU's conversion is the indefinite 0x80000000.
-    const long whole = std::fabs(scaled) < 2147483648.0 ? std::lrint(scaled) : 0L;
-    const auto byte = static_cast<uint8_t>(whole & 0xFF);
-    w->alpha = static_cast<float>(byte) / 255.0f;
+    // Cut, not rounded: .5 is 127. Out of an int's reach the FPU's conversion
+    // is the indefinite 0x80000000.
+    const long whole = std::fabs(scaled) < 2147483648.0 ? static_cast<long>(scaled) : 0L;
+    const float kept = static_cast<float>(static_cast<uint8_t>(whole & 0xFF)) / 255.0f;
+    if (w->kind == wowee::ui::WidgetKind::Frame) {
+        w->alpha = kept;
+        return 0;
+    }
+    // A texture's and a string's is its colour's: the colour is read, its alpha written and it is
+    // set again (0x00487ab0, 0x00487a10). Read where it is four, a gradient's, it is white.
+    w->gradient = false;
+    w->color[3] = kept;
     return 0;
 }
 int lua_Region_GetAlpha(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushnumber(L, w ? w->alpha : 1.0);
+    if (!w) lua_pushnumber(L, 1.0);
+    else if (w->kind == wowee::ui::WidgetKind::Frame)
+        lua_pushnumber(L, ui::region_colour::byteOf(w->alpha) * 0.00392156862745098);  // 0x0049f980
+    else
+        lua_pushnumber(L, ui::region_colour::byteOf(w->color[3]) * static_cast<double>(0.003921569f));  // 0x0048c4c0
     return 1;
+}
+
+/// A colour's parts from `at` on (0x00960420), what is no number 0; the alpha `without` where
+/// there is none, which the fourth argument of GetMessageTypeColor's - a table - is too.
+static void colourArgs(lua_State* L, int at, float* colour, float without) {
+    for (int i = 0; i < 3; ++i) colour[i] = ui::region_colour::part(lua_tonumber(L, at + i));
+    colour[3] = lua_isnumber(L, at + 3) ? ui::region_colour::part(lua_tonumber(L, at + 3)) : without;
+}
+static int pushColour(lua_State* L, const float* colour) {
+    for (int i = 0; i < 4; ++i) lua_pushnumber(L, ui::region_colour::answered(colour[i]));
+    return 4;
 }
 
 /// Whether a file of the interface can be had; where there are no files to ask,
@@ -7988,22 +8014,10 @@ int lua_Texture_GetBlendMode(lua_State* L) {
     lua_pushstring(L, wowee::ui::textureBlendName(w ? w->blend : wowee::ui::TextureBlend::Blend));
     return 1;
 }
+// SetVertexColor (0x0048c1c0, a string's 0x0048cf30): the alpha stays without a fourth number.
 int lua_Region_SetVertexColor(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
-        // Lenient, because the interface passes junk into the fourth argument
-        // and the real client accepts it. GetMessageTypeColor ends
-        //
-        //     return info.r, info.g, info.b, group;
-        //
-        // where group is a *table*, and the chat settings panel spreads that
-        // straight into SetVertexColor - so the alpha is a table on every
-        // colour swatch it draws. luaL_optnumber falls back to its default for
-        // nil and none only; anything else that will not convert raises, which
-        // took the panel down as it opened.
-        w->color[0] = static_cast<float>(luaOptNumberText(L, 2, 1.0));
-        w->color[1] = static_cast<float>(luaOptNumberText(L, 3, 1.0));
-        w->color[2] = static_cast<float>(luaOptNumberText(L, 4, 1.0));
-        w->color[3] = static_cast<float>(luaOptNumberText(L, 5, 1.0));
+        colourArgs(L, 2, w->color, w->color[3]);
         w->gradient = false;
         w->fontOwn |= ui::font_follow::kColor;
     }
@@ -8047,6 +8061,8 @@ static int setGradient(lua_State* L, bool withAlpha) {
     for (int c = 0; c < 4; ++c)
         for (int i = 0; i < 4; ++i) w->gradientColor[c][i] = corners[c][i];
     w->gradient = true;
+    // What is read of four colours is white (0x00487ab0).
+    std::fill(std::begin(w->color), std::end(w->color), 1.0f);
     return 0;
 }
 int lua_Texture_SetGradient(lua_State* L) { return setGradient(L, false); }
@@ -8166,7 +8182,9 @@ int lua_Frame_SetFrameLevel(lua_State* L) {
     if (tree && id) tree->setFrameLevel(id, wanted);
     return 0;
 }
-int lua_FontString_SetText(lua_State* L) {
+
+/// What a string is to say (0x00483910), font or no font: the XML's text and a button's label.
+int lua_WoweeSetStringText(lua_State* L) {
     // Anything but a string is taken as no text rather than as an error.
     //
     // WoW raises here, and so would this - except that the missing-API
@@ -8183,6 +8201,17 @@ int lua_FontString_SetText(lua_State* L) {
         tooltipLineStringWritten(L, w);
     }
     return 0;
+}
+
+/// A font string without a font takes no text from a script (0x0048d780, 0x0048d800).
+static void raiseWithoutFont(lua_State* L, const char* method) {
+    const auto* w = widgetOf(L, 1);
+    if (w && w->kind == ui::WidgetKind::FontString && w->fontFace.empty())
+        luaL_error(L, "%s:%s(): Font not set", w->name.empty() ? "<unnamed>" : w->name.c_str(), method);
+}
+int lua_FontString_SetText(lua_State* L) {
+    raiseWithoutFont(L, "SetText");
+    return lua_WoweeSetStringText(L);
 }
 /// GetText() -> the text, or nil for none (0x0048d730 pushes a null for an
 /// empty string). A tooltip's line answers the line as the tooltip holds it.
@@ -8248,8 +8277,8 @@ int lua_FontString_GetJustifyH(lua_State* L) {
 ///
 /// optionspaneltemplates is the caller: re-enabling a control does
 /// `SetTextColor(fontObject:GetTextColor())`, and nil for all four made that
-/// SetTextColor() with no arguments - which defaults to white rather than to
-/// the colour the font object actually carries.
+/// SetTextColor() with no arguments - rather than the colour the font object
+/// actually carries.
 int lua_FontString_GetTextColor(lua_State* L) {
     syncTooltipLineStringOf(L, widgetOf(L, 1));
     auto* tree = wowee::addons::getWidgetTree(L);
@@ -8263,8 +8292,7 @@ int lua_FontString_GetTextColor(lua_State* L) {
         lua_pop(L, 1);
     }
     if (w) {
-        for (float component : w->color) lua_pushnumber(L, component);
-        return 4;
+        return pushColour(L, w->color);  // 0x0048d890, 0x004a3ca0
     }
     if (lua_istable(L, 1)) {
         static const char* keys[4] = {"r", "g", "b", "a"};
@@ -8294,10 +8322,7 @@ int lua_FontString_SetTextColor(lua_State* L) {
         lua_pop(L, 1);
     }
     if (w) {
-        w->color[0] = static_cast<float>(luaL_optnumber(L, 2, 1.0));
-        w->color[1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-        w->color[2] = static_cast<float>(luaL_optnumber(L, 4, 1.0));
-        w->color[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+        colourArgs(L, 2, w->color, 1.0f);  // 0x0048d970
         w->fontOwn |= ui::font_follow::kColor;
         // A tooltip's line - TextLeft1 coloured by reaction in
         // OnTooltipSetUnit - takes the colour where it is drawn.
@@ -8592,10 +8617,7 @@ int lua_FontString_SetShadowOffset(lua_State* L) {
 }
 int lua_FontString_SetShadowColor(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
-        w->shadowColor[0] = static_cast<float>(luaL_optnumber(L, 2, 0.0));
-        w->shadowColor[1] = static_cast<float>(luaL_optnumber(L, 3, 0.0));
-        w->shadowColor[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
-        w->shadowColor[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+        colourArgs(L, 2, w->shadowColor, 1.0f);  // 0x0048dab0
         w->fontOwn |= ui::font_follow::kShadow;
     }
     return 0;
@@ -8702,8 +8724,8 @@ int lua_EditBox_GetInputLanguage(lua_State* L) {
 /// to seed the colour picker.
 int lua_Region_GetVertexColor(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    for (int i = 0; i < 4; ++i) lua_pushnumber(L, w ? w->color[i] : 1.0);
-    return 4;
+    const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    return pushColour(L, w ? w->color : white);  // 0x0048c0e0
 }
 
 static void refreshButtonFont(lua_State* L, uint32_t id) {
@@ -8812,8 +8834,8 @@ int lua_Region_GetSize(lua_State* L);  // with GetChildren, below
 /// CanNonSpaceWrap (0x0048e010).
 int lua_FontString_GetShadowColor(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    for (int i = 0; i < 4; ++i) lua_pushnumber(L, w ? static_cast<double>(std::lround(std::clamp(w->shadowColor[i], 0.0f, 1.0f) * 255.0f)) / 255.0 : (i == 3 ? 1.0 : 0.0));
-    return 4;
+    const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    return pushColour(L, w ? w->shadowColor : black);
 }
 int lua_FontString_GetShadowOffset(lua_State* L) {
     const auto* w = widgetOf(L, 1);
@@ -9079,11 +9101,10 @@ int lua_Frame_IsJoystickEnabled(lua_State* L) {
     return 1;
 }
 
-/// The four components of a state colour, as SetTextColor takes them.
+/// The four components of a state colour.
 ///
-/// Missing components read as white, which is what SetTextColor does with no
-/// arguments - a three-argument call is a colour with no alpha, not a colour
-/// that is transparent.
+/// Missing components read as white: a three-argument call is a colour with
+/// no alpha, not a colour that is transparent.
 static void applyStateComponents(lua_State* L, float out[4], bool& flag) {
     for (int i = 0; i < 4; ++i) {
         out[i] = static_cast<float>(luaL_optnumber(L, 2 + i, 1.0));
@@ -9596,12 +9617,7 @@ int lua_Frame_GetBackdrop(lua_State* L) {
 int pushBackdropColour(lua_State* L, bool border) {
     const auto* w = widgetOf(L, 1);
     if (!w || !w->hasBackdrop) return 0;
-    const float* c = border ? w->borderColor : w->backdropColor;
-    for (int i = 0; i < 4; ++i) {
-        const float v = std::clamp(c[i], 0.0f, 1.0f);
-        lua_pushnumber(L, static_cast<float>(std::lround(v * 255.0f)) * 0.00392156f);
-    }
-    return 4;
+    return pushColour(L, border ? w->borderColor : w->backdropColor);
 }
 int lua_Frame_GetBackdropColor(lua_State* L) { return pushBackdropColour(L, false); }
 int lua_Frame_GetBackdropBorderColor(lua_State* L) { return pushBackdropColour(L, true); }
@@ -10585,12 +10601,7 @@ int lua_wowee_barHasTexture(lua_State* L) {
     return 1;
 }
 int lua_StatusBar_SetStatusBarColor(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        w->barColor[0] = static_cast<float>(luaL_optnumber(L, 2, 1.0));
-        w->barColor[1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-        w->barColor[2] = static_cast<float>(luaL_optnumber(L, 4, 1.0));
-        w->barColor[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
-    }
+    if (auto* w = widgetOf(L, 1)) colourArgs(L, 2, w->barColor, 1.0f);  // 0x00971910
     return 0;
 }
 int lua_StatusBar_SetOrientation(lua_State* L) {
@@ -10606,13 +10617,6 @@ int lua_StatusBar_SetOrientation(lua_State* L) {
 }
 
 // ── Getters the client registers (each pushes what its setter stored) ──────
-namespace {
-/// A colour channel kept as a byte, as the client keeps it (0x00487ab0).
-double asByte(float c) {
-    return static_cast<double>(std::lround(std::clamp(c, 0.0f, 1.0f) * 255.0f)) * (1.0 / 255.0);
-}
-}  // namespace
-
 /// EditBox:IsAutoFocus/IsMultiLine/IsNumeric/IsPassword/IsCountInvisibleLetters
 /// - flags 1, 2, 4, 8 and 0x20 of +0x2a0 (0x00975a20 .. 0x00975ce0).
 int lua_EditBox_IsAutoFocus(lua_State* L) {
@@ -10668,9 +10672,8 @@ int lua_StatusBar_GetOrientation(lua_State* L) {
 /// GetStatusBarColor (0x00971800): the bar texture's colour, white with none.
 int lua_StatusBar_GetStatusBarColor(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    const bool has = w && !w->barTexture.empty();
-    for (int i = 0; i < 4; ++i) lua_pushnumber(L, has ? asByte(w->barColor[i]) : 1.0);
-    return 4;
+    const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    return pushColour(L, w && !w->barTexture.empty() ? w->barColor : white);
 }
 
 /// Frame:GetMinResize / GetMaxResize (0x004a0480, 0x004a0640).
@@ -14111,7 +14114,7 @@ void LuaEngine::registerCoreAPI() {
         "       and self:IsObjectType('Button') then\n"
         "        self:GetFontString()\n"
         "    end\n"
-        "    if self.__fontString then self.__fontString:SetText(text) end\n"
+        "    if self.__fontString then __WoweeSetStringText(self.__fontString, text) end\n"
         "end\n"
         "function mt:GetText()\n"
         "    if self.__isEditBox then return __WoweeEditGetText(self) end\n"
@@ -14476,6 +14479,8 @@ void LuaEngine::registerCoreAPI() {
     // so it applies to every frame without another entry in the method list.
     lua_pushcfunction(L_, lua_Frame_SetWheelEnabled);
     lua_setglobal(L_, "__WoweeSetWheelEnabled");
+    lua_pushcfunction(L_, lua_WoweeSetStringText);
+    lua_setglobal(L_, "__WoweeSetStringText");
     lua_pushcfunction(L_, lua_WoweeClientBoolean);
     lua_setglobal(L_, "__WoweeClientBoolean");
     // The XML loader's anchors, lenient where SetPoint is strict (D8).

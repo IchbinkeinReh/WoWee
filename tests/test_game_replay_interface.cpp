@@ -872,6 +872,94 @@ TEST_CASE("a frame to be clicked is found by its name", "[replay][interface]") {
     CHECK(ui.is("not pcall(GetClickFrame)"));
 }
 
+// T269: 0x0048c3e0, 0x0048d030, 0x0048c1c0, 0x0048cf30, 0x0048d970, 0x0048c4c0 and 0x00487ab0.
+TEST_CASE("a texture's and a string's alpha is its colour's", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("t = UIParent:CreateTexture('PlayAlphaT') w = UIParent:CreateFontString() F = CreateFrame('Frame') "
+           "function near(a, b) return math.abs(a - b) < 1e-6 end "
+           "function alphas(o, a) local c = 1 if o.GetVertexColor and o == t then c = select(4, o:GetVertexColor()) "
+           "  elseif o == w then c = select(4, o:GetTextColor()) end "
+           "  return near(o:GetAlpha(), a / 255) and near(c, a * .00392156) end");
+    ui.run("t:SetVertexColor(1, 1, 1, .5)");
+    CHECK(ui.is("alphas(t, 128)"));
+    ui.run("t:SetAlpha(1)");
+    CHECK(ui.is("alphas(t, 255)"));
+    // SetAlpha cuts (0x0048c46f), a colour rounds (0x0048bd20).
+    ui.run("t:SetAlpha(.5) t:SetVertexColor(1, 0, 0)");
+    CHECK(ui.is("alphas(t, 127) and t:GetVertexColor() > .99 and select(2, t:GetVertexColor()) == 0"));
+    // A table in the fourth place is no number; what is none of the first three is 0.
+    ui.run("t:SetVertexColor(nil, 2, -1, {})");
+    CHECK(ui.is("alphas(t, 127) and t:GetVertexColor() == 0 and select(2, t:GetVertexColor()) > .99 "
+                "and select(3, t:GetVertexColor()) == 0"));
+    ui.run("t:SetVertexColor(1, 1, 1, 1)");
+    CHECK(ui.is("alphas(t, 255)"));
+    // A string's: SetTextColor has an alpha of its own, SetVertexColor leaves it.
+    ui.run("w:SetTextColor(1, 1, 1, .5)");
+    CHECK(ui.is("alphas(w, 128)"));
+    ui.run("w:SetAlpha(1)");
+    CHECK(ui.is("alphas(w, 255)"));
+    ui.run("w:SetAlpha(.5) w:SetVertexColor(1, 1, 0)");
+    CHECK(ui.is("alphas(w, 127)"));
+    ui.run("w:SetTextColor(1, 1, 1)");
+    CHECK(ui.is("alphas(w, 255)"));
+    // Four colours are read as white, and set again they are one.
+    ui.run("t:SetVertexColor(1, 0, 0, .5) t:SetGradientAlpha('HORIZONTAL', 1, 0, 0, .5, 0, 0, 1, .5)");
+    CHECK(ui.is("alphas(t, 255) and select(2, t:GetVertexColor()) > .99"));
+    const auto* shown = ui.engine.widgets().findByName("PlayAlphaT");
+    REQUIRE(shown != nullptr);
+    CHECK(shown->gradient);
+    ui.run("t:SetAlpha(.25)");
+    CHECK_FALSE(ui.engine.widgets().findByName("PlayAlphaT")->gradient);
+    CHECK(ui.is("alphas(t, 63)"));
+    // A frame's is its own.
+    ui.run("F:SetAlpha(.5)");
+    CHECK(ui.is("near(F:GetAlpha(), 127 / 255)"));
+}
+
+// T268: 0x0048c0e0, 0x0048d890, 0x004a3ca0, 0x0048d9e0, 0x00971800: a byte times 0.00392156.
+TEST_CASE("colours are answered as they are kept", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("function same(...) local want = {128, 64, 26, 178} for i = 1, 4 do "
+           "  if math.abs((select(i, ...)) - want[i] * .00392156) > 1e-7 then return false end end return true end "
+           "t = UIParent:CreateTexture() t:SetVertexColor(.5, .25, .1, .7) "
+           "w = UIParent:CreateFontString() w:SetTextColor(.5, .25, .1, .7) w:SetShadowColor(.5, .25, .1, .7) "
+           "e = CreateFrame('EditBox') e:SetAutoFocus(false) e:SetTextColor(.5, .25, .1, .7) "
+           "b = CreateFrame('StatusBar') b:SetStatusBarColor(.5, .25, .1, .7)");
+    CHECK(ui.is("same(t:GetVertexColor())"));
+    CHECK(ui.is("same(w:GetTextColor())"));
+    CHECK(ui.is("same(w:GetShadowColor())"));
+    CHECK(ui.is("same(e:GetTextColor())"));
+    // Without a texture the bar's colour is white.
+    CHECK(ui.is("math.abs(b:GetStatusBarColor() - 255 * .00392156) < 1e-6"));
+    ui.run("b:SetStatusBarTexture('Interface\\\\TargetingFrame\\\\UI-StatusBar')");
+    CHECK(ui.is("same(b:GetStatusBarColor())"));
+}
+
+// T268: 0x0048d780 and 0x0048d800.
+TEST_CASE("a string without a font takes no text", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("w = UIParent:CreateFontString('PlayNoFont') n = UIParent:CreateFontString() "
+           "ok, why = pcall(w.SetText, w, 'x') ok2, why2 = pcall(n.SetFormattedText, n, '%d', 1)");
+    CHECK(ui.is("not ok and why:find('PlayNoFont:SetText%(%): Font not set')"));
+    CHECK(ui.is("not ok2 and why2:find('<unnamed>:SetFormattedText%(%): Font not set')"));
+    CHECK(ui.is("w:GetText() == nil"));
+    ui.run("w:SetFont('Fonts\\\\FRIZQT__.TTF', 12) w:SetText('x') w:SetFormattedText('%d', 7)");
+    CHECK(ui.is("w:GetText() == '7'"));
+    // A button's own says it, with a font or without, and so does the XML's.
+    ui.run("b = CreateFrame('Button') b:SetText('y')");
+    CHECK(ui.is("b:GetText() == 'y'"));
+    wowee::ui::XmlNode root;
+    std::string error;
+    REQUIRE(wowee::ui::parseXml("<Ui><Frame name=\"PlayNoFontXml\"><Layers><Layer>"
+                                "<FontString name=\"$parentText\" text=\"z\"/></Layer></Layers></Frame></Ui>",
+                                root, error));
+    CHECK(ui.engine.buildElements(wowee::ui::emitFrameXml(root), "t.xml", [](const auto&) {}));
+    CHECK(ui.is("PlayNoFontXmlText:GetText() == 'z'"));
+}
+
 // T262: 0x004a8340 and 0x004a4220 answer nil for one without a name; 0x0048b540: what is above
 // an animation is its group.
 TEST_CASE("an animation's name is of its group", "[replay][interface]") {

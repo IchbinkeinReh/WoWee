@@ -1,6 +1,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "ui/keyboard_frame.hpp"
+#include "ui/region_colour.hpp"
 #include "ui/widget_tree.hpp"
 
 #include <algorithm>
@@ -251,6 +252,42 @@ TEST_CASE("A child frame draws over its parent", "[widget][draworder]") {
     REQUIRE(order.size() == 2);
     REQUIRE(order[0]->id == parentArt);
     REQUIRE(order[1]->id == childArt);
+}
+
+// A texture's alpha is its colour's; what does not blend by it is there at none.
+TEST_CASE("what its colour lets nothing be seen of is not drawn", "[widget][draworder]") {
+    WidgetTree tree;
+    const uint32_t parent = tree.create(WidgetKind::Frame, 0, "P");
+    tree.get(parent)->width = 100.0f;
+    tree.get(parent)->height = 100.0f;
+    tree.addPoint(parent, Anchor{});
+    const uint32_t tex = tree.create(WidgetKind::Texture, parent, "");
+    tree.get(tex)->texturePath = "Interface\\Buttons\\Button-Backpack-Up.blp";
+    tree.setAllPoints(tex, parent);
+    const auto drawn = [&] {
+        tree.layout(kScreenW, kScreenH);
+        return tree.drawOrder().size();
+    };
+    CHECK(drawn() == 1);
+    tree.get(tex)->color[3] = 0.0f;
+    CHECK(drawn() == 0);
+    tree.get(tex)->blend = TextureBlend::Mod;
+    CHECK(drawn() == 1);
+    tree.get(tex)->blend = TextureBlend::Blend;
+    tree.get(tex)->gradient = true;
+    CHECK(drawn() == 1);
+}
+
+// 0x006c7440, 0x006c6c30; 0x00960420, 0x0048bd20.
+TEST_CASE("a shadow is never stronger than its words", "[widget]") {
+    namespace rc = wowee::ui::region_colour;
+    CHECK(rc::shadow(1.0f, 0.5f) == 0.5f);
+    CHECK(rc::shadow(0.3f, 0.5f) == 0.3f);
+    CHECK(rc::byteOf(rc::part(0.5)) == 128);
+    CHECK(rc::byteOf(rc::part(0.1)) == 26);
+    CHECK(rc::part(-1.0) == 0.0f);
+    CHECK(rc::part(0.0 / 0.0 * 1.0) == 0.0f);
+    CHECK(rc::part(7.0) == 1.0f);
 }
 
 TEST_CASE("Nothing to draw is not drawn", "[widget][draworder]") {
