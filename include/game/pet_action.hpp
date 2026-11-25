@@ -75,8 +75,10 @@ constexpr uint32_t petSlotSpell(uint32_t packed) {
 /// Whether a pet slot's spell is cast by the pet as the client casts the
 /// player's (0x005d4210 -> 0x0080cce0, CMSG_PET_CAST_SPELL) rather than
 /// asked of it by CMSG_PET_ACTION: Spell.dbc AttributesEx4 (+0x20) 0x20, or
-/// the pet is the active mover - a vehicle the player drives (0x006dd060).
-constexpr bool petCastsItself(uint32_t attrEx4, bool petIsMover) { return (attrEx4 & 0x20u) != 0 || petIsMover; }
+/// the pet is the unit the player possesses - a vehicle it drives or sits in (0x006dd060).
+constexpr bool petCastsItself(uint32_t attrEx4, bool petIsPossessed) {
+    return (attrEx4 & 0x20u) != 0 || petIsPossessed;
+}
 
 /// 0x005d4210: a spell no pet is in a state to cast - every pet stunned
 /// (UNIT_FIELD_FLAGS 0x40000) unless the spell's AttributesEx5 has 0x8,

@@ -2225,6 +2225,11 @@ public:
     void setOverrideLightCallback(OverrideLightCallback cb) { overrideLightCallback_ = std::move(cb); }
     void setVehicleMoveHoldCallback(VehicleMoveHoldCallback cb) { vehicleMoveHoldCallback_ = std::move(cb); }
     [[nodiscard]] const VehicleMoveHoldCallback& vehicleMoveHoldCallback() const { return vehicleMoveHoldCallback_; }
+    /// A unit's packet has put it into a seat, out of one or into another.
+    void setVehicleSeatMovedCallback(std::function<void(uint64_t)> cb) { vehicleSeatMovedCallback_ = std::move(cb); }
+    void vehicleSeatMoved(uint64_t guid) const {
+        if (vehicleSeatMovedCallback_) vehicleSeatMovedCallback_(guid);
+    }
     void releaseVehicleMove(uint64_t mover);
 
     // Unit move-flags callback: fired on every MSG_MOVE_* for other players with the raw flags field.
@@ -4901,6 +4906,11 @@ public:
     /// The unit the client moves (DAT_00ca1238): the player, a vehicle it
     /// drives, or none.
     uint64_t activeMover() const;
+    /// The unit the player possesses (0x006dd060): the one PLAYER_FARSIGHT names, once that has
+    /// been said (CMSG_FAR_SIGHT), possessed (UNIT_FLAG 0x1000000) and charmed by the player, else
+    /// made by it (0x004f7250); 0 for none. A vehicle's that the server has taken the moving of
+    /// is this, and not the mover.
+    uint64_t possessedUnit() const;
     /// Whether the active mover is a unit the player possesses (an Eye of
     /// Kilrogg, a mind-controlled unit) rather than a vehicle it rides: the
     /// keys move that unit while the player stays where it stood.
@@ -7470,6 +7480,7 @@ private:
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
     std::array<int, 12> inventoryAlerts_{};  ///< DAT_00c24238
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
+    std::function<void(uint64_t)> vehicleSeatMovedCallback_;
     OverrideLightCallback overrideLightCallback_;
     PlacedFallCallback placedFallCallback_;
     PlacedFallCallback fallEndsCallback_;

@@ -128,6 +128,36 @@ TEST_CASE("the player is in combat by its flag", "[replay][combat]") {
     CHECK_FALSE(s.handler().isInCombat());
 }
 
+// T286: 0x005d4210 asks 0x006dd060: the unit seen through and possessed, whoever moves it.
+TEST_CASE("a vehicle the player does not move casts its spells itself", "[replay][pet]") {
+    constexpr uint32_t kFeast = 61784;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    const uint32_t me = static_cast<uint32_t>(Session::kPlayerGuid);
+    s.receive(UpdateObject().create(kVehicle, ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_FLAGS, 0x1008008}}));
+    s.handler().spellNameCacheRef()[kFeast].name = "Feast";
+    s.handler().spellNameCacheRef()[kFeast].implicitTargetsA[0] = 1;
+    s.receive(petSpells(kVehicle));
+    // The chair's control, given and taken again before it is seen through.
+    const uint32_t action = 0x08000000u | kFeast;
+    const auto casts = [&] { return s.sent().of(Opcode::CMSG_PET_CAST_SPELL).size(); };
+    const auto actions = [&] { return s.sent().of(Opcode::CMSG_PET_ACTION).size(); };
+    CHECK(s.handler().possessedUnit() == 0);
+    s.receive(UpdateObject().values(kVehicle, {{UF::UNIT_FIELD_CHARMEDBY, me}}));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FARSIGHT, static_cast<uint32_t>(kVehicle)}}));
+    CHECK(s.handler().possessedUnit() == kVehicle);
+    s.handler().usePetSlot(action, 0);
+    CHECK(casts() == 1);
+    CHECK(actions() == 0);
+    // Another's is not.
+    s.receive(UpdateObject().values(kVehicle, {{UF::UNIT_FIELD_CHARMEDBY, 0x77}}));
+    CHECK(s.handler().possessedUnit() == 0);
+    s.handler().usePetSlot(action, 0);
+    CHECK(casts() == 1);
+    CHECK(actions() == 1);
+}
+
 // T284: 0x0080c790, case 0x59: an aimed shot's place is picked by its trajectory. It waited for
 // a unit, which its target flags do not want.
 TEST_CASE("a vehicle's aimed shot waits for no target", "[replay][pet]") {

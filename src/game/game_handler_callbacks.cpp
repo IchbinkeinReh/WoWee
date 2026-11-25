@@ -3341,7 +3341,7 @@ bool GameHandler::unitSpellInEffect(uint64_t guid, uint32_t spell, const std::ve
 
 void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
     // 0x005d4210: a spell the pet casts itself - AttributesEx4 0x20, or the
-    // pet is the active mover (0x006dd060) - goes as the player's casts do
+    // pet is the unit it possesses (0x006dd060) - goes as the player's casts do
     // (0x0080cce0) at the unit asked; anything else is CMSG_PET_ACTION.
     if (const uint32_t spell = pet::petSlotSpell(packed); spell != 0 && petGuid_ != 0) {
         loadSpellNameCache();
@@ -3373,7 +3373,7 @@ void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
         // does not allow it; nothing said (0x005d4210).
         const uint32_t attrEx5 = it != spellNameCache_.end() ? it->second.attrEx5 : 0;
         if (pet::petsCannotCast(std::array<uint32_t, 1>{petUnit->getUnitFlags()}, attrEx5)) return;
-        if (pet::petCastsItself(attrEx4, petGuid_ == activeMover())) {
+        if (pet::petCastsItself(attrEx4, petGuid_ == possessedUnit())) {
             if (spellHandler_) spellHandler_->castPetSpell(petGuid_, spell, targetGuid);
             return;
         }
@@ -4307,9 +4307,10 @@ uint64_t GameHandler::softInteractTarget() {
     auto playerEntity = getEntityManager().getEntity(playerGuid);
     const auto* player = dynamic_cast<const Unit*>(playerEntity.get());
     if (!player) return 0;
-    // The mover (0x006dd060), else the player: where the search stands and
-    // the way it faces (vfunc +0x2c, +0x34).
-    const uint64_t moverGuid = activeMover() != 0 ? activeMover() : playerGuid;
+    // The unit possessed (0x006dd060), else the player: where the search
+    // stands and the way it faces (vfunc +0x2c, +0x34).
+    const uint64_t possessed = possessedUnit();
+    const uint64_t moverGuid = possessed != 0 ? possessed : playerGuid;
     auto moverEntity = getEntityManager().getEntity(moverGuid);
     if (!moverEntity) moverEntity = playerEntity;
     const bool moverIsPlayer = moverEntity->getGuid() == playerGuid;

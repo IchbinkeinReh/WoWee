@@ -25,18 +25,21 @@ uint64_t guidAt(const Entity& e, UF f) {
 
 }  // namespace
 
+uint64_t GameHandler::possessedUnit() const {
+    const uint64_t sight = cameraTarget();
+    if (sight == playerGuid || !movementHandler_ || !movementHandler_->farSightAnnounced()) return 0;
+    const auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(sight));
+    if (!unit || (unit->getUnitFlags() & 0x01000000u) == 0) return 0;
+    const uint64_t charmer = guidAt(*unit, UF::UNIT_FIELD_CHARMEDBY);
+    return (charmer != 0 ? charmer : guidAt(*unit, UF::UNIT_FIELD_CREATEDBY)) == playerGuid ? sight : 0;
+}
+
 unit_pointer::Player GameHandler::unitPointerPlayer() const {
     unit_pointer::Player p;
     auto& entities = getEntityManager();
-    if (const uint64_t sight = cameraTarget(); sight != playerGuid) {
+    if (cameraTarget() != playerGuid) {
         p.seesElsewhere = true;
-        // 0x006dd060 -> 0x004f7250: a unit that is possessed (UNIT_FLAG
-        // 0x1000000) by the player: charmed by it, else made by it.
-        if (const auto unit = std::dynamic_pointer_cast<Unit>(entities.getEntity(sight))) {
-            const uint64_t charmer = guidAt(*unit, UF::UNIT_FIELD_CHARMEDBY);
-            p.possesses = (unit->getUnitFlags() & 0x01000000u) != 0 &&
-                          (charmer != 0 ? charmer : guidAt(*unit, UF::UNIT_FIELD_CREATEDBY)) == playerGuid;
-        }
+        p.possesses = possessedUnit() != 0;
     }
     const auto seat = vehicleRoster_.passenger(playerGuid);
     if (seat && (vehicle::isVehicleGuid(seat->vehicleGuid) || vehicle::isPlayerGuid(seat->vehicleGuid)) &&

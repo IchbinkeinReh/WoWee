@@ -2079,8 +2079,8 @@ bool CombatHandler::nearestCandidate(NearestMode mode, uint64_t guid) const {
 
 void CombatHandler::targetNext(NearestMode mode, bool reverse) {
     const uint64_t me = owner_.getPlayerGuid();
-    // From the unit the player moves, where it is another (0x006dd060).
-    uint64_t fromGuid = owner_.activeMover();
+    // From the unit the player possesses, where there is one (0x006dd060).
+    uint64_t fromGuid = owner_.possessedUnit();
     auto from = fromGuid != 0 ? owner_.getEntityManager().getEntity(fromGuid) : nullptr;
     if (!from) {
         fromGuid = me;
