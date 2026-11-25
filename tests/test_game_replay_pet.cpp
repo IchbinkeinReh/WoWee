@@ -4,6 +4,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "game_replay.hpp"
+#include "game/spell_handler.hpp"
 
 #include <algorithm>
 #include <string>
@@ -125,6 +126,35 @@ TEST_CASE("the player is in combat by its flag", "[replay][combat]") {
     swing.writeUInt64(Session::kPlayerGuid);
     s.receive(swing);
     CHECK_FALSE(s.handler().isInCombat());
+}
+
+// T284: 0x0080c790, case 0x59: an aimed shot's place is picked by its trajectory. It waited for
+// a unit, which its target flags do not want.
+TEST_CASE("a vehicle's aimed shot waits for no target", "[replay][pet]") {
+    constexpr uint32_t kHurlBoulder = 62306, kMissile = 1682;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.receive(UpdateObject().create(kVehicle, ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}}));
+    auto& spell = s.handler().spellNameCacheRef()[kHurlBoulder];
+    spell.name = "Hurl Boulder";
+    spell.targetFlags = 0x40;
+    spell.implicitTargetsA[0] = 89;
+    spell.spellMissileId = kMissile;
+    auto* spells = s.handler().getSpellHandler();
+    uint32_t flags = 17;
+    spells->setMissileRowSource([&](uint32_t id) -> std::optional<wowee::game::missile_trajectory::MissileRow> {
+        if (id != kMissile) return std::nullopt;
+        wowee::game::missile_trajectory::MissileRow row;
+        row.flags = flags;
+        return row;
+    });
+    spells->castPetSpell(kVehicle, kHurlBoulder, 0);
+    CHECK_FALSE(spells->cancelGroundTargeting());
+    // One that is not aimed waits for its place.
+    flags = 16;
+    spells->castPetSpell(kVehicle, kHurlBoulder, 0);
+    CHECK(spells->cancelGroundTargeting());
+    spells->setMissileRowSource({});
 }
 
 // P69: 0x005d4ad0 puts the pet's actions into the bonus bar each time (0x005ab800), and each of

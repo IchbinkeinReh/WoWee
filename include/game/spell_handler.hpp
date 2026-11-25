@@ -95,6 +95,10 @@ public:
     /// A pet's spell cast by the pet itself (0x005d4210 -> 0x0080cce0,
     /// CMSG_PET_CAST_SPELL): at a place it waits for one, as the player's do.
     void castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targetGuid);
+    /// Where SpellMissile rows come from in place of the DBC.
+    void setMissileRowSource(std::function<std::optional<missile_trajectory::MissileRow>(uint32_t)> source) {
+        missileRowSource_ = std::move(source);
+    }
     /// 0x00729740: whether one unit may attack another, each by guid; false
     /// when either is not a unit here.
     [[nodiscard]] bool unitMayAttack(uint64_t attacker, uint64_t victim) const;
@@ -1113,6 +1117,10 @@ private:
     void releaseAimedMissiles();
     /// Whether the spell's SpellMissile row has Flags bit 1.
     bool spellIsAimed(uint32_t spellId);
+    /// The targets a spell needs (0x0080c790), its SpellMissile row asked.
+    uint32_t requiredTargetsOf(uint32_t targetFlags, uint32_t implicitTargetA0, uint32_t spellMissileId) const;
+    std::optional<missile_trajectory::MissileRow> missileRow(uint32_t spellMissileId) const;
+    std::function<std::optional<missile_trajectory::MissileRow>(uint32_t)> missileRowSource_;
     /// 0x006fe7e0, each frame: once the aimed cast's time has passed since it
     /// was sent, 0x006fd6b0.
     void tickAimedCast();

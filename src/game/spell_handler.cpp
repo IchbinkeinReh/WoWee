@@ -1069,18 +1069,8 @@ bool SpellHandler::armGroundTarget(uint32_t spellId, uint64_t caster) {
     loadSpellNameCache();
     auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return false;
-    // TARGET_DEST_TRAJ's exception reads the spell's SpellMissile
-    // row, its Flags (+4) bit 1 (0x0080c790 case 0x59).
-    bool trajectory = false;
-    if (it->second.implicitTargetsA[0] == 89 && it->second.spellMissileId != 0) {
-        auto* am = core::Application::getInstance().getAssetManager();
-        auto missiles = am ? am->loadDBCOptional("SpellMissile.dbc") : nullptr;
-        const int32_t row = missiles && missiles->getFieldCount() > 1
-                                ? missiles->findRecordById(it->second.spellMissileId) : -1;
-        trajectory = row >= 0 && (missiles->getUInt32(static_cast<uint32_t>(row), 1) & 1u) != 0;
-    }
-    const uint32_t required = ground_target::requiredTargets(
-        it->second.targetFlags, it->second.implicitTargetsA[0], trajectory);
+    const uint32_t required =
+        requiredTargetsOf(it->second.targetFlags, it->second.implicitTargetsA[0], it->second.spellMissileId);
     if (!ground_target::wantsLocation(required)) return false;
     if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
     owner_.cancelGlyphTargeting();
@@ -1626,11 +1616,28 @@ std::optional<missile_trajectory::MissileRow> aimedMissileRow(uint32_t spellMiss
 uint32_t clientMs() { return static_cast<uint32_t>(static_cast<int64_t>(core::appTimeSeconds() * 1000.0)); }
 }  // namespace
 
+std::optional<missile_trajectory::MissileRow> SpellHandler::missileRow(uint32_t spellMissileId) const {
+    return missileRowSource_ ? missileRowSource_(spellMissileId) : aimedMissileRow(spellMissileId);
+}
+
+uint32_t SpellHandler::requiredTargetsOf(uint32_t targetFlags, uint32_t implicitTargetA0,
+                                         uint32_t spellMissileId) const {
+    // TARGET_DEST_TRAJ's exception reads the spell's SpellMissile row, its
+    // Flags (+4) bit 1 (0x0080c790 case 0x59).
+    constexpr uint32_t kTargetDestTrajectory = 89;
+    bool trajectory = false;
+    if (implicitTargetA0 == kTargetDestTrajectory) {
+        const auto row = missileRow(spellMissileId);
+        trajectory = row && (row->flags & missile_trajectory::kFlagAimed) != 0;
+    }
+    return ground_target::requiredTargets(targetFlags, implicitTargetA0, trajectory);
+}
+
 bool SpellHandler::spellIsAimed(uint32_t spellId) {
     loadSpellNameCache();
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return false;
-    const auto row = aimedMissileRow(it->second.spellMissileId);
+    const auto row = missileRow(it->second.spellMissileId);
     return row && (row->flags & missile_trajectory::kFlagAimed) != 0;
 }
 
@@ -1638,7 +1645,7 @@ SpellHandler::AimSolve SpellHandler::solveAimedShot(uint32_t spellId, uint64_t c
     namespace mt = missile_trajectory;
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return AimSolve::NotAimed;
-    const auto row = aimedMissileRow(it->second.spellMissileId);
+    const auto row = missileRow(it->second.spellMissileId);
     if (!row || (row->flags & mt::kFlagAimed) == 0) return AimSolve::NotAimed;
     out.row = *row;
     out.spellMissileId = it->second.spellMissileId;
@@ -3821,7 +3828,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     const auto& spell = it->second;
     const uint64_t player = owner_.getPlayerGuid();
     // 0x0080c790: the targets it needs.
-    const uint32_t required = ground_target::requiredTargets(spell.targetFlags, spell.implicitTargetsA[0], false);
+    const uint32_t required = requiredTargetsOf(spell.targetFlags, spell.implicitTargetsA[0], spell.spellMissileId);
     // The unit asked: the cast's, else the player's target.
     const uint64_t asked = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
     auto& em = owner_.getEntityManager();
