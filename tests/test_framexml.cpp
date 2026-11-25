@@ -710,9 +710,11 @@ TEST_CASE("A Font element becomes a font object", "[framexml][emit]") {
 
     REQUIRE(has(r.lua, "Base.height = 10"));
     REQUIRE(has(r.lua, "Base.r = 1"));
-    // Copied first, so the height stated here wins over the inherited one.
-    REQUIRE(has(r.lua, "for k, v in pairs(base) do Derived[k] = v end"));
-    REQUIRE(r.lua.find("pairs(base) do Derived") < r.lua.find("Derived.height = 16"));
+    // It follows the other, and the height stated here is its own.
+    REQUIRE(has(r.lua, "Derived:SetFontObject(base)"));
+    REQUIRE(r.lua.find("Derived:SetFontObject(base)") < r.lua.find("Derived.height = 16"));
+    REQUIRE(has(r.lua, "Derived.__own = {[1] = true}"));
+    REQUIRE(has(r.lua, "Base.__own = {[1] = true, [4] = true}"));
     // A font object is not a frame.
     REQUIRE_FALSE(has(r.lua, "CreateFrame(\"Font\""));
 }

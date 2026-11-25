@@ -836,20 +836,18 @@ struct Emitter {
                 height = fh->attrFloat("val", 0.0f);
         }
 
-        // Inheriting copies the settings first, so anything stated here wins -
-        // the same order a frame's template follows.
+        // Inheriting takes the other's settings first and goes on taking them as
+        // they change (0x00490000's font, 6155); what is stated here is its own.
         if (const std::string* inh = node.attr("inherits"); inh && !inh->empty()) {
             line(name + " = {}");
-            line("do local base = rawget(_G, " + quote(*inh) + ")");
-            line("  if type(base) == 'table' then");
-            line("    for k, v in pairs(base) do " + name + "[k] = v end");
-            line("  end");
-            line("end");
-            // pairs() copies fields and not the metatable, and a font object's
-            // methods live in one. Without this the copy answered nothing -
-            // fontObject:GetTextColor(), which every options control calls to
-            // put its label back when it is enabled, indexed a bare table.
+            // A font object's methods live in its metatable: fontObject:GetTextColor(),
+            // which every options control calls to put its label back when it is
+            // enabled, indexed a bare table without it.
             line("if __WoweeFontMT then setmetatable(" + name + ", __WoweeFontMT) end");
+            line("do local base = rawget(_G, " + quote(*inh) + ")");
+            line("  if type(base) == 'table' and getmetatable(base) == __WoweeFontMT then " + name +
+                 ":SetFontObject(base) end");
+            line("end");
         } else {
             // rawget, because reading the name to see whether it is already
             // there is exactly what the missing-API fallback is watching for.
@@ -861,6 +859,15 @@ struct Emitter {
             line("if __WoweeFontMT then setmetatable(" + name + ", __WoweeFontMT) end");
         }
         line(name + ".name = " + quote(name));   // what GetName answers
+        std::string own;   // by the bits of font_follow.hpp
+        const auto states = [&own](const char* bit) { own += std::string(own.empty() ? "" : ", ") + "[" + bit + "] = true"; };
+        if (height > 0.0f || node.attr("font") || node.attr("outline") || node.attr("monochrome")) states("1");
+        if (node.attr("justifyH") || node.attr("justifyV")) states("2");
+        if (node.child("Color")) states("4");
+        if (node.child("Shadow")) states("8");
+        if (node.attr("spacing")) states("16");
+        if (!own.empty()) line(name + ".__own = {" + own + "}");
+        if (node.attr("spacing")) line(name + ".spacing = " + std::to_string(node.attrFloat("spacing", 0.0f)));
         if (height > 0.0f) line(name + ".height = " + std::to_string(height));
         if (const std::string* f = node.attr("font"))
             line(name + ".font = " + quote(*f));

@@ -12,6 +12,7 @@
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
 #include "ui/font_flags.hpp"
+#include "ui/font_follow.hpp"
 #include "ui/edit_typing.hpp"
 #include "ui/mouse_over.hpp"
 #include "ui/macro_text.hpp"
@@ -2997,7 +2998,10 @@ int lua_Texture_GetNonBlocking(lua_State* L) {
 }
 int lua_FontString_SetIndentedWordWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
-    if (w) w->indentedWordWrap = luaClientSwitchArg(L, 2, true);
+    if (w) {
+        w->indentedWordWrap = luaClientSwitchArg(L, 2, true);
+        w->fontOwn |= ui::font_follow::kStyle;
+    }
     return 0;
 }
 int lua_FontString_GetIndentedWordWrap(lua_State* L) {
@@ -3007,7 +3011,10 @@ int lua_FontString_GetIndentedWordWrap(lua_State* L) {
 }
 int lua_FontString_SetNonSpaceWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
-    if (w) w->nonSpaceWrap = luaClientSwitchArg(L, 2, true);
+    if (w) {
+        w->nonSpaceWrap = luaClientSwitchArg(L, 2, true);
+        w->fontOwn |= ui::font_follow::kStyle;
+    }
     return 0;
 }
 
@@ -7863,6 +7870,7 @@ int lua_Region_SetVertexColor(lua_State* L) {
         w->color[2] = static_cast<float>(luaOptNumberText(L, 4, 1.0));
         w->color[3] = static_cast<float>(luaOptNumberText(L, 5, 1.0));
         w->gradient = false;
+        w->fontOwn |= ui::font_follow::kColor;
     }
     return 0;
 }
@@ -8077,6 +8085,7 @@ int setJustify(lua_State* L, bool horizontal) {
     }
     if (horizontal) w->justifyH = h ? name : "LEFT";
     else            w->justifyV = v ? name : "TOP";
+    w->fontOwn |= ui::font_follow::kStyle;
     return 0;
 }
 }  // namespace
@@ -8159,6 +8168,7 @@ int lua_FontString_SetTextColor(lua_State* L) {
         w->color[1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
         w->color[2] = static_cast<float>(luaL_optnumber(L, 4, 1.0));
         w->color[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+        w->fontOwn |= ui::font_follow::kColor;
         // A tooltip's line - TextLeft1 coloured by reaction in
         // OnTooltipSetUnit - takes the colour where it is drawn.
         tooltipLineStringWritten(L, w);
@@ -8208,6 +8218,7 @@ int lua_FontString_SetFont(lua_State* L) {
         // The flags, none where none are given.
         m->fontOutline = ui::font_flags::names(lua_isstring(L, 4) ? ui::font_flags::parse(lua_tostring(L, 4)) : 0u);
         m->fontHeight = height;
+        m->fontOwn |= ui::font_follow::kFont;
     }
     lua_pushnumber(L, 1);
     return 1;
@@ -8256,6 +8267,7 @@ int lua_FontString_SetSpacing(lua_State* L) {
     if (!lua_isnumber(L, 2))
         return luaL_error(L, "Usage: %s:SetSpacing(spacing)", w->name.empty() ? "<unnamed>" : w->name.c_str());
     w->lineSpacing = static_cast<float>(lua_tonumber(L, 2));
+    w->fontOwn |= ui::font_follow::kSpacing;
     return 0;
 }
 
@@ -8263,73 +8275,177 @@ int lua_FontString_SetSpacing(lua_State* L) {
 /// a height and a colour. FrameXML reaches for these more than three thousand
 /// times, so a FontString that ignores them is the wrong size and colour nearly
 /// everywhere.
-/// Read a font object - a table, or the name of one - onto a widget.
+/// The font objects' followers: by the font the ids of the texts it was given to, and by
+/// the id the font. The client's own lists (+0x68), so neither tainting nor tainted.
+static void pushFontUsers(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_font_users");
+    if (lua_istable(L, -1)) return;
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_newtable(L);
+    lua_pushstring(L, "k");
+    lua_setfield(L, -2, "__mode");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, "wowee_font_users");
+}
+static void pushFontsFollowed(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_fonts_followed");
+    if (lua_istable(L, -1)) return;
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, "wowee_fonts_followed");
+}
+/// The widget follows the font at an index, or none (nil there). False where it does already.
+static bool followFont(lua_State* L, int fontIndex, const wowee::ui::Widget& w) {
+    taint::Quiet quiet;
+    const int top = lua_gettop(L);
+    if (fontIndex < 0) fontIndex = top + fontIndex + 1;
+    const auto id = static_cast<lua_Integer>(w.id);
+    pushFontsFollowed(L);
+    lua_pushinteger(L, id);
+    lua_rawget(L, -2);
+    const bool had = lua_istable(L, -1);
+    if (had && lua_istable(L, fontIndex) && lua_rawequal(L, -1, fontIndex)) {
+        lua_settop(L, top);
+        return false;
+    }
+    pushFontUsers(L);
+    if (had) {
+        lua_pushvalue(L, -2);
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) {
+            lua_pushinteger(L, id);
+            lua_pushnil(L);
+            lua_rawset(L, -3);
+        }
+        lua_pop(L, 1);
+    }
+    if (lua_istable(L, fontIndex)) {
+        lua_pushvalue(L, fontIndex);
+        lua_rawget(L, -2);
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            lua_newtable(L);
+            lua_pushvalue(L, fontIndex);
+            lua_pushvalue(L, -2);
+            lua_rawset(L, -4);
+        }
+        lua_pushinteger(L, id);
+        lua_pushboolean(L, 1);
+        lua_rawset(L, -3);
+    }
+    lua_settop(L, top);
+    pushFontsFollowed(L);
+    lua_pushinteger(L, id);
+    if (lua_istable(L, fontIndex)) lua_pushvalue(L, fontIndex);
+    else lua_pushnil(L);
+    lua_rawset(L, -3);
+    lua_settop(L, top);
+    return true;
+}
+
+/// What of `changed` the widget takes of the font object at an index (0x00483030): only
+/// what the font has.
+static void takeFont(lua_State* L, int fontIndex, wowee::ui::Widget* w, uint8_t changed) {
+    namespace ff = ui::font_follow;
+    taint::Quiet quiet;
+    if (!lua_istable(L, fontIndex)) return;
+    const uint8_t take = ff::taken(changed, w->fontOwn);
+    if (take == 0) return;
+    // A face and a height, both of which the label is measured from.
+    if (auto* tree = wowee::addons::getWidgetTree(L)) {
+        tree->markMeasureDirty(w->id);
+        tree->markLayoutDirty();
+    }
+    const auto number = [&](const char* key, float& out) {
+        lua_getfield(L, fontIndex, key);
+        const bool has = lua_isnumber(L, -1) != 0;
+        if (has) out = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+        return has;
+    };
+    const auto word = [&](const char* key, std::string& out) {
+        lua_getfield(L, fontIndex, key);
+        const bool has = lua_isstring(L, -1) != 0;
+        if (has) out = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        return has;
+    };
+    if ((take & ff::kFont) != 0) {
+        number("height", w->fontHeight);
+        // Which typeface, not only how big. FrameXML sets its headings in
+        // MORPHEUS and its damage numbers in SKURRI, and a font object is
+        // where it says so.
+        word("font", w->fontFace);
+        if (!word("outline", w->fontOutline)) w->fontOutline.clear();
+    }
+    if ((take & ff::kStyle) != 0) {
+        // Which way it sits in its box. A font object carries this and it was
+        // being read off the object by nothing, so GameFontNormalLeft and
+        // GameFontNormal drew identically.
+        word("justifyH", w->justifyH);
+        word("justifyV", w->justifyV);
+        lua_getfield(L, fontIndex, "indentedWordWrap");
+        if (!lua_isnil(L, -1)) w->indentedWordWrap = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+    if ((take & ff::kColor) != 0) {
+        static const char* const kKeys[4] = {"r", "g", "b", "a"};
+        for (int i = 0; i < 4; ++i) number(kKeys[i], w->color[i]);
+    }
+    if ((take & ff::kShadow) != 0) {
+        if (number("shadowX", w->shadowX)) w->hasShadow = true;
+        number("shadowY", w->shadowY);
+        static const char* const kKeys[4] = {"shadowR", "shadowG", "shadowB", "shadowA"};
+        for (int i = 0; i < 4; ++i) number(kKeys[i], w->shadowColor[i]);
+    }
+    if ((take & ff::kSpacing) != 0) number("spacing", w->lineSpacing);
+}
+
+/// A widget given a font object - a table, or the name of one: what it has not set
+/// itself it takes from that, now and as it changes (0x00485160).
 ///
 /// Shared because a button says the same thing a different way: a font string
 /// has SetFontObject, a button has SetNormalFontObject and the font belongs to
 /// the font string it holds.
 static void applyFontObject(lua_State* L, int fontIndex, wowee::ui::Widget* w) {
     if (!w) return;
-    // A face and a height, both of which the label is measured from.
-    if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markMeasureDirty(w->id);
+    taint::Quiet quiet;
+    const int top = lua_gettop(L);
     if (lua_isstring(L, fontIndex)) {       // by name
-        // Remembered, not only unpacked. GetFontObject has to hand the object
-        // back, and the fields copied out of it cannot be reassembled into the
-        // one it came from. A name covers the path that matters: every
-        // `inherits="GameFontNormal"` in the XML emits SetFontObject with the
-        // name as a string.
         w->fontObjectName = lua_tostring(L, fontIndex);
         lua_getglobal(L, lua_tostring(L, fontIndex));
     } else {
         lua_pushvalue(L, fontIndex);
     }
-    if (lua_istable(L, -1)) {
-        lua_getfield(L, -1, "height");
-        if (lua_isnumber(L, -1)) w->fontHeight = static_cast<float>(lua_tonumber(L, -1));
-        lua_pop(L, 1);
-        // Which typeface, not only how big. FrameXML sets its headings in
-        // MORPHEUS and its damage numbers in SKURRI, and a font object is
-        // where it says so.
-        lua_getfield(L, -1, "font");
-        if (lua_isstring(L, -1)) w->fontFace = lua_tostring(L, -1);
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "outline");
-        w->fontOutline = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
-        lua_pop(L, 1);
-        // Which way it sits in its box. A font object carries this and it was
-        // being read off the object by nothing, so GameFontNormalLeft and
-        // GameFontNormal drew identically.
-        lua_getfield(L, -1, "justifyH");
-        if (lua_isstring(L, -1)) w->justifyH = lua_tostring(L, -1);
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "justifyV");
-        if (lua_isstring(L, -1)) w->justifyV = lua_tostring(L, -1);
-        lua_pop(L, 1);
-        const char* keys[4] = {"r", "g", "b", "a"};
-        for (int i = 0; i < 4; ++i) {
-            lua_getfield(L, -1, keys[i]);
-            if (lua_isnumber(L, -1)) w->color[i] = static_cast<float>(lua_tonumber(L, -1));
-            lua_pop(L, 1);
-        }
-        lua_getfield(L, -1, "shadowX");
-        if (lua_isnumber(L, -1)) {
-            w->hasShadow = true;
-            w->shadowX = static_cast<float>(lua_tonumber(L, -1));
-        }
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "shadowY");
-        if (lua_isnumber(L, -1)) w->shadowY = static_cast<float>(lua_tonumber(L, -1));
-        lua_pop(L, 1);
-        const char* skeys[4] = {"shadowR", "shadowG", "shadowB", "shadowA"};
-        for (int i = 0; i < 4; ++i) {
-            lua_getfield(L, -1, skeys[i]);
-            if (lua_isnumber(L, -1)) {
-                w->shadowColor[i] = static_cast<float>(lua_tonumber(L, -1));
-            }
-            lua_pop(L, 1);
-        }
+    const int font = lua_gettop(L);
+    if (!lua_istable(L, font)) {
+        if (lua_isnil(L, font)) (void)followFont(L, font, *w);
+    } else if (followFont(L, font, *w)) {
+        takeFont(L, font, w, ui::font_follow::kAll);
     }
-    lua_pop(L, 1);
+    lua_settop(L, top);
+}
+
+/// __WoweeFontChanged(font, what): the texts that follow it take what changed (0x004963f0).
+static int lua_WoweeFontChanged(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (!tree || !lua_istable(L, 1)) return 0;
+    const auto changed = static_cast<uint8_t>(lua_tointeger(L, 2));
+    taint::Quiet quiet;
+    std::vector<uint32_t> ids;
+    pushFontUsers(L);
+    lua_pushvalue(L, 1);
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+        for (lua_pushnil(L); lua_next(L, -2) != 0; lua_pop(L, 1))
+            ids.push_back(static_cast<uint32_t>(lua_tointeger(L, -2)));
+    }
+    for (const uint32_t id : ids)
+        if (auto* w = tree->get(id)) takeFont(L, 1, w, changed);
+    return 0;
 }
 
 // SetShadowOffset(x, y) (0x0048dbb0): both numbers, or the usage error.
@@ -8341,6 +8457,7 @@ int lua_FontString_SetShadowOffset(lua_State* L) {
     w->hasShadow = true;
     w->shadowX = static_cast<float>(lua_tonumber(L, 2));
     w->shadowY = static_cast<float>(lua_tonumber(L, 3));
+    w->fontOwn |= ui::font_follow::kShadow;
     return 0;
 }
 int lua_FontString_SetShadowColor(lua_State* L) {
@@ -8349,6 +8466,7 @@ int lua_FontString_SetShadowColor(lua_State* L) {
         w->shadowColor[1] = static_cast<float>(luaL_optnumber(L, 3, 0.0));
         w->shadowColor[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
         w->shadowColor[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+        w->fontOwn |= ui::font_follow::kShadow;
     }
     return 0;
 }
@@ -8374,6 +8492,7 @@ int lua_FontString_SetTextHeight(lua_State* L) {
     if (h <= 1.1920929e-07f)
         return luaL_error(L, "%s:SetTextHeight(): invalid texHeight: %f, height must be > 0", who, static_cast<double>(h));
     w->fontHeight = h;
+    w->fontOwn |= ui::font_follow::kFont;
     return 0;
 }
 int lua_FontString_SetFontObject(lua_State* L) {
@@ -8415,13 +8534,16 @@ int lua_FontString_SetFontObject(lua_State* L) {
 /// which is how every options-panel control puts its label back to full colour
 /// when it is re-enabled - so enabling a checkbox raised instead.
 ///
-/// Answers the shared global by name. A region whose font was set field by
-/// field rather than from an object has no object to name, and nil is the right
-/// answer there: it is what the real client says too.
+/// A region whose font was set field by field rather than from an object has
+/// none, and nil is the right answer there: it is what the real client says too.
 int lua_FontString_GetFontObject(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    if (!w || w->fontObjectName.empty()) { lua_pushnil(L); return 1; }
-    lua_getglobal(L, w->fontObjectName.c_str());
+    if (!w) { lua_pushnil(L); return 1; }
+    taint::Quiet quiet;
+    pushFontsFollowed(L);
+    lua_pushinteger(L, static_cast<lua_Integer>(w->id));
+    lua_rawget(L, -2);
+    lua_remove(L, -2);
     return 1;
 }
 
@@ -14171,6 +14293,8 @@ void LuaEngine::registerCoreAPI() {
     // cover every slot from one loop.
     lua_pushcfunction(L_, lua_WoweeFontFlags);
     lua_setglobal(L_, "__WoweeFontFlags");
+    lua_pushcfunction(L_, lua_WoweeFontChanged);
+    lua_setglobal(L_, "__WoweeFontChanged");
     lua_pushcfunction(L_, lua_Texture_SetButtonArt);
     lua_setglobal(L_, "__WoweeSetButtonArt");
 
@@ -15761,15 +15885,43 @@ void LuaEngine::registerCoreAPI() {
         "local function readColour(r, g, b, a)\n"
         "    return colourByte(r), colourByte(g), colourByte(b), type(a) == 'number' and colourByte(a) or colourByte(1)\n"
         "end\n"
+        // What a font takes of the one it follows and has not set itself, as the
+        // texts do (0x004963f0, font_follow.hpp): by the same bits.
+        "local fontGroups = {[1] = {'font', 'height', 'outline'}, [2] = {'justifyH', 'justifyV', 'indentedWordWrap'},\n"
+        "    [4] = {'r', 'g', 'b', 'a'}, [8] = {'shadowR', 'shadowG', 'shadowB', 'shadowA', 'shadowX', 'shadowY'},\n"
+        "    [16] = {'spacing'}}\n"
+        "local fontKids = setmetatable({}, {__mode = 'k'})\n"
+        "local function fontTake(f, src, bit)\n"
+        "    local any = false\n"
+        "    for _, k in ipairs(fontGroups[bit]) do if rawget(src, k) ~= nil then any = true end end\n"
+        "    if any then for _, k in ipairs(fontGroups[bit]) do f[k] = rawget(src, k) end end\n"
+        "    return any\n"
+        "end\n"
+        "local function fontTouched(f, bit)\n"
+        "    __WoweeFontChanged(f, bit)\n"
+        "    for k in pairs(fontKids[f] or {}) do\n"
+        "        if rawget(k, 'fontObject') == f and not (rawget(k, '__own') or {})[bit] and fontTake(k, f, bit) then\n"
+        "            fontTouched(k, bit)\n"
+        "        end\n"
+        "    end\n"
+        "end\n"
+        "local function fontSet(f, bit)\n"
+        "    local own = rawget(f, '__own')\n"
+        "    if not own then own = {} f.__own = own end\n"
+        "    own[bit] = true\n"
+        "    fontTouched(f, bit)\n"
+        "end\n"
         "local fontMT = { __index = {\n"
         "    GetTextColor = function(self) return self.r, self.g, self.b, self.a end,\n"
         // SetTextColor and SetShadowColor (0x004a4500 -> 0x004a3c50, 0x004a45e0
         // -> 0x004a3d40).
         "    SetTextColor = function(self, r, g, b, a)\n"
         "        self.r, self.g, self.b, self.a = readColour(r, g, b, a)\n"
+        "        fontSet(self, 4)\n"
         "    end,\n"
         "    SetShadowColor = function(self, r, g, b, a)\n"
         "        self.shadowR, self.shadowG, self.shadowB, self.shadowA = readColour(r, g, b, a)\n"
+        "        fontSet(self, 8)\n"
         "    end,\n"
         "    GetFont = function(self)\n"
         "        return self.font or 'Fonts\\\\FRIZQT__.TTF', self.height, self.outline or ''\n"
@@ -15782,6 +15934,7 @@ void LuaEngine::registerCoreAPI() {
         "        end\n"
         "        self.font, self.height = tostring(f), tonumber(h)\n"
         "        self.outline = __WoweeFontFlags(flags)\n"
+        "        fontSet(self, 1)\n"
         "        return 1\n"
         "    end,\n"
         // GetName (0x004a4220): the name, or nil for none.
@@ -15793,6 +15946,7 @@ void LuaEngine::registerCoreAPI() {
         // flag as the client reads one, none being yes; 1 or nil back.
         "    SetIndentedWordWrap = function(self, ...)\n"
         "        self.indentedWordWrap = __WoweeClientBoolean(true, ...)\n"
+        "        fontSet(self, 2)\n"
         "    end,\n"
         "    GetIndentedWordWrap = function(self) if self.indentedWordWrap then return 1 end end,\n"
         "    GetFontHeight = function(self) return self.height end,\n"
@@ -15810,22 +15964,26 @@ void LuaEngine::registerCoreAPI() {
         // as a byte, unclamped, as a font string's does.
         "    SetAlpha = function(self, a)\n"
         "        if not tonumber(a) then fontUsage(self, 'Usage: %s:SetAlpha(alpha)') end\n"
+        // It is the colour's (0x004a3b60: +0x4b).
         "        local n = math.floor(tonumber(a) * 255 + 0.5) % 256\n"
-        "        self.alpha = n / 255\n"
+        "        self.r, self.g, self.b, self.a = self.r or 1, self.g or 1, self.b or 1, n / 255\n"
+        "        fontSet(self, 4)\n"
         "    end,\n"
-        "    GetAlpha = function(self) return self.alpha or 1 end,\n"
+        "    GetAlpha = function(self) return self.a or 1 end,\n"
         "    SetShadowOffset = function(self, x, y)\n"
         "        if not tonumber(x) or not tonumber(y) then fontUsage(self, 'Usage: %s:SetShadowOffset(x, y)') end\n"
         "        self.shadowX, self.shadowY = tonumber(x), tonumber(y)\n"
+        "        fontSet(self, 8)\n"
         "    end,\n"
         "    SetSpacing = function(self, n)\n"
         "        if not tonumber(n) then fontUsage(self, 'Usage: %s:SetSpacing(spacing)') end\n"
         "        self.spacing = tonumber(n)\n"
+        "        fontSet(self, 16)\n"
         "    end,\n"
         // SetJustifyH / SetJustifyV (0x004a4930, 0x004a49c0): the one six-name
         // table, each keeping its own axis.
-        "    SetJustifyH = function(self, j) self.justifyH = fontJustify(self, j, 'H') end,\n"
-        "    SetJustifyV = function(self, j) self.justifyV = fontJustify(self, j, 'V') end,\n"
+        "    SetJustifyH = function(self, j) self.justifyH = fontJustify(self, j, 'H') fontSet(self, 2) end,\n"
+        "    SetJustifyV = function(self, j) self.justifyV = fontJustify(self, j, 'V') fontSet(self, 2) end,\n"
         // IsObjectType (0x004a4170): a string, or the usage error.
         "    IsObjectType = function(self, t)\n"
         "        if type(t) ~= 'string' then fontUsage(self, 'Usage: %s:IsObjectType(\"TYPE\")') end\n"
@@ -15837,10 +15995,11 @@ void LuaEngine::registerCoreAPI() {
         // nil, which lets go of the one followed; another type is the usage
         // error, a table that is not a font or a name with no font behind it
         // their own errors, and one that would end up following itself the
-        // loop error. Takes the other font's settings, as CopyFontObject, and
-        // remembers it: GetFontObject (0x004a42d0) answers the font followed,
-        // or nil.
+        // loop error. Takes what the other font has and it has not set itself, now and
+        // as that changes; GetFontObject (0x004a42d0) answers the font followed, or nil.
         "    SetFontObject = function(self, src)\n"
+        "        local was = rawget(self, 'fontObject')\n"
+        "        if was and was ~= src and fontKids[was] then fontKids[was][self] = nil end\n"
         "        if src == nil then self.fontObject = nil return end\n"
         "        if type(src) == 'string' then\n"
         "            local f = _G[src]\n"
@@ -15864,8 +16023,13 @@ void LuaEngine::registerCoreAPI() {
         "            end\n"
         "            p = rawget(p, 'fontObject')\n"
         "        end\n"
+        "        if was == src then return end\n"
         "        self.fontObject = src\n"
-        "        self:CopyFontObject(src)\n"
+        "        fontKids[src] = fontKids[src] or setmetatable({}, {__mode = 'k'})\n"
+        "        fontKids[src][self] = true\n"
+        "        for bit in pairs(fontGroups) do\n"
+        "            if not (rawget(self, '__own') or {})[bit] and fontTake(self, src, bit) then fontTouched(self, bit) end\n"
+        "        end\n"
         "    end,\n"
         "    GetFontObject = function(self) return rawget(self, 'fontObject') end,\n"
         // CopyFontObject(font or name) (0x004a4350): take another font's
@@ -15873,10 +16037,7 @@ void LuaEngine::registerCoreAPI() {
         "    CopyFontObject = function(self, src)\n"
         "        if type(src) == 'string' then src = _G[src] end\n"
         "        if type(src) ~= 'table' then return end\n"
-        "        for _, k in ipairs({'font', 'height', 'outline', 'r', 'g', 'b', 'a', 'justifyH', 'justifyV',\n"
-        "                            'spacing', 'shadowR', 'shadowG', 'shadowB', 'shadowA', 'shadowX', 'shadowY'}) do\n"
-        "            self[k] = src[k]\n"
-        "        end\n"
+        "        for bit in pairs(fontGroups) do if fontTake(self, src, bit) then fontTouched(self, bit) end end\n"
         "    end,\n"
         "} }\n"
         // Exposed, because the emitter has to put it back. A <Font> in the

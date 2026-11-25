@@ -7,6 +7,7 @@
 #include "ui/interface_file.hpp"
 #include "ui/widget_renderer.hpp"
 #include "ui/texture_variants.hpp"
+#include "ui/font_follow.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/simple_html.hpp"
 #include "ui/link_hit.hpp"
@@ -3555,7 +3556,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // declares it; only the colour changes, never the size, or a label
             // would jump about as the cursor crossed it.
             const float* textColor = w->color;
-            if (const Widget* owner = tree.get(w->parent)) {
+            if (const Widget* owner = tree.get(w->parent); owner && (w->fontOwn & font_follow::kColor) == 0) {
                 if (!owner->enabled && owner->hasDisabledColor) {
                     textColor = owner->disabledColor;
                 } else if (owner->enabled && owner->hasHighlightColor &&

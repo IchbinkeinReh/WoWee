@@ -973,6 +973,9 @@ struct Widget {
     /// options panels read a control's font object to get the colour to put a
     /// label back to when the control is re-enabled.
     std::string fontObjectName;
+    /// What of a font object's it has set itself and takes from none any more
+    /// (font_follow.hpp).
+    uint8_t fontOwn = 0;
     /// The font objects SetHighlightFontObject / SetDisabledFontObject were
     /// given by name, which GetHighlightFontObject / GetDisabledFontObject
     /// hand back (0x00977750, 0x009775d0).
