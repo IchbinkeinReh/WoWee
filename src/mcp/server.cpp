@@ -344,6 +344,9 @@ bool Server::gateSetting(const std::string& name, const std::string& before, con
                          int accountData) {
     if (!gServer || std::this_thread::get_id() != gServer->gameThread_ || !gServer->context_.origin.isServer())
         return false;
+    // What the client and the interface set as they load, behind the loading screen, is their own:
+    // it is so with every login, whoever asked for this one.
+    if (gServer->context_.app.worldComing()) return false;
     gServer->context_.settings.changed(name, before, after, clockNow());
     const bool allowed = (gServer->options_.allow & static_cast<uint32_t>(Social::Settings)) != 0;
     // From here on: a key pressed before it is looked at whether to send it up makes it no person's.
@@ -364,9 +367,10 @@ bool Server::gateAccountData(uint32_t type, const std::string& before, const std
             context.settings.changed("chat windows", "", "changed", clockNow());
         }
     }
-    // With nothing changed it is not the server's doing, and is not held for good; but it does
-    // not go now either, as the packet would not (send_guard.hpp).
-    if (before == after) return allowed || !isSettingsData(type) || (!byServer && !context.settings.held(type));
+    // What is not the server's doing is not held for good; but it does not go now either, as the
+    // packet would not (send_guard.hpp).
+    if (context.settings.notTheServers(type, before != after))
+        return allowed || !isSettingsData(type) || (!byServer && !context.settings.held(type));
     if (context.settings.mayGoUp(type, byServer, allowed)) return true;
     if (context.settings.firstToldOf(type)) {
         context.refusals.push({.what = "CMSG_UPDATE_ACCOUNT_DATA",

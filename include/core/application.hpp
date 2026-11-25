@@ -184,6 +184,8 @@ public:
     /// A loading screen is drawn over the world: the entry's, until the world
     /// settles behind it, or a difficulty change's.
     [[nodiscard]] bool loadingScreenUp() const { return settleScreen_ || difficultyLoadingScreen_; }
+    /// The world is being loaded, or settles behind its loading screen.
+    [[nodiscard]] bool worldComing() const;
     /// Where a world ray first meets the triangles a unit's model draws
     /// (CharacterRenderer::rayHitInstance); none for a unit without one.
     [[nodiscard]] rendering::pointer_pick::ObjectHit rayHitGameObject(uint64_t guid, const glm::vec3& origin,

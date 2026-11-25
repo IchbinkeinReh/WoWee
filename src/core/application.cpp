@@ -858,6 +858,10 @@ std::string startStreaming(const core::DataStreamChoice& stream, std::string& er
 
 }  // namespace
 
+bool Application::worldComing() const {
+    return loadingScreenUp() || (worldLoader_ && worldLoader_->isLoadingWorld());
+}
+
 bool Application::initialize() {
     LOG_INFO("Initializing Wowee Native Client");
 

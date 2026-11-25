@@ -98,6 +98,12 @@ public:
         return !held_[type];
     }
     [[nodiscard]] bool held(uint32_t type) const { return type < held_.size() && held_[type]; }
+    /// Whether what a look for changes has found is not the server's doing: nothing, or CVars,
+    /// whose changes are noted one by one as they are made, with none of its among them - what the
+    /// client sets itself as the world comes.
+    [[nodiscard]] bool notTheServers(uint32_t type, bool changed) const {
+        return !changed || (type <= 1 && !held(type));
+    }
     /// Once a kind.
     bool firstToldOf(uint32_t type) { return type < told_.size() && !std::exchange(told_[type], true); }
 

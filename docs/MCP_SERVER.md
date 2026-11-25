@@ -166,7 +166,8 @@ unlearning a profession, the game masters' and developers' own packets. Quitting
 What its doing changes of the CVars, key bindings, chat windows and the action bars shown is not refused, so that it can
 be tried. It is told: `state` has `settings_changed`, a list of `cvar`, `old`, `new` and `when` since the server started
 (a key binding as `key KEY`, the action bars as `SetActionBarToggles`), and `settings_not_sent_up`, the kinds of account
-data that are held back for it.
+data that are held back for it. What the client and the interface set themselves behind the loading screen of a world is
+neither.
 
 Without `--mcp-allow=settings` none of it is kept on the realm: `CMSG_UPDATE_ACCOUNT_DATA` of the CVars (0, 1), the key
 bindings (2, 3) and the chat windows (7) is not sent, nor `CMSG_SET_ACTIONBAR_TOGGLES` (macros, 4 and 5, are). A kind

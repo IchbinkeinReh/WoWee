@@ -571,6 +571,21 @@ TEST_CASE("what the server's doing changed of the settings does not go up with a
     CHECK_FALSE(open.held(0));
 }
 
+TEST_CASE("what the client changes itself is not the server's doing", "[mcp][settings]") {
+    SettingsLedger ledger;
+    // CVars are noted one by one; none has been.
+    CHECK(ledger.notTheServers(0, true));
+    CHECK(ledger.notTheServers(1, true));
+    // Key bindings and chat windows are not.
+    CHECK_FALSE(ledger.notTheServers(2, true));
+    CHECK_FALSE(ledger.notTheServers(7, true));
+    CHECK(ledger.notTheServers(2, false));
+    ledger.mayGoUp(1, true, false);
+    CHECK_FALSE(ledger.notTheServers(1, true));
+    CHECK(ledger.notTheServers(1, false));
+    CHECK(ledger.notTheServers(0, true));
+}
+
 TEST_CASE("key bindings that differ are told by key", "[mcp][settings]") {
     const auto changes = bindingChanges("bind W MOVEFORWARD\nbind X NONE\nbind F1 TARGETSELF\n",
                                         "bind W MOVEFORWARD\nbind X SITORSTAND\nbind F2 TARGETPARTYMEMBER1\n");
