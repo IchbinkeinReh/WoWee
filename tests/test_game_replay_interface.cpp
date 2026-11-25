@@ -788,6 +788,12 @@ TEST_CASE("a frame's table shows no more than what is in it", "[replay][interfac
         INFO(other);
         CHECK(ui.is(std::string("keys(") + other + ") == '0'"));
     }
+    for (const char* type : {"Frame", "Button", "CheckButton", "StatusBar", "Slider", "ScrollFrame", "MessageFrame",
+                             "ScrollingMessageFrame", "SimpleHTML", "ColorSelect", "Cooldown", "Model", "PlayerModel",
+                             "DressUpModel"}) {
+        INFO(type);
+        CHECK(ui.is(std::string("keys(CreateFrame('") + type + "')) == '0'"));
+    }
     CHECK(ui.is("next(f) ~= nil and next(t, 0) == nil and rawget(f, '__wid') ~= nil"));
     ui.run("seen = '' table.foreach(f, function(k) seen = seen .. (type(k) == 'string' and k:sub(1, 5) == '__wid' and 'bad' or '') end)");
     CHECK(ui.is("seen == '' and pairs({}) == next"));
