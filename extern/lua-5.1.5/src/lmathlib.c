@@ -197,7 +197,7 @@ static int math_random (lua_State *L) {
       int l = luaL_checkint(L, 1);
       int u = luaL_checkint(L, 2);
       luaL_argcheck(L, l<=u, 2, "interval is empty");
-      lua_pushnumber(L, floor(r*(u-l+1))+l);  /* int between `l' and `u' */
+      lua_pushnumber(L, floor(r*(int)((unsigned int)u-(unsigned int)l+1u))+l);  /* int between `l' and `u' */
       break;
     }
     default: return luaL_error(L, "wrong number of arguments");

@@ -15,4 +15,4 @@ when upgrading any dependency so maintainers can track drift.
 | stb_image | 2.30 | https://github.com/nothings/stb | Single header |
 | stb_image_write | 1.16 | https://github.com/nothings/stb | Single header |
 | Catch2 | amalgamated (Catch2 v3.x) | https://github.com/catchorg/Catch2 | Vendored `catch_amalgamated.{cpp,hpp}` — test build only |
-| Lua | 5.1.5 | https://www.lua.org/ | Intentionally 5.1 for WoW addon API compatibility |
+| Lua | 5.1.5 | https://www.lua.org/ | Intentionally 5.1 for WoW addon API compatibility. Patched as the client's is (numbers, date, memory by addon, taint; `git log extern/lua-5.1.5`), and where the int arithmetic of its own overflows (`luaH_getnum`, `string.rep`, `unpack`, `math.random`) |

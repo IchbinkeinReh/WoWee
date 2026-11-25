@@ -110,6 +110,15 @@ TEST_CASE("bit works on the low 32 bits, and shifts count modulo 32", "[lua]") {
     CHECK(s.run("return bit.band(1e300, 255), bit.bor(0/0, 4)") == "0 4");
 }
 
+// Where the int arithmetic of Lua's own would overflow: 32-bit, round.
+TEST_CASE("the ends of int are numbers as any", "[lua]") {
+    State s;
+    CHECK(s.run("local t = {1, 2} t[-2147483648] = 5 return t[-2147483648], t[2147483648], t[-2147483647]") == "5 nil nil");
+    CHECK(s.run("return '[' .. string.rep('x', -2147483648) .. ']'") == "[]");
+    CHECK(s.run("return pcall(unpack, {}, -2147483648, 2147483647)").find("too many results to unpack") != std::string::npos);
+    CHECK(s.run("return math.random(-2147483648, 2147483647)") == "-2147483648");
+}
+
 TEST_CASE("removemulti takes a run out of a list", "[lua]") {
     State s;
     // The values it takes out, and what is left.
