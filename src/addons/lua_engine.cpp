@@ -11730,6 +11730,11 @@ void LuaEngine::setGameHandler(game::GameHandler* handler) {
             if (L_) applyAccountBindingsText(L_, perCharacter, text);
         };
         handler->setAccountDataBridge(std::move(bridge));
+        handler->setCursorDropCallback([this] {
+            if (!L_) return;
+            taint::Quiet quiet;
+            clearCursor(L_);
+        });
     }
     if (L_) {
         lua_pushlightuserdata(L_, handler);

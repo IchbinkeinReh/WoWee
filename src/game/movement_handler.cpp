@@ -3002,6 +3002,7 @@ void MovementHandler::handleTransferPending(network::Packet& packet) {
     transferPendingOnTransport_ = false;
     if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
     const uint32_t pendingMapId = packet.readUInt32();
+    owner_.dropCursor();
     if (packet.hasRemaining(8)) {
         const uint32_t transportEntry = packet.readUInt32();
         const uint32_t transportMapId = packet.readUInt32();

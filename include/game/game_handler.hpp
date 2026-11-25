@@ -2219,6 +2219,11 @@ public:
     using OverrideLightCallback = std::function<void(uint32_t areaLight, uint32_t overrideLight, uint32_t ms)>;
     /// The placed fall queued for the player (0x006eccf0, event 9).
     using PlacedFallCallback = std::function<void()>;
+    /// What the cursor holds is put down (0x005194c0), as the map changes.
+    void setCursorDropCallback(std::function<void()> cb) { cursorDropCallback_ = std::move(cb); }
+    void dropCursor() const {
+        if (cursorDropCallback_) cursorDropCallback_();
+    }
     void setPlacedFallCallback(PlacedFallCallback cb) { placedFallCallback_ = std::move(cb); }
     PlacedFallCallback& placedFallCallbackRef() { return placedFallCallback_; }
     /// The active mover's fall is over (0x006e9980 -> 0x00988490): a spline
@@ -6630,6 +6635,7 @@ public:
 
 private:
     /// setUnitClock, until an update takes it, and the last one taken.
+    std::function<void()> cursorDropCallback_;
     std::optional<std::chrono::steady_clock::time_point> unitClockNow_;
     std::optional<std::chrono::steady_clock::time_point> unitClockTaken_;
     /// The time of it the units' moves were last run to.
