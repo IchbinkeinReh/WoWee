@@ -217,7 +217,10 @@ private:
     AssetManifest manifest_;
 
     // The client's archives, when they are the source instead of a manifest.
-    std::atomic<std::shared_ptr<const std::vector<std::string>>> addonRoots_;
+    // Set by the main thread, read by every thread that resolves a path. Not a
+    // std::atomic of it, which libc++ does not have.
+    mutable std::mutex addonRootsMutex_;
+    std::shared_ptr<const std::vector<std::string>> addonRoots_;
     std::unique_ptr<MpqArchiveSet> mpq_;
 
     // Optional base-path fallback: used when manifest_ doesn't contain a file.

@@ -199,12 +199,19 @@ void AssetManager::shutdown() {
 }
 
 void AssetManager::setAddonRoots(std::vector<std::string> roots) {
-    addonRoots_.store(std::make_shared<const std::vector<std::string>>(std::move(roots)));
+    auto made = std::make_shared<const std::vector<std::string>>(std::move(roots));
+    const std::lock_guard lock(addonRootsMutex_);
+    addonRoots_ = std::move(made);
 }
 
 std::string AssetManager::resolveFile(const std::string& normalizedPath) const {
     if (!addonRelativePath(normalizedPath).empty() && (!mpq_ || !mpq_->contains(normalizedPath))) {
-        if (const auto roots = addonRoots_.load())
+        std::shared_ptr<const std::vector<std::string>> roots;
+        {
+            const std::lock_guard lock(addonRootsMutex_);
+            roots = addonRoots_;
+        }
+        if (roots)
             if (std::string file = addonFile(*roots, normalizedPath); !file.empty()) return file;
     }
     // Check override directory first (for HD upgrades, custom textures)
