@@ -1493,3 +1493,29 @@ TEST_CASE("a unit's tokens hear of its fields", "[replay][fieldevents]") {
     CHECK(std::count(events.begin(), events.end(), "UNIT_AURA focus") == 1);
     s.handler().setAddonEventCallback({});
 }
+
+// 0x005c4ef0
+TEST_CASE("the socketing window hears of the gems that went in", "[replay][fieldevents]") {
+    constexpr uint64_t kHelm = 0x4000000000000777ull;
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kHelm, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 39496}, {UF::ITEM_FIELD_STACK_COUNT, 1}}));
+    REQUIRE(s.handler().onlineItemsRef().count(kHelm) == 1);
+    int updates = 0;
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>&) {
+        if (name == "SOCKET_INFO_UPDATE") ++updates;
+    });
+    // ITEM_FIELD_ENCHANTMENT_1_1, eight on from the stack's count; the first socket's
+    // is the third enchantment.
+    const auto socket = static_cast<uint16_t>(wowee::game::fieldIndex(UF::ITEM_FIELD_STACK_COUNT) + 8 + 6);
+    s.receive(UpdateObject().valuesAt(kHelm, {{socket, 3621}}));
+    CHECK(updates == 0);
+    s.handler().openSocketing(kHelm);
+    updates = 0;
+    s.receive(UpdateObject().valuesAt(kHelm, {{socket, 3448}}));
+    CHECK(updates == 1);
+    s.receive(UpdateObject().valuesAt(kHelm, {{socket, 3448}}));
+    CHECK(updates == 1);
+    s.handler().setAddonEventCallback({});
+}

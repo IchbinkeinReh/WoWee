@@ -2361,6 +2361,7 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
 
     auto it = owner_.onlineItemsRef().find(block.guid);
     bool isItemInInventory = (it != owner_.onlineItemsRef().end());
+    bool enchantMoved = false;
 
     for (const auto& [key, val] : block.fields) {
         // Every enchantment slot's id, the five the branches below read
@@ -2395,11 +2396,13 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
             if (it->second.permanentEnchantId != val) {
                 it->second.permanentEnchantId = val;
                 inventoryChanged = true;
+                enchantMoved = true;
             }
         } else if (isItemInInventory && itemTempEnchField != 0xFFFF && key == itemTempEnchField) {
             if (it->second.temporaryEnchantId != val) {
                 it->second.temporaryEnchantId = val;
                 inventoryChanged = true;
+                enchantMoved = true;
             }
         } else if (isItemInInventory && itemTempEnchField != 0xFFFF && key == itemTempEnchField + 1u) {
             it->second.temporaryEnchantMs = val;
@@ -2414,16 +2417,19 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
             if (it->second.socketEnchantIds[0] != val) {
                 it->second.socketEnchantIds[0] = val;
                 inventoryChanged = true;
+                enchantMoved = true;
             }
         } else if (isItemInInventory && itemSock2EnchField != 0xFFFF && key == itemSock2EnchField) {
             if (it->second.socketEnchantIds[1] != val) {
                 it->second.socketEnchantIds[1] = val;
                 inventoryChanged = true;
+                enchantMoved = true;
             }
         } else if (isItemInInventory && itemSock3EnchField != 0xFFFF && key == itemSock3EnchField) {
             if (it->second.socketEnchantIds[2] != val) {
                 it->second.socketEnchantIds[2] = val;
                 inventoryChanged = true;
+                enchantMoved = true;
             }
         } else if (isItemInInventory && itemChargesField != 0xFFFF && key == itemChargesField) {
             it->second.spellCharges0 = static_cast<int32_t>(val);
@@ -2448,6 +2454,10 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
             }
         }
     }
+    // The item whose sockets are on screen: the window is drawn with what is in them
+    // now (0x005c4ef0).
+    if (enchantMoved && owner_.isSocketingOpen() && owner_.getSocketItemGuid() == block.guid)
+        pendingEvents_.emit("SOCKET_INFO_UPDATE", {});
     // Whether what changed touches a currency: an item of class 10, the one the
     // client's container-slot handler asks about on either side of a slot
     // change (0x005d9790, before it calls 0x005b0660).
