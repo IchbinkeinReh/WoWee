@@ -25,6 +25,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace wowee {
@@ -48,6 +49,7 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
         return (hi < 0 || lo < 0) ? -1 : hi * 16 + lo;
     };
 
+    size_t colorAt = std::string::npos;   // the colour that holds
     for (size_t i = 0; i < in.size();) {
         if (in[i] != '|') { cur.text += in[i++]; continue; }
         if (i + 1 >= in.size()) { cur.text += in[i++]; continue; }
@@ -62,6 +64,7 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
                       b = hexPair(in, i + 8);
             if (r >= 0 && g >= 0 && b >= 0) {
                 flush();
+                colorAt = i;
                 cur.hasColor = true;
                 cur.rgba[0] = r / 255.0f; cur.rgba[1] = g / 255.0f;
                 cur.rgba[2] = b / 255.0f; cur.rgba[3] = 1.0f;
@@ -69,7 +72,13 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
                 continue;
             }
         }
-        if (tag == 'r' || tag == 'R') { flush(); cur.hasColor = false; i += 2; continue; }
+        if (tag == 'r' || tag == 'R') {
+            flush();
+            colorAt = std::string::npos;
+            cur.hasColor = false;
+            i += 2;
+            continue;
+        }
         // |n is WoW's line break, and it was not handled at all - so every one
         // of them drew as a literal bar and an n. globalstrings.lua alone has a
         // hundred and thirty-eight.
@@ -107,12 +116,22 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
             if (close == std::string::npos) { i = in.size(); continue; }
             flush();
             cur.link = in.substr(i + 2, close - (i + 2));
+            cur.linkText.clear();
+            if (const size_t end = in.find("|h", close + 2); end != std::string::npos) {
+                size_t from = i, stop = end + 2;
+                if (colorAt != std::string::npos && in.compare(stop, 2, "|r") == 0) {
+                    from = std::exchange(colorAt, std::string::npos);
+                    stop += 2;
+                }
+                cur.linkText = in.substr(from, stop - from);
+            }
             i = close + 2;
             continue;
         }
         if (tag == 'h') {          // the closing marker; the link ends here
             flush();
             cur.link.clear();
+            cur.linkText.clear();
             i += 2;
             continue;
         }

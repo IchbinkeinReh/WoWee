@@ -16612,6 +16612,41 @@ bool LuaEngine::frameHasScript(uint32_t wid, const char* script) {
     return has;
 }
 
+void LuaEngine::callFrameScriptMotion(uint32_t wid, const char* script, bool motion) {
+    const int handlerIdx = beginFrameScript(wid, script);
+    if (handlerIdx == 0) return;
+    lua_pushboolean(L_, motion ? 1 : 0);
+    finishFrameScript(wid, script, handlerIdx, 2);
+}
+
+void LuaEngine::callFrameScript2(uint32_t wid, const char* script, const char* a, const char* b) {
+    const int handlerIdx = beginFrameScript(wid, script);
+    if (handlerIdx == 0) return;
+    lua_pushstring(L_, a);
+    lua_pushstring(L_, b);
+    finishFrameScript(wid, script, handlerIdx, 3);
+}
+
+LuaEngine::HoverLink LuaEngine::linkUnder(float x, float y, uint32_t hit, const char* script, const char* orScript) {
+    const ui::LinkRect* at = widgets_.linkAt(x, y);
+    if (!at) return {};
+    const uint32_t owner = ui::findScriptOwner(widgets_, at->widget, [&](uint32_t w) {
+        return frameHasScript(w, script) || (orScript && frameHasScript(w, orScript));
+    });
+    const ui::Widget* w = owner ? widgets_.get(owner) : nullptr;
+    // Only when the link is what the mouse is actually on.
+    //
+    // A link rect is filed wherever its text was drawn and says nothing about what
+    // has been opened over the top of it since: a window drawn over the chat left the
+    // chat still answering clicks through it, because the rect was still there.
+    //
+    // Nothing under the cursor at all is the chat's own case - the window is
+    // click-through, so the hit test finds no widget and the link is the only thing
+    // there.
+    if (!w || !w->hyperlinksEnabled || (hit != 0 && !ui::isSelfOrDescendantOf(widgets_, hit, owner))) return {};
+    return {owner, at->link, at->text};
+}
+
 void LuaEngine::callFrameScript3(uint32_t wid, const char* script,
                                  const char* a, const char* b, const char* c) {
     const int handlerIdx = beginFrameScript(wid, script);
@@ -18509,9 +18544,11 @@ void LuaEngine::releaseMouseHover() {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     if (hoverWid_ != 0) {
-        callFrameScript(hoverWid_, "OnLeave");
+        callFrameScriptMotion(hoverWid_, "OnLeave", false);
         hoverWid_ = 0;
     }
+    if (const HoverLink was = std::exchange(hoverLink_, {}); was.owner != 0)
+        callFrameScript2(was.owner, "OnHyperlinkLeave", was.link.c_str(), was.text.c_str());
     widgets_.setInteraction(0);
     // Nothing is under the cursor and nothing is holding it, which is the
     // camera's cue that it may turn again.
@@ -18651,9 +18688,17 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
         return w && (w->enabled || w->motionScriptsWhileDisabled);
     };
     if (hit != hoverWid_) {
-        if (hoverWid_ != 0 && hearsMotion(hoverWid_)) callFrameScript(hoverWid_, "OnLeave");
+        const bool moved = !haveCursor_ || x != cursorX_ || y != cursorY_;
+        if (hoverWid_ != 0 && hearsMotion(hoverWid_)) callFrameScriptMotion(hoverWid_, "OnLeave", moved);
         hoverWid_ = hit;
-        if (hoverWid_ != 0 && hearsMotion(hoverWid_)) callFrameScript(hoverWid_, "OnEnter");
+        if (hoverWid_ != 0 && hearsMotion(hoverWid_)) callFrameScriptMotion(hoverWid_, "OnEnter", moved);
+    }
+    // And a link's own (0x00978420, 0x00978480).
+    if (HoverLink over = linkUnder(x, y, hit, "OnHyperlinkEnter", "OnHyperlinkLeave"); !(over == hoverLink_)) {
+        const HoverLink was = std::exchange(hoverLink_, std::move(over));
+        if (was.owner != 0) callFrameScript2(was.owner, "OnHyperlinkLeave", was.link.c_str(), was.text.c_str());
+        const HoverLink now = hoverLink_;
+        if (now.owner != 0) callFrameScript2(now.owner, "OnHyperlinkEnter", now.link.c_str(), now.text.c_str());
     }
 
     // A panel that closes under the cursor leaves its tooltip behind: the
@@ -19008,33 +19053,9 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             // there.
             bool tookLink = false;
             if (!draggingThisButton) {
-                if (const ui::LinkRect* hitLink = widgets_.linkAt(x, y)) {
-                    const uint32_t owner = ui::findScriptOwner(
-                        widgets_, hitLink->widget, [this](uint32_t w) {
-                            return frameHasScript(w, "OnHyperlinkClick");
-                        });
-                    const ui::Widget* ownerW = owner ? widgets_.get(owner) : nullptr;
-                    // Only when the link is what the mouse is actually on.
-                    //
-                    // A link rect is filed wherever its text was drawn and
-                    // says nothing about what has been opened over the top
-                    // of it since. Hoisting this check out of the block
-                    // below took that away with the gate: a window drawn
-                    // over the chat left the chat still answering clicks
-                    // through it, because the rect was still there.
-                    //
-                    // Nothing under the cursor at all is the chat's own
-                    // case - the window is click-through, so the hit test
-                    // finds no widget and the link is the only thing there.
-                    const bool linkIsWhatIsUnderTheCursor =
-                        hit == 0 || ui::isSelfOrDescendantOf(widgets_, hit, owner);
-                    if (owner != 0 && ownerW && ownerW->hyperlinksEnabled &&
-                        linkIsWhatIsUnderTheCursor) {
-                        callFrameScript3(owner, "OnHyperlinkClick",
-                                         hitLink->link.c_str(),
-                                         hitLink->text.c_str(), b.name);
-                        tookLink = true;
-                    }
+                if (const HoverLink link = linkUnder(x, y, hit, "OnHyperlinkClick"); link.owner != 0) {
+                    callFrameScript3(link.owner, "OnHyperlinkClick", link.link.c_str(), link.text.c_str(), b.name);
+                    tookLink = true;
                 }
             }
             if (pressedWid_[i] != 0) {

@@ -819,7 +819,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                 // Filing the pixels would have made the hit test miss by the
                 // scale factor and by the whole height of the screen.
                 linkSink->addLinkRect(linkRectFromDraw(
-                    linkOwner, run.link, run.text, x, y, runW, size,
+                    linkOwner, run.link, run.linkText, x, y, runW, size,
                     linkScreenH_, linkScale_));
             }
             x += runW;

@@ -1086,7 +1086,7 @@ struct Widget {
 struct LinkRect {
     uint32_t    widget = 0;   ///< the font string the link was drawn in
     std::string link;         ///< "item:3299", "quest:1234:60"
-    std::string text;         ///< what it drew, brackets and all
+    std::string text;         ///< its own text in the line, markup and all (WrapRun::linkText)
     float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
 };
 

@@ -571,3 +571,22 @@ TEST_CASE("a text is as wide as what it draws", "[markup]") {
     CHECK(markupWidth("", 12.0f, ten) == 0.0f);
     CHECK(markupWidth("a||b", 12.0f, ten) == 30.0f);
 }
+
+// 0x006c6ec5
+TEST_CASE("a link's text is its markup out of the line", "[markup]") {
+    const auto textOf = [](const std::string& line) {
+        for (const WrapRun& r : parseMarkup(line))
+            if (!r.link.empty()) return r.linkText;
+        return std::string("none");
+    };
+    CHECK(textOf("a |cff9d9d9d|Hitem:2092:0|h[Dolch]|h|r b") == "|cff9d9d9d|Hitem:2092:0|h[Dolch]|h|r");
+    CHECK(textOf("|Hquest:1:2|h[Zehn Ratten]|h!") == "|Hquest:1:2|h[Zehn Ratten]|h");
+    // The colour ends elsewhere, or was over: without it.
+    CHECK(textOf("|cff9d9d9d|Hitem:1|h[A]|h und|r") == "|Hitem:1|h[A]|h");
+    CHECK(textOf("|cff9d9d9dgrau|r |Hitem:1|h[A]|h|r") == "|Hitem:1|h[A]|h");
+    // The colour need not be just before it.
+    CHECK(textOf("|cff9d9d9dgrau |Hitem:1|h[A]|h|r") == "|cff9d9d9dgrau |Hitem:1|h[A]|h|r");
+    CHECK(textOf("|Hitem:1|h[A]").empty());
+    for (const WrapRun& r : parseMarkup("|Hitem:1|h[A]|h tail"))
+        if (r.link.empty()) CHECK(r.linkText.empty());
+}

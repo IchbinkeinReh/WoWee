@@ -30,6 +30,10 @@ struct WrapRun {
     /// has something to name; the display text alone cannot say what was
     /// clicked.
     std::string link;
+    /// And the link's own text as it stands in the line (0x006c6ec5): from its |H to
+    /// the |h after its words, or from the colour before it to the |r after it where
+    /// that follows at once. What a click on it is told, to be put into a chat line.
+    std::string linkText;
 
     /// An inline texture: the file named by a |Tpath:h:w:ox:oy|t escape.
     ///

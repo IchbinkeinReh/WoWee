@@ -518,8 +518,12 @@ private:
     /// OnTextChanged(userInput), as 0x00967020 tells both.
     void fireTextChanged(uint32_t wid, bool userInput);
     ui::TextChanges textChanges_;
-    /// Three string arguments, which OnHyperlinkClick takes: the link, the
-    /// text it drew, and the mouse button.
+    /// OnEnter and OnLeave: whether the mouse moved (00480000.c 12120).
+    void callFrameScriptMotion(uint32_t wid, const char* script, bool motion);
+    /// OnHyperlinkEnter and OnHyperlinkLeave: the link and its text.
+    void callFrameScript2(uint32_t wid, const char* script, const char* a, const char* b);
+    /// Three string arguments, which OnHyperlinkClick takes: the link, its
+    /// text, and the mouse button.
     void callFrameScript3(uint32_t wid, const char* script, const char* a,
                           const char* b, const char* c);
     /// Whether a frame declares a script. Used to find which ancestor of a
@@ -591,6 +595,16 @@ public:
 private:
 
     uint32_t hoverWid_ = 0;
+    /// The link under the mouse: the frame that hears of it, the link and its text.
+    struct HoverLink {
+        uint32_t owner = 0;
+        std::string link, text;
+        friend bool operator==(const HoverLink&, const HoverLink&) = default;
+    };
+    HoverLink hoverLink_;
+    /// The link at a place, if it is what the mouse is on there, and the frame that
+    /// has one of the scripts of it.
+    [[nodiscard]] HoverLink linkUnder(float x, float y, uint32_t hit, const char* script, const char* orScript = nullptr);
     /// How long after a click a second one is a double click: 300 ms
     /// (0x0096fb60), unless setPointerTolerance says otherwise.
     double   doubleClickSeconds_ = 0.3;
