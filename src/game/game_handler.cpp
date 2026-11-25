@@ -4580,6 +4580,11 @@ void GameHandler::updatePetActionBar() {
     }
     const uint32_t before = getBonusActionBarOffset();
     petActionsOnBonusBar_ = on;
+    // Put there anew each time (0x005ab800 with 0x005d3240): twelve slots, of
+    // which each is said (0x005aae80 -> 0x005aa390). A button redraws for that
+    // alone once its number is the one it had - the bonus bar keeps its last.
+    for (int i = 0; on && i < 12; ++i)
+        fireAddonEvent("ACTIONBAR_SLOT_CHANGED", {std::to_string(kBonusPetSlotFirst + i + 1)});
     // 0x005a83c0: the page changes back from the pet's bar.
     for (const char* event : bonusBarOffsetEvents(before, getBonusActionBarOffset())) {
         fireAddonEvent(event, {});

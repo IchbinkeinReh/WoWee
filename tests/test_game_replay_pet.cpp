@@ -126,3 +126,39 @@ TEST_CASE("the player is in combat by its flag", "[replay][combat]") {
     s.receive(swing);
     CHECK_FALSE(s.handler().isInCombat());
 }
+
+// P69: 0x005d4ad0 puts the pet's actions into the bonus bar each time (0x005ab800), and each of
+// its twelve slots is said. The buttons have the number they had, and redrew for nothing else:
+// after the first vehicle and a map they never came back.
+TEST_CASE("a vehicle's actions are said slot by slot each time they come", "[replay][pet]") {
+    Heard heard;
+    Session s;
+    heard.listen(s);
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.receive(UpdateObject().create(kVehicle, ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}}));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FARSIGHT, static_cast<uint32_t>(kVehicle)}}));
+    for (int time = 0; time < 2; ++time) {
+        heard.events.clear();
+        s.receive(petSpells(kVehicle));
+        CHECK(s.handler().petActionsOnBonusBar());
+        CHECK(s.handler().getBonusActionBarOffset() == 5);
+        for (int slot = 121; slot <= 132; ++slot)
+            CHECK(heard.count("ACTIONBAR_SLOT_CHANGED " + std::to_string(slot)) == 1);
+        // Said before the bar is.
+        const auto at = [&](const std::string& what) {
+            return std::find(heard.events.begin(), heard.events.end(), what) - heard.events.begin();
+        };
+        CHECK(at("ACTIONBAR_SLOT_CHANGED 132") < at("PET_BAR_UPDATE"));
+        if (time == 0) CHECK(at("ACTIONBAR_SLOT_CHANGED 132") < at("UPDATE_BONUS_ACTIONBAR"));
+        // Off it, nothing is put there.
+        heard.events.clear();
+        s.receive(petSpells(0));
+        CHECK_FALSE(s.handler().petActionsOnBonusBar());
+        CHECK(heard.count("ACTIONBAR_SLOT_CHANGED 121") == 0);
+    }
+    // A pet on a bar of its own takes none of the player's.
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FARSIGHT, 0}}));
+    heard.events.clear();
+    s.receive(petSpells(kVehicle));
+    CHECK(heard.count("ACTIONBAR_SLOT_CHANGED 121") == 0);
+}
