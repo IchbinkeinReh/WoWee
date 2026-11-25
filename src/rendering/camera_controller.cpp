@@ -1,3 +1,4 @@
+#include "rendering/drunk_sway.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/camera_near_sweep.hpp"
 #include "game/vehicle_mover.hpp"
@@ -2530,12 +2531,15 @@ void CameraController::update(float deltaTime) {
                                      swimming || isFlightAirborne(), track);
         }
     }
-    float moveYaw = cameraDrivesFacing ? yaw : facingYaw;
-    if (intoxication_ > 0.34f) {
-        // Drunk and smashed characters weave while trying to walk. Keep facing
-        // authoritative; only the travel direction stumbles side to side.
-        moveYaw += std::sin(intoxicationTime_ * 2.1f) * 11.0f * intoxication_;
+    // Drunk, its facing sways while a movement key is down, and the camera that steers it
+    // with it - but for one the turn keys turn (0x006deb30).
+    if (intoxication_ > 0.0f && hasMoveInput && !movementRooted_ && (cameraDrivesFacing || !(nowTurnLeft || nowTurnRight))) {
+        const float sway = glm::degrees(drunkSway(static_cast<double>(intoxicationTime_) * 1000.0, intoxication_)) *
+                           deltaTime * kDrunkUpdatesPerSecond;
+        facingYaw += sway;
+        if (cameraDrivesFacing) yaw += sway;
     }
+    const float moveYaw = cameraDrivesFacing ? yaw : facingYaw;
     float moveYawRad = glm::radians(moveYaw);
     glm::vec3 forward(std::cos(moveYawRad), std::sin(moveYawRad), 0.0f);
     glm::vec3 right(-std::sin(moveYawRad), std::cos(moveYawRad), 0.0f);
@@ -2857,19 +2861,6 @@ void CameraController::update(float deltaTime) {
         const glm::vec3 offset = camera_shake::offset(shakes_, shakeClock_, camera->getPosition(),
                                                       glm::radians(facingYaw));
         camera->setPosition(camera->getPosition() + offset * shakeScale_);
-    }
-
-    // Scaled by the same setting as the shake above, because it is the same
-    // thing from the player's side: the view moving without being asked to.
-    //
-    // The stumble in the travel direction is deliberately not scaled with it.
-    // That one is what being drunk does to the character rather than to the
-    // picture, and turning it off would be an advantage rather than a comfort.
-    if (intoxication_ > 0.0f && camera) {
-        const float swayYaw = std::sin(intoxicationTime_ * 1.35f) * 2.5f * intoxication_ * shakeScale_;
-        const float swayPitch = std::sin(intoxicationTime_ * 1.8f + 0.7f) * 1.6f * intoxication_ * shakeScale_;
-        camera->setRotation(yaw + swayYaw,
-                            glm::clamp(pitch + swayPitch, pitchLimitMinDeg_, pitchLimitMaxDeg_));
     }
 }
 
