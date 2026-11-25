@@ -1,5 +1,6 @@
 #include <cctype>
 #include <cstdlib>
+#include "rendering/m2_deck_floor.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "game/go_interaction_anim.hpp"
 #include "rendering/collision_facets.hpp"
@@ -1387,41 +1388,18 @@ std::optional<float> M2Renderer::getInstanceFloorHeight(uint32_t instanceId,
     const M2ModelGPU& model = *instance.cachedModel;
     if (!model.collision.valid()) return std::nullopt;
 
-    // Same cast as getFloorHeight: world-down through the instance transform,
-    // so a car placed with any pitch still sees a ray along gravity.
     const glm::vec3 localRayOrigin = glm::vec3(
         instance.invModelMatrix * glm::vec4(glX, glY, glZ + 5.0f, 1.0f));
     const glm::vec3 localRayEnd = glm::vec3(
         instance.invModelMatrix * glm::vec4(glX, glY, glZ - 10.0f, 1.0f));
-    const glm::vec3 localRayVector = localRayEnd - localRayOrigin;
-    const float localRayLength = glm::length(localRayVector);
-    if (localRayLength <= 1e-5f) return std::nullopt;
-    const glm::vec3 localRayDir = localRayVector / localRayLength;
-
     model.collision.getFloorTrisInRange(
         std::min(localRayOrigin.x, localRayEnd.x) - 1.0f,
         std::min(localRayOrigin.y, localRayEnd.y) - 1.0f,
         std::max(localRayOrigin.x, localRayEnd.x) + 1.0f,
         std::max(localRayOrigin.y, localRayEnd.y) + 1.0f,
         tl_m2_collisionTriScratch);
-
-    std::optional<float> best;
-    for (uint32_t ti : tl_m2_collisionTriScratch) {
-        if (ti >= model.collision.triCount) continue;
-        const auto& verts = model.collision.vertices;
-        const auto& idx = model.collision.indices;
-        const float tHit = rayTriangleIntersect(localRayOrigin, localRayDir,
-                                                verts[idx[ti * 3]],
-                                                verts[idx[ti * 3 + 1]],
-                                                verts[idx[ti * 3 + 2]]);
-        if (tHit < 0.0f || tHit > localRayLength) continue;
-        const glm::vec3 worldHit = glm::vec3(
-            instance.modelMatrix * glm::vec4(localRayOrigin + localRayDir * tHit, 1.0f));
-        // At or under the probe, and the highest such - the deck rather than
-        // whatever structure the car carries beneath it.
-        if (worldHit.z <= glZ && (!best || worldHit.z > *best)) best = worldHit.z;
-    }
-    return best;
+    return m2DeckUnder(instance.modelMatrix, instance.invModelMatrix, model.collision.vertices,
+                       model.collision.indices, tl_m2_collisionTriScratch, glm::vec3(glX, glY, glZ));
 }
 
 void M2Renderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,

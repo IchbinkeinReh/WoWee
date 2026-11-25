@@ -10,11 +10,13 @@
 // actually wrong in one of the copies.
 #include <catch_amalgamated.hpp>
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <limits>
 #include <string>
 #include <vector>
 
+#include "rendering/m2_deck_floor.hpp"
 #include "rendering/m2_mesh_drawn.hpp"
 #include "core/character_paths.hpp"
 #include "game/inventory.hpp"
@@ -29,6 +31,24 @@
 #include "ui/settings_schema.hpp"
 
 using namespace wowee;
+
+// T299: an Undercity lift's door took whoever stood in front of it for its passenger.
+TEST_CASE("one stands on a model's faces that face up", "[m2]") {
+    // A slab from 0 to 8: its top and its underside.
+    const std::vector<glm::vec3> verts = {{-1, -1, 8}, {1, -1, 8}, {1, 1, 8}, {-1, 1, 8},
+                                          {-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+    const std::vector<uint16_t> indices = {0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6};
+    const std::vector<uint32_t> all = {0, 1, 2, 3};
+    const glm::mat4 at = glm::translate(glm::mat4(1.0f), glm::vec3(100.0f, 50.0f, -41.6f));
+    const auto under = [&](float x, float z) {
+        return rendering::m2DeckUnder(at, glm::inverse(at), verts, indices, all, glm::vec3(x, 50.2f, z));
+    };
+    // At its foot: nothing to stand on. On top of it: the top.
+    CHECK_FALSE(under(100.3f, -41.0f).has_value());
+    REQUIRE(under(100.3f, -33.0f).has_value());
+    CHECK(*under(100.3f, -33.0f) == Catch::Approx(-33.6f));
+    CHECK_FALSE(under(102.0f, -33.0f).has_value());
+}
 
 // T288: the twin made for a figure's particles was drawn over it, in white.
 TEST_CASE("a particle twin's triangles are in no view", "[m2]") {
