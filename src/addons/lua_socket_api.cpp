@@ -20,6 +20,7 @@
 //     them: a refund record the server answered CMSG_ITEM_REFUND_INFO with,
 //     and ITEM_FIELD_FLAGS 0x100 for an item bound but still tradeable.
 #include "addons/lua_api_helpers.hpp"
+#include "game/item_stat_summary.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/game_utils.hpp"
 #include "game/interface_text.hpp"
@@ -192,11 +193,10 @@ int lua_GetSocketTypes(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh || !gh->isSocketingOpen()) return 0;
     const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
-    static constexpr const char* kColours[4] = {"Meta", "Red", "Yellow", "Blue"};
     const uint32_t mask = socketMaskAt(gh, index);
     int n = 0;
     for (int bit = 0; bit < 4; ++bit) {
-        if (mask & (1u << bit)) { lua_pushstring(L, kColours[bit]); ++n; }
+        if (mask & (1u << bit)) { lua_pushstring(L, game::item_stats::kSocketColours[bit]); ++n; }
     }
     if (n == 0) { lua_pushstring(L, "Socket"); n = 1; }
     return n;

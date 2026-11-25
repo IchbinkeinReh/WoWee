@@ -23,6 +23,8 @@ inline constexpr int kBlockValue = 60;
 inline constexpr int kFirstPowerRegen = 61;
 inline constexpr int kHealthRegen = 68;
 inline constexpr int kFirstSocket = 69;
+/// The socket colours as the client names them, in its files and to the interface.
+inline constexpr const char* kSocketColours[4] = {"Meta", "Red", "Yellow", "Blue"};
 
 struct Summary {
     float dps = 0.0f;

@@ -29,12 +29,11 @@ namespace wowee::game::item_stats {
         const int32_t v = delta.v[static_cast<size_t>(i)];
         if (v != 0 && i != 0x31 && i != 0x32) line(v > 0, std::to_string(v > 0 ? v : -v), text(key(i)));
     }
-    constexpr const char* kSockets[4] = {"Meta", "Red", "Yellow", "Blue"};
     for (int i = 0; i < 4; ++i) {
         const int32_t v = delta.v[static_cast<size_t>(kFirstSocket + i)];
         if (v == 0) continue;
         line(v > 0, std::to_string(v > 0 ? v : -v),
-             std::string("|TInterface\\ItemSocketingFrame\\UI-EmptySocket-") + kSockets[i] + ".blp:12|t  " +
+             std::string("|TInterface\\ItemSocketingFrame\\UI-EmptySocket-") + kSocketColours[i] + ".blp:12|t  " +
                  text(key(kFirstSocket + i)));
     }
     return lines;
