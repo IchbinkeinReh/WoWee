@@ -531,6 +531,61 @@ TEST_CASE("a spline that waited behind a load is as far as the time it waited", 
     CHECK(closeTo(placeOf(*drake), end));
 }
 
+// P58, run 10: the answers the server has in the same breath are said from where the spline has
+// the player, not from where the last frame left it. CMSG_MOVE_SET_COLLISION_HGT_ACK went out
+// with the place of before the load, and set the player back there.
+TEST_CASE("a forced change is answered from where the spline has the player now", "[replay][taxi]") {
+    using namespace std::chrono_literals;
+    Session s;
+    s.setConnected(true);
+    spawn(s, kTaxiFlag, 1149, kBorder530);
+    auto& gh = s.handler();
+    const auto height = [&s](uint32_t counter) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_MOVE_SET_COLLISION_HGT));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt32(counter);
+        p.writeFloat(2.0f);
+        s.receive(p);
+        auto sent = s.sent().of(Opcode::CMSG_MOVE_SET_COLLISION_HGT_ACK);
+        REQUIRE(sent.size() == counter);
+        auto& ack = sent.back();
+        REQUIRE(ack.readPackedGuid() == Session::kPlayerGuid);
+        REQUIRE(ack.readUInt32() == counter);
+        const uint32_t flags = ack.readUInt32();
+        CHECK((flags & 0x200u) == 0);
+        ack.readUInt16();
+        ack.readUInt32();
+        glm::vec3 at;
+        at.x = ack.readFloat();
+        at.y = ack.readFloat();
+        at.z = ack.readFloat();
+        return at;
+    };
+    const auto handled = std::chrono::steady_clock::now();
+    gh.setUnitClock(handled);
+    gh.update(0.016f);
+    std::vector<glm::vec3> way;
+    for (int i = 1; i <= 100; ++i) way.push_back(kBorder530 + glm::vec3(10.0f * static_cast<float>(i), 0.0f, 0.0f));
+    auto p = flight(91, kBorder530, way, 40000);  // 25 yd/s
+    p.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - 6000);
+    s.receive(p);
+    // Before the next frame has moved anybody on: six seconds along it.
+    CHECK(glm::length(height(1) - kBorder530) == Catch::Approx(150.0f).margin(5.0f));
+    CHECK(glm::length(height(2) - kBorder530) == Catch::Approx(150.0f).margin(5.0f));
+    // The frames go on from there and count nothing twice.
+    gh.setUnitClock(handled + 2s);
+    gh.update(0.016f);
+    const auto self = gh.getEntityManager().getEntity(Session::kPlayerGuid);
+    REQUIRE(self);
+    CHECK(glm::length(placeOf(*self) - kBorder530) == Catch::Approx(200.0f).margin(5.0f));
+
+    // One that ran out behind the load: from its end.
+    auto q = flight(92, kBorder530, way, 40000);
+    q.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - 60000);
+    s.receive(q);
+    CHECK(closeTo(height(3), way.back()));
+}
+
 TEST_CASE("an aura's time counts from when its packet came", "[replay][taxi]") {
     Session s;
     s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}});

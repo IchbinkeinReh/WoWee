@@ -841,6 +841,35 @@ public:
         return PathHeading{.tangent = at.tangent, .ahead = next.position - at.position};
     }
 
+    /// Where the spline carrying the unit has it `seconds` on from the moment
+    /// the unit was last moved on to; its end once that is past. None where no
+    /// spline does.
+    struct SplinePlace {
+        glm::vec3 position;
+        float orientation;
+    };
+    [[nodiscard]] std::optional<SplinePlace> splinePlaceAfter(float seconds) const {
+        if (!isMoving_ || movingByFlags_ || (splineFramed_ && !moveFrame_)) return std::nullopt;
+        float t = moveElapsed_ + std::max(seconds - startsIn_, 0.0f);
+        if (splineCyclic_ && moveDuration_ > 0.0f) t = std::fmod(t, moveDuration_);
+        if (t >= moveDuration_)
+            return SplinePlace{.position = {moveEndX_, moveEndY_, moveEndZ_},
+                               .orientation = finalFacing_.value_or(orientation)};
+        if (usePathMode_ && activeSpline_ && splineDurationMs_ > 0) {
+            const math::SplineEvalResult at =
+                pathEval(std::min(static_cast<uint32_t>(t * 1000.0f), splineDurationMs_ - 1));
+            return SplinePlace{.position = at.position,
+                               .orientation = faceAlongPath_
+                                                  ? facingAlong(at.tangent.x, at.tangent.y).value_or(orientation)
+                                                  : orientation};
+        }
+        const float share = t / moveDuration_;
+        return SplinePlace{.position = {moveStartX_ + (moveEndX_ - moveStartX_) * share,
+                                        moveStartY_ + (moveEndY_ - moveStartY_) * share,
+                                        moveStartZ_ + (moveEndZ_ - moveStartZ_) * share},
+                           .orientation = orientation};
+    }
+
     void updateMovement(float deltaTime) {
         // What of this step lies before the move under way began.
         const float before = std::clamp(deltaTime, 0.0f, startsIn_);
@@ -1100,10 +1129,12 @@ private:
     }
 
     void faceDirection(float dx, float dy) {
+        if (const auto facing = facingAlong(dx, dy)) orientation = *facing;
+    }
+    [[nodiscard]] std::optional<float> facingAlong(float dx, float dy) const {
         constexpr float kMinTangentSq = 0.0018490001f;  // FUN_0098ca00
-        if (dx * dx + dy * dy > kMinTangentSq) {
-            orientation = wrapAngle(std::atan2(-dy, dx) + pathFacingOffset_);
-        }
+        if (dx * dx + dy * dy <= kMinTangentSq) return std::nullopt;
+        return wrapAngle(std::atan2(-dy, dx) + pathFacingOffset_);
     }
 
     /// The path at `ms`: the curve, or straight between its points when the

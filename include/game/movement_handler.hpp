@@ -435,6 +435,9 @@ private:
     /// The movement a forced change of `guid` lands on: the mover's, or the
     /// player's held one while another unit moves; none for another unit.
     [[nodiscard]] MovementInfo* movementFor(uint64_t guid);
+    /// Its movement as it goes out now: while a spline carries the unit, at
+    /// the place the spline has it at this moment.
+    [[nodiscard]] MovementInfo movementNow(uint64_t guid) const;
     void handleForceMoveRootState(network::Packet& packet, bool rooted);
     void handleMoveKnockBack(network::Packet& packet);
     /// An event of the player's own movement, handed to its animation

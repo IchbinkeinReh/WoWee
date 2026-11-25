@@ -1184,6 +1184,12 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         }
     }
 
+    // Where the spline that lets this by has the mover (movementNow).
+    if (const MovementInfo now = movementNow(mover); !isPreWotlk() && !taxiClientActive_) {
+        movementInfo.x = now.x;
+        movementInfo.y = now.y;
+        movementInfo.z = now.z;
+    }
     if (moverIsPlayer) noteOutgoingPlace(wireOpcode(opcode), movementInfo);
 
     // Convert canonical → server coordinates for the wire
@@ -1469,7 +1475,7 @@ network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counte
     }
     ack.writeUInt32(counter);
 
-    MovementInfo wire = movementOf(guid);
+    MovementInfo wire = movementNow(guid);
     wire.time = nextMovementTimestampMs();
     if (guid == owner_.getPlayerGuid()) noteOutgoingPlace(wireOpcode(ackOpcode), wire);
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
@@ -4948,6 +4954,27 @@ const MovementInfo& MovementHandler::movementOf(uint64_t guid) const {
     return movementInfo;
 }
 
+MovementInfo MovementHandler::movementNow(uint64_t guid) const {
+    // A forced change is answered from the unit's movement as it stands at
+    // that moment - 0x006ed0f0 answers it where the step has brought the unit
+    // to, and 0x00990420 lets the answers by while a spline carries it. What
+    // is kept here is a frame old; and where a load came between, as old as
+    // the load: the answer to the collision height of a dismount put a flight
+    // two hundred yards back, on the server.
+    MovementInfo info = movementOf(guid);
+    // One run out and reported (updateMoverSplineDone) carries it no more.
+    if (info.hasFlag(MovementFlags::ONTRANSPORT) || !moveSplines_.count(guid)) return info;
+    const auto unit = owner_.getEntityManager().getEntity(guid);
+    if (!unit) return info;
+    if (const auto at = unit->splinePlaceAfter(owner_.sinceUnitsAdvanced())) {
+        info.x = at->position.x;
+        info.y = at->position.y;
+        info.z = at->position.z;
+        info.orientation = at->orientation;
+    }
+    return info;
+}
+
 MovementInfo* MovementHandler::movementFor(uint64_t guid) {
     const uint64_t player = owner_.getPlayerGuid();
     const uint64_t owner = moverInfoOwner_ != 0 ? moverInfoOwner_ : player;
@@ -5172,7 +5199,7 @@ float MovementHandler::transportFacingToWire(uint64_t transportGuid, float canon
 }
 
 MovementInfo MovementHandler::moverWireInfo() {
-    MovementInfo wire = movementInfo;
+    MovementInfo wire = movementNow(moverInfoOwner_ != 0 ? moverInfoOwner_ : owner_.getPlayerGuid());
     wire.time = nextMovementTimestampMs();
     const glm::vec3 serverPos = core::coords::canonicalToServer(glm::vec3(wire.x, wire.y, wire.z));
     wire.x = serverPos.x;
