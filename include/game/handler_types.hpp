@@ -396,6 +396,10 @@ struct GossipPoi {
     /// rather than an area.
     std::vector<std::pair<float, float>> area;
 };
+/// A place of this quest's; a gossip's point has its importance where that has the quest.
+[[nodiscard]] inline bool isOfQuest(const GossipPoi& p, uint32_t questId) {
+    return p.questObjectiveIndex != -2 && p.data == questId;
+}
 
 // ---- Instance lockouts ----
 

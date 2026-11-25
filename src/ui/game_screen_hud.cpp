@@ -457,7 +457,8 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
                     break;
                 }
             }
-            if (duplicatesQuestGiver) continue;
+            // Its area is shown all the same.
+            if (duplicatesQuestGiver && blobAreas.count(poiIndex) == 0) continue;
 
             rendering::WorldMap::QuestPoi qp;
             qp.wowX = poi.x;

@@ -103,7 +103,15 @@ public:
     [[nodiscard]] const std::vector<GossipPoi>& getGossipPois() const { return gossipPois_; }
     [[nodiscard]] const GossipPoi* gossipPoint() const;
     void dropGossipPoint();
-    void clearGossipPois() { gossipPois_.clear(); }
+    /// The gossip's point goes with the map; the quests' places, each with its own map, stay.
+    void clearGossipPois() {
+        std::erase_if(gossipPois_, [](const GossipPoi& p) { return p.questObjectiveIndex == -2; });
+    }
+    /// All of them, with the character (0x005e70d0).
+    void clearPois() {
+        gossipPois_.clear();
+        questPoiIcons_.clear();
+    }
     /// The console's UpdatePOI (0x005e7170 -> 0x005e70d0): every quest's
     /// points of interest dropped and asked for again, the whole log in one
     /// CMSG_QUEST_POI_QUERY (0x005e6940).

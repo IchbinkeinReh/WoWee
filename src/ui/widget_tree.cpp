@@ -1703,7 +1703,7 @@ void WidgetTree::collectDrawOrder() {
         // Not gated on holding text. The caret is what says which box is
         // listening, and an empty box still has to show it.
         if (w.kind == WidgetKind::Frame && !w.hasBackdrop && !w.isStatusBar &&
-            !w.isEditBox && w.externalTexture == 0 && !w.isMovieFrame &&
+            !w.isEditBox && w.externalTexture == 0 && !w.isMovieFrame && !w.isQuestAreas &&
             // A cooldown paints its shade and its star (0x005ebd20). It was
             // missing here, so no sweep was ever drawn: the frames were shown,
             // sized and timed, and never reached the renderer.
@@ -1739,7 +1739,7 @@ void WidgetTree::collectDrawOrder() {
         if (border) drawEntries_.emplace_back(&w, DrawPart::Border);
         // And what else the frame paints.
         if (backdrop && !w.isStatusBar && !w.isSlider && !w.isEditBox && w.externalTexture == 0 && !w.isMovieFrame &&
-            !w.isCooldown && !w.isSimpleHtml && !w.isMessageFrame && !w.isTooltip) continue;
+            !w.isQuestAreas && !w.isCooldown && !w.isSimpleHtml && !w.isMessageFrame && !w.isTooltip) continue;
         drawEntries_.emplace_back(&w, DrawPart::Own);
     }
 
@@ -1772,6 +1772,7 @@ void WidgetTree::collectDrawOrder() {
         if (w->isEditBox || w->isMessageFrame || w->isSimpleHtml || (w->isTooltip && w->objectType == "GameTooltip"))
             return {2 * w->effLevel + 1, artwork, kString};
         if (w->externalTexture != 0) return {2 * w->effLevel + 1, artwork, kCallback};
+        if (w->isQuestAreas) return {2 * w->effLevel + 1, layerRank(DrawLayer::Overlay), kCallback};   // 0x00590660
         return {2 * w->effLevel, layerRank(w->layer), kTexture};
     };
     using Entry = std::pair<const Widget*, DrawPart>;

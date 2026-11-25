@@ -169,7 +169,6 @@ struct WorldMapFacade::Impl {
     std::vector<TaxiNode> taxiNodes;
     std::vector<QuestPOI> questPois;
     std::optional<LayerContext> hostedContext;   // of the last frame drawn in the interface's
-    bool areasHaveFrame = false;                 // drawQuestAreas was asked for
 
     // Flight-map (taxi selection) mode - locks the view to the continent and
     // renders only the map, player marker, and interactive flight nodes.
@@ -1187,10 +1186,16 @@ void WorldMapFacade::setQuestPois(std::vector<QuestPOI> pois) {
 }
 
 void WorldMapFacade::drawQuestAreas(ImDrawList* drawList) {
-    impl_->areasHaveFrame = true;
     if (!impl_->hostedContext || !impl_->hasFrameRect || !impl_->questPOILayer || !drawList) return;
     LayerContext ctx = *impl_->hostedContext;
     ctx.drawList = drawList;
+    // The map and the place as they are now.
+    ctx.currentZoneIdx = impl_->viewState.currentZoneIdx();
+    ctx.continentIdx = impl_->viewState.continentIdx();
+    ctx.viewLevel = impl_->viewState.currentLevel();
+    ctx.imgMin = ImVec2(impl_->frameRectX, impl_->frameRectY);
+    ctx.displayW = impl_->frameRectW;
+    ctx.displayH = impl_->frameRectH;
     impl_->questPOILayer->render(ctx);
 }
 
@@ -1466,9 +1471,7 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
         }
 
         if (hostedDraw) {
-            hostedContext = layerCtx;
-            if (questPOILayer && !areasHaveFrame) questPOILayer->render(layerCtx);
-            areasHaveFrame = false;
+            hostedContext = layerCtx;   // for drawQuestAreas
             if (playerMarkerLayer && !interfaceDrawsPlayerArrow) playerMarkerLayer->render(layerCtx);
             ImGui::End();
             if (!windowOpen) closeMap();

@@ -536,6 +536,30 @@ TEST_CASE("A backdrop's border draws over its frame's BACKGROUND textures", "[wi
     CHECK(tree.drawPart(1) == Part::Border);
 }
 
+// V304: the quests' areas are drawn in their frame (0x00590660: by callback, in OVERLAY).
+TEST_CASE("The quests' areas are drawn at their frame's level", "[widget][draworder]") {
+    WidgetTree tree;
+    const auto make = [&](int level) {
+        const uint32_t f = tree.create(WidgetKind::Frame, 0, "");
+        tree.get(f)->width = tree.get(f)->height = 100.0f;
+        tree.setFrameLevel(f, level);
+        tree.addPoint(f, Anchor{});
+        return f;
+    };
+    const auto picture = [&](uint32_t frame) {
+        const uint32_t t = tree.create(WidgetKind::Texture, frame, "");
+        tree.get(t)->texturePath = "x.blp";
+        tree.setAllPoints(t, frame);
+        return t;
+    };
+    const uint32_t map = picture(make(88)), areas = make(89), button = picture(make(100));
+    tree.get(areas)->isQuestAreas = true;
+    tree.layout(kScreenW, kScreenH);
+    std::vector<uint32_t> order;
+    for (const auto* w : tree.drawOrder()) order.push_back(w->id);
+    CHECK(order == std::vector<uint32_t>{map, areas, button});
+}
+
 TEST_CASE("A frame's backdrop draws beneath its own regions",
           "[widget][backdrop][draworder]") {
     // The backdrop is the panel; anything the frame owns belongs on top of it.

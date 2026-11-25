@@ -57,8 +57,8 @@ public:
     void setPartyDots(std::vector<PartyDot> dots);
     void setTaxiNodes(std::vector<TaxiNode> nodes);
     void setQuestPois(std::vector<QuestPOI> pois);
-    /// The quest areas as the map in the interface's frame last had them, where the interface
-    /// has their frame (WorldMapBlobFrame, under the quests' buttons).
+    /// The quest areas, in the interface's frame of theirs (WorldMapBlobFrame, under the quests'
+    /// buttons; with it hidden there are none).
     void drawQuestAreas(ImDrawList* drawList);
     /// WorldMapBlobFrame's textures, alphas and border width for the quest
     /// areas (see QuestPOILayer::setBlobStyle).

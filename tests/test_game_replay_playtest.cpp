@@ -1004,6 +1004,61 @@ TEST_CASE("a worldport is acknowledged once the world is in", "[replay][playtest
     s.handler().setWorldEntryCallback({});
 }
 
+// V304: 0x005e7370 keeps every area with its map; they went as the map changed, and no
+// quest was asked for again.
+TEST_CASE("a quest's places are kept over a change of map", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    const auto places = [&] { return s.handler().getGossipPois().size(); };
+    const auto answer = [&] {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUEST_POI_QUERY_RESPONSE));
+        p.writeUInt32(1);
+        p.writeUInt32(743);
+        p.writeUInt32(2);
+        for (const uint32_t map : {1u, 530u}) {
+            p.writeUInt32(map);   // the point's number
+            p.writeUInt32(0);
+            p.writeUInt32(map);
+            p.writeUInt32(9);
+            p.writeUInt32(0);
+            p.writeUInt32(0);
+            p.writeUInt32(0);
+            p.writeUInt32(3);
+            for (const int32_t v : {0, 0, 100, 0, 100, 100}) p.writeUInt32(static_cast<uint32_t>(v));
+        }
+        s.receive(p);
+    };
+    answer();
+    REQUIRE(places() == 2);
+    CHECK(s.handler().getGossipPois()[0].mapId == 1);
+    CHECK(s.handler().getGossipPois()[1].mapId == 530);
+    // A gossip's point, of the same number as it happens.
+    wowee::network::Packet point(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_POI));
+    point.writeUInt32(0);
+    point.writeFloat(1.0f);
+    point.writeFloat(2.0f);
+    point.writeUInt32(7);
+    point.writeUInt32(743);
+    point.writeString("The bank");
+    s.receive(point);
+    REQUIRE(s.handler().gossipPoint());
+    answer();
+    CHECK(places() == 3);
+    CHECK(s.handler().gossipPoint());
+
+    s.handler().setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(530);
+    for (const float v : {-1863.0f, 5430.0f, -8.7f, 0.4f}) world.writeFloat(v);
+    s.receive(world);
+    s.handler().setWorldEntryCallback({});
+    CHECK(places() == 2);
+    CHECK_FALSE(s.handler().gossipPoint());
+    // With the character they go.
+    s.receive(wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_LOGOUT_COMPLETE)));
+    CHECK(places() == 0);
+}
+
 // SMSG_LOGOUT_COMPLETE takes the character out of the world and leaves the
 // connection standing (0x006b2180 -> 0x00406510(1, 1, 0) -> "charselect"),
 // where the client dropped it and asked for the password again.

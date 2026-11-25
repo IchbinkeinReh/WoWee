@@ -4548,8 +4548,8 @@ void SocialHandler::handleLogoutComplete(network::Packet& /*packet*/) {
     // complete." on the way out.
     const bool exiting = exitAfterLogout_;
     loggingOut_ = false; exitAfterLogout_ = false; logoutCountdown_ = 0.0f;
-    // The quest POI icon list goes with the character (0x005e70d0).
-    if (auto* quests = owner_.getQuestHandler()) quests->questPoiIcons().clear();
+    // The quests' places go with the character (0x005e70d0).
+    if (auto* quests = owner_.getQuestHandler()) quests->clearPois();
     owner_.clearLatestUpdatedStats();  // 0x005b4f00
     LOG_WARNING("Logout complete (exiting=", exiting ? "yes" : "no", ")");  // temporary: visible at default log level
     if (owner_.logoutCompleteCallbackRef()) owner_.logoutCompleteCallbackRef()(exiting);

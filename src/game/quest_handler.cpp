@@ -1509,7 +1509,7 @@ void QuestHandler::abandonQuest(uint32_t questId) {
     // Remove any quest POI minimap markers for this quest.
     gossipPois_.erase(
         std::remove_if(gossipPois_.begin(), gossipPois_.end(),
-            [questId](const GossipPoi& p) { return p.data == questId; }),
+            [questId](const GossipPoi& p) { return isOfQuest(p, questId); }),
         gossipPois_.end());
 }
 
@@ -2453,7 +2453,7 @@ void QuestHandler::refreshQuestPois() {
     for (const auto& q : questLog_) {
         if (q.questId == 0) continue;
         gossipPois_.erase(std::remove_if(gossipPois_.begin(), gossipPois_.end(),
-                                         [&](const GossipPoi& p) { return p.data == q.questId; }),
+                                         [&](const GossipPoi& p) { return isOfQuest(p, q.questId); }),
                           gossipPois_.end());
         if (quests.size() < 25) quests.push_back(q.questId);
     }
@@ -2492,9 +2492,7 @@ void QuestHandler::handleQuestPoiQueryResponse(network::Packet& packet) {
         // Remove any previously added POI markers for this quest
         gossipPois_.erase(
             std::remove_if(gossipPois_.begin(), gossipPois_.end(),
-                [questId](const GossipPoi& p) {
-                    return p.data == questId;
-                }),
+                [questId](const GossipPoi& p) { return isOfQuest(p, questId); }),
             gossipPois_.end());
 
         // Every area, whatever its map, for the client's icon list (0x005e7370).

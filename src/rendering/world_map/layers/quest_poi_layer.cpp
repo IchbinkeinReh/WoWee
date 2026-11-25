@@ -79,24 +79,23 @@ void QuestPOILayer::render(const LayerContext& ctx) {
     const ImVec2 imgMax(ctx.imgMin.x + ctx.displayW, ctx.imgMin.y + ctx.displayH);
     for (const auto& qp : *pois_) {
         if (qp.area.size() < 3 || !ofMap(qp)) continue;
+        // Its middle must be on the map (0x005e0110); what is over the edge is cut off.
+        const glm::vec2 middle = renderPosToMapUV(core::coords::canonicalToRender(glm::vec3(qp.wowX, qp.wowY, 0.0f)),
+                                                  projection->bounds, projection->isContinent);
+        if (middle.x < 0.0f || middle.x > 1.0f || middle.y < 0.0f || middle.y > 1.0f ||
+            middle.x * middle.y < 0.001f) continue;
         std::vector<ImVec2> screen;
         std::vector<glm::vec2> flat;
         screen.reserve(qp.area.size());
         flat.reserve(qp.area.size());
-        bool anyOnMap = false;
         for (const auto& pt : qp.area) {
             const glm::vec3 rPos = core::coords::canonicalToRender(glm::vec3(pt.x, pt.y, 0.0f));
             const glm::vec2 uv = renderPosToMapUV(rPos, projection->bounds, projection->isContinent);
-            if (uv.x >= 0.0f && uv.x <= 1.0f && uv.y >= 0.0f && uv.y <= 1.0f) anyOnMap = true;
             const float sx = ctx.imgMin.x + uv.x * ctx.displayW;
             const float sy = ctx.imgMin.y + uv.y * ctx.displayH;
             screen.push_back(ImVec2(sx, sy));
             flat.push_back(glm::vec2(sx, sy));
         }
-        // An area belonging to another part of the world is not drawn at all;
-        // one that only crosses the edge is drawn and cut off there, since
-        // clamping its points to the edge would change the shape.
-        if (!anyOnMap) continue;
         ctx.drawList->PushClipRect(ctx.imgMin, imgMax, true);
         // With the interface's textures, the client's own mesh (0x0058f1a0):
         // a fan from the centroid, the fill texture's 0,0 there and 1,1 at
