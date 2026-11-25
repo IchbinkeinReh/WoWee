@@ -4346,6 +4346,10 @@ wowee_add_test(test_world_mouse
 wowee_add_test(test_quest_link
     SOURCES test_quest_link.cpp)
 
+# ── test_replace_enchant ─────────────────────────────────────
+wowee_add_test(test_replace_enchant
+    SOURCES test_replace_enchant.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

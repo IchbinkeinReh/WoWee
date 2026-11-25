@@ -1,3 +1,4 @@
+#include "game/replace_enchant.hpp"
 #include "game/inventory_handler.hpp"
 #include "game/mail_ignore.hpp"
 #include "game/stationery.hpp"
@@ -2900,12 +2901,7 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
         return;
     }
 
-    // Something permanent is already on it, and applying this destroys it.
-    //
-    // Only the permanent slot. A weapon carrying a sharpening stone is not
-    // warned about, because the temporary slot is minutes of a stone rather
-    // than an enchanter, and naming a permanent enchant that is not being
-    // replaced would be a warning about the wrong thing.
+    // Something is already on it, and applying this takes its place.
     if (!confirmed && !destroysTarget) {
         // Enchanting an unbound item binds it. Same family as the equip, use
         // and loot warnings, and the one of the five that was missed: the
@@ -2965,18 +2961,22 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
             }
         }
 
+        // What it replaces, by the names of both enchants; an enchant the client
+        // has no row of is not asked about.
         const auto enchants = owner_.getItemEnchantIds(targetItemGuid);
-        if (enchants.first != 0) {
+        ReplacedEnchant replaced;
+        if (const auto it = owner_.spellNameCacheRef().find(pending.spellId); it != owner_.spellNameCacheRef().end())
+            for (int i = 0; i < 3 && !replaced.asks(); ++i)
+                replaced = replacedEnchant(it->second.effectIds[i], it->second.effectMiscValues[i], enchants.first,
+                                           enchants.second);
+        const std::string existing = replaced.asks() ? owner_.getEnchantName(replaced.existing) : std::string();
+        const std::string incoming = replaced.asks() ? owner_.getEnchantName(replaced.incoming) : std::string();
+        if (!existing.empty() && !incoming.empty()) {
             // Taken out of the parked slot entirely: see PendingEnchant.
             pendingItemTarget_.reset();
             pendingEnchant_ = PendingEnchant{.active = true, .targetItemGuid = targetItemGuid, .request = pending};
-            const std::string existing = owner_.getEnchantName(enchants.first);
-            if (owner_.addonEventCallbackRef()) {
-                owner_.addonEventCallbackRef()(
-                    "REPLACE_ENCHANT",
-                    {existing.empty() ? std::string("an enchantment") : existing,
-                     pending.itemName});
-            }
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("REPLACE_ENCHANT", {existing, incoming});
             return;
         }
     }
