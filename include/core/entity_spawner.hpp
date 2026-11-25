@@ -51,6 +51,11 @@ public:
     void attachDisplayItemVisual(uint32_t instanceId, uint32_t point, uint32_t itemVisualId);
     /// The colours a creature's display gives its particles (ParticleColor.dbc).
     [[nodiscard]] std::optional<std::array<glm::vec3, 9>> particleColorsOf(uint32_t displayId) const;
+    /// Which of its model's geosets a creature's display shows (core::creatureGeosets).
+    [[nodiscard]] uint32_t geosetDataOf(uint32_t displayId) const {
+        const auto it = displayDataMap_.find(displayId);
+        return it != displayDataMap_.end() ? it->second.geosetData : 0u;
+    }
     /// After the interface is loaded again: the player's own seat, said
     /// again - UNIT_ENTERING_VEHICLE while climbing in, and with
     /// UNIT_ENTERED_VEHICLE once seated - so the new interface puts its
@@ -901,6 +906,8 @@ private:
         uint32_t particleColorId = 0;
         /// CreatureDisplayInfo.CreatureModelAlpha, of 255.
         uint32_t modelAlpha = 255;
+        /// CreatureDisplayInfo.CreatureGeosetData (core::creatureGeosets).
+        uint32_t geosetData = 0;
     };
 
     /// CreatureModelData.ModelScale for a model id, the second half of the

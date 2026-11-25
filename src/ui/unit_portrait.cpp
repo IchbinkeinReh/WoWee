@@ -78,7 +78,7 @@ bool UnitPortrait::load(const UnitLook& look) {
         // (0x004f2640); the bake already wears them.
         const bool baked = !look.bakedSkin.empty() && preview_->setBakedSkin(look.bakedSkin);
         if (!look.worn.empty()) preview_->applyEquipment(look.worn, !baked);
-    } else if (!preview_->loadCreature(look.model, look.skins)) {
+    } else if (!preview_->loadCreature(look.model, look.skins, look.geosetData)) {
         return false;
     }
     // After the model, because its cameras and bounds are what the framing is

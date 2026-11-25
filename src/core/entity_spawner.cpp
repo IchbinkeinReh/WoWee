@@ -1423,6 +1423,9 @@ void EntitySpawner::buildCreatureDisplayLookups() {
             if (pcField != 0xFFFFFFFFu && pcField < cdi->getFieldCount()) {
                 data.particleColorId = cdi->getUInt32(i, pcField);
             }
+            const uint32_t geosetField = cdiL ? (*cdiL)["CreatureGeosetData"] : 0xFFFFFFFFu;
+            if (geosetField != 0xFFFFFFFFu && geosetField < cdi->getFieldCount())
+                data.geosetData = cdi->getUInt32(i, geosetField);
             displayDataMap_[cdi->getUInt32(i, cdiL ? (*cdiL)["ID"] : 0)] = data;
         }
         LOG_INFO("Loaded ", displayDataMap_.size(), " display→model mappings");
@@ -2225,7 +2228,16 @@ void EntitySpawner::normalizeHumanoidClothingGeosets(uint32_t instanceId, uint32
     // model keeps its own geosets: a creature's numbers mean nothing of the
     // kind - elementals carry their wrist pieces in group 8.
     auto itDisplayData = displayDataMap_.find(displayId);
-    if (itDisplayData == displayDataMap_.end() || itDisplayData->second.extraDisplayId == 0) return;
+    if (itDisplayData == displayDataMap_.end()) return;
+    if (itDisplayData->second.extraDisplayId == 0) {
+        // But for those its display picks (0x004e7790): an iron dwarf's beard,
+        // head, hands and feet, of which its model has several each.
+        if (const uint32_t data = itDisplayData->second.geosetData; data != 0) {
+            const auto shown = core::creatureGeosets(modelSubmeshIds(modelId), data);
+            if (!shown.empty()) charRenderer->setActiveGeosets(instanceId, shown);
+        }
+        return;
+    }
     auto itExtra = humanoidExtraMap_.find(itDisplayData->second.extraDisplayId);
     if (itExtra == humanoidExtraMap_.end()) return;
     const HumanoidDisplayExtra& extra = itExtra->second;

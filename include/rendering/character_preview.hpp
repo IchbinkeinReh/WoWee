@@ -69,7 +69,8 @@ public:
     /// untextured shape. EntitySpawner::getCreatureSkinPaths answers with
     /// exactly this.
     bool loadCreature(const std::string& m2Path,
-                      const std::vector<std::pair<uint32_t, std::string>>& skins = {});
+                      const std::vector<std::pair<uint32_t, std::string>>& skins = {},
+                      uint32_t geosetData = 0);
 
     /// A unit's worn items, as the world draws it: armour, the helmet's
     /// model and masks (0x004ef0d0), shoulders and the weapons in hand.

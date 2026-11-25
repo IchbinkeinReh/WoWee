@@ -134,6 +134,7 @@ const ui::UnitLook& Application::displayLook(uint32_t displayId) {
         look.model = entitySpawner_->getModelPathForDisplayId(displayId);
         if (!look.model.empty()) look.skins = entitySpawner_->getCreatureSkinPaths(displayId, look.model);
         look.particleColors = entitySpawner_->particleColorsOf(displayId);
+        look.geosetData = entitySpawner_->geosetDataOf(displayId);
     }
     if (!look.any()) return kNone;
     return displayLooks_.emplace(displayId, std::move(look)).first->second;

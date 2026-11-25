@@ -979,7 +979,7 @@ bool CharacterPreview::setBakedSkin(const std::string& bakePath) {
 
 bool CharacterPreview::loadCreature(
         const std::string& m2Path,
-        const std::vector<std::pair<uint32_t, std::string>>& skins) {
+        const std::vector<std::pair<uint32_t, std::string>>& skins, uint32_t geosetData) {
     if (!charRenderer_ || !assetManager_ || !assetManager_->isInitialized()) {
         return false;
     }
@@ -1062,8 +1062,14 @@ bool CharacterPreview::loadCreature(
         }
     }
 
-    // No geoset selection: a creature shows every submesh its skin declares,
-    // which is what leaving the active set alone means.
+    // A creature shows every submesh its skin declares, which is what leaving
+    // the active set alone means, but for those its display picks (0x004e7790).
+    if (const auto* data = geosetData != 0 ? charRenderer_->getModelData(PREVIEW_MODEL_ID) : nullptr) {
+        std::vector<uint16_t> ids;
+        for (const auto& batch : data->batches) ids.push_back(batch.submeshId);
+        const auto shown = core::creatureGeosets(ids, geosetData);
+        if (!shown.empty()) charRenderer_->setActiveGeosets(instanceId_, shown);
+    }
     charRenderer_->playAnimation(instanceId_, rendering::anim::STAND, true);
     modelLoaded_ = true;
     return true;

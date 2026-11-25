@@ -40,6 +40,7 @@ struct UnitLook {
     std::string model;
     std::vector<std::pair<uint32_t, std::string>> skins;   ///< by M2 texture type
     std::optional<std::array<glm::vec3, 9>> particleColors;   ///< the display's (ParticleColor.dbc)
+    uint32_t geosetData = 0;   ///< the display's (core::creatureGeosets)
 
     [[nodiscard]] bool any() const { return character || !model.empty(); }
     friend bool operator==(const UnitLook&, const UnitLook&) = default;

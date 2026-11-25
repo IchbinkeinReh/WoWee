@@ -110,6 +110,7 @@
     "ResSicknessSpellID": 9
   },
   "CreatureDisplayInfo": {
+    "CreatureGeosetData": 14,
     "CreatureModelScale": 4,
     "ParticleColorID": 13,
     "ExtraDisplayId": 3,

@@ -121,6 +121,16 @@ TEST_CASE("a robe's skirt replaces everything below the waist", "[geoset]") {
     CHECK(inGroup(shown, 11) == 0);
 }
 
+// T289: 0x004e7790: CreatureDisplayInfo's CreatureGeosetData. Iron dwarves had all their beards.
+TEST_CASE("a creature's display picks of its geosets", "[geoset]") {
+    const std::vector<uint16_t> ids = {202, 201, 0, 101, 102, 103, 104, 301, 302, 303, 401, 402, 1501, 1702, 901};
+    CHECK(creatureGeosets(ids, 0).empty());
+    CHECK(creatureGeosets(ids, 0x1213u) == std::unordered_set<uint16_t>{0, 103, 201, 302, 401, 901});
+    // A group it does not name has all.
+    CHECK(creatureGeosets(ids, 0x0002u) ==
+          std::unordered_set<uint16_t>{0, 102, 201, 202, 301, 302, 303, 401, 402, 901});
+}
+
 TEST_CASE("boots, kneepads, trousers and the tabard", "[geoset]") {
     CharacterEquipmentGeosets eq;
     eq.boots = item(2);

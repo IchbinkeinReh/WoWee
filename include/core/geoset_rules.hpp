@@ -236,5 +236,21 @@ inline std::unordered_set<uint16_t> modelGeosetsShown(const std::unordered_set<u
     return out;
 }
 
+/// A creature's geosets by its display's CreatureGeosetData (0x004e7790): a nibble for each group
+/// from 1 to 8, the variant shown of it and no other, 0 for all the model has. What of `submeshIds`
+/// is drawn; the groups that are not drawn unasked (a cloak, the eyes' glow) not. Nothing where the
+/// data says nothing.
+inline std::unordered_set<uint16_t> creatureGeosets(const std::vector<uint16_t>& submeshIds, uint32_t geosetData) {
+    std::unordered_set<uint16_t> shown;
+    if (geosetData == 0) return shown;
+    for (const uint16_t id : submeshIds) {
+        const unsigned group = id / 100u;
+        if (group == 15 || group == 17 || group == 18) continue;
+        const unsigned variant = group >= 1 && group <= 8 ? (geosetData >> (4 * (group - 1))) & 0xfu : 0u;
+        if (variant == 0 || id == group * 100u + variant) shown.insert(id);
+    }
+    return shown;
+}
+
 }  // namespace core
 }  // namespace wowee
