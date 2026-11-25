@@ -184,10 +184,24 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
              ImVec2(col.x0 + listW + gap * 0.5f, bodyBottom), paperFade(theme.pencil, 0.55f),
              px(1.0f), 0x6621u);
 
-    const float levelX = col.x0 + listW * 0.40f;
-    const float raceX = col.x0 + listW * 0.50f;
-    const float classX = col.x0 + listW * 0.67f;
-    const float zoneX = col.x0 + listW * 0.83f;
+    // As wide as their words are, the German ones too; the name has the rest.
+    float levelW = ui_.textWidth("Lv", labelSize), raceW = ui_.textWidth("Race", labelSize);
+    float classW = ui_.textWidth("Class", labelSize), zoneW = ui_.textWidth("Where", labelSize);
+    const auto zoneOf = [&](const game::Character& c) {
+        const std::string zone = gameHandler.getWhoAreaName(c.zoneId);
+        return zone.empty() ? std::to_string(c.zoneId) : zone;
+    };
+    for (const auto& c : characters) {
+        levelW = std::max(levelW, ui_.textWidth(std::to_string(c.level).c_str(), smallSize));
+        raceW = std::max(raceW, ui_.textWidth(raceName(assetManager_, c).c_str(), smallSize));
+        classW = std::max(classW, ui_.textWidth(className(assetManager_, c).c_str(), smallSize));
+        zoneW = std::max(zoneW, ui_.textWidth(zoneOf(c).c_str(), smallSize));
+    }
+    const float columnGap = px(12);
+    const float zoneX = std::min(col.x0 + listW * 0.83f, col.x0 + listW - px(8) - zoneW);
+    const float classX = std::min(col.x0 + listW * 0.67f, zoneX - columnGap - classW);
+    const float raceX = std::min(col.x0 + listW * 0.50f, classX - columnGap - raceW);
+    const float levelX = std::min(col.x0 + listW * 0.40f, raceX - columnGap - levelW);
 
     ui_.text(ImVec2(col.x0 + px(10), bodyTop), "Name", labelSize, theme.inkSoft);
     ui_.text(ImVec2(levelX, bodyTop), "Lv", labelSize, theme.inkSoft);
@@ -229,13 +243,7 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
                          smallSize,
                          ui_.onPaper(classColor(static_cast<uint8_t>(character.characterClass))));
 
-                std::string zone = gameHandler.getWhoAreaName(character.zoneId);
-                if (zone.empty()) {
-                    char fallback[16];
-                    std::snprintf(fallback, sizeof(fallback), "%u", character.zoneId);
-                    zone = fallback;
-                }
-                ui_.text(ImVec2(zoneX, smallY), zone.c_str(), smallSize, theme.pencil);
+                ui_.text(ImVec2(zoneX, smallY), zoneOf(character).c_str(), smallSize, theme.pencil);
             });
 
         if (picked.clicked >= 0) {
@@ -644,10 +652,9 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
     col.gap(ui_.lineHeight(smallSize));
 
     if (character.hasPet()) {
-        char pet[64];
-        std::snprintf(pet, sizeof(pet), "Pet, level %d (family %d)", character.pet.level,
-                      character.pet.family);
-        ui_.text(col.at(), pet, smallSize, theme.pencil);
+        const std::string family = game::creatureFamilyName(assetManager_, character.pet.family);
+        const std::string pet = "Pet, level " + std::to_string(character.pet.level) + (family.empty() ? "" : " (" + family + ")");
+        ui_.text(col.at(), pet.c_str(), smallSize, theme.pencil);
     }
 }
 

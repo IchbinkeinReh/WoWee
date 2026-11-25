@@ -33,5 +33,15 @@ GenderedName chrClassName(pipeline::AssetManager* assets, uint32_t classId, int 
     return rowName(assets, "ChrClasses.dbc", "ChrClasses", classId, gender);
 }
 
+std::string creatureFamilyName(pipeline::AssetManager* assets, uint32_t family) {
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* layout = layouts ? layouts->getLayout("CreatureFamily") : nullptr;
+    const uint32_t nameF = layout ? layout->tryField("Name") : 0xFFFFFFFFu;
+    auto dbc = family != 0 && assets && assets->isInitialized() ? assets->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+    if (!dbc || !dbc->isLoaded() || nameF >= dbc->getFieldCount()) return {};
+    const int32_t row = dbc->findRecordById(family);
+    return row >= 0 ? dbc->getString(static_cast<uint32_t>(row), nameF) : std::string{};
+}
+
 }  // namespace game
 }  // namespace wowee

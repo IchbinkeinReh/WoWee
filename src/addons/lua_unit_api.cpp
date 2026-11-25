@@ -723,15 +723,7 @@ static int lua_UnitCreatureFamily(lua_State* L) {
     if (!unit) return luaReturnNil(L);
     const uint32_t family = gh->getCreatureFamily(unit->getEntry());
     if (family == 0) return luaReturnNil(L);
-    auto* am = gh->services().assetManager;
-    const auto* layouts = pipeline::getActiveDBCLayout();
-    const auto* layout = layouts ? layouts->getLayout("CreatureFamily") : nullptr;
-    const uint32_t nameF = layout ? layout->tryField("Name") : 0xFFFFFFFFu;
-    auto dbc = am && am->isInitialized() ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
-    if (dbc && dbc->isLoaded() && nameF < dbc->getFieldCount()) {
-        const int32_t r = dbc->findRecordById(family);
-        if (r < 0) return luaReturnNil(L);
-        const std::string name = dbc->getString(static_cast<uint32_t>(r), nameF);
+    if (const std::string name = game::creatureFamilyName(gh->services().assetManager, family); !name.empty()) {
         lua_pushstring(L, name.c_str());
         return 1;
     }

@@ -37,6 +37,8 @@ struct GenderedName {
 /// Empty where the file or its layout is not to hand.
 [[nodiscard]] GenderedName chrRaceName(pipeline::AssetManager* assets, uint32_t raceId, int gender);
 [[nodiscard]] GenderedName chrClassName(pipeline::AssetManager* assets, uint32_t classId, int gender);
+/// A creature family's name (CreatureFamily, 0x007153e0), empty without one.
+[[nodiscard]] std::string creatureFamilyName(pipeline::AssetManager* assets, uint32_t family);
 
 }  // namespace game
 }  // namespace wowee
