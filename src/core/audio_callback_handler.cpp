@@ -171,6 +171,17 @@ void AudioCallbackHandler::setupCallbacks() {
         }
     });
 
+    gameHandler_.setSoundAtUnitCallback([this](uint32_t soundId, uint64_t unitGuid) {
+        auto* svs = renderer_ ? renderer_->getSpellVisualSystem() : nullptr;
+        if (!svs) return;
+        if (unitGuid == gameHandler_.getPlayerGuid()) {
+            svs->playSoundEntry(soundId, renderer_->getCharacterPosition());
+        } else if (const auto entity = gameHandler_.getEntityManager().getEntity(unitGuid)) {
+            svs->playSoundEntry(soundId, core::coords::canonicalToRender(glm::vec3(
+                                             entity->getLatestX(), entity->getLatestY(), entity->getLatestZ())));
+        }
+    });
+
     // Open dungeon finder callback - server sends SMSG_OPEN_LFG_DUNGEON_FINDER
     gameHandler_.setOpenLfgCallback([this]() {
         if (uiManager_) uiManager_->getGameScreen().openDungeonFinder(gameHandler_);

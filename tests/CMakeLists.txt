@@ -4374,6 +4374,10 @@ wowee_add_test(test_mouse_over
 wowee_add_test(test_chunk_name
     SOURCES test_chunk_name.cpp)
 
+# ── test_fizzle_sound ────────────────────────────────────────
+wowee_add_test(test_fizzle_sound
+    SOURCES test_fizzle_sound.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

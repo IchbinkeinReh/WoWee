@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/fizzle_sound.hpp"
 #include "game/tutorials.hpp"
 
 #include "game/world_packets.hpp"
@@ -748,6 +749,10 @@ public:
     /// (cast_failure::gameError), where the client's table gives it one
     /// (0x00808200 -> 0x005216f0 -> 0x00986d00).
     void sayCastFailure(uint32_t spellId, uint8_t result) const;
+    /// The fizzle of a spell that failed, at a unit (0x004cff30).
+    void playFizzle(uint32_t spellId, uint64_t unitGuid) const;
+    /// Its sounds by school, read from Resistances.dbc where none were given.
+    void setResistanceSounds(const ResistanceSounds& sounds) { resistanceSounds_ = sounds; }
     /// And a pet's (0x00805610): its cooldown and power lines speak too, in
     /// the player's voice.
     void sayPetCastFailure(uint32_t spellId, uint8_t result) const;
@@ -963,6 +968,7 @@ private:
     /// The last failure 0x00808200 reported, held three seconds. Mutable:
     /// the const reach test reports through it.
     mutable cast_failure::RepeatHold failureHold_;
+    mutable std::optional<ResistanceSounds> resistanceSounds_;
     /// 0x00af5274: the casts whose missile still flies.
     spell_missiles::InFlightList missilesInFlight_;
     /// 0x0080e1b0: a cast whose spell has a missile Speed joins the list.

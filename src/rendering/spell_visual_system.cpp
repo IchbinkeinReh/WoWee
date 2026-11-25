@@ -810,6 +810,12 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     return playKitModels(kit, type, renderInstanceId, position, place, castTimeMs);
 }
 
+void SpellVisualSystem::playSoundEntry(uint32_t soundId, const glm::vec3& worldPosition) {
+    KitRecord kit;
+    kit.soundId = soundId;
+    playKitSound(kit, spell_kit::KitType::Cast, 0, worldPosition, /*holds=*/false);
+}
+
 uint32_t SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
                                          const glm::vec3& position, bool holds) {
     const LoadedSound* sound = kit.soundId ? soundEntry(kit.soundId) : nullptr;

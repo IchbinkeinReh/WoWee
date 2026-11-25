@@ -72,6 +72,8 @@ public:
     /// A SpellVisualKit by its id, as SMSG_PLAY_SPELL_VISUAL (0x1F3, kit
     /// type 0 through 0x00800610) and SMSG_PLAY_SPELL_IMPACT (0x1F7, type 1
     /// through 0x008006c0) play one on a unit.
+    /// A SoundEntries row's sound once at a place, as a kit's without a unit.
+    void playSoundEntry(uint32_t soundId, const glm::vec3& worldPosition);
     void playKit(uint32_t kitId, spell_kit::KitType type, const glm::vec3& worldPosition, uint32_t renderInstanceId);
     /// One SpellVisualEffectName model on a unit's attachment, played once as
     /// a kit's impact model is (0x006f94c0 with 0x00744870) - a blood spurt.

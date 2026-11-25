@@ -387,6 +387,30 @@ constexpr uint8_t kInterrupted = 0x28, kInProgress = 0x69;
 
 }  // namespace
 
+// 0x00808200, 0x00809c70 -> 0x004cff30
+TEST_CASE("a failed cast fizzles where the caster is", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    s.handler().spellNameCacheRef()[kFireball].schoolMask = 0x4;
+    s.handler().getSpellHandler()->setResistanceSounds({0u, 1428u, 1424u, 1426u, 1425u, 1427u, 1428u});
+    std::vector<std::pair<uint32_t, uint64_t>> heard;
+    s.handler().setSoundAtUnitCallback([&](uint32_t sound, uint64_t unit) { heard.emplace_back(sound, unit); });
+    const std::vector<std::pair<uint32_t, uint64_t>> own{{1424u, Session::kPlayerGuid}};
+    const auto take = [&] { return std::exchange(heard, {}); };
+    s.receive(castFailed(5, kFireball, kInProgress));
+    CHECK(take() == own);
+    s.receive(castFailed(6, kFireball, kInProgress));  // said once, but fizzled again
+    CHECK(take() == own);
+    s.receive(castFailed(7, kFireball, 0x1b));
+    CHECK(take().empty());
+    s.receive(spellFailure(Opcode::SMSG_SPELL_FAILURE, 4, kFireball, kInterrupted));
+    CHECK(take() == own);
+    s.receive(spellFailure(Opcode::SMSG_SPELL_FAILED_OTHER, 4, kFireball, kInterrupted));
+    CHECK(take().empty());
+    s.handler().getSpellHandler()->reportLocalCastFailure(kFireball, 0x0c);
+    CHECK(take() == own);
+}
+
 // The fourth argument was the spell's id, not the count the cast bar holds it
 // against, and an interrupted cast's bar filled up and flashed.
 TEST_CASE("a cast's events carry its count", "[replay][playtest]") {

@@ -1420,12 +1420,30 @@ void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result) const {
     owner_.playGameErrorSound(cast_failure::gameError(result, spellRowOf(owner_, spellId)));
 }
 
+void SpellHandler::playFizzle(uint32_t spellId, uint64_t unitGuid) const {
+    const auto spell = owner_.spellNameCacheRef().find(spellId);
+    if (spell == owner_.spellNameCacheRef().end()) return;
+    if (!resistanceSounds_) {
+        resistanceSounds_.emplace();
+        auto* am = owner_.services().assetManager;
+        const auto dbc = am ? am->loadDBCOptional("Resistances.dbc") : nullptr;
+        for (uint32_t row = 0; dbc && dbc->getFieldCount() > 2 && row < dbc->getRecordCount(); ++row) {
+            const uint32_t school = dbc->getUInt32(row, 0);
+            if (school < resistanceSounds_->size()) (*resistanceSounds_)[school] = dbc->getUInt32(row, 2);
+        }
+    }
+    if (const uint32_t sound = fizzleSound(spell->second.schoolMask, *resistanceSounds_); sound != 0)
+        owner_.playSoundAtUnit(sound, unitGuid);
+}
+
 void SpellHandler::sayPetCastFailure(uint32_t spellId, uint8_t result) const {
     owner_.playGameErrorSound(cast_failure::petGameError(result, spellRowOf(owner_, spellId)));
 }
 
 void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const {
-    // 0x00808200: SPELL_FAILED_NEED_AMMO (0x34) triggers tutorial 0x2c.
+    // 0x00808200: its fizzle, however often; SPELL_FAILED_NEED_AMMO (0x34)
+    // triggers tutorial 0x2c.
+    if (castFailureFizzles(result)) playFizzle(spellId, owner_.getPlayerGuid());
     if (result == 0x34) owner_.triggerTutorial(0x2c);
     // OsGetAsyncTimeMs's milliseconds (0x0086ae20); only their differences count.
     const auto nowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -4698,6 +4716,8 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // told (0x00808200 -> 0x00807560(1)).
     if (owner_.isAutoRepeating() && data.result != 0x1b && data.spellId == owner_.autoRepeatSpellId())
         owner_.stopAutoRepeat(true);
+
+    if (castFailureFizzles(data.result)) playFizzle(data.spellId, owner_.getPlayerGuid());  // 0x00808200
 
     // Show failure reason
     int powerType = -1;
@@ -8536,6 +8556,7 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
     const uint8_t rawFailReason = packet.readUInt8();
     const uint64_t me = owner_.getPlayerGuid();
     const uint64_t caster = failGuid != 0 ? failGuid : me;
+    if (owner_.getEntityManager().getEntity(caster)) playFizzle(failSpellId, caster);  // 0x00809c70
     // 0x00809c70: the player's auto-repeat bit goes for results 0x34..0x36
     // (0x00807560).
     if (!isClassic) {
