@@ -55,6 +55,10 @@ inline std::vector<EquipmentItem> wornByPlayer(bool known, const std::array<uint
         for (size_t slot = 0; slot < displayIds.size(); ++slot) {
             if (displayIds[slot] == 0) continue;
             worn.push_back({.displayModel = displayIds[slot], .inventoryType = inventoryTypes[slot], .enchantment = 0u});
+            // A weapon in each hand is two weapons: by its kind alone the one
+            // in the off hand was a second main hand, and not shown.
+            if (slot == 15) worn.back().hand = EquipmentItem::Hand::Main;
+            if (slot == 16) worn.back().hand = EquipmentItem::Hand::Off;
         }
         return worn;
     }
@@ -64,6 +68,25 @@ inline std::vector<EquipmentItem> wornByPlayer(bool known, const std::array<uint
             worn[static_cast<size_t>(slot)] = EquipmentItem{};
     }
     return worn;
+}
+
+/// The same by equipment slot, for a dressing room (0x005989e0).
+inline std::array<EquipmentItem, 19> wornBySlot(bool known, const std::array<uint32_t, 19>& displayIds,
+                                                const std::array<uint8_t, 19>& inventoryTypes,
+                                                const std::vector<EquipmentItem>& listed, uint32_t playerFlags) {
+    std::array<EquipmentItem, 19> out{};
+    const std::vector<EquipmentItem> worn =
+        known ? std::vector<EquipmentItem>{}
+              : wornByPlayer(false, displayIds, inventoryTypes, listed, playerFlags);
+    for (size_t slot = 0; slot < out.size(); ++slot) {
+        if (known) {
+            out[slot].displayModel = displayIds[slot];
+            out[slot].inventoryType = inventoryTypes[slot];
+        } else if (slot < worn.size()) {
+            out[slot] = worn[slot];
+        }
+    }
+    return out;
 }
 
 }  // namespace wowee::game::player_display

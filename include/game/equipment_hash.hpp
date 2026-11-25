@@ -10,8 +10,9 @@
 /// leave the other cache holding a picture of the previous outfit with nothing
 /// to say so.
 ///
-/// displayModel, inventoryType and enchantment are the three: the model worn,
-/// the slot it occupies, and the visual the enchant puts on it. Anything else
+/// displayModel, inventoryType, enchantment and hand are the four: the model
+/// worn, the slot it occupies, the visual the enchant puts on it and the hand
+/// a weapon is in. Anything else
 /// on an equipped item - its id, its durability, its charges - changes nothing
 /// a viewer can see, so it is deliberately not mixed in and a cache does not
 /// redraw for it.
@@ -43,6 +44,7 @@ inline uint64_t hashEquipmentAppearance(const std::vector<EquipmentItem>& equipm
         mix32(item.displayModel);
         mix8(item.inventoryType);
         mix32(item.enchantment);
+        mix8(static_cast<uint8_t>(item.hand));
     }
     return h;
 }

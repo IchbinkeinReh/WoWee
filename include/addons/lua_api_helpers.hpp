@@ -1226,6 +1226,8 @@ inline const game::ItemSlot* containerItemSlot(const game::Inventory& inv,
 /// Defined in lua_inventory_api.cpp: SetCreature's creature on its model
 /// frame, once its template is known (0x00597960).
 void showAskedCreature(ui::Widget& w, game::GameHandler* gh);
+/// What a dressing room was asked to show and did not know, once it does.
+void tryOnAskedItems(ui::Widget& w, game::GameHandler* gh);
 
 /// One slot named by an *inventory* slot id, the interface's 1-based numbering.
 ///

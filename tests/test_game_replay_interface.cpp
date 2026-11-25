@@ -4,9 +4,14 @@
 
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_engine.hpp"
+#include "core/preview_dressing.hpp"
+#include "game/dressing_room.hpp"
+#include "game/player_display_flags.hpp"
 #include "game_replay.hpp"
 #include "ui/widget_tree.hpp"
 
+#include <algorithm>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -277,4 +282,132 @@ TEST_CASE("the socketing window describes the item itself", "[replay][interface]
     CHECK(all.find("Light-Touched Breastplate of the Gorilla|") == 0);
     CHECK(all.find("Soulbound|") != std::string::npos);
     CHECK(all.find("120") != std::string::npos);
+}
+
+// P61: 0x005980d0 goes by the slot an item takes, not by its kind.
+TEST_CASE("the dressing room puts an item where it goes", "[replay][interface]") {
+    namespace room = wowee::game::dressing_room;
+    using Hand = wowee::game::EquipmentItem::Hand;
+    std::array<room::Item, 19> own{};
+    own[4] = {.itemId = 50, .display = 504, .inventoryType = 20};
+    own[15] = {.itemId = 51, .display = 515, .inventoryType = 21};
+    own[16] = {.itemId = 52, .display = 516, .inventoryType = 23};
+    own[17] = {.itemId = 53, .display = 517, .inventoryType = 28};
+    bool dual = false;
+    std::vector<uint32_t> grips;
+    const room::Hands hands{.dualWield = [&] { return dual; },
+                            .fitsOffHand = [&](uint32_t id) {
+                                return std::find(grips.begin(), grips.end(), id) != grips.end();
+                            }};
+    using Tried = std::vector<room::Item>;
+    const auto figure = [&](const Tried& tried, bool undressed = false) {
+        std::string out;
+        for (const auto& it : room::dressed(own, undressed, tried, hands)) {
+            out += (it.hand == Hand::Main ? "main " : it.hand == Hand::Off ? "off " : "") +
+                   std::to_string(it.displayModel) + ";";
+        }
+        return out;
+    };
+    const room::Item chest{.itemId = 1, .display = 1, .inventoryType = 5};
+    const room::Item claymore{.itemId = 2, .display = 2, .inventoryType = 17};
+    const room::Item greataxe{.itemId = 3, .display = 3, .inventoryType = 17};
+    const room::Item sword{.itemId = 4, .display = 4, .inventoryType = 13};
+    const room::Item axe{.itemId = 5, .display = 5, .inventoryType = 13};
+    const room::Item shield{.itemId = 6, .display = 6, .inventoryType = 14};
+    const room::Item gun{.itemId = 7, .display = 7, .inventoryType = 26};
+    const room::Item bow{.itemId = 8, .display = 8, .inventoryType = 15};
+    // The ranged one is left out (0x005989e0).
+    CHECK(figure({}) == "504;main 515;off 516;");
+    CHECK(figure({chest}) == "1;main 515;off 516;");
+    // Two hands empty the other; a shield after it empties the two-hander's.
+    CHECK(figure({claymore}) == "504;main 2;");
+    CHECK(figure({claymore, shield}) == "504;off 6;");
+    CHECK(figure({claymore, shield, sword}) == "504;main 4;off 6;");
+    CHECK(figure({shield}) == "504;main 515;off 6;");
+    // A gun is held in the right hand, a bow in the left, each alone.
+    CHECK(figure({gun}) == "504;main 7;");
+    CHECK(figure({bow}) == "504;off 8;");
+    // Without the second weapon both go in the main hand, with it in turn.
+    CHECK(figure({sword, axe}) == "504;main 5;off 516;");
+    dual = true;
+    CHECK(figure({sword}) == "504;main 4;off 516;");
+    CHECK(figure({sword, axe}) == "504;main 4;off 5;");
+    CHECK(figure({sword, axe, sword}) == "504;main 4;off 5;");
+    CHECK(figure({sword, axe, sword, sword}) == "504;main 4;off 4;");
+    // Titan's grip holds two.
+    grips = {2, 3};
+    CHECK(figure({claymore, greataxe}) == "504;main 2;off 3;");
+    CHECK(figure({claymore, shield}) == "504;main 2;off 6;");
+    // Undressed, it is bare under what comes after.
+    CHECK(figure({sword}, true) == "main 4;");
+    // What the model shows of them: each in its hand, not one of each kind.
+    std::vector<wowee::core::PreviewItem> both = {
+        {.display = 4, .inventoryType = 13, .hand = wowee::core::PreviewItem::Hand::Main},
+        {.display = 5, .inventoryType = 13, .hand = wowee::core::PreviewItem::Hand::Off}};
+    const auto held = wowee::core::wornDress(both).held;
+    REQUIRE(held.size() == 2);
+    CHECK(held[0].point == wowee::core::attachment::kHandRight);
+    CHECK(held[1].point == wowee::core::attachment::kHandLeft);
+    // The same of a character window's, which knows the slots.
+    std::array<uint32_t, 19> ids{};
+    std::array<uint8_t, 19> types{};
+    ids[15] = 4;
+    ids[16] = 5;
+    types[15] = types[16] = 13;
+    const auto worn = wowee::game::player_display::wornByPlayer(true, ids, types, {}, 0);
+    REQUIRE(worn.size() == 2);
+    CHECK(worn[0].hand == Hand::Main);
+    CHECK(worn[1].hand == Hand::Off);
+
+    // 0x007082b0: two hands in one only with the grip that names the kind.
+    const auto grip = [](uint32_t c, uint32_t sub) { return c == 2 && sub == 8; };
+    CHECK(room::itemFitsOffHand(2, 8, 17, 0, grip));
+    CHECK_FALSE(room::itemFitsOffHand(2, 10, 17, 0, grip));
+    CHECK_FALSE(room::itemFitsOffHand(2, 8, 17, 0x40000000u, grip));
+    CHECK(room::itemFitsOffHand(4, 6, 14, 0, grip));
+    CHECK_FALSE(room::itemFitsOffHand(2, 2, 15, 0, grip));
+}
+
+// P61: a recipe is what it makes, and an item not known yet is tried on as
+// the answer comes (0x005980b0).
+TEST_CASE("trying on a recipe, a stranger and a ring", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    const auto know = [&](uint32_t id, uint32_t display, uint32_t type) -> auto& {
+        auto& item = gh.itemInfoCacheRef()[id];
+        item.entry = id;
+        item.displayInfoId = display;
+        item.inventoryType = type;
+        return item;
+    };
+    ui.run("room = CreateFrame('DressUpModel', 'PlayDressUp', UIParent)");
+    auto* w = ui.engine.widgets().findByName("PlayDressUp");
+    REQUIRE(w);
+    know(700, 70, 5);
+    gh.spellNameCacheRef()[9001].effectIds[0] = 36;
+    gh.spellNameCacheRef()[9002].effectIds[0] = 24;
+    gh.spellNameCacheRef()[9002].effectItemType0 = 700;
+    auto& recipe = know(701, 71, 0);
+    recipe.spells[0].spellId = 9001;
+    recipe.spells[1].spellId = 9002;
+    recipe.spells[1].spellTrigger = 6;
+    ui.run("room:TryOn(701)");
+    REQUIRE(w->tryOnItems.size() == 1);
+    CHECK(w->tryOnItems[0].displayInfoId == 70);
+    know(702, 72, 11);
+    ui.run("room:TryOn(702)");
+    CHECK(w->tryOnItems.size() == 1);
+    ui.run("room:TryOn('item:703:0:0')");
+    CHECK(w->tryOnItems.size() == 1);
+    wowee::addons::tryOnAskedItems(*w, &gh);
+    CHECK(w->tryOnItems.size() == 1);
+    know(703, 73, 17);
+    wowee::addons::tryOnAskedItems(*w, &gh);
+    REQUIRE(w->tryOnItems.size() == 2);
+    CHECK(w->tryOnItems[1].displayInfoId == 73);
+    CHECK(w->tryOnItems[1].itemId == 703);
+    wowee::addons::tryOnAskedItems(*w, &gh);
+    CHECK(w->tryOnItems.size() == 2);
 }

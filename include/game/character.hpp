@@ -87,6 +87,9 @@ struct EquipmentItem {
     uint32_t displayModel;      // Display model ID
     uint8_t inventoryType;      // Inventory slot type
     uint32_t enchantment;       // Enchantment/effect ID
+    /// The hand it is in, where that is known; by its kind where it is not.
+    enum class Hand : uint8_t { ByKind, Main, Off };
+    Hand hand = Hand::ByKind;
 
     [[nodiscard]] bool isEmpty() const { return displayModel == 0; }
 };

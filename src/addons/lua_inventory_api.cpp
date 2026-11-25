@@ -5,6 +5,7 @@
 #include "game/item_text.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/dressing_room.hpp"
 #include "game/text_tokens.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
@@ -880,14 +881,44 @@ static int lua_GetItemIcon(lua_State* L) {
 //
 // Armour and weapons only: everything else has no display slot, and the frame
 // opens an empty preview for anything that answers yes.
+/// 0x005980d0: a recipe is what it makes, and one not known yet waits for the
+/// server's answer (0x005980b0).
+static void tryOnItem(ui::Widget& w, game::GameHandler& gh, uint32_t itemId, int depth = 0) {
+    namespace room = game::dressing_room;
+    if (itemId == 0 || depth > 4) return;
+    const auto* info = gh.getItemInfo(itemId);
+    if (!info) {
+        if (std::find(w.tryOnAsked.begin(), w.tryOnAsked.end(), itemId) == w.tryOnAsked.end())
+            w.tryOnAsked.push_back(itemId);
+        gh.ensureItemInfo(itemId);
+        return;
+    }
+    if (info->displayInfoId == 0) return;
+    if (const uint32_t made = gh.itemMadeByRecipe(*info)) {
+        tryOnItem(w, gh, made, depth + 1);
+        return;
+    }
+    const uint8_t type = static_cast<uint8_t>(info->inventoryType);
+    switch (room::tryOnKind(type)) {
+        case room::TryOn::Worn: w.tryOnItems.push_back({info->displayInfoId, type, itemId}); break;
+        case room::TryOn::NothingToShow: break;
+        case room::TryOn::NotEquippable: gh.sayGameError(game::server_notice::kNotEquippable); break;
+    }
+}
+
+void tryOnAskedItems(ui::Widget& w, game::GameHandler* gh) {
+    if (!gh || w.tryOnAsked.empty()) return;
+    const std::vector<uint32_t> asked = std::exchange(w.tryOnAsked, {});
+    for (const uint32_t itemId : asked) tryOnItem(w, *gh, itemId);
+}
+
 /// __WoweeTryOn(frame, itemLinkOrId) - put an item on a model frame.
 ///
 /// DressUpModel:TryOn(link) is the "try on" every item link and auction row
 /// offers. The list belongs to the frame rather than to the application: a
 /// second dressing room would have its own, and closing one is what empties it.
 ///
-/// An item already on the same inventory slot is replaced, because trying on
-/// two chests means wearing the second.
+/// What it takes the place of is the figure's to say (game/dressing_room.hpp).
 static int lua_WoweeTryOn(lua_State* L) {
     auto* gh = getGameHandler(L);
     auto* tree = getWidgetTree(L);
@@ -947,17 +978,7 @@ static int lua_WoweeTryOn(lua_State* L) {
         gh->sayGameError(game::server_notice::kNotEquippable);
         return 0;
     }
-    const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
-    if (!info || info->displayInfoId == 0) return 0;
-
-    const uint8_t slot = static_cast<uint8_t>(info->inventoryType);
-    for (auto& worn : w->tryOnItems) {
-        if (worn.inventoryType == slot) {
-            worn.displayInfoId = info->displayInfoId;
-            return 0;
-        }
-    }
-    w->tryOnItems.push_back({info->displayInfoId, slot});
+    tryOnItem(*w, *gh, itemId);
     return 0;
 }
 

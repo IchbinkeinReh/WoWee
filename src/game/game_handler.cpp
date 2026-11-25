@@ -8,6 +8,7 @@
 
 #include "game/item_text.hpp"
 #include "game/difficulty_change.hpp"
+#include "game/dressing_room.hpp"
 #include "game/achievement_criteria.hpp"
 #include "game/game_utils.hpp"
 #include "rendering/world_map/map_resolver.hpp"
@@ -6271,28 +6272,65 @@ bool GameHandler::playerCanDualWield() const {
     return false;
 }
 
+namespace {
+constexpr uint32_t kEffectLearnSpell = 36;
+
+/// The spell an item's teaching spell teaches: the effect's trigger spell,
+/// else the item's spell with the learn trigger (6).
+uint32_t spellTaughtBy(const GameHandler::SpellNameEntry& lesson, const ItemQueryResponseData& item) {
+    constexpr uint32_t kItemSpellTriggerLearn = 6;
+    if (lesson.effectTriggerSpell[0] != 0) return lesson.effectTriggerSpell[0];
+    for (const auto& s : item.spells) {
+        if (s.spellTrigger == kItemSpellTriggerLearn) return s.spellId;
+    }
+    return 0;
+}
+}  // namespace
+
+bool GameHandler::itemFitsOffHand(uint32_t itemId) const {
+    const auto* item = itemId != 0 ? getItemInfo(itemId) : nullptr;
+    if (!item) return false;
+    return dressing_room::itemFitsOffHand(
+        item->itemClass, item->subClass, static_cast<uint8_t>(item->inventoryType), item->itemFlags,
+        [this](uint32_t itemClass, uint32_t subClass) {
+            loadSpellNameCache();
+            for (const uint32_t spellId : getKnownSpells()) {
+                const auto it = spellNameCache_.find(spellId);
+                if (it == spellNameCache_.end()) continue;
+                const auto& grip = it->second;
+                if (grip.effectIds[0] == SpellEffect::TITAN_GRIP && (grip.attr & 0x20u) == 0 &&
+                    grip.equippedItemClass == static_cast<int32_t>(itemClass) &&
+                    (grip.equippedItemSubClassMask & (1u << (subClass & 31u))) != 0)
+                    return true;
+            }
+            return false;
+        });
+}
+
+uint32_t GameHandler::itemMadeByRecipe(const ItemQueryResponseData& item) const {
+    constexpr uint32_t kEffectCreateItem = 24;
+    if (item.inventoryType != 0) return 0;
+    loadSpellNameCache();
+    for (const auto& s : item.spells) {
+        const auto lesson = s.spellId != 0 ? spellNameCache_.find(s.spellId) : spellNameCache_.end();
+        if (lesson == spellNameCache_.end() || lesson->second.effectIds[0] != kEffectLearnSpell) continue;
+        const auto taught = spellNameCache_.find(spellTaughtBy(lesson->second, item));
+        if (taught != spellNameCache_.end() && taught->second.effectIds[0] == kEffectCreateItem)
+            return taught->second.effectItemType0;
+    }
+    return 0;
+}
+
 bool GameHandler::itemSpellAlreadyKnown(const ItemQueryResponseData& item) const {
     // 0x006277f0, after the skill line: the item's first spell, when it is one
     // that teaches (SPELL_EFFECT_LEARN_SPELL, 36, as its first effect).
-    constexpr uint32_t kEffectLearnSpell = 36;
-    constexpr uint32_t kItemSpellTriggerLearn = 6;
     constexpr uint32_t kTargetPet = 5;
     const uint32_t first = item.spells[0].spellId;
     if (first == 0) return false;
     loadSpellNameCache();
     const auto it = spellNameCache_.find(first);
     if (it == spellNameCache_.end() || it->second.effectIds[0] != kEffectLearnSpell) return false;
-    // The spell taught: the effect's trigger spell, else the item's spell with
-    // the learn trigger (6).
-    uint32_t taught = it->second.effectTriggerSpell[0];
-    if (taught == 0) {
-        for (const auto& s : item.spells) {
-            if (s.spellTrigger == kItemSpellTriggerLearn) {
-                taught = s.spellId;
-                break;
-            }
-        }
-    }
+    const uint32_t taught = spellTaughtBy(it->second, item);
     if (taught == 0) return false;
     // Aimed at the pet, the pet's spells are asked; there being no pet, no line.
     if (it->second.implicitTargetsA[0] == kTargetPet || it->second.implicitTargetsB[0] == kTargetPet) {

@@ -1823,6 +1823,12 @@ public:
     /// the item's learn-trigger spell, known by the pet when the effect is
     /// aimed at the pet (implicit target 5) and by the player otherwise.
     [[nodiscard]] bool itemSpellAlreadyKnown(const ItemQueryResponseData& item) const;
+    /// The item a recipe's lesson makes, which a dressing room shows for it
+    /// (0x005980d0), or 0: something never worn, the first of whose spells
+    /// that teaches (Effect[0] 36) teaches one that creates (Effect[0] 24).
+    [[nodiscard]] uint32_t itemMadeByRecipe(const ItemQueryResponseData& item) const;
+    /// 0x007082b0 with the off hand's slot (game/dressing_room.hpp).
+    [[nodiscard]] bool itemFitsOffHand(uint32_t itemId) const;
 
     // Minimap pings from party members
     struct MinimapPing {

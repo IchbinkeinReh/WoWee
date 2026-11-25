@@ -15,6 +15,7 @@
 #include "game/mover_keys.hpp"
 #include "game/game_utils.hpp"
 #include "game/mover_mode.hpp"
+#include "game/dressing_room.hpp"
 #include "game/player_display_flags.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/vehicle_camera.hpp"
@@ -7526,6 +7527,7 @@ void Application::render() {
                         *room.widgetId = dressUp ? dressUp->id : 0;
                     }
                     bool shown = false;
+                    if (dressUp) addons::tryOnAskedItems(*dressUp, gameHandler.get());
                     if (dressUp && dressUp->visible) {
                         const game::Character* self = nullptr;
                         for (const auto& c : gameHandler->getCharacters()) {
@@ -7533,9 +7535,7 @@ void Application::render() {
                         }
                         if (self) {
                             // What they are wearing, with a tried-on piece
-                            // standing in for the slot it belongs to. Replaced
-                            // rather than appended: wearing two chests is
-                            // wearing the second.
+                            // standing in for the slot it belongs to.
                             //
                             // Now rather than at login, and from the same place
                             // the portrait beside it reads: the character list
@@ -7547,26 +7547,36 @@ void Application::render() {
                             std::array<uint8_t, 19> invTypes{};
                             const bool known =
                                 gameHandler->getOtherPlayerEquipment(self->guid, displayIds, invTypes);
-                            std::vector<game::EquipmentItem> worn = game::player_display::wornByPlayer(
-                                known, displayIds, invTypes, self->equipment,
-                                game::player_display::hideBits(gameHandler->isHelmVisible(),
-                                                               gameHandler->isCloakVisible()));
-                            // Undress empties the figure; what is tried on
-                            // after goes onto it bare.
-                            if (dressUp->undressed) worn.clear();
-                            for (const auto& tried : dressUp->tryOnItems) {
-                                bool replaced = false;
-                                for (auto& item : worn) {
-                                    if (item.inventoryType != tried.inventoryType) continue;
-                                    item.displayModel = tried.displayInfoId;
-                                    replaced = true;
-                                    break;
+                            const uint32_t hidden = game::player_display::hideBits(
+                                gameHandler->isHelmVisible(), gameHandler->isCloakVisible());
+                            std::vector<game::EquipmentItem> worn;
+                            if (room.model == &tabardModel_) {
+                                worn = game::player_display::wornByPlayer(known, displayIds, invTypes,
+                                                                          self->equipment, hidden);
+                            } else {
+                                // Dressed slot by slot (0x005989e0), and what
+                                // is tried on put where it belongs (0x005980d0).
+                                const auto own = game::player_display::wornBySlot(known, displayIds, invTypes,
+                                                                                  self->equipment, hidden);
+                                std::array<game::dressing_room::Item, 19> bySlot{};
+                                for (size_t slot = 0; slot < bySlot.size(); ++slot) {
+                                    const auto& item = gameHandler->getInventory()
+                                                           .getEquipSlot(static_cast<game::EquipSlot>(slot)).item;
+                                    bySlot[slot] = {.itemId = item.itemId,
+                                                    .display = own[slot].displayModel,
+                                                    .inventoryType = own[slot].inventoryType};
                                 }
-                                if (!replaced) {
-                                    worn.push_back({.displayModel = tried.displayInfoId,
-                                                    .inventoryType = tried.inventoryType,
-                                                    .enchantment = 0u});
+                                std::vector<game::dressing_room::Item> tried;
+                                for (const auto& t : dressUp->tryOnItems) {
+                                    tried.push_back({.itemId = t.itemId, .display = t.displayInfoId,
+                                                     .inventoryType = t.inventoryType});
                                 }
+                                worn = game::dressing_room::dressed(
+                                    bySlot, dressUp->undressed, tried,
+                                    {.dualWield = [this] { return gameHandler->playerCanDualWield(); },
+                                     .fitsOffHand = [this](uint32_t itemId) {
+                                         return gameHandler->itemFitsOffHand(itemId);
+                                     }});
                             }
                             // In the body it is shown in: SetUnit duplicates
                             // the unit's model (0x005975e0).

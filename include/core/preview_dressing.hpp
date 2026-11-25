@@ -15,6 +15,9 @@ struct PreviewItem {
     uint32_t display = 0;
     uint8_t inventoryType = 0;
     uint32_t enchant = 0;
+    /// The hand it is in, where that is known.
+    enum class Hand : uint8_t { ByKind, Main, Off };
+    Hand hand = Hand::ByKind;
 };
 
 struct PreviewWeapon {
@@ -39,6 +42,45 @@ constexpr uint8_t kClassHunter = 3;
 /// & 0x400 and & 0x800).
 constexpr uint32_t kCharacterFlagHideHelm = 0x400;
 constexpr uint32_t kCharacterFlagHideCloak = 0x800;
+
+/// A player as a window shows it: what is in the main hand in the right one
+/// and what is in the off hand in the left - a shield at the shield point.
+/// Where the hand is not said, the first of a kind that goes there.
+inline PreviewDress wornDress(const std::vector<PreviewItem>& items) {
+    PreviewDress d;
+    bool haveMain = false;
+    bool haveOff = false;
+    for (const PreviewItem& it : items) {
+        if (it.display == 0) continue;
+        if (it.inventoryType == 1) {
+            if (d.head == 0) d.head = it.display;
+            continue;
+        }
+        PreviewItem::Hand hand = it.hand;
+        switch (it.inventoryType) {
+            case 13: case 15: case 17: case 21: case 25: case 26:
+                if (hand == PreviewItem::Hand::ByKind) hand = PreviewItem::Hand::Main;
+                break;
+            case 14: case 22: case 23:
+                if (hand == PreviewItem::Hand::ByKind) hand = PreviewItem::Hand::Off;
+                break;
+            default:
+                d.worn.push_back(it);
+                continue;
+        }
+        bool& have = hand == PreviewItem::Hand::Main ? haveMain : haveOff;
+        if (have) continue;
+        have = true;
+        const bool shield = it.inventoryType == 14;
+        d.held.push_back({.display = it.display,
+                          .enchant = it.enchant,
+                          .point = hand == PreviewItem::Hand::Main ? attachment::kHandRight
+                                   : shield                        ? attachment::kShield
+                                                                   : attachment::kHandLeft,
+                          .shield = shield});
+    }
+    return d;
+}
 
 /// 0x004e3cd0, the select screen: the character's 23 enumerated slots, by
 /// slot. The head (0) unless its helm is hidden, the cloak (14) unless
