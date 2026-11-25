@@ -129,6 +129,20 @@ inline std::string questObjectiveLine(const std::string& objectiveText, const st
     return chat_channels::luaFormat(text("QUEST_MONSTERS_KILLED", "%s slain: %d/%d"), {shown, counts[0], counts[1]});
 }
 
+/// The on-screen line of one kill or use credit (0x006d8030,
+/// SMSG_QUESTUPDATE_ADD_KILL): the quest's own ObjectiveText for that slot where
+/// it has one, in ERR_QUEST_ADD_FOUND_SII; otherwise a game object's name in that
+/// and a creature's in ERR_QUEST_ADD_KILL_SII. None for one not known by name.
+inline std::string questCreditLine(const std::string& objectiveText, const std::string& name, bool isObject,
+                                   uint32_t count, uint32_t required, const QuestTextSource& text) {
+    const std::string& shown = objectiveText.empty() ? name : objectiveText;
+    if (shown.empty()) return {};
+    const std::vector<std::string> args = {shown, std::to_string(count), std::to_string(required)};
+    if (isObject || !objectiveText.empty())
+        return chat_channels::luaFormat(text("ERR_QUEST_ADD_FOUND_SII", "%1$s: %2$d/%3$d"), args);
+    return chat_channels::luaFormat(text("ERR_QUEST_ADD_KILL_SII", "%1$s slain: %2$d/%3$d"), args);
+}
+
 /// An item objective's line: QUEST_ITEMS_NEEDED with the count held, never
 /// more than the count needed (0x005e1460).
 inline std::string questItemObjectiveLine(const std::string& name, uint32_t held, uint32_t required,

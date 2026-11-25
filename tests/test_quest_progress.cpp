@@ -125,3 +125,15 @@ TEST_CASE("Items, players and reputation objectives", "[quest][objective]") {
     REQUIRE(wowee::game::questFactionLine("Kirin Tor", "Freundlich", "Wohlwollend", germanText) ==
             "Kirin Tor: Freundlich / Wohlwollend");
 }
+
+// 0x006d8030
+TEST_CASE("a credit's line", "[quest][objective]") {
+    using wowee::game::questCreditLine;
+    REQUIRE(questCreditLine("", "Nightbane Worgen", false, 12, 15, englishText) == "Nightbane Worgen slain: 12/15");
+    REQUIRE(questCreditLine("", "Bundle of Wood", true, 1, 8, englishText) == "Bundle of Wood: 1/8");
+    REQUIRE(questCreditLine("Verseuchte Brut befreit", "[DND] Bunny", false, 2, 6, englishText) ==
+            "Verseuchte Brut befreit: 2/6");
+    REQUIRE(questCreditLine("Verseuchte Brut befreit", "", false, 2, 6, englishText) == "Verseuchte Brut befreit: 2/6");
+    REQUIRE(questCreditLine("", "", false, 2, 6, englishText).empty());
+    REQUIRE(questCreditLine("", "", true, 2, 6, englishText).empty());
+}

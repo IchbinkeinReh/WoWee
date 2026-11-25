@@ -49,27 +49,23 @@ std::unordered_map<uint32_t, std::string>& questEndTexts() {
     return texts;
 }
 
-/// The on-screen line for one kill or use credit, as 0x006d8030 words it for
-/// SMSG_QUESTUPDATE_ADD_KILL: a game object (the entry's high bit) by its name
-/// in ERR_QUEST_ADD_FOUND_SII, a creature by its name in ERR_QUEST_ADD_KILL_SII.
-/// Empty when the name is not cached - the original prints nothing then.
-///
-/// The original first prefers the quest's own ObjectiveText for that entry
-/// (cache +0x1c94), in ERR_QUEST_ADD_FOUND_SII; this client does not keep
-/// those four strings, so such a quest shows the creature's name instead.
-std::string questKillCreditText(const GameHandler& owner, uint32_t rawEntry,
+/// The on-screen line for one kill or use credit (questCreditLine): the slot's
+/// text is that of the objective the entry is, a game object's with its high bit.
+std::string questKillCreditText(const GameHandler& owner, const QuestHandler::QuestLogEntry& quest, uint32_t rawEntry,
                                 uint32_t count, uint32_t required) {
+    const bool isObject = (rawEntry & 0x80000000u) != 0;
     const uint32_t entry = rawEntry & 0x7FFFFFFFu;
-    if ((rawEntry & 0x80000000u) != 0) {
-        const auto* info = owner.getCachedGameObjectInfo(entry);
-        if (!info || info->name.empty()) return {};
-        return interfaceFormat("ERR_QUEST_ADD_FOUND_SII", "%1$s: %2$d/%3$d",
-                               {info->name, std::to_string(count), std::to_string(required)});
+    const int32_t wanted = isObject ? -static_cast<int32_t>(entry) : static_cast<int32_t>(entry);
+    std::string objectiveText;
+    for (size_t i = 0; i < quest.killObjectives.size() && objectiveText.empty(); ++i)
+        if (quest.killObjectives[i].npcOrGoId == wanted) objectiveText = quest.objectiveTexts[i];
+    std::string name;
+    if (isObject) {
+        if (const auto* info = owner.getCachedGameObjectInfo(entry)) name = info->name;
+    } else {
+        name = owner.getCachedCreatureName(entry);
     }
-    const std::string name = owner.getCachedCreatureName(entry);
-    if (name.empty()) return {};
-    return interfaceFormat("ERR_QUEST_ADD_KILL_SII", "%1$s slain: %2$d/%3$d",
-                           {name, std::to_string(count), std::to_string(required)});
+    return questCreditLine(objectiveText, name, isObject, count, required, &interfaceString);
 }
 
 /// The on-screen line SMSG_QUESTUPDATE_COMPLETE gives (0x006d8030, case
@@ -775,7 +771,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     // On screen in yellow, as UI_INFO_MESSAGE (0x006d8030,
                     // case 0x199). This was an English chat line, "Title:
                     // Name 3/10".
-                    const std::string progressMsg = questKillCreditText(owner_, rawEntry, count, reqCount);
+                    // Nothing for one that has failed (0x005dee60).
+                    if (quest.failed) break;
+                    const std::string progressMsg = questKillCreditText(owner_, quest, rawEntry, count, reqCount);
                     if (!progressMsg.empty()) owner_.addUIInfoMessage(progressMsg);
 
                     if (owner_.questProgressCallbackRef()) {
@@ -835,7 +833,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     // A kill credit by its layout, so worded as one (see
                     // SMSG_QUESTUPDATE_ADD_KILL). This was "Title: 3/10" in
                     // chat.
-                    const std::string progressMsg = questKillCreditText(owner_, rawEntry, count, reqCount);
+                    const std::string progressMsg = questKillCreditText(owner_, quest, rawEntry, count, reqCount);
                     if (!progressMsg.empty()) owner_.addUIInfoMessage(progressMsg);
                     announceQuestLogChanged(questId);
                     break;
@@ -1155,11 +1153,14 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 count = std::min(count, reqCount);
                 quest.killCounts[PVP_KILL_ENTRY] = {count, reqCount};
 
-                // ERR_QUEST_ADD_PLAYER_KILL_SII on screen in yellow
-                // (0x006d8030, case 0x46f). This was "Title: PvP kills 3/10"
-                // in chat.
+                // ERR_QUEST_ADD_PLAYER_KILL_SII on screen in yellow, of the
+                // number the quest asks for, and the watch frame's event
+                // (0x006d8030, case 0x46f); nothing for one that has failed.
+                if (quest.failed) break;
+                if (quest.playersSlain != 0) reqCount = quest.playersSlain;
                 owner_.addUIInfoMessage(interfaceFormat("ERR_QUEST_ADD_PLAYER_KILL_SII",
                     "Players slain: %d/%d", {std::to_string(count), std::to_string(reqCount)}));
+                announceQuestLogChanged(questId);
                 break;
             }
         }

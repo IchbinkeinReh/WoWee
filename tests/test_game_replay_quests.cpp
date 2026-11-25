@@ -25,7 +25,7 @@ constexpr const char* kDetails =
 // `wantedItem` are WotLK's words 19 and the first item record.
 wowee::network::Packet questAnswer(uint32_t questId, const std::string& expansion,
                                    uint32_t ownItem = 0, uint32_t wantedItem = 0,
-                                   uint32_t wantedCount = 0) {
+                                   uint32_t wantedCount = 0, uint32_t wantedKill = 0, const char* text = "") {
     wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUEST_QUERY_RESPONSE));
     const bool wotlk = expansion == "wotlk";
     const int words = wotlk ? 65 : (expansion == "tbc" ? 43 : 39);
@@ -42,14 +42,14 @@ wowee::network::Packet questAnswer(uint32_t questId, const std::string& expansio
     p.writeString(kDetails);
     p.writeString("");
     if (wotlk) p.writeString("Kehrt zu Megzeg zur\xc3\xbc""ck.");
-    for (int i = 0; i < 16; ++i) p.writeUInt32(0);
+    for (int i = 0; i < 16; ++i) p.writeUInt32(i == 0 ? wantedKill : i == 1 && wantedKill != 0 ? 5 : 0);
     if (wotlk) {
         for (int i = 0; i < 6; ++i) {
             p.writeUInt32(i == 0 ? wantedItem : 0);
             p.writeUInt32(i == 0 ? wantedCount : 0);
         }
     }
-    for (int i = 0; i < 4; ++i) p.writeString("");
+    for (int i = 0; i < 4; ++i) p.writeString(i == 0 ? text : "");
     return p;
 }
 
@@ -162,5 +162,40 @@ TEST_CASE("the events name a quest by its place in the interface's list", "[repl
     for (const auto& e : events) CHECK(e.second == "5");
     s.handler().setQuestLogRowLookup(nullptr);
     CHECK(s.handler().getQuestHandler()->questLogIndexOf(9387) == 1);
+    s.handler().setAddonEventCallback(nullptr);
+}
+
+// 0x006d8030: the quest's own text for the objective first, whatever the creature
+// or object that carries it is called; nothing for one that has failed.
+TEST_CASE("a credit is named by the quest's objective", "[replay][quest]") {
+    std::vector<std::string> lines, watched;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 13829}}));
+    const uint32_t wanted = GENERATE(33341u, 0x80000000u | 33341u);
+    s.receive(questAnswer(13829, "wotlk", 0, 0, 0, wanted, "\"Zusto\xc3\x9f""en\" anwenden"));
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>& args) {
+        if (name == "UI_INFO_MESSAGE" && !args.empty()) lines.push_back(args[0]);
+        if (name == "QUEST_WATCH_UPDATE") watched.push_back(args.empty() ? std::string() : args[0]);
+    });
+    const auto credit = [&](uint32_t entry, uint32_t count) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTUPDATE_ADD_KILL));
+        for (const uint32_t v : {13829u, entry, count, 5u}) p.writeUInt32(v);
+        p.writeUInt64(0);
+        s.receive(p);
+    };
+    credit(wanted, 2);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0] == "\"Zusto\xc3\x9f""en\" anwenden: 2/5");
+    CHECK(watched.size() == 1);
+    // Another entry's, which is not known by name.
+    credit(5u, 1);
+    CHECK(lines.size() == 1);
+    // Failed: nothing more.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 1, 5), 2}}));
+    watched.clear();
+    credit(wanted, 3);
+    CHECK(lines.size() == 1);
+    CHECK(watched.empty());
     s.handler().setAddonEventCallback(nullptr);
 }
