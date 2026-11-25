@@ -793,6 +793,13 @@ public:
     void auctionCancelItem(uint32_t auctionId);
     void auctionListOwnerItems(uint32_t offset = 0);
     void auctionListBidderItems(uint32_t offset = 0);
+    /// What the interface asks for (0x0059d4f0, 0x0059d540, 0x0059c740): the own
+    /// auctions and those bid on, where something of them may have changed, no
+    /// answer is due and the realm's wait is over; and whether a list - 0 the
+    /// search's, 1 the bid on, 2 the own - may be asked for.
+    void requestOwnerAuctions();
+    void requestBidderAuctions(uint32_t page);
+    [[nodiscard]] bool auctionListMayBeAsked(int list) const;
     bool isAuctionHouseOpen() const { return auctionOpen_; }
     uint64_t getAuctioneerGuid() const { return auctioneerGuid_; }
     /// The open house's AuctionHouse.dbc row, 0 with none open.
@@ -1303,6 +1310,15 @@ private:
     /// How many owner list answers are still to come (0xc0e73c): two for
     /// each request, the auctions and the pending sales (0x0059cc50).
     int ownerListAnswersDue_ = 0;
+    int bidderListAnswersDue_ = 0;         ///< 0xc0e738
+    bool ownerListWanted_ = true;          ///< 0xc0f41c
+    bool bidderListWanted_ = true;         ///< 0xc0f420
+    std::array<uint64_t, 3> auctionAskedMs_{};  ///< 0xc0e728, by list; 0 never
+    uint32_t auctionListDelayMs_ = 5000;   ///< 0xacf628, what the last answer said
+    uint32_t bidderListOffset_ = 0;        ///< 0xc0f438
+    uint32_t auctionBidSent_ = 0;          ///< 0xc0f43c
+    void requestPendingSales();
+    void forgetAuction(uint32_t auctionId);
 
     // ---- Trainer state ----
     bool trainerWindowOpen_ = false;

@@ -5176,10 +5176,20 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
     owner_.setInteractionObject(guid);
     auctioneerGuid_ = guid;
     auctionOpen_ = true;
-    ownerListAnswersDue_ = 0;  // 0xc0e73c
+    ownerListAnswersDue_ = bidderListAnswersDue_ = 0;  // 0x0059f000
+    ownerListWanted_ = bidderListWanted_ = true;
+    auctionAskedMs_ = {};
+    auctionListDelayMs_ = 5000;
     auctionActiveTab_ = 0;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_SHOW", {});
 }
+
+namespace {
+uint64_t steadyMs() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch()).count()) + 1;
+}
+}  // namespace
 
 bool InventoryHandler::auctionGetAllAllowed() const {
     const auto now = static_cast<uint64_t>(
@@ -5374,6 +5384,7 @@ void InventoryHandler::auctionBid(const AuctionEntry& a, uint32_t bid) {
     if (const auto* info = owner_.getItemInfo(a.itemEntry);
         info && info->valid && !canOwnMore(*info, a.stackCount, true))
         return;
+    auctionBidSent_ = bid;
     auto packet = AuctionPlaceBidPacket::build(auctioneerGuid_, a.auctionId, bid);
     owner_.getSocket()->send(packet);
 }
@@ -5389,14 +5400,53 @@ void InventoryHandler::auctionListOwnerItems(uint32_t offset) {
     pendingAuctionTarget_ = AuctionResultTarget::OWNER;
     auto packet = AuctionListOwnerItemsPacket::build(auctioneerGuid_, offset);
     owner_.getSocket()->send(packet);
+    ownerListWanted_ = false;
+    auctionAskedMs_[2] = steadyMs();
     // 0x0059cc50: the sales still to pay out asked for with them, each answer
     // counted.
-    if (wireOpcode(Opcode::CMSG_AUCTION_LIST_PENDING_SALES) != 0xFFFF) {
-        network::Packet pending(wireOpcode(Opcode::CMSG_AUCTION_LIST_PENDING_SALES));
-        pending.writeUInt64(auctioneerGuid_);
-        owner_.getSocket()->send(pending);
-        ownerListAnswersDue_ += 2;
-    }
+    if (wireOpcode(Opcode::CMSG_AUCTION_LIST_PENDING_SALES) != 0xFFFF) ++ownerListAnswersDue_;
+    requestPendingSales();
+}
+
+void InventoryHandler::requestPendingSales() {
+    if (auctioneerGuid_ == 0 || wireOpcode(Opcode::CMSG_AUCTION_LIST_PENDING_SALES) == 0xFFFF) return;
+    network::Packet pending(wireOpcode(Opcode::CMSG_AUCTION_LIST_PENDING_SALES));
+    pending.writeUInt64(auctioneerGuid_);
+    owner_.getSocket()->send(pending);
+    ++ownerListAnswersDue_;
+}
+
+bool InventoryHandler::auctionListMayBeAsked(int list) const {
+    if (!auctionOpen_ || list < 0 || list > 2) return false;
+    if (list == 0) return auctionSearchDelayTimer_ <= 0.0f;
+    if ((list == 1 ? bidderListAnswersDue_ : ownerListAnswersDue_) > 0) return false;
+    const uint64_t asked = auctionAskedMs_[static_cast<size_t>(list)];
+    return asked == 0 || steadyMs() - asked >= auctionListDelayMs_;
+}
+
+void InventoryHandler::requestOwnerAuctions() {
+    if (ownerListWanted_ && auctionListMayBeAsked(2)) auctionListOwnerItems(0);
+}
+
+void InventoryHandler::requestBidderAuctions(uint32_t page) {
+    if (bidderListWanted_ && auctionListMayBeAsked(1)) auctionListBidderItems(page * 50);
+}
+
+// 0x0059f2f0: an auction that is gone is in no list any more; of the own ones,
+// the sales still to pay out are asked for again.
+void InventoryHandler::forgetAuction(uint32_t auctionId) {
+    const auto gone = [auctionId](const AuctionEntry& e) { return e.auctionId == auctionId; };
+    const auto fire = [this](const char* event) {
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()(event, {});
+    };
+    const auto drop = [&](AuctionListResult& list) {
+        if (std::erase_if(list.auctions, gone) == 0) return false;
+        if (list.totalCount > 0) --list.totalCount;
+        return true;
+    };
+    if (drop(auctionBrowseResults_)) fire("AUCTION_ITEM_LIST_UPDATE");
+    if (drop(auctionOwnerResults_)) requestPendingSales();
+    if (drop(auctionBidderResults_)) fire("AUCTION_BIDDER_LIST_UPDATE");
 }
 
 void InventoryHandler::replaceOwnerRows(std::vector<AuctionEntry> rows, bool pending) {
@@ -5435,6 +5485,10 @@ void InventoryHandler::auctionListBidderItems(uint32_t offset) {
     pendingAuctionTarget_ = AuctionResultTarget::BIDDER;
     auto packet = AuctionListBidderItemsPacket::build(auctioneerGuid_, offset);
     owner_.getSocket()->send(packet);
+    ++bidderListAnswersDue_;
+    bidderListWanted_ = false;
+    bidderListOffset_ = offset;
+    auctionAskedMs_[1] = steadyMs();
 }
 
 void InventoryHandler::handleAuctionHello(network::Packet& packet) {
@@ -5487,6 +5541,7 @@ void InventoryHandler::handleAuctionListResult(network::Packet& packet) {
     // have to defend itself against.
     if (result.searchDelay > 0) {
         auctionSearchDelayTimer_ = static_cast<float>(result.searchDelay) / 1000.0f;
+        auctionListDelayMs_ = result.searchDelay;
     }
 
     if (pendingAuctionTarget_ == AuctionResultTarget::OWNER) {
@@ -5494,6 +5549,9 @@ void InventoryHandler::handleAuctionListResult(network::Packet& packet) {
         auctionOwnerResults_.searchDelay = result.searchDelay;
         replaceOwnerRows(std::move(result.auctions), /*pending=*/false);
     } else if (pendingAuctionTarget_ == AuctionResultTarget::BIDDER) {
+        bidderListAnswersDue_ = std::max(bidderListAnswersDue_ - 1, 0);
+        // More of them than sent: another page may be asked for (0x0059ecd0).
+        if (result.auctions.size() != result.totalCount) bidderListWanted_ = true;
         auctionBidderResults_ = std::move(result);
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_BIDDER_LIST_UPDATE", {});
     } else {
@@ -5528,7 +5586,6 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
     uint32_t auctionId = packet.readUInt32();
     uint32_t action = packet.readUInt32();
     uint32_t error  = packet.readUInt32();
-    (void)auctionId;
 
     // 0x0059ffb0's lines, all of them the game error table's: ERR_AUCTION_
     // STARTED, _REMOVED and _BID_PLACED in system chat for the three actions
@@ -5537,12 +5594,30 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
     // English - with the refusals numbered as the server does not number
     // them - red and in chat both.
     if (error == 0) {
-        if (action == 0)
+        if (action == 0) {
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_STARTED", "Auction created."));
-        else if (action == 1)
+            ownerListWanted_ = true;
+            if (ownerListAnswersDue_ < 1) auctionListOwnerItems(0);
+        } else if (action == 1) {
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_REMOVED", "Auction cancelled."));
-        else if (action == 2) {
+            forgetAuction(auctionId);
+        } else if (action == 2) {
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_BID_PLACED", "Bid accepted."));
+            // What is bid on asked for again, and the row of the search as it
+            // is now: the bid, the next step, the player's, a minute and a
+            // half left at the least.
+            const uint32_t increment = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+            bidderListWanted_ = true;
+            auctionListBidderItems(bidderListOffset_);
+            for (AuctionEntry& e : auctionBrowseResults_.auctions) {
+                if (e.auctionId != auctionId) continue;
+                e.currentBid = auctionBidSent_;
+                e.minBidIncrement = increment;
+                e.bidderGuid = owner_.getPlayerGuid();
+                e.timeLeftMs = std::max(e.timeLeftMs, 90000u);
+                if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_ITEM_LIST_UPDATE", {});
+                break;
+            }
             // A bid taken, the player waves: CMSG_EMOTE with ONESHOT_WAVE (3)
             // at the end of 0x0059ffb0's bid branch.
             if (owner_.getSocket() && wireOpcode(Opcode::CMSG_EMOTE) != 0xFFFF) {
@@ -5555,14 +5630,6 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
             fireBagUpdates();
-        }
-        // Re-query after successful buy/bid so the list reflects the change.
-        // Previously gated on name.length()>0 which skipped browse-all (empty name).
-        if (action == 2 && hasAuctionSearch_) {
-            auctionSearch(lastAuctionSearch_.name, lastAuctionSearch_.levelMin, lastAuctionSearch_.levelMax,
-                         lastAuctionSearch_.quality, lastAuctionSearch_.itemClass, lastAuctionSearch_.itemSubClass,
-                         lastAuctionSearch_.invTypeMask, lastAuctionSearch_.usableOnly,
-                         lastAuctionSearch_.offset, lastAuctionSearch_.sort);
         }
     } else {
         GameErrorText err;

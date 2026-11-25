@@ -2128,6 +2128,18 @@ void GameHandler::auctionListOwnerItems(uint32_t offset) {
     if (inventoryHandler_) inventoryHandler_->auctionListOwnerItems(offset);
 }
 
+void GameHandler::requestOwnerAuctions() {
+    if (inventoryHandler_) inventoryHandler_->requestOwnerAuctions();
+}
+
+void GameHandler::requestBidderAuctions(uint32_t page) {
+    if (inventoryHandler_) inventoryHandler_->requestBidderAuctions(page);
+}
+
+bool GameHandler::auctionListMayBeAsked(int list) const {
+    return inventoryHandler_ && inventoryHandler_->auctionListMayBeAsked(list);
+}
+
 void GameHandler::auctionListBidderItems(uint32_t offset) {
     if (inventoryHandler_) inventoryHandler_->auctionListBidderItems(offset);
 }

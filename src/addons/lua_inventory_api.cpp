@@ -7443,11 +7443,16 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // send and none of which the interface could reach.
                 {"CanSendAuctionQuery", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // Two returns (0x0059c740): whether a search may be sent, and
-            // whether a getAll sweep may be - the same, and fifteen minutes
-            // since the last getAll this session.
-            const bool open = gh && gh->isAuctionHouseOpen();
-            const bool may = open && gh->getAuctionSearchDelay() <= 0.0f;
+            // Two returns (0x0059c740): whether the list named - the search's
+            // without a name - may be asked for, and whether a getAll sweep
+            // may be: the same, and fifteen minutes since the last this session.
+            int list = 0;
+            if (lua_isstring(L, 1)) {
+                std::string which(lua_tostring(L, 1));
+                toLowerInPlace(which);
+                list = which == "list" ? 0 : which == "bidder" ? 1 : which == "owner" ? 2 : 3;
+            }
+            const bool may = gh && gh->auctionListMayBeAsked(list);
             const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
             luaPushOneOrNil(L, may);
             luaPushOneOrNil(L, may && inv && inv->auctionGetAllAllowed());
@@ -7524,11 +7529,12 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"GetOwnerAuctionItems", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->auctionListOwnerItems(0);
+            if (auto* gh = getGameHandler(L)) gh->requestOwnerAuctions();
             return 0;
         }},
                 {"GetBidderAuctionItems", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->auctionListBidderItems(0);
+            if (auto* gh = getGameHandler(L)) gh->requestBidderAuctions(static_cast<uint32_t>(
+                    std::clamp(std::llround(luaL_optnumber(L, 1, 0)), 0LL, 1000000LL)));
             return 0;
         }},
                 // PlaceAuctionBid(list, index, bid) - a bid equal to the

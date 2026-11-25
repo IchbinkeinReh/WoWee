@@ -5311,6 +5311,9 @@ public:
     void auctionCancelItem(uint32_t auctionId);
     void auctionListOwnerItems(uint32_t offset = 0);
     void auctionListBidderItems(uint32_t offset = 0);
+    void requestOwnerAuctions();
+    void requestBidderAuctions(uint32_t page);
+    [[nodiscard]] bool auctionListMayBeAsked(int list) const;
     bool isAuctionHouseOpen() const;
     /// The open auction house's AuctionHouse.dbc row (0x00c0f3f0), 0 when none.
     uint32_t getAuctionHouseId() const;

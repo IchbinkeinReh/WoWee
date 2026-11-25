@@ -6,6 +6,7 @@
 
 #include "core/coordinates.hpp"
 #include "game/game_object_type.hpp"
+#include "game/inventory_handler.hpp"
 #include "game_replay.hpp"
 #include "game/combat_handler.hpp"
 #include "game/idle_steps.hpp"
@@ -2450,4 +2451,77 @@ TEST_CASE("the facing sent is never negative", "[replay][playtest]") {
         for (int i = 0; i < 3; ++i) p.readFloat();
         CHECK(p.readFloat() == Catch::Approx(facing).margin(1e-4));
     }
+}
+
+// T306: 0x0059d4f0, 0x0059d540 and 0x0059ffb0: what is asked of the auction house
+// and when, and what an auction begun, cancelled or bid on changes at once.
+TEST_CASE("the auction house's lists are asked for as they may have changed", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FIELD_COINAGE, 900000}});
+    auto& gh = s.handler();
+    auto* inv = gh.getInventoryHandler();
+    inv->openAuctionHouse(0x77);
+    const auto count = [&](Opcode op) { return s.sent().of(op).size(); };
+    const auto list = [&](Opcode op, std::vector<uint32_t> ids, uint32_t total) {
+        wowee::network::Packet p(wowee::game::wireOpcode(op));
+        p.writeUInt32(static_cast<uint32_t>(ids.size()));
+        for (uint32_t id : ids) {
+            p.writeUInt32(id);
+            p.writeUInt32(2589);
+            for (int i = 0; i < 21; ++i) p.writeUInt32(0);   // seven enchantments
+            for (int i = 0; i < 2; ++i) p.writeUInt32(0);    // property, suffix
+            p.writeUInt32(1);
+            for (int i = 0; i < 2; ++i) p.writeUInt32(0);    // charges, flags
+            p.writeUInt64(0x1001);
+            for (uint32_t v : {100u, 0u, 5000u, 60000u}) p.writeUInt32(v);
+            p.writeUInt64(0);
+            p.writeUInt32(0);
+        }
+        p.writeUInt32(total);
+        p.writeUInt32(300);
+        s.receive(p);
+    };
+    gh.requestBidderAuctions(2);
+    REQUIRE(count(Opcode::CMSG_AUCTION_LIST_BIDDER_ITEMS) == 1);
+    auto asked = s.sent().of(Opcode::CMSG_AUCTION_LIST_BIDDER_ITEMS).back();
+    asked.readUInt64();
+    CHECK(asked.readUInt32() == 100);
+    CHECK_FALSE(gh.auctionListMayBeAsked(1));
+    CHECK(gh.auctionListMayBeAsked(2));
+    gh.requestBidderAuctions(0);   // one is due
+    CHECK(count(Opcode::CMSG_AUCTION_LIST_BIDDER_ITEMS) == 1);
+    list(Opcode::SMSG_AUCTION_BIDDER_LIST_RESULT, {}, 0);
+    gh.requestBidderAuctions(0);   // and nothing of it changed
+    CHECK(count(Opcode::CMSG_AUCTION_LIST_BIDDER_ITEMS) == 1);
+
+    gh.requestOwnerAuctions();
+    CHECK(count(Opcode::CMSG_AUCTION_LIST_OWNER_ITEMS) == 1);
+    CHECK(count(Opcode::CMSG_AUCTION_LIST_PENDING_SALES) == 1);
+    CHECK_FALSE(gh.auctionListMayBeAsked(2));
+    list(Opcode::SMSG_AUCTION_OWNER_LIST_RESULT, {7, 8}, 2);
+    wowee::network::Packet none(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_LIST_PENDING_SALES));
+    none.writeUInt32(0);
+    s.receive(none);
+    list(Opcode::SMSG_AUCTION_LIST_RESULT, {7, 9}, 2);
+
+    const auto result = [&](uint32_t id, uint32_t action, uint32_t word) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_COMMAND_RESULT));
+        for (uint32_t v : {id, action, 0u, word}) p.writeUInt32(v);
+        s.receive(p);
+    };
+    result(10, 0, 0);   // one begun: the own are asked for at once
+    CHECK(count(Opcode::CMSG_AUCTION_LIST_OWNER_ITEMS) == 2);
+    result(7, 1, 0);    // one cancelled is in no list any more
+    CHECK(inv->getAuctionOwnerResults().auctions.size() == 1);
+    CHECK(inv->getAuctionBrowseResults().auctions.size() == 1);
+    CHECK(count(Opcode::CMSG_AUCTION_LIST_PENDING_SALES) == 3);
+    gh.auctionBid(inv->getAuctionBrowseResults().auctions.front(), 250);
+    result(9, 2, 25);   // a bid taken
+    const auto& row = inv->getAuctionBrowseResults().auctions.front();
+    CHECK(row.currentBid == 250);
+    CHECK(row.minBidIncrement == 25);
+    CHECK(row.bidderGuid == Session::kPlayerGuid);
+    CHECK(row.timeLeftMs == 90000);
+    CHECK(count(Opcode::CMSG_AUCTION_LIST_BIDDER_ITEMS) == 2);
+    CHECK(count(Opcode::CMSG_AUCTION_LIST_ITEMS) == 0);
 }
