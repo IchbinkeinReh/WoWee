@@ -3439,6 +3439,13 @@ wowee_add_test(test_wmo_group_path
     SOURCES test_wmo_group_path.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_adt_tile_name ───────────────────────────────────────
+# The map and tile an ADT's path names. A map whose name holds "_"
+# (Azjol_LowerCity, Transport_*) had its first tile read as [32,49] (T332).
+wowee_add_test(test_adt_tile_name
+    SOURCES test_adt_tile_name.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_env_flag ────────────────────────────────────────────
 # Reading a boolean out of an environment variable. Five files had their own
 # copy and two rules: one read "off" as enabled because it tested only the

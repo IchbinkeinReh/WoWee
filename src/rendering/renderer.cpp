@@ -19,6 +19,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "rendering/horizon_renderer.hpp"
 #include "pipeline/wdl_loader.hpp"
+#include "pipeline/adt_tile_name.hpp"
 #include "core/env_flag.hpp"
 #include "rendering/sky_params_from_lighting.hpp"
 #include "core/coordinates.hpp"
@@ -6123,45 +6124,22 @@ bool Renderer::loadTestTerrain(pipeline::AssetManager* assetManager, const std::
 
     LOG_INFO("Loading test terrain: ", adtPath);
 
-    // Extract map name from ADT path for renderer initialization
-    std::string mapName;
-    {
-        size_t lastSep = adtPath.find_last_of("\\/");
-        if (lastSep != std::string::npos) {
-            std::string filename = adtPath.substr(lastSep + 1);
-            size_t firstUnderscore = filename.find('_');
-            mapName = filename.substr(0, firstUnderscore != std::string::npos ? firstUnderscore : filename.size());
-        }
+    // Map and tile from the ADT's path: World\Maps\{Map}\{Map}_{X}_{Y}.adt.
+    // A map's own name may hold underscores (Azjol_LowerCity), so the tile is
+    // the name's last two fields, not what follows its first "_".
+    pipeline::AdtTileName tileName;
+    tileName.tileX = 32;
+    tileName.tileY = 49;  // defaults
+    if (!pipeline::parseAdtTileName(adtPath, tileName)) {
+        LOG_WARNING("Failed to parse tile coords from: ", adtPath);
     }
+    const std::string& mapName = tileName.mapName;
+    const int tileX = tileName.tileX;
+    const int tileY = tileName.tileY;
 
     // Initialize all sub-renderers
     if (!initializeRenderers(assetManager, mapName)) {
         return false;
-    }
-
-    // Parse tile coordinates from ADT path
-    // Format: World\Maps\{MapName}\{MapName}_{X}_{Y}.adt
-    int tileX = 32, tileY = 49;  // defaults
-    {
-        size_t lastSep = adtPath.find_last_of("\\/");
-        if (lastSep != std::string::npos) {
-            std::string filename = adtPath.substr(lastSep + 1);
-            size_t firstUnderscore = filename.find('_');
-            if (firstUnderscore != std::string::npos) {
-                size_t secondUnderscore = filename.find('_', firstUnderscore + 1);
-                if (secondUnderscore != std::string::npos) {
-                    size_t dot = filename.find('.', secondUnderscore);
-                    if (dot != std::string::npos) {
-                        try {
-                            tileX = std::stoi(filename.substr(firstUnderscore + 1, secondUnderscore - firstUnderscore - 1));
-                            tileY = std::stoi(filename.substr(secondUnderscore + 1, dot - secondUnderscore - 1));
-                        } catch (...) {
-                            LOG_WARNING("Failed to parse tile coords from: ", filename);
-                        }
-                    }
-                }
-            }
-        }
     }
 
     LOG_INFO("Enqueuing initial tile [", tileX, ",", tileY, "] via terrain manager");
