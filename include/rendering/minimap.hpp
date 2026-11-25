@@ -2,6 +2,8 @@
 
 #include "rendering/minimap_indoor.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "rendering/picture_cache.hpp"
+#include "rendering/vk_texture.hpp"
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
@@ -160,11 +162,11 @@ private:
     std::unordered_map<std::string, std::string> trsLookup;
     bool trsParsed = false;
 
-    // Tile texture cache: hash → VkTexture
-    // Evicted (FIFO) when the count of successfully-loaded tiles exceeds MAX_TILE_CACHE.
+    // Tile texture cache, by the hash in the file's name. What is drawn of it is held by
+    // pointer until the composite has been recorded, so a round of it is a composite's.
     static constexpr size_t MAX_TILE_CACHE = 128;
-    std::unordered_map<std::string, std::unique_ptr<VkTexture>> tileTextureCache;
-    std::deque<std::string> tileInsertionOrder;  // hashes of successfully loaded tiles, oldest first
+    PictureCache<VkTexture> tileTextures_{MAX_TILE_CACHE};
+    void endTileRound();
     std::unique_ptr<VkTexture> noDataTexture;
 
     // Composite render target (GRID x GRID tiles)

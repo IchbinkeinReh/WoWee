@@ -340,11 +340,7 @@ void Minimap::shutdown() {
 
     destroy(alloc, quadVB, quadVBAlloc);
 
-    for (auto& [hash, tex] : tileTextureCache) {
-        if (tex) tex->destroy(device, alloc);
-    }
-    tileTextureCache.clear();
-    tileInsertionOrder.clear();
+    for (auto& tex : tileTextures_.takeAll()) tex->destroy(device, alloc);
 
     if (noDataTexture) { noDataTexture->destroy(device, alloc); noDataTexture.reset(); }
     if (maskTexture_) { maskTexture_->destroy(device, alloc); maskTexture_.reset(); }
@@ -475,16 +471,13 @@ VkTexture* Minimap::loadTrsTexture(const std::string& key) {
 
     const std::string& hash = trsIt->second;
 
-    auto cacheIt = tileTextureCache.find(hash);
-    if (cacheIt != tileTextureCache.end())
-        return cacheIt->second.get();
+    if (tileTextures_.known(hash)) return tileTextures_.find(hash);
 
     // Load from MPQ
     std::string blpPath = "Textures\\Minimap\\" + hash + ".blp";
     auto blpImage = assetManager->loadTexture(blpPath);
     if (!blpImage.isValid()) {
-        tileTextureCache[hash] = nullptr;  // Mark as failed
-        return nullptr;
+        return tileTextures_.add(hash, nullptr);  // Marked as failed
     }
 
     auto tex = std::make_unique<VkTexture>();
@@ -493,18 +486,16 @@ VkTexture* Minimap::loadTrsTexture(const std::string& key) {
     tex->createSampler(vkCtx->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
                        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 1.0f);
 
-    VkTexture* ptr = tex.get();
-    tileTextureCache[hash] = std::move(tex);
-    tileInsertionOrder.push_back(hash);
+    return tileTextures_.add(hash, std::move(tex));
+}
 
-    // Evict oldest tiles when cache grows too large to bound GPU memory usage.
-    while (tileInsertionOrder.size() > MAX_TILE_CACHE) {
-        const std::string& oldest = tileInsertionOrder.front();
-        tileTextureCache.erase(oldest);
-        tileInsertionOrder.pop_front();
-    }
-
-    return ptr;
+// What is too many goes once the composite has been recorded - what it draws may not - and
+// its picture with the last frame that may still be drawing it.
+void Minimap::endTileRound() {
+    tileTextures_.endRound([this](std::unique_ptr<VkTexture> gone) {
+        vkCtx->deferAfterAllFrameFences(
+            [doomed = std::shared_ptr<VkTexture>(std::move(gone))]() mutable { doomed.reset(); });
+    });
 }
 
 // --------------------------------------------------------
@@ -629,6 +620,7 @@ void Minimap::compositePass(VkCommandBuffer cmd, const glm::vec3& centerWorldPos
     uint32_t frameIdx = vkCtx->getCurrentFrame();
 
     // Update tile descriptor sets
+    tileTextures_.beginRound();
     updateTileDescriptors(frameIdx, curTileX, curTileY);
 
     // Begin off-screen render pass
@@ -662,6 +654,7 @@ void Minimap::compositePass(VkCommandBuffer cmd, const glm::vec3& centerWorldPos
     }
 
     compositeTarget->endPass(cmd);
+    endTileRound();
 
     // Update tracking
     lastCenterTileX = curTileX;
@@ -688,6 +681,7 @@ void Minimap::compositeIndoor(VkCommandBuffer cmd) {
         mi::Tile tile;
     };
     std::vector<Picture> pictures;
+    tileTextures_.beginRound();
     for (const auto& group : scene.groups) {
         const float key = mi::drawKey((group.min.z + group.max.z) * 0.5f, scene.playerLocalZ,
                                       group.index == scene.playerGroup);
@@ -764,6 +758,7 @@ void Minimap::compositeIndoor(VkCommandBuffer cmd) {
         }
     }
     compositeTarget->endPass(cmd);
+    endTileRound();
 
     compositeCenter_ = center;
     compositeSpan_ = span;

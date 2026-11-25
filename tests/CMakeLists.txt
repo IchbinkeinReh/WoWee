@@ -4457,6 +4457,10 @@ wowee_add_test(test_skill_list
 wowee_add_test(test_font_flags
     SOURCES test_font_flags.cpp)
 
+# ── test_picture_cache ──────────────────────────────────────
+wowee_add_test(test_picture_cache
+    SOURCES test_picture_cache.cpp)
+
 # ── test_reactive_spell ──────────────────────────────────────
 wowee_add_test(test_reactive_spell
     SOURCES test_reactive_spell.cpp)
