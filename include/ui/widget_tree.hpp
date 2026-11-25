@@ -1290,6 +1290,11 @@ public:
     /// A texture sized by its picture as soon as it is asked, not with the next frame.
     void sizeTexture(uint32_t id);
     void setTextureSizer(std::function<void(Widget&)> sizer) { textureSizer_ = std::move(sizer); }
+    /// The size of a picture, as its file has it; false for none.
+    [[nodiscard]] bool pictureSize(const std::string& path, float& width, float& height) const {
+        return !path.empty() && pictureSizer_ && pictureSizer_(path, width, height);
+    }
+    void setPictureSizer(std::function<bool(const std::string&, float&, float&)> sizer) { pictureSizer_ = std::move(sizer); }
     [[nodiscard]] bool hasTooltipSizer() const { return static_cast<bool>(tooltipSizer_); }
     void sizeTooltip(uint32_t id);
 
@@ -1400,6 +1405,7 @@ private:
     int compactLevels(FrameStrata strata);
     std::function<void(Widget&)> tooltipSizer_;
     std::function<void(Widget&)> textureSizer_;
+    std::function<bool(const std::string&, float&, float&)> pictureSizer_;
 
     template <typename Tell>
     void comeUp(uint32_t id, const Tell& tell) {

@@ -1343,6 +1343,9 @@ void WidgetRenderer::layout(WidgetTree& tree, float screenW, float screenH) {
             if (alive.expired() || !ImGui::GetCurrentContext()) return;
             if (ImFont* font = interfaceFaceOrDefault(w.fontFace)) sizeTooltipWidget(&w, font, tree);
         });
+        tree.setPictureSizer([this, alive = std::weak_ptr<bool>(alive_)](const std::string& path, float& w, float& h) {
+            return !alive.expired() && assets_ && textureSize(path, w, h);
+        });
         tree.setTextureSizer([this, alive = std::weak_ptr<bool>(alive_)](Widget& w) {
             if (!alive.expired()) sizeTextureWidget(&w);
         });

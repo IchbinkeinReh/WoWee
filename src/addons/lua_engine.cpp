@@ -1921,82 +1921,64 @@ int lua_Region_GetTextHeight(lua_State* L) {
     return 1;
 }
 
-int lua_Region_GetWidth(lua_State* L) {
-    const auto* w = measuredWidgetOf(L, 1);
-    // In the frame's own units, which is what WoW reports: the laid-out rect
-    // has the effective scale in it and handing that back would have a script
-    // that reads a width and sets it again shrink the frame every time.
-    const float es = (w && w->effScale > 0.0f) ? w->effScale : 1.0f;
-    // A label sized by its own text, whose text has changed since it was last
-    // measured, is as wide as what it says now - not as wide as what it used
-    // to say.
-    //
-    // The measuring happens once a frame in the renderer, and the interface
-    // reads the width in the same breath as it writes the text:
-    // ChatEdit_UpdateHeader sets the header to "Guild:" or "To Someone:" and
-    // then insets the box by 15 plus that header's width. Answering last
-    // frame's width gave every category the same inset, so what was typed
-    // began under the longer ones.
-    const bool staleAutoSize =
-        w && w->kind == wowee::ui::WidgetKind::FontString && w->autoSized &&
-        !w->text.empty() && w->text != w->measuredText;
-    // Nor does one declared with no anchors and no size. The layout places it
-    // over its whole parent - that is where it draws, centred - but that rect
-    // is borrowed, not a width it was given, and FrameXML reads this to size
-    // the parent from the text: AudioOptionsVoicePanelDisabledMessage's
-    // OnLoad does self:SetWidth(Text:GetWidth()). Answering the one-unit
-    // parent it was sitting in kept that frame one unit wide, so its tooltip
-    // could only be found by hovering a single column of the words.
-    const bool widthBorrowed =
-        w && w->kind == wowee::ui::WidgetKind::FontString && w->anchors.empty() &&
-        w->width <= 0.0f;
-    if (w && !w->text.empty() && w->kind == wowee::ui::WidgetKind::FontString &&
-        (staleAutoSize || widthBorrowed || (w->rectW <= 0.0f && w->width <= 0.0f))) {
-        // A font string that was never given a width is as wide as its text.
-        // That is what WoW answers, and the interface sizes things from it:
-        // PanelTemplates_TabResize builds a tab's width out of
-        // _G[name.."Text"]:GetWidth(), so answering zero made every tab on the
-        // character sheet collapse to the width of its two end textures, with
-        // the label clipped out of sight inside it.
-        lua_pushnumber(L, measureTextWidth(w->text, w->fontFace, w->fontHeight));
-        return 1;
+/// A region's own width and height (the layout's +0x28, +0x2c), in its own units: of a
+/// frame what was set, of a texture that or its picture's (0x004817d0, 0x00481850), of a
+/// font string that or its text's (0x00483f30, 0x00483fa0). 0 for none.
+float ownWidth(const wowee::ui::WidgetTree& tree, const wowee::ui::Widget& w) {
+    using wowee::ui::WidgetKind;
+    float pictureW = 0.0f, pictureH = 0.0f;
+    switch (w.kind) {
+        case WidgetKind::FontString:
+            // One without a text is a unit wide.
+            if (const float given = wowee::ui::givenWidth(w); given > 0.0f) return given;
+            return std::max(1.0f, static_cast<float>(measureTextWidth(w.text, w.fontFace, w.fontHeight)));
+        case WidgetKind::Texture:
+            if (w.width > 0.0f && !w.widthFromImage) return w.width;
+            return tree.pictureSize(w.texturePath, pictureW, pictureH) ? pictureW : 0.0f;
+        default: return w.width;
     }
-    lua_pushnumber(L, w ? (w->rectW > 0.0f ? w->rectW / es : w->width) : 0.0);
+}
+float ownHeight(const wowee::ui::WidgetTree& tree, const wowee::ui::Widget& w) {
+    using wowee::ui::WidgetKind;
+    float pictureW = 0.0f, pictureH = 0.0f;
+    switch (w.kind) {
+        case WidgetKind::FontString:
+            if (w.heightGiven) return w.height;
+            return w.text.empty() ? 0.0f : static_cast<float>(fontStringTextHeight(w));
+        case WidgetKind::Texture:
+            if (w.height > 0.0f && !w.heightFromImage) return w.height;
+            return tree.pictureSize(w.texturePath, pictureW, pictureH) ? pictureH : 0.0f;
+        default: return w.height;
+    }
+}
+
+// GetWidth([ignoreRect]) (0x0049d3b0): its own width, and where it has none that of its
+// rect, if that can be worked out and is asked for.
+//
+// In the frame's own units, which is what WoW reports: the laid-out rect has the
+// effective scale in it and handing that back would have a script that reads a width and
+// sets it again shrink the frame every time. A text's is of what it says now: the
+// interface reads it in the same breath as it writes the text - ChatEdit_UpdateHeader
+// sets the header to "Guild:" and insets the box by that header's width,
+// StaticPopup_Resize reads the height of a text it has just set.
+int lua_Region_GetWidth(lua_State* L) {
+    const bool rectToo = !luaClientSwitchArg(L, 2, false);
+    const auto* w = measuredWidgetOf(L, 1);
+    auto* tree = wowee::addons::getWidgetTree(L);
+    float width = w && tree ? ownWidth(*tree, *w) : 0.0f;
+    if (w && tree && width == 0.0f && rectToo && tree->placed(w->id))
+        width = w->rectW / (w->effScale > 0.0f ? w->effScale : 1.0f);
+    lua_pushnumber(L, width);
     return 1;
 }
-int lua_Region_GetHeight(lua_State* L) {
+int lua_Region_GetHeight(lua_State* L) {   // 0x0049d550
+    const bool rectToo = !luaClientSwitchArg(L, 2, false);
     const auto* w = measuredWidgetOf(L, 1);
-    const float es = (w && w->effScale > 0.0f) ? w->effScale : 1.0f;
-    // The same staleness as GetWidth: a label measured last frame is measured
-    // against last frame's text, and the interface reads a height it has just
-    // changed the text of.
-    const bool staleAutoSize =
-        w && w->kind == wowee::ui::WidgetKind::FontString && w->autoSized && !w->heightGiven &&
-        !w->text.empty() && w->text != w->measuredText;
-    // And a paragraph - a declared width that wraps, its height following the
-    // text - is as stale once its text changes: the renderer wrote last
-    // frame's line count into its height. StaticPopup_Show sets the text and
-    // StaticPopup_Resize reads text:GetHeight() in the same breath, so a
-    // dialog reused after a one-line popup (the release timer) was sized for
-    // one line, and the spirit healer's seven-line warning ran out of its
-    // box with the Accept and Cancel buttons drawn over the middle of it.
-    const bool staleParagraph =
-        w && w->kind == wowee::ui::WidgetKind::FontString && !w->text.empty() &&
-        !w->heightGiven && (w->wrapsToWidth || w->wrapsBetweenAnchors) && w->text != w->measuredText;
-    if (w && !w->text.empty() && w->kind == wowee::ui::WidgetKind::FontString &&
-        (staleAutoSize || staleParagraph || (w->rectH <= 0.0f && w->height <= 0.0f))) {
-        // A font string that was never given a height is as tall as its text,
-        // the same way one never given a width is as wide as it - and the
-        // interface reads that. `<Size x="160" y="0"/>` is how a wrapping
-        // label is declared, and WatchFrameLineTemplate_Reset writes the zero
-        // back on every rebuild; the tracker then compares the height it gets
-        // against one line and gives a two-line objective a taller row. Zero
-        // failed that test always, so every wrapped objective was drawn over
-        // the row beneath it.
-        lua_pushnumber(L, fontStringTextHeight(*w));
-        return 1;
-    }
-    lua_pushnumber(L, w ? (w->rectH > 0.0f ? w->rectH / es : w->height) : 0.0);
+    auto* tree = wowee::addons::getWidgetTree(L);
+    float height = w && tree ? ownHeight(*tree, *w) : 0.0f;
+    if (w && tree && height == 0.0f && rectToo && tree->placed(w->id))
+        height = w->rectH / (w->effScale > 0.0f ? w->effScale : 1.0f);
+    lua_pushnumber(L, height);
     return 1;
 }
 // The four edges, in the same coordinates the tree lays out in: origin at the
@@ -9135,11 +9117,18 @@ int pushChildWidgets(lua_State* L, bool regions, bool countOnly) {
 /// Region:GetSize() - the width and the height, as GetWidth and GetHeight
 /// answer them.
 int lua_Region_GetSize(lua_State* L) {
+    // 0x0049d6f0, its own argument among theirs.
+    const bool ownOnly = luaClientSwitchArg(L, 2, false);
+    double size[2] = {};
+    for (int i = 0; i < 2; ++i) {
+        lua_settop(L, 1);
+        lua_pushboolean(L, ownOnly ? 1 : 0);
+        (void)(i == 0 ? lua_Region_GetWidth(L) : lua_Region_GetHeight(L));
+        size[i] = lua_tonumber(L, -1);
+    }
     lua_settop(L, 1);
-    lua_Region_GetWidth(L);
-    lua_pushvalue(L, 1);
-    lua_Region_GetHeight(L);
-    lua_remove(L, -2);
+    lua_pushnumber(L, size[0]);
+    lua_pushnumber(L, size[1]);
     return 2;
 }
 }  // namespace
