@@ -87,4 +87,8 @@ TEST_CASE("the base animation is asked again as a spline takes the player or let
     now = before;
     now.onFlightPath = true;
     CHECK(asksBaseAgain(before, now));
+    // T322: a figure built anew, dead or not, is asked what it is in.
+    now = before;
+    now.instanceId = 2;
+    CHECK(asksBaseAgain(before, now));
 }

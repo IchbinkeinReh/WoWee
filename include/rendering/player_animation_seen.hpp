@@ -30,7 +30,10 @@ struct PlayerAnimationSeen {
 };
 
 [[nodiscard]] inline bool asksBaseAgain(const PlayerAnimationSeen& before, const PlayerAnimationSeen& now) {
-    return now.turning != before.turning || now.turningLeft != before.turningLeft || now.alive != before.alive ||
+    // A new instance starts on Stand: built anew for a display, at a teleport, at
+    // the barber's, it takes up what the unit is in - dead, in water, stealthed,
+    // sitting, hovering (0x0073e410's model is asked as any).
+    return now.instanceId != before.instanceId || now.turning != before.turning || now.turningLeft != before.turningLeft || now.alive != before.alive ||
            now.looting != before.looting || now.stealthed != before.stealthed ||
            now.autoAttacking != before.autoAttacking || now.swimming != before.swimming ||
            now.onFlightPath != before.onFlightPath || now.splineMoves != before.splineMoves;
