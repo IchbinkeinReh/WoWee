@@ -416,6 +416,8 @@ public:
     /// The player's body half-width for the collision port (0x006e9570),
     /// read with the height; a third of a yard where there is none.
     [[nodiscard]] float playerCollisionHalfWidth() const { return collisionHalfWidth_; }
+    /// What it steps up (0x006e9570 from 0x006cf350): its server size, 1 for a smaller one.
+    [[nodiscard]] float playerStepHeight() const { return collisionStepHeight_; }
     /// Whether the player unit `guid`, whose OBJECT_FIELD_SCALE_X has just
     /// changed from `oldScale`, no longer fits where it stands, so that
     /// CMSG_CANCEL_GROWTH_AURA is due (0x0072a560, collision_fit.hpp).
@@ -909,7 +911,14 @@ private:
 
     /// Re-apply creatureRenderScale to spawned creatures whose level, family
     /// or server scale has changed or arrived since they were spawned.
-    void refreshCreatureScales();
+    void refreshUnitScales();
+    /// A player's size in a display's body (0x0071c110): the server's times the display's and
+    /// its model's.
+    [[nodiscard]] float playerRenderScale(const game::Entity& player, uint32_t displayId) const;
+    /// The display a player has by nature, or the one it has.
+    [[nodiscard]] static uint32_t nativeDisplay(const game::Entity& player);
+    /// The own mount at the player's size (0x0071c0e0, +0x990), and the seat on it.
+    void scaleOwnMount();
 
     /// Apply the textures a creature display names: its own skin variations,
     /// and for a humanoid the composited body, face, hair and equipment. Once
@@ -1086,7 +1095,11 @@ private:
     void syncGroundTargetModel();
     uint32_t groundTargetModelEntry_ = 0;
     void removeCreatureParticleTwin(uint64_t guid);
-    uint32_t scaleSyncFrameCounter_ = 0;  // throttles refreshCreatureScales()
+    uint32_t scaledBody_ = 0;             // the own instance that has its size
+    float mountSeatZ_ = 0.0f;             // the own mount's seat in its model
+    std::optional<float> mountCameraSeatZ_;
+    std::string mountModelPath_;
+    uint32_t scaleSyncFrameCounter_ = 0;  // throttles refreshUnitScales()
     /// What updateUnitWeapons last dressed each unit with.
     struct UnitWeaponsShown {
         uint32_t instanceId = 0;
@@ -1668,6 +1681,7 @@ private:
     std::unordered_map<uint64_t, float> splashDepth_;
     /// Its display's CreatureModelData CollisionHeight at its scale.
     [[nodiscard]] float modelCollisionHeight(const game::Unit& unit) const;
+    float collisionStepHeight_ = 1.0f;
     /// playerCollisionHeight's last answer, and the display and scale it was for.
     uint32_t collisionHeightDisplay_ = 0;
     uint32_t collisionHeightScaleBits_ = 0;

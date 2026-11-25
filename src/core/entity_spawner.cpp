@@ -121,7 +121,7 @@ void EntitySpawner::update() {
     processPendingMount();
     processPendingRemotePlayerMounts();
     syncRiderMountWaits();
-    refreshCreatureScales();
+    refreshUnitScales();
     syncCreatureParticleTwins();
     syncAttachmentParticleTwins();
     syncGroundTargetModel();
@@ -2842,7 +2842,7 @@ float EntitySpawner::creatureRenderScaleFor(const game::Entity* entity, uint32_t
     const auto* unit = static_cast<const game::Unit*>(entity);
 
     // The family arrives with the creature query response, which can be
-    // later than the spawn; refreshCreatureScales picks it up then.
+    // later than the spawn; refreshUnitScales picks it up then.
     const uint32_t familyId = gameHandler_->getCreatureFamily(unit->getEntry());
     auto famIt = familyScale_.find(familyId);
     if (familyId == 0 || famIt == familyScale_.end()) return s;
@@ -2860,7 +2860,17 @@ float EntitySpawner::creatureRenderScaleFor(const game::Entity* entity, uint32_t
     return (familySize > s || isPet) ? familySize : s;
 }
 
-void EntitySpawner::refreshCreatureScales() {
+float EntitySpawner::playerRenderScale(const game::Entity& player, uint32_t displayId) const {
+    return unitServerScale(player) * creatureRenderScaleFor(&player, displayId);
+}
+
+uint32_t EntitySpawner::nativeDisplay(const game::Entity& player) {
+    const uint16_t idx = game::fieldIndex(game::UF::UNIT_FIELD_NATIVEDISPLAYID);
+    const uint32_t native = idx != 0xFFFF ? player.getField(idx) : 0u;
+    return native != 0 || !player.isUnit() ? native : static_cast<const game::Unit&>(player).getDisplayId();
+}
+
+void EntitySpawner::refreshUnitScales() {
     // Level, family and the server's scale can all change, or arrive, after
     // the instance exists. A few sweeps a second is plenty for a size.
     if (++scaleSyncFrameCounter_ % 15 != 0) return;
@@ -2868,26 +2878,44 @@ void EntitySpawner::refreshCreatureScales() {
     auto* charRenderer = renderer_->getCharacterRenderer();
     if (!charRenderer) return;
     const auto& entities = gameHandler_->getEntityManager().getEntities();
+    // Every unit's, a player's too (OBJECT_FIELD_SCALE_X watched: 0x0072d070 -> 0x0072a560).
+    const auto apply = [&](uint64_t guid, uint32_t instanceId, const game::Entity& entity, uint32_t displayId,
+                           bool fresh) {
+        const float want = unitServerScale(entity) * creatureRenderScaleFor(&entity, displayId);
+        auto& applied = creatureAppliedScale_[guid];
+        if (!fresh && std::abs(applied - want) <= 1e-4f) return;
+        charRenderer->setInstanceScale(instanceId, want);
+        applied = want;
+        // Its mount is its size times the mount display's (0x0071c0e0).
+        if (auto mountIt = remotePlayerMounts_.find(guid); mountIt != remotePlayerMounts_.end()) {
+            RemotePlayerMount& mount = mountIt->second;
+            mount.scale = rendering::mount_seat::mountModelScale(want, creatureDisplayScale(mount.displayId));
+            mount.riderHeight = rendering::mount_seat::seatHeight(mount.seatZ, mount.scale);
+            charRenderer->setInstanceScale(mount.instanceId, mount.scale);
+        }
+    };
     for (const auto& [guid, instanceId] : creatureInstances_) {
         auto entIt = entities.find(guid);
         if (entIt == entities.end() || !entIt->second) continue;
         auto dispIt = creatureDisplayIds_.find(guid);
         if (dispIt == creatureDisplayIds_.end()) continue;
-        const float want = unitServerScale(*entIt->second) *
-                           creatureRenderScaleFor(entIt->second.get(), dispIt->second);
-        auto& applied = creatureAppliedScale_[guid];
-        if (std::abs(applied - want) > 1e-4f) {
-            charRenderer->setInstanceScale(instanceId, want);
-            applied = want;
-            // Its mount is its size times the mount display's (0x0071c0e0).
-            if (auto mountIt = remotePlayerMounts_.find(guid); mountIt != remotePlayerMounts_.end()) {
-                RemotePlayerMount& mount = mountIt->second;
-                mount.scale = rendering::mount_seat::mountModelScale(want, creatureDisplayScale(mount.displayId));
-                mount.riderHeight = rendering::mount_seat::seatHeight(mount.seatZ, mount.scale);
-                charRenderer->setInstanceScale(mount.instanceId, mount.scale);
-            }
-        }
+        apply(guid, instanceId, *entIt->second, dispIt->second, false);
     }
+    for (const auto& [guid, instanceId] : playerInstances_) {
+        auto entIt = entities.find(guid);
+        if (entIt != entities.end() && entIt->second)
+            apply(guid, instanceId, *entIt->second, nativeDisplay(*entIt->second), false);
+    }
+    // One's own, in whatever body it is shown, which is another instance for each.
+    const uint64_t self = gameHandler_->getPlayerGuid();
+    const uint32_t body = renderer_->getCharacterInstanceId();
+    const auto me = entities.find(self);
+    if (self == 0 || body == 0 || me == entities.end() || !me->second || !me->second->isUnit()) return;
+    const uint32_t display = static_cast<const game::Unit&>(*me->second).getDisplayId();
+    const float before = unitModelScale(self);
+    apply(self, body, *me->second, display != 0 ? display : nativeDisplay(*me->second), body != scaledBody_);
+    scaledBody_ = body;
+    if (mountInstanceId_ != 0 && std::abs(unitModelScale(self) - before) > 1e-4f) scaleOwnMount();
 }
 
 void EntitySpawner::spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId,

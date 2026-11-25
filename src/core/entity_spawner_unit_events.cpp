@@ -732,6 +732,7 @@ float EntitySpawner::playerCollisionHeight() {
     if (model < 0) return collisionHeight_;
     const auto mrow = static_cast<uint32_t>(model);
     const float objectScale = scaleField != 0xFFFF ? std::bit_cast<float>(scaleBits) : 1.0f;
+    collisionStepHeight_ = objectScale > 1.0f && objectScale < 100.0f ? objectScale : 1.0f;
     collisionHeight_ = us::collisionHeight(models->getFloat(mrow, us::kModelCollisionHeightColumn), objectScale,
                                            displays->getFloat(drow, us::kDisplayScaleColumn),
                                            models->getFloat(mrow, us::kModelScaleColumn));

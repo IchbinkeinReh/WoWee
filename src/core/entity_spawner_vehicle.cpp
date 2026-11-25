@@ -1035,7 +1035,6 @@ void EntitySpawner::updateVehiclePassengers() {
         if (!inSeats.count(guid) && entersOrSits(p.state)) change(guid, p, 0, 0xff, 0);
     }
 
-    const uint64_t playerGuid = gameHandler_->getPlayerGuid();
     // Hung on a vehicle's seat, facing `facing` on it (0x007490f0); false
     // where the vehicle or the seat is not there to hang on.
     auto seatOn = [&](uint64_t guid, uint32_t instanceId, uint64_t vehicleGuid, uint8_t seatIndex, float facing) {
@@ -1049,7 +1048,7 @@ void EntitySpawner::updateVehiclePassengers() {
         pose.seatPitch = seat->passengerPitch;
         pose.seatRoll = seat->passengerRoll;
         pose.seatOffset = seat->attachmentOffset;
-        pose.passengerScale = guid == playerGuid ? 1.0f : unitModelScale(guid);
+        pose.passengerScale = unitModelScale(guid);
         if (seat->passengerAttachmentId >= 0) {
             pose.passengerAttachment =
                 cr->modelAttachmentPosition(instanceId, static_cast<uint32_t>(seat->passengerAttachmentId));

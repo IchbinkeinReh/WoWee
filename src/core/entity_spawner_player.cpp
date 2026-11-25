@@ -146,8 +146,11 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
     // Create instance at server position
     glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
     float renderYaw = orientation + glm::radians(90.0f);
-    uint32_t instanceId = charRenderer->createInstance(modelId, renderPos, glm::vec3(0.0f, 0.0f, renderYaw), 1.0f);
+    const auto entity = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
+    const float scale = entity ? playerRenderScale(*entity, nativeDisplay(*entity)) : 1.0f;
+    uint32_t instanceId = charRenderer->createInstance(modelId, renderPos, glm::vec3(0.0f, 0.0f, renderYaw), scale);
     if (instanceId == 0) return;
+    creatureAppliedScale_[guid] = scale;
 
     // The character's textures, through the one reader in
     // pipeline/char_sections.hpp - the same scan the local player, the NPCs and
@@ -582,6 +585,7 @@ void EntitySpawner::despawnPlayer(uint64_t guid) {
         [instanceModelId](const auto& entry) { return entry.second == instanceModelId; });
     if (instanceModelId != 0 && !isCachedPlayerModel) charRenderer->unloadModelIfUnused(instanceModelId);
     playerInstances_.erase(it);
+    creatureAppliedScale_.erase(guid);
     onlinePlayerAppearance_.erase(guid);
     deadCreatureGuids_.erase(guid);
     creatureRenderPosCache_.erase(guid);

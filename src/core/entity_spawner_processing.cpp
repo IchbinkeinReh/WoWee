@@ -1918,11 +1918,12 @@ void EntitySpawner::processPendingMount() {
 
     mountModelId_ = modelId;
 
-    // Create mount instance at player position, the player's size (drawn
-    // at 1) times the mount display's (0x0071c0e0, +0x990 from 0x0073d5d0).
+    // Create mount instance at player position, the player's size times the
+    // mount display's (0x0071c0e0, +0x990 from 0x0073d5d0).
     glm::vec3 mountPos = renderer_->getCharacterPosition();
     float yawRad = glm::radians(renderer_->getCharacterYaw());
-    const float mountScale = rendering::mount_seat::mountModelScale(1.0f, creatureDisplayScale(mountDisplayId));
+    const float mountScale = rendering::mount_seat::mountModelScale(
+        gameHandler_ ? unitModelScale(gameHandler_->getPlayerGuid()) : 1.0f, creatureDisplayScale(mountDisplayId));
     uint32_t instanceId = charRenderer->createInstance(modelId, mountPos,
         glm::vec3(0.0f, 0.0f, yawRad), mountScale);
 
@@ -1991,22 +1992,10 @@ void EntitySpawner::processPendingMount() {
         }
     }
 
-    // The seat by the mount's size.
-    heightOffset = rendering::mount_seat::seatHeight(heightOffset, mountScale);
-    if (auto* ac = renderer_->getAnimationController()) ac->setMounted(instanceId, mountDisplayId, heightOffset, m2Path);
-    // The camera's height on it (0x00604e00): the seat at the mount's size,
-    // under the player's mounted collision height (0x006d7720).
-    if (auto* cc = renderer_->getCameraController()) {
-        rendering::CameraController::MountPivot mp;
-        mp.mountInstance = instanceId;
-        mp.mountScale = mountScale;
-        mp.seatZ = cameraSeatZ;
-        mp.collisionHeight = playerMountedCollisionHeight(mountDisplayId);
-        LOG_WARNING("Camera mount: display ", mountDisplayId, " seat ",
-                    cameraSeatZ ? *cameraSeatZ : -1.0f, " x ", mountScale, ", mounted collision height ",
-                    mp.collisionHeight);
-        cc->setMountPivot(mp);
-    }
+    mountSeatZ_ = heightOffset;
+    mountCameraSeatZ_ = cameraSeatZ;
+    mountModelPath_ = m2Path;
+    scaleOwnMount();
 
     // For taxi mounts, start with flying animation; for ground mounts, start with stand
     bool isTaxi = gameHandler_ && gameHandler_->isOnTaxiFlight();
@@ -2025,7 +2014,31 @@ void EntitySpawner::processPendingMount() {
     }
     charRenderer->playAnimation(instanceId, startAnim, true);
 
-    LOG_INFO("processPendingMount: DONE displayId=", mountDisplayId, " model=", m2Path, " heightOffset=", heightOffset);
+    LOG_INFO("processPendingMount: DONE displayId=", mountDisplayId, " model=", m2Path, " seat=", mountSeatZ_);
+}
+
+void EntitySpawner::scaleOwnMount() {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || mountInstanceId_ == 0) return;
+    const float mountScale = rendering::mount_seat::mountModelScale(
+        gameHandler_ ? unitModelScale(gameHandler_->getPlayerGuid()) : 1.0f, creatureDisplayScale(mountDisplayId_));
+    charRenderer->setInstanceScale(mountInstanceId_, mountScale);
+    // The seat by the mount's size.
+    const float seat = rendering::mount_seat::seatHeight(mountSeatZ_, mountScale);
+    if (auto* ac = renderer_->getAnimationController())
+        ac->setMounted(mountInstanceId_, mountDisplayId_, seat, mountModelPath_);
+    // The camera's height on it (0x00604e00): the seat at the mount's size,
+    // under the player's mounted collision height (0x006d7720).
+    if (auto* cc = renderer_->getCameraController()) {
+        rendering::CameraController::MountPivot mp;
+        mp.mountInstance = mountInstanceId_;
+        mp.mountScale = mountScale;
+        mp.seatZ = mountCameraSeatZ_;
+        mp.collisionHeight = playerMountedCollisionHeight(mountDisplayId_);
+        LOG_WARNING("Camera mount: display ", mountDisplayId_, " seat ", mp.seatZ ? *mp.seatZ : -1.0f, " x ", mountScale,
+                    ", mounted collision height ", mp.collisionHeight);
+        cc->setMountPivot(mp);
+    }
 }
 
 uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec3& renderPos, float renderYaw,

@@ -484,6 +484,8 @@ public:
     void setPortHalfWidth(float r) {
         if (r > 0.01f && r < 25.0f) portMover_.halfWidth = r;
     }
+    /// And what it steps up (+0xd0).
+    void setPortStepHeight(float h) { portMover_.stepHeight = h; }
     /// In the air on it. Space takes off, and touching real ground without
     /// climbing lands - after which the mount runs, falls and jumps like any
     /// other until it takes off again. Flight physics, the flight animations

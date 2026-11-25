@@ -4928,6 +4928,8 @@ void Application::applyServerMovementState(float deltaTime) {
             renderer->getCameraController()->setCollisionHeight(playerCollisionHeight());
         if (entitySpawner_)
             renderer->getCameraController()->setPortHalfWidth(entitySpawner_->playerCollisionHalfWidth());
+        if (entitySpawner_)
+            renderer->getCameraController()->setPortStepHeight(entitySpawner_->playerStepHeight());
         // And whether the player is up in it, which the camera worked out
         // last frame: take-off and landing are decided where the floor is.
         gameHandler->setFlightAirborne(renderer->getCameraController()->isFlightAirborne());
