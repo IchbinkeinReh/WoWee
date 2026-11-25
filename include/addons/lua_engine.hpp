@@ -437,6 +437,11 @@ private:
     /// only symptom was a method quietly answering as though unimplemented.
     void bootstrap(const char* code);
 
+    /// ITEM_LOCK_CHANGED for each item put into a window or taken out of it since
+    /// the last look (0x00706fe0, 0x00707020).
+    void noteItemLocks();
+    std::vector<uint64_t> lockedItems_;
+
     /// The frame a typed key belongs to: the topmost with one of these scripts
     /// (ui::topKeyboardFrame) - see dispatchFrameKey. 0 for none.
     [[nodiscard]] uint32_t topKeyboardFrame(const char* script, const char* orScript = nullptr);

@@ -2361,6 +2361,10 @@ static int lua_PickupContainerItem(lua_State* L) {
         return 0;
     }
 
+    // What lies in a window stays where it is, and nothing takes its place
+    // (0x005d7ff0).
+    if (itemLocked(gh, containerSlotGuid(gh, bag, slot))) return 0;
+
     // Carrying something the bags cannot take: the drag ends here and nothing
     // moves. Before cursorWireSlot, which would otherwise answer no and let
     // this fall through to the pickup below - putting the bag's own item on a
@@ -2755,6 +2759,8 @@ static int lua_PickupInventoryItem(lua_State* L) {
     // Worn gear is what usually needs repairing, and the paperdoll has no
     // branch of its own for it either.
     if (slot <= 19 && repairedHeldItem(gh, gh->getEquipSlotGuid(slot - 1))) return 0;
+
+    if (slot <= 19 && itemLocked(gh, gh->getEquipSlotGuid(slot - 1))) return 0;   // 0x005e85d0
 
     if (droppedItemFromNowhere(L)) return 0;
 

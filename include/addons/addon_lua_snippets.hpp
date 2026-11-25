@@ -2328,6 +2328,20 @@ watcher:SetScript("OnEvent", function(self, event, a1)
             if link and tip.IsShown and tip:IsShown() then tip:SetHyperlink(link) end
         end
     end
+    -- One that names a set of which this is a piece (see awaitSetPieces).
+    local sets = __WoweeSetTooltipsWaiting
+    if arrivedId and sets then
+        local due = {}
+        for tip in pairs(sets) do
+            local pieces = rawget(tip, "__setPieces")
+            if not pieces then sets[tip] = nil
+            elseif pieces[arrivedId] then due[#due + 1] = tip end
+        end
+        for _, tip in ipairs(due) do
+            local link = rawget(tip, "__hyperlink")
+            if link and tip.IsShown and tip:IsShown() then tip:SetHyperlink(link) end
+        end
+    end
     if not GameTooltip or not GameTooltip.IsShown or not GameTooltip:IsShown() then
         return
     end

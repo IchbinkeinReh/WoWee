@@ -163,7 +163,8 @@ int lua_SocketInventoryItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int slotId = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || slotId < 1 || slotId > 19) return 0;
-    gh->openSocketing(gh->getEquipSlotGuid(slotId - 1));
+    const uint64_t guid = gh->getEquipSlotGuid(slotId - 1);
+    if (!itemLocked(gh, guid)) gh->openSocketing(guid);
     return 0;
 }
 
@@ -176,7 +177,8 @@ int lua_SocketContainerItem(lua_State* L) {
     const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (!gh) return 0;
-    gh->openSocketing(containerSlotGuid(gh, bag, slot));
+    const uint64_t guid = containerSlotGuid(gh, bag, slot);
+    if (!itemLocked(gh, guid)) gh->openSocketing(guid);
     return 0;
 }
 

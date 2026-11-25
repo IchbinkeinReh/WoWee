@@ -1627,6 +1627,11 @@ uint32_t GameHandler::getSocketPendingGemItemId(int index) const {
     return inventoryHandler_->getSocketSession().newGemItemId[index];
 }
 
+uint64_t GameHandler::getSocketPendingGemGuid(int index) const {
+    if (!inventoryHandler_ || index < 0 || index > 2) return 0;
+    return inventoryHandler_->getSocketSession().newGemGuid[static_cast<size_t>(index)];
+}
+
 void GameHandler::openSocketing(uint64_t itemGuid) {
     if (inventoryHandler_) inventoryHandler_->openSocketing(itemGuid);
 }

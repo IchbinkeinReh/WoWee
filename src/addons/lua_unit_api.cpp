@@ -4553,7 +4553,9 @@ void registerUnitLuaAPI(lua_State* L) {
                 // desaturated (Texture:SetDesaturated, Desaturate.bls).
                 {"IsInventoryItemLocked",   [](lua_State* L) -> int {
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-            luaPushOneOrNil(L, slot > 0 && cursorEquipSlot() == slot);
+            auto* gh = getGameHandler(L);
+            luaPushOneOrNil(L, slot > 0 && (cursorEquipSlot() == slot ||
+                                            (gh && slot <= 19 && itemLocked(gh, gh->getEquipSlotGuid(slot - 1)))));
             return 1;
         }},
                 // GetInventoryItemBroken(unit, slot) - worn out, so the

@@ -5071,6 +5071,7 @@ public:
     uint64_t getSocketItemGuid() const;
     uint32_t getSocketItemId() const;
     uint32_t getSocketPendingGemItemId(int index) const;
+    uint64_t getSocketPendingGemGuid(int index) const;
     void openSocketing(uint64_t itemGuid);
     void closeSocketing();
     bool setSocketGem(int index, uint64_t gemGuid, uint32_t gemItemId);

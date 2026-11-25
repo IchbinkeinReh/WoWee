@@ -110,6 +110,24 @@ inline std::string coinIconPath(int64_t copper) {
     return std::string("Interface\\Icons\\") + icon;
 }
 
+/// Where an item the player carries or wears is: its bag, 0 the backpack, and its
+/// slot in it from 1, or its slot on the character.
+struct ItemPlace {
+    const game::ItemDef* item = nullptr;
+    int bag = 0, slot = 0;
+    bool worn = false;
+};
+std::optional<ItemPlace> placeOfItem(game::GameHandler* gh, uint64_t guid);
+/// The item with this GUID the player carries or wears, null for none.
+const game::ItemDef* heldItem(game::GameHandler* gh, uint64_t guid);
+/// The items that lie in a window, and are locked so (+0x394 bit 0x1, 0x00513740):
+/// in the trade and in a letter, put up for auction, the one with its sockets shown
+/// and the gems put into them (0x005c4680). The cursor's is not among them.
+std::vector<uint64_t> lockedItems(game::GameHandler* gh);
+bool itemLocked(game::GameHandler* gh, uint64_t guid);
+/// The pieces of an item's set that are not known yet.
+std::vector<uint32_t> missingSetPieces(game::GameHandler* gh, uint32_t itemId);
+
 /// The gems socketed into one held item, for _WoweePopulateItemTooltip's
 /// `inst` (lua_socket_api.cpp): sets `gems` (per socket index: the gem's
 /// enchant text, its skill and level requirements and its meta conditions,

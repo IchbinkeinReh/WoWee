@@ -3451,6 +3451,7 @@ static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
 static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
                                 uint32_t itemId, const game::ItemDef* instance = nullptr,
                                 const std::array<uint32_t, 3>* linkGems = nullptr);
+static void awaitSetPieces(lua_State* L, game::GameHandler* gh, uint32_t itemId);
 static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
                                const game::ItemDef& item);
 static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item);
@@ -4707,6 +4708,7 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
         lua_pushboolean(L, linkRolled ? 1 : 0);
         lua_setfield(L, 1, "__linkRolled");
         filled = fillItemTooltipById(L, gh, id, nullptr, &linkGems);
+        awaitSetPieces(L, gh, id);
         lua_pushnil(L);
         lua_setfield(L, 1, "__linkRolled");
         if (filled) appendEnchantLineById(w, gh, enchantId);
@@ -6378,6 +6380,42 @@ void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::I
     pushSocketedGems(L, gh, instance.guid, itemId);
 }
 
+/// A link's tooltip, at 1, is filled again as the names of its item's set come, which
+/// 0x006277f0 asks for with the tooltip's callback (0x0067c3e0, 0x00626650). One with
+/// an owner is filled again by that one's UpdateTooltip. The watcher is in
+/// kTooltipItemDataRefreshLua.
+static void awaitSetPieces(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
+    if (!lua_istable(L, 1)) return;
+    const int top = lua_gettop(L);
+    const auto missing = wowee::addons::missingSetPieces(gh, itemId);
+    if (missing.empty()) {
+        lua_pushnil(L);
+        lua_setfield(L, 1, "__setPieces");
+        return;
+    }
+    lua_newtable(L);
+    for (const uint32_t piece : missing) {
+        lua_pushboolean(L, 1);
+        lua_rawseti(L, -2, static_cast<int>(piece));
+    }
+    lua_setfield(L, 1, "__setPieces");
+    lua_getglobal(L, "__WoweeSetTooltipsWaiting");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_newtable(L);                       // its metatable: weak keys
+        lua_pushstring(L, "k");
+        lua_setfield(L, -2, "__mode");
+        lua_setmetatable(L, -2);
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, "__WoweeSetTooltipsWaiting");
+    }
+    lua_pushvalue(L, 1);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+    lua_settop(L, top);
+}
+
 /// The same, through the bootstrap's builder - which is the fuller of the two.
 ///
 /// There were two item tooltips. The bootstrap Lua defines
@@ -6414,6 +6452,12 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
         // is bound, and its durability (the instance's fields, 0x006277f0).
         if (instance) {
             buildTooltipItemInstance(L, gh, *instance, itemId);
+            if (linkGems) {
+                // In the socketing window: with the gems it would have.
+                pushSocketedGems(L, gh, *linkGems, itemId);
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "inSocketing");
+            }
         } else if (linkGems && ((*linkGems)[0] | (*linkGems)[1] | (*linkGems)[2])) {
             // A link's gems: its fields 3-5 are the sockets' enchant ids, as
             // 0x0061e3a0 wrote them off the item, and the tooltip of the link
@@ -6839,7 +6883,8 @@ int lua_Tooltip_SetSocketedItem(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     if (!widgetOf(L, 1) || !gh) { lua_pushboolean(L, 0); return 1; }
     const auto sockets = wowee::addons::socketsAsTheyWouldBe(gh);
-    lua_pushboolean(L, fillItemTooltipById(L, gh, gh->getSocketItemId(), nullptr, &sockets) ? 1 : 0);
+    const auto* item = wowee::addons::heldItem(gh, gh->getSocketItemGuid());
+    lua_pushboolean(L, fillItemTooltipById(L, gh, gh->getSocketItemId(), item, &sockets) ? 1 : 0);
     return 1;
 }
 
@@ -14830,6 +14875,17 @@ void LuaEngine::registerCoreAPI() {
         "        self:AddLine(name, c[1], c[2], c[3])\n"
         "    else self:SetText(name, c[1], c[2], c[3]) end\n"
         "    local data = _GetItemTooltipData(itemId)\n"
+        // In the socketing window (0x006277f0's tenth argument) nothing is said of
+        // what it is bound to down to its lock, of its empty sockets, its durability
+        // and duration, the races, classes, skills, spells and standings it asks
+        // for, its set, who made it, what a click does and what it disenchants to.
+        "    local brief = inst and inst.inSocketing\n"
+        "    if data and brief then\n"
+        "        for _, k in ipairs({'limitArea', 'limitMap', 'conjured', 'bindType', 'uniqueKey', 'startsQuest', 'lock',\n"
+        "            'duration', 'raceClassOnly', 'races', 'classes', 'requiredSkillName', 'processKey', 'spellKnown',\n"
+        "            'requiredSpellName', 'requiredFactionName', 'itemSet', 'disenchant'}) do data[k] = nil end\n"
+        "        inst.soulbound, inst.maxDurability, inst.creator, inst.action = nil, nil, nil, nil\n"
+        "    end\n"
         // Colour-blind mode names the quality under the title, in white, and a
         // heroic item's as ITEM_HEROIC_EPIC in place of both that and the
         // green ITEM_HEROIC line (0x006277f0).
@@ -15044,7 +15100,7 @@ void LuaEngine::registerCoreAPI() {
         "            for i = 1, 3 do\n"
         "                local g = gems and gems[i]\n"
         "                if g then gemLines(g)\n"
-        "                elseif socks[i] then\n"
+        "                elseif socks[i] and not brief then\n"
         "                    local key = socketKeys[socks[i].color] or 'EMPTY_SOCKET_NO_COLOR'\n"
         "                    self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
         "                    local art = socketArt[socks[i].color]\n"
@@ -19365,12 +19421,29 @@ void LuaEngine::refreshUnitTooltip() {
 
 void LuaEngine::noteAttributesAllowed(uint32_t wid) { attributesAllowed_.push_back(wid); }
 
+void LuaEngine::noteItemLocks() {
+    auto* gh = wowee::addons::getGameHandler(L_);
+    auto now = wowee::addons::lockedItems(gh);
+    if (now == lockedItems_) return;
+    std::vector<uint64_t> changed;
+    std::set_symmetric_difference(now.begin(), now.end(), lockedItems_.begin(), lockedItems_.end(),
+                                  std::back_inserter(changed));
+    lockedItems_ = std::move(now);
+    for (const uint64_t guid : changed) {
+        const auto place = wowee::addons::placeOfItem(gh, guid);
+        if (!place) continue;
+        if (place->worn) fireEvent("ITEM_LOCK_CHANGED", {std::to_string(place->slot)});
+        else fireEvent("ITEM_LOCK_CHANGED", {std::to_string(place->bag), std::to_string(place->slot)});
+    }
+}
+
 void LuaEngine::dispatchOnUpdate(float elapsed) {
     // 0x00495320: the attributes allowed to be changed for the moment are not
     // any more.
     for (const uint32_t id : std::exchange(attributesAllowed_, {}))
         if (auto* w = widgets_.get(id)) w->attributesAllowed = false;
     refreshUnitTooltip();
+    noteItemLocks();
 
     // Asked for by the check, and answered here because only this side can ask
     // the interface anything.

@@ -1873,7 +1873,8 @@ static int lua_SplitContainerItem(lua_State* L) {
 
     // Every container the interface can name, through the one mapping.
     // bankframe splits from BANK_CONTAINER, which this could not name before.
-    if (!containerItemSlot(gh->getInventory(), bag, slot)) return 0;
+    const auto* from = containerItemSlot(gh->getInventory(), bag, slot);
+    if (!from || itemLocked(gh, from->item.guid)) return 0;
 
     // WoW's SplitContainerItem picks the split portion up rather than moving
     // it: the stack-split dialog calls this, and the player then drops what
@@ -3138,7 +3139,7 @@ static int lua_UseContainerItem(lua_State* L) {
     // The keyring counts here too: right-clicking a key is how a locked box or
     // a quest door is opened, and the branch this replaced could not name it.
     const game::ItemSlot* itemSlot = containerItemSlot(inv, bag, slot);
-    if (!itemSlot || itemSlot->empty()) return 0;
+    if (!itemSlot || itemSlot->empty() || itemLocked(gh, itemSlot->item.guid)) return 0;
 
     // Right-clicking an item in a bag is three different messages depending on
     // what the item is, and only the last of them was sent from here. Taken
@@ -3751,6 +3752,39 @@ static const ItemSetRow* itemSetRow(game::GameHandler* gh, uint32_t setId) {
     }
     const auto it = rows.find(setId);
     return it == rows.end() ? nullptr : &it->second;
+}
+
+std::vector<uint32_t> missingSetPieces(game::GameHandler* gh, uint32_t itemId) {
+    std::vector<uint32_t> missing;
+    const auto* info = gh ? gh->getItemInfo(itemId) : nullptr;
+    const ItemSetRow* set = info && info->valid && info->itemSetId != 0 ? itemSetRow(gh, info->itemSetId) : nullptr;
+    if (!set) return missing;
+    for (const uint32_t item : set->items)
+        if (const auto* piece = item != 0 ? gh->getItemInfo(item) : nullptr; item != 0 && (!piece || !piece->valid))
+            missing.push_back(item);
+    return missing;
+}
+
+std::optional<ItemPlace> placeOfItem(game::GameHandler* gh, uint64_t guid) {
+    if (!gh || guid == 0) return std::nullopt;
+    const auto& inv = gh->getInventory();
+    const auto is = [guid](const game::ItemSlot& slot) { return !slot.empty() && slot.item.guid == guid; };
+    for (int i = 0; i < inv.getBackpackSize(); ++i)
+        if (const auto& slot = inv.getBackpackSlot(i); is(slot))
+            return ItemPlace{.item = &slot.item, .bag = 0, .slot = i + 1, .worn = false};
+    for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS; ++bag)
+        for (int i = 0; i < inv.getBagSize(bag); ++i)
+            if (const auto& slot = inv.getBagSlot(bag, i); is(slot))
+                return ItemPlace{.item = &slot.item, .bag = bag + 1, .slot = i + 1, .worn = false};
+    for (int i = 0; i < static_cast<int>(game::EquipSlot::NUM_SLOTS); ++i)
+        if (const auto& slot = inv.getEquipSlot(static_cast<game::EquipSlot>(i)); is(slot))
+            return ItemPlace{.item = &slot.item, .bag = -1, .slot = i + 1, .worn = true};
+    return std::nullopt;
+}
+
+const game::ItemDef* heldItem(game::GameHandler* gh, uint64_t guid) {
+    const auto place = placeOfItem(gh, guid);
+    return place ? place->item : nullptr;
 }
 
 /// The item set block of an item's tooltip (0x006277f0): the set's name with
@@ -4646,11 +4680,12 @@ static int lua_GetContainerItemInfo(lua_State* L) {
     lua_pushstring(L, icon.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
                                    : icon.c_str());
     lua_pushnumber(L, itemSlot->item.stackCount);  // count
-    // Locked while its item is on the cursor: ContainerFrame_UpdateLockedItem
-    // greys the slot from this, which is what shows the item has been picked up
-    // out of it rather than still sitting there.
+    // Locked while its item is on the cursor or in a window: ContainerFrame_
+    // UpdateLockedItem greys the slot from this, which is what shows the item has
+    // been picked up out of it rather than still sitting there.
     const auto& held = cursorItemSlot();
-    luaPushOneOrNil(L, (!held.equipped && held.bag == container && held.slot == slot) ? 1 : 0);
+    luaPushOneOrNil(L, (!held.equipped && held.bag == container && held.slot == slot) ||
+                           itemLocked(gh, itemSlot->item.guid));
     // quality, -1 while the template is not known (0x005d7a90).
     lua_pushnumber(L, info ? static_cast<double>(info->quality) : -1.0);
     // readable: the item has a page to read, or its ITEM_FIELD_FLAGS 0x200.
@@ -4915,6 +4950,32 @@ static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
         return &s;
     }
     return nullptr;
+}
+
+std::vector<uint64_t> lockedItems(game::GameHandler* gh) {
+    std::vector<uint64_t> locked;
+    if (!gh) return locked;
+    const auto add = [&locked](uint64_t guid) {
+        if (guid != 0) locked.push_back(guid);
+    };
+    if (gh->isTradeOpen())
+        for (const auto& slot : gh->getMyTradeSlots()) add(slot.itemGuid);
+    for (const auto& attached : gh->getMailAttachments()) add(attached.itemGuid);
+    uint64_t selling = 0;
+    auctionSellItemSlot(gh, &selling);
+    add(selling);
+    if (gh->isSocketingOpen()) {
+        add(gh->getSocketItemGuid());
+        for (int i = 0; i < 3; ++i) add(gh->getSocketPendingGemGuid(i));
+    }
+    std::sort(locked.begin(), locked.end());
+    return locked;
+}
+
+bool itemLocked(game::GameHandler* gh, uint64_t guid) {
+    if (guid == 0) return false;
+    const auto locked = lockedItems(gh);
+    return std::binary_search(locked.begin(), locked.end(), guid);
 }
 
 /// One bag object an auction can draw from: its guid and how many it holds.
