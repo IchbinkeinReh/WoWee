@@ -4443,9 +4443,7 @@ void InventoryHandler::mailReturnToSender(uint32_t mailId) {
     owner_.getSocket()->send(packet);
     // Same as deleting: the letter being read is this one, and the view over it
     // hides when told which mail closed.
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("CLOSE_INBOX_ITEM", {std::to_string(mailId)});
-    }
+    closeInboxItem(mailId);
 }
 
 void InventoryHandler::mailDelete(uint32_t mailId) {
@@ -4454,9 +4452,23 @@ void InventoryHandler::mailDelete(uint32_t mailId) {
     owner_.getSocket()->send(packet);
     // The letter being read is this one, so the view over it has to go: the
     // interface hides it when told which mail closed, and was never told.
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("CLOSE_INBOX_ITEM", {std::to_string(mailId)});
-    }
+    closeInboxItem(mailId);
+}
+
+void InventoryHandler::closeInboxItem(uint32_t mailId) {
+    const auto it = std::find_if(mailInbox_.begin(), mailInbox_.end(),
+                                 [mailId](const MailMessage& m) { return m.messageId == mailId; });
+    if (it == mailInbox_.end() || !owner_.addonEventCallbackRef()) return;
+    owner_.addonEventCallbackRef()("CLOSE_INBOX_ITEM", {std::to_string(std::distance(mailInbox_.begin(), it) + 1)});
+}
+
+void InventoryHandler::deleteMailIfEmptied(const MailMessage& mail, uint32_t reason) {
+    const bool goes = mail.messageType == 2 || (mail.flags & 0x8u) != 0 || (mail.body.empty() && mail.mailTemplateId == 0);
+    if (!goes || mail.money != 0 || !mail.attachments.empty() || mailDeleting_.count(mail.messageId)) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailboxGuid_ == 0) return;
+    owner_.getSocket()->send(MailDeletePacket::build(mailboxGuid_, mail.messageId, reason));
+    mailDeleting_.insert(mail.messageId);
+    closeInboxItem(mail.messageId);
 }
 
 void InventoryHandler::mailMarkAsRead(uint32_t mailId) {
@@ -4642,13 +4654,17 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
     }
  else if (action == MAIL_MONEY_TAKEN) {
         if (error == 0) {
-            if (mailIt != mailInbox_.end()) mailIt->money = 0;
+            if (mailIt != mailInbox_.end()) {
+                mailIt->money = 0;
+                deleteMailIfEmptied(*mailIt, 2);
+            }
             if (owner_.addonEventCallbackRef()) {
                 owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
                 owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
             }
         }
     } else if (action == MAIL_DELETED || action == MAIL_RETURNED_TO_SENDER) {
+        mailDeleting_.erase(mailId);
         if (error == 0) {
             if (mailIt != mailInbox_.end()) {
                 const int erasedIndex = static_cast<int>(std::distance(mailInbox_.begin(), mailIt));
@@ -4671,6 +4687,9 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
             atts.erase(std::remove_if(atts.begin(), atts.end(),
                            [takenGuid](const MailAttachment& a) { return a.itemGuidLow == takenGuid; }),
                        atts.end());
+            mailIt->cod = 0;
+            deleteMailIfEmptied(*mailIt, 3);
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
         }
     }
     if (action == MAIL_ITEM_TAKEN && error != 0) mailAutoLootId_ = 0;

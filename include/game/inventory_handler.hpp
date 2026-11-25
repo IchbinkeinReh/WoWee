@@ -1179,6 +1179,13 @@ private:
     /// A take the auto-loot sent and has had no answer to (0x00beb1e4):
     /// nothing more is sent until it comes.
     bool mailTakePending_ = false;
+    /// The letters being deleted as they were emptied (+0x2940), until the server has.
+    std::set<uint32_t> mailDeleting_;
+    /// 0x0056f770, 0x0056f8d0: a letter that had something taken from it: an auction's, one flagged
+    /// 0x8, or one with no text, that holds nothing more, is deleted with `reason`.
+    void deleteMailIfEmptied(const MailMessage& mail, uint32_t reason);
+    /// CLOSE_INBOX_ITEM (event 0x1c5) with the letter's place in the inbox, from 1.
+    void closeInboxItem(uint32_t mailId);
     /// The letter whose remaining attachments the auto-loot takes next, as
     /// each answer comes back (0x00beb1ec); 0 for none.
     uint32_t mailAutoLootId_ = 0;

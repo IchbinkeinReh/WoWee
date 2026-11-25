@@ -7,6 +7,7 @@
 #include "core/input.hpp"
 #include "core/preview_dressing.hpp"
 #include "game/dressing_room.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/player_display_flags.hpp"
 #include "game_replay.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -1133,6 +1134,69 @@ TEST_CASE("an item's comparison shows what is worn", "[replay][interface]") {
            "GetInventoryItemLink = function(u, slot) if slot == 16 then return 'item:24022:0:0:0:0:0:0:0' end end "
            "tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1)");
     CHECK(ui.is("money == 90"));
+}
+
+// T301: 0x0056f770, 0x0056f8d0: a letter that was emptied is deleted.
+TEST_CASE("a letter emptied of all it held is deleted", "[replay][interface]") {
+    struct Letter {
+        uint8_t type;
+        const char* body;
+        uint32_t money;
+        bool goes;
+    };
+    const Letter letter = GENERATE(Letter{0, "", 0, true}, Letter{0, "Hello", 0, false}, Letter{0, "", 500, false},
+                                   Letter{3, "", 0, true});
+    Session s;
+    s.setConnected(true);
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("f = CreateFrame('Frame') f:RegisterEvent('CLOSE_INBOX_ITEM') f:SetScript('OnEvent', function(self, e, a) closed = a end)");
+    s.handler().getInventoryHandler()->openMailbox(0xF110000000000099ull);
+    wowee::network::Packet m;
+    m.writeUInt32(501);
+    m.writeUInt8(letter.type);
+    if (letter.type == 0) m.writeUInt64(0x77);
+    else m.writeUInt32(0x77);
+    for (uint32_t v : {0u, 0u, 41u, letter.money, 0u}) m.writeUInt32(v);
+    m.writeFloat(29.0f);
+    m.writeUInt32(0);
+    m.writeString("Parcel");
+    m.writeString(letter.body);
+    m.writeUInt8(1);
+    m.writeUInt8(0);
+    m.writeUInt32(9001);
+    m.writeUInt32(12047);
+    for (int i = 0; i < 21; ++i) m.writeUInt32(0);
+    for (uint32_t v : {0u, 0u, 1u, 0u, 0u, 0u}) m.writeUInt32(v);
+    m.writeUInt8(0);
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_MAIL_LIST_RESULT));
+    list.writeUInt32(1);
+    list.writeUInt8(1);
+    list.writeUInt16(static_cast<uint16_t>(m.getData().size() + 2));
+    list.writeBytes(m.getData().data(), m.getData().size());
+    s.receive(list);
+    REQUIRE(ui.is("GetInboxNumItems() == 1"));
+    wowee::network::Packet taken(wowee::game::wireOpcode(Opcode::SMSG_SEND_MAIL_RESULT));
+    for (uint32_t v : {501u, 2u, 0u, 9001u, 1u}) taken.writeUInt32(v);
+    s.receive(taken);
+    auto deleted = s.sent().of(Opcode::CMSG_MAIL_DELETE);
+    CHECK(deleted.size() == (letter.goes ? 1u : 0u));
+    CHECK(ui.is(letter.goes ? "closed == 1" : "closed == nil"));
+    if (letter.goes) {
+        CHECK(deleted.front().readUInt64() == 0xF110000000000099ull);
+        CHECK(deleted.front().readUInt32() == 501);
+        CHECK(deleted.front().readUInt32() == 3);
+    }
+    if (letter.money != 0) {
+        wowee::network::Packet paid(wowee::game::wireOpcode(Opcode::SMSG_SEND_MAIL_RESULT));
+        for (uint32_t v : {501u, 1u, 0u}) paid.writeUInt32(v);
+        s.receive(paid);
+        deleted = s.sent().of(Opcode::CMSG_MAIL_DELETE);
+        REQUIRE(deleted.size() == 1);
+        deleted.front().readUInt64();
+        deleted.front().readUInt32();
+        CHECK(deleted.front().readUInt32() == 2);
+    }
 }
 
 // T278: 0x004fdbc0: what a chat line's event has.
