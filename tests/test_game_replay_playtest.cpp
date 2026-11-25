@@ -2431,3 +2431,23 @@ TEST_CASE("the guild bank is asked for what can be paid", "[replay][playtest]") 
     gh.buyGuildBankTab();
     CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_BUY_TAB).size() == 1);
 }
+
+// T303: the movement's facing is kept in 0..2 pi (0x004c5090); half the circle
+// went out below 0.
+TEST_CASE("the facing sent is never negative", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    for (float facing = 0.1f; facing < 6.28f; facing += 0.5f) {
+        INFO(facing);
+        gh.movementInfoRef().orientation = wowee::core::coords::serverToCanonicalYaw(facing);
+        gh.sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+        auto p = s.sent().of(Opcode::MSG_MOVE_HEARTBEAT).back();
+        CHECK(p.readPackedGuid() == Session::kPlayerGuid);
+        p.readUInt32();
+        p.readUInt16();
+        p.readUInt32();
+        for (int i = 0; i < 3; ++i) p.readFloat();
+        CHECK(p.readFloat() == Catch::Approx(facing).margin(1e-4));
+    }
+}

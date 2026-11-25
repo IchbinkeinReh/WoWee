@@ -1192,7 +1192,7 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
                     ") flags=0x", std::hex, movementInfo.flags, std::dec);
     }
 
-    wireInfo.orientation = core::coords::canonicalToServerYaw(wireInfo.orientation);
+    wireInfo.orientation = core::coords::canonicalToPlayerFacing(wireInfo.orientation);
 
     if (includeTransportInWire) {
         // Back to the wire's axes the way it came in (serverToTransportLocal):
@@ -1475,7 +1475,7 @@ network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counte
     wire.z = serverPos.z;
     // The facing too, as every other movement the client sends has it: the
     // canonical one went out, a quarter turn off.
-    wire.orientation = core::coords::canonicalToServerYaw(wire.orientation);
+    wire.orientation = core::coords::canonicalToPlayerFacing(wire.orientation);
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         glm::vec3 serverTransport =
             transportOffsetToWire(wire.transportGuid, glm::vec3(wire.transportX, wire.transportY, wire.transportZ));
@@ -5237,7 +5237,7 @@ MovementInfo MovementHandler::moverWireInfo() {
     wire.z = serverPos.z;
     if (wire.hasFlag(MovementFlags::ONTRANSPORT))
         wire.transportO = transportFacingToWire(wire.transportGuid, wire.orientation, wire.transportO);
-    wire.orientation = core::coords::canonicalToServerYaw(wire.orientation);
+    wire.orientation = core::coords::canonicalToPlayerFacing(wire.orientation);
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         wire.transportTime = wire.time;
         wire.transportTime2 = wire.time;
