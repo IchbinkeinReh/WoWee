@@ -278,6 +278,33 @@ TEST_CASE("what its colour lets nothing be seen of is not drawn", "[widget][draw
     CHECK(drawn() == 1);
 }
 
+// 0x0061b040: ANCHOR_NONE takes a tooltip's points away and sets none.
+TEST_CASE("a tooltip without a point is nowhere", "[widget][layout]") {
+    WidgetTree tree;
+    const uint32_t tip = tree.create(WidgetKind::Frame, tree.uiParentId(), "Tip");
+    auto* w = tree.get(tip);
+    w->objectType = "GameTooltip";
+    w->isTooltip = true;
+    w->width = 100.0f;
+    w->height = 50.0f;
+    w->tooltipLines.emplace_back();
+    w->tooltipLines.back().left = "x";
+    const auto drawn = [&] {
+        tree.layout(kScreenW, kScreenH);
+        return tree.drawOrder().size();
+    };
+    tree.get(tip)->tooltipAnchorType = 9;
+    CHECK(drawn() == 0);
+    CHECK_FALSE(tree.placed(tip));
+    // At the cursor its points are on their way.
+    tree.get(tip)->tooltipAnchorType = 8;
+    CHECK(drawn() == 1);
+    CHECK(tree.placed(tip));
+    tree.get(tip)->tooltipAnchorType = 9;
+    tree.addPoint(tip, Anchor{});
+    CHECK(drawn() == 1);
+}
+
 // 0x006c7440, 0x006c6c30; 0x00960420, 0x0048bd20.
 TEST_CASE("a shadow is never stronger than its words", "[widget]") {
     namespace rc = wowee::ui::region_colour;
@@ -4141,7 +4168,10 @@ TEST_CASE("a frame without points has no rect, nor has what is placed by it", "[
     CHECK(tree.placed(inner));
     const uint32_t tip = tree.create(WidgetKind::Frame, tree.rootId(), "Tip");
     tree.get(tip)->isTooltip = true;
+    tree.get(tip)->tooltipAnchorType = 8;   // ANCHOR_CURSOR
     CHECK(tree.placed(tip));
+    tree.get(tip)->tooltipAnchorType = 9;
+    CHECK_FALSE(tree.placed(tip));
     CHECK(Widget().editAutoFocus);
     CHECK(Widget().textInsetLeft == 0.0f);
     CHECK(Widget().textInsetRight == 0.0f);

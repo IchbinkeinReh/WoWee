@@ -817,9 +817,13 @@ const Anchor* WidgetTree::pointAt(uint32_t id, int index) const {
 bool WidgetTree::placedBy(const Widget& w, const std::function<bool(uint32_t)>& other) const {
     if (w.anchors.empty()) {
         // What the client places itself: the art and the text of a frame, a
-        // scroll frame's child, a tooltip.
+        // scroll frame's child, a tooltip at the cursor, whose points come with
+        // the next frame (followCursorTooltips). One of ANCHOR_NONE is nowhere
+        // until somebody gives it a point (0x0061b040) - where addons keep the
+        // ones they read.
         const Widget* parent = get(w.parent);
-        const bool bySelf = w.needsPoint || (w.kind == WidgetKind::Frame && !w.isTooltip &&
+        const bool atCursor = w.isTooltip && (w.tooltipAnchorType == 8 || w.tooltipAnchorType == 11);
+        const bool bySelf = w.needsPoint || (w.kind == WidgetKind::Frame && !atCursor &&
                                              !(parent && parent->scrollChild == w.id));
         return !bySelf && other(w.parent);
     }
