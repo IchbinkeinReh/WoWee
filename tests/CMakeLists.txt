@@ -4378,6 +4378,10 @@ wowee_add_test(test_chunk_name
 wowee_add_test(test_fizzle_sound
     SOURCES test_fizzle_sound.cpp)
 
+# ── test_cvar_ids ────────────────────────────────────────────
+wowee_add_test(test_cvar_ids
+    SOURCES test_cvar_ids.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

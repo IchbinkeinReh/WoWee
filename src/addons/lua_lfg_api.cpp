@@ -33,9 +33,12 @@
 // An empty answer is chosen deliberately over a plausible one. Every caller
 // here guards, and a fabricated reward or lock reads as fact.
 #include "addons/lua_api_helpers.hpp"
+#include "addons/cvar_ids.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/game_utils.hpp"
+#include "game/lfg_roles.hpp"
 #include "game/interface_text.hpp"
 
 #include <algorithm>
@@ -187,26 +190,28 @@ int lua_UnitHasLfgDebuff(lua_State* L) {
     return luaReturnFalse(L);
 }
 
-/// Which dungeons the player has ticked, and which headers are folded up.
-/// Both are the panel's own state - FrameXML says so in a comment, "we
-/// maintain this list in Lua" - and the only reason they are here is that it
-/// asks the client for the starting value.
-std::unordered_map<int, bool>& enabledDungeons() {
-    static std::unordered_map<int, bool> enabled;
-    return enabled;
-}
-std::unordered_map<int, bool>& collapsedHeaders() {
-    static std::unordered_map<int, bool> collapsed;
-    return collapsed;
+/// Which headers are folded up and which dungeons are ticked: the character's
+/// CVars (0x00555f30, 0x00555f80).
+constexpr const char* kCollapsedHeaders = "lfdCollapsedHeaders";
+constexpr const char* kSelectedDungeons = "lfdSelectedDungeons";
+
+void putCVarId(const char* cvar, uint32_t id, bool in) {
+    setStoredCVar(cvar, cvarWithId(storedCVarValue(cvar, ""), id, in));
 }
 
 int luaReturnNothing(lua_State* L) { (void)L; return 0; }
 
-/// The roles the player has offered. Kept on the handler now - the ready
-/// dialog names the role it found you a group for, and a static in this file
-/// was not somewhere GetLFGProposal could reach.
+/// The roles the player has offered.
 uint8_t offeredRoles(game::GameHandler* gh) {
     return gh ? gh->getLfgOfferedRoles() : 0;
+}
+
+/// Whether a row of LFGDungeons is in the dungeon side's list (0x00558350): flag
+/// 0x2, neither a random dungeon (type 6) nor a holiday (flag 0x4) - or in the raid
+/// side's (0x00558520): a raid.
+bool lfgListed(const game::LfgDungeon& d, bool dungeonSide) {
+    return dungeonSide ? ((d.flags & 0x2u) != 0 && d.typeId != 6 && (d.flags & 0x4u) == 0)
+                       : d.typeId == static_cast<uint32_t>(game::LfgTypeId::Raid);
 }
 
 /// Build the ordered id list one side of the panel shows: a header, then the
@@ -214,18 +219,14 @@ uint8_t offeredRoles(game::GameHandler* gh) {
 void pushChoiceOrder(lua_State* L, game::GameHandler* gh, bool dungeonSide) {
     lua_newtable(L);
     if (!gh) return;
-    // The two lists as the client builds them. The dungeon side (0x00558350):
-    // every row flagged 0x2 that is not a random dungeon (type 6) and not a
-    // holiday (flag 0x4), and a header for every LfgDungeonGroup whose TypeID
-    // is set. The raid side (0x00558520): every raid (type 2) and a header for
-    // every group. A header is the group's id negated.
+    // The two lists as the client builds them: the rows (lfgListed), and on the
+    // dungeon side (0x00558350) a header for every LfgDungeonGroup whose TypeID
+    // is set, on the raid side (0x00558520) for every group. A header is the
+    // group's id negated.
     struct Entry { int id; uint32_t group; const game::LfgDungeon* d; };
     std::vector<Entry> rows;
     for (const auto& d : gh->getLfgDungeons()) {
-        const bool listed = dungeonSide
-            ? ((d.flags & 0x2u) != 0 && d.typeId != 6 && (d.flags & 0x4u) == 0)
-            : d.typeId == static_cast<uint32_t>(game::LfgTypeId::Raid);
-        if (listed) rows.push_back({static_cast<int>(d.id), d.groupId, &d});
+        if (lfgListed(d, dungeonSide)) rows.push_back({static_cast<int>(d.id), d.groupId, &d});
     }
     for (const auto& [id, g] : gh->lfgGroups()) {
         if (dungeonSide && g.typeId == 0) continue;
@@ -361,19 +362,30 @@ void registerLfgLuaAPI(lua_State* L) {
     {"GetLFDChoiceEnabledState", [](lua_State* L) -> int {
         if (!lua_isnoneornil(L, 1) && !lua_istable(L, 1)) return luaL_error(L, "Usage: GetLFDChoiceEnabledState([table])");   // 0x005567e0
         lua_newtable(L);
-        for (const auto& [id, on] : enabledDungeons()) {
-            lua_pushboolean(L, on ? 1 : 0);
-            lua_rawseti(L, -2, id);
+        auto* gh = getGameHandler(L);
+        if (!gh) return 1;
+        const std::string selected = storedCVarValue(kSelectedDungeons, "");
+        for (const auto& d : gh->getLfgDungeons()) {
+            if (!(lfgListed(d, true) || lfgListed(d, false)) || !cvarHasId(selected, d.id)) continue;
+            lua_pushboolean(L, 1);
+            lua_rawseti(L, -2, static_cast<int>(d.id));
         }
         return 1;
     }},
     {"GetLFDChoiceCollapseState", [](lua_State* L) -> int {
         if (!lua_isnoneornil(L, 1) && !lua_istable(L, 1)) return luaL_error(L, "Usage: GetLFDChoiceCollapseState([table])");   // 0x005564d0
         lua_newtable(L);
-        for (const auto& [id, folded] : collapsedHeaders()) {
-            lua_pushboolean(L, folded ? 1 : 0);
+        auto* gh = getGameHandler(L);
+        if (!gh) return 1;
+        // A header's own, a dungeon's that of its group.
+        const std::string collapsed = storedCVarValue(kCollapsedHeaders, "");
+        const auto put = [L, &collapsed](int id, uint32_t group) {
+            lua_pushboolean(L, cvarHasId(collapsed, group) ? 1 : 0);
             lua_rawseti(L, -2, id);
-        }
+        };
+        for (const auto& [id, g] : gh->lfgGroups()) put(headerIdFor(id), id);
+        for (const auto& d : gh->getLfgDungeons())
+            if (lfgListed(d, true) || lfgListed(d, false)) put(static_cast<int>(d.id), d.groupId);
         return 1;
     }},
     // Which dungeons this character or the party may not queue for, and why:
@@ -454,13 +466,20 @@ void registerLfgLuaAPI(lua_State* L) {
     {"SetLFGDungeonEnabled", [](lua_State* L) -> int {
         if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetLFGDungeonEnabled(dungeonID, isEnabled)");   // 0x00556b60
         const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
-        if (id != 0) enabledDungeons()[id] = lua_toboolean(L, 2) != 0;
+        if (id > 0) putCVarId(kSelectedDungeons, static_cast<uint32_t>(id), lua_isnone(L, 2) || lua_toboolean(L, 2) != 0);
         return 0;
     }},
     {"SetLFGHeaderCollapsed", [](lua_State* L) -> int {
         if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetLFGHeaderCollapsed(headerID, isCollapsed)");   // 0x00556ad0
         const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
-        if (id != 0) collapsedHeaders()[id] = lua_toboolean(L, 2) != 0;
+        auto* gh = getGameHandler(L);
+        if (!gh || id >= 0) return 0;
+        const uint32_t group = static_cast<uint32_t>(-id);
+        for (const auto& [known, g] : gh->lfgGroups())
+            if (known == group) {
+                putCVarId(kCollapsedHeaders, group, lua_toboolean(L, 2) != 0);
+                break;
+            }
         return 0;
     }},
     // ClearLFGDungeon(type, id) (0x00559500 -> 0x005593a0): one slot taken out
@@ -535,11 +554,10 @@ void registerLfgLuaAPI(lua_State* L) {
         auto* gh = getGameHandler(L);
         const uint8_t cls = gh ? gh->getPlayerClass() : 0;
         // WARRIOR 1, PALADIN 2, PRIEST 5, SHAMAN 7, DRUID 11, DEATH KNIGHT 6
-        const bool tank   = cls == 1 || cls == 2 || cls == 11 || cls == 6;
-        const bool healer = cls == 2 || cls == 5 || cls == 7 || cls == 11;
-        lua_pushboolean(L, tank ? 1 : 0);
-        lua_pushboolean(L, healer ? 1 : 0);
-        lua_pushboolean(L, 1);
+        const uint8_t roles = game::lfgClassRoles(cls);
+        lua_pushboolean(L, (roles & 0x02) != 0);
+        lua_pushboolean(L, (roles & 0x04) != 0);
+        lua_pushboolean(L, (roles & 0x08) != 0);
         return 3;
     }},
     // CompleteLFGRoleCheck(accept) (0x00553e20): the role check answered -

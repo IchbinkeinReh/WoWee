@@ -1,3 +1,4 @@
+#include "game/lfg_roles.hpp"
 #include "game/group_defines.hpp"
 #include "core/local_time.hpp"
 #include "game/item_text.hpp"
@@ -5974,6 +5975,7 @@ void SocialHandler::lfgClearSlots() {
 }
 
 void SocialHandler::lfgJoinLocal(uint8_t roles) {
+    roles &= lfgClassRoles(owner_.getPlayerClass());  // 0x00553b50
     if (lfgLocalJoin_.slots.empty()) {
         gameError(owner_, ErrTo::Error, "ERR_LFG_NO_SLOTS_SELECTED", "You did not select any valid slots.");
         return;
@@ -6035,8 +6037,14 @@ void SocialHandler::lfgLeave() {
     owner_.getSocket()->send(pkt);
 }
 
+uint8_t SocialHandler::getLfgOfferedRoles() const {
+    // 0x00552e10: the character's CVar.
+    return static_cast<uint8_t>(std::atoi(addons::storedCVarValue("lfgSelectedRoles", "0").c_str()) & 0xff);
+}
+
 void SocialHandler::lfgSetRoles(uint8_t roles) {
-    lfgOfferedRoles_ = roles;
+    // 0x00553d60: those the class may take.
+    addons::setStoredCVar("lfgSelectedRoles", std::to_string(roles & lfgClassRoles(owner_.getPlayerClass())));
     // Three frames draw the same three role checkboxes - the dungeon queue, the
     // raid browser queue and the role-check popup - and every one of them ticks
     // from GetLFGRoles when this event arrives. Setting the roles without
@@ -6055,7 +6063,7 @@ int SocialHandler::lfgCompleteRoleCheck(bool accept) {
     if (!lfgThrottlePasses(lfgRoleSends_, lfgRoleWindowStart_, 10.0)) return -1;
     uint8_t roles = 0;
     if (accept) {
-        roles = lfgOfferedRoles_;
+        roles = getLfgOfferedRoles() & lfgClassRoles(owner_.getPlayerClass());  // 0x00553b50
         if ((roles & 0x0eu) == 0) {
             gameError(owner_, ErrTo::Error, "ERR_LFG_NO_ROLES_SELECTED", "You must select at least one role.");
             return 0;
@@ -6589,7 +6597,6 @@ void SocialHandler::resetForWorldEntry() {
     lfgPartyLocks_.clear();
     lfgPartyLocksReceived_ = false;
     lfgPlayerLocksReceived_ = false;
-    lfgOfferedRoles_ = 0;
     lfgWaitTank_ = lfgWaitHealer_ = lfgWaitDps_ = -1;
     lfgNeedTank_ = lfgNeedHealer_ = lfgNeedDps_ = 0;
     lfgBootVictimGuid_ = 0;

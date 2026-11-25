@@ -444,7 +444,7 @@ public:
     /// The roles last offered to the dungeon finder. lfgSetRoles used to send
     /// them and keep nothing, so the panel reading its own checkboxes back, and
     /// the ready dialog naming the role it found you a group for, had no source.
-    [[nodiscard]] uint8_t getLfgOfferedRoles() const { return lfgOfferedRoles_; }
+    [[nodiscard]] uint8_t getLfgOfferedRoles() const;
     [[nodiscard]] int32_t  getLfgWaitTank() const   { return lfgWaitTank_; }
     [[nodiscard]] int32_t  getLfgWaitHealer() const { return lfgWaitHealer_; }
     [[nodiscard]] int32_t  getLfgWaitDps() const    { return lfgWaitDps_; }
@@ -1176,7 +1176,6 @@ private:
     std::vector<LfgMemberLocks> lfgPartyLocks_;
     bool lfgPartyLocksReceived_ = false;
     bool lfgPlayerLocksReceived_ = false;
-    uint8_t  lfgOfferedRoles_ = 0;
     LfgLocalJoin lfgLocalJoin_;
     /// The two throttles: joins (0x00acdd6c, ten seconds) and comments
     /// (0x00acdd50, two).
