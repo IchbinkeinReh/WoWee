@@ -151,6 +151,9 @@ private:
     struct ZoneTextureSlots {
         VkTexture* tileTextures[12] = {};
         bool tilesLoaded = false;
+        /// Asked for (loadZoneTextures, loadOverlayTextures); read as the zone is
+        /// composited.
+        bool tilesWanted = false, overlaysWanted = false;
         // Per-overlay tile textures
         struct OverlaySlots {
             std::vector<VkTexture*> tiles;
@@ -161,6 +164,8 @@ private:
     std::vector<ZoneTextureSlots> zoneTextureSlots_;
 
     void ensureTextureSlots(size_t zoneCount, const std::vector<Zone>& zones);
+    void fetchZoneTextures(int zoneIdx, const std::vector<Zone>& zones);
+    void fetchOverlayTextures(int zoneIdx, const std::vector<Zone>& zones);
 };
 
 } // namespace world_map

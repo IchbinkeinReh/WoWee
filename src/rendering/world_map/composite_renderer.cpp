@@ -263,9 +263,19 @@ void CompositeRenderer::shutdown() {
 }
 
 void CompositeRenderer::loadZoneTextures(int zoneIdx, std::vector<Zone>& zones,
-                                          const std::string& mapName) {
+                                          const std::string& /*mapName*/) {
     if (zoneIdx < 0 || zoneIdx >= static_cast<int>(zones.size())) return;
     ensureTextureSlots(zones.size(), zones);
+    zoneTextureSlots_[zoneIdx].tilesWanted = true;
+}
+
+void CompositeRenderer::loadOverlayTextures(int zoneIdx, std::vector<Zone>& zones) {
+    if (zoneIdx < 0 || zoneIdx >= static_cast<int>(zones.size())) return;
+    ensureTextureSlots(zones.size(), zones);
+    zoneTextureSlots_[zoneIdx].overlaysWanted = true;
+}
+
+void CompositeRenderer::fetchZoneTextures(int zoneIdx, const std::vector<Zone>& zones) {
     auto& slots = zoneTextureSlots_[zoneIdx];
     if (slots.tilesLoaded) return;
     slots.tilesLoaded = true;
@@ -275,7 +285,7 @@ void CompositeRenderer::loadZoneTextures(int zoneIdx, std::vector<Zone>& zones,
     if (folder.empty()) return;
 
     LOG_INFO("loadZoneTextures: zone[", zoneIdx, "] areaName='", zone.areaName,
-             "' areaID=", zone.areaID, " mapName='", mapName, "'");
+             "' areaID=", zone.areaID);
 
     VkDevice device = vkCtx->getDevice();
 
@@ -314,10 +324,7 @@ void CompositeRenderer::loadZoneTextures(int zoneIdx, std::vector<Zone>& zones,
     LOG_INFO("CompositeRenderer: loaded ", loaded, "/12 tiles for '", folder, "'");
 }
 
-void CompositeRenderer::loadOverlayTextures(int zoneIdx, std::vector<Zone>& zones) {
-    if (zoneIdx < 0 || zoneIdx >= static_cast<int>(zones.size())) return;
-    ensureTextureSlots(zones.size(), zones);
-
+void CompositeRenderer::fetchOverlayTextures(int zoneIdx, const std::vector<Zone>& zones) {
     const auto& zone = zones[zoneIdx];
     auto& slots = zoneTextureSlots_[zoneIdx];
     if (zone.overlays.empty()) return;
@@ -380,6 +387,7 @@ void CompositeRenderer::detachZoneTextures() {
     for (auto& slots : zoneTextureSlots_) {
         for (auto& tex : slots.tileTextures) tex = nullptr;
         slots.tilesLoaded = false;
+        slots.tilesWanted = slots.overlaysWanted = false;
         for (auto& ov : slots.overlays) {
             for (auto& t : ov.tiles) t = nullptr;
             ov.tilesLoaded = false;
@@ -422,6 +430,10 @@ void CompositeRenderer::compositePass(VkCommandBuffer cmd,
 
     if (compositedIdx_ == zoneIdx) return;
     ensureTextureSlots(zones.size(), zones);
+    // Its pictures, read now that it is shown: the interface may set the map to
+    // any number of zones between two frames, with the map closed.
+    if (zoneTextureSlots_[zoneIdx].tilesWanted) fetchZoneTextures(zoneIdx, zones);
+    if (zoneTextureSlots_[zoneIdx].overlaysWanted) fetchOverlayTextures(zoneIdx, zones);
 
     const auto& zone = zones[zoneIdx];
     const auto& slots = zoneTextureSlots_[zoneIdx];
