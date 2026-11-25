@@ -14929,7 +14929,12 @@ void LuaEngine::registerCoreAPI() {
         // undefined global answers with a truthy stand-in, so `if not
         // __cmpSeen` would never be taken and the table never made.
         "local __cmpSeen = {}\n"
-        "local function __cmpNo(why)\n"
+        "local function __cmpNo(why, tip)\n"
+        // A refusal is answered by GameTooltip_ShowCompareItem not showing this
+        // tooltip - not by hiding one already up: shown for the last item
+        // hovered and cleared for this one, it stayed on screen as an empty box
+        // beside the cursor.
+        "    tip:Hide()\n"
         "    if not __cmpSaid[why] then\n"
         "        __cmpSaid[why] = true\n"
         "        __WoweeLogWarning('item compare refused: ' .. why)\n"
@@ -14940,14 +14945,10 @@ void LuaEngine::registerCoreAPI() {
         "    if not __WoweeIsText(link) then\n"   // 0x00631b60
         "        __WoweeUsageError(self, 'Usage: %s:SetHyperlinkCompareItem(\"hyperlink\" [, offset, shiftButton])')\n"
         "    end\n"
+        // Cleared, not hidden (0x00631b60): hidden it has no owner any more,
+        // and what is put into it then is nothing.
         "    self:ClearLines()\n"
-        // And hidden, because a refusal below returns false and
-        // GameTooltip_ShowCompareItem answers that by simply not showing this
-        // tooltip - not by hiding one already up. Shown for the last item
-        // hovered and cleared for this one, it stayed on screen as an empty
-        // box beside the cursor. Every success path calls Show() at the end.
-        "    self:Hide()\n"
-        "    if not link then return __cmpNo('no link given') end\n"
+        "    if not link then return __cmpNo('no link given', self) end\n"
         // What the tooltip believes it is showing, said once per item. The
         // comparison is only ever as right as this: GameTooltip_ShowCompareItem
         // reads GetItem() and passes the link on, so an item recorded by an
@@ -14959,11 +14960,11 @@ void LuaEngine::registerCoreAPI() {
         "        __WoweeLogWarning('item compare asked about ' .. tostring(link))\n"
         "    end\n"
         "    local id = tonumber(link:match('item:(%d+)'))\n"
-        "    if not id then return __cmpNo('link carries no item id') end\n"
+        "    if not id then return __cmpNo('link carries no item id', self) end\n"
         "    local _, _, _, _, _, _, _, _, equipSlot = GetItemInfo(id)\n"
-        "    if not equipSlot or equipSlot == '' then return __cmpNo('GetItemInfo gave no equip slot') end\n"
+        "    if not equipSlot or equipSlot == '' then return __cmpNo('GetItemInfo gave no equip slot', self) end\n"
         "    local slots = __WoweeCompareSlots[equipSlot]\n"
-        "    if not slots then return __cmpNo('no slot mapping for ' .. tostring(equipSlot)) end\n"
+        "    if not slots then return __cmpNo('no slot mapping for ' .. tostring(equipSlot), self) end\n"
         // 0x00631850: the index-th of the fitting slots that hold something
         // - an empty first ring slot does not stop the second being compared.
         "    local slot, seen = nil, 0\n"
@@ -14973,13 +14974,13 @@ void LuaEngine::registerCoreAPI() {
         "            if seen == (index or 1) then slot = s break end\n"
         "        end\n"
         "    end\n"
-        "    if not slot then return __cmpNo('no slot at compare index') end\n"
+        "    if not slot then return __cmpNo('no slot at compare index', self) end\n"
         // Nothing worn there is not a comparison, it is an empty tooltip -
         // and answering true for one would show a blank box beside the item.
         "    local wornLink = GetInventoryItemLink('player', slot)\n"
-        "    if not wornLink then return __cmpNo('nothing worn in slot ' .. tostring(slot)) end\n"
+        "    if not wornLink then return __cmpNo('nothing worn in slot ' .. tostring(slot), self) end\n"
         "    local wornId = tonumber(wornLink:match('item:(%d+)'))\n"
-        "    if not wornId then return __cmpNo('worn link carries no item id') end\n"
+        "    if not wornId then return __cmpNo('worn link carries no item id', self) end\n"
         // An item you already wear is compared against itself, and the panel
         // shows it twice. That reads oddly written down and it is what the real
         // client does: the comparison answers "here is what you have in that
@@ -14998,7 +14999,7 @@ void LuaEngine::registerCoreAPI() {
         "    local ok, filled = pcall(self.SetInventoryItem, self, 'player', slot)\n"
         "    __WoweeTooltipEquippedHeader = nil\n"
         "    if not ok then error(filled, 0) end\n"
-        "    if not filled then return __cmpNo('no tooltip could be built for the worn item') end\n"
+        "    if not filled then return __cmpNo('no tooltip could be built for the worn item', self) end\n"
         // With the item's own tooltip given, what would change with it
         // (0x00631850 -> 0x00631590, 0x0062d930).
         "    local _, itemLink\n"

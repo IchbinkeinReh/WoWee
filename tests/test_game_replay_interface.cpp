@@ -1096,6 +1096,45 @@ TEST_CASE("a gem to be destroyed is said to be", "[replay][interface]") {
     CHECK(has(lines("24022, {gems = {gem}}"), "|asks Cut:10,1|needs Cut:10,1|"));
 }
 
+// T295: the comparison hid its own tooltip, and with that let go of its owner: nothing was put into
+// it. T296: a tooltip without the money's script has no price.
+TEST_CASE("an item's comparison shows what is worn", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    answerItem(s, 24021, "Dagger", 70);
+    answerItem(s, 24022, "Sword", 90);
+    wowee::game::ItemDef item;
+    item.guid = 0x4000000000000778ull;
+    item.itemId = 24022;
+    item.name = "Sword";
+    item.stackCount = 1;
+    s.handler().getInventory().setEquipSlot(wowee::game::EquipSlot::MAIN_HAND, item);
+    s.handler().onlineItemsRef()[item.guid].entry = 24022;
+    ui.run("local real = GetItemInfo GetItemInfo = function(id) local a, b, q, d, e, f, g, h, _, j, k = real(id) "
+           "  return a, b, q, d, e, f, g, h, 'INVTYPE_WEAPONMAINHAND', j, k end "
+           "GetInventoryItemLink = function(u, slot) if slot == 16 then return 'item:24022:0:0:0:0:0:0:0' end end "
+           "tip = CreateFrame('GameTooltip', 'PlayCompare', UIParent) anchor = CreateFrame('Frame')");
+    const auto* w = ui.engine.widgets().findByName("PlayCompare");
+    REQUIRE(w);
+    // Asked before it has an owner, as GameTooltip_ShowCompareItem does, and again with one.
+    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1)"));
+    ui.run("tip:SetOwner(anchor, 'ANCHOR_NONE')");
+    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1)"));
+    REQUIRE(w->tooltipLines.size() >= 2);
+    CHECK(w->tooltipLines[1].left == "Sword");
+    CHECK(ui.is("tip:IsShown()"));
+    for (const auto& line : w->tooltipLines) CHECK(line.left.find("|T") == std::string::npos);
+    // Nothing worn there: gone.
+    ui.run("GetInventoryItemLink = function() end");
+    CHECK(ui.is("not tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1) and not tip:IsShown()"));
+    // The script has it.
+    ui.run("tip:SetScript('OnTooltipAddMoney', function(self, m) money = m end) tip:SetOwner(anchor, 'ANCHOR_NONE') "
+           "GetInventoryItemLink = function(u, slot) if slot == 16 then return 'item:24022:0:0:0:0:0:0:0' end end "
+           "tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1)");
+    CHECK(ui.is("money == 90"));
+}
+
 // T278: 0x004fdbc0: what a chat line's event has.
 TEST_CASE("the client's own chat lines are from no one", "[replay][interface]") {
     Session s;
