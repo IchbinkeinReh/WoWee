@@ -21,10 +21,8 @@
 // button already has that of its state; this is the other half. Run with __WoweeFrameMT defined, after
 // the block that installs the rest of the button methods.
 //
-// GetFontString makes a label on demand when a button is asked for one it has
-// not been given. Every button has a font string in the real client, and
-// FrameXML assumes it: FCF_SetTabColor does
-// minFrame:GetFontString():SetTextColor(...) without checking.
+// SetText makes a button without a label one; GetFontString answers none
+// (0x009778e0).
 
 namespace wowee::addons {
 
@@ -58,6 +56,10 @@ function mt:SetFontString(fs)
 end
 
 function mt:GetFontString()
+    return self.__fontString
+end
+
+function __WoweeButtonLabel(self)
     if not self.__fontString and self.CreateFontString then
         self:SetFontString(self:CreateFontString(nil, 'OVERLAY'))
     end

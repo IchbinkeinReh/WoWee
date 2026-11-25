@@ -274,10 +274,13 @@ TEST_CASE("a label with no anchors sits where its button's font justifies", "[ad
             for _, font in ipairs({ 'GameFontNormal', 'QuestFontLeft', 'GameFontNormalRight' }) do
                 local b = newButton()
                 b:SetNormalFontObject(font)
-                local fs = b:GetFontString()       -- made on demand
+                if b:GetFontString() then table.insert(out, 'early') end
+                local fs = __WoweeButtonLabel(b)   -- as SetText makes it
                 table.insert(out, fs.points[1] .. '/' .. fs.justifyH)
             end
-            local plain = newButton():GetFontString()
+            local button = newButton()
+            local plain = __WoweeButtonLabel(button)
+            if button:GetFontString() ~= plain then table.insert(out, 'another') end
             table.insert(out, plain.points[1] .. '/' .. plain.justifyH)
             return table.concat(out, ' ')
         )LUA", "Placement"},

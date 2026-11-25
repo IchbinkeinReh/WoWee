@@ -8449,6 +8449,13 @@ int lua_FontString_SetFont(lua_State* L) {
 /// the emitter already fixed.
 int lua_FontString_GetFont(lua_State* L) {
     const auto* w = widgetOf(L, 1);
+    // A string without a font has none (0x0048d510).
+    if (w && w->kind == ui::WidgetKind::FontString && w->fontFace.empty()) {
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        lua_pushstring(L, "");
+        return 3;
+    }
     lua_pushstring(L, (w && !w->fontFace.empty()) ? w->fontFace.c_str()
                                                   : "Fonts\\FRIZQT__.TTF");
     lua_pushnumber(L, wowee::ui::interfaceFontSize(w ? w->fontHeight : 0.0f));
@@ -14046,8 +14053,7 @@ void LuaEngine::registerCoreAPI() {
         // kButtonLabelLua's, run once this block has.
         // The fill of a status bar, as an object. This client keeps a bar's
         // fill as a texture *path* on the bar itself, so there is no region to
-        // hand back and one is made on demand - the same answer GetFontString
-        // gives, and for the same reason.
+        // hand back and one is made on demand.
         //
         // It was nil, and blizzard_achievementui does
         // `self:GetStatusBarTexture():SetDrawLayer("BORDER")` in the OnLoad of
@@ -14103,18 +14109,16 @@ void LuaEngine::registerCoreAPI() {
         // only carry text="DEFAULTS" and inherit a template with a NormalFont
         // and no ButtonText - UIPanelButtonGrayTemplate is the one in the
         // options frames - had nowhere to put it: GetText answered correctly
-        // and the button drew blank. GetFontString above already creates one
-        // on demand and is the same call, so this is the existing answer
-        // rather than a second one.
+        // and the button drew blank.
         //
         // Only for a button. A plain frame's SetText is a value it keeps, and
         // giving every frame a font string would draw labels nothing asked
         // for.
-        // GetFontString makes it through SetFontString, which places it
-        // and gives it the button's font, as the real client does.
+        // Made through SetFontString, which places it and gives it the
+        // button's font, as the real client does.
         "    if not self.__fontString and self.IsObjectType\n"
         "       and self:IsObjectType('Button') then\n"
-        "        self:GetFontString()\n"
+        "        __WoweeButtonLabel(self)\n"
         "    end\n"
         "    if self.__fontString then __WoweeSetStringText(self.__fontString, text) end\n"
         "end\n"

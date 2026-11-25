@@ -1033,11 +1033,14 @@ TEST_CASE("a string without a font takes no text", "[replay][interface]") {
     CHECK(ui.is("not ok and why:find('PlayNoFont:SetText%(%): Font not set')"));
     CHECK(ui.is("not ok2 and why2:find('<unnamed>:SetFormattedText%(%): Font not set')"));
     CHECK(ui.is("w:GetText() == nil"));
+    // T201: 0x0048d510, 0x009778e0.
+    CHECK(ui.is("w:GetFont() == nil and select(2, w:GetFont()) == 0 and select(3, w:GetFont()) == ''"));
+    CHECK(ui.is("CreateFrame('Button'):GetFontString() == nil"));
     ui.run("w:SetFont('Fonts\\\\FRIZQT__.TTF', 12) w:SetText('x') w:SetFormattedText('%d', 7)");
     CHECK(ui.is("w:GetText() == '7'"));
     // A button's own says it, with a font or without, and so does the XML's.
     ui.run("b = CreateFrame('Button') b:SetText('y')");
-    CHECK(ui.is("b:GetText() == 'y'"));
+    CHECK(ui.is("b:GetText() == 'y' and b:GetFontString():GetText() == 'y'"));
     wowee::ui::XmlNode root;
     std::string error;
     REQUIRE(wowee::ui::parseXml("<Ui><Frame name=\"PlayNoFontXml\"><Layers><Layer>"
