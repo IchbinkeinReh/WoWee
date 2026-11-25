@@ -1637,6 +1637,8 @@ public:
     /// anything - not a guess. The next full pass overwrites both values as it
     /// always did.
     void noteScreenSize(float pixelW, float pixelH);
+    /// The screen's rect, and UIParent's in it, from the size last noted.
+    void placeScreen();
 
 private:
 

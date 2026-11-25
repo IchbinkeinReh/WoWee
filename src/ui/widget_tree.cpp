@@ -842,6 +842,37 @@ void WidgetTree::noteScreenSize(float pixelW, float pixelH) {
     // pass is in the units everything else will be in.
     uiScale_ = (pixelH / kInterfaceHeight) * userScale_;
     markLayoutDirty();
+    // And what everything is measured from: a rect asked for before the first
+    // pass walks up to the screen and UIParent and takes them as they stand.
+    placeScreen();
+}
+
+void WidgetTree::placeScreen() {
+    const float units = uiScale_ > 0.0f ? uiScale_ : 1.0f;
+    const float screenW = lastPixelW_ / units;
+    const float screenH = lastPixelH_ / units;
+    if (Widget* screen = get(rootId_)) {
+        screen->left = screen->bottom = 0.0f;
+        if (screen->rectW != screenW || screen->rectH != screenH) markResizePending(rootId_);
+        screen->rectW = screenW;
+        screen->rectH = screenH;
+        screen->effScale = 1.0f;
+    }
+    // UIParent inside the safe area, where the display has one: in landscape
+    // an iPhone's notch covers one side and its home indicator the bottom.
+    if (Widget* ui = get(uiParentId_); ui && uiParentId_ != rootId_) {
+        const float insetL = safeLeft_ / units, insetR = safeRight_ / units;
+        const float insetT = safeTop_ / units, insetB = safeBottom_ / units;
+        const float uiW = std::max(1.0f, screenW - insetL - insetR);
+        const float uiH = std::max(1.0f, screenH - insetT - insetB);
+        if (ui->left != insetL || ui->bottom != insetB) ++layoutGeneration_;
+        ui->left = insetL;
+        ui->bottom = insetB;
+        if (ui->rectW != uiW || ui->rectH != uiH) markResizePending(ui->id);
+        ui->rectW = uiW;
+        ui->rectH = uiH;
+        ui->effScale = 1.0f;
+    }
 }
 
 void WidgetTree::resolveWidget(uint32_t id) {
@@ -925,39 +956,20 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     const auto solveStart = std::chrono::steady_clock::now();
     visibleThisPass_ = 0;
 
+    placeScreen();
     Widget& rootW = widgets_[rootId_];
-    rootW.left = 0.0f;
-    rootW.bottom = 0.0f;
-    if (rootW.rectW != screenW || rootW.rectH != screenH) markResizePending(rootId_);
-    rootW.rectW = screenW;
-    rootW.rectH = screenH;
     if ((!rootW.visibleChain || !rootW.visible) && rootW.shown) ++visibilityRaises_;
     rootW.visibleChain = rootW.shown;
     setVisible(rootW, rootW.shown);
     if (rootW.visible) mayBeVisible_.set(rootId_);
     rootW.effStrata = rootW.strata;
     rootW.effLevel = 0;
-    rootW.effScale = 1.0f;
 
     // UIParent fills the screen and is laid out here rather than by anchors:
     // it is created before any XML is read, so it has none, and a frame with
     // no anchors is not displayed. Its own shown flag still decides whether
     // anything under it is, which is the whole point of it being a frame.
-    //
-    // Inside the safe area, where the display has one: in landscape an
-    // iPhone's notch covers one side and its home indicator the bottom.
     if (Widget* ui = get(uiParentId_); ui && ui != &rootW) {
-        const float toUnits = (uiScale_ > 0.0f) ? 1.0f / uiScale_ : 1.0f;
-        const float insetL = safeLeft_ * toUnits, insetR = safeRight_ * toUnits;
-        const float insetT = safeTop_ * toUnits, insetB = safeBottom_ * toUnits;
-        const float uiW = std::max(1.0f, screenW - insetL - insetR);
-        const float uiH = std::max(1.0f, screenH - insetT - insetB);
-        if (ui->left != insetL || ui->bottom != insetB) ++layoutGeneration_;
-        ui->left = insetL;
-        ui->bottom = insetB;
-        if (ui->rectW != uiW || ui->rectH != uiH) markResizePending(ui->id);
-        ui->rectW = uiW;
-        ui->rectH = uiH;
         const bool uiVisible = rootW.visible && ui->shown;
         if (uiVisible && (!ui->visibleChain || !ui->visible)) ++visibilityRaises_;
         ui->visibleChain = uiVisible;
@@ -965,7 +977,6 @@ void WidgetTree::layout(float pixelW, float pixelH) {
         if (ui->visible) mayBeVisible_.set(ui->id);
         ui->effStrata = ui->strata;
         ui->effLevel = 0;
-        ui->effScale = 1.0f;
         for (uint32_t child : ui->children) layoutWidget(child, screenW, screenH);
     }
 

@@ -4000,3 +4000,29 @@ TEST_CASE("a frame raised twice before a layout keeps what is inside where it is
     CHECK(tree.get(bar)->effLevel == tree.get(win)->effLevel);
     CHECK(tree.get(text)->effLevel == tree.get(win)->effLevel + 1);
 }
+
+// P70: after /reload the objectives were closed for good. WatchFrame_Update asks WatchFrame for its
+// top and its bottom as the world is entered, before the new interface's first layout, and what
+// hangs between the minimap at the screen's top and something at its bottom had no screen to
+// hang in.
+TEST_CASE("a rect asked for before the first layout hangs in the screen", "[widget][resolve]") {
+    WidgetTree tree;
+    for (int interface = 0; interface < 2; ++interface) {
+        if (interface == 1) tree.reset();  // /reload
+        tree.noteScreenSize(1024.0f, 768.0f);
+        const uint32_t cluster = tree.create(WidgetKind::Frame, tree.uiParentId(), "MinimapCluster");
+        tree.get(cluster)->width = tree.get(cluster)->height = 192.0f;
+        tree.get(cluster)->anchors.push_back({.point = "TOPRIGHT", .relativePoint = "TOPRIGHT"});
+        const uint32_t watch = tree.create(WidgetKind::Frame, tree.uiParentId(), "WatchFrame");
+        tree.get(watch)->width = 204.0f;
+        tree.get(watch)->anchors.push_back(
+            {.point = "TOPRIGHT", .relativeTo = cluster, .relativePoint = "BOTTOMRIGHT"});
+        tree.get(watch)->anchors.push_back({.point = "BOTTOM", .relativePoint = "BOTTOM", .y = 100.0f});
+        tree.resolveWidget(watch);
+        const float tall = tree.get(watch)->rectH;
+        CHECK(tall == Catch::Approx(768.0f - 192.0f - 100.0f));
+        // And the first layout puts it nowhere else.
+        tree.layout(1024.0f, 768.0f);
+        CHECK(tree.get(watch)->rectH == Catch::Approx(tall));
+    }
+}
