@@ -237,6 +237,8 @@ struct M2Batch {
     uint16_t textureUnit;           // Texture unit
     uint16_t transparencyIndex;     // Transparency animation index
     uint16_t textureAnimIndex;      // Texture animation index
+    /// The shader id of one of a model's that are folded (m2FoldLayers); 0xFFFF in the others.
+    uint16_t foldedShader = 0xFFFF;
 
     // Render data
     uint32_t indexStart;            // First index

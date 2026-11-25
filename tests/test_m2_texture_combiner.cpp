@@ -120,3 +120,114 @@ TEST_CASE("packing for the shaders", "[m2]") {
     CHECK(m2PackCombinerModes(c) == (M2_COMBINE_MOD | (M2_COMBINE_MOD2X << 4) | (2 << 8)));
     CHECK(m2PackCoordSources(c) == (2 | (3 << 2)));
 }
+
+namespace {
+struct Material {
+    uint16_t flags = 0, blendMode = 0;
+};
+struct Batch {
+    uint16_t shader = 0, materialIndex = 0, materialLayer = 0, textureCount = 1, textureIndex = 0, textureUnit = 0,
+             transparencyIndex = 0, textureAnimIndex = 0, foldedShader = 0xFFFF;
+};
+struct Model {
+    uint32_t globalFlags = 0;
+    std::vector<Batch> batches;
+    std::vector<Material> materials;
+    std::vector<uint16_t> textureLookup, textureCoordCombos, textureCombinerCombos, textureTransformLookup,
+        textureWeightLookup;
+};
+}  // namespace
+
+// 0x00837680, with Polearm_2H_Lance_A_01's data: drawn see-through it was twice as opaque as who
+// held it.
+TEST_CASE("a reflecting layer and its texture again over it are one", "[m2]") {
+    Model m{.globalFlags = 8,
+            .batches = {{.materialIndex = 0, .textureCount = 2}, {.materialIndex = 1, .materialLayer = 1}},
+            .materials = {{0, 0}, {0, 1}},
+            .textureLookup = {0, 1},
+            .textureCoordCombos = {0, 0xFFFF},
+            .textureCombinerCombos = {1, 4},
+            .textureTransformLookup = {0xFFFF, 0xFFFF},
+            .textureWeightLookup = {0}};
+    const Model as = m;
+    m2FoldLayers(m);
+    CHECK(m2ShaderIdOf(m, m.batches[0]) == 0x8001);
+    CHECK(m2ShaderIdOf(m, m.batches[1]) == 0x8000);
+    CHECK_FALSE(m2ResolveCombiner(0x8000, 1, 0).drawn);
+    CHECK(m2ResolveCombiner(m2ShaderIdOf(m, m.batches[0]), m.batches[0].textureCount, 0).mode[1] ==
+          M2_COMBINE_MOD2X_NA_ALPHA);
+    // Not one unlit over a lit one, another's texture, another weight, or an added one.
+    const auto stays = [&](Model with) {
+        m2FoldLayers(with);
+        return m2ShaderIdOf(with, with.batches[0]) == 0x000C && m2ShaderIdOf(with, with.batches[1]) != 0x8000;
+    };
+    Model other = as;
+    other.materials[1].flags = 1;
+    CHECK(stays(other));
+    other = as;
+    other.batches[1].textureIndex = 1;
+    CHECK(stays(other));
+    other = as;
+    other.textureWeightLookup = {0, 1};
+    other.batches[1].transparencyIndex = 1;
+    CHECK(stays(other));
+    other = as;
+    other.materials[1].blendMode = 4;
+    CHECK(stays(other));
+    // Nothing over another: left alone.
+    other = as;
+    other.batches.pop_back();
+    m2FoldLayers(other);
+    CHECK(other.batches[0].foldedShader == 0xFFFF);
+}
+
+TEST_CASE("a reflection added or doubled over a texture is its second texture", "[m2]") {
+    Model m{.batches = {{.materialIndex = 0, .textureIndex = 0, .textureUnit = 0},
+                        {.materialIndex = 1, .materialLayer = 1, .textureIndex = 1, .textureUnit = 1, .textureAnimIndex = 1},
+                        {.materialIndex = 2, .materialLayer = 2, .textureIndex = 0, .textureUnit = 0}},
+            .materials = {{0, 0}, {0, 4}, {0, 2}},
+            .textureLookup = {3, 5},
+            .textureCoordCombos = {0, 0xFFFF},
+            .textureTransformLookup = {0xFFFF, 2},
+            .textureWeightLookup = {0}};
+    Model two = m;
+    two.batches.pop_back();
+    m2FoldLayers(two);
+    CHECK(two.batches[0].foldedShader == 0x8002);
+    CHECK(two.batches[1].foldedShader == 0x8000);
+    REQUIRE(two.batches[0].textureCount == 2);
+    CHECK(two.textureLookup[two.batches[0].textureIndex] == 3);
+    CHECK(two.textureLookup[two.batches[0].textureIndex + 1u] == 5);
+    CHECK(two.textureTransformLookup[two.batches[0].textureAnimIndex] == 0xFFFF);
+    CHECK(two.textureTransformLookup[two.batches[0].textureAnimIndex + 1u] == 2);
+    // Doubled: the program of a texture and a reflection doubled over it.
+    two = m;
+    two.batches.pop_back();
+    two.materials[1].blendMode = 6;
+    m2FoldLayers(two);
+    CHECK(two.batches[0].foldedShader == 0x000E);
+    // And the texture once more over that.
+    Model three = m;
+    m2FoldLayers(three);
+    CHECK(three.batches[0].foldedShader == 0x8003);
+    CHECK(three.batches[2].foldedShader == 0x8000);
+    three = m;
+    three.materials[1].blendMode = 6;
+    m2FoldLayers(three);
+    CHECK(three.batches[0].foldedShader == 0x8001);
+}
+
+TEST_CASE("a batch of the material before it is drawn as that one", "[m2]") {
+    Model m{.batches = {{.materialIndex = 0}, {.materialIndex = 1, .materialLayer = 1, .textureIndex = 1, .textureUnit = 1},
+                        {.materialIndex = 0}, {.materialIndex = 0, .textureIndex = 1}},
+            .materials = {{0, 0}, {0, 4}},
+            .textureLookup = {0, 1},
+            .textureCoordCombos = {0, 0xFFFF},
+            .textureTransformLookup = {0xFFFF, 0xFFFF},
+            .textureWeightLookup = {0}};
+    m2FoldLayers(m);
+    CHECK(m.batches[0].foldedShader == 0x8002);
+    CHECK(m.batches[2].foldedShader == 0x0000);
+    CHECK(m.batches[3].foldedShader == 0x0000);
+    CHECK(m.batches[3].textureIndex == m.batches[2].textureIndex);
+}

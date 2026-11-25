@@ -1758,11 +1758,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             // it combines, by what, and where each one's coordinates come from.
             bool shaderless = false;
             {
-                const uint16_t matBlend = batch.materialIndex < model.materials.size()
-                    ? model.materials[batch.materialIndex].blendMode : 0;
-                const uint16_t shaderId = m2BatchShaderId(
-                    batch.shader, matBlend, batch.textureCount, batch.textureUnit,
-                    model.globalFlags, model.textureCoordCombos, model.textureCombinerCombos);
+                const uint16_t shaderId = m2ShaderIdOf(model, batch);
                 const uint16_t firstCoord = batch.textureUnit < model.textureCoordCombos.size()
                     ? model.textureCoordCombos[batch.textureUnit] : 0;
                 const M2BatchCombiner comb = m2ResolveCombiner(shaderId, batch.textureCount, firstCoord);

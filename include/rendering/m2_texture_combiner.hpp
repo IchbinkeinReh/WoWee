@@ -108,6 +108,138 @@ inline uint16_t m2BatchShaderId(uint16_t fileShader, uint16_t blendMode, uint16_
     return static_cast<uint16_t>(id | (vals[0] << 4) | vals[1]);
 }
 
+/// The shader id of a model's batch.
+template <typename Model, typename Batch>
+inline uint16_t m2ShaderIdOf(const Model& model, const Batch& batch) {
+    if (batch.foldedShader != 0xFFFF) return batch.foldedShader;
+    const uint16_t blend =
+        batch.materialIndex < model.materials.size() ? model.materials[batch.materialIndex].blendMode : 0;
+    return m2BatchShaderId(batch.shader, blend, batch.textureCount, batch.textureUnit, model.globalFlags,
+                           model.textureCoordCombos, model.textureCombinerCombos);
+}
+
+/// Batches laid one over the other that one pixel program draws (0x00837680): what reflects under
+/// the same texture again (0x8001), what is added to or doubled over it by a reflection (0x8002,
+/// 0x000e), and those with the texture again over that (0x8003, 0x8001). The first of them takes
+/// the textures and the program, the others are drawn no more (0x8000). Not folded they are so
+/// many layers, which is the same picture - but not of something see-through.
+/// Nothing is done to a model with no batch over another.
+template <typename Model>
+inline void m2FoldLayers(Model& model) {
+    bool layered = false;
+    for (const auto& b : model.batches) layered = layered || b.materialLayer != 0;
+    if (!layered) return;
+    // 0x00835e90: the textures and the transforms themselves, a pair of them in two bytes.
+    struct Row {
+        uint16_t texture = 0, transform = 0;
+        bool paired = false;
+    };
+    std::vector<Row> rows;
+    const auto transformOf = [&](uint32_t i) -> uint8_t {
+        const uint16_t v = i < model.textureTransformLookup.size() ? model.textureTransformLookup[i] : 0xFFFF;
+        return v == 0xFFFF ? 0 : static_cast<uint8_t>(v + 1);
+    };
+    for (auto& b : model.batches) {
+        Row r;
+        b.foldedShader = m2ShaderIdOf(model, b);
+        r.texture = detail::m2At(model.textureLookup, b.textureIndex);
+        r.transform = transformOf(b.textureAnimIndex);
+        if (b.textureCount == 2) {
+            r.texture = static_cast<uint16_t>((r.texture & 0xFF) |
+                                              (detail::m2At(model.textureLookup, b.textureIndex + 1u) << 8));
+            r.transform = static_cast<uint16_t>(r.transform | (transformOf(b.textureAnimIndex + 1u) << 8));
+        }
+        rows.push_back(r);
+    }
+    const auto coord = [&](const auto& b, uint32_t i) { return detail::m2At(model.textureCoordCombos, b.textureUnit + i); };
+    const auto weight = [&](const auto& b) { return detail::m2At(model.textureWeightLookup, b.transparencyIndex); };
+    const auto blendOf = [&](const auto& b) -> uint16_t {
+        return b.materialIndex < model.materials.size() ? model.materials[b.materialIndex].blendMode : 0;
+    };
+    const auto unlitOf = [&](const auto& b) -> uint16_t {
+        return b.materialIndex < model.materials.size() ? model.materials[b.materialIndex].flags & 1 : 0;
+    };
+    int reflects = 0, added = 0;   // how far each of the two kinds has come
+    bool again = false;
+    uint32_t material = 0xFFFFFFFF;
+    size_t base = 0;
+    for (size_t i = 0; i < model.batches.size(); ++i) {
+        auto& b = model.batches[i];
+        if (b.materialIndex == material) {
+            again = true;
+            continue;
+        }
+        const uint16_t mode = b.foldedShader & 7;
+        const uint16_t blend = blendOf(b);
+        if (b.materialLayer == 0) {
+            reflects = added = 0;
+            if (b.textureCount != 0 && blend == 0) b.foldedShader &= 0xFF8F;
+            base = i;
+        }
+        material = b.materialIndex;
+        auto& first = model.batches[base];
+        // The texture of the first again, blended over, with as much weight and as lit.
+        const bool overAgain = (blend == 2 || blend == 1) && b.textureCount == 1 && unlitOf(first) == unlitOf(b) &&
+                               rows[i].texture == (rows[base].texture & 0xFF) && weight(first) == weight(b);
+        if (reflects == 1) {
+            if (overAgain) {
+                b.foldedShader = 0x8000;
+                first.foldedShader = 0x8001;
+                reflects = 3;
+                continue;
+            }
+            reflects = 0;
+        }
+        if (reflects == 0 && blend == 0 && b.textureCount == 2 && (mode == 4 || mode == 6) && coord(b, 0) == 0 &&
+            coord(b, 1) > 2)
+            reflects = 1;
+        if (added == 1) {
+            if ((blend == 4 || blend == 6) && b.textureCount == 1 && coord(b, 0) >= 3 && weight(first) == weight(b)) {
+                b.foldedShader = 0x8000;
+                first.foldedShader = blend == 4 ? 0x8002 : 0x000E;
+                first.textureCount = 2;
+                rows[base].texture = static_cast<uint16_t>((rows[base].texture & 0xFF) | (rows[i].texture << 8));
+                rows[base].transform = static_cast<uint16_t>((rows[base].transform & 0xFF) | (rows[i].transform << 8));
+                rows[base].paired = true;
+                added = 2;
+                continue;
+            }
+            added = 0;
+        } else if (added == 2) {
+            if (overAgain) {
+                b.foldedShader = 0x8000;
+                first.foldedShader = first.foldedShader == 0x8002 ? 0x8003 : 0x8001;
+                added = 3;
+                continue;
+            }
+            added = 0;
+        }
+        if (added == 0 && blend == 0 && b.textureCount == 1 && coord(b, 0) == 0) added = 1;
+    }
+    // 0x00837250, 0x008374a0: the new pairs are looked up as any.
+    for (size_t i = 0; i < model.batches.size(); ++i) {
+        if (!rows[i].paired) continue;
+        auto& b = model.batches[i];
+        b.textureIndex = static_cast<uint16_t>(model.textureLookup.size());
+        model.textureLookup.push_back(rows[i].texture & 0xFF);
+        model.textureLookup.push_back(rows[i].texture >> 8);
+        b.textureAnimIndex = static_cast<uint16_t>(model.textureTransformLookup.size());
+        for (const uint8_t t : {static_cast<uint8_t>(rows[i].transform & 0xFF), static_cast<uint8_t>(rows[i].transform >> 8)})
+            model.textureTransformLookup.push_back(t == 0 ? 0xFFFF : static_cast<uint16_t>(t - 1));
+    }
+    // One of the same material as the one before is drawn as that.
+    if (!again) return;
+    for (size_t i = 1; i < model.batches.size(); ++i) {
+        auto& b = model.batches[i];
+        const auto& before = model.batches[i - 1];
+        if (b.materialIndex != before.materialIndex) continue;
+        b.foldedShader = before.foldedShader;
+        b.textureCount = before.textureCount;
+        b.textureIndex = before.textureIndex;
+        b.textureAnimIndex = before.textureAnimIndex;
+    }
+}
+
 /// The shader a batch's id selects (0x00836c90, 0x00836600), as stages.
 /// `firstCoord` is the batch's first coordinate combo entry, which picks T1
 /// or T2 for a single texture.

@@ -139,9 +139,7 @@ uint64_t CharacterRenderer::rtShapeKey(const CharacterInstance& inst, const M2Mo
             const uint16_t grp = batch.submeshId / 100;
             if (grp == 17 || grp == 18 || grp == 15) continue;
         }
-        const uint16_t shaderId = m2BatchShaderId(batch.shader, blendMode, batch.textureCount, batch.textureUnit,
-                                                  data.globalFlags, data.textureCoordCombos,
-                                                  data.textureCombinerCombos);
+        const uint16_t shaderId = m2ShaderIdOf(data, batch);
         const uint16_t firstCoord =
             batch.textureUnit < data.textureCoordCombos.size() ? data.textureCoordCombos[batch.textureUnit] : 0;
         const M2BatchCombiner combiner = m2ResolveCombiner(shaderId, batch.textureCount, firstCoord);

@@ -4845,10 +4845,7 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 // textures it combines, by what, and where each one's
                 // coordinates come from - an attached weapon's additive and
                 // env-mapped passes included, which the client draws.
-                const uint16_t shaderId = m2BatchShaderId(
-                    batch.shader, blendMode, batch.textureCount, batch.textureUnit,
-                    gpuModel.data.globalFlags, gpuModel.data.textureCoordCombos,
-                    gpuModel.data.textureCombinerCombos);
+                const uint16_t shaderId = m2ShaderIdOf(gpuModel.data, batch);
                 const uint16_t firstCoord = batch.textureUnit < gpuModel.data.textureCoordCombos.size()
                     ? gpuModel.data.textureCoordCombos[batch.textureUnit] : 0;
                 const M2BatchCombiner combiner = m2ResolveCombiner(shaderId, batch.textureCount, firstCoord);
@@ -5476,10 +5473,7 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
             if (glm::clamp(batchAlpha, 0.0f, 1.0f) <= 0.01f) continue;
             if (inst.opacity <= 0.01f) continue;
 
-            const uint16_t shaderId = m2BatchShaderId(
-                batch.shader, blendMode, batch.textureCount, batch.textureUnit,
-                gpuModel.data.globalFlags, gpuModel.data.textureCoordCombos,
-                gpuModel.data.textureCombinerCombos);
+            const uint16_t shaderId = m2ShaderIdOf(gpuModel.data, batch);
             const uint16_t firstCoord = batch.textureUnit < gpuModel.data.textureCoordCombos.size()
                 ? gpuModel.data.textureCoordCombos[batch.textureUnit] : 0;
             const M2BatchCombiner combiner = m2ResolveCombiner(shaderId, batch.textureCount, firstCoord);

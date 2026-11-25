@@ -20,6 +20,7 @@
  * Reference: https://wowdev.wiki/M2
  */
 #include "pipeline/m2_loader.hpp"
+#include "rendering/m2_texture_combiner.hpp"
 #include "pipeline/m2_color_track.hpp"
 #include "core/logger.hpp"
 #include <cstddef>
@@ -2453,6 +2454,7 @@ bool M2Loader::loadSkin(const std::vector<uint8_t>& skinData, M2Model& model) {
         core::Logger::getInstance().debug("  Batches: ", model.batches.size());
     }
 
+    rendering::m2FoldLayers(model);
     return true;
 }
 
