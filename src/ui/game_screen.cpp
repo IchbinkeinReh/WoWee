@@ -58,6 +58,7 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/pvp_flags.hpp"
 #include "game/game_utils.hpp"
+#include "game/game_object_type.hpp"
 #include "game/world_pick.hpp"
 #include "core/logger.hpp"
 #include <imgui.h>
@@ -2282,8 +2283,8 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 // Skip chairs: auto-sit must only happen when the chair is
                 // under the cursor, never as a side effect of right-click.
                 auto go = std::static_pointer_cast<game::GameObject>(target);
-                auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
-                if (!goInfo || goInfo->type != 7) {
+                const auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
+                if (game::gameObjectTypeOf(*go, goInfo) != 7) {
                     gameHandler.interactWithGameObject(target->getGuid());
                 }
             }

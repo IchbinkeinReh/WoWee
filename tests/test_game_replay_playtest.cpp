@@ -2,6 +2,9 @@
 // game_replay.hpp.
 #include <catch_amalgamated.hpp>
 
+#include <optional>
+
+#include "game/game_object_type.hpp"
 #include "game_replay.hpp"
 #include "game/combat_handler.hpp"
 #include "game/idle_steps.hpp"
@@ -1533,4 +1536,30 @@ TEST_CASE("a player made in a vehicle's seat is there", "[replay][playtest]") {
     CHECK(s.handler().movementInfoRef().x == Catch::Approx(100.0f).margin(0.01f));
     CHECK(s.handler().movementInfoRef().y == Catch::Approx(201.0f).margin(0.01f));
     CHECK(s.handler().movementInfoRef().z == Catch::Approx(30.5f).margin(0.01f));
+}
+
+// P79: the open doors of an instance were solid for the whole first visit: whether one is a door was
+// asked of its template, which is not there yet. 0x00714250 takes the field's type.
+TEST_CASE("a game object's type is its field's, with its template there or not", "[replay][gameobject]") {
+    namespace game = wowee::game;
+    Session s;
+    game::GameObject door(0xF1100002C633ull);
+    const uint16_t bytes1 = game::fieldIndex(UF::GAMEOBJECT_BYTES_1);
+    REQUIRE(bytes1 != 0xFFFF);
+    const auto collides = [&](uint32_t bytes, const game::GameObjectQueryResponseData* info) {
+        door.setField(bytes1, bytes);
+        return game::stateCollides(game::gameObjectTypeOf(door, info), static_cast<uint8_t>(bytes & 0xFF));
+    };
+    // Animation progress, art kit, type, state.
+    CHECK(collides(0xFF000000u, nullptr) == false);  // an open door
+    CHECK(collides(0xFF000001u, nullptr) == true);   // a shut one
+    CHECK(collides(0xFF000002u, nullptr) == false);  // a broken one
+    CHECK(collides(0xFF002300u, nullptr) == false);  // an open trapdoor
+    CHECK(collides(0xFF002301u, nullptr) == true);
+    CHECK(collides(0xFF000300u, nullptr) == std::nullopt);  // an open chest is one to walk into
+    // The template says nothing about it, whatever it holds.
+    game::GameObjectQueryResponseData chest;
+    chest.type = 3;
+    CHECK(collides(0xFF000000u, &chest) == false);
+    CHECK(game::gameObjectTypeOf(door, &chest) == 0);
 }
