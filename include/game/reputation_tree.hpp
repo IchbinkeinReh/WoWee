@@ -18,6 +18,8 @@
 #include <utility>
 #include <vector>
 
+#include "game/client_compare.hpp"
+
 namespace wowee::game::reputation_tree {
 
 /// The two groups' ids, as they are kept among the closed ones. No faction's.
@@ -26,7 +28,7 @@ inline constexpr uint32_t kInactive = 0xFFFFFFFFu;
 
 inline constexpr uint8_t kFlagInactive = 0x20;
 
-/// A faction with a standing, in the server's own order.
+/// A faction with a standing.
 struct Entry {
     uint32_t factionId = 0;
     uint32_t reputationIndex = 0;
@@ -55,7 +57,6 @@ std::vector<Row> rows(const std::vector<Entry>& flat, ParentOf&& parentOf, NameO
     // Faction.dbc is data, and a cycle in it would spin here. The real chain
     // is three deep, so a small ceiling costs nothing.
     constexpr int kDeepest = 8;
-    constexpr size_t kNoRank = static_cast<size_t>(-1);
 
     std::unordered_map<uint32_t, const Entry*> byId;
     std::unordered_set<uint32_t> groups;
@@ -71,46 +72,45 @@ std::vector<Row> rows(const std::vector<Entry>& flat, ParentOf&& parentOf, NameO
 
     // Everything drawn: the factions that are not put away, and what one of
     // them descends from. A group with nobody in it is not drawn, so its
-    // heading is not either. And where each sits: at its first member's place
-    // in the server's list. Ordering by the heading's own repListId instead
-    // would scatter the groups, since Classic is 96 while the factions inside
-    // it start at 10.
-    std::unordered_map<uint32_t, size_t> rank;
+    // heading is not either.
+    std::unordered_set<uint32_t> drawn;
     std::vector<uint32_t> inactive;
-    for (size_t i = 0; i < flat.size(); ++i) {
-        if (putAway(flat[i])) {
-            rank[flat[i].factionId] = i;
-            inactive.push_back(flat[i].factionId);
+    for (const Entry& e : flat) {
+        if (putAway(e)) {
+            drawn.insert(e.factionId);
+            inactive.push_back(e.factionId);
             continue;
         }
-        uint32_t id = flat[i].factionId;
-        for (int depth = 0; id != 0 && depth <= kDeepest; ++depth, id = parentOf(id)) {
-            auto [it, fresh] = rank.try_emplace(id, kNoRank);
-            it->second = std::min(it->second, i);
-        }
+        uint32_t id = e.factionId;
+        for (int depth = 0; id != 0 && depth <= kDeepest; ++depth, id = parentOf(id)) drawn.insert(id);
     }
     const std::unordered_set<uint32_t> away(inactive.begin(), inactive.end());
 
     // The tree, with a parent outside the drawn set counting as no parent.
     std::unordered_map<uint32_t, std::vector<uint32_t>> children;
-    for (const auto& [id, at] : rank) {
-        (void)at;
+    for (const uint32_t id : drawn) {
         if (away.count(id) != 0) continue;
         const uint32_t parent = parentOf(id);
-        children[rank.count(parent) != 0 && away.count(parent) == 0 ? parent : 0u].push_back(id);
+        children[drawn.count(parent) != 0 && away.count(parent) == 0 ? parent : 0u].push_back(id);
     }
-    const auto byRank = [&](uint32_t a, uint32_t b) {
-        if (rank[a] != rank[b]) return rank[a] < rank[b];
-        return nameOf(a) < nameOf(b);
+    // By name everywhere, as the client compares names (0x0076ec80): the
+    // groups (0x005d1710), and the factions in one (0x005d02f0), which come
+    // before the groups in it - a group follows the one it is in whole, its
+    // own members first.
+    const auto isGroup = [&](uint32_t id) { return children.count(id) != 0; };
+    const auto byName = [&](uint32_t a, uint32_t b) {
+        if (isGroup(a) != isGroup(b)) return isGroup(b);
+        const int order = compareCaseless(nameOf(a), nameOf(b));
+        return order != 0 ? order < 0 : a < b;
     };
     std::vector<uint32_t> top;
     for (const uint32_t id : children[0]) (children.count(id) != 0 ? top : children[kOther]).push_back(id);
     children.erase(0);
     children[kInactive] = std::move(inactive);
-    std::sort(top.begin(), top.end(), byRank);
+    std::sort(top.begin(), top.end(), byName);
     for (auto& [parent, kids] : children) {
         (void)parent;
-        std::sort(kids.begin(), kids.end(), byRank);
+        std::sort(kids.begin(), kids.end(), byName);
     }
     // After the factions, OTHER before INACTIVE (0x005d1710).
     for (const uint32_t group : {kOther, kInactive}) {

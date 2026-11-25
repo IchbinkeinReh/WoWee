@@ -636,15 +636,18 @@ wowee::pipeline::DBCFile factionTable(
 // Burning Crusade (980) with Shattrath (936) and two factions in it, Thrallmar
 // right in it, and the Hydraxian Waterlords under nothing.
 struct Reputation : Interface {
-    explicit Reputation(Session& s) : Interface(s) {
-        s.handler().readFactionTable(factionTable({{980, 0xFFFFFFFFu, 0, "The Burning Crusade", ""},
+    explicit Reputation(Session& s)
+        : Reputation(s, factionTable({{980, 0xFFFFFFFFu, 0, "The Burning Crusade", ""},
                                                    {936, 4, 980, "Shattrath City", ""},
                                                    {942, 0, 936, "Cenarion Expedition", "An expedition."},
                                                    {932, 1, 936, "The Aldor", ""},
                                                    {947, 2, 980, "Thrallmar", "Sent by Thrall."},
-                                                   {749, 3, 0, "Hydraxian Waterlords", ""}}));
-        for (int i = 0; i < 5; ++i) s.handler().initialFactionsRef().push_back({0x1, 100});
+                                                   {749, 3, 0, "Hydraxian Waterlords", ""}}), 5) {
         s.handler().initialFactionsRef()[4].flags = 0;
+    }
+    Reputation(Session& s, const wowee::pipeline::DBCFile& table, int standings) : Interface(s) {
+        s.handler().readFactionTable(table);
+        for (int i = 0; i < standings; ++i) s.handler().initialFactionsRef().push_back({0x1, 100});
     }
     /// The rows as "name", "+name" for a heading, ">" before a child.
     bool rowsAre(const std::string& want) {
@@ -675,12 +678,12 @@ TEST_CASE("a faction put away is in the inactive group", "[replay][interface][re
     Reputation ui(s);
     ui.run("updates = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_FACTION') "
            "f:SetScript('OnEvent', function() updates = updates + 1 end) ");
-    const std::string before = "+The Burning Crusade;>+Shattrath City;>Cenarion Expedition;>The Aldor;Thrallmar;"
+    const std::string before = "+The Burning Crusade;Thrallmar;>+Shattrath City;>Cenarion Expedition;>The Aldor;"
                                "+Other;Hydraxian Waterlords;";
     CHECK(ui.rowsAre(before));
-    ui.run("SetFactionInactive(3)");
+    ui.run("SetFactionInactive(4)");
     CHECK(ui.is("updates == 1"));
-    CHECK(ui.rowsAre("+The Burning Crusade;>+Shattrath City;>The Aldor;Thrallmar;+Other;Hydraxian Waterlords;"
+    CHECK(ui.rowsAre("+The Burning Crusade;Thrallmar;>+Shattrath City;>The Aldor;+Other;Hydraxian Waterlords;"
                      "+Inactive;Cenarion Expedition;"));
     CHECK(ui.is("IsFactionInactive(8) == 1 and not IsFactionInactive(3)"));
     CHECK(ui.is("(function() local n, d, st, lo, hi, v, war, can, head, closed, rep, watched, child = GetFactionInfo(7) "
@@ -689,13 +692,13 @@ TEST_CASE("a faction put away is in the inactive group", "[replay][interface][re
     CHECK(s.sent().of(Opcode::CMSG_SET_FACTION_INACTIVE).size() == 1);
     // Closed, it keeps its heading alone.
     ui.run("CollapseFactionHeader(7)");
-    CHECK(ui.rowsAre("+The Burning Crusade;>+Shattrath City;>The Aldor;Thrallmar;+Other;Hydraxian Waterlords;"
+    CHECK(ui.rowsAre("+The Burning Crusade;Thrallmar;>+Shattrath City;>The Aldor;+Other;Hydraxian Waterlords;"
                      "-Inactive;"));
     ui.run("ExpandFactionHeader(7)");
     // A group is not put away, and a whole group's members take its heading along.
-    ui.run("updates = 0 SetFactionInactive(1) SetFactionInactive(2)");
+    ui.run("updates = 0 SetFactionInactive(1) SetFactionInactive(3)");
     CHECK(ui.is("updates == 0"));
-    ui.run("SetFactionInactive(3)");
+    ui.run("SetFactionInactive(4)");
     CHECK(ui.rowsAre("+The Burning Crusade;Thrallmar;+Other;Hydraxian Waterlords;+Inactive;Cenarion Expedition;"
                      "The Aldor;"));
     ui.run("SetFactionActive(6) SetFactionActive(GetNumFactions())");
@@ -705,4 +708,30 @@ TEST_CASE("a faction put away is in the inactive group", "[replay][interface][re
     s.handler().initialFactionsRef()[4].flags |= 0x1;
     CHECK(ui.is("(function() for i = 1, GetNumFactions() do local n, _, _, _, _, _, _, _, _, _, rep = GetFactionInfo(i) "
                 "if n == 'Shattrath City' then return rep end end end)()"));
+}
+
+// P73: by name as the client compares names - the groups (0x005d1710) and the
+// factions in each (0x005d02f0), these before the groups in it. The table's
+// places are the other way round, and a byte compare puts the accented last.
+TEST_CASE("the reputation rows are in the order of their names", "[replay][interface][reputation]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Reputation ui(s, factionTable({{1097, 0xFFFFFFFFu, 0, "Wrath", ""},
+                                               {1118, 0xFFFFFFFFu, 0, "Classic", ""},
+                                               {50, 0xFFFFFFFFu, 1118, "Horde", ""},
+                                               {51, 0xFFFFFFFFu, 1118, "Cartel", ""},
+                                               {60, 0, 1097, "Zuldrak", ""},
+                                               {61, 1, 1118, "thorium", ""},
+                                               {62, 2, 1118, "Ödland", ""},
+                                               {63, 3, 50, "Orgrimmar", ""},
+                                               {64, 4, 51, "Ratchet", ""},
+                                               {65, 5, 51, "Beutebucht", ""},
+                                               {66, 6, 0, "Zweiter", ""},
+                                               {67, 7, 0, "Erster", ""}}), 8);
+    CHECK(ui.rowsAre("+Classic;Ödland;thorium;>+Cartel;>Beutebucht;>Ratchet;>+Horde;>Orgrimmar;+Wrath;Zuldrak;"
+                     "+Other;Erster;Zweiter;"));
+    // Put away, in the order of the names too.
+    ui.run("SetFactionInactive(3) SetFactionInactive(2)");
+    CHECK(ui.rowsAre("+Classic;>+Cartel;>Beutebucht;>Ratchet;>+Horde;>Orgrimmar;+Wrath;Zuldrak;"
+                     "+Other;Erster;Zweiter;+Inactive;Ödland;thorium;"));
 }
