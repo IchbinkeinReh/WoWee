@@ -9,6 +9,7 @@
 // were turned down as broken.
 #include <catch_amalgamated.hpp>
 
+#include "pipeline/wmo_loader.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/m2_asset_loader.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -178,4 +179,15 @@ TEST_CASE("no solid model is taken for an effect by its name", "[m2]") {
     REQUIRE(at != std::string::npos);
     CHECK(renderer.substr(at, 1500).find("isSpellEffect") == std::string::npos);
     CHECK(renderer.substr(at, 1500).find("isSpellKit") != std::string::npos);
+}
+
+// V394: a room no walk comes to is not drawn (Stormwind's 93, 0x28c1), an
+// exterior shell, an always drawn one and a room with portals are.
+TEST_CASE("a room without a way in is seen from nowhere", "[wmo]") {
+    using wowee::pipeline::wmoGroupNeverReached;
+    CHECK(wmoGroupNeverReached(0x28c1, 0));
+    CHECK_FALSE(wmoGroupNeverReached(0x28c1, 2));
+    CHECK_FALSE(wmoGroupNeverReached(0xa09, 0));
+    CHECK_FALSE(wmoGroupNeverReached(0x122c1, 0));
+    CHECK_FALSE(wmoGroupNeverReached(0x2805, 0));
 }

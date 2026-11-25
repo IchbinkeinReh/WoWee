@@ -130,6 +130,14 @@ inline uint32_t wmoGroupLiquidType(uint32_t mogpLiquid, uint32_t mogpFlags, uint
     return t;
 }
 
+/// A room flagged unreachable (0x80) that no portal leads to: the walk from
+/// the camera's groups never comes to it and it is not of the outside
+/// (0x007ac060, 0x007b3a10), so that it is seen from nowhere else. Stormwind's
+/// second shell of the cathedral (93), over the square.
+inline bool wmoGroupNeverReached(uint32_t mogpFlags, uint32_t portalCount) {
+    return portalCount == 0 && (mogpFlags & 0x12088u) == 0x2080u;
+}
+
 /// An old-style group's liquid whose MOGP names none (15 with MOHD flag 4
 /// clear): the client takes it from the first tile that has liquid (the
 /// first MLIQ tile flag whose low nibble is not 0xF), that nibble plus one

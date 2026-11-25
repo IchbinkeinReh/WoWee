@@ -646,6 +646,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         GroupResources resources;
         resources.groupIndex = static_cast<uint32_t>(gi);
         if (createGroupResources(wmoGroup, resources, wmoGroup.flags, model.flags)) {
+            resources.neverReached = pipeline::wmoGroupNeverReached(wmoGroup.flags, wmoGroup.portalCount);
             modelData.groups.push_back(resources);
             modelData.loadedGroups++;
         }
@@ -1818,7 +1819,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
             const auto& group = model.groups[gi];
 
             // Only skip antiportal geometry
-            if (group.groupFlags & 0x4000000) continue;
+            if ((group.groupFlags & 0x4000000) || group.neverReached) continue;
 
             // Skip groups with invalid GPU resources
             if (group.vertexBuffer == VK_NULL_HANDLE || group.indexBuffer == VK_NULL_HANDLE) continue;
@@ -2013,7 +2014,7 @@ void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceM
             if (group.vertexBuffer == VK_NULL_HANDLE || group.indexBuffer == VK_NULL_HANDLE) continue;
 
             // Skip antiportal geometry
-            if (group.groupFlags & 0x4000000) continue;
+            if ((group.groupFlags & 0x4000000) || group.neverReached) continue;
 
             // Per-group AABB cull against shadow frustum
             if (gi < instance.worldGroupBounds.size()) {
@@ -5197,7 +5198,7 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
     modelData.bakedGlows.clear();
     modelData.windowGlows.clear();
     for (const auto& group : modelData.groups) {
-        if (group.allUntextured || group.collisionVertices.empty()) continue;
+        if (group.allUntextured || group.neverReached || group.collisionVertices.empty()) continue;
         // An interior group's glow is in its baked colours already: its
         // lights only cast their shadows there (PointLight::baked), as an
         // interior doodad's do. Nothing is left out for being inside.
@@ -5305,7 +5306,7 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
     for (const auto& group : model.groups) {
         // Groups the renderer never draws would cast shadows the player cannot
         // see the source of.
-        if (group.allUntextured || (group.groupFlags & 0x4000000u)) continue;
+        if (group.allUntextured || group.neverReached || (group.groupFlags & 0x4000000u)) continue;
         if (group.collisionVertices.empty()) continue;
         const uint32_t base = static_cast<uint32_t>(src.positions.size());
         src.positions.insert(src.positions.end(), group.collisionVertices.begin(),

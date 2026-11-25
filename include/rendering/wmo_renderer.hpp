@@ -774,6 +774,7 @@ private:
         /// the minimap's pictures and the portals go by. Not this one's place
         /// in ModelData::groups: an empty group is not kept there.
         uint32_t groupIndex = 0;
+        bool neverReached = false;   // pipeline::wmoGroupNeverReached
         bool allUntextured = false;  // True if ALL batches use fallback white texture (collision/placeholder group)
 
         // Material batches (start index, count, material ID)
