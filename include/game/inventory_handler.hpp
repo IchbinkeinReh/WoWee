@@ -1319,6 +1319,11 @@ private:
     uint32_t auctionBidSent_ = 0;          ///< 0xc0f43c
     void requestPendingSales();
     void forgetAuction(uint32_t auctionId);
+    /// A bid the realm tells of, in the search's and the bid on's rows.
+    void auctionBidIs(uint32_t auctionId, uint32_t bid, uint32_t increment, uint64_t bidder, bool inSearch);
+    /// The auctions the player was outbid on, their house and number (0xc0f478),
+    /// which the bid on are asked for with.
+    std::vector<std::pair<uint32_t, uint32_t>> auctionsOutbid_;
 
     // ---- Trainer state ----
     bool trainerWindowOpen_ = false;

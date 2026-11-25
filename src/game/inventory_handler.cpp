@@ -1129,11 +1129,11 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // Previously read auctionHouseId as auctionId and auctionId as itemEntry,
         // so outbid messages always referenced the wrong item.
         if (!packet.hasRemaining(32)) { packet.skipAll(); return; }
-        /*uint32_t auctionHouseId =*/ packet.readUInt32();
-        /*uint32_t auctionId      =*/ packet.readUInt32();
-        /*uint64_t bidderGuid     =*/ packet.readUInt64();
+        const uint32_t auctionHouseId = packet.readUInt32();
+        const uint32_t auctionId = packet.readUInt32();
+        const uint64_t bidderGuid = packet.readUInt64();
         const uint32_t bidAmount = packet.readUInt32();
-        /*uint32_t outbidAmount   =*/ packet.readUInt32();
+        const uint32_t outbidAmount = packet.readUInt32();
         uint32_t itemEntry = packet.readUInt32();
         int32_t bidRandProp = static_cast<int32_t>(packet.readUInt32());
         // 0x005a0480: a bid of zero is an auction won, ERR_AUCTION_WON_S;
@@ -1146,14 +1146,25 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         else
             auctionItemLine(owner_, itemEntry, bidRandProp, "ERR_AUCTION_OUTBID_S",
                             "You have been outbid on %s.");
+        // Won, it is in no list any more; outbid, it is kept for the next
+        // asking, and its rows are told.
+        if (bidAmount == 0) {
+            forgetAuction(auctionId);
+        } else {
+            const std::pair outbid{auctionHouseId, auctionId};
+            if (std::find(auctionsOutbid_.begin(), auctionsOutbid_.end(), outbid) == auctionsOutbid_.end())
+                auctionsOutbid_.push_back(outbid);
+            auctionBidIs(auctionId, bidAmount, outbidAmount, bidderGuid, /*inSearch=*/true);
+        }
         packet.skipAll();
     };
 
     table[Opcode::SMSG_AUCTION_REMOVED_NOTIFICATION] = [this](network::Packet& packet) {
         if (packet.hasRemaining(12)) {
-            /*uint32_t auctionId =*/ packet.readUInt32();
+            const uint32_t auctionId = packet.readUInt32();
             uint32_t itemEntry = packet.readUInt32();
             int32_t itemRandom = static_cast<int32_t>(packet.readUInt32());
+            forgetAuction(auctionId);
             // ERR_AUCTION_REMOVED_S, system chat (0x005a0ac0) - the seller
             // took the auction down. This said "Your auction of [item] has
             // expired." in English, which is a different line.
@@ -5432,6 +5443,23 @@ void InventoryHandler::requestBidderAuctions(uint32_t page) {
     if (bidderListWanted_ && auctionListMayBeAsked(1)) auctionListBidderItems(page * 50);
 }
 
+void InventoryHandler::auctionBidIs(uint32_t auctionId, uint32_t bid, uint32_t increment, uint64_t bidder,
+                                    bool inSearch) {
+    const auto tell = [&](AuctionListResult& list, const char* event) {
+        for (AuctionEntry& e : list.auctions) {
+            if (e.auctionId != auctionId) continue;
+            e.currentBid = bid;
+            e.minBidIncrement = increment;
+            e.bidderGuid = bidder;
+            e.timeLeftMs = std::max(e.timeLeftMs, 90000u);
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()(event, {});
+            return;
+        }
+    };
+    tell(auctionBidderResults_, "AUCTION_BIDDER_LIST_UPDATE");
+    if (inSearch) tell(auctionBrowseResults_, "AUCTION_ITEM_LIST_UPDATE");
+}
+
 // 0x0059f2f0: an auction that is gone is in no list any more; of the own ones,
 // the sales still to pay out are asked for again.
 void InventoryHandler::forgetAuction(uint32_t auctionId) {
@@ -5483,7 +5511,11 @@ void InventoryHandler::handleAuctionPendingSales(network::Packet& packet) {
 void InventoryHandler::auctionListBidderItems(uint32_t offset) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
     pendingAuctionTarget_ = AuctionResultTarget::BIDDER;
-    auto packet = AuctionListBidderItemsPacket::build(auctioneerGuid_, offset);
+    // With those outbid on (0x0059ce50).
+    std::vector<uint32_t> outbid;
+    for (const auto& [house, id] : auctionsOutbid_)
+        if (auctionHouseId_ == 0 || house == auctionHouseId_) outbid.push_back(id);
+    auto packet = AuctionListBidderItemsPacket::build(auctioneerGuid_, offset, outbid);
     owner_.getSocket()->send(packet);
     ++bidderListAnswersDue_;
     bidderListWanted_ = false;
@@ -5607,6 +5639,7 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
             // is now: the bid, the next step, the player's, a minute and a
             // half left at the least.
             const uint32_t increment = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+            std::erase_if(auctionsOutbid_, [auctionId](const auto& o) { return o.second == auctionId; });
             bidderListWanted_ = true;
             auctionListBidderItems(bidderListOffset_);
             for (AuctionEntry& e : auctionBrowseResults_.auctions) {
@@ -5643,7 +5676,15 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
             }
             case 3:  err = {"ERR_NOT_ENOUGH_MONEY", "You don't have enough money."}; break;
             case 4:  err = {"ERR_ITEM_NOT_FOUND", "The item was not found."}; break;
-            case 5:  err = {"ERR_AUCTION_HIGHER_BID", "There is already a higher bid on that item."}; break;
+            case 5:
+                // With who bid, how much, and the next step.
+                if (packet.hasRemaining(16)) {
+                    const uint64_t bidder = packet.readUInt64();
+                    const uint32_t bid = packet.readUInt32();
+                    auctionBidIs(auctionId, bid, packet.readUInt32(), bidder, /*inSearch=*/true);
+                }
+                err = {"ERR_AUCTION_HIGHER_BID", "There is already a higher bid on that item."};
+                break;
             case 7:  err = {"ERR_AUCTION_BID_INCREMENT", "Your bid increment is too small."}; break;
             case 10: err = {"ERR_AUCTION_BID_OWN", "You cannot bid on your own auction."}; break;
             case 13: err = {"ERR_RESTRICTED_ACCOUNT", "Starter Edition accounts can't perform that action"}; break;

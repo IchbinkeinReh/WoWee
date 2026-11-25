@@ -2524,4 +2524,25 @@ TEST_CASE("the auction house's lists are asked for as they may have changed", "[
     CHECK(row.timeLeftMs == 90000);
     CHECK(count(Opcode::CMSG_AUCTION_LIST_BIDDER_ITEMS) == 2);
     CHECK(count(Opcode::CMSG_AUCTION_LIST_ITEMS) == 0);
+
+    // Outbid on it (0x005a0480): told in its row, and asked for with the bid on.
+    const auto told = [&](uint32_t bid) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_BIDDER_NOTIFICATION));
+        p.writeUInt32(6);
+        p.writeUInt32(9);
+        p.writeUInt64(0x1002);
+        for (uint32_t v : {bid, 30u, 2589u, 0u}) p.writeUInt32(v);
+        s.receive(p);
+    };
+    told(300);
+    CHECK(inv->getAuctionBrowseResults().auctions.front().currentBid == 300);
+    CHECK(inv->getAuctionBrowseResults().auctions.front().bidderGuid == 0x1002);
+    inv->auctionListBidderItems(0);
+    asked = s.sent().of(Opcode::CMSG_AUCTION_LIST_BIDDER_ITEMS).back();
+    asked.readUInt64();
+    asked.readUInt32();
+    CHECK(asked.readUInt32() == 1);
+    CHECK(asked.readUInt32() == 9);
+    told(0);   // won
+    CHECK(inv->getAuctionBrowseResults().auctions.empty());
 }
