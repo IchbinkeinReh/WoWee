@@ -876,6 +876,7 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
         pendingPetNameQueries_.erase(it);
         owner_.combatLogFeed().petNameAnswered(guid, name, !name.empty());
         if (name.empty()) return;
+        petNames_[guid] = name;
 
         auto entity = owner_.getEntityManager().getEntity(guid);
         if (!entity) return;

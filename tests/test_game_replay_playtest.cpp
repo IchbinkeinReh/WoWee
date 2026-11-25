@@ -1720,6 +1720,44 @@ TEST_CASE("a pet's name is told by every token it has", "[replay][playtest]") {
     gh.setAddonEventCallback({});
 }
 
+// T271: 0x0072a000 asks the pet's number first; 0x0072cde0 overwrites nothing.
+TEST_CASE("a pet keeps its own name when its creature's comes after", "[replay][playtest]") {
+    constexpr uint64_t kPet = 0xF14000000600008Cull;
+    Session s;
+    spawnPlayer(s);
+    const auto create = [&] {
+        s.receive(UpdateObject().create(kPet, wowee::game::ObjectType::UNIT,
+                                        {{UF::OBJECT_FIELD_ENTRY, 416}, {UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    };
+    create();
+    auto& gh = s.handler();
+    const auto name = [&] {
+        const auto unit = std::dynamic_pointer_cast<wowee::game::Unit>(gh.getEntityManager().getEntity(kPet));
+        return unit ? unit->getName() : std::string("?");
+    };
+    gh.getSpellHandler()->requestPetName(kPet);
+    REQUIRE_FALSE(s.sent().of(Opcode::CMSG_PET_NAME_QUERY).empty());
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_PET_NAME_QUERY_RESPONSE));
+    answer.writeUInt32(s.sent().of(Opcode::CMSG_PET_NAME_QUERY).back().readUInt32());
+    answer.writeString("Karuri");
+    answer.writeUInt32(0);
+    answer.writeUInt8(0);
+    s.receive(answer);
+    CHECK(name() == "Karuri");
+    wowee::network::Packet creature(wowee::game::wireOpcode(Opcode::SMSG_CREATURE_QUERY_RESPONSE));
+    creature.writeUInt32(416);
+    creature.writeString("Wichtel");
+    for (int i = 0; i < 5; ++i) creature.writeString("");
+    for (uint32_t v : {0u, 3u, 23u, 0u}) creature.writeUInt32(v);
+    for (uint32_t v : {0u, 0u, 4449u, 0u, 0u, 0u}) creature.writeUInt32(v);
+    for (int i = 0; i < 12; ++i) creature.writeUInt32(0);
+    s.receive(creature);
+    CHECK(name() == "Karuri");
+    // Seen again: its own at once.
+    create();
+    CHECK(name() == "Karuri");
+}
+
 // P59: the player stayed, for the game, where it got on, and stood there when it was let go;
 // jumped onto it, it fell on from there.
 TEST_CASE("the player in a vehicle's seat is its place there, and is let go at it", "[replay][playtest]") {

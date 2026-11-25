@@ -726,6 +726,12 @@ public:
     /// this sends a number of its own making and uses it to match the reply to
     /// the pet it asked about, which is what the field would have been for.
     void requestPetName(uint64_t petGuid);
+    /// A pet's own name as the realm told it, null before: its creature's is none of it
+    /// (0x0072a000 asks UNIT_FIELD_PETNUMBER first).
+    [[nodiscard]] const std::string* ownPetName(uint64_t guid) const {
+        const auto it = petNames_.find(guid);
+        return it != petNames_.end() ? &it->second : nullptr;
+    }
     /// The pets' names still without an answer, once more.
     void askPetNamesAgain();
     /// 0x007ff180 != 0: whether the spell takes time to cast for this unit -
@@ -784,6 +790,8 @@ public:
 private:
     void sendPetNameQuery(uint32_t key, uint64_t petGuid);
     std::unordered_map<uint32_t, uint64_t> pendingPetNameQueries_;
+    /// What the realm has told of pets' own names, by guid.
+    std::unordered_map<uint64_t, std::string> petNames_;
     uint32_t nextPetNameQueryKey_ = 1;
 
     // --- Packet handlers ---

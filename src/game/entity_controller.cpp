@@ -2622,7 +2622,9 @@ void EntityController::onCreateUnit(const UpdateBlock& block, std::shared_ptr<En
         unit->setEntry(it->second);
         std::string cached = getCachedCreatureName(it->second);
         if (!cached.empty()) {
-            unit->setName(cached);
+            const std::string* own =
+                owner_.getSpellHandler() ? owner_.getSpellHandler()->ownPetName(unit->getGuid()) : nullptr;
+            unit->setName(own ? *own : cached);
         }
         queryCreatureInfo(it->second, block.guid);
     }
@@ -4710,7 +4712,9 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
             if (entity->getType() == ObjectType::UNIT) {
                 auto unit = std::static_pointer_cast<Unit>(entity);
                 if (unit->getEntry() == data.entry) {
-                    unit->setName(data.name);
+                    const std::string* own =
+                        owner_.getSpellHandler() ? owner_.getSpellHandler()->ownPetName(guid) : nullptr;
+                    unit->setName(own ? *own : data.name);
                     // The rank came with this response, and UnitClassification
                     // reads it from the cache just filled. A unit targeted
                     // before its query came back answered "normal" until now -
