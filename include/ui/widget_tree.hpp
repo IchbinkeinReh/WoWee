@@ -1179,6 +1179,9 @@ public:
     /// something else cannot be dragged without the drag fighting the anchor,
     /// so the anchors are replaced by a single one describing where it is now.
     void pinToCurrentPosition(uint32_t id);
+    /// Hung where it is at the one of the screen's nine points that its own is nearest to
+    /// (0x0048a840), as a frame let go of after it was moved or sized.
+    void placeNearest(uint32_t id);
 
     /// Shift every anchor by the same amount, which moves the frame.
     void nudge(uint32_t id, float dx, float dy);

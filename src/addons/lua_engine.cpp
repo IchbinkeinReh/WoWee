@@ -1629,8 +1629,10 @@ int lua_Frame_StopMovingOrSizing(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
+    if (tree->movingWidget() != id && tree->sizingWidget() != id) return 0;
     if (tree->movingWidget() == id) tree->setMovingWidget(0);
     if (tree->sizingWidget() == id) tree->setSizingWidget(0, "");
+    tree->placeNearest(id);   // 0x00493a10
     return 0;
 }
 
@@ -2214,7 +2216,8 @@ int lua_Region_GetPoint(lua_State* L) {
         tree && w ? tree->pointAt(w->id, lua_isnumber(L, 2) ? luaToClientInt(L, 2) - 1 : 0) : nullptr;
     if (!a) return 0;
     lua_pushstring(L, a->point.c_str());
-    pushFrameByHandle(L, a->relativeTo != 0 ? a->relativeTo : w->parent);
+    if (a->relativeTo == tree->rootId()) lua_pushnil(L);
+    else pushFrameByHandle(L, a->relativeTo != 0 ? a->relativeTo : w->parent);
     lua_pushstring(L, a->relativePoint.c_str());
     lua_pushnumber(L, a->x);
     lua_pushnumber(L, a->y);
@@ -19013,6 +19016,8 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     if (!anyHeld && (widgets_.movingWidget() != 0 || widgets_.sizingWidget() != 0 ||
                      draggingWid_ != 0)) {
         if (draggingWid_ != 0) callFrameScript(draggingWid_, "OnDragStop", "LeftButton");
+        for (const uint32_t held : {widgets_.movingWidget(), widgets_.sizingWidget()})
+            if (held != 0) widgets_.placeNearest(held);
         widgets_.setMovingWidget(0);
         widgets_.setSizingWidget(0, "");
         draggingWid_ = 0;
@@ -19359,6 +19364,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                 const bool wasDragged = (draggingWid_ != 0 && draggingButton_ == i);
                 if (wasDragged) {
                     callFrameScript(draggingWid_, "OnDragStop", b.name);
+                    if (widgets_.movingWidget() != 0) widgets_.placeNearest(widgets_.movingWidget());
                     widgets_.setMovingWidget(0);
                     // Up through the parents to whatever is listening, the same
                     // way a click resolves through clickOwnerOf.

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <limits>
 #include <cstring>
 #include <ranges>
 
@@ -565,6 +566,35 @@ void WidgetTree::pinToCurrentPosition(uint32_t id) {
     w->anchors.clear();
     w->anchors.push_back(a);
     w->userMoved = true;
+}
+
+void WidgetTree::placeNearest(uint32_t id) {
+    resolveWidget(id);
+    Widget* w = get(id);
+    const Widget* screen = get(rootId_);
+    if (!w || !screen || id == rootId_ || !placed(id)) return;
+    static constexpr const char* kPoints[9] = {"TOPLEFT", "TOP", "TOPRIGHT", "LEFT", "CENTER",
+                                               "RIGHT", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT"};
+    const float es = w->effScale > 0.0f ? w->effScale : 1.0f;
+    float nearest = std::numeric_limits<float>::max();
+    Anchor a;
+    for (int i = 0; i < 9; ++i) {
+        const float fx = static_cast<float>(i % 3) * 0.5f, fy = 1.0f - static_cast<float>(i / 3) * 0.5f;
+        const float x = w->left + fx * w->rectW - (screen->left + fx * screen->rectW);
+        const float y = w->bottom + fy * w->rectH - (screen->bottom + fy * screen->rectH);
+        const float apart = x * x + y * y;
+        if (!(apart < nearest)) continue;
+        nearest = apart;
+        a.point = a.relativePoint = kPoints[i];
+        a.x = x / es;
+        a.y = y / es;
+    }
+    a.relativeTo = rootId_;
+    if (w->width <= 0.0f)  w->width  = w->rectW / es;
+    if (w->height <= 0.0f) w->height = w->rectH / es;
+    w->anchors.assign(1, a);
+    markLayoutDirty();
+    markMeasureDirty(id);
 }
 
 namespace {

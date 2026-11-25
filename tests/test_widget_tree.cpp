@@ -1288,6 +1288,48 @@ TEST_CASE("A clamped frame stops at the screen edge", "[widget][layout]") {
     REQUIRE(tree.get(f)->bottom == Catch::Approx(kScreenH - 100.0f));
 }
 
+// 0x0048a840
+TEST_CASE("A frame let go of hangs at the nearest of the screen's points", "[widget][layout]") {
+    struct Case { float left, bottom; const char* point; float x, y; };
+    // 100 by 60, at twice its own units.
+    const Case cases[] = {
+        {10.0f, kScreenH - 70.0f, "TOPLEFT", 5.0f, -5.0f},
+        {kScreenW * 0.5f - 45.0f, kScreenH - 62.0f, "TOP", 2.5f, -1.0f},
+        {kScreenW - 104.0f, kScreenH - 64.0f, "TOPRIGHT", -2.0f, -2.0f},
+        {20.0f, kScreenH * 0.5f - 30.0f, "LEFT", 10.0f, 0.0f},
+        {kScreenW * 0.5f - 50.0f, kScreenH * 0.5f - 10.0f, "CENTER", 0.0f, 10.0f},
+        {kScreenW - 120.0f, kScreenH * 0.5f - 30.0f, "RIGHT", -10.0f, 0.0f},
+        {8.0f, 6.0f, "BOTTOMLEFT", 4.0f, 3.0f},
+        {kScreenW * 0.5f - 50.0f, 40.0f, "BOTTOM", 0.0f, 20.0f},
+        {kScreenW - 100.0f, 0.0f, "BOTTOMRIGHT", 0.0f, 0.0f},
+    };
+    for (const Case& k : cases) {
+        WidgetTree tree;
+        const uint32_t f = tree.create(WidgetKind::Frame, tree.root(), "Moved");
+        tree.setWidth(f, 50.0f);
+        tree.setHeight(f, 30.0f);
+        tree.get(f)->scale = 2.0f;
+        Anchor a; a.point = "BOTTOMLEFT"; a.relativePoint = "BOTTOMLEFT";
+        a.x = k.left / 2.0f;
+        a.y = k.bottom / 2.0f;
+        tree.addPoint(f, a);
+        tree.layout(kScreenW, kScreenH);
+        tree.placeNearest(f);
+        REQUIRE(tree.get(f)->anchors.size() == 1);
+        const Anchor& now = tree.get(f)->anchors.front();
+        CHECK(now.point == k.point);
+        CHECK(now.relativePoint == k.point);
+        CHECK(now.relativeTo == tree.root());
+        CHECK(now.x == Catch::Approx(k.x).margin(0.01));
+        CHECK(now.y == Catch::Approx(k.y).margin(0.01));
+        // Where it was.
+        tree.layout(kScreenW, kScreenH);
+        CHECK(tree.get(f)->left == Catch::Approx(k.left).margin(0.01));
+        CHECK(tree.get(f)->bottom == Catch::Approx(k.bottom).margin(0.01));
+        CHECK(tree.get(f)->rectW == Catch::Approx(100.0f));
+    }
+}
+
 // 0x004893c0
 TEST_CASE("A clamped frame's insets", "[widget][layout]") {
     for (const float scale : {1.0f, 2.0f}) {   // in its own units
