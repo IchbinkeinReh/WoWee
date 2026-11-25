@@ -611,16 +611,15 @@ static int lua_GetMerchantItemInfo(lua_State* L) {
     // race, the armour or weapon type, skill, spell, reputation. The merchant
     // frame tints the icon red where it is false. Usable while the item is
     // not known yet, as the client answers for an entry it has no record of.
-    luaPushOneOrNil(L, !info || gh->judgeItemRequirements(*info).usable());
-    // The extended cost - tokens, honour, arena points - which merchantframe
+    // And the arena rating its cost asks for, in a bracket there is.
+    const auto* cost = vi.extendedCost != 0 ? gh->getExtendedCost(vi.extendedCost) : nullptr;
+    const bool rated = !cost || cost->requiredArenaRating == 0 ||
+                       (cost->arenaBracket < 3 && gh->meetsArenaRating(cost->requiredArenaRating, cost->arenaBracket));
+    luaPushOneOrNil(L, rated && (!info || gh->judgeItemRequirements(*info).usable()));
+    // Whether it costs tokens, honour or arena points, which merchantframe
     // reads as `if ( extendedCost and (price <= 0) )` to decide whether to
-    // show a token price instead of a coin one. It was not returned at all, so
-    // an item bought with marks or emblems showed as free.
-    //
-    // Nil rather than zero when there is none: zero is *true* in Lua, so a
-    // zero here would claim every free item had a token cost.
-    if (vi.extendedCost != 0) lua_pushnumber(L, vi.extendedCost);
-    else                      lua_pushnil(L);
+    // show a token price instead of a coin one: 1 or nil (0x00584e10).
+    luaPushOneOrNil(L, cost != nullptr);
     return 7;
 }
 
