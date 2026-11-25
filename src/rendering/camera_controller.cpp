@@ -1135,6 +1135,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         };
 
         float rawLimit = wmoLimitAlong(camDir);
+        pivotStanding_.distanceHit = false;
         // Nothing in the way: the sweep answers as far as it looked, which is
         // where the zoom is going. Not a limit to recover toward - see below.
         constexpr float kClearEps = 1e-3f;
@@ -1164,6 +1165,8 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         } else {
             smoothedTerrainDist_ = -1.0f;
         }
+
+        pivotStanding_.distanceHit = probeDistance > MIN_DISTANCE + 0.1f && rawLimit < probeDistance - kClearEps;
 
         // Initialise smoothed state on first use.
         if (smoothedCollisionDist_ < 0.0f) {
@@ -1237,6 +1240,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             }
         }
     } else {
+        pivotStanding_.distanceHit = false;
         smoothedCollisionDist_ = -1.0f;   // Reset when no collision sources available
         smoothedTerrainDist_ = -1.0f;
     }
@@ -1425,6 +1429,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         }
         if (camFloorH && actualCam.z < *camFloorH + MIN_FLOOR_CLEARANCE) {
             actualCam.z = *camFloorH + MIN_FLOOR_CLEARANCE;
+            pivotStanding_.distanceHit = true;
         }
     }
     // Never let camera sink below the character's feet plane.
@@ -1433,7 +1438,15 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
     camera->setPosition(actualCam);
     // The pitch offset tilts the view (0x004c55b0), easing back to 0 out of a
     // seat (0x005fe8d0).
-    if (vehiclePitchOffset_.value != 0.0f) camera->setRotation(yaw, pitch + glm::degrees(vehiclePitchOffset_.value));
+    pivotStanding_.following = thirdPerson;
+    pivotStanding_.moving = f.nowForward || f.nowBackward || f.nowStrafeLeft || f.nowStrafeRight;
+    pivotStanding_.flying = isFlightAirborne();
+    pivotStanding_.pitch = -glm::radians(pitch);
+    smartPivot_.placed(smart_pivot::mayTilt(pivotStanding_), cameraClockMs_);
+    if (vehiclePitchOffset_.value != 0.0f || smartPivot_.tilt() != 0.0f) {
+        camera->setRotation(yaw, pitch + glm::degrees(vehiclePitchOffset_.value) + tiltUpDegrees());
+        viewTilted_ = true;
+    }
 
     // Hide player model when in first-person (camera too close)
     // WoW fades between ~1.0m and ~0.5m, hides fully below 0.5m
@@ -1803,6 +1816,7 @@ glm::vec3 CameraController::vehiclePulledIn(const glm::vec3& point, float deltaT
     if (wmoRenderer) hit = std::min(hit, wmoRenderer->raycastBoundingBoxes(origin, dir, reach));
     if (terrainManager && !cachedInsideInteriorWMO) hit = std::min(hit, raymarchTerrainCameraLimit(origin, dir, reach));
     const std::optional<float> share = hit < reach ? std::optional<float>(hit / reach) : std::nullopt;
+    pivotStanding_.heightHit = share.has_value();
     return game::vehicle::vehicleCameraPulledIn(origin, point, share, vehiclePullIn_);
 }
 
@@ -2031,6 +2045,11 @@ void CameraController::update(float deltaTime) {
     cameraClockMs_ += static_cast<uint32_t>(std::max(0.0f, deltaTime) * 1000.0f);
     vehicleYawOffset_.step(cameraClockMs_);
     vehiclePitchOffset_.step(cameraClockMs_);
+    smartPivot_.step(cameraClockMs_);
+    if (viewTilted_ && camera) {
+        camera->setRotation(yaw, pitch);
+        viewTilted_ = false;
+    }
     if (viewBlending_) {
         // Only the parts being eased are set (0x00603d30 steps them by +0x98
         // 0x4000000, 0x2000000, 0x1000000); each ends as it arrives.
@@ -2078,6 +2097,9 @@ void CameraController::update(float deltaTime) {
         idleOrbit_ = false;
         idleTimer_ = 0.0f;
 
+        // Carried, the view does not tilt against what is in its way.
+        smartPivot_.placed(false, cameraClockMs_);
+        pivotStanding_.distanceHit = pivotStanding_.heightHit = false;
         camera->setRotation(yaw, pitch);
         float zoomLerp = 1.0f - std::exp(-ZOOM_SMOOTH_SPEED * deltaTime);
         currentDistance += (userTargetDistance - currentDistance) * zoomLerp;
@@ -2131,8 +2153,9 @@ void CameraController::update(float deltaTime) {
         }
         // The vehicle's pitch offset tilts the view and not where it stands
         // (0x00606f90 -> 0x004c55b0).
-        if (vehiclePitchOffset_.value != 0.0f) {
-            camera->setRotation(yaw, pitch + glm::degrees(vehiclePitchOffset_.value));
+        if (vehiclePitchOffset_.value != 0.0f || smartPivot_.tilt() != 0.0f) {
+            camera->setRotation(yaw, pitch + glm::degrees(vehiclePitchOffset_.value) + tiltUpDegrees());
+            viewTilted_ = true;
         }
 
         // The ground limits are not kept up in flight. Left as they were at
@@ -2571,14 +2594,17 @@ void CameraController::update(float deltaTime) {
     if (cameraDrivesFacing && !externalFollow_) {
         const float len = glm::length(forward3D);
         if (len > 1e-4f) {
-            flightPitchDeg_ = glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f)));
+            flightPitchDeg_ = std::clamp(
+                glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f))) + tiltUpDegrees(), -90.0f, 90.0f);
         }
     }
     // Not "swimming and moving", which turns the facing here: the pitch
     // follows the camera only while the camera steers.
     if (mouseSteers && !externalFollow_) {
         const float len = glm::length(forward3D);
-        if (len > 1e-4f) swimPitchDeg_ = glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f)));
+        if (len > 1e-4f)
+            swimPitchDeg_ = std::clamp(
+                glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f))) + tiltUpDegrees(), -90.0f, 90.0f);
     }
     if (!isFlightAirborne()) flightPitchDeg_ = 0.0f;
     // A swimmer's pitch is the unit's, as a flyer's is: it follows the
@@ -2938,8 +2964,17 @@ void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
     // those names its own axes before asking for the turn.
     const float invertY = invertYaw ? 1.0f : -1.0f;
     // Each axis on its own gain, the picture's ratio inside both.
-    lookBy(event.xrel * getMouseSensitivity() * invertY,
-           event.yrel * getMousePitchSensitivity() * invert);
+    mouseLook(event.xrel * getMouseSensitivity() * invertY, event.yrel * getMousePitchSensitivity(), -invert);
+}
+
+void CameraController::mouseLook(float yawDegrees, float pitchDownDegrees, float sign) {
+    smart_pivot::Limits limits = pivotLimits_;
+    limits.lowest = -glm::radians(pitchLimitMaxDeg_);
+    pivotStanding_.pitch = -glm::radians(pitch);
+    const auto pitched = smartPivot_.turn({glm::radians(yawDegrees), glm::radians(pitchDownDegrees), sign},
+                                          smart_pivot::mayTilt(pivotStanding_), pivotStanding_.pitch, limits,
+                                          cameraClockMs_);
+    lookBy(yawDegrees, pitched ? -glm::degrees(*pitched) : 0.0f);
 }
 
 void CameraController::startViewMove(int direction, float speed, float rate) {
@@ -3178,6 +3213,7 @@ void CameraController::reset() {
     yaw = defaultYaw;
     facingYaw = defaultYaw;
     pitch = defaultPitch;
+    smartPivot_.reset();
     verticalVelocity = 0.0f;
     grounded = true;
     // Entering the world, the player's unit falls from where it is put

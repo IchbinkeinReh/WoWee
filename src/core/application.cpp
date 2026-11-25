@@ -4953,6 +4953,10 @@ void Application::applyServerMovementState(float deltaTime) {
             std::atoi(addons::storedCVarValue("cameraSmoothTrackingStyle", "4").c_str()));
         renderer->getCameraController()->setWaterCollision(
             std::atoi(addons::storedCVarValue("cameraWaterCollision", "1").c_str()) != 0);
+        renderer->getCameraController()->setSmartPivot(
+            std::atoi(addons::storedCVarValue("cameraPivot", "1").c_str()) != 0,
+            static_cast<float>(std::atof(addons::storedCVarValue("cameraPivotDXMax", "0.05").c_str())),
+            static_cast<float>(std::atof(addons::storedCVarValue("cameraPivotDYMin", "0.00").c_str())));
 
         // Sync camera forward pitch to movement packets during flight / swimming.
         // The server writes the pitch field when FLYING or SWIMMING flags are set;

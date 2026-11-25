@@ -4,6 +4,7 @@
 #include "rendering/camera_pivot.hpp"
 
 #include "rendering/camera_shake.hpp"
+#include "rendering/smart_pivot.hpp"
 #include "rendering/camera_smooth.hpp"
 #include "rendering/camera.hpp"
 #include "game/vehicle_camera.hpp"
@@ -899,8 +900,22 @@ public:
     }
     /// cameraWaterCollision: the liquids' surfaces are in the camera's way (0x005fec50).
     void setWaterCollision(bool on) { waterCollision_ = on; }
+    /// cameraPivot, cameraPivotDXMax and cameraPivotDYMin (smart_pivot.hpp).
+    void setSmartPivot(bool on, float yawMost, float pitchLeast) {
+        pivotStanding_.on = on;
+        pivotLimits_.yawMost = yawMost;
+        pivotLimits_.pitchLeast = pitchLeast;
+    }
 private:
     bool waterCollision_ = true;
+    smart_pivot::Pivot smartPivot_;
+    smart_pivot::Standing pivotStanding_;
+    smart_pivot::Limits pivotLimits_;
+    bool viewTilted_ = false;   ///< the camera's rotation has the tilt in it
+    /// The mouse's turn (0x006020b0), by its own way: the pitch, or the tilt.
+    void mouseLook(float yawDegrees, float pitchDownDegrees, float sign);
+    /// What the tilt adds to the pitch of the view, degrees up.
+    [[nodiscard]] float tiltUpDegrees() const { return -glm::degrees(smartPivot_.tilt()); }
     int smoothStyle_ = camera_smooth::kDefaultStyle;
     int smoothTrackingStyle_ = camera_smooth::kDefaultStyle;
     /// The Fear state's ease, planned for a character carried by a server

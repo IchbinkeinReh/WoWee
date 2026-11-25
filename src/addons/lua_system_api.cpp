@@ -1351,7 +1351,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // As registered (0x004d9c00, 0x00510000): the tips on the loading screen, and
     // no role chosen.
     else if (n == "gametip" || n == "lfgselectedroles") lua_pushstring(L, "0");
-    else if (n == "showgametips" || n == "camerawatercollision") lua_pushstring(L, "1");
+    else if (n == "showgametips" || n == "camerawatercollision" || n == "camerapivot") lua_pushstring(L, "1");
+    else if (n == "camerapivotdxmax") lua_pushstring(L, "0.05");
+    else if (n == "camerapivotdymin") lua_pushstring(L, "0.00");
     // Off, as the real client has it: attacking an ally does nothing unless
     // the player has asked for it to mean assist.
     else if (n == "assistattack") lua_pushstring(L, "0");

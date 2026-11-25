@@ -4643,6 +4643,11 @@ wowee_add_test(test_keys_held_into_typing
 wowee_add_test(test_water_motes
     SOURCES test_water_motes.cpp)
 
+# ── test_smart_pivot ─────────────────────────────────
+# The camera's smart pivot.
+wowee_add_test(test_smart_pivot
+    SOURCES test_smart_pivot.cpp)
+
 # ── test_model_claims ────────────────────────────────
 # The models tiles on their way count on.
 wowee_add_test(test_model_claims
