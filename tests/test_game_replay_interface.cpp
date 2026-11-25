@@ -1709,17 +1709,10 @@ TEST_CASE("a quest's page shows all it gives", "[replay][interface]") {
 // T325: 0x00401480 puts down what the cursor holds (0x005194c0).
 TEST_CASE("a change of map empties the cursor", "[replay][interface]") {
     Session s;
-    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FIELD_COINAGE, 5000}});
     Interface ui(s);
-    ui.run("ClearCursor()");
-    s.handler().getInventory().setBackpackSlot(0, [] {
-        wowee::game::ItemDef item;
-        item.itemId = 2589;
-        item.stackCount = 1;
-        return item;
-    }());
-    ui.run("PickupContainerItem(0, 1)");
-    REQUIRE(ui.is("GetCursorInfo() == 'item'"));
+    ui.run("PickupPlayerMoney(10)");
+    REQUIRE(ui.is("GetCursorInfo() == 'money'"));
     wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_TRANSFER_PENDING));
     p.writeUInt32(571);
     s.receive(p);
