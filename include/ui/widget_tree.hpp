@@ -1085,6 +1085,10 @@ public:
     /// Frame:SetFrameLevel: the frame to a level of its own, and with it what
     /// is inside.
     void setLevel(uint32_t id, int level);
+    /// The level a frame in `parent` has where it set none: one over its
+    /// parent's, and 0 for one with no parent, which here is in the screen
+    /// (0x004911b0). UIParent is one of those, so all that is in it is at 1.
+    [[nodiscard]] int levelIn(const Widget& parent) const { return parent.id == rootId_ ? 0 : parent.effLevel + 1; }
 
     /// The frame currently following the cursor, if any.
     ///
@@ -1263,6 +1267,8 @@ public:
     }
 
 private:
+    /// The levels of what is in a frame that is at another itself.
+    void settleLevels(const Widget& parent);
     template <typename Tell>
     void comeUp(uint32_t id, const Tell& tell) {
         Widget* w = get(id);

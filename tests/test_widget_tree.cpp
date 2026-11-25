@@ -4026,3 +4026,55 @@ TEST_CASE("a rect asked for before the first layout hangs in the screen", "[widg
         CHECK(tree.get(watch)->rectH == Catch::Approx(tall));
     }
 }
+
+// P66 again: the interface's UIParent is a frame with no parent, as the breath bar is until its
+// template's parent is given to it - one level under what the bar was then laid out at.
+TEST_CASE("a frame with no parent is at the bottom, and SetParent sets the level at once", "[widget][framelevel]") {
+    WidgetTree tree;
+    const auto made = [&](WidgetKind kind, uint32_t parent, const char* name) {
+        const uint32_t id = tree.create(kind, parent, name);
+        tree.get(id)->width = tree.get(id)->height = 20.0f;
+        tree.get(id)->anchors.push_back({});
+        return id;
+    };
+    const uint32_t ui = made(WidgetKind::Frame, 0, "UIParent");
+    const uint32_t win = made(WidgetKind::Frame, 0, "MirrorTimer1");
+    CHECK(tree.get(ui)->effLevel == 0);
+    CHECK(tree.get(win)->effLevel == 0);
+    tree.setParent(win, ui);
+    CHECK(tree.get(win)->effLevel == 1);
+    const uint32_t text = made(WidgetKind::FontString, win, "MirrorTimer1Text");
+    tree.get(text)->layer = DrawLayer::Overlay;
+    tree.get(text)->text = "Breath";
+    const uint32_t bar = made(WidgetKind::Frame, win, "MirrorTimer1StatusBar");
+    tree.get(bar)->isStatusBar = true;
+    tree.get(bar)->barTexture = "bar";
+    tree.setLevel(bar, tree.get(bar)->effLevel - 1);  // LowerFrameLevel
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.get(ui)->effLevel == 0);
+    CHECK(tree.get(win)->effLevel == 1);
+    CHECK(tree.get(bar)->effLevel == 1);
+    const auto& order = tree.drawOrder();
+    REQUIRE(order.size() == 2);
+    CHECK(order[0]->id == bar);
+    CHECK(order[1]->id == text);
+
+    // 0x004911b0: at once, what is inside with it, and no level of its own any more.
+    const uint32_t deep = made(WidgetKind::Frame, bar, "Deep");
+    tree.setLevel(win, 30);
+    CHECK(tree.get(deep)->effLevel == 31);
+    tree.setParent(win, deep);  // inside itself: refused
+    CHECK(tree.get(win)->effLevel == 30);
+    const uint32_t other = made(WidgetKind::Frame, ui, "Other");
+    tree.setLevel(other, 7);
+    tree.setParent(win, other);
+    CHECK(tree.get(win)->effLevel == 8);
+    CHECK(tree.get(bar)->effLevel == 8);
+    CHECK(tree.get(deep)->effLevel == 9);
+    tree.setParent(win, 0);
+    CHECK(tree.get(win)->effLevel == 0);
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.get(win)->effLevel == 0);
+    CHECK(tree.get(bar)->effLevel == 0);
+    CHECK(tree.get(deep)->effLevel == 1);
+}

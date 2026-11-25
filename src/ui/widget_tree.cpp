@@ -154,11 +154,6 @@ void WidgetTree::reset() {
     // rather than naming something WoW has no word for.
     rootId_ = create(WidgetKind::Frame, 0, "");
     uiParentId_ = create(WidgetKind::Frame, rootId_, "UIParent");
-    // The bottom, as every layout has it, and from the start: an OnLoad asks
-    // for levels long before the first layout, and was told them one too high.
-    // The breath bar's LowerFrameLevel put it on its frame's level that way,
-    // and a layout later it was one over it, on top of the word on the frame.
-    widgets_[uiParentId_].effLevel = 0;
 }
 
 uint32_t WidgetTree::create(WidgetKind kind, uint32_t parent, const std::string& name) {
@@ -191,7 +186,7 @@ uint32_t WidgetTree::create(WidgetKind kind, uint32_t parent, const std::string&
         // itself to 1 rather than to one above its parent, its buttons
         // followed, and the bar they sit on stayed above all of them and took
         // every click. Elsewhere the same sum went negative.
-        w.effLevel = widgets_[parent].effLevel + 1;
+        w.effLevel = levelIn(widgets_[parent]);
         w.effStrata = widgets_[parent].effStrata;
     }
     return id;
@@ -225,6 +220,16 @@ void WidgetTree::setParent(uint32_t id, uint32_t newParent) {
     }
     w->parent = newParent;
     get(newParent)->children.push_back(id);
+    // 0x004911b0: at once a level over the new parent, whatever level it had
+    // set itself, and what is inside it with it. A frame made with no parent
+    // and then given the one its template names - the breath bar is - had the
+    // frames in it made and their levels set while it still was where it had
+    // been made.
+    const int level = levelIn(*get(newParent));
+    shiftExplicitLevels(id, level - w->effLevel);
+    w->levelExplicit = false;
+    w->effLevel = level;
+    settleLevels(*w);
     // Moved under a hidden frame still marked visible: the next pass has to
     // walk whichever hidden subtree it landed in.
     ++visibilityRaises_;
@@ -670,15 +675,16 @@ void WidgetTree::setLevel(uint32_t id, int level) {
     w->level = level;
     w->levelExplicit = true;
     w->effLevel = level;
-    const auto settle = [this](const auto& self, const Widget& parent) -> void {
-        for (const uint32_t child : parent.children) {
-            Widget* c = get(child);
-            if (!c) continue;
-            c->effLevel = c->levelExplicit && c->level >= parent.effLevel ? c->level : parent.effLevel + 1;
-            self(self, *c);
-        }
-    };
-    settle(settle, *w);
+    settleLevels(*w);
+}
+
+void WidgetTree::settleLevels(const Widget& parent) {
+    for (const uint32_t child : parent.children) {
+        Widget* c = get(child);
+        if (!c) continue;
+        c->effLevel = c->levelExplicit && c->level >= parent.effLevel ? c->level : parent.effLevel + 1;
+        settleLevels(*c);
+    }
 }
 
 void WidgetTree::raise(uint32_t id) {
@@ -1154,7 +1160,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // frame sits one level above its parent so it draws over it, which is what
     // makes a button's own regions land on top of the frame holding it.
     w->effStrata = w->strataExplicit ? w->strata : (parent ? parent->effStrata : FrameStrata::Medium);
-    w->effLevel  = w->levelExplicit  ? w->level  : (parent ? parent->effLevel + 1 : 0);
+    w->effLevel  = w->levelExplicit  ? w->level  : (parent ? levelIn(*parent) : 0);
     // ...and never below the parent, whatever the two lines above worked out.
     //
     // The level a child inherits is read off the parent, so a parent raised
