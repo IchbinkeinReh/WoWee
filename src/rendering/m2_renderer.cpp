@@ -2,6 +2,7 @@
 #include "rendering/depth_convention.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/m2_renderer.hpp"
+#include "rendering/rt_fire_color.hpp"
 #include "rendering/model_memory.hpp"
 #include "rendering/rt_bvh.hpp"
 #include "rendering/rt_point_lights.hpp"
@@ -2228,6 +2229,15 @@ void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& mode
             }
         }
     }
+    // A fire's flames that are cards and no particles (fireTint).
+    gpuModel.flameCards = glm::vec3(0.0f);
+    if (gpuModel.lights.empty() && (gpuModel.isBrazierOrFire || gpuModel.isTorch)) {
+        forEachGlowTriangle([&](uint32_t, const auto& batch, const glm::vec3& color, const glm::vec3& a,
+                                const glm::vec3& b, const glm::vec3& c, uint32_t) {
+            if (batch.blendMode == 3 || batch.blendMode == 4)
+                gpuModel.flameCards += color * (0.5f * glm::length(glm::cross(b - a, c - a)));
+        });
+    }
     // What gives a light already (an M2 light, fireLight, lampLight) - its
     // glow is that light, and a second would light it twice - and a trap the
     // renderer never draws. Nothing else is left out by what it is or what
@@ -2245,6 +2255,24 @@ void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& mode
         builder.addTriangle(a, b, c, color, bi, batch.colorAnimated, bone);
     });
     gpuModel.glowPatches = builder.finish();
+}
+
+glm::vec3 M2Renderer::fireTint(const M2ModelGPU& model) const {
+    if (model.fireTint) return *model.fireTint;
+    rt_lights::FlameColor flames;
+    flames.added = model.flameCards;
+    const auto at0 = [&](const pipeline::M2AnimationTrack& t) {
+        return interpFloat(t, 0.0f, 0.0f, 0, model.globalSequenceDurations);
+    };
+    for (size_t i = 0; i < model.particleEmitters.size(); ++i) {
+        const pipeline::M2ParticleEmitter& e = model.particleEmitters[i];
+        const VkTexture* tex = i < model.particleTextures.size() ? model.particleTextures[i] : nullptr;
+        flames.addEmitter(e, at0(e.emissionRate), at0(e.lifespan),
+                          tex ? tex->averageColor() * tex->alphaCoverage() : glm::vec3(1.0f));
+    }
+    const glm::vec3 own = model.isTorch ? rt_lights::kTorchColor : rt_lights::kFireColor;
+    model.fireTint = rt_lights::fireColor(model.isTorch, flames.color()) / own;
+    return *model.fireTint;
 }
 
 void M2Renderer::computeFlameClouds(M2ModelGPU& gpuModel) {
@@ -3057,6 +3085,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
                                                            inst.globalSequenceTime,
                                                            static_cast<float>(inst.id % 97u), rtFireFlickerStrength_);
+            // In the colour of its own flames (rt_fire_color.hpp), as strong as it was.
+            l.color *= fireTint(*model);
             // At its flames where it has any (rt_lights::flameCentre).
             if (const auto flame = rt_lights::flameCentre(
                     model->particleEmitters,

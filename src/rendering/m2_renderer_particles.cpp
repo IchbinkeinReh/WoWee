@@ -1,4 +1,5 @@
 #include "rendering/m2_renderer.hpp"
+#include "rendering/rt_fire_color.hpp"
 #include <unordered_set>
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/vk_context.hpp"
@@ -28,49 +29,19 @@ namespace rendering {
 
 float M2Renderer::interpFloat(const pipeline::M2AnimationTrack& track, float animTime,
                                 float globalTime, int seqIdx,
-                                const std::vector<uint32_t>& globalSeqDurations) {
+                                const std::vector<uint32_t>& globalSeqDurations) const {
     return m2_track::sampleFloat(track, seqIdx, animTime, globalTime,
                                  globalSeqDurations, 0.0f);
 }
 
 // Interpolate an M2 FBlock (particle lifetime curve) at a given life ratio [0..1].
 // FBlocks store per-lifetime keyframes for particle color, alpha, and scale.
-// NOTE: interpFBlockFloat and interpFBlockVec3 share identical interpolation logic -
-// if you fix a bug in one, update the other to match.
 float M2Renderer::interpFBlockFloat(const pipeline::M2FBlock& fb, float lifeRatio) {
-    if (fb.floatValues.empty()) return 1.0f;
-    if (fb.floatValues.size() == 1 || fb.timestamps.empty()) return fb.floatValues[0];
-    lifeRatio = glm::clamp(lifeRatio, 0.0f, 1.0f);
-    for (size_t i = 0; i < fb.timestamps.size() - 1; i++) {
-        if (lifeRatio <= fb.timestamps[i + 1]) {
-            float t0 = fb.timestamps[i];
-            float t1 = fb.timestamps[i + 1];
-            float dur = t1 - t0;
-            float frac = (dur > 0.0f) ? (lifeRatio - t0) / dur : 0.0f;
-            size_t v0 = std::min(i, fb.floatValues.size() - 1);
-            size_t v1 = std::min(i + 1, fb.floatValues.size() - 1);
-            return glm::mix(fb.floatValues[v0], fb.floatValues[v1], frac);
-        }
-    }
-    return fb.floatValues.back();
+    return rt_lights::overLife(fb.timestamps, fb.floatValues, lifeRatio, 1.0f);
 }
 
 glm::vec3 M2Renderer::interpFBlockVec3(const pipeline::M2FBlock& fb, float lifeRatio) {
-    if (fb.vec3Values.empty()) return glm::vec3(1.0f);
-    if (fb.vec3Values.size() == 1 || fb.timestamps.empty()) return fb.vec3Values[0];
-    lifeRatio = glm::clamp(lifeRatio, 0.0f, 1.0f);
-    for (size_t i = 0; i < fb.timestamps.size() - 1; i++) {
-        if (lifeRatio <= fb.timestamps[i + 1]) {
-            float t0 = fb.timestamps[i];
-            float t1 = fb.timestamps[i + 1];
-            float dur = t1 - t0;
-            float frac = (dur > 0.0f) ? (lifeRatio - t0) / dur : 0.0f;
-            size_t v0 = std::min(i, fb.vec3Values.size() - 1);
-            size_t v1 = std::min(i + 1, fb.vec3Values.size() - 1);
-            return glm::mix(fb.vec3Values[v0], fb.vec3Values[v1], frac);
-        }
-    }
-    return fb.vec3Values.back();
+    return rt_lights::overLife(fb.timestamps, fb.vec3Values, lifeRatio, glm::vec3(1.0f));
 }
 
 std::vector<glm::vec3> M2Renderer::getWaterVegetationPositions(const glm::vec3& camPos, float maxDist) const {

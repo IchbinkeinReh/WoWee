@@ -1775,6 +1775,10 @@ wowee_add_test(test_rt_point_lights
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_rt_fire_color ──────────────────────────────────────
+wowee_add_test(test_rt_fire_color
+    SOURCES test_rt_fire_color.cpp)
+
 # ── test_rt_glow_pulse ───────────────────────────────────────
 # A glow card's bone pulse for its traced light.
 wowee_add_test(test_rt_glow_pulse

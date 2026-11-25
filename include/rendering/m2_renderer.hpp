@@ -161,6 +161,10 @@ struct M2ModelGPU {
     /// it starts, from the emitter (rt_lights::particleCloudOffset): a fire's
     /// or a lamp's light goes there, among its flames, not into its coals.
     std::vector<glm::vec3> flameClouds;
+    /// Of a fire without a light of its own: its glowing cards' colours by their areas, and what
+    /// fireLight's colour is times for its flames (M2Renderer::fireTint, as first asked for).
+    glm::vec3 flameCards{0.0f};
+    mutable std::optional<glm::vec3> fireTint;
     /// What of it glows - its unlit and additive batches, its glow cards -
     /// in a few patches of its own space (rt_lights::GlowBuilder), each a
     /// light while an instance is near (rt_lights::glowLight). Gathered at
@@ -1494,6 +1498,7 @@ private:
     /// (M2ModelGPU::isLamp, lampLocal, lampBone).
     static void detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     /// M2ModelGPU::flameClouds, from the emitters' tracks at the start.
+    glm::vec3 fireTint(const M2ModelGPU& model) const;
     void computeFlameClouds(M2ModelGPU& gpuModel);
     // The instances placed in the dynamic level - moving ones - are brought
     // up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).
@@ -1850,7 +1855,7 @@ private:
 
     float interpFloat(const pipeline::M2AnimationTrack& track, float animTime,
                       float globalTime, int seqIdx,
-                      const std::vector<uint32_t>& globalSeqDurations);
+                      const std::vector<uint32_t>& globalSeqDurations) const;
     float interpFBlockFloat(const pipeline::M2FBlock& fb, float lifeRatio);
     glm::vec3 interpFBlockVec3(const pipeline::M2FBlock& fb, float lifeRatio);
     void emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt);

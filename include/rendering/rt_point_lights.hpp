@@ -293,6 +293,9 @@ inline std::optional<PointLight> evaluateM2Light(const pipeline::M2Light& light,
     return out;
 }
 
+/// An ordinary fire's colour, and a torch's.
+inline constexpr glm::vec3 kFireColor{1.0f, 0.55f, 0.22f}, kTorchColor{1.0f, 0.62f, 0.3f};
+
 /// The light of a fire that carries none of its own: a brazier, a bonfire, a
 /// torch (the classifier's isBrazierOrFire and isTorch), whose glow the
 /// original draws only as a card. At the top of its box, warm, reaching
@@ -311,7 +314,7 @@ inline PointLight fireLight(const glm::vec3& boxMin, const glm::vec3& boxMax, co
     const float t = timeMs * 0.001f;
     const float swing = 0.08f * std::sin(t * 7.3f + phase) + 0.04f * std::sin(t * 17.9f + 2.1f * phase);
     const float flicker = std::max(0.88f + swing * flickerScale, 0.0f);
-    out.color = (torch ? glm::vec3(1.0f, 0.62f, 0.3f) : glm::vec3(1.0f, 0.55f, 0.22f)) * flicker;
+    out.color = (torch ? kTorchColor : kFireColor) * flicker;
     out.attenuationEnd = std::clamp(extent * 3.0f, torch ? 4.0f : 5.0f, 14.0f) * kWorldReachScale;
     out.attenuationStart = 0.25f * out.attenuationEnd;
     out.source = Source::Fire;
