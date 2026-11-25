@@ -131,6 +131,8 @@ public:
     void setReadPos(size_t pos) { readPos = pos; }
     [[nodiscard]] bool hasData() const { return readPos < data.size(); }
     void skipAll() { readPos = data.size(); }
+    /// Whether something was read where there was nothing more (packet_reads.hpp).
+    [[nodiscard]] bool readPastEnd() const { return pastEnd_; }
 
     /// When the socket read it (steady clock, ms; 0 for a packet made here).
     void setReceivedMs(int64_t ms) { receivedMs_ = ms; }
@@ -141,6 +143,7 @@ private:
     uint16_t opcode = 0;
     std::vector<uint8_t> data;
     size_t readPos = 0;
+    bool pastEnd_ = false;
 
     // The open bit byte on each side. 8 means none is open, which is what
     // makes flushBits() and resetBitReader() free on the byte paths.

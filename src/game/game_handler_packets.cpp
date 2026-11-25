@@ -4310,6 +4310,7 @@ void GameHandler::handlePacket(network::Packet& packet) {
     auto it = dispatchTable_.find(*logicalOp);
     if (it != dispatchTable_.end()) {
         it->second(packet);
+        packetReads_.note(packet.getOpcode(), packet.getRemainingSize(), packet.readPastEnd());
     } else {
         // In pre-world states we need full visibility (char create/login handshakes).
         // In-world we keep de-duplication to avoid heavy log I/O in busy areas.

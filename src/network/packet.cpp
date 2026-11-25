@@ -58,7 +58,10 @@ void Packet::writeBytes(const uint8_t* bytes, size_t length) {
 
 uint8_t Packet::readUInt8() {
     resetBitReader();
-    if (readPos >= data.size()) return 0;
+    if (readPos >= data.size()) {
+        pastEnd_ = true;
+        return 0;
+    }
     return data[readPos++];
 }
 
@@ -176,7 +179,10 @@ void Packet::flushBits() {
 
 bool Packet::readBit() {
     if (readBitPos == 8) {
-        if (readPos >= data.size()) return false;
+        if (readPos >= data.size()) {
+            pastEnd_ = true;
+            return false;
+        }
         readBitValue = data[readPos++];
         readBitPos = 0;
     }

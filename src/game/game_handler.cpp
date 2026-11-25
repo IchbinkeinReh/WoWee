@@ -122,6 +122,12 @@ GameHandler::GameHandler(GameServices& services)
 
 GameHandler::~GameHandler() {
     disconnect();
+    for (const auto& row : packetReads_.odd()) {
+        const auto logical = opcodeTable_.fromWire(row.opcode);
+        LOG_INFO("Packets: ", logical ? OpcodeTable::logicalToName(*logical) : "?", " (0x", std::hex, row.opcode,
+                 std::dec, "): of ", row.packets, " ", row.past, " read past the end, ", row.leftOver,
+                 " with bytes left, ", row.mostLeftOver, " at most");
+    }
 }
 
 void GameHandler::setPacketParsers(std::unique_ptr<PacketParsers> parsers) {

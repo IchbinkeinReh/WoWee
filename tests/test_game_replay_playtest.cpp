@@ -512,6 +512,47 @@ TEST_CASE("how long a thing can be handed back", "[replay][playtest]") {
     CHECK(s.handler().itemRefundLeft(kItem) == 0);
 }
 
+// What is read of a packet is counted: too little or too much of it.
+TEST_CASE("packets read short or past their end are counted", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    const auto wire = wowee::game::wireOpcode(Opcode::SMSG_TIME_SYNC_REQ);
+    const auto row = [&] {
+        for (const auto& r : s.handler().packetReads().odd())
+            if (r.opcode == wire) return r;
+        return wowee::network::PacketReads::Row{};
+    };
+    const auto send = [&](int bytes) {
+        wowee::network::Packet p(wire);
+        for (int i = 0; i < bytes; ++i) p.writeUInt8(0);
+        s.receive(p);
+    };
+    send(4);
+    CHECK(row().packets == 0);
+    send(7);
+    CHECK(row().leftOver == 1);
+    CHECK(row().mostLeftOver == 3);
+    CHECK(row().past == 0);
+    CHECK(row().packets == 2);
+
+    wowee::network::PacketReads reads;
+    reads.note(1, 0, false);
+    reads.note(2, 9, false);
+    reads.note(2, 4, false);
+    reads.note(3, 0, true);
+    const auto odd = reads.odd();
+    REQUIRE(odd.size() == 2);
+    CHECK(odd[0].opcode == 3);
+    CHECK(odd[1].opcode == 2);
+    CHECK(odd[1].mostLeftOver == 9);
+    wowee::network::Packet shortOne(5);
+    shortOne.writeUInt16(1);
+    (void)shortOne.readUInt16();
+    CHECK_FALSE(shortOne.readPastEnd());
+    (void)shortOne.readUInt8();
+    CHECK(shortOne.readPastEnd());
+}
+
 // T161: ITEM_FIELD_GIFTCREATOR, for a wrapped item's tooltip.
 TEST_CASE("who wrapped a gift is known", "[replay][playtest]") {
     Session s;

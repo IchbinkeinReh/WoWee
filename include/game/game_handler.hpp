@@ -53,6 +53,7 @@
 #include "game/skill_ups.hpp"
 #include "game/dialog_emotes.hpp"
 #include "game/game_services.hpp"
+#include "network/packet_reads.hpp"
 #include "network/packet.hpp"
 #include "core/logger.hpp"
 #include <glm/glm.hpp>
@@ -3342,6 +3343,7 @@ public:
         uint32_t signatures = 0;
     };
     std::optional<CharterFacts> charterFacts(uint64_t itemGuid, uint32_t itemId);
+    [[nodiscard]] const network::PacketReads& packetReads() const { return packetReads_; }
     bool supportsEquipmentSets() const;
     bool useEquipmentSet(const std::string& name, bool itemOnCursor);
     /// ignoredSlotMask: bit i set leaves equipment slot i out of the set.
@@ -6869,6 +6871,7 @@ private:
     // Chat (state lives in ChatHandler; callbacks remain here for cross-domain access)
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
+    network::PacketReads packetReads_;
     UnitTooltipCallback unitTooltipCallback_;
     /// A server's movie is playing (DAT_00bd0800).
     bool moviePlaying_ = false;
