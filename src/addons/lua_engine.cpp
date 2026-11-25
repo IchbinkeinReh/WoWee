@@ -8161,11 +8161,6 @@ int lua_FontString_SetText(lua_State* L) {
         // A tooltip's line: the tooltip draws what the interface wrote.
         tooltipLineStringWritten(L, w);
     }
-    // GetText answers what was set, not what is drawn. WoW resolves the escape
-    // on the way to the screen and hands the original back, and FrameXML reads
-    // its own labels back in a few places to re-format them.
-    lua_pushstring(L, text);
-    lua_setfield(L, 1, "_text");
     return 0;
 }
 /// GetText() -> the text, or nil for none (0x0048d730 pushes a null for an
@@ -11083,8 +11078,6 @@ static int lua_Frame_CreateFontString(lua_State* L) {
     // shape in FrameXML.
     lua_pushvalue(L, 1);
     lua_setfield(L, -2, "__parent");
-    lua_pushstring(L, "");
-    lua_setfield(L, -2, "_text");
     installRegionMethods(L, /*isTexture=*/false, /*isFontString=*/true);
     if (name && *name) {
         lua_pushvalue(L, -1);

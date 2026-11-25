@@ -1,3 +1,4 @@
+#include "addons/inner_fields.hpp"
 #include "addons/lua_std_libs.hpp"
 
 extern "C" {
@@ -119,11 +120,50 @@ void alias(lua_State* L, const char* global, const char* table, const char* fiel
 
 }  // namespace
 
+/// next, pairs and table.foreach, without what an object's table has of ours (inner_fields.hpp).
+static int objectNext(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_settop(L, 2);
+    if (inner_fields::next(L, 1)) return 2;
+    lua_pushnil(L);
+    return 1;
+}
+static int objectPairs(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushvalue(L, 1);
+    lua_pushnil(L);
+    return 3;
+}
+static int objectForeach(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_pushnil(L);
+    while (inner_fields::next(L, 1)) {
+        lua_pushvalue(L, 2);
+        lua_pushvalue(L, -3);
+        lua_pushvalue(L, -3);
+        lua_call(L, 2, 1);
+        if (!lua_isnil(L, -1)) return 1;
+        lua_pop(L, 2);
+    }
+    return 0;
+}
+
 void openInterfaceLibs(lua_State* L) {
     for (const lua_CFunction open : {luaopen_base, luaopen_table, luaopen_string, luaopen_math}) {
         lua_pushcfunction(L, open);
         lua_call(L, 0, 0);
     }
+    lua_pushcfunction(L, objectNext);
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "next");
+    lua_pushcclosure(L, objectPairs, 1);
+    lua_setglobal(L, "pairs");
+    lua_getglobal(L, "table");
+    lua_pushcfunction(L, objectForeach);
+    lua_setfield(L, -2, "foreach");
+    lua_pop(L, 1);
     // newproxy stays, despite the name. It returns a userdata with a fresh
     // metatable and reaches nothing else; what it buys is __index and
     // __newindex on a value that cannot be tampered with, which is exactly how

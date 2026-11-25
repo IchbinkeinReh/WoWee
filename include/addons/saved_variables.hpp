@@ -6,6 +6,8 @@ extern "C" {
 #include <lua.h>
 }
 
+#include "addons/inner_fields.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -72,7 +74,7 @@ inline void appendTable(lua_State* L, int idx, std::string& out, std::vector<con
         lua_pop(L, 1);
     }
     lua_pushnil(L);
-    while (lua_next(L, idx) != 0) {
+    while (inner_fields::next(L, idx)) {
         const int value = lua_gettop(L), key = value - 1;
         const int type = lua_type(L, key);
         const double number = type == LUA_TNUMBER ? lua_tonumber(L, key) : 0.0;

@@ -8,6 +8,7 @@ extern "C" {
 #include <lualib.h>
 }
 
+#include <algorithm>
 #include <string>
 
 using namespace wowee::addons;
@@ -103,6 +104,20 @@ TEST_CASE("a file is read back as it was", "[saved_variables]") {
           " for k, v in pairs(a) do if not same(v, b[k]) then return false end end"
           " for k in pairs(b) do if a[k] == nil then return false end end return true end");
     CHECK(l.truth("same(OLD, DB) and NUM == 5 and GONE == nil"));
+}
+
+TEST_CASE("an object's inner fields are not written", "[saved_variables]") {
+    Lua l;
+    l.run("F = { [0] = newproxy(), __wid = 7, __scripts = {}, __own_thing = 1, mine = 2 }");
+    const std::string text = l.value("F");
+    CHECK(text.find("__wid") == std::string::npos);
+    CHECK(text.find("__scripts") == std::string::npos);
+    CHECK(text.find("[\"__own_thing\"] = 1") != std::string::npos);
+    CHECK(text.find("[\"mine\"] = 2") != std::string::npos);
+    CHECK(text.find("[0] = nil --[[ skipped userdata ]]") != std::string::npos);
+    // Of no object they are an addon's own.
+    CHECK(l.value("{ __scripts = 1 }") == "{\r\n\t[\"__scripts\"] = 1,\r\n}");
+    CHECK(std::is_sorted(std::begin(inner_fields::kNames), std::end(inner_fields::kNames)));
 }
 
 TEST_CASE("which names are written", "[saved_variables]") {

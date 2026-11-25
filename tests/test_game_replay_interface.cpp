@@ -771,6 +771,28 @@ TEST_CASE("the reputation rows are in the order of their names", "[replay][inter
                      "+Other;Erster;Zweiter;+Inactive;Ödland;thorium;"));
 }
 
+// T247: the client's table of a frame has its handle at 0 and what the interface put there.
+TEST_CASE("a frame's table shows no more than what is in it", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("f = CreateFrame('Button', 'PlayFields', UIParent) f:SetText('x') f:SetNormalTexture('a') "
+           "f:SetHighlightTexture('b') f:SetScript('OnClick', function() end) f:RegisterEvent('BAG_UPDATE') "
+           "f:SetAttribute('a', 1) f:SetID(3) f:RegisterForClicks('AnyUp') f.own = 1 f.__ouf = 2 "
+           "t = f:CreateTexture('PlayFieldsT') s = f:CreateFontString() "
+           "e = CreateFrame('EditBox', nil, f) e:SetAutoFocus(false) e:SetText('y') "
+           "g = CreateFrame('GameTooltip', 'PlayFieldsTip', UIParent) g:SetOwner(f, 'ANCHOR_NONE') g:SetText('z') "
+           "function keys(x) local out = {} for k in pairs(x) do out[#out + 1] = tostring(k) end "
+           "table.sort(out) return table.concat(out, ' ') end");
+    CHECK(ui.is("keys(f) == '0 __ouf own'"));
+    for (const char* other : {"t", "s", "e", "g"}) {
+        INFO(other);
+        CHECK(ui.is(std::string("keys(") + other + ") == '0'"));
+    }
+    CHECK(ui.is("next(f) ~= nil and next(t, 0) == nil and rawget(f, '__wid') ~= nil"));
+    ui.run("seen = '' table.foreach(f, function(k) seen = seen .. (type(k) == 'string' and k:sub(1, 5) == '__wid' and 'bad' or '') end)");
+    CHECK(ui.is("seen == '' and pairs({}) == next"));
+}
+
 // 0x0096f4a0: a button's label has the font object of the button's state.
 TEST_CASE("a button's label takes the font of its state", "[replay][interface]") {
     Session s;
