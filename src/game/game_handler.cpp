@@ -2490,6 +2490,10 @@ void GameHandler::loadAchievementNameCache() {
         if (fieldCount > 40) {
             if (const uint32_t order = dbc->getUInt32(i, 40)) achievementUiOrderCache_[id] = order;
         }
+        if (fieldCount > 61) {
+            if (const uint32_t minimum = dbc->getUInt32(i, 60)) achievementMinimumCache_[id] = minimum;
+            if (const uint32_t shared = dbc->getUInt32(i, 61)) achievementSharedCache_[id] = shared;
+        }
     }
     LOG_INFO("Achievement: loaded ", achievementNameCache_.size(), " names from Achievement.dbc");
 }
@@ -2923,12 +2927,14 @@ void GameHandler::handleAllAchievementData(network::Packet& packet) {
     // is in readCriteriaProgressTail, which SMSG_CRITERIA_UPDATE reads with too
     // - the server builds both from the same lines.
     criteriaProgress_.clear();
+    criteriaTimes_.clear();
     while (packet.hasRemaining(4)) {
         uint32_t id = packet.readUInt32();
         if (id == 0xFFFFFFFF) break;
         CriteriaProgressRecord rec;
         if (!readCriteriaProgressTail(packet, rec)) break;
         criteriaProgress_[id] = rec.counter;
+        criteriaTimes_[id] = static_cast<uint32_t>(std::time(nullptr)) - rec.timeElapsed;
         noteCriteriaForLatestStats(id, rec.flags);
     }
 

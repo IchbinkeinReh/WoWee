@@ -2156,6 +2156,7 @@ void GameHandler::registerCoreOpcodes() {
                 auto cpit = criteriaProgress_.find(criteriaId);
                 if (cpit != criteriaProgress_.end()) oldProgress = cpit->second;
                 criteriaProgress_[criteriaId] = progress;
+                criteriaTimes_[criteriaId] = static_cast<uint32_t>(std::time(nullptr)) - rec.timeElapsed;
                 LOG_DEBUG("SMSG_CRITERIA_UPDATE: id=", criteriaId, " progress=", progress);
                 // CRITERIA_UPDATE, with nothing: the client signals it bare
                 // (0x005b3160), and the interface asks GetAchievementCriteriaInfo.

@@ -4415,6 +4415,10 @@ wowee_add_test(test_item_delta_lines
 wowee_add_test(test_quest_log_rows
     SOURCES test_quest_log_rows.cpp)
 
+# ── test_achievement_progress ────────────────────────────────
+wowee_add_test(test_achievement_progress
+    SOURCES test_achievement_progress.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

@@ -4172,6 +4172,8 @@ public:
                                                      uint32_t current, uint32_t required)>;
     void setQuestProgressCallback(QuestProgressCallback cb) { questProgressCallback_ = std::move(cb); }
     const std::unordered_map<uint32_t, uint64_t>& getCriteriaProgress() const { return criteriaProgress_; }
+    /// When each last moved, in this computer's seconds.
+    const std::unordered_map<uint32_t, uint32_t>& getCriteriaTimes() const { return criteriaTimes_; }
     /// The achievement data has come (SMSG_ALL_ACHIEVEMENT_DATA): what
     /// CanShowAchievementUI answers (DAT_00c1f454).
     bool achievementDataReceived() const { return achievementDataReceived_; }
@@ -4469,6 +4471,16 @@ public:
     uint32_t getAchievementFlags(uint32_t id) const {
         auto it = achievementFlagsCache_.find(id);
         return (it != achievementFlagsCache_.end()) ? it->second : 0u;
+    }
+    /// The achievement whose criteria it counts, 0 its own (field 61, +0x34), and
+    /// how many of them do (field 60, +0x30).
+    uint32_t getAchievementShared(uint32_t id) const {
+        const auto it = achievementSharedCache_.find(id);
+        return it != achievementSharedCache_.end() ? it->second : 0u;
+    }
+    uint32_t getAchievementMinimum(uint32_t id) const {
+        const auto it = achievementMinimumCache_.find(id);
+        return it != achievementMinimumCache_.end() ? it->second : 0u;
     }
     /// Achievement.dbc's Faction (field 1): -1 either side, 0 Horde, 1 Alliance.
     int32_t getAchievementFaction(uint32_t id) const {
@@ -7572,6 +7584,8 @@ private:
     std::unordered_map<uint32_t, uint32_t> achievementDates_;
     // Criteria progress: criteriaId → current value (from SMSG_CRITERIA_UPDATE)
     std::unordered_map<uint32_t, uint64_t> criteriaProgress_;
+    std::unordered_map<uint32_t, uint32_t> criteriaTimes_;
+    std::unordered_map<uint32_t, uint32_t> achievementSharedCache_, achievementMinimumCache_;
     std::chrono::steady_clock::time_point petExpiry_{};
     bool achievementDataReceived_ = false;
     void handleAllAchievementData(network::Packet& packet);
