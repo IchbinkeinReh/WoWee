@@ -4411,6 +4411,10 @@ register_test_target(test_edit_typing)
 wowee_add_test(test_item_delta_lines
     SOURCES test_item_delta_lines.cpp)
 
+# ── test_quest_log_rows ──────────────────────────────────────
+wowee_add_test(test_quest_log_rows
+    SOURCES test_quest_log_rows.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

@@ -946,7 +946,7 @@ inline uint64_t resolveUnitOrName(game::GameHandler* gh, const std::string& text
 /// means either that the quest has no such item or that it is no longer held,
 /// and the caller cannot usefully tell those apart.
 struct QuestSpecialItem {
-    int bag = -1;          ///< 0 for the backpack, 1-4 for a worn bag
+    int bag = -1;          ///< 0 for the backpack, 1-4 for a worn bag, -1 for one worn
     int slot = 0;          ///< 1-based within that bag
     uint32_t itemId = 0;
     uint32_t count = 0;
@@ -964,32 +964,13 @@ inline void askItemForEvent(game::GameHandler* gh, uint32_t itemId, const char* 
     });
 }
 
-inline QuestSpecialItem questSpecialItemAt(game::GameHandler* gh, int questIndex) {
-    QuestSpecialItem found;
-    if (!gh || questIndex < 1) return found;
-    const auto& ql = gh->getQuestLog();
-    if (questIndex > static_cast<int>(ql.size())) return found;
-    const uint32_t itemId = ql[questIndex - 1].sourceItemId;
-    if (itemId == 0) return found;
-
-    const auto& inv = gh->getInventory();
-    for (int i = 0; i < inv.getBackpackSize(); ++i) {
-        const auto& slot = inv.getBackpackSlot(i);
-        if (!slot.empty() && slot.item.itemId == itemId) {
-            return {.bag = 0, .slot = i + 1, .itemId = itemId, .count = slot.item.stackCount};
-        }
-    }
-    for (int bag = 0; bag < 4; ++bag) {
-        const int size = inv.getBagSize(bag);
-        for (int i = 0; i < size; ++i) {
-            const auto& slot = inv.getBagSlot(bag, i);
-            if (!slot.empty() && slot.item.itemId == itemId) {
-                return {.bag = bag + 1, .slot = i + 1, .itemId = itemId, .count = slot.item.stackCount};
-            }
-        }
-    }
-    return found;
-}
+/// The quest in a row of the quest log as the interface counts them, headings and
+/// all; null for a heading or no row.
+const game::GameHandler::QuestLogEntry* questOfLogRow(game::GameHandler* gh, int index);
+/// The spell using an item casts (0x00510ef0), 0 for none.
+uint32_t itemUseSpell(game::GameHandler* gh, uint32_t itemId);
+/// The quest's item the player carries or wears and can use (0x005e0da0).
+QuestSpecialItem questSpecialItemAt(game::GameHandler* gh, int questIndex);
 
 /// The thirteen values GetFactionInfo and GetFactionInfoByID both answer with.
 ///

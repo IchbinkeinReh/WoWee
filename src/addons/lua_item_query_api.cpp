@@ -5,6 +5,7 @@
 // function.
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "game/quest_log_rows.hpp"
 #include "game/item_delta_lines.hpp"
 #include "game/interface_text.hpp"
 #include "game/item_stat_summary.hpp"
@@ -54,6 +55,8 @@ int useSpellIndex(const Item& info) {
     return -1;
 }
 
+}  // namespace
+
 /// 0x00510ef0: the spell using the item casts. Its template's use spell;
 /// where it has none, an equipped one's on-use enchantment (0x005a86b0 ->
 /// 0x00707c60: SpellItemEnchantment Effect 7, its EffectArg).
@@ -80,6 +83,37 @@ uint32_t itemUseSpell(game::GameHandler* gh, uint32_t itemId) {
     }
     return 0;
 }
+
+QuestSpecialItem questSpecialItemAt(game::GameHandler* gh, int questIndex) {
+    const auto* quest = questOfLogRow(gh, questIndex);
+    if (!quest) return {};
+    std::vector<uint32_t> wanted;
+    for (const auto& w : quest->itemObjectives) wanted.push_back(w.itemId);
+    const auto& inv = gh->getInventory();
+    for (const uint32_t itemId : game::questButtonItems(quest->sourceItemId, quest->questFlags, wanted)) {
+        if (itemUseSpell(gh, itemId) == 0) continue;
+        for (int i = 0; i < inv.getBackpackSize(); ++i) {
+            const auto& slot = inv.getBackpackSlot(i);
+            if (!slot.empty() && slot.item.itemId == itemId)
+                return {.bag = 0, .slot = i + 1, .itemId = itemId, .count = slot.item.stackCount};
+        }
+        for (int bag = 0; bag < 4; ++bag) {
+            for (int i = 0; i < inv.getBagSize(bag); ++i) {
+                const auto& slot = inv.getBagSlot(bag, i);
+                if (!slot.empty() && slot.item.itemId == itemId)
+                    return {.bag = bag + 1, .slot = i + 1, .itemId = itemId, .count = slot.item.stackCount};
+            }
+        }
+        for (int i = 0; i < static_cast<int>(game::EquipSlot::NUM_SLOTS); ++i) {
+            const auto& slot = inv.getEquipSlot(static_cast<game::EquipSlot>(i));
+            if (!slot.empty() && slot.item.itemId == itemId)
+                return {.bag = -1, .slot = i + 1, .itemId = itemId, .count = slot.item.stackCount};
+        }
+    }
+    return {};
+}
+
+namespace {
 
 bool spellKnownToClient(game::GameHandler* gh, uint32_t spellId) {
     if (!gh || spellId == 0) return false;

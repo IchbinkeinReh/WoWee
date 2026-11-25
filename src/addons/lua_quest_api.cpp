@@ -1,6 +1,7 @@
 // lua_quest_api.cpp - Quest log, skills, talents, glyphs, and achievements Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "core/local_time.hpp"
+#include "game/quest_log_rows.hpp"
 #include "game/spell_handler.hpp"
 #include "game/trade_skill_verb.hpp"
 #include "game/quest_link.hpp"
@@ -127,24 +128,27 @@ std::vector<QuestRow> questRows(game::GameHandler* gh) {
         groups[q.zoneOrSort].push_back(&q);
     }
 
-    // Zones first and in name order, then the QuestSort groups (Epic, class,
-    // profession), then the not-yet-known ones - which is the order the real
-    // log reads in, and stable so the list does not reshuffle under the cursor
-    // as query responses land.
+    // By name, zones and QuestSort groups (Epic, class, profession) alike
+    // (0x005dfdc0), and the not-yet-known ones at the end.
     struct Group { int32_t key; std::string title; int rank; };
     std::vector<Group> ordered;
     ordered.reserve(groups.size());
     for (const auto& [key, _] : groups) {
-        const int rank = (key > 0) ? 0 : (key < 0 ? 1 : 2);
+        const int rank = key != 0 ? 0 : 1;
         ordered.push_back({key, questGroupTitle(gh, key), rank});
     }
     std::sort(ordered.begin(), ordered.end(), [](const Group& a, const Group& b) {
         if (a.rank != b.rank) return a.rank < b.rank;
-        if (a.title != b.title) return a.title < b.title;
+        if (a.title != b.title) return game::questNameBefore(a.title, b.title);
         return a.key < b.key;
     });
 
+    const auto orderOf = [gh](const game::GameHandler::QuestLogEntry& q) {
+        return game::QuestRowOrder{q.level == -1 ? static_cast<int>(gh->getPlayerLevel()) : q.level, q.title};
+    };
     for (const Group& g : ordered) {
+        std::stable_sort(groups[g.key].begin(), groups[g.key].end(),
+                         [&](const auto* a, const auto* b) { return orderOf(*a).before(orderOf(*b)); });
         QuestRow header;
         header.isHeader = true;
         header.group = g.key;
@@ -160,6 +164,15 @@ std::vector<QuestRow> questRows(game::GameHandler* gh) {
     }
     return rows;
 }
+
+}  // namespace
+
+const game::GameHandler::QuestLogEntry* questOfLogRow(game::GameHandler* gh, int index) {
+    const auto rows = questRows(gh);
+    return index >= 1 && index <= static_cast<int>(rows.size()) ? rows[static_cast<size_t>(index) - 1].quest : nullptr;
+}
+
+namespace {
 
 /// Server text as the player should read it.
 ///
@@ -1974,8 +1987,9 @@ static int lua_UseQuestLogSpecialItem(lua_State* L) {
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const QuestSpecialItem item = questSpecialItemAt(gh, index);
     if (!item.itemId) return 0;
-    if (item.bag == 0) gh->useItemBySlot(item.slot - 1);
-    else               gh->useItemInBag(item.bag - 1, item.slot - 1);
+    if (item.bag < 0)       gh->useItemById(item.itemId);
+    else if (item.bag == 0) gh->useItemBySlot(item.slot - 1);
+    else                    gh->useItemInBag(item.bag - 1, item.slot - 1);
     return 0;
 }
 
