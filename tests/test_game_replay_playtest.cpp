@@ -524,6 +524,52 @@ TEST_CASE("a seat's state goes with the world", "[replay][playtest]") {
     CHECK_FALSE(s.handler().heldBySeat(Session::kPlayerGuid));
 }
 
+// T293: 0x0051fde0: every window closes as its object is walked away from or goes, not four of them.
+TEST_CASE("a window closes as its object is left", "[replay][playtest]") {
+    constexpr uint64_t kBanker = 0xF130000CED000077ull;
+    Session s;
+    s.setConnected(true);
+    s.handler().setFactionTemplates({{35u, {.id = 35, .faction = 31, .factionGroup = 1, .friendGroup = 1}}});
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100},
+                   {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::UNIT_FIELD_FACTIONTEMPLATE, 35}});
+    s.receive(replay::UpdateObject().create(kBanker, wowee::game::ObjectType::UNIT,
+                                            {{UF::UNIT_FIELD_HEALTH, 100},
+                                             {UF::UNIT_NPC_FLAGS, 0x20001u},
+                                             {UF::UNIT_FIELD_FACTIONTEMPLATE, 35}}));
+    const auto banker = s.handler().getEntityManager().getEntity(kBanker);
+    REQUIRE(banker);
+    const auto& me = s.handler().playerMovementInfo();
+    const auto open = [&] {
+        banker->setPosition(me.x + 3.0f, me.y, me.z, 0.0f);
+        wowee::network::Packet bank(wowee::game::wireOpcode(Opcode::SMSG_SHOW_BANK));
+        bank.writeUInt64(kBanker);
+        s.receive(bank);
+        REQUIRE(s.handler().isBankOpen());
+    };
+    open();
+    s.handler().update(0.016f);
+    CHECK(s.handler().isBankOpen());
+    // Its bounding radius and four yards.
+    banker->setPosition(me.x + 9.0f, me.y, me.z, 0.0f);
+    s.handler().update(0.016f);
+    CHECK_FALSE(s.handler().isBankOpen());
+    // No longer one that is spoken to.
+    open();
+    s.receive(replay::UpdateObject().values(kBanker, {{UF::UNIT_FIELD_FLAGS, 0x2000000u}}));
+    s.handler().update(0.016f);
+    CHECK_FALSE(s.handler().isBankOpen());
+    s.receive(replay::UpdateObject().values(kBanker, {{UF::UNIT_FIELD_FLAGS, 0u}}));
+    // Gone.
+    open();
+    wowee::network::Packet gone(wowee::game::wireOpcode(Opcode::SMSG_DESTROY_OBJECT));
+    gone.writeUInt64(kBanker);
+    gone.writeUInt8(0);
+    s.receive(gone);
+    s.handler().update(0.016f);
+    CHECK_FALSE(s.handler().isBankOpen());
+}
+
 // What is read of a packet is counted: too little or too much of it.
 TEST_CASE("packets read short or past their end are counted", "[replay][playtest]") {
     Session s;

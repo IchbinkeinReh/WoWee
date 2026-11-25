@@ -1,3 +1,4 @@
+#include "game/game_object_use.hpp"
 #include "game/reputation_tree.hpp"
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
@@ -1025,38 +1026,6 @@ void GameHandler::update(float deltaTime) {
         }
 
         updateAutoAttack();
-        auto closeIfTooFar = [&](bool windowOpen, uint64_t npcGuid, auto closeFn, const char* label) {
-            if (!windowOpen || npcGuid == 0) return;
-            auto npc = entityController_->getEntityManager().getEntity(npcGuid);
-            if (!npc) return;
-            // 0x0051fde0 against the limit 0x0051fce0 sets: for a creature its
-            // bounding radius + 4 yards, for a player 123.4568 squared (about
-            // 11.1 yards), both against the squared 3D distance (0x004f61d0).
-            // Game objects keep the flat limit: the client asks each type's
-            // own interaction radius there (0x0070bad0).
-            float limit = game::NPC_INTERACT_MAX_DISTANCE;
-            float limitSq = limit * limit;
-            float dx = movementInfo.x - npc->getX();
-            float dy = movementInfo.y - npc->getY();
-            float distSq = dx * dx + dy * dy;
-            if (npc->getType() == ObjectType::PLAYER) {
-                limitSq = 123.45678f;
-                const float dz = movementInfo.z - npc->getZ();
-                distSq += dz * dz;
-            } else if (npc->getType() == ObjectType::UNIT) {
-                limit = static_cast<const Unit&>(*npc).getBoundingRadius() + 4.0f;
-                limitSq = limit * limit;
-                const float dz = movementInfo.z - npc->getZ();
-                distSq += dz * dz;
-            }
-            if (distSq > limitSq) {
-                closeFn();
-                // Warning: a window closing by itself is a report waiting to
-                // happen, and the client is the one deciding.
-                LOG_WARNING(label, " closed: ", std::sqrt(distSq), " yards from the NPC, past ",
-                            std::sqrt(limitSq));
-            }
-        };
         // A hello the server never answered. It says nothing when it refuses,
         // so this is the only place the refusal can be seen.
         if (pendingNpcHello_.guid != 0 &&
@@ -1086,16 +1055,7 @@ void GameHandler::update(float deltaTime) {
                         "or regards you as Unfriendly or worse");
             pendingNpcHello_.guid = 0;
         }
-        closeIfTooFar(isVendorWindowOpen(), getVendorItems().vendorGuid, [this]{ closeVendor(); }, "Vendor");
-        closeIfTooFar(isGossipWindowOpen(), getCurrentGossip().npcGuid, [this]{ closeGossip(); }, "Gossip");
-        // The movement handler's guid, not a copy of it: the one this class
-        // kept was never assigned, so this asked about guid 0, found no NPC and
-        // returned - the only one of these four windows that stayed open when
-        // the player walked away from it.
-        closeIfTooFar(isTaxiWindowOpen(),
-                      movementHandler_ ? movementHandler_->getTaxiNpcGuid() : 0,
-                      [this]{ closeTaxi(); }, "Taxi window");
-        closeIfTooFar(isTrainerWindowOpen(), getTrainerSpells().trainerGuid, [this]{ closeTrainer(); }, "Trainer");
+        closeLeftInteractions();
 
         updateEntityInterpolation(deltaTime);
 
@@ -4394,6 +4354,61 @@ bool GameHandler::interactionWindowOpen(uint64_t guid) {
         if (with == guid) return true;
     }
     return false;
+}
+
+bool GameHandler::interactionLeft(uint64_t guid) {
+    // 0x0051fde0, with the limits 0x0051fce0 sets. An item is not left, nor
+    // the player itself (a quest of its own, the stable a spell opens).
+    if (guid == playerGuid || onlineItems_.count(guid) != 0) return false;
+    const auto object = getEntityManager().getEntity(guid);
+    if (!object) return true;
+    const MovementInfo& me = playerMovementInfo();
+    const glm::vec3 away(me.x - object->getX(), me.y - object->getY(), me.z - object->getZ());
+    const float distSq = glm::dot(away, away);
+    switch (object->getType()) {
+        case ObjectType::PLAYER:
+            // 123.4568 (0x00ac8a68); and only of the player's side and
+            // peaceable (0x00729b30).
+            return distSq > 123.45678f || !unitsCooperate(playerGuid, guid);
+        case ObjectType::UNIT: {
+            // Its bounding radius and four yards, and one that is still
+            // spoken to (0x00729530).
+            const float limit = static_cast<const Unit&>(*object).getBoundingRadius() + 4.0f;
+            return distSq > limit * limit || !mayInteractWith(guid);
+        }
+        case ObjectType::GAMEOBJECT: {
+            // One with a reach (0x0070bad0): not to a ghost, not from one
+            // that is hostile (0x0071f8b0 -> 0x0070edd0), and within it
+            // (0x0070ba30 -> 0x0070fa70).
+            const auto& go = static_cast<const GameObject&>(*object);
+            const GameObjectFacts facts = gameObjectFacts(go, getCachedGameObjectInfo(go.getEntry()));
+            if (go_use::handlerFor(facts.type).reach <= 0.0f) return false;
+            return isPlayerGhost() || gameObjectReactionToPlayer(go) <= 2 || !gameObjectInReach(go, facts);
+        }
+        default: return false;
+    }
+}
+
+void GameHandler::closeLeftInteractions() {
+    // 0x0051fde0, every frame: the object a window is open with, walked away
+    // from or gone, and the window closes (0x00518d50 -> 0x00512e60). wowee
+    // keeps each window's own, so each is asked; the object itself may have
+    // no window of these (a battlemaster's list).
+    using go_interaction::Window;
+    const auto with = interactionWindowObjects();
+    for (size_t i = 0; i < with.size(); ++i) {
+        const uint64_t guid = with[i];
+        if (guid == 0 || !interactionLeft(guid)) continue;
+        LOG_WARNING("Interaction: window ", i, " closed, 0x", std::hex, guid, std::dec,
+                    " is out of reach or gone");
+        if (guid == interactionObject_) releaseInteractionObject(/*farewell=*/true);
+        closeInteractionWindow(static_cast<Window>(i));
+    }
+    if (interactionObject_ != 0 && interactionObject_ == battlemasterGuid() && interactionLeft(interactionObject_)) {
+        releaseInteractionObject(/*farewell=*/true);
+        clearBattlemasterGuid();
+        fireAddonEvent("BATTLEFIELDS_CLOSED", {});
+    }
 }
 
 void GameHandler::closeInteractionWindow(go_interaction::Window window) {

@@ -7159,6 +7159,9 @@ private:
     std::array<uint64_t, go_interaction::kWindowCount> interactionWindowObjects();
     /// Whether a window that sets the interaction object is open with guid.
     bool interactionWindowOpen(uint64_t guid);
+    /// Whether what a window is open with has been walked away from, or is gone (0x0051fde0).
+    bool interactionLeft(uint64_t guid);
+    void closeLeftInteractions();
     /// Closes one of them, as 0x00512e60 does.
     void closeInteractionWindow(go_interaction::Window window);
 
