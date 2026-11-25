@@ -5011,7 +5011,7 @@ void Application::applyServerMovementState(float deltaTime) {
     if (onTransportNow && gameHandler->getTransportManager()) {
         auto* currentTracked = gameHandler->getTransportManager()->getTransport(
             gameHandler->getPlayerTransportGuid());
-        if (!currentTracked) {
+        if (!currentTracked && !gameHandler->hasPendingPlayerTransportWorldTransfer()) {
             gameHandler->clearPlayerTransport();
             onTransportNow = false;
         }

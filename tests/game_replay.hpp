@@ -108,6 +108,19 @@ public:
         return *this;
     }
 
+    // A game object that carries passengers (UPDATEFLAG_TRANSPORT, with its time).
+    UpdateObject& transport(uint64_t guid, const Fields& fields) {
+        ++blocks_;
+        body_.writeUInt8(static_cast<uint8_t>(wowee::game::UpdateType::CREATE_OBJECT2));
+        body_.writePackedGuid(guid);
+        body_.writeUInt8(static_cast<uint8_t>(wowee::game::ObjectType::GAMEOBJECT));
+        body_.writeUInt16(kStationaryPosition | 0x0002);
+        for (int i = 0; i < 4; ++i) body_.writeFloat(0.0f);
+        body_.writeUInt32(0);
+        writeFields(fields);
+        return *this;
+    }
+
     // A unit of the WotLK realm's walking its path (UPDATEFLAG_LIVING, with
     // MOVEMENTFLAG_SPLINE_ENABLED), as Unit::BuildMovementUpdate and
     // PacketBuilder::WriteCreate write it.

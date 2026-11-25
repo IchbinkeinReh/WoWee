@@ -296,6 +296,8 @@ public:
     /// queued path in the second is the one most spawns actually take -
     /// so fixing the first left the bug on screen.
     static std::string transportModelPath(uint32_t entry, uint32_t displayId);
+    /// Whether the object's display is a WMO's file; none where it is not known.
+    std::optional<bool> gameObjectIsWmo(uint64_t guid);
 
     /// Every other unit's weapons as its items and sheath state have them,
     /// re-dressed when either changes (0x0072dbc0, 0x00731f40): creatures

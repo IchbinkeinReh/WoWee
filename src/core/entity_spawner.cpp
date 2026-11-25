@@ -356,7 +356,7 @@ bool EntitySpawner::hasWorkPending() const {
            !asyncPlayerModelLoads_.empty() ||
            !asyncEquipmentLoads_.empty() || !deferredEquipmentQueue_.empty() ||
            !pendingGameObjectSpawns_.empty() || !asyncGameObjectLoads_.empty() ||
-           !asyncGameObjectM2Loads_.empty();
+           !asyncGameObjectM2Loads_.empty() || !pendingWmoUploads_.empty();
 }
 
 std::string EntitySpawner::pendingWorkSummary() const {

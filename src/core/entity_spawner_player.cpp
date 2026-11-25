@@ -657,6 +657,21 @@ std::string EntitySpawner::transportModelPath(uint32_t entry, uint32_t displayId
     return "";
 }
 
+std::optional<bool> EntitySpawner::gameObjectIsWmo(uint64_t guid) {
+    if (!gameHandler_) return std::nullopt;
+    const auto object =
+        std::dynamic_pointer_cast<game::GameObject>(gameHandler_->getEntityManager().getEntity(guid));
+    if (!object || object->getDisplayId() == 0) return std::nullopt;
+    if (!gameObjectLookupsBuilt_) buildGameObjectDisplayLookups();
+    std::string path;
+    if (gameHandler_->isTransportGuid(guid)) path = transportModelPath(object->getEntry(), object->getDisplayId());
+    if (path.empty()) path = getGameObjectModelPathForDisplayId(object->getDisplayId());
+    if (path.size() < 4) return std::nullopt;
+    std::string ext = path.substr(path.size() - 4);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == ".wmo";
+}
+
 glm::vec3 EntitySpawner::gameObjectPlacement(uint64_t guid, float canonicalYaw) const {
     if (gameHandler_) {
         const auto entity = gameHandler_->getEntityManager().getEntity(guid);

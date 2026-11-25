@@ -22,11 +22,26 @@
 #include "core/coordinates.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <optional>
 
 namespace wowee::game::transport_local {
+
+// A game object's guid that carries passengers: a moving transport's (0x1fc)
+// or a lift's (0xf12). A vehicle's is not one.
+constexpr bool isTransportGuid(uint64_t guid) {
+    return (guid >> 52) == 0x1FCu || (guid >> 52) == 0xF12u;
+}
+
+// The kind of a transport whose model is not here yet: its display's file says
+// it; of one nothing is known of, the guid's high part (0x1fc, as 0x004f66c0
+// tests it: a ship, a zeppelin - their hulls are WMOs).
+inline bool unregisteredIsWmo(uint64_t guid, std::optional<bool> displayIsWmo) {
+    return displayIsWmo.value_or((guid >> 52) == 0x1FCu);
+}
 
 inline glm::vec3 fromWire(bool wmo, const glm::vec3& wireOffset) {
     return wmo ? wireOffset : core::coords::serverToCanonical(wireOffset);

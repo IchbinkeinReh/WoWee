@@ -82,6 +82,11 @@ void TransportCallbackHandler::setupCallbacks() {
         }
     });
 
+    // What a transport is whose model is not here yet.
+    if (auto* transports = gameHandler_.getTransportManager()) {
+        transports->setDisplayIsWmo([this](uint64_t guid) { return entitySpawner_.gameObjectIsWmo(guid); });
+    }
+
     // Transport spawn callback (online mode) - register transports with TransportManager
     gameHandler_.setTransportSpawnCallback([this](uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation) {
         // Get the GameObject instance now so late queue processing can rely on stable IDs.

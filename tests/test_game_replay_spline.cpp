@@ -452,6 +452,99 @@ TEST_CASE("a passenger that comes into view walking walks on its transport", "[r
     }
 }
 
+// T287: logged in on a ship, its model still to come. 12340 keeps a unit on its transport by the
+// guid (0x004f4460); the offset was taken as an M2's and swapped for the hull's, and the player let
+// go of it - or sent back across the deck.
+TEST_CASE("the player is kept on the transport it is made on", "[replay][transport]") {
+    constexpr uint64_t kShip = 0x1FC0000000000007ull, kLift = 0xF12000001000000Aull;
+    const bool ship = GENERATE(true, false);
+    const uint64_t guid = ship ? kShip : kLift;
+    Session s;
+    auto* transports = s.handler().getTransportManager();
+    REQUIRE(transports);
+    transports->loadPathFromNodes(9001, {glm::vec3(0.0f)}, false, 10.0f);
+    const glm::vec3 deck = wowee::core::coords::serverToCanonical(kAt);
+    const glm::vec3 wire(3.0f, -7.0f, 2.0f);
+    UpdateObject::Spline sp;
+    sp.objectType = ObjectType::PLAYER;
+    sp.moveFlags = 0x200;
+    sp.transport = guid;
+    sp.onTransport = wire;
+    sp.at = kAt + glm::vec3(50.0f, 60.0f, 2.0f);
+    sp.facing = 1.0f;
+    s.receive(UpdateObject().transport(guid, {}).onSpline(Session::kPlayerGuid, {}, sp));
+    auto& h = s.handler();
+    CHECK(h.hasPendingPlayerTransportWorldTransfer());
+    CHECK(h.awaitsTransport(guid, 0));
+    // Moves before it is there have the wire's offset again.
+    h.setPosition(deck.x, deck.y, deck.z);
+    h.sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+    const auto sent = s.sent().of(Opcode::MSG_MOVE_HEARTBEAT);
+    REQUIRE(!sent.empty());
+    auto beat = sent.front();
+    CHECK(beat.readPackedGuid() == Session::kPlayerGuid);
+    CHECK((beat.readUInt32() & 0x200u) != 0);
+    beat.readUInt16();
+    beat.readUInt32();
+    for (int i = 0; i < 4; ++i) beat.readFloat();
+    CHECK(beat.readPackedGuid() == guid);
+    glm::vec3 said;
+    said.x = beat.readFloat();
+    said.y = beat.readFloat();
+    said.z = beat.readFloat();
+    CHECK(closeTo(said, wire));
+    // The ground says nothing of it meanwhile.
+    h.updateM2TransportBoarding(deck + glm::vec3(0.0f, 0.0f, 100.0f));
+    CHECK(h.hasPendingPlayerTransportWorldTransfer());
+    // And others' offsets on it are read as its kind has them.
+    const glm::vec3 kept = transports->serverToTransportLocal(guid, wire);
+    CHECK(closeTo(kept, ship ? wire : wowee::core::coords::serverToCanonical(wire)));
+    CHECK(closeTo(transports->transportLocalToServer(guid, kept), wire));
+
+    transports->registerTransport(guid, 0, 9001, deck, 9001, 0, !ship, 0.4f);
+    CHECK(closeTo(transports->serverToTransportLocal(guid, wire), kept));
+    glm::vec3 world(0.0f);
+    REQUIRE(h.completePlayerTransportWorldTransfer(guid, world));
+    CHECK(h.getPlayerTransportGuid() == guid);
+    CHECK(closeTo(h.getPlayerTransportOffset(), kept));
+    CHECK(closeTo(world, transports->getPlayerWorldPosition(guid, kept)));
+    CHECK(std::cos(h.getMovementInfo().orientation -
+                   wowee::game::transport_local::worldYaw(*transports->transportFacing(guid), 1.0f)) ==
+          Catch::Approx(1.0f).margin(0.001f));
+    CHECK_FALSE(h.hasPendingPlayerTransportWorldTransfer());
+}
+
+// Its display says what it is; and the server says where the player is.
+TEST_CASE("a transport's kind is its display's, before it is there", "[replay][transport]") {
+    constexpr uint64_t kShip = 0x1FC0000000000007ull, kLift = 0xF12000001000000Aull;
+    using wowee::game::transport_local::unregisteredIsWmo;
+    CHECK(unregisteredIsWmo(kShip, std::nullopt));
+    CHECK_FALSE(unregisteredIsWmo(kLift, std::nullopt));
+    CHECK(unregisteredIsWmo(kLift, true));
+    CHECK_FALSE(unregisteredIsWmo(kShip, false));
+    Session s;
+    auto* transports = s.handler().getTransportManager();
+    REQUIRE(transports);
+    transports->setDisplayIsWmo([](uint64_t guid) { return std::optional<bool>(guid == 0xF12000001000000Aull); });
+    const glm::vec3 wire(3.0f, -7.0f, 2.0f);
+    CHECK(closeTo(transports->serverToTransportLocal(kLift, wire), wire));
+    CHECK(closeTo(transports->transportLocalToServer(kShip, wire), wowee::core::coords::canonicalToServer(wire)));
+
+    auto& h = s.handler();
+    h.awaitPlayerTransport(kShip, wire, 0.0f);
+    UpdateObject::Spline off;
+    off.objectType = ObjectType::PLAYER;
+    off.moveFlags = 0;
+    off.at = kAt;
+    s.receive(UpdateObject().onSpline(Session::kPlayerGuid, {}, off));
+    CHECK_FALSE(h.hasPendingPlayerTransportWorldTransfer());
+    // Nor is a vehicle one.
+    off.moveFlags = 0x200;
+    off.transport = 0xF150006D50000003ull;
+    s.receive(UpdateObject().onSpline(Session::kPlayerGuid, {}, off));
+    CHECK_FALSE(h.hasPendingPlayerTransportWorldTransfer());
+}
+
 // A vehicle's passenger is in its seat.
 TEST_CASE("a passenger of a vehicle is not flown by its block", "[replay][blockspline]") {
     Session s;

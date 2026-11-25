@@ -2727,6 +2727,18 @@ public:
     bool hasPendingPlayerTransportWorldTransfer() const {
         return pendingPlayerTransportTransfer_;
     }
+    /// The server has the player on a transport whose model is not here yet (a login on a ship):
+    /// kept on it by its guid (0x004f4460 asks for the object, not for its model), the offset as the
+    /// wire has it, until it is registered (completePlayerTransportWorldTransfer).
+    void awaitPlayerTransport(uint64_t transportGuid, const glm::vec3& wireOffset, float facingOnIt);
+    /// The player is on no transport any more: none is waited for.
+    void forgetPendingPlayerTransport();
+    /// The one waited for, by its guid or - on another map - by its entry.
+    bool awaitsTransport(uint64_t guid, uint32_t entry) const {
+        return pendingPlayerTransportTransfer_ &&
+               (guid == pendingPlayerTransportGuid_ ||
+                (pendingPlayerTransportEntry_ != 0 && entry == pendingPlayerTransportEntry_));
+    }
     /// The transport a continent transfer carries the player on, and the
     /// offset SMSG_NEW_WORLD gave on it as the wire has it - what the player's
     /// movement says until the transport is known on the new map.
@@ -7165,6 +7177,8 @@ private:
     std::optional<LoadingScreenCrossing> loadingScreenCrossing_;
     uint32_t pendingPlayerTransportMapId_ = 0xFFFFFFFFu;
     glm::vec3 pendingPlayerTransportOffset_ = glm::vec3(0.0f);  ///< as the wire has it
+    std::optional<float> pendingPlayerTransportFacing_;         ///< on it, once it was said
+    std::optional<std::chrono::steady_clock::time_point> pendingPlayerTransportSince_;  ///< waited for in the world
     std::unique_ptr<TransportManager> transportManager_;  // Transport movement manager
     uint32_t weaponProficiency_ = 0;  // bitmask from SMSG_SET_PROFICIENCY itemClass=2
     uint32_t armorProficiency_  = 0;  // bitmask from SMSG_SET_PROFICIENCY itemClass=4

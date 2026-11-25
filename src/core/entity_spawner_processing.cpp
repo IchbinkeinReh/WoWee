@@ -1011,6 +1011,13 @@ void EntitySpawner::processPendingWmoUploads() {
     if (!wmoRenderer) { pendingWmoUploads_.clear(); return; }
 
     constexpr float kUploadBudgetMs = 6.0f;
+    // The player's own transport before the others.
+    if (gameHandler_ && gameHandler_->hasPendingPlayerTransportWorldTransfer()) {
+        const auto own = std::find_if(pendingWmoUploads_.begin(), pendingWmoUploads_.end(), [this](const auto& p) {
+            return gameHandler_->awaitsTransport(p.result.guid, p.result.entry);
+        });
+        if (own != pendingWmoUploads_.end()) std::rotate(pendingWmoUploads_.begin(), own, std::next(own));
+    }
     auto& pending = pendingWmoUploads_.front();
 
     wmoRenderer->setPredecodedBLPCache(&pending.result.predecodedTextures);
@@ -1117,6 +1124,15 @@ void EntitySpawner::processGameObjectSpawnQueue() {
     // Models prepared at once on workers: more behind the loading screen,
     // where nothing competes with them.
     const size_t maxAsyncM2Loads = dressPrefetchBypass_ ? 12 : 4;
+    // The player's own transport before the others: it is the ground it
+    // stands on.
+    if (gameHandler_ && gameHandler_->hasPendingPlayerTransportWorldTransfer()) {
+        const auto own = std::find_if(
+            pendingGameObjectSpawns_.begin(), pendingGameObjectSpawns_.end(),
+            [this](const auto& p) { return gameHandler_->awaitsTransport(p.guid, p.entry); });
+        if (own != pendingGameObjectSpawns_.end())
+            std::rotate(pendingGameObjectSpawns_.begin(), own, std::next(own));
+    }
     // A spawn waiting for its model goes to the back of the queue, so the
     // ones behind it are not held up; each may be passed over once a call.
     size_t rotationsLeft = pendingGameObjectSpawns_.size();
@@ -1153,7 +1169,8 @@ void EntitySpawner::processGameObjectSpawnQueue() {
         bool isCached = isWmo && gameObjectDisplayIdWmoCache_.count(s.displayId);
 
         if (isWmo && !isCached && !modelPath.empty() &&
-            static_cast<int>(asyncGameObjectLoads_.size()) < kMaxAsyncLoads) {
+            (static_cast<int>(asyncGameObjectLoads_.size()) < kMaxAsyncLoads ||
+             (gameHandler_ && gameHandler_->awaitsTransport(s.guid, s.entry)))) {
             // Launch async WMO load - file I/O + parse on background thread
             auto* am = assetManager_;
             PendingGameObjectSpawn capture = s;
@@ -1462,11 +1479,24 @@ void EntitySpawner::processPendingTransportRegistrations() {
             }
 
             glm::vec3 restoredWorldPosition(0.0f);
+            const float facingBefore = gameHandler_->getMovementInfo().orientation;
             if (gameHandler_->completePlayerTransportWorldTransfer(
                     pending.guid, restoredWorldPosition)) {
                 const glm::vec3 renderPosition =
                     core::coords::canonicalToRender(restoredWorldPosition);
                 renderer_->getCharacterPosition() = renderPosition;
+                // As it faces on the deck, which has turned with the hull.
+                if (const float facing = gameHandler_->getMovementInfo().orientation; facing != facingBefore) {
+                    const float yawDeg = core::coords::canonicalToCharacterYawDeg(facing);
+                    const float turnDeg = glm::degrees(core::coords::normalizeAngleRad(
+                        glm::radians(yawDeg - renderer_->getCharacterYaw())));
+                    if (auto* camera = renderer_->getCameraController()) {
+                        camera->turnWithVehicle(turnDeg);
+                        camera->setFacingYaw(yawDeg);
+                    }
+                    renderer_->setCharacterYaw(yawDeg);
+                    renderer_->snapCharacterBodyYaw();
+                }
                 if (auto* camera = renderer_->getCameraController()) {
                     camera->teleportTo(renderPosition, true);
                     camera->clearMovementInputs();

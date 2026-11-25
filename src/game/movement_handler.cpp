@@ -1109,9 +1109,15 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         includeTransportInWire = true;
         movementInfo.flags |= static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
         movementInfo.transportGuid = owner_.pendingPlayerTransportGuid();
-        movementInfo.transportX = owner_.pendingPlayerTransportWireOffset().x;
-        movementInfo.transportY = owner_.pendingPlayerTransportWireOffset().y;
-        movementInfo.transportZ = owner_.pendingPlayerTransportWireOffset().z;
+        // Put back on the wire's axes below, as any other's.
+        const glm::vec3 offset =
+            owner_.getTransportManager()
+                ? owner_.getTransportManager()->serverToTransportLocal(owner_.pendingPlayerTransportGuid(),
+                                                                       owner_.pendingPlayerTransportWireOffset())
+                : core::coords::serverToCanonical(owner_.pendingPlayerTransportWireOffset());
+        movementInfo.transportX = offset.x;
+        movementInfo.transportY = offset.y;
+        movementInfo.transportZ = offset.z;
         movementInfo.transportTime = movementInfo.time;
         movementInfo.transportSeat = -1;
         movementInfo.transportTime2 = movementInfo.time;
@@ -2890,6 +2896,7 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         // names. Kept, the old one went on placing the player by its offset
         // on it, so a .go away from a lift left them riding it.
         auto* transports = owner_.getTransportManager();
+        owner_.forgetPendingPlayerTransport();
         if (teleportTransportGuid != 0 && transports &&
             transports->getTransport(teleportTransportGuid)) {
             owner_.setPlayerOnTransport(
@@ -3022,6 +3029,7 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     transferPendingOnTransport_ = false;
     const bool crossMapTransportTransfer = travelsWithTransport && owner_.isOnTransport() &&
         mapId != owner_.getCurrentMapId();
+    if (!crossMapTransportTransfer) owner_.forgetPendingPlayerTransport();
     if (!crossMapTransportTransfer && owner_.isOnTransport()) {
         owner_.clearPlayerTransport();
         owner_.playerTransportStickyGuidRef() = 0;

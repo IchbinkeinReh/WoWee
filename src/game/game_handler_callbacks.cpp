@@ -719,6 +719,7 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
 
     // Successfully entered the world (or teleported)
     currentMapId_ = data.mapId;
+    forgetPendingPlayerTransport();
     setState(WorldState::IN_WORLD);
     if (socket) {
         socket->tracePacketsFor(std::chrono::seconds(12), "login_verify_world");

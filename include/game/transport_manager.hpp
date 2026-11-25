@@ -6,6 +6,7 @@
 #include "game/transport_route_clock.hpp"
 #include "game/transport_animator.hpp"
 #include "game/ship_path.hpp"
+#include <functional>
 #include <memory>
 #include <chrono>
 #include <cstdint>
@@ -359,12 +360,20 @@ public:
     [[nodiscard]] std::optional<glm::mat4> passengerRenderFrame(uint64_t transportGuid) const;
     /// The same matrix for a transport in hand.
     [[nodiscard]] static glm::mat4 passengerFrame(const ActiveTransport& transport);
+    /// Of a transport that is not registered yet too: its kind is asked of
+    /// whoever knows its display (setDisplayIsWmo). A passenger's offset was
+    /// taken for an M2's until the hull's model was in, so one logged in on a
+    /// zeppelin stood across its deck, and said so to the server.
     [[nodiscard]] glm::vec3 serverToTransportLocal(uint64_t transportGuid,
                                      const glm::vec3& serverOffset) const;
     /// serverToTransportLocal's inverse: a passenger's offset as the wire
     /// carries it, for the movement the client sends.
     [[nodiscard]] glm::vec3 transportLocalToServer(uint64_t transportGuid,
                                                    const glm::vec3& localOffset) const;
+    /// Whether the display of the transport of this guid is a WMO's file; none
+    /// where the object is not known.
+    using DisplayIsWmo = std::function<std::optional<bool>(uint64_t)>;
+    void setDisplayIsWmo(DisplayIsWmo ask) { displayIsWmo_ = std::move(ask); }
     /// The transport's facing as the client has it (ActiveTransport::facing),
     /// for its passengers' facings. None for a transport not known.
     [[nodiscard]] std::optional<float> transportFacing(uint64_t transportGuid) const;
@@ -501,6 +510,10 @@ public:
     [[nodiscard]] bool isClientSideAnimation() const { return clientSideAnimation_; }
 
 private:
+    /// Its passengers' offsets on the wire's axes (transport_local.hpp).
+    [[nodiscard]] bool isWmo(uint64_t transportGuid) const;
+    DisplayIsWmo displayIsWmo_;
+
     void poseShip(ActiveTransport& transport, uint32_t splineTimeMs, uint32_t splineDurationMs);
     void updateTransportMovement(ActiveTransport& transport, float deltaTime);
     void updateTransformMatrices(ActiveTransport& transport);

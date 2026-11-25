@@ -910,6 +910,10 @@ void EntityController::applyPlayerTransportState(const UpdateBlock& block,
             ? owner_.getTransportManager()->serverToTransportLocal(block.transportGuid, serverOffset)
             : core::coords::serverToCanonical(serverOffset);
         owner_.setPlayerOnTransport(block.transportGuid, canonicalOffset);
+        // Its model is still to come: the player waits for it.
+        if (transport_local::isTransportGuid(block.transportGuid) && owner_.getTransportManager() &&
+            !owner_.getTransportManager()->getTransport(block.transportGuid))
+            owner_.awaitPlayerTransport(block.transportGuid, serverOffset, block.transportO);
         if (owner_.getTransportManager() && owner_.getTransportManager()->getTransport(owner_.playerTransportGuidRef())) {
             glm::vec3 composed = owner_.getTransportManager()->getPlayerWorldPosition(owner_.playerTransportGuidRef(), owner_.playerTransportOffsetRef());
             // Facing the transport's way plus its own on it (0x009872c0 ->
@@ -935,6 +939,7 @@ void EntityController::applyPlayerTransportState(const UpdateBlock& block,
                 " offset=(", owner_.playerTransportOffsetRef().x, ", ", owner_.playerTransportOffsetRef().y,
                 ", ", owner_.playerTransportOffsetRef().z, ")");
     } else {
+        owner_.forgetPendingPlayerTransport();
         if (updateMovementInfoPos) {
             if (positionIsBad(canonicalPos.x, canonicalPos.y, canonicalPos.z)) {
                 LOG_WARNING("REJECTED player UPDATE_OBJECT to near-origin canonical=(",
@@ -3961,7 +3966,7 @@ void EntityController::resyncPlayerIfFarFromServer(const glm::vec3& serverCanoni
     // seconds of running. Snapping on a smaller gap would fight the client's
     // own movement and rubber-band.
     constexpr float kResyncDistance = 50.0f;
-    if (owner_.isOnTransport()) return;
+    if (owner_.isOnTransport() || owner_.hasPendingPlayerTransportWorldTransfer()) return;
     if (auto* movement = owner_.getMovementHandler()) {
         if (movement->isOnTaxiFlight()) return;
     }

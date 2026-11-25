@@ -25,6 +25,7 @@
 #include "game/warden_memory.hpp"
 #include "game/warden_module.hpp"
 #include "game/packet_parsers.hpp"
+#include "game/transport_local.hpp"
 #include "game/transport_manager.hpp"
 #include "game/transport_boarding.hpp"
 #include "game/opcodes.hpp"
@@ -1853,6 +1854,7 @@ void GameHandler::beginPlayerTransportWorldTransfer(
     pendingPlayerTransportGuid_ = playerTransportGuid_;
     pendingPlayerTransportMapId_ = destinationMapId;
     pendingPlayerTransportOffset_ = wireOffset;
+    pendingPlayerTransportFacing_.reset();
     pendingPlayerTransportEntry_ = 0;
     if (transportManager_) {
         if (const auto* transport = transportManager_->getTransport(playerTransportGuid_)) {
@@ -1865,6 +1867,28 @@ void GameHandler::beginPlayerTransportWorldTransfer(
                 " entry=", pendingPlayerTransportEntry_,
                 " destinationMap=", destinationMapId,
                 " wire offset=(", wireOffset.x, ",", wireOffset.y, ",", wireOffset.z, ")");
+}
+
+void GameHandler::awaitPlayerTransport(uint64_t transportGuid, const glm::vec3& wireOffset, float facingOnIt) {
+    if (!pendingPlayerTransportTransfer_ || pendingPlayerTransportGuid_ != transportGuid) {
+        LOG_WARNING("Transport of the player not here yet: guid=0x", std::hex, transportGuid, std::dec,
+                    " wire offset=(", wireOffset.x, ",", wireOffset.y, ",", wireOffset.z, ")");
+        pendingPlayerTransportEntry_ = 0;
+    }
+    pendingPlayerTransportTransfer_ = true;
+    pendingPlayerTransportGuid_ = transportGuid;
+    pendingPlayerTransportMapId_ = currentMapId_;
+    pendingPlayerTransportOffset_ = wireOffset;
+    pendingPlayerTransportFacing_ = facingOnIt;
+}
+
+void GameHandler::forgetPendingPlayerTransport() {
+    pendingPlayerTransportTransfer_ = false;
+    pendingPlayerTransportGuid_ = 0;
+    pendingPlayerTransportEntry_ = 0;
+    pendingPlayerTransportMapId_ = 0xFFFFFFFFu;
+    pendingPlayerTransportFacing_.reset();
+    pendingPlayerTransportSince_.reset();
 }
 
 void GameHandler::armLoadingScreenCrossing(uint32_t entry, uint32_t fromMap) {
@@ -1909,6 +1933,11 @@ bool GameHandler::completePlayerTransportWorldTransfer(
     setPlayerOnTransport(transportGuid, localOffset);
     worldPosition = transportManager_->getPlayerWorldPosition(transportGuid, localOffset);
     setPosition(worldPosition.x, worldPosition.y, worldPosition.z);
+    // Facing the transport's way plus its own on it (0x009872c0 -> 0x004f42a0).
+    if (pendingPlayerTransportFacing_) {
+        if (const auto facing = transportManager_->transportFacing(transportGuid))
+            setOrientation(transport_local::worldYaw(*facing, *pendingPlayerTransportFacing_));
+    }
 
     LOG_WARNING("Transport world transfer restored: guid=0x", std::hex,
                 transportGuid, std::dec,
@@ -1917,10 +1946,7 @@ bool GameHandler::completePlayerTransportWorldTransfer(
                 " local=(", localOffset.x, ",", localOffset.y, ",", localOffset.z, ") world=(",
                 worldPosition.x, ",", worldPosition.y, ",", worldPosition.z, ")");
 
-    pendingPlayerTransportTransfer_ = false;
-    pendingPlayerTransportGuid_ = 0;
-    pendingPlayerTransportEntry_ = 0;
-    pendingPlayerTransportMapId_ = 0xFFFFFFFFu;
+    forgetPendingPlayerTransport();
     transportTransferArrived_ = true;
     return true;
 }
@@ -1935,6 +1961,16 @@ bool GameHandler::completePlayerTransportWorldTransfer(
 void GameHandler::updateM2TransportBoarding(const glm::vec3& playerCanonical) {
     auto* tm = getTransportManager();
     if (!tm) return;
+    // Nothing is known of the ground before the transport the player is on is here. One that
+    // does not come - its model is not to be had - is not waited for endlessly.
+    if (pendingPlayerTransportTransfer_) {
+        const auto now = core::steadyNow();
+        if (!pendingPlayerTransportSince_) pendingPlayerTransportSince_ = now;
+        if (now - *pendingPlayerTransportSince_ < std::chrono::seconds(60)) return;
+        LOG_WARNING("Transport of the player not come within a minute: guid=0x", std::hex, pendingPlayerTransportGuid_,
+                    std::dec, " - no longer waited for");
+        forgetPendingPlayerTransport();
+    }
 
     float ownerDeckZ = 0.0f;
     const uint64_t owner = tm->groundTransportUnder(playerCanonical, &ownerDeckZ);

@@ -573,20 +573,23 @@ std::optional<glm::mat4> TransportManager::passengerRenderFrame(uint64_t transpo
     return passengerFrame(it->second);
 }
 
+bool TransportManager::isWmo(uint64_t transportGuid) const {
+    const auto it = transports_.find(transportGuid);
+    if (it != transports_.end()) return !it->second.isM2;
+    return transport_local::unregisteredIsWmo(transportGuid,
+                                              displayIsWmo_ ? displayIsWmo_(transportGuid) : std::nullopt);
+}
+
 glm::vec3 TransportManager::serverToTransportLocal(
     uint64_t transportGuid, const glm::vec3& serverOffset) const {
-    const auto it = transports_.find(transportGuid);
     // The wire's offset is in the transport's own frame, which is how it is
     // kept: a WMO transport's as it comes, an M2 one's on canonical axes.
-    if (it == transports_.end()) return transport_local::fromWire(false, serverOffset);
-    return transport_local::fromWire(!it->second.isM2, serverOffset);
+    return transport_local::fromWire(isWmo(transportGuid), serverOffset);
 }
 
 glm::vec3 TransportManager::transportLocalToServer(
     uint64_t transportGuid, const glm::vec3& localOffset) const {
-    const auto it = transports_.find(transportGuid);
-    if (it == transports_.end()) return transport_local::toWire(false, localOffset);
-    return transport_local::toWire(!it->second.isM2, localOffset);
+    return transport_local::toWire(isWmo(transportGuid), localOffset);
 }
 
 std::optional<float> TransportManager::transportFacing(uint64_t transportGuid) const {
