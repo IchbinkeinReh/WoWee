@@ -347,3 +347,24 @@ TEST_CASE("The display extras name their flags", "[dbc][layout]") {
     CHECK(extra->tryField("EquipDisplay10") == 18);
     CHECK(extra->tryField("BakeName") == 20);
 }
+
+TEST_CASE("The enchantments' visual and gem columns are declared", "[dbc][layout]") {
+    // Read for every weapon drawn and every socketed item's tooltip. Where a
+    // layout said neither, the columns were told by the record's width and the
+    // log told of a layout that is behind at every start.
+    struct Columns {
+        const char* expansion;
+        uint32_t visual;
+        uint32_t gem;
+    };
+    for (const Columns& c : {Columns{"classic", 19, kMissing}, Columns{"tbc", 30, 32}, Columns{"wotlk", 31, 33},
+                             Columns{"turtle", 19, kMissing}}) {
+        INFO("expansion: " << c.expansion);
+        DBCLayout layout;
+        REQUIRE(layout.loadFromJson(layoutPath(c.expansion)));
+        const auto* enchant = layout.getLayout("SpellItemEnchantment");
+        REQUIRE(enchant != nullptr);
+        CHECK(enchant->tryField("ItemVisual") == c.visual);
+        CHECK(enchant->tryField("SrcItemID") == c.gem);
+    }
+}

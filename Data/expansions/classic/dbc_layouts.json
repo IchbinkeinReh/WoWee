@@ -275,6 +275,7 @@
   },
   "SpellItemEnchantment": {
     "ID": 0,
+    "ItemVisual": 19,
     "Name": 10
   },
   "SpellRange": {

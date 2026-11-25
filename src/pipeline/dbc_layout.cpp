@@ -278,7 +278,7 @@ uint32_t detectEnchantmentItemVisualField(const DBCFile* dbc, const DBCFieldMap*
     else                       visualField = 19;  // Vanilla 1.12 / Turtle
 
     if (sieL) {
-        uint32_t f = sieL->field("ItemVisual");
+        uint32_t f = sieL->tryField("ItemVisual");
         if (f != 0xFFFFFFFF && f < fieldCount) visualField = f;
     }
     if (visualField >= fieldCount) return 0;
@@ -305,7 +305,7 @@ uint32_t detectEnchantmentGemItemField(const DBCFile* dbc, const DBCFieldMap* si
     else                       return 0;       // Vanilla 1.12 / Turtle: no gems
 
     if (sieL) {
-        uint32_t f = sieL->field("SrcItemID");
+        uint32_t f = sieL->tryField("SrcItemID");
         if (f != 0xFFFFFFFF && f < fieldCount) gemField = f;
     }
     if (gemField >= fieldCount) return 0;

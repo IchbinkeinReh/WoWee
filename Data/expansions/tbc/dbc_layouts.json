@@ -314,7 +314,9 @@
   },
   "SpellItemEnchantment": {
     "ID": 0,
-    "Name": 13
+    "ItemVisual": 30,
+    "Name": 13,
+    "SrcItemID": 32
   },
   "SpellRange": {
     "MaxRange": 4,
