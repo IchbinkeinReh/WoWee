@@ -18,6 +18,7 @@
 #include <cmath>
 #include <algorithm>
 
+#include "game/container_place.hpp"
 #include "game/action_drop.hpp"
 #include "game/item_text.hpp"
 #include "addons/lua_services.hpp"
@@ -1403,9 +1404,10 @@ inline SpellArgs spellArgs(lua_State* L, game::GameHandler* gh, bool takesId = f
 }
 
 inline uint64_t containerSlotGuid(game::GameHandler* gh, int bag, int slot) {
-    if (!gh || slot < 1) return 0;
-    if (bag == 0) return gh->getBackpackItemGuid(slot - 1);
-    if (bag >= 1 && bag <= 4) return gh->getBagItemGuid(bag - 1, slot - 1);
+    const auto place = game::containerPlace(bag, slot);
+    if (!gh || place.where == game::ContainerPlace::Where::Nowhere) return 0;
+    if (place.where == game::ContainerPlace::Where::Backpack) return gh->getBackpackItemGuid(place.slot);
+    if (place.where == game::ContainerPlace::Where::Bag) return gh->getBagItemGuid(place.bag, place.slot);
     // The keyring and the bank bags keep their guid on the slot rather than in
     // a side table, so these read it from the inventory directly.
     if (bag == kKeyringContainer || bag == kBankContainer || isBankBagContainer(bag)) {

@@ -4707,7 +4707,7 @@ static int lua_GetContainerItemLink(lua_State* L) {
     // The temporary enchant is deliberately out: an oil or a sharpening stone is
     // not a property of the item, and the client has no slot for it in a link.
     game::ItemLinkInstance inst =
-        gh->itemLinkInstance(gh->getBagItemGuid(container, slot - 1));
+        gh->itemLinkInstance(containerSlotGuid(gh, container, slot));
     const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
                                                         : itemSlot->item.randomPropertyId;
     inst.randomPropertyId = property;

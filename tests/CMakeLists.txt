@@ -4327,6 +4327,10 @@ wowee_add_test(test_spell_call
 wowee_add_test(test_addon_load
     SOURCES test_addon_load.cpp)
 
+# ── test_container_place ─────────────────────────────────────
+wowee_add_test(test_container_place
+    SOURCES test_container_place.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

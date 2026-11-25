@@ -6643,7 +6643,7 @@ int lua_Tooltip_AppendItemEnchants(lua_State* L) {
         s && !s->empty()) {
         appendRandomSuffix(w, gh, s->item);
     }
-    appendEnchantLines(w, gh, gh->getBagItemGuid(bag, slot - 1));
+    appendEnchantLines(w, gh, wowee::addons::containerSlotGuid(gh, bag, slot));
     return 0;
 }
 
