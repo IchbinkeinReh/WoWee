@@ -20157,7 +20157,7 @@ bool LuaEngine::saveSavedVariables(const std::string& path, const std::vector<st
 
 namespace {
 
-/// Appends the Lua call stack to an error message.
+/// The Lua call stack, for the log.
 ///
 /// An error says where it happened; the interesting part is nearly always how
 /// it got there. "dropdownMenu is nil at unitpopup.lua:484" cost several rounds
@@ -20167,10 +20167,8 @@ namespace {
 ///
 /// Written by hand rather than through debug.traceback because the debug
 /// library is deliberately not opened.
-/// The error at 1, with the stack folded into it.
-static void foldStackIn(lua_State* L) {
-    const char* msg = lua_tostring(L, 1);
-    std::string out = msg ? msg : "(error)";
+static std::string stackLines(lua_State* L) {
+    std::string out;
     for (int level = 1; level < 12; ++level) {
         lua_Debug ar;
         if (!lua_getstack(L, level, &ar)) break;
@@ -20180,24 +20178,31 @@ static void foldStackIn(lua_State* L) {
         out += ":" + std::to_string(ar.currentline);
         if (ar.name) { out += " in "; out += ar.name; }
     }
-    lua_pushstring(L, out.c_str());
-    lua_replace(L, 1);
+    return out;
 }
 
 /// query()'s: told to nobody else.
 static int queryTracebackHandler(lua_State* L) {
-    foldStackIn(L);
+    const char* msg = lua_tostring(L, 1);
+    lua_pushstring(L, ((msg ? msg : "(error)") + stackLines(L)).c_str());
+    lua_replace(L, 1);
     lua_settop(L, 1);
     return 1;
 }
 
 int luaTracebackHandler(lua_State* L) {
-    foldStackIn(L);
-    // Then what every other script call does with a message: the interface's
-    // handler gets it, and its return is what the dispatch reports. Without
-    // this leg, an error in a frame script - the commonest kind - went to the
-    // log while the ones from events went to the interface as well.
-    return taint::scriptErrorHandler(L);
+    const char* msg = lua_tostring(L, 1);
+    const std::string said = msg ? msg : "(error)", stack = stackLines(L);
+    // What every other script call does with a message: the interface's handler gets
+    // it - it alone, as debugstack() there has the stack - and its return is what the
+    // dispatch reports, with the stack for the log.
+    const int results = taint::scriptErrorHandler(L);
+    if (results == 1) {
+        const char* answer = lua_tostring(L, -1);
+        lua_pushstring(L, ((answer ? std::string(answer) : said) + stack).c_str());
+        lua_replace(L, -2);
+    }
+    return results;
 }
 
 /// Loads and runs a chunk with the traceback handler in place. Returns the
