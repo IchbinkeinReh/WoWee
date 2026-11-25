@@ -192,3 +192,18 @@ TEST_CASE("the activity's keyboard reports are kept", "[keyboard]") {
     wowee::ui::noteImeVisibility(false);
     CHECK(wowee::ui::reportedImeVisibility() == 0);
 }
+
+TEST_CASE("a frame that reads digits has text input too", "[keyboard]") {
+    ScreenKeyboardSync sync;
+    ScreenKeyboardSync::Inputs in;
+    CHECK_FALSE(sync.update(in).startTextInput);
+    in.frameListens = true;
+    CHECK(sync.update(in).startTextInput);
+    in.textInputActive = true;
+    CHECK_FALSE(sync.update(in).startTextInput);
+    // Not on a phone, whose keyboard would come up over it.
+    ScreenKeyboardSync phone;
+    in.textInputActive = false;
+    in.hasScreenKeyboard = true;
+    CHECK_FALSE(phone.update(in).startTextInput);
+}

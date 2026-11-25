@@ -29,12 +29,14 @@ namespace ui {
 /// Pure: the caller reads SDL and the interface, feeds update(), and carries
 /// out what it answers. Where there is no screen keyboard at all the only
 /// answer is the one the desktop has always had - text input started for a
-/// focused box that lost it.
+/// focused box that lost it, or a frame that reads digits (the stack split
+/// window, the money's).
 class ScreenKeyboardSync {
 public:
     struct Inputs {
         bool hasScreenKeyboard = false;  ///< SDL_HasScreenKeyboardSupport()
         bool editFocused = false;        ///< an interface edit box has the focus
+        bool frameListens = false;       ///< a frame takes the characters typed (OnChar)
         bool keyboardShown = false;      ///< the system says the keyboard is up
         bool textInputActive = false;    ///< SDL_TextInputActive()
         bool otherWantsText = false;     ///< an ImGui field of the client's own
@@ -53,7 +55,9 @@ public:
 
         if (!in.hasScreenKeyboard) {
             keyboardSeenUp_ = false;
-            if (in.editFocused && !in.textInputActive) out.startTextInput = true;
+            // SDL sends characters only while text input is on; the client's
+            // come by WM_CHAR to whatever takes the keyboard.
+            if ((in.editFocused || in.frameListens) && !in.textInputActive) out.startTextInput = true;
             return out;
         }
 

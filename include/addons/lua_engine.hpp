@@ -316,6 +316,8 @@ public:
     /// panel destroyed with focus inside it, or one that went invisible
     /// through a parent before the frame that would have noticed ran.
     [[nodiscard]] bool editBoxHasFocus() const;
+    /// Whether a frame takes the characters typed, with its OnChar.
+    [[nodiscard]] bool frameListensForChars() { return topKeyboardFrame("OnChar") != 0; }
     /// Whether it leaves the arrow keys to the game (ignoreArrows, without
     /// Alt), and whether a key is one of them (0x00967760).
     [[nodiscard]] bool editBoxLeavesArrows(bool altHeld) const;

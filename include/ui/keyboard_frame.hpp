@@ -13,9 +13,9 @@ namespace wowee::ui {
 template <class Takes>
 [[nodiscard]] uint32_t topKeyboardFrame(const WidgetTree& tree, Takes&& takes) {
     const Widget* best = nullptr;
-    for (size_t id = 1; id < tree.size(); ++id) {
-        const Widget* w = tree.get(static_cast<uint32_t>(id));
-        if (!w || !w->keyboardEnabled || !w->visible || !tree.shownNow(static_cast<uint32_t>(id))) continue;
+    for (uint32_t id = tree.nextMaybeVisible(1); id != 0; id = tree.nextMaybeVisible(id + 1)) {
+        const Widget* w = tree.get(id);
+        if (!w || !w->keyboardEnabled || !w->visible || !tree.shownNow(id)) continue;
         if (best && (w->effStrata < best->effStrata ||
                      (w->effStrata == best->effStrata && w->effLevel < best->effLevel)))
             continue;

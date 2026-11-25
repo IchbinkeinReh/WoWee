@@ -2560,6 +2560,7 @@ void Application::run() {
                 ui::ScreenKeyboardSync::Inputs in;
                 in.hasScreenKeyboard = SDL_HasScreenKeyboardSupport();
                 in.editFocused = engine->editBoxHasFocus();
+                in.frameListens = !in.editFocused && engine->frameListensForChars();
                 in.keyboardShown = in.hasScreenKeyboard && screenKeyboardShown(sdlWindow);
                 in.textInputActive = sdlWindow && SDL_TextInputActive(sdlWindow);
                 in.otherWantsText = ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
