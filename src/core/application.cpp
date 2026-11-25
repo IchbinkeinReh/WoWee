@@ -1479,7 +1479,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             if (!uim) return;
             uim->getGameScreen().getSettingsPanel().applyAudioVolumes(audioCoordinator_.get());
         };
-        luaSvc.runMacroText = [uim = uiManager.get(), gh = gameHandler.get()](const std::string& body) {
+        luaSvc.runMacroText = [uim = uiManager.get(), gh = gameHandler.get(), this](const std::string& body) {
+            // The interface's own edit box runs it; the chat panel's commands
+            // where there is none.
+            if (addonManager_ && addonsLoaded_ && addonManager_->getLuaEngine()->runMacro(body)) return;
             if (uim && gh) uim->getGameScreen().getChatPanel().executeMacroText(*gh, body);
         };
         luaSvc.clientChatCommandNames = [uim = uiManager.get()]() {

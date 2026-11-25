@@ -24,6 +24,16 @@ namespace ui {
 /// legitimately end in a space.
 std::vector<std::string> macroCommandLines(const std::string& macroText);
 
+/// Runs a macro's commands, one after the other, for as long as it goes on
+/// (0x00564db0: StopMacro ends it).
+template <typename Run, typename GoesOn>
+void runMacroCommands(const std::string& macroText, Run&& run, GoesOn&& goesOn) {
+    for (const std::string& command : macroCommandLines(macroText)) {
+        if (!goesOn()) return;
+        run(command);
+    }
+}
+
 /// The argument of the macro's `#showtooltip`, which names what its icon and
 /// tooltip should show.
 ///

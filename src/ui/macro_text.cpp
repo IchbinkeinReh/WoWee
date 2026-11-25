@@ -48,13 +48,7 @@ private:
 /// here: a body line "-hello" said "-hello" in chat, where the real client
 /// says nothing at all.
 ///
-/// The same loop is also where /stopmacro takes effect - its condition holds
-/// while the record of the running macro is still set, which is what stops
-/// ChatPanel's own loop short. And the real client hands each of these lines
-/// to FrameXML (EXECUTE_CHAT_LINE, 383, answered by the hidden MacroEditBox in
-/// chatframe.lua:2468, which copies the chat frame's target attributes and
-/// sends the line as chat), while this client runs them through its own slash
-/// dispatch instead. Raised here as well, every line would run twice.
+/// The same loop ends with StopMacro (runMacroCommands).
 bool executedAsMacroLine(const std::string& line) {
     return !line.empty() && line.front() != '#' && line.front() != '-';
 }

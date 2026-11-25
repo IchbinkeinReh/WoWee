@@ -9,6 +9,7 @@
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
+#include "ui/macro_text.hpp"
 #include "ui/tooltip_layout.hpp"
 #include "ui/edit_lines.hpp"
 #include "ui/interface_file.hpp"
@@ -19973,6 +19974,26 @@ void LuaEngine::bootstrap(const char* code) {
     noteLuaError(std::string("bootstrap chunk failed: ") + (e ? e : "?") +
                  "  [began: " + head + "]");
     lua_pop(L_, 1);
+}
+
+bool LuaEngine::runMacro(const std::string& text) {
+    if (!L_) return false;
+    {
+        taint::Quiet quiet;
+        lua_getglobal(L_, "__WoweeFrameEvents");
+        bool heard = false;
+        if (lua_istable(L_, -1)) {
+            lua_getfield(L_, -1, "EXECUTE_CHAT_LINE");
+            heard = lua_istable(L_, -1) && lua_objlen(L_, -1) > 0;
+            lua_pop(L_, 1);
+        }
+        lua_pop(L_, 1);
+        if (!heard) return false;
+    }
+    ui::runMacroCommands(
+        text, [this](const std::string& line) { fireEvent("EXECUTE_CHAT_LINE", {line}); },
+        [] { return runningMacro().running; });
+    return true;
 }
 
 LuaEngine::AddonFiles::AddonFiles(LuaEngine& engine, const std::string& name)

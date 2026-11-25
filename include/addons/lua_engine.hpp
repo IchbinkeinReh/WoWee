@@ -42,6 +42,10 @@ public:
     bool initialize();
     void shutdown();
 
+    /// Runs a macro's commands as the interface does (0x00564db0): each line is
+    /// EXECUTE_CHAT_LINE, and FrameXML's MacroEditBox sends it as one typed into
+    /// the chat. False where nothing listens for it.
+    bool runMacro(const std::string& text);
     /// While an addon's files run (0x00818e50): each gets the addon's name and a
     /// table of the addon's own. FrameXML's get nothing.
     class AddonFiles {

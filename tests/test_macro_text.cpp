@@ -103,3 +103,18 @@ TEST_CASE("showtooltip is found wherever it sits", "[macrotext]") {
     CHECK(macroShowtooltipArg("/cast Frostbolt\n  #showtooltip Fireball\r\n") ==
           "Fireball");
 }
+
+// 0x00564db0
+TEST_CASE("a macro runs its lines until it is stopped", "[macrotext]") {
+    const std::string macro = "#showtooltip\n/cast A\n-no\n/stopmacro\n/cast B";
+    std::string ran;
+    bool on = true;
+    wowee::ui::runMacroCommands(macro, [&](const std::string& line) {
+        ran += line + ";";
+        if (line == "/stopmacro") on = false;
+    }, [&] { return on; });
+    CHECK(ran == "/cast A;/stopmacro;");
+    ran.clear();
+    wowee::ui::runMacroCommands(macro, [&](const std::string& line) { ran += line + ";"; }, [] { return true; });
+    CHECK(ran == "/cast A;/stopmacro;/cast B;");
+}

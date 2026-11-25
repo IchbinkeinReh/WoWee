@@ -5627,7 +5627,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 }},
                 // 0x00564b90 asks the taint check (kind 3) before stopping.
                 {"StopMacro",                [](lua_State* L) -> int {
-                    taint::allowed(L, 3);
+                    if (!taint::allowed(L, 3)) return 0;
+                    runningMacro().running = false;
+                    runningMacro().index = 0;
                     return 0;
                 }},
                 // The targeting variants this client has no equivalent for.
