@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 
 namespace wowee::ui {
 
@@ -8,17 +9,29 @@ namespace wowee::ui {
 /// has one; else the one that was, unless the button is up (0x0096fe30). So a
 /// button without a DisabledTexture keeps its normal picture as it is disabled,
 /// and one disabled while it is pressed its pushed one.
-struct ButtonArtShown {
-    enum { Disabled, Normal, Pushed, None };
-    int state = Normal;
-    int shown = None;
+class ButtonArtShown {
+public:
+    enum Art { Disabled, Normal, Pushed, None };
+    [[nodiscard]] Art shown() const { return shown_; }
 
-    /// The state it is in now, and which of the three pictures there are.
-    void note(int now, const std::array<bool, 3>& there) {
-        if (now != state && now == Normal) shown = None;
-        if (there[static_cast<size_t>(now)]) shown = now;
-        state = now;
+    /// It has a picture for that state (0x0096f920): shown where it is the one
+    /// it is in.
+    void give(Art art) {
+        there_[static_cast<size_t>(art)] = true;
+        if (art == state_) shown_ = art;
     }
+    /// The state it is in from here on.
+    void note(Art state) {
+        if (state == state_) return;
+        if (state == Normal) shown_ = None;
+        if (there_[static_cast<size_t>(state)]) shown_ = state;
+        state_ = state;
+    }
+
+private:
+    Art state_ = Normal;
+    Art shown_ = None;
+    std::array<bool, 3> there_{};
 };
 
 }  // namespace wowee::ui

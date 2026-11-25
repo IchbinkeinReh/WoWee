@@ -455,8 +455,8 @@ struct Widget {
     bool  motionScriptsWhileDisabled = false;
     /// Whether this region is one of its owner's state textures, and which.
     ButtonArt buttonArt = ButtonArt::None;
-    /// A button's, as of the draw order's last making.
-    mutable ButtonArtShown artShown;
+    /// A button's, kept as its state changes.
+    ButtonArtShown artShown;
     /// Whether a check button is checked, which decides between its checked
     /// art and none.
     bool  checked = false;
@@ -479,11 +479,14 @@ struct Widget {
         stateLocked = lock;
         enabled = state != ButtonState::Disabled;
         pushed = state == ButtonState::Pushed;
+        artShown.note(static_cast<ButtonArtShown::Art>(state));
     }
     /// The mouse down on it (0x0096fa80), and up, dragging or the button
     /// hidden (0x0096fb60, 0x0096f440, 0x0096f410).
     void mouseButtonState(bool down) {
-        if (enabled && !stateLocked) pushed = down;
+        if (!enabled || stateLocked) return;
+        pushed = down;
+        artShown.note(static_cast<ButtonArtShown::Art>(buttonState()));
     }
     /// 0x00970440: whether that is a change, for OnEnable or OnDisable.
     bool setEnabled(bool on) {
@@ -1808,8 +1811,6 @@ private:
     std::vector<uint32_t> ownedTooltips_;
 
     /// Whether a state texture should be drawn given what the mouse is doing.
-    /// Which of a button's pictures is shown (button_art.hpp).
-    int shownButtonArt(const Widget& button) const;
     [[nodiscard]] bool buttonArtVisible(const Widget& w) const;
     std::deque<Widget> widgets_;   ///< Index 0 is a placeholder; id == index.
     /// What findByName last answered for a name, and how far up widgets_ it

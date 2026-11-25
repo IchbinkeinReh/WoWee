@@ -9,6 +9,7 @@
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
+#include "ui/mouse_over.hpp"
 #include "ui/macro_text.hpp"
 #include "ui/tooltip_layout.hpp"
 #include "ui/edit_lines.hpp"
@@ -2142,7 +2143,8 @@ int lua_Region_GetTop(lua_State* L) {
 }
 /// GetRect() → left, bottom, width, height. All four at once, which is what
 /// the newer code in FrameXML reaches for.
-/// IsMouseOver() - whether the cursor is inside this frame's rect.
+/// IsMouseOver([top, bottom, left, right]) (0x0049e100) - whether the cursor is
+/// inside this frame's rect, its sides moved by as much.
 ///
 /// Answered from the rect rather than from hover, because hover names the
 /// mouse-enabled frame under the cursor and the callers ask about frames that
@@ -2154,8 +2156,9 @@ int lua_Region_IsMouseOver(lua_State* L) {
     if (!w || !w->visible) { lua_pushboolean(L, 0); return 1; }
     const float mx = wowee::addons::LuaEngine::lastMouseX();
     const float my = wowee::addons::LuaEngine::lastMouseY();
-    const bool inside = mx >= w->left && mx <= w->left + w->rectW &&
-                        my >= w->bottom && my <= w->bottom + w->rectH;
+    const auto by = [L](int arg) { return lua_isnumber(L, arg) ? static_cast<float>(lua_tonumber(L, arg)) : 0.0f; };
+    const bool inside = wowee::ui::mouseOver(w->left, w->bottom, w->rectW, w->rectH, w->effScale, mx, my,
+                                             {.top = by(2), .bottom = by(3), .left = by(4), .right = by(5)});
     lua_pushboolean(L, inside ? 1 : 0);
     return 1;
 }
@@ -2746,6 +2749,14 @@ int lua_Texture_SetButtonArt(lua_State* L) {
     else if (slot == "DisabledTexture")        w->buttonArt = ButtonArt::Disabled;
     else if (slot == "CheckedTexture")         w->buttonArt = ButtonArt::Checked;
     else if (slot == "DisabledCheckedTexture") w->buttonArt = ButtonArt::DisabledChecked;
+    // 0x0096f920: the picture of the state the button is in is shown at once.
+    using Shown = wowee::ui::ButtonArtShown;
+    if (auto* tree = wowee::addons::getWidgetTree(L))
+        if (auto* button = tree->get(w->parent)) {
+            if (w->buttonArt == ButtonArt::Normal) button->artShown.give(Shown::Normal);
+            else if (w->buttonArt == ButtonArt::Pushed) button->artShown.give(Shown::Pushed);
+            else if (w->buttonArt == ButtonArt::Disabled) button->artShown.give(Shown::Disabled);
+        }
     return 0;
 }
 

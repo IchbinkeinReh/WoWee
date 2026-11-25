@@ -4010,7 +4010,7 @@ TEST_CASE("the HIGHLIGHT layer is there while the mouse is on its frame", "[widg
     CHECK(drawn(glow));
 }
 
-// 0x0096fe30
+// 0x0096fe30, 0x0096f920
 TEST_CASE("a button's state without a picture keeps the one shown", "[widgets][buttonart]") {
     WidgetTree tree;
     Anchor a;
@@ -4020,42 +4020,49 @@ TEST_CASE("a button's state without a picture keeps the one shown", "[widgets][b
     tree.setWidth(button, 50.0f);
     tree.setHeight(button, 50.0f);
     tree.addPoint(button, a);
-    const auto art = [&](ButtonArt kind) {
+    const auto art = [&](ButtonArt kind, ButtonArtShown::Art shown) {
         const uint32_t id = tree.create(WidgetKind::Texture, button, "");
         tree.get(id)->solidColor = true;
         tree.get(id)->buttonArt = kind;
+        tree.get(button)->artShown.give(shown);
         return id;
     };
-    const uint32_t normal = art(ButtonArt::Normal);
+    const uint32_t normal = art(ButtonArt::Normal, ButtonArtShown::Normal);
     const auto shown = [&] {
         tree.layout(800.0f, 600.0f);
         uint32_t out = 0;
         for (const auto* w : tree.drawOrder()) out = w->id;
         return out;
     };
-    auto* b = tree.get(button);
+    using State = Widget::ButtonState;
+    const auto is = [&](State state) { tree.get(button)->setButtonState(state, false); };
+    // Disabled and up again before it was ever drawn.
+    is(State::Disabled);
     CHECK(shown() == normal);
-    b->enabled = false;
+    is(State::Normal);
+    is(State::Pushed);
     CHECK(shown() == normal);
-    b->enabled = true;
-    b->pushed = true;
-    CHECK(shown() == normal);
-    const uint32_t pushed = art(ButtonArt::Pushed);
+    // The picture of the state it is in is shown at once.
+    const uint32_t pushed = art(ButtonArt::Pushed, ButtonArtShown::Pushed);
     CHECK(shown() == pushed);
-    // Disabled while it is pressed.
-    b->enabled = false;
+    is(State::Normal);
+    CHECK(shown() == normal);
+    // Pressed and disabled between two frames.
+    tree.get(button)->mouseButtonState(true);
+    is(State::Disabled);
     CHECK(shown() == pushed);
-    const uint32_t disabled = art(ButtonArt::Disabled);
+    const uint32_t disabled = art(ButtonArt::Disabled, ButtonArtShown::Disabled);
     CHECK(shown() == disabled);
-    b->enabled = true;
-    b->pushed = false;
+    tree.get(button)->setEnabled(true);
     CHECK(shown() == normal);
     // One without a normal picture shows none of the others when it is up.
-    tree.get(normal)->buttonArt = ButtonArt::Highlight;
-    b->pushed = true;
-    CHECK(shown() == pushed);
-    b->pushed = false;
-    CHECK(shown() == 0);
+    ButtonArtShown none;
+    none.give(ButtonArtShown::Pushed);
+    CHECK(none.shown() == ButtonArtShown::None);
+    none.note(ButtonArtShown::Pushed);
+    CHECK(none.shown() == ButtonArtShown::Pushed);
+    none.note(ButtonArtShown::Normal);
+    CHECK(none.shown() == ButtonArtShown::None);
 }
 
 // 0x004910a0, 0x00491020, 0x004911b0

@@ -4362,6 +4362,14 @@ wowee_add_test(test_item_book
 wowee_add_test(test_unit_field_events
     SOURCES test_unit_field_events.cpp)
 
+# ── test_alpha_gradient ──────────────────────────────────────
+wowee_add_test(test_alpha_gradient
+    SOURCES test_alpha_gradient.cpp)
+
+# ── test_mouse_over ──────────────────────────────────────────
+wowee_add_test(test_mouse_over
+    SOURCES test_mouse_over.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
