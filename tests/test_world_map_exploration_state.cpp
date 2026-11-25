@@ -87,3 +87,24 @@ TEST_CASE("ExplorationState: update with valid zone and server mask", "[world_ma
     // Zone should be explored since bit 0 is set in the mask
     REQUIRE(es.exploredZones().count(0) == 1);
 }
+
+// 0x00546310: the overlays of the zone shown, as it is shown.
+TEST_CASE("ExplorationState: a zone's explored parts are known at once", "[world_map][exploration_state]") {
+    ExplorationState es;
+    auto z = makeZone(1, 100, 1000.0f, -1000.0f, 1000.0f, -1000.0f, 0);
+    for (const uint32_t area : {100u, 101u, 102u, 0u}) {
+        OverlayEntry ov;
+        ov.areaIDs[0] = area;
+        z.overlays.push_back(ov);
+    }
+    z.overlays[0].areaIDs[1] = 103;
+    const std::unordered_map<uint32_t, uint32_t> flags{{100, 1}, {101, 2}, {102, 40}, {103, 3}};
+    // Nothing has been said: all.
+    CHECK(es.revealed(z, flags).size() == 4);
+    es.setServerMask({0x0Cu, 0x100u}, true);   // 2, 3 and 40
+    CHECK(es.revealed(z, flags) == std::unordered_set<int>{0, 1, 2});
+    es.setServerMask({0x02u}, true);
+    CHECK(es.revealed(z, flags) == std::unordered_set<int>{0});
+    es.setServerMask({0u}, true);
+    CHECK(es.revealed(z, flags).empty());
+}

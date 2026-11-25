@@ -57,22 +57,9 @@ void ExplorationState::update(const std::vector<Zone>& zones,
 
         // Per-overlay exploration: check each overlay's areaIDs against the exploration mask
         std::unordered_set<int> newExploredOverlays;
-        if (currentZoneIdx >= 0 && currentZoneIdx < static_cast<int>(zones.size())) {
-            const auto& curZoneData = zones[currentZoneIdx];
-            for (int oi = 0; oi < static_cast<int>(curZoneData.overlays.size()); oi++) {
-                const auto& ov = curZoneData.overlays[oi];
-                bool revealed = false;
-                for (unsigned int areaID : ov.areaIDs) {
-                    if (areaID == 0) continue;
-                    auto flagIt = exploreFlagByAreaId.find(areaID);
-                    if (flagIt != exploreFlagByAreaId.end() && isBitSet(flagIt->second)) {
-                        revealed = true;
-                        break;
-                    }
-                }
-                if (revealed) newExploredOverlays.insert(oi);
-            }
-        }
+        if (currentZoneIdx >= 0 && currentZoneIdx < static_cast<int>(zones.size()))
+            newExploredOverlays = revealed(zones[static_cast<size_t>(currentZoneIdx)], exploreFlagByAreaId);
+
         if (newExploredOverlays != exploredOverlays_) {
             exploredOverlays_ = std::move(newExploredOverlays);
             overlaysChanged_ = true;
@@ -109,10 +96,23 @@ void ExplorationState::update(const std::vector<Zone>& zones,
 
     // Without server mask, mark all overlays as explored (no fog of war)
     exploredOverlays_.clear();
-    if (currentZoneIdx >= 0 && currentZoneIdx < static_cast<int>(zones.size())) {
-        for (int oi = 0; oi < static_cast<int>(zones[currentZoneIdx].overlays.size()); oi++)
-            exploredOverlays_.insert(oi);
+    if (currentZoneIdx >= 0 && currentZoneIdx < static_cast<int>(zones.size()))
+        exploredOverlays_ = revealed(zones[static_cast<size_t>(currentZoneIdx)], exploreFlagByAreaId);
+}
+
+std::unordered_set<int> ExplorationState::revealed(
+    const Zone& zone, const std::unordered_map<uint32_t, uint32_t>& exploreFlagByAreaId) const {
+    std::unordered_set<int> out;
+    for (int oi = 0; oi < static_cast<int>(zone.overlays.size()); ++oi) {
+        bool seen = !hasServerMask_;
+        for (const uint32_t areaId : zone.overlays[static_cast<size_t>(oi)].areaIDs) {
+            if (seen) break;
+            const auto flag = areaId != 0 ? exploreFlagByAreaId.find(areaId) : exploreFlagByAreaId.end();
+            seen = flag != exploreFlagByAreaId.end() && isBitSet(flag->second);
+        }
+        if (seen) out.insert(oi);
     }
+    return out;
 }
 
 } // namespace world_map

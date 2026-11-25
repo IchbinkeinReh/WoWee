@@ -1519,10 +1519,13 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             return wmap ? wmap->currentMapFolder() : std::string();
         };
-        luaSvc.getMapOverlays = [r = renderer.get()]() {
+        luaSvc.getMapOverlays = [this, r = renderer.get()]() {
             std::vector<addons::LuaServices::MapOverlay> out;
             auto* wmap = r ? r->getWorldMap() : nullptr;
             if (!wmap) return out;
+            if (gameHandler)
+                wmap->setServerExplorationMask(gameHandler->getPlayerExploredZoneMasks(),
+                                               gameHandler->hasPlayerExploredZoneMasks());
             const std::string folder = wmap->currentMapFolder();
             for (const auto& o : wmap->currentOverlays()) {
                 addons::LuaServices::MapOverlay m;

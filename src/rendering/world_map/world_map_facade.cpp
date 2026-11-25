@@ -941,7 +941,8 @@ std::string WorldMapFacade::zoneNameAtMapPoint(float u, float v) const {
         const auto& zones = impl_->data.zones();
         if (zi < 0 || zi >= static_cast<int>(zones.size()) || u < 0.0f || v < 0.0f) return {};
         const float px = u * 1002.0f, py = v * 668.0f;
-        const auto& explored = impl_->exploration.exploredOverlays();
+        const auto explored = impl_->exploration.revealed(zones[static_cast<size_t>(zi)],
+                                                          impl_->data.exploreFlagByAreaId());
         const auto& names = impl_->data.areaNameByAreaId();
         const auto& overlays = zones[static_cast<size_t>(zi)].overlays;
         for (int oi = 0; oi < static_cast<int>(overlays.size()); ++oi) {
@@ -1037,9 +1038,12 @@ std::vector<OverlayEntry> WorldMapFacade::currentOverlays() const {
     // zones' maps, which the interface reaches by drilling in.
     if (zones[static_cast<size_t>(idx)].areaID == 0) return {};
     // Only the parts the character has explored (0x00546310 lists an overlay
-    // once one of its areas is) - the rest of the zone is FrameXML's fog.
+    // once one of its areas is) - the rest of the zone is FrameXML's fog. Of
+    // the zone as it is shown now: the event that has the interface draw them
+    // comes with the zone, not with the next picture.
     const auto& all = zones[static_cast<size_t>(idx)].overlays;
-    const auto& explored = impl_->exploration.exploredOverlays();
+    const auto explored = impl_->exploration.revealed(zones[static_cast<size_t>(idx)],
+                                                      impl_->data.exploreFlagByAreaId());
     std::vector<OverlayEntry> out;
     for (int i = 0; i < static_cast<int>(all.size()); ++i)
         if (explored.count(i)) out.push_back(all[static_cast<size_t>(i)]);

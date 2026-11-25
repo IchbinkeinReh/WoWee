@@ -31,6 +31,11 @@ public:
                 const std::unordered_map<uint32_t, uint32_t>& exploreFlagByAreaId,
                 uint32_t playerZoneId = 0);
 
+    /// Which of a zone's overlays the player has explored one area of, now (0x00546310); all
+    /// where the server has not said.
+    [[nodiscard]] std::unordered_set<int> revealed(
+        const Zone& zone, const std::unordered_map<uint32_t, uint32_t>& exploreFlagByAreaId) const;
+
     [[nodiscard]] const std::unordered_set<int>& exploredZones() const { return exploredZones_; }
     /// Whether the player has explored the area with this AreaBit.
     [[nodiscard]] bool bitSet(uint32_t bitIndex) const { return isBitSet(bitIndex); }
