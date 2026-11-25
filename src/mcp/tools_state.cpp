@@ -61,6 +61,22 @@ Tool handsTool(std::string name, std::string description, json schema,
 
 namespace {
 
+/// The settings its own doing has changed since the server started.
+json settingsChanged(const ToolContext& context) {
+    json out = json::array();
+    for (const auto& change : context.settings.changes())
+        out.push_back({{"cvar", change.name}, {"old", change.before}, {"new", change.after}, {"when", change.when}});
+    return out;
+}
+
+/// What of the account's copy on the realm is left as it was for it.
+json settingsHeld(const ToolContext& context) {
+    json out = json::array();
+    for (uint32_t type = 0; type < 8; ++type)
+        if (context.settings.held(type)) out.push_back(settingsDataName(type));
+    return out;
+}
+
 json movementFlagNames(uint32_t flags) {
     using F = game::MovementFlags;
     json out = json::array();
@@ -235,6 +251,8 @@ json stateOf(ToolContext& context, const json& args) {
         errors.push_back({{"seq", e.seq}, {"text", e.value.text.substr(0, 200)}});
     }
     out["recent_errors"] = std::move(errors);
+    out["settings_changed"] = settingsChanged(context);
+    if (json held = settingsHeld(context); !held.empty()) out["settings_not_sent_up"] = std::move(held);
     out["cursors"] = {{"log", context.log.last()},
                       {"events", context.events.last()},
                       {"chat", context.chat.last()},
@@ -253,7 +271,7 @@ json serverInfo(ToolContext& context, const json& args) {
     return {{"options",
              {{"lua", context.options.lua},
               {"allow", socialList(context.options.allow)},
-              {"not_allowed", socialList(kSocialAll & ~context.options.allow)}}},
+              {"not_allowed", socialList(kAllowable & ~context.options.allow)}}},
             {"uptime_s", rounded(context.now, 0)},
             {"last_act_was_the_servers", context.origin.isServer()},
             {"refused", std::move(refused)},
@@ -267,7 +285,8 @@ void addStateTools(Toolbox& box) {
                            "Overview of the client and the player: login / char select / in world / dead, whether a "
                            "loading screen is up, the transport it is on, position "
                            "(.gps coordinates), facing, zone, speed and movement flags, camera, clock and weather, "
-                           "health, power, casting, auras, target, fps, recent errors, and the cursors of the logs.",
+                           "health, power, casting, auras, target, fps, recent errors, the settings this server's doing has "
+                           "changed since it started (settings_changed), and the cursors of the logs.",
                            schema::object({}), stateOf, Tool::Where::Anywhere));
     box.push_back(lookTool("server_info",
                            "What this server was started to allow, and what it has refused (packets and acts towards "

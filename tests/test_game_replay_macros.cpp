@@ -3,6 +3,7 @@
 // game_replay.hpp.
 #include <catch_amalgamated.hpp>
 
+#include "mcp/gate.hpp"
 #include "game_replay.hpp"
 #include "core/env.hpp"
 #include "game/macro_list.hpp"
@@ -204,5 +205,77 @@ TEST_CASE("a character without a config here asks the realm for its own", "[repl
     CHECK(times() == (kept ? 0u : 1u));
     CHECK(begun.find("characters/Anna.config-cache.wtf") != std::string::npos);
     CHECK((config.read("account_data_times.txt").find("ACC:Anna:1=0") != std::string::npos) == !kept);
+    s.handler().setAccountDataBridge({});
+}
+
+// The MCP server's: mcp/settings_ledger.hpp. What is not to go up does not, and the next start takes
+// the realm's again.
+TEST_CASE("account data that is held back is the realm's at the next start", "[replay][macros][mcp]") {
+    ConfigSandbox config;
+    static bool allowed;
+    static std::vector<uint32_t> asked;
+    allowed = false;
+    asked.clear();
+    struct Gate {
+        Gate() {
+            wowee::mcp::gate::allowsAccountData = +[](uint32_t type, const std::string&, const std::string&) {
+                asked.push_back(type);
+                return allowed || type > 3;
+            };
+        }
+        ~Gate() { wowee::mcp::gate::allowsAccountData = nullptr; }
+    } gate;
+    config.write("account_data_times.txt", "ACC:0=500\n");
+    std::string cvars = "SET a \"1\"\n";
+    const auto with = [&](Session& s) {
+        s.setConnected(true);
+        become(s, "ACC", "Anna", 66);
+        GameHandler::AccountDataBridge bridge;
+        bridge.config = [&](bool perCharacter) { return perCharacter ? std::string() : cvars; };
+        s.handler().setAccountDataBridge(std::move(bridge));
+    };
+    const auto times = [](Session& s) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ACCOUNT_DATA_TIMES));
+        p.writeUInt32(1000);
+        p.writeUInt8(1);
+        p.writeUInt32(0x01);
+        p.writeUInt32(500);
+        s.receive(p);
+        return s.sent().of(Opcode::CMSG_REQUEST_ACCOUNT_DATA).size();
+    };
+    const auto upsOf = [](Session& s) { return s.sent().of(Opcode::CMSG_UPDATE_ACCOUNT_DATA).size(); };
+    {
+        Session s;
+        with(s);
+        CHECK(times(s) == 0);
+        s.handler().tickAccountData(2.0f);
+        CHECK(asked.empty());
+        cvars = "SET a \"0\"\n";
+        s.handler().tickAccountData(2.0f);
+        CHECK(asked == std::vector<uint32_t>{0});
+        CHECK(upsOf(s) == 0);
+        // Not again for the same, and as long as the client goes it stands as it is.
+        s.handler().tickAccountData(2.0f);
+        CHECK(asked.size() == 1);
+        CHECK(times(s) == 0);
+        CHECK(config.read("account_data_times.txt").find("ACC:0=0") != std::string::npos);
+        s.handler().setAccountDataBridge({});
+    }
+    {
+        Session next;
+        with(next);
+        CHECK(times(next) == 1);
+        next.handler().setAccountDataBridge({});
+    }
+    // Allowed, it goes up and is the newest.
+    allowed = true;
+    config.write("account_data_times.txt", "ACC:0=500\n");
+    Session s;
+    with(s);
+    CHECK(times(s) == 0);
+    cvars = "SET a \"2\"\n";
+    s.handler().tickAccountData(2.0f);
+    CHECK(upsOf(s) == 1);
+    CHECK(config.read("account_data_times.txt").find("ACC:0=1000") != std::string::npos);
     s.handler().setAccountDataBridge({});
 }

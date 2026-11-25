@@ -1,4 +1,5 @@
 #include "mcp/send_guard.hpp"
+#include "mcp/settings_ledger.hpp"
 
 #include <algorithm>
 #include <array>
@@ -44,6 +45,14 @@ Verdict social(Social s, std::string_view what, const GuardContext& context) {
     return {.kind = Verdict::Kind::Social,
             .social = s,
             .why = std::string(what) + " is not done towards other players (--mcp-allow=" + socialName(s) + ")"};
+}
+
+/// What the realm would keep of the settings.
+Verdict keeps(std::string_view what, const GuardContext& context) {
+    if ((context.allow & static_cast<uint32_t>(Social::Settings)) != 0) return {};
+    return {.kind = Verdict::Kind::Social,
+            .social = Social::Settings,
+            .why = std::string(what) + " changed here are not kept on the realm (--mcp-allow=settings)"};
 }
 
 /// The bytes of a packet in order; past the end it says so and answers zeros.
@@ -272,6 +281,8 @@ std::vector<std::string_view> namedOpcodes() {
     out.insert(out.end(), kHarmless.begin(), kHarmless.end());
     out.insert(out.end(), kNever.begin(), kNever.end());
     out.emplace_back("CMSG_DISMISS_CONTROLLED_VEHICLE");
+    out.emplace_back("CMSG_UPDATE_ACCOUNT_DATA");
+    out.emplace_back("CMSG_SET_ACTIONBAR_TOGGLES");
     return out;
 }
 
@@ -304,6 +315,14 @@ Verdict judgeSend(std::string_view opcode, std::span<const uint8_t> payload, con
         }
         return judgeAim(guid, context);
     }
+
+    if (opcode == "CMSG_UPDATE_ACCOUNT_DATA") {
+        Reader r(payload);
+        const uint32_t type = r.u32();
+        if (!r.ok()) return never("account data whose kind could not be read");
+        return isSettingsData(type) ? keeps(settingsDataName(type), context) : Verdict{};
+    }
+    if (opcode == "CMSG_SET_ACTIONBAR_TOGGLES") return keeps("the action bars shown", context);
 
     if (opcode == "CMSG_DISMISS_CONTROLLED_VEHICLE") {
         // Getting out of what the character drives itself: the mover is named

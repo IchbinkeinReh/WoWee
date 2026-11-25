@@ -11,7 +11,7 @@ struct Named {
     const char* name;
 };
 
-constexpr std::array<Named, 11> kNames = {{
+constexpr std::array<Named, 12> kNames = {{
     {Social::Chat, "chat"},
     {Social::Emote, "emote"},
     {Social::Mail, "mail"},
@@ -23,6 +23,7 @@ constexpr std::array<Named, 11> kNames = {{
     {Social::Players, "players"},
     {Social::Friends, "friends"},
     {Social::Tickets, "tickets"},
+    {Social::Settings, "settings"},
 }};
 
 }  // namespace

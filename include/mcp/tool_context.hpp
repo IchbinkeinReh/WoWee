@@ -16,6 +16,7 @@
 #include "mcp/origin.hpp"
 #include "mcp/ring_log.hpp"
 #include "mcp/script.hpp"
+#include "mcp/settings_ledger.hpp"
 
 namespace wowee::core { class Application; }
 
@@ -67,6 +68,8 @@ struct ToolContext {
     RingLog<EventLine> chat{1000};
     RingLog<EventLine> combat{2000};
     RingLog<RefusedLine> refusals{200};
+    /// The game's thread's only.
+    SettingsLedger settings;
     /// The last CMSG_SET_SELECTION let out (GuardContext::selectedOnRealm).
     std::atomic<uint64_t> selectedOnRealm{0};
     FrameGrab grab;

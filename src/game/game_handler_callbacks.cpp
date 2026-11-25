@@ -3101,6 +3101,8 @@ void GameHandler::sendInterfaceRequest(network::Packet& packet) {
 
 void GameHandler::sendActionBarToggles(uint8_t mask) {
     if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_SET_ACTIONBAR_TOGGLES) == 0xFFFF) return;
+    const int before = actionBarToggles_ ? *actionBarToggles_ : 0;
+    mcp::gate::noteSetting("SetActionBarToggles", std::to_string(before), std::to_string(int{mask}), -1);
     network::Packet packet(wireOpcode(Opcode::CMSG_SET_ACTIONBAR_TOGGLES));
     packet.writeUInt8(mask);
     socket->send(packet);

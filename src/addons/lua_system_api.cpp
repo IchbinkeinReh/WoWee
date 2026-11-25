@@ -15,6 +15,7 @@
 #include <sstream>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <set>
@@ -2614,12 +2615,47 @@ std::string storedCVarValue(const std::string& key, const std::string& fallback)
     return fallback;
 }
 
+/// What the MCP server's doing has changed of the account's CVars, as it was -
+/// nothing for one that had no value -, to be put back as the client ends.
+static std::map<std::string, std::optional<std::string>>& cvarsToPutBack() {
+    static std::map<std::string, std::optional<std::string>> cvars;
+    return cvars;
+}
+
+/// A CVar by its lower-case name is about to be another.
+static void noteCVarChange(const std::string& key, const std::string& value) {
+    const auto existing = cvarStore().find(key);
+    const bool had = existing != cvarStore().end();
+    const std::string before = had ? existing->second : std::string(clientCVarDefault(key).value_or(""));
+    if (before == value) return;
+    const auto flags = registeredCVarFlags(key).value_or(0u);
+    const int kind = (flags & kCVarStoredWithAccount) != 0 ? 0 : (flags & kCVarStoredWithCharacter) != 0 ? 1 : -1;
+    if (!mcp::gate::noteSetting(key, before, value, kind)) {
+        // A person's: it stays.
+        cvarsToPutBack().erase(key);
+        return;
+    }
+    if (kind == 0)
+        cvarsToPutBack().try_emplace(key, had ? std::optional<std::string>(existing->second) : std::nullopt);
+}
+
+void putBackCVars() {
+    if (cvarsToPutBack().empty()) return;
+    for (const auto& [key, value] : cvarsToPutBack()) {
+        if (value) cvarStore()[key] = *value;
+        else cvarStore().erase(key);
+    }
+    cvarsToPutBack().clear();
+    saveStoredCVars();
+}
+
 void setStoredCVar(const std::string& key, const std::string& value) {
     if (!cvarStoreLoaded()) loadStoredCVars();
     std::string k = key;
     toLowerInPlace(k);
     const auto existing = cvarStore().find(k);
     if (existing != cvarStore().end() && existing->second == value) return;
+    noteCVarChange(k, value);
     cvarStore()[k] = value;
     saveStoredCVars();
 }
@@ -2697,6 +2733,7 @@ void noteClientSettingChanged(const std::string& settingKey, const std::string& 
                 : value;
         auto it = cvarStore().find(binding.cvar);
         if (it != cvarStore().end() && it->second == text) return;
+        noteCVarChange(binding.cvar, text);
         cvarStore()[binding.cvar] = text;
         saveStoredCVars();
         return;
@@ -2931,6 +2968,7 @@ static int lua_SetCVar(lua_State* L) {
     if (cvarValueInRange(key, value)) {
         const auto existing = cvarStore().find(key);
         const bool changed = (existing == cvarStore().end() || existing->second != value);
+        if (changed) noteCVarChange(key, value);
         cvarStore()[key] = value;
         // Only on a real change. A slider drag calls SetCVar on every frame it
         // moves, and most of those calls set the value it already has.

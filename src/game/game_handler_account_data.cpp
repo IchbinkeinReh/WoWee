@@ -19,6 +19,7 @@
 #include "game/opcode_table.hpp"
 #include "game/world_packets.hpp"
 #include "core/logger.hpp"
+#include "mcp/gate.hpp"
 #include "network/world_socket.hpp"
 
 #include <zlib.h>
@@ -104,6 +105,8 @@ std::string GameHandler::accountDataKey(uint32_t type) const {
 }
 
 uint32_t GameHandler::accountDataLocalTime(uint32_t type) const {
+    if (const auto held = accountDataHeldTimes_.find(accountDataKey(type)); held != accountDataHeldTimes_.end())
+        return held->second;
     std::ifstream in(timesPath());
     std::string line;
     const std::string key = accountDataKey(type) + "=";
@@ -263,6 +266,17 @@ void GameHandler::uploadAccountData(uint32_t type) {
     LOG_INFO("Account data ", type, " sent up (", text.size(), " bytes)");
 }
 
+void GameHandler::holdAccountData(uint32_t type, const std::string& text) {
+    // Not sent up and not again (mcp/settings_ledger.hpp). While the client goes it stands as what
+    // it was last told of; the next start has none of its own and takes the realm's.
+    accountDataLastText_[type] = text;
+    const std::string key = accountDataKey(type);
+    if (accountDataHeldTimes_.count(key)) return;
+    const uint32_t time = accountDataLocalTime(type);
+    setAccountDataLocalTime(type, 0);
+    accountDataHeldTimes_[key] = time;
+}
+
 void GameHandler::handleAccountDataTimes(network::Packet& packet) {
     AccountDataTimesData data;
     if (!AccountDataTimesParser::parse(packet, data)) {
@@ -293,9 +307,13 @@ void GameHandler::handleAccountDataTimes(network::Packet& packet) {
         if (!accountDataSynced(t)) continue;
         const uint32_t local = t == 4 && !accountMacrosHere ? 0 : accountDataLocalTime(t);
         const uint32_t server = data.accountDataTimes[t];
-        if (local < server) requestAccountData(t);
-        else if (local > server) uploadAccountData(t);
-        else accountDataLastText_[t] = accountDataText(t);
+        if (local < server) {
+            requestAccountData(t);
+            continue;
+        }
+        const std::string text = accountDataText(t);
+        if (local > server && mcp::gate::accountDataAllowed(t, text, text)) uploadAccountData(t);
+        else accountDataLastText_[t] = text;
     }
 }
 
@@ -344,7 +362,9 @@ void GameHandler::tickAccountData(float dt) {
     for (uint32_t t = 0; t < kAccountDataTypes; ++t) {
         if (!accountDataKnown_[t] || accountDataAwaited_[t] || !accountDataSynced(t)) continue;
         const std::string text = accountDataText(t);
-        if (text != accountDataLastText_[t]) uploadAccountData(t);
+        if (text == accountDataLastText_[t]) continue;
+        if (mcp::gate::accountDataAllowed(t, accountDataLastText_[t], text)) uploadAccountData(t);
+        else holdAccountData(t, text);
     }
 }
 

@@ -3,11 +3,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <ctime>
 #include <utility>
 
+#include "addons/lua_api_registrations.hpp"
 #include "auth/auth_handler.hpp"
 #include "core/application.hpp"
 #include "core/config_paths.hpp"
+#include "core/local_time.hpp"
 #include "core/logger.hpp"
 #include "core/version.hpp"
 #include "core/window.hpp"
@@ -98,6 +101,8 @@ std::unique_ptr<Server> Server::start(core::Application& app, const Options& opt
     gate::allowsSend = &Server::gateSend;
     gate::allowsLua = &Server::gateLua;
     gate::allowsQuit = &Server::gateQuit;
+    gate::settingChanged = &Server::gateSetting;
+    gate::allowsAccountData = &Server::gateAccountData;
     gate::heardEvent = &Server::gateEvent;
     core::Logger::getInstance().setTap(&Server::logTap);
     return server;
@@ -148,7 +153,10 @@ Server::~Server() {
     gate::allowsSend = nullptr;
     gate::allowsLua = nullptr;
     gate::allowsQuit = nullptr;
+    gate::settingChanged = nullptr;
+    gate::allowsAccountData = nullptr;
     gate::heardEvent = nullptr;
+    addons::putBackCVars();
     // Those who wait are told first, or the threads that wait would be waited
     // for.
     queue_.close();
@@ -319,6 +327,55 @@ void Server::heard(const std::string& event, const std::vector<std::string>& arg
 
 bool Server::gateSend(uint16_t wireOpcode, std::span<const uint8_t> payload) {
     return !gServer || gServer->sendAllowed(wireOpcode, payload);
+}
+
+namespace {
+
+std::string clockNow() {
+    const std::tm local = core::localTime(std::time(nullptr));
+    char text[16] = {};
+    std::strftime(text, sizeof(text), "%H:%M:%S", &local);
+    return text;
+}
+
+}  // namespace
+
+bool Server::gateSetting(const std::string& name, const std::string& before, const std::string& after,
+                         int accountData) {
+    if (!gServer || std::this_thread::get_id() != gServer->gameThread_ || !gServer->context_.origin.isServer())
+        return false;
+    gServer->context_.settings.changed(name, before, after, clockNow());
+    const bool allowed = (gServer->options_.allow & static_cast<uint32_t>(Social::Settings)) != 0;
+    // From here on: a key pressed before it is looked at whether to send it up makes it no person's.
+    if (accountData >= 0) gServer->context_.settings.mayGoUp(static_cast<uint32_t>(accountData), true, allowed);
+    return !allowed;
+}
+
+bool Server::gateAccountData(uint32_t type, const std::string& before, const std::string& after) {
+    if (!gServer) return true;
+    auto& context = gServer->context_;
+    const bool byServer = context.origin.isServer();
+    const bool allowed = (gServer->options_.allow & static_cast<uint32_t>(Social::Settings)) != 0;
+    if (byServer && before != after) {
+        if (type == 2 || type == 3) {
+            for (const auto& b : bindingChanges(before, after))
+                context.settings.changed("key " + b.key, b.before, b.after, clockNow());
+        } else if (type == 7) {
+            context.settings.changed("chat windows", "", "changed", clockNow());
+        }
+    }
+    // With nothing changed it is not the server's doing, and is not held for good; but it does
+    // not go now either, as the packet would not (send_guard.hpp).
+    if (before == after) return allowed || !isSettingsData(type) || (!byServer && !context.settings.held(type));
+    if (context.settings.mayGoUp(type, byServer, allowed)) return true;
+    if (context.settings.firstToldOf(type)) {
+        context.refusals.push({.what = "CMSG_UPDATE_ACCOUNT_DATA",
+                               .why = std::string(settingsDataName(type)) +
+                                      " changed here are not kept on the realm (--mcp-allow=settings)",
+                               .at = context.now});
+        LOG_WARNING("MCP server: ", settingsDataName(type), " are not sent up any more: changed by its doing");
+    }
+    return false;
 }
 
 bool Server::gateLua() {

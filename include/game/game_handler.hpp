@@ -6659,6 +6659,9 @@ private:
     uint64_t characterConfigOf_ = 0;     // whose own file is read; none is written before
     void requestAccountData(uint32_t type);
     void uploadAccountData(uint32_t type);
+    void holdAccountData(uint32_t type, const std::string& text);
+    /// The times of what is not sent up, as they were: by accountDataKey.
+    std::unordered_map<std::string, uint32_t> accountDataHeldTimes_;
     AccountDataBridge accountDataBridge_;
     uint32_t accountDataClock_ = 0;
     float accountDataCheckTimer_ = 0.0f;

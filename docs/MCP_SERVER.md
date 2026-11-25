@@ -22,7 +22,7 @@ wowee --help
 | Option | |
 |---|---|
 | `--mcp [PORT]`, `--mcp=PORT` | start the server |
-| `--mcp-allow=LIST` | let it do things towards other players: `chat`, `emote`, `mail`, `trade`, `auction`, `group`, `guild`, `duel`, `players`, `friends`, `tickets`, or `all`. None by default |
+| `--mcp-allow=LIST` | let it do things towards other players: `chat`, `emote`, `mail`, `trade`, `auction`, `group`, `guild`, `duel`, `players`, `friends`, `tickets`, or `all` of these. `settings`, which is none of `all`: keep the settings it changed on the realm (below). None by default |
 | `--mcp-lua` | let it run Lua in the interface. Off by default |
 
 An option that cannot be understood keeps the server off; the log says so. Arguments that are none of these are
@@ -161,6 +161,19 @@ Never sent, whatever is allowed: deleting, creating or renaming characters, dest
 unlearning a profession, the game masters' and developers' own packets. Quitting from inside the game is refused; the
 `quit` tool does it.
 
+### Settings
+
+What its doing changes of the CVars, key bindings, chat windows and the action bars shown is not refused, so that it can
+be tried. It is told: `state` has `settings_changed`, a list of `cvar`, `old`, `new` and `when` since the server started
+(a key binding as `key KEY`, the action bars as `SetActionBarToggles`), and `settings_not_sent_up`, the kinds of account
+data that are held back for it.
+
+Without `--mcp-allow=settings` none of it is kept on the realm: `CMSG_UPDATE_ACCOUNT_DATA` of the CVars (0, 1), the key
+bindings (2, 3) and the chat windows (7) is not sent, nor `CMSG_SET_ACTIONBAR_TOGGLES` (macros, 4 and 5, are). A kind
+once changed by the server's doing is not sent for as long as the client goes, a person's changes after it with it. While
+the client goes it stays as it was changed, over a logout too; at the next start the realm's copy is taken again (its time
+here is put to 0), and the account's CVars are put back as they were when the client ends.
+
 ### Gaps
 
 - Whose doing something is, is who acted last. If a person plays along and presses a key, what an earlier act of the
@@ -169,6 +182,10 @@ unlearning a profession, the game masters' and developers' own packets. Quitting
 - Spells without a target can land on others (areas, auras), and objects somebody else put down can be used - a
   spell aimed at one of them, or at a player's corpse, is held to be aimed at that player.
 - A group or a duel somebody else began is not left by the server: it can decline and cancel, and not accept.
+- What of the settings lies on this computer alone stays changed: `settings.cfg`, and after a crash the account's CVars
+  the realm has no value of. A key binding or chat window changed within a second of a real key press counts as a
+  person's. What a person changes of a kind the server's doing changed before is not kept either.
+- Where the realm has nothing of a kind yet, what was changed stays here until it is changed again.
 - Names are redacted from texts, not from pictures. A picture of the world shows the names over heads.
 - The token protects against other programs of *other* users and against web pages; a program of the same user can
   read the file.

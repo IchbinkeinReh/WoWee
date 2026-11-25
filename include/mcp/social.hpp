@@ -1,7 +1,8 @@
 #pragma once
 
-// The kinds of thing the MCP server does not do towards other players unless
-// it was started with --mcp-allow naming them.
+// The kinds of thing the MCP server does not do towards other players - and
+// the settings it does not keep on the realm - unless it was started with
+// --mcp-allow naming them.
 
 #include <cstdint>
 #include <optional>
@@ -22,9 +23,15 @@ enum class Social : uint32_t {
     Players = 1u << 8,   ///< spells, items and attacks aimed at another player, pvp
     Friends = 1u << 9,   ///< the friends and ignore lists
     Tickets = 1u << 10,  ///< game master tickets, complaints and bug reports
+    /// CVars, key bindings, chat windows and the action bars shown, as the
+    /// realm keeps them (settings_ledger.hpp). Not one of `all`.
+    Settings = 1u << 11,
 };
 
+/// `all`: everything towards other players.
 inline constexpr uint32_t kSocialAll = (1u << 11) - 1;
+/// Every name --mcp-allow knows.
+inline constexpr uint32_t kAllowable = kSocialAll | static_cast<uint32_t>(Social::Settings);
 
 /// "chat", "emote", ...
 const char* socialName(Social s);

@@ -82,6 +82,9 @@ void noteClientSettingChanged(const std::string& settingKey, const std::string& 
 /// reason its own file says: a value that survives only a clean exit is not one
 /// a player can rely on, and this client is exited every way there is.
 void setStoredCVar(const std::string& key, const std::string& value);
+/// As the client ends: the account's CVars the MCP server's doing has changed, as they were
+/// (mcp/settings_ledger.hpp).
+void putBackCVars();
 
 /// The CVars kept on the realm (config-cache.wtf, account data 0 and 1):
 /// those set here whose registration keeps them with the account, or with

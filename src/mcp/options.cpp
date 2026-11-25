@@ -66,7 +66,7 @@ Options parseOptions(int argc, const char* const* argv) {
                 out.allow |= *mask;
             } else {
                 out.problems.push_back("--mcp-allow " + std::string(list.value_or("")) +
-                                       ": not a list of " + socialList(kSocialAll) + " or all");
+                                       ": not a list of " + socialList(kAllowable) + " or all");
             }
         }
     }
@@ -83,7 +83,9 @@ std::string helpText() {
            "                       Off by default and never remembered. docs/MCP_SERVER.md\n"
            "  --mcp-allow=LIST     let the MCP server do things towards other players: any of chat,\n"
            "                       emote, mail, trade, auction, group, guild, duel, players,\n"
-           "                       friends, tickets, or all. None by default\n"
+           "                       friends, tickets, or all of these; and settings: keep CVars,\n"
+           "                       key bindings and action bars it changed on the realm. None by\n"
+           "                       default\n"
            "  --mcp-lua            let the MCP server run Lua in the interface. Off by default\n"
            "\n"
            "Everything else is set in the game or by WOWEE_* environment variables.\n";

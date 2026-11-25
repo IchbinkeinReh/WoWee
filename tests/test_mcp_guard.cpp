@@ -14,6 +14,7 @@
 #include "mcp/options.hpp"
 #include "mcp/origin.hpp"
 #include "mcp/send_guard.hpp"
+#include "mcp/settings_ledger.hpp"
 
 using namespace wowee::mcp;
 
@@ -172,11 +173,32 @@ TEST_CASE("each family is refused, and what only asks or declines is not", "[mcp
           "CMSG_LIST_INVENTORY", "CMSG_BUY_ITEM", "CMSG_SELL_ITEM", "CMSG_AUTOEQUIP_ITEM", "CMSG_SWAP_ITEM",
           "CMSG_ACTIVATETAXI", "MSG_MOVE_HEARTBEAT", "MSG_MOVE_START_FORWARD", "CMSG_PING", "CMSG_TIME_SYNC_RESP",
           "CMSG_WARDEN_DATA", "CMSG_STANDSTATECHANGE", "CMSG_MOUNTSPECIAL_ANIM", "CMSG_PLAYER_LOGIN",
-          "CMSG_LOGOUT_REQUEST", "CMSG_UPDATE_ACCOUNT_DATA", "CMSG_CAST_SPELL_UNKNOWN"}) {
+          "CMSG_LOGOUT_REQUEST", "CMSG_CAST_SPELL_UNKNOWN"}) {
         INFO(opcode);
         if (std::string(opcode) == "CMSG_PETITION_DECLINE") continue;  // MSG_PETITION_DECLINE is the packet's name
         CHECK(sends(opcode, Bytes{}));
     }
+}
+
+TEST_CASE("settings are kept on the realm only where that is allowed", "[mcp][guard]") {
+    const auto kind = [](uint32_t type) {
+        Bytes b;
+        b.u32(type).u32(1000).u32(0);
+        return b;
+    };
+    const uint32_t settings = static_cast<uint32_t>(Social::Settings);
+    // CVars, key bindings and chat windows; the macros are none.
+    for (const uint32_t type : {0u, 1u, 2u, 3u, 7u}) {
+        INFO(type);
+        CHECK_FALSE(sends("CMSG_UPDATE_ACCOUNT_DATA", kind(type)));
+        CHECK_FALSE(sends("CMSG_UPDATE_ACCOUNT_DATA", kind(type), context(kSocialAll)));
+        CHECK(sends("CMSG_UPDATE_ACCOUNT_DATA", kind(type), context(settings)));
+    }
+    for (const uint32_t type : {4u, 5u}) CHECK(sends("CMSG_UPDATE_ACCOUNT_DATA", kind(type)));
+    CHECK_FALSE(sends("CMSG_UPDATE_ACCOUNT_DATA", Bytes{}, context(settings)));
+    CHECK(sends("CMSG_REQUEST_ACCOUNT_DATA", kind(0)));
+    CHECK_FALSE(sends("CMSG_SET_ACTIONBAR_TOGGLES", Bytes{}, context(kSocialAll)));
+    CHECK(sends("CMSG_SET_ACTIONBAR_TOGGLES", Bytes{}, context(settings)));
 }
 
 TEST_CASE("what cannot be had back is not done, whatever is allowed", "[mcp][guard]") {
@@ -502,10 +524,62 @@ TEST_CASE("what is allowed is read exactly, or nothing is", "[mcp][options]") {
           (static_cast<uint32_t>(Social::Chat) | static_cast<uint32_t>(Social::Mail)));
     CHECK(parsed({"--mcp", "--mcp-allow", "duel"}).allow == static_cast<uint32_t>(Social::Duel));
     CHECK(parsed({"--mcp", "--mcp-allow=all"}).allow == kSocialAll);
+    // Settings are asked for by name.
+    const uint32_t settings = static_cast<uint32_t>(Social::Settings);
+    CHECK((kSocialAll & settings) == 0);
+    CHECK(parsed({"--mcp", "--mcp-allow=settings"}).allow == settings);
+    CHECK(parsed({"--mcp", "--mcp-allow=all,settings"}).allow == (kSocialAll | settings));
     for (auto bad : {std::vector<const char*>{"--mcp", "--mcp-allow=everything"}, {"--mcp", "--mcp-allow=chat,"},
                      {"--mcp", "--mcp-allow"}, {"--mcp", "--mcp-allow", "--mcp-lua"}, {"--mcp", "--mcp-allow=Chat"}}) {
         const Options o = parsed(bad);
         CHECK_FALSE(o.enabled);
         CHECK_FALSE(o.problems.empty());
     }
+}
+
+TEST_CASE("the settings changed by the server's doing are told of", "[mcp][settings]") {
+    SettingsLedger ledger;
+    ledger.changed("lockactionbars", "1", "0", "10:00:00");
+    ledger.changed("showgametips", "1", "0", "10:00:01");
+    // Once each: what it was first, and is now; not at all where that is the same again.
+    ledger.changed("lockactionbars", "0", "2", "10:00:02");
+    REQUIRE(ledger.changes().size() == 2);
+    CHECK(ledger.changes()[0].name == "lockactionbars");
+    CHECK(ledger.changes()[0].before == "1");
+    CHECK(ledger.changes()[0].after == "2");
+    CHECK(ledger.changes()[0].when == "10:00:02");
+    ledger.changed("lockactionbars", "2", "1", "10:00:03");
+    ledger.changed("other", "x", "x", "10:00:04");
+    REQUIRE(ledger.changes().size() == 1);
+    CHECK(ledger.changes()[0].name == "showgametips");
+}
+
+TEST_CASE("what the server's doing changed of the settings does not go up with a person's after", "[mcp][settings]") {
+    SettingsLedger ledger;
+    CHECK(ledger.mayGoUp(0, false, false));
+    CHECK_FALSE(ledger.mayGoUp(0, true, false));
+    CHECK(ledger.held(0));
+    CHECK_FALSE(ledger.mayGoUp(0, false, false));
+    // Of other kinds, or the macros: it does.
+    CHECK(ledger.mayGoUp(2, false, false));
+    CHECK(ledger.mayGoUp(4, true, false));
+    CHECK(ledger.firstToldOf(0));
+    CHECK_FALSE(ledger.firstToldOf(0));
+    // With --mcp-allow=settings all of it.
+    SettingsLedger open;
+    CHECK(open.mayGoUp(0, true, true));
+    CHECK_FALSE(open.held(0));
+}
+
+TEST_CASE("key bindings that differ are told by key", "[mcp][settings]") {
+    const auto changes = bindingChanges("bind W MOVEFORWARD\nbind X NONE\nbind F1 TARGETSELF\n",
+                                        "bind W MOVEFORWARD\nbind X SITORSTAND\nbind F2 TARGETPARTYMEMBER1\n");
+    REQUIRE(changes.size() == 3);
+    CHECK(changes[0].key == "F2");
+    CHECK(changes[0].before.empty());
+    CHECK(changes[1].key == "X");
+    CHECK(changes[1].before == "NONE");
+    CHECK(changes[1].after == "SITORSTAND");
+    CHECK(changes[2].key == "F1");
+    CHECK(changes[2].after.empty());
 }

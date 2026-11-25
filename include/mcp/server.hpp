@@ -58,6 +58,9 @@ private:
     bool sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload);
     void heard(const std::string& event, const std::vector<std::string>& args);
     static bool gateSend(uint16_t wireOpcode, std::span<const uint8_t> payload);
+    static bool gateSetting(const std::string& name, const std::string& before, const std::string& after,
+                            int accountData);
+    static bool gateAccountData(uint32_t type, const std::string& before, const std::string& after);
     static bool gateLua();
     static bool gateQuit();
     static void gateEvent(const std::string& event, const std::vector<std::string>& args);
