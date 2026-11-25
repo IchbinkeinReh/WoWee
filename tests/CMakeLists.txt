@@ -4633,6 +4633,11 @@ wowee_add_test(test_transport_physics
 wowee_add_test(test_object_effect
     SOURCES test_object_effect.cpp)
 
+# ── test_keys_held_into_typing ───────────────────────
+# A key held as a line is begun (0x004943c0, 0x00494490).
+wowee_add_test(test_keys_held_into_typing
+    SOURCES test_keys_held_into_typing.cpp)
+
 # ── test_model_frame_pose ────────────────────────────
 # A UI model frame's pose (0x0095fba0) and the DDC screen (0x0047bf90).
 wowee_add_test(test_model_frame_pose

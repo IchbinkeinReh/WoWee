@@ -776,7 +776,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             keys.left = f.nowStrafeLeft;
             keys.right = f.nowStrafeRight;
             keys.rising = f.spaceHeld && !f.noAscendDescend;
-            keys.sinking = !keys.rising && !f.uiWantsKeyboard && f.xDown && !f.noAscendDescend;
+            keys.sinking = !keys.rising && f.xDown && !f.noAscendDescend;
             const float applySpeed = collision::swimFlySpeed(keys, flySpeed, flyBackSpeed);
             targetPos += collision::swimFlyVelocity(keys, glm::vec2(f.forward), glm::vec2(f.right),
                                                     glm::radians(flightPitchDeg_), applySpeed) *
@@ -2171,14 +2171,32 @@ void CameraController::update(float deltaTime) {
     // The arrows are the game's while a line is typed into the chat too, with
     // Alt they are its box's (0x00967760).
     const bool arrowsFree = !ImGui::GetIO().WantTextInput && !cinematicKeysHeld_ && ui::editBoxLeavesArrows();
-    const auto arrow = [&](SDL_Scancode key) { return (!uiWantsKeyboard || arrowsFree) && input.isKeyPressed(key); };
-    bool keyW = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_W) || held(kControlForward))) || arrow(SDL_SCANCODE_UP));
-    bool keyS = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_S) || held(kControlBackward))) || arrow(SDL_SCANCODE_DOWN));
+    enum { kW, kS, kA, kD, kQ, kE, kUp, kDown, kLeft, kRight, kSpace, kX };
+    static_assert(kX + 1 == KeysHeldIntoTyping::kKeys);
+    const auto down = [&](size_t key, bool pressed) {
+        return heldIntoTyping_.down(key, pressed && !cinematicKeysHeld_, uiWantsKeyboard);
+    };
+    const auto arrow = [&](size_t key, bool pressed) { return down(key, pressed) || (arrowsFree && pressed); };
+    const bool wDown = down(kW, input.isKeyPressed(SDL_SCANCODE_W) || held(kControlForward));
+    const bool sDown = down(kS, input.isKeyPressed(SDL_SCANCODE_S) || held(kControlBackward));
     // TurnLeftStart()/TurnRightStart() hold a turn the way the key does.
-    bool keyA = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_A) || bindingTurnLeft_)) || arrow(SDL_SCANCODE_LEFT));
-    bool keyD = !sitting && !movementSuppressed && ((!uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_D) || bindingTurnRight_)) || arrow(SDL_SCANCODE_RIGHT));
-    bool keyQ = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_Q) || held(kControlStrafeLeft));
-    bool keyE = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_E) || held(kControlStrafeRight));
+    const bool aDown = down(kA, input.isKeyPressed(SDL_SCANCODE_A) || bindingTurnLeft_);
+    const bool dDown = down(kD, input.isKeyPressed(SDL_SCANCODE_D) || bindingTurnRight_);
+    const bool qDown = down(kQ, input.isKeyPressed(SDL_SCANCODE_Q) || held(kControlStrafeLeft));
+    const bool eDown = down(kE, input.isKeyPressed(SDL_SCANCODE_E) || held(kControlStrafeRight));
+    const bool upDown = arrow(kUp, input.isKeyPressed(SDL_SCANCODE_UP));
+    const bool downDown = arrow(kDown, input.isKeyPressed(SDL_SCANCODE_DOWN));
+    const bool leftDown = arrow(kLeft, input.isKeyPressed(SDL_SCANCODE_LEFT));
+    const bool rightDown = arrow(kRight, input.isKeyPressed(SDL_SCANCODE_RIGHT));
+    const bool ascendDown = down(kSpace, input.isKeyPressed(SDL_SCANCODE_SPACE) || held(kControlAscend));
+    const bool descendDown = down(kX, input.isKeyPressed(SDL_SCANCODE_X) || held(kControlDescend));
+    const bool mayMove = !sitting && !movementSuppressed;
+    bool keyW = mayMove && (wDown || upDown);
+    bool keyS = mayMove && (sDown || downDown);
+    bool keyA = mayMove && (aDown || leftDown);
+    bool keyD = mayMove && (dDown || rightDown);
+    bool keyQ = mayMove && qDown;
+    bool keyE = mayMove && eDown;
     bool shiftDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LSHIFT) || input.isKeyPressed(SDL_SCANCODE_RSHIFT));
     // Exploration mode's slow modifier only. In the game the client walks by
     // the WALKING movement flag ToggleRun sets (0x00987570), not by a key held.
@@ -2192,8 +2210,7 @@ void CameraController::update(float deltaTime) {
     // space is a one-shot jump, but in water and in the air it is continuous
     // ascent, and an edge gave a single impulse that then bled away - or, in
     // flight, a single frame of climb per press.
-    bool spaceHeld = !uiWantsKeyboard && !sitting && !movementSuppressed &&
-                     (input.isKeyPressed(SDL_SCANCODE_SPACE) || held(kControlAscend));
+    bool spaceHeld = mayMove && ascendDown;
 
     // Idle camera: any input resets the timer; timeout triggers a slow orbit pan
     bool anyInput = leftMouseDown || rightMouseDown || keyW || keyS || keyA || keyD || keyQ || keyE || nowJump;
@@ -2253,7 +2270,9 @@ void CameraController::update(float deltaTime) {
         autoRunning = false;
     }
 
-    bool mouseAutorun = !uiWantsKeyboard && !sitting && leftMouseDown && rightMouseDown;
+    // The buttons are no keys: a line being typed keeps none of them.
+    bool mouseAutorun =
+        !ImGui::GetIO().WantTextInput && !cinematicKeysHeld_ && !sitting && leftMouseDown && rightMouseDown;
     if (mouseAutorun) {
         autoRunning = false;
     }
@@ -2584,7 +2603,7 @@ void CameraController::update(float deltaTime) {
     // falling (0x006dcb40, flags 0x2e0100f); mounted, as before.
     bool prevSitting = sitting;
     const bool xKey = !uiWantsKeyboard && input.isKeyPressed(SDL_SCANCODE_X);
-    bool xDown = xKey || (!uiWantsKeyboard && held(kControlDescend));
+    const bool xDown = descendDown;
     const bool sitStandPress = (xKey && !xKeyWasDown) || std::exchange(bindingSitStand_, false);
     const bool idleSit = std::exchange(sitDownAsked_, false) && !sitting;
     if ((sitStandPress || idleSit) && !isFlightAirborne()) {
@@ -2604,16 +2623,8 @@ void CameraController::update(float deltaTime) {
     // there was no way to move with the mouse at all: the input that would
     // have stood the character up was the one input that could not.
     if (sitting && !movementSuppressed) {
-        const bool anyMoveKey = !uiWantsKeyboard && (
-            input.isKeyPressed(SDL_SCANCODE_W) || input.isKeyPressed(SDL_SCANCODE_S) ||
-            input.isKeyPressed(SDL_SCANCODE_A) || input.isKeyPressed(SDL_SCANCODE_D) ||
-            input.isKeyPressed(SDL_SCANCODE_Q) || input.isKeyPressed(SDL_SCANCODE_E) ||
-            input.isKeyPressed(SDL_SCANCODE_SPACE) ||
-            held(kControlForward | kControlBackward | kControlStrafeLeft |
-                 kControlStrafeRight | kControlAscend) ||
-            bindingTurnLeft_ || bindingTurnRight_);
-        const bool anyArrow = arrow(SDL_SCANCODE_UP) || arrow(SDL_SCANCODE_DOWN) || arrow(SDL_SCANCODE_LEFT) ||
-                              arrow(SDL_SCANCODE_RIGHT);
+        const bool anyMoveKey = wDown || sDown || aDown || dDown || qDown || eDown || ascendDown;
+        const bool anyArrow = upDown || downDown || leftDown || rightDown;
         // Not gated on uiWantsKeyboard, which is a different question, and not
         // on the interface wanting the mouse either: both flags are already
         // cleared at the press when it did.
@@ -2674,7 +2685,6 @@ void CameraController::update(float deltaTime) {
     f.spaceHeld = spaceHeld;
     f.xDown = xDown;
     f.noAscendDescend = moverNoStrafe_;
-    f.uiWantsKeyboard = uiWantsKeyboard;
 
     // Two cameras: one orbits a character and moves it, one flies itself.
     if (thirdPerson && followTarget) {

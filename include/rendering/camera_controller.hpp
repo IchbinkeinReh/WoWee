@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/keys_held_into_typing.hpp"
 #include "rendering/camera_pivot.hpp"
 
 #include "rendering/camera_shake.hpp"
@@ -720,7 +721,6 @@ private:
         bool spaceHeld = false;       ///< held, not pressed: rising in water and in flight
         bool xDown = false;
         bool noAscendDescend = false;  ///< flags2 0x1: no rising or sinking (0x009898e0)
-        bool uiWantsKeyboard = false;
     };
 
     /// The camera that orbits a character and moves it: collision, grounding,
@@ -1285,6 +1285,7 @@ private:
 
     bool rotationSuppressed_ = false;
     bool cinematicKeysHeld_ = false;
+    KeysHeldIntoTyping heldIntoTyping_;
     bool steering_ = false;
     bool moveForwardActive = false;
     bool moveBackwardActive = false;
