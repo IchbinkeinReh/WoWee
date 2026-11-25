@@ -997,6 +997,19 @@ TEST_CASE("an object has the methods of its type", "[replay][interface]") {
            "k = 0 hooksecurefunc(index(b), 'SetText', function() k = k + 1 end) b:SetText('x') c:SetText('y') e:SetText('z') "
            "tip:SetText('w')");
     CHECK(ui.is("n == 1 and who == cd2 and k == 1"));
+    // What an element's attributes are not its own, its type does not read; a bar's layer is.
+    wowee::ui::XmlNode root;
+    std::string error;
+    REQUIRE(wowee::ui::parseXml("<Ui><Frame name=\"PlayOdd\" letters=\"5\" checked=\"true\" minValue=\"1\" "
+                                "maxValue=\"2\" valueStep=\"1\" text=\"x\" maxLines=\"3\" "
+                                "motionScriptsWhileDisabled=\"true\" drawEdge=\"true\"/>"
+                                "<StatusBar name=\"PlayLayer\" drawLayer=\"BORDER\" minValue=\"1\" maxValue=\"7\"/></Ui>",
+                                root, error));
+    CHECK(ui.engine.buildElements(wowee::ui::emitFrameXml(root), "t.xml", [](const auto&) {}));
+    CHECK(ui.is("rawget(_G, 'PlayOdd') and select(2, PlayLayer:GetMinMaxValues()) == 7 and PlayLayer.SetDrawLayer == nil"));
+    const auto* bar = ui.engine.widgets().findByName("PlayLayer");
+    REQUIRE(bar);
+    CHECK(bar->barLayer == wowee::ui::DrawLayer::Border);
     // Put in by an addon.
     ui.run("index(f).PlayOwn = function(self) return self end");
     CHECK(ui.is("f2:PlayOwn() == f2 and b.PlayOwn == nil"));

@@ -1,5 +1,6 @@
 #include "ui/font_flags.hpp"
 #include "ui/framexml_emitter.hpp"
+#include "addons/widget_types.hpp"
 #include <cctype>
 
 #include "ui/xml_parser.hpp"
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <set>
 #include <sstream>
+#include <string_view>
 
 namespace wowee {
 namespace ui {
@@ -224,7 +226,40 @@ struct Emitter {
         return quote(substituteParent(rawName, parentName));
     }
 
-    void line(const std::string& s) { result.lua += s; result.lua += "\n"; }
+    /// A call of what only some types have is made where it is there: an attribute that is not the
+    /// element's is not read (each type reads its own).
+    void line(const std::string& s) {
+        const std::string called = methodOfSome(s);
+        if (called.empty()) result.lua += s;
+        else result.lua += "if " + called + " then " + s + " end";
+        result.lua += "\n";
+    }
+    /// "var.Method" of a line that is "var:Method(...)" and no more, of a method not every frame,
+    /// texture or string has.
+    static std::string methodOfSome(const std::string& s) {
+        static const std::set<std::string, std::less<>> kSome = [] {
+            std::set<std::string, std::less<>> out;
+            for (const auto& type : addons::kWidgetTypes) {
+                const std::string_view name = type.name;
+                if (name == "Object" || name == "Region" || name == "Frame" || name == "Texture" || name == "FontString")
+                    continue;
+                std::istringstream words(type.methods);
+                for (std::string word; words >> word;) out.insert(std::move(word));
+            }
+            return out;
+        }();
+        const auto word = [&](size_t from, std::string_view more) {
+            size_t at = from;
+            while (at < s.size() && (std::isalnum(static_cast<unsigned char>(s[at])) || more.find(s[at]) != more.npos)) ++at;
+            return at;
+        };
+        const size_t colon = word(0, "_[]");   // a name, or __w[3]
+        if (colon == 0 || colon >= s.size() || s[colon] != ':' || s.back() != ')') return {};
+        const size_t open = word(colon + 1, "");
+        if (open >= s.size() || s[open] != '(') return {};
+        const std::string method = s.substr(colon + 1, open - colon - 1);
+        return kSome.count(method) ? s.substr(0, colon) + "." + method : std::string();
+    }
     /// What another has written, here.
     void take(EmitResult& inner) {
         const std::size_t at = result.lua.size();
@@ -1569,11 +1604,10 @@ struct Emitter {
         // by. StatusBar is the only element that declares it here, and
         // CastingBarFrameTemplate is one of them - so the cast bar's fill was
         // coming out in the default layer rather than the BORDER it asked for.
-        // SetDrawLayer is a region method, so this is emitted for whatever
-        // declares the attribute rather than for status bars alone.
+        // A bar has no method of the kind; what is called is its own.
         if (const std::string* layer = node.attr("drawLayer");
             layer && !layer->empty()) {
-            line(var + ":SetDrawLayer(" + quote(*layer) + ")");
+            line("__WoweeSetDrawLayer(" + var + ", " + quote(*layer) + ")");
         }
         if (node.attr("multiLine")) {
             line(var + ":SetMultiLine(" + (node.attrBool("multiLine") ? "true" : "false") + ")");

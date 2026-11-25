@@ -12574,12 +12574,6 @@ void LuaEngine::registerCoreAPI() {
         // versions kept the numbers where only Lua could see them, which is
         // why a frame could be sized and positioned and still never appear.
         {"SetPoint",        lua_Region_SetPoint},
-        // A frame method too, and not only a region one: <StatusBar
-        // drawLayer="BORDER"> is emitted as a call on the bar, and a bar is a
-        // frame. Absent here it fell to the no-op fallback, so all twenty of
-        // the bars that declare a layer were silently ignored - the trace
-        // under WOWEE_WIDGET_TRACE=1 is what named them.
-        {"SetDrawLayer",    lua_Region_SetDrawLayer},
         {"ClearAllPoints",  lua_Region_ClearAllPoints},
         {"SetAllPoints",    lua_Region_SetAllPoints},
         {"SetSize",         lua_Region_SetSize},
@@ -14462,6 +14456,9 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
     lua_pushcfunction(L_, lua_Tooltip_FadeOut);
     lua_setglobal(L_, "__WoweeTooltipFadeOut");
+    // <StatusBar drawLayer="BORDER">: the layer of its fill (the emitter's).
+    lua_pushcfunction(L_, lua_Region_SetDrawLayer);
+    lua_setglobal(L_, "__WoweeSetDrawLayer");
     lua_pushcfunction(L_, lua_Tooltip_Roll);
     lua_setglobal(L_, "__WoweeTooltipRoll");
     lua_pushcfunction(L_, lua_Tooltip_AddFontStrings);
