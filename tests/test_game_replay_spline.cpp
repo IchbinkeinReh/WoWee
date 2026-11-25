@@ -9,7 +9,6 @@
 #include "game_replay.hpp"
 
 #include <cmath>
-#include <thread>
 #include <vector>
 
 using replay::Session;
@@ -304,7 +303,7 @@ TEST_CASE("a block's spline goes by the clock from before its packet came", "[re
     Session s;
     s.setConnected(true);
     auto& gh = s.handler();
-    gh.setUnitClock(std::chrono::steady_clock::now() - 5s);
+    gh.setUnitClock(wowee::core::steadyNow() - 5s);
     gh.update(0.016f);
     std::vector<glm::vec3> way;
     for (int i = 0; i <= 100; ++i) way.push_back(kAt + glm::vec3(10.0f * static_cast<float>(i), 0, 0));
@@ -312,7 +311,7 @@ TEST_CASE("a block's spline goes by the clock from before its packet came", "[re
     sp.passed = 10000;
     sp.duration = 100000;
     s.receive(UpdateObject().onSpline(kWalker, kFields, sp));
-    const auto started = std::chrono::steady_clock::now();
+    const auto started = wowee::core::steadyNow();
     const auto e = gh.getEntityManager().getEntity(kWalker);
     REQUIRE(e);
     gh.setUnitClock(started);
@@ -323,7 +322,7 @@ TEST_CASE("a block's spline goes by the clock from before its packet came", "[re
     CHECK(closeTo(placeOf(*e), kAt + glm::vec3(120, 0, 0), 2.0f));
     // Its packet read four seconds before it is handled.
     auto packet = UpdateObject().onSpline(kWalker + 1, kFields, sp).packet();
-    packet.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - 4000);
+    packet.setReceivedMs(std::chrono::duration_cast<std::chrono::milliseconds>(wowee::core::steadyNow().time_since_epoch()).count() - 4000);
     s.receive(packet);
     const auto late = gh.getEntityManager().getEntity(kWalker + 1);
     REQUIRE(late);
@@ -363,7 +362,7 @@ TEST_CASE("the player made on a spline is carried by it to its end", "[replay][b
     CHECK(closeTo(placeOf(*self), kAt + glm::vec3(1.5f, 0, 0), 0.3f));
     s.handler().sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
     CHECK(s.sent().of(Opcode::MSG_MOVE_HEARTBEAT).empty());
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    wowee::core::advanceTestClock(0.150);
     self->updateMovement(0.15f);
     mh->updateMoverSplineDone();
     REQUIRE(s.sent().of(Opcode::CMSG_MOVE_SPLINE_DONE).size() == 1);

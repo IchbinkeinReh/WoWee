@@ -41,6 +41,7 @@
 #include "network/world_socket.hpp"
 #include "network/packet.hpp"
 #include "auth/crypto.hpp"
+#include "core/app_clock.hpp"
 #include "core/coordinates.hpp"
 #include "core/application.hpp"
 #include "core/config_paths.hpp"
@@ -652,7 +653,7 @@ float GameHandler::takeUnitClock(float deltaTime) {
 
 float GameHandler::sinceUnitsAdvanced() const {
     if (!unitsAdvancedTo_) return 0.0f;
-    return std::max(std::chrono::duration<float>(std::chrono::steady_clock::now() - *unitsAdvancedTo_).count(), 0.0f);
+    return std::max(std::chrono::duration<float>(core::steadyNow() - *unitsAdvancedTo_).count(), 0.0f);
 }
 
 void GameHandler::updateEntityInterpolation(float deltaTime) {

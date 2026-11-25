@@ -9,7 +9,13 @@
 // apart they first ran, which for a cooldown means a sweep that is wrong by
 // seconds and never settles.
 
+#include <chrono>
+
 namespace wowee::core {
+
+/// The steady clock as the moves, the splines and the time packets waited are measured by it: the
+/// real one, but for a test's (below).
+std::chrono::steady_clock::time_point steadyNow();
 
 /// Seconds since the first call, monotonic. Not wall-clock time: it never goes
 /// backwards, which is what anything measuring a duration needs.
@@ -22,5 +28,8 @@ double appTimeSeconds();
 /// faster than real time. The live client never calls this, so its clock is
 /// exactly the steady_clock as before.
 void advanceTestClock(double seconds);
+
+/// Tests only: the clock stands still, but for what advanceTestClock adds, until it is let go.
+void holdTestClock(bool held);
 
 } // namespace wowee::core

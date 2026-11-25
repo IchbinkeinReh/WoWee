@@ -528,7 +528,7 @@ void MovementHandler::handleClientControlUpdate(network::Packet& packet) {
 // ============================================================
 
 uint32_t MovementHandler::nextMovementTimestampMs() {
-    auto now = std::chrono::steady_clock::now();
+    auto now = core::steadyNow();
     uint64_t elapsed = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(now - movementClockStart_).count()) + 1ULL;
     if (elapsed > std::numeric_limits<uint32_t>::max()) {
@@ -551,7 +551,7 @@ uint32_t MovementHandler::nextMovementTimestampMs() {
 
 uint32_t MovementHandler::movementClockMs() const {
     const uint64_t elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                       std::chrono::steady_clock::now() - movementClockStart_)
+                                                       core::steadyNow() - movementClockStart_)
                                                        .count()) +
                              1ULL;
     return std::max(static_cast<uint32_t>(std::min<uint64_t>(elapsed, std::numeric_limits<uint32_t>::max())),

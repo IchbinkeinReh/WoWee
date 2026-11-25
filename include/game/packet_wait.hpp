@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/app_clock.hpp"
 #include "network/packet.hpp"
 
 #include <chrono>
@@ -19,7 +20,7 @@ namespace wowee::game {
 [[nodiscard]] inline uint32_t packetWaitedMs(const network::Packet& packet) {
     if (packet.receivedMs() <= 0) return 0;
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+        core::steadyNow().time_since_epoch()).count();
     const int64_t waited = static_cast<int64_t>(now) - packet.receivedMs();
     return waited > 0 && waited <= 600000 ? static_cast<uint32_t>(waited) : 0u;
 }

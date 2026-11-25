@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -82,11 +81,15 @@ wowee::network::Packet newWorld(uint32_t map, const glm::vec3& at) {
     return p;
 }
 
+int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(wowee::core::steadyNow().time_since_epoch()).count();
+}
+
 // The frames that pass: the units moved on, the spline asked after.
 void frames(Session& s, int milliseconds) {
     auto* mh = s.handler().getMovementHandler();
     for (int at = 0; at < milliseconds; at += 10) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        wowee::core::advanceTestClock(0.010);
         if (auto self = s.handler().getEntityManager().getEntity(Session::kPlayerGuid)) self->updateMovement(0.01f);
         mh->updateMoverSplineDone();
         mh->updateClientTaxi(0.01f);
@@ -456,12 +459,12 @@ TEST_CASE("a spline that comes after a load begins at its beginning", "[replay][
     const auto self = gh.getEntityManager().getEntity(Session::kPlayerGuid);
     REQUIRE(self);
     // The last update before the load, five seconds ago.
-    gh.setUnitClock(std::chrono::steady_clock::now() - 5s);
+    gh.setUnitClock(wowee::core::steadyNow() - 5s);
     gh.update(0.016f);
     std::vector<glm::vec3> way;
     for (int i = 1; i <= 100; ++i) way.push_back(kBorder530 + glm::vec3(10.0f * static_cast<float>(i), 0.0f, 0.0f));
     s.receive(flight(81, kBorder530, way, 40000));
-    const auto started = std::chrono::steady_clock::now();
+    const auto started = wowee::core::steadyNow();
     // The frame after it, as long as the load.
     gh.setUnitClock(started);
     gh.update(0.016f);
@@ -483,7 +486,7 @@ TEST_CASE("a spline that comes after a load begins at its beginning", "[replay][
     drake->setPosition(c.x, c.y, c.z, 0.0f);
     s.receive(flight(82, kBorder530, {kBorder530 + glm::vec3(100.0f, 0.0f, 0.0f)}, 10000, 0x0, kDrake));
     // The units stand as they were three seconds before (the clock is put back).
-    gh.setUnitClock(std::chrono::steady_clock::now() + 2s);
+    gh.setUnitClock(wowee::core::steadyNow() + 2s);
     gh.update(0.016f);
     CHECK(glm::length(placeOf(*drake) - kBorder530) < 22.0f);
 }
@@ -499,17 +502,17 @@ TEST_CASE("a spline that waited behind a load is as far as the time it waited", 
     auto& gh = s.handler();
     const auto self = gh.getEntityManager().getEntity(Session::kPlayerGuid);
     REQUIRE(self);
-    const auto handled = std::chrono::steady_clock::now();
+    const auto handled = wowee::core::steadyNow();
     gh.setUnitClock(handled);
     gh.update(0.016f);
     std::vector<glm::vec3> way;
     for (int i = 1; i <= 100; ++i) way.push_back(kBorder530 + glm::vec3(10.0f * static_cast<float>(i), 0.0f, 0.0f));
     const auto readAgo = [](wowee::network::Packet p, int64_t ms) {
-        p.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - ms);
+        p.setReceivedMs(steadyMs() - ms);
         return p;
     };
     s.receive(readAgo(flight(83, kBorder530, way, 40000), 6000));  // 25 yd/s
-    gh.setUnitClock(std::chrono::steady_clock::now());
+    gh.setUnitClock(wowee::core::steadyNow());
     gh.update(0.016f);
     CHECK(glm::length(placeOf(*self) - kBorder530) == Catch::Approx(150.0f).margin(3.0f));
     gh.setUnitClock(handled + 2s);
@@ -561,13 +564,13 @@ TEST_CASE("a forced change is answered from where the spline has the player now"
         at.z = ack.readFloat();
         return at;
     };
-    const auto handled = std::chrono::steady_clock::now();
+    const auto handled = wowee::core::steadyNow();
     gh.setUnitClock(handled);
     gh.update(0.016f);
     std::vector<glm::vec3> way;
     for (int i = 1; i <= 100; ++i) way.push_back(kBorder530 + glm::vec3(10.0f * static_cast<float>(i), 0.0f, 0.0f));
     auto p = flight(91, kBorder530, way, 40000);  // 25 yd/s
-    p.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - 6000);
+    p.setReceivedMs(steadyMs() - 6000);
     s.receive(p);
     // Before the next frame has moved anybody on: six seconds along it.
     CHECK(glm::length(height(1) - kBorder530) == Catch::Approx(150.0f).margin(5.0f));
@@ -581,7 +584,7 @@ TEST_CASE("a forced change is answered from where the spline has the player now"
 
     // One that ran out behind the load: from its end.
     auto q = flight(92, kBorder530, way, 40000);
-    q.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - 60000);
+    q.setReceivedMs(steadyMs() - 60000);
     s.receive(q);
     CHECK(closeTo(height(3), way.back()));
 }
@@ -598,10 +601,11 @@ TEST_CASE("an aura's time counts from when its packet came", "[replay][taxi]") {
     p.writeUInt8(0);
     p.writeUInt32(60000);
     p.writeUInt32(30000);
-    p.setReceivedMs(wowee::game::TransportManager::nowSteadyMs() - 6000);
+    p.setReceivedMs(steadyMs() - 6000);
     s.receive(p);
     const auto& auras = s.handler().getPlayerAuras();
     REQUIRE_FALSE(auras.empty());
+    // Counted by the real clock, as the interface counts it.
     const auto left = auras[0].getRemainingMs(static_cast<uint64_t>(wowee::game::TransportManager::nowSteadyMs()));
     CHECK(left <= 24000);
     CHECK(left > 22000);

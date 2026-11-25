@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/app_clock.hpp"
 #include "game/area_trigger_watch.hpp"
 #include "game/world_packets.hpp"
 #include "game/entity.hpp"
@@ -336,7 +337,7 @@ public:
     uint32_t& monsterMovePacketsDroppedThisTickRef() { return monsterMovePacketsDroppedThisTick_; }
 
     // Movement clock / fall state setters (formerly accessed via friend)
-    void resetMovementClock() { movementClockStart_ = std::chrono::steady_clock::now(); lastMovementTimestampMs_ = 0; }
+    void resetMovementClock() { movementClockStart_ = core::steadyNow(); lastMovementTimestampMs_ = 0; }
     void forgetFall() {
         isFalling_ = false;
         fallStartMs_ = 0;
@@ -505,7 +506,7 @@ private:
     // --- Movement state ---
     // Reference to GameHandler's movementInfo to avoid desync
     MovementInfo& movementInfo;
-    std::chrono::steady_clock::time_point movementClockStart_ = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point movementClockStart_ = core::steadyNow();
     float timeSkipCarryMs_ = 0.0f;  ///< a frame's part of a millisecond, carried
     uint32_t lastMovementTimestampMs_ = 0;
     bool serverMovementAllowed_ = true;

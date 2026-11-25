@@ -20,6 +20,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "core/application.hpp"
+#include "core/app_clock.hpp"
 #include "game/expansion_profile.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_services.hpp"
@@ -265,6 +266,15 @@ public:
 
     // The expansion is chosen and its tables loaded the way the client does it
     // at startup, from the profiles under Data/expansions in this repository.
+    // What goes by the clock goes by it as the test moves it on (core::advanceTestClock), however
+    // slow the machine.
+    struct HeldClock {
+        HeldClock() { wowee::core::holdTestClock(true); }
+        ~HeldClock() { wowee::core::holdTestClock(false); }
+        HeldClock(const HeldClock&) = delete;
+        HeldClock& operator=(const HeldClock&) = delete;
+    };
+
     explicit Session(const char* expansion = "wotlk") : handler_(services_) {
         auto registry = std::make_unique<wowee::game::ExpansionRegistry>();
         registry->initialize(std::string(WOWEE_SOURCE_DIR) + "/Data");
@@ -297,6 +307,7 @@ public:
     }
 
 private:
+    HeldClock clock_;
     // Never initialized: it is here because the game code asks the
     // application's expansion registry which protocol it is speaking.
     wowee::core::Application app_;
