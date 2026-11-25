@@ -124,6 +124,7 @@ public:
     void setFrameHidden(bool hidden) { frameHidden_ = hidden; }
     /// How opaque that frame is: the map is as it is.
     void setFrameAlpha(float alpha) { frameAlpha_ = alpha; }
+    [[nodiscard]] float frameAlpha() const { return frameAlpha_; }
     [[nodiscard]] bool isShown() const { return enabled && !frameHidden_; }
     /// Where the map is actually being drawn, when something placed it.
     ///

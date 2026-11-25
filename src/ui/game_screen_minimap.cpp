@@ -1404,7 +1404,8 @@ void GameScreen::renderMinimapPlayerArrow(const MinimapFrame& frame, uint8_t alp
                                  corner(hw, hh), corner(-hw, hh),
                                  ImVec2(0.0f, 0.0f), ImVec2(1.0f, 0.0f),
                                  ImVec2(1.0f, 1.0f), ImVec2(0.0f, 1.0f),
-                                 IM_COL32(255, 255, 255, alpha));
+                                 // A region of the minimap's frame (+0x2a0), and as faint.
+                                 IM_COL32(255, 255, 255, static_cast<int>(alpha * std::clamp(minimap->frameAlpha(), 0.0f, 1.0f))));
 }
 
 // The wheel and the ctrl+click, when this client owns the ring.
