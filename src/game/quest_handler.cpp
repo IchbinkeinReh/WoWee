@@ -1696,6 +1696,8 @@ std::vector<std::pair<uint32_t, uint32_t>> QuestHandler::getQuestTimers() const 
             const uint16_t timeField = static_cast<uint16_t>(idField + qStride - 1);
             auto tIt = owner_.lastPlayerFieldsRef().find(timeField);
             if (tIt == owner_.lastPlayerFieldsRef().end() || tIt->second == 0) break;
+            // 0x005e4320, 0x005e6240: none of one that has failed.
+            if (q.failed) break;
             const auto expiry = static_cast<uint64_t>(tIt->second);
             // An expired timer is reported as zero rather than dropped, so the
             // row stays put until the server removes the quest.

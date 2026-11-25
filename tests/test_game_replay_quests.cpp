@@ -114,6 +114,13 @@ TEST_CASE("any word of a quest's slot is news to the interface", "[replay][quest
         CHECK(updates() == 1);
         CHECK(questOf(s, 9387)->failed);
     }
+    SECTION("a failed one has no timer") {
+        // 0x005e4320, 0x005e6240.
+        s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 4, 5), 4000000000u}}));
+        REQUIRE(s.handler().getQuestTimers().size() == 1);
+        s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 1, 5), 2}, {slotField(0, 4, 5), 1}}));
+        CHECK(s.handler().getQuestTimers().empty());
+    }
     SECTION("a counter or the timer") {
         s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 2, 5), 3}}));
         CHECK(updates() == 1);
