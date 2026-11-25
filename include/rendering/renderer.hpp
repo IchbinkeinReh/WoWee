@@ -70,6 +70,7 @@ class Celestial;
 class StarField;
 class Clouds;
 class LensFlare;
+class WaterMotesRenderer;
 class Weather;
 class Lightning;
 class LightingManager;
@@ -563,6 +564,7 @@ private:
     std::unique_ptr<Clouds> clouds;
     std::unique_ptr<LensFlare> lensFlare;
     std::unique_ptr<Weather> weather;
+    std::unique_ptr<WaterMotesRenderer> waterMotes_;
     std::unique_ptr<Lightning> lightning;
     std::unique_ptr<LightingManager> lightingManager;
     std::unique_ptr<SkySystem> skySystem;  // Coordinator for sky rendering

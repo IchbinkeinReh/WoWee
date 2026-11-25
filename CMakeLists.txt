@@ -1148,6 +1148,7 @@ set(WOWEE_SOURCES
     src/rendering/starfield.cpp
     src/rendering/clouds.cpp
     src/rendering/lens_flare.cpp
+    src/rendering/water_motes_renderer.cpp
     src/rendering/weather.cpp
     src/rendering/lightning.cpp
     src/rendering/lighting_manager.cpp

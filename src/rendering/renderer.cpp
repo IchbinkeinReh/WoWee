@@ -38,6 +38,7 @@
 #include "rendering/vk_texture.hpp"
 #include "rendering/clouds.hpp"
 #include "rendering/lens_flare.hpp"
+#include "rendering/water_motes_renderer.hpp"
 #include "rendering/weather.hpp"
 #include "rendering/wave_spectrum.hpp"
 #include "rendering/rain_ripple.hpp"
@@ -979,6 +980,9 @@ bool Renderer::initialize(core::Window* win) {
     clouds = nullptr;
     lensFlare = nullptr;
 
+    waterMotes_ = std::make_unique<WaterMotesRenderer>();
+    if (!waterMotes_->initialize(vkCtx, perFrameSetLayout))
+        LOG_WARNING("Water motes initialization failed (non-fatal)");
     weather = std::make_unique<Weather>();
     if (!weather->initialize(vkCtx, perFrameSetLayout))
         LOG_WARNING("Weather effect initialization failed (non-fatal)");
@@ -1288,6 +1292,7 @@ void Renderer::shutdown() {
     lensFlare = nullptr;
 
     if (weather) {
+        waterMotes_.reset();
         weather.reset();
     }
 
@@ -1535,6 +1540,7 @@ void Renderer::applyMsaaChange() {
     if (footprintRenderer) footprintRenderer->recreatePipelines();
     if (blobShadowRenderer) blobShadowRenderer->recreatePipelines();
     if (weather) weather->recreatePipelines();
+    if (waterMotes_) waterMotes_->recreatePipelines();
     if (lightning) lightning->recreatePipelines();
     if (swimEffects) {
         syncSwimEffectsTargetPass();
@@ -3425,6 +3431,7 @@ void Renderer::update(float deltaTime) {
     }
     { WOWEE_PROFILE_SCOPE("stars", Cpu); updateStarsModel(deltaTime); }
 
+    if (waterMotes_ && camera) waterMotes_->update(deltaTime, *camera, cameraLiquidType_);
     // Update weather particles
     if (weather && camera) {
         Weather::FrameInput in;
@@ -3993,6 +4000,7 @@ void Renderer::loadDeferredWorldTextures() {
     if (blobShadowRenderer && !blobShadowRenderer->initialize(vkCtx, perFrameSetLayout, cachedAssetManager))
         LOG_WARNING("Blob shadow renderer re-init failed (non-fatal)");
     if (weather) weather->loadAssets(cachedAssetManager);
+    if (waterMotes_) waterMotes_->loadAssets(cachedAssetManager);
 }
 
 void Renderer::setSelectionCircleTarget(uint64_t guid, const glm::vec4& color) {
@@ -5126,6 +5134,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 sceneMark(cmd, kMarkWater, "water");
             }
             if (weather && camera && !weatherIndoors_) weather->render(cmd, perFrameSet);
+            if (waterMotes_ && camera) waterMotes_->render(cmd, perFrameSet);
             if (lightning && camera && lightning->isEnabled()) lightning->render(cmd, perFrameSet);
             if (swimEffects && camera && !swimEffectsDrawWithWater_) {
                 swimEffects->render(cmd, perFrameSet);
@@ -5298,6 +5307,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             sceneMark(currentCmd, kMarkWater, "water");
         }
         if (weather && camera && !weatherIndoors_) weather->render(currentCmd, perFrameSet);
+        if (waterMotes_ && camera) waterMotes_->render(currentCmd, perFrameSet);
         if (lightning && camera && lightning->isEnabled()) lightning->render(currentCmd, perFrameSet);
         if (swimEffects && camera && !swimEffectsDrawWithWater_) {
             swimEffects->render(currentCmd, perFrameSet);
