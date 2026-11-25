@@ -160,3 +160,20 @@ TEST_CASE("ADT loader rejects a file of random bytes", "[adt][robustness]") {
     }
     REQUIRE_NOTHROW(ADTLoader::load(data));
 }
+
+// U9: a destructible building (MODF flag 1) is the realm's game object: the
+// map's own stood on, whole, where the object's was in ruins (0x007c6150).
+TEST_CASE("a destructible building is not the map's", "[adt]") {
+    std::vector<uint8_t> file;
+    std::vector<uint8_t> version;
+    appendU32(version, 18);
+    appendChunk(file, kMVER, version);
+    std::vector<uint8_t> placements(3 * 64, 0);
+    for (uint32_t i = 0; i < 3; ++i) writeU32At(placements, i * 64 + 4, 100 + i);
+    placements[64 + 56] = 1;
+    appendChunk(file, 0x4D4F4446, placements);   // MODF
+    const auto terrain = ADTLoader::load(file);
+    REQUIRE(terrain.wmoPlacements.size() == 2);
+    CHECK(terrain.wmoPlacements[0].uniqueId == 100);
+    CHECK(terrain.wmoPlacements[1].uniqueId == 102);
+}

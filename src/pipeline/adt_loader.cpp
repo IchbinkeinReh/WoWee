@@ -352,6 +352,10 @@ void ADTLoader::parseMODF(std::span<const uint8_t> data, ADTTerrain& terrain) {
     for (size_t i = 0; i < count; i++) {
         const auto entry = readDisk<ModfEntryDisk>(data, i * sizeof(ModfEntryDisk));
 
+        // A destructible building's (flag 1) is the realm's game object, which
+        // has its state, and not the map's (0x007c6150).
+        if ((entry.flags & 1u) != 0) continue;
+
         ADTTerrain::WMOPlacement placement;
         placement.nameId = entry.nameId;
         placement.uniqueId = entry.uniqueId;
