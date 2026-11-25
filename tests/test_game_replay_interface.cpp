@@ -667,3 +667,42 @@ TEST_CASE("a faction's description is told", "[replay][interface][reputation]") 
     CHECK(ui.is("told['Cenarion Expedition'] == 'An expedition.'"));
     CHECK(ui.is("told['The Aldor'] == ''"));
 }
+
+// P73: a faction put away goes to a group of its own at the end (0x005d1880), at once and told of.
+TEST_CASE("a faction put away is in the inactive group", "[replay][interface][reputation]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Reputation ui(s);
+    ui.run("updates = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_FACTION') "
+           "f:SetScript('OnEvent', function() updates = updates + 1 end) ");
+    const std::string before = "+The Burning Crusade;>+Shattrath City;>Cenarion Expedition;>The Aldor;Thrallmar;"
+                               "+Other;Hydraxian Waterlords;";
+    CHECK(ui.rowsAre(before));
+    ui.run("SetFactionInactive(3)");
+    CHECK(ui.is("updates == 1"));
+    CHECK(ui.rowsAre("+The Burning Crusade;>+Shattrath City;>The Aldor;Thrallmar;+Other;Hydraxian Waterlords;"
+                     "+Inactive;Cenarion Expedition;"));
+    CHECK(ui.is("IsFactionInactive(8) == 1 and not IsFactionInactive(3)"));
+    CHECK(ui.is("(function() local n, d, st, lo, hi, v, war, can, head, closed, rep, watched, child = GetFactionInfo(7) "
+                "return n == 'Inactive' and d == '' and st == 1 and lo == 0 and hi == 0 and v == 0 and war == nil "
+                "and can == nil and head == 1 and closed == nil and rep == nil and watched == nil and child == nil end)()"));
+    CHECK(s.sent().of(Opcode::CMSG_SET_FACTION_INACTIVE).size() == 1);
+    // Closed, it keeps its heading alone.
+    ui.run("CollapseFactionHeader(7)");
+    CHECK(ui.rowsAre("+The Burning Crusade;>+Shattrath City;>The Aldor;Thrallmar;+Other;Hydraxian Waterlords;"
+                     "-Inactive;"));
+    ui.run("ExpandFactionHeader(7)");
+    // A group is not put away, and a whole group's members take its heading along.
+    ui.run("updates = 0 SetFactionInactive(1) SetFactionInactive(2)");
+    CHECK(ui.is("updates == 0"));
+    ui.run("SetFactionInactive(3)");
+    CHECK(ui.rowsAre("+The Burning Crusade;Thrallmar;+Other;Hydraxian Waterlords;+Inactive;Cenarion Expedition;"
+                     "The Aldor;"));
+    ui.run("SetFactionActive(6) SetFactionActive(GetNumFactions())");
+    CHECK(ui.rowsAre(before));
+
+    // The rows are those of the flags as they are: one met since is among them.
+    s.handler().initialFactionsRef()[4].flags |= 0x1;
+    CHECK(ui.is("(function() for i = 1, GetNumFactions() do local n, _, _, _, _, _, _, _, _, _, rep = GetFactionInfo(i) "
+                "if n == 'Shattrath City' then return rep end end end)()"));
+}

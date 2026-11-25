@@ -4374,7 +4374,8 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto& rows = gh->getReputationRows();
             if (index <= static_cast<int>(rows.size())) {
                 const auto& row = rows[static_cast<size_t>(index) - 1];
-                if (row.hasRep) gh->setFactionInactive(row.reputationIndex, false);
+                // Not a group (0x005d1c10): it goes nowhere.
+                if (row.hasRep && !row.isHeader) gh->setFactionInactive(row.reputationIndex, false);
             }
             return 0;
         }},
@@ -4388,7 +4389,7 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto& rows = gh->getReputationRows();
             if (index <= static_cast<int>(rows.size())) {
                 const auto& row = rows[static_cast<size_t>(index) - 1];
-                if (row.hasRep) gh->setFactionInactive(row.reputationIndex, true);
+                if (row.hasRep && !row.isHeader) gh->setFactionInactive(row.reputationIndex, true);
             }
             return 0;
         }},

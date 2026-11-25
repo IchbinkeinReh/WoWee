@@ -1051,6 +1051,21 @@ inline int factionHeaderSetCollapsed(lua_State* L, bool collapsed) {
 /// The same thirteen for a drawn row, which knows its place in the tree.
 inline int pushFactionRow(lua_State* L, game::GameHandler* gh,
                           const game::GameHandler::ReputationRow& row) {
+    // The two groups of no faction (0x005d0da0): a name, an empty description,
+    // standing 1 of nothing, a heading that is open or closed.
+    if (row.factionId == game::reputation_tree::kInactive || row.factionId == game::reputation_tree::kOther) {
+        lua_pushstring(L, row.name.c_str());
+        lua_pushstring(L, "");
+        lua_pushnumber(L, 1);
+        for (int i = 0; i < 3; ++i) lua_pushnumber(L, 0);
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 1);
+        if (gh->isFactionCollapsed(row.factionId)) lua_pushnumber(L, 1);
+        else lua_pushnil(L);
+        for (int i = 0; i < 3; ++i) lua_pushnil(L);
+        return 13;
+    }
     game::GameHandler::ReputationEntry e;
     e.factionId = row.factionId;
     e.reputationIndex = row.reputationIndex;

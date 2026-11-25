@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/reputation_tree.hpp"
 #include "game/achievement_list.hpp"
 #include "game/macro_list.hpp"
 #include "game/pet_action.hpp"
@@ -3964,14 +3965,10 @@ public:
     /// that is not the faction id - and only Faction.dbc knows which faction
     /// each index belongs to. Resolved here rather than in a window, because
     /// the original interface asks the same question through GetFactionInfo.
-    struct ReputationEntry {
-        uint32_t factionId = 0;
-        uint32_t reputationIndex = 0;
-        std::string name;
-        uint8_t flags = 0;
-    };
-    /// Visible factions in the server's own order. Empty until the standings
-    /// arrive, and built once after they do.
+    using ReputationEntry = reputation_tree::Entry;
+    /// Visible factions in the server's own order, as their flags are now:
+    /// one the player meets joins them, one put away or at war says so. Empty
+    /// until the standings arrive.
     const std::vector<ReputationEntry>& getReputationList() const;
     /// The player's current standing with a faction, which moves after the
     /// list is built and so is not stored in it.
@@ -3985,17 +3982,7 @@ public:
     /// ParentFactionID, and a header is simply a faction that some visible
     /// faction descends from. A header may have a standing of its own (Alliance
     /// does), which is why hasRep is a separate answer from isHeader.
-    struct ReputationRow {
-        uint32_t factionId = 0;
-        /// The server's repListId, and 0 for a header the player has no
-        /// standing with - such a row is drawn but cannot be acted on.
-        uint32_t reputationIndex = 0;
-        std::string name;
-        uint8_t flags = 0;
-        bool isHeader = false;    ///< something below it descends from this
-        bool isChild = false;     ///< drawn indented, under a header
-        bool hasRep = false;      ///< the player has a standing to show
-    };
+    using ReputationRow = reputation_tree::Row;
     /// The rows currently on screen: headers, plus the children of every header
     /// that is not collapsed. This is what GetNumFactions counts and what
     /// GetFactionInfo indexes, so every binding taking a "faction index" must
@@ -7561,12 +7548,13 @@ private:
     mutable std::unordered_map<uint32_t, ExtendedCostEntry> extendedCostCache_;
     mutable bool extendedCostCacheLoaded_ = false;
     mutable std::vector<ReputationEntry> reputationList_;
-    mutable bool reputationListBuilt_ = false;
+    /// The flags reputationList_ was built from, one per repListId.
+    mutable std::vector<uint8_t> reputationListFlags_;
     /// factionId → the faction it is grouped under, from Faction.dbc field 18.
     /// Filled by loadFactionNameCache alongside the names and the repList map.
     mutable std::unordered_map<uint32_t, uint32_t> factionParent_;
-    /// The drawn rows, rebuilt whenever the collapse set changes rather than
-    /// on every ask - the reputation panel calls GetFactionInfo once per row
+    /// The drawn rows, rebuilt whenever the list or the collapse set changes
+    /// rather than on every ask - the reputation panel calls GetFactionInfo once per row
     /// per redraw.
     mutable std::vector<ReputationRow> reputationRows_;
     mutable bool reputationRowsDirty_ = true;
