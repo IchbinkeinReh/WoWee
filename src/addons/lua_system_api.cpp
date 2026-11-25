@@ -7261,8 +7261,8 @@ static constexpr const char* kShowArrowsLua =
     "local a, e = _G[an], _G[en]\n"
     "if not a or not e or not a.GetModel or not a:GetModel() then return end\n"
     "if show then a:Show() e:Show() else a:Hide() e:Hide() end\n";
-// The offsets are the screen's units, not the frames' own
-// (x / (1024 * ar * 0.75) of the DDC width, 0x005430a0 / 0x005432c0).
+// The offsets are the frames' own units, as SetPoint's are, and there with a
+// point of the other frame alone (0x005430a0 / 0x005432c0).
 static constexpr const char* kPositionArrowsLua =
     "local an, en, point, rel, relPoint, x, y = ...\n"
     "local a, e = _G[an], _G[en]\n"
@@ -7271,11 +7271,10 @@ static constexpr const char* kPositionArrowsLua =
     "  error('Usage: PositionWorldMapArrowFrame(\"point\" \"frame\" [, relativePoint] [, offsetX, offsetY])')\n"
     "end\n"
     "if not _G[rel] then error(\"Couldn't find frame named '\" .. rel .. \"'\") end\n"
-    "for _, f in ipairs({a, e}) do\n"
-    "  local s = f:GetEffectiveScale()\n"
-    "  if not s or s <= 0 then s = 1 end\n"
-    "  f:SetPoint(point, rel, relPoint or point, (tonumber(x) or 0) / s, (tonumber(y) or 0) / s)\n"
-    "end\n";
+    "local dx, dy = tonumber(x), tonumber(y)\n"
+    "if type(relPoint) ~= 'string' then relPoint, dx = point, nil end\n"
+    "if not dx or not dy then dx, dy = 0, 0 end\n"
+    "for _, f in ipairs({a, e}) do f:SetPoint(point, rel, relPoint, dx, dy) end\n";
 // 0x00545e60 -> 0x00544750; 0x00545f20 -> 0x005448a0.
 static int lua_CreateWorldMapArrowFrame(lua_State* L) {
     return runArrowChunk(L, kWorldArrows, true, "wowee.CreateArrows", kCreateArrowsLua);
