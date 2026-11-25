@@ -25,6 +25,7 @@
 #include "ui/framexml_takeover.hpp"
 #include "core/logger.hpp"
 #include "core/config_paths.hpp"
+#include "pipeline/item_visual.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "game/item_requirements.hpp"
@@ -883,7 +884,9 @@ static int lua_GetItemIcon(lua_State* L) {
 // opens an empty preview for anything that answers yes.
 /// 0x005980d0: a recipe is what it makes, and one not known yet waits for the
 /// server's answer (0x005980b0).
-static void tryOnItem(ui::Widget& w, game::GameHandler& gh, uint32_t itemId, int depth = 0) {
+/// `enchants` are the link's or the item's; what comes later, or is made by a recipe, has none.
+static void tryOnItem(ui::Widget& w, game::GameHandler& gh, uint32_t itemId, std::span<const uint32_t> enchants = {},
+                      int depth = 0) {
     namespace room = game::dressing_room;
     if (itemId == 0 || depth > 4) return;
     const auto* info = gh.getItemInfo(itemId);
@@ -895,12 +898,20 @@ static void tryOnItem(ui::Widget& w, game::GameHandler& gh, uint32_t itemId, int
     }
     if (info->displayInfoId == 0) return;
     if (const uint32_t made = gh.itemMadeByRecipe(*info)) {
-        tryOnItem(w, gh, made, depth + 1);
+        tryOnItem(w, gh, made, {}, depth + 1);
         return;
     }
     const uint8_t type = static_cast<uint8_t>(info->inventoryType);
     switch (room::tryOnKind(type)) {
-        case room::TryOn::Worn: w.tryOnItems.push_back({info->displayInfoId, type, itemId}); break;
+        case room::TryOn::Worn: {
+            auto* assets = gh.services().assetManager;
+            const bool any = std::any_of(enchants.begin(), enchants.end(), [](uint32_t id) { return id != 0; });
+            const uint32_t visual = any && assets && assets->isInitialized()
+                                        ? pipeline::itemVisualOf(*assets, info->displayInfoId, enchants)
+                                        : 0u;
+            w.tryOnItems.push_back({info->displayInfoId, type, itemId, visual});
+            break;
+        }
         case room::TryOn::NothingToShow: break;
         case room::TryOn::NotEquippable: gh.sayGameError(game::server_notice::kNotEquippable); break;
     }
@@ -936,6 +947,7 @@ static int lua_WoweeTryOn(lua_State* L) {
     // player carries (0x00754c30, the carried set 0x247). Anything else, or a
     // spell or name that finds nothing, is ERR_NOT_EQUIPPABLE.
     uint32_t itemId = 0;
+    std::array<uint32_t, 5> enchants{};
     bool found = false;
     if (lua_isnumber(L, 2)) {
         itemId = static_cast<uint32_t>(lua_tonumber(L, 2));
@@ -944,6 +956,8 @@ static int lua_WoweeTryOn(lua_State* L) {
         const std::string arg = lua_tostring(L, 2);
         if (const auto at = arg.find("item:"); at != std::string::npos) {
             itemId = static_cast<uint32_t>(std::strtoul(arg.c_str() + at + 5, nullptr, 10));
+            // Its enchant and its four gems' (0x0050f630).
+            enchants = game::itemLinkEnchants(arg);
             found = true;
         } else if (const auto en = arg.find("enchant:"); en != std::string::npos) {
             const long spellId = std::strtol(arg.c_str() + en + 8, nullptr, 10);
@@ -972,13 +986,14 @@ static int lua_WoweeTryOn(lua_State* L) {
                     found = true;
                 }
             });
+            if (found) std::tie(enchants[0], enchants[1]) = gh->carriedItemEnchants(itemId);   // 0x00708040
         }
     }
     if (!found) {
         gh->sayGameError(game::server_notice::kNotEquippable);
         return 0;
     }
-    tryOnItem(*w, *gh, itemId);
+    tryOnItem(*w, *gh, itemId, enchants);
     return 0;
 }
 

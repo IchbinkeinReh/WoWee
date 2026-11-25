@@ -410,7 +410,7 @@ TEST_CASE("detectEnchantmentNameField ignores an out-of-range layout override", 
 // Enchant → ItemVisuals → ItemVisualEffects is what puts the glint on a freshly
 // sharpened blade. The ItemVisual column moves with the record like the name does
 // (Vanilla 19, TBC 30, WotLK 31).
-TEST_CASE("resolveEnchantItemVisuals walks enchant to effect model paths", "[dbc][enchant]") {
+TEST_CASE("an enchant's visual is the models of its effects", "[dbc][enchant]") {
     using namespace wowee::pipeline;
 
     std::string strings;
@@ -440,7 +440,11 @@ TEST_CASE("resolveEnchantItemVisuals walks enchant to effect model paths", "[dbc
     DBCFile effects;
     REQUIRE(effects.load(effectData));
 
-    auto models = resolveEnchantItemVisuals(40, &sie, &visuals, &effects, nullptr);
+    const auto modelsOf = [&](uint32_t enchant, const DBCFile& of) {
+        return resolveItemVisualModels(itemVisualOf(0, std::vector<uint32_t>{enchant}, &of, &visuals, nullptr), &visuals,
+                                       &effects);
+    };
+    auto models = modelsOf(40, sie);
     REQUIRE(models[0] == "Spells\\Enchantments\\Sparkle_A.mdx");
     for (size_t i = 1; i < models.size(); ++i) REQUIRE(models[i].empty());
 
@@ -450,13 +454,13 @@ TEST_CASE("resolveEnchantItemVisuals walks enchant to effect model paths", "[dbc
     auto plainData = buildSyntheticDBC(1, 38, {plainRec}, std::string(1, '\0'));
     DBCFile plain;
     REQUIRE(plain.load(plainData));
-    auto none = resolveEnchantItemVisuals(2629, &plain, &visuals, &effects, nullptr);
+    auto none = modelsOf(2629, plain);
     for (const auto& m : none) REQUIRE(m.empty());
 }
 
 // Another player's weapon (0x00759050): the display's own visual where
 // ItemVisuals has it, else the permanent enchant's, else the temporary one's.
-TEST_CASE("playerWeaponItemVisual prefers the display, then the permanent enchant", "[dbc][enchant]") {
+TEST_CASE("an item's visual is its display's, then its enchants' in turn", "[dbc][enchant]") {
     using namespace wowee::pipeline;
     std::vector<uint32_t> crusader(38, 0), oil(38, 0), plain(38, 0);
     crusader[0] = 1900;
@@ -471,15 +475,35 @@ TEST_CASE("playerWeaponItemVisual prefers the display, then the permanent enchan
     DBCFile visuals;
     REQUIRE(visuals.load(visualData));
 
+    const auto visual = [&](uint32_t own, std::vector<uint32_t> enchants) {
+        return itemVisualOf(own, enchants, &sie, &visuals, nullptr);
+    };
     // A staff's own glow stays whatever is on it.
-    REQUIRE(playerWeaponItemVisual(164, 1900, 2629, &sie, &visuals, nullptr) == 164);
+    REQUIRE(visual(164, {1900, 2629}) == 164);
     // A display visual ItemVisuals does not have counts as none.
-    REQUIRE(playerWeaponItemVisual(999, 1900, 0, &sie, &visuals, nullptr) == 61);
+    REQUIRE(visual(999, {1900, 0}) == 61);
     // The permanent enchant before the temporary one, and past one with none.
-    REQUIRE(playerWeaponItemVisual(0, 1900, 2629, &sie, &visuals, nullptr) == 61);
-    REQUIRE(playerWeaponItemVisual(0, 3790, 2629, &sie, &visuals, nullptr) == 28);
-    REQUIRE(playerWeaponItemVisual(0, 0, 0, &sie, &visuals, nullptr) == 0);
-    REQUIRE(playerWeaponItemVisual(0, 3790, 0, &sie, &visuals, nullptr) == 0);
+    REQUIRE(visual(0, {1900, 2629}) == 61);
+    REQUIRE(visual(0, {3790, 2629}) == 28);
+    REQUIRE(visual(0, {0, 0}) == 0);
+    REQUIRE(visual(0, {3790, 0}) == 0);
+    // A link's gems after its enchant (0x00597fc0).
+    REQUIRE(visual(0, {0, 3790, 2629, 1900}) == 28);
+
+    // The display's own: the column after its eight textures.
+    for (const uint32_t columns : {25u, 23u}) {
+        std::vector<uint32_t> staff(columns, 0), none(columns, 0);
+        staff[0] = 5;
+        staff[columns == 25 ? 23 : 22] = 164;
+        none[0] = 6;
+        none[columns == 25 ? 23 : 22] = 0xFFFFFFFFu;
+        auto displayData = buildSyntheticDBC(2, columns, {staff, none}, std::string(1, '\0'));
+        DBCFile displays;
+        REQUIRE(displays.load(displayData));
+        CHECK(displayItemVisual(displays, 5) == 164);
+        CHECK(displayItemVisual(displays, 6) == 0);
+        CHECK(displayItemVisual(displays, 7) == 0);
+    }
 }
 
 TEST_CASE("Spell.dbc's timing columns come from the file's shape", "[dbc][spell]") {

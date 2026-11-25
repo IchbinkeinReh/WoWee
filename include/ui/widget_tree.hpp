@@ -877,7 +877,12 @@ struct Widget {
     /// and inventory type. The dressing room's contents belong to the frame
     /// rather than to the application: a second one would have its own, and
     /// closing this one is what empties it.
-    struct TryOnItem { uint32_t displayInfoId; uint8_t inventoryType; uint32_t itemId = 0; };
+    struct TryOnItem {
+        uint32_t displayInfoId;
+        uint8_t inventoryType;
+        uint32_t itemId = 0;
+        uint32_t visual = 0;   ///< the ItemVisuals row of the link's enchants (0x00597fc0)
+    };
     std::vector<TryOnItem> tryOnItems;
     /// Items asked for and not known yet: tried on as the server answers
     /// (0x005980b0).

@@ -939,7 +939,7 @@ void M2Renderer::prepareRender(uint32_t frameIndex) {
         }
 
         const uint32_t boneCount = static_cast<uint32_t>(instance.boneMatrices.size());
-        if (boneCount > MEGA_BONE_MATRIX_CAPACITY - nextOffset) {
+        if (boneCount > boneCapacity_ - nextOffset) {
             instance.megaBoneOffset = 0;  // Overflow - use identity
             continue;
         }
@@ -1431,8 +1431,8 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
             // nearest tufts when that is not all of them.
             if (model.isGroundDetail) {
                 const size_t reserved = transparentVisible_.size();
-                const size_t room = MAX_INSTANCE_DATA > instanceDataCount_ + reserved
-                                        ? MAX_INSTANCE_DATA - instanceDataCount_ - reserved : 0;
+                const size_t room = instanceCapacity_ > instanceDataCount_ + reserved
+                                        ? instanceCapacity_ - instanceDataCount_ - reserved : 0;
                 if (pending.size() > room) {
                     std::nth_element(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(room), pending.end(),
                                      [&](const PendingInstance& a, const PendingInstance& b) {
@@ -1457,7 +1457,7 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
             uint32_t baseSSBOOffset = instanceDataCount_;
             size_t writtenInstances = 0;
             for (const auto& p : pending) {
-                if (instanceDataCount_ >= MAX_INSTANCE_DATA) break;
+                if (instanceDataCount_ >= instanceCapacity_) break;
                 auto& inst = instances[p.instanceIdx];
                 auto& e = instSSBO[instanceDataCount_];
                 e.model = inst.drawMatrix();
@@ -1493,7 +1493,7 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                 static bool warnedInstanceCap = false;
                 if (!warnedInstanceCap) {
                     warnedInstanceCap = true;
-                    LOG_WARNING("M2Renderer: instance buffer full at ", MAX_INSTANCE_DATA,
+                    LOG_WARNING("M2Renderer: instance buffer full at ", instanceCapacity_,
                                 "; dropping ", pending.size() - writtenInstances,
                                 " instances of '", model.name, "' this frame");
                 }
@@ -1581,7 +1581,7 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                     bool hasBatchTexAnim = (batch.textureAnimIndex != 0xFFFF && model.hasTextureAnimation)
                                            || batch.colorAnimated;
                     uint32_t drawOffset = groupSSBOOffset;
-                    if (hasBatchTexAnim && instanceDataCount_ + groupSize <= MAX_INSTANCE_DATA) {
+                    if (hasBatchTexAnim && instanceDataCount_ + groupSize <= instanceCapacity_) {
                         drawOffset = instanceDataCount_;
                         // Hoist per-batch lookups: the transform pointer is fixed for
                         // every instance in this group; only the sampled translation
@@ -2062,7 +2062,7 @@ void M2Renderer::renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             }
 
             // Write single instance entry to SSBO
-            if (instanceDataCount_ >= MAX_INSTANCE_DATA) continue;
+            if (instanceDataCount_ >= instanceCapacity_) continue;
             uint32_t drawOffset = instanceDataCount_;
             auto& e = instSSBO[instanceDataCount_];
             e.model = instance.drawMatrix();

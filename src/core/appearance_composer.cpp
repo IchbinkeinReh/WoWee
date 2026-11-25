@@ -1,5 +1,6 @@
 #include "core/appearance_composer.hpp"
 #include "core/geoset_rules.hpp"
+#include "pipeline/item_visual.hpp"
 #include "pipeline/item_textures.hpp"
 #include "pipeline/m2_asset_loader.hpp"
 #include "core/character_paths.hpp"
@@ -259,56 +260,19 @@ std::unordered_set<uint16_t> AppearanceComposer::playerGeosets(const core::Chara
     return core::modelGeosetsShown(core::characterLookGeosets(*assetManager_, look), ids);
 }
 
-void AppearanceComposer::applyEnchantVisuals(uint32_t charInstanceId, int equipSlotIndex,
-                                             uint32_t attachmentId) {
+void AppearanceComposer::applyItemVisual(uint32_t charInstanceId, game::EquipSlot slot, uint32_t displayId,
+                                         uint32_t attachmentId) {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!charRenderer || !gameHandler_ || !assetManager_ || !entitySpawner_) return;
-
     charRenderer->detachWeaponEffects(charInstanceId, attachmentId);
-
-    uint64_t itemGuid = gameHandler_->getEquipSlotGuid(equipSlotIndex);
-    if (itemGuid == 0) return;
-
-    // A temporary enchant (sharpening stone, oil) masks the permanent one's visual.
-    auto [permEnchantId, tempEnchantId] = gameHandler_->getItemEnchantIds(itemGuid);
-    uint32_t enchantId = (tempEnchantId != 0) ? tempEnchantId : permEnchantId;
-    if (enchantId == 0) return;
-
-    auto sieDbc     = assetManager_->loadDBC("SpellItemEnchantment.dbc");
-    auto visualsDbc = assetManager_->loadDBC("ItemVisuals.dbc");
-    auto effectsDbc = assetManager_->loadDBC("ItemVisualEffects.dbc");
-    if (!sieDbc || !sieDbc->isLoaded() || !visualsDbc || !visualsDbc->isLoaded() ||
-        !effectsDbc || !effectsDbc->isLoaded()) {
-        return;
+    std::array<uint32_t, 2> enchants{};
+    if (slot == game::EquipSlot::MAIN_HAND || slot == game::EquipSlot::OFF_HAND) {
+        const auto [permanent, temporary] =
+            gameHandler_->getItemEnchantIds(gameHandler_->getEquipSlotGuid(static_cast<int>(slot)));
+        enchants = {permanent, temporary};
     }
-
-    const auto* sieL = pipeline::getActiveDBCLayout()
-        ? pipeline::getActiveDBCLayout()->getLayout("SpellItemEnchantment") : nullptr;
-    auto effectModels = pipeline::resolveEnchantItemVisuals(enchantId, sieDbc.get(),
-                                                            visualsDbc.get(), effectsDbc.get(), sieL);
-
-    for (uint32_t visualSlot = 0; visualSlot < effectModels.size(); ++visualSlot) {
-        const std::string& modelName = effectModels[visualSlot];
-        if (modelName.empty()) continue;
-
-        // DBC stores .mdx paths; the shipped assets are .m2.
-        std::string m2Path = modelName;
-        size_t dotPos = m2Path.rfind('.');
-        m2Path = (dotPos != std::string::npos ? m2Path.substr(0, dotPos) : m2Path) + ".m2";
-
-        pipeline::M2Model effectModel;
-        if (!loadWeaponM2(m2Path, effectModel)) {
-            LOG_WARNING("Enchant visual: failed to load ", m2Path);
-            continue;
-        }
-
-        uint32_t effectModelId = entitySpawner_->allocateWeaponModelId();
-        if (charRenderer->attachWeaponEffect(charInstanceId, attachmentId, visualSlot,
-                                             effectModel, effectModelId)) {
-            LOG_INFO("Enchant visual: ", m2Path, " on attachment ", attachmentId,
-                     " (enchant ", enchantId, ", visual slot ", visualSlot, ")");
-        }
-    }
+    entitySpawner_->attachDisplayItemVisual(charInstanceId, attachmentId,
+                                            pipeline::itemVisualOf(*assetManager_, displayId, enchants));
 }
 
 bool AppearanceComposer::loadWeaponM2(const std::string& m2Path, pipeline::M2Model& outModel) {
@@ -527,7 +491,7 @@ void AppearanceComposer::attachEquippedWeapons() {
         if (charRenderer->attachWeapon(charInstanceId, attachmentId, weaponModel, weaponModelId,
                                        texturePath)) {
             LOG_INFO("Equipped weapon: ", m2Path, " at attachment ", attachmentId);
-            applyEnchantVisuals(charInstanceId, static_cast<int>(slot), attachmentId);
+            applyItemVisual(charInstanceId, slot, equipSlot.item.displayInfoId, attachmentId);
         }
     }
 }

@@ -363,6 +363,26 @@ TEST_CASE("the dressing room puts an item where it goes", "[replay][interface]")
     REQUIRE(worn.size() == 2);
     CHECK(worn[0].hand == Hand::Main);
     CHECK(worn[1].hand == Hand::Off);
+    // T281: and what hangs on them, the unit's and the tried on's.
+    const auto glowing = wowee::game::player_display::wornByPlayer(true, ids, types, {}, 0, {28, 61});
+    CHECK(glowing[0].enchantment == 28);
+    CHECK(glowing[1].enchantment == 61);
+    const auto slots = wowee::game::player_display::wornBySlot(true, ids, types, {}, 0, {28, 61});
+    CHECK(slots[15].enchantment == 28);
+    CHECK(slots[16].enchantment == 61);
+    own[15].visual = 28;
+    room::Item lit = sword;
+    lit.visual = 164;
+    for (const auto& it : room::dressed(own, false, {}, hands))
+        if (it.hand == Hand::Main) CHECK(it.enchantment == 28);
+    auto tried = room::dressed(own, true, {lit}, hands);
+    REQUIRE(tried.size() == 1);
+    CHECK(tried[0].enchantment == 164);
+    tried = room::dressed(own, true, {lit, axe}, hands);   // in its place
+    REQUIRE(tried.size() == 1);
+    CHECK(tried[0].enchantment == 0);
+    both[0].enchant = 164;
+    CHECK(wowee::core::wornDress(both).held[0].enchant == 164);
 
     // 0x007082b0: two hands in one only with the grip that names the kind.
     const auto grip = [](uint32_t c, uint32_t sub) { return c == 2 && sub == 8; };

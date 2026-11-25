@@ -200,6 +200,7 @@ void ModelFrameView::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
     m2_->prepareRender(fi);
     m2_->render(cmd, perFrameSet_[fi], *camera_);
     m2_->renderM2Particles(cmd, perFrameSet_[fi]);
+    m2_->renderClientRibbons(cmd, perFrameSet_[fi]);
     target_->endPass(cmd);
     composited_ = true;
 }

@@ -389,6 +389,14 @@ TEST_CASE("an item hyperlink as 3.3.5a writes one", "[item]") {
     // links included.  Sixteen places built this by hand; the ones that wrote
     // eight gave an addon a differently shaped link from the one a shift-click
     // produced.
+    // T281: 0x0050f630.
+    using Enchants = std::array<uint32_t, 5>;
+    CHECK(game::itemLinkEnchants("item:34336:803:0:0:0:0:0:0") == Enchants{803, 0, 0, 0, 0});
+    CHECK(game::itemLinkEnchants("|cffa335ee|Hitem:50613:3823:3524:3525:0:7:-12:99:80|h[x]|h|r") ==
+          Enchants{3823, 3524, 3525, 0, 7});
+    CHECK(game::itemLinkEnchants("item:34336") == Enchants{});
+    CHECK(game::itemLinkEnchants("item:34336::5") == Enchants{0, 5, 0, 0, 0});
+    CHECK(game::itemLinkEnchants("enchant:803") == Enchants{});
     CHECK(game::itemChatLink(3299, 0, "Fractured Canine") ==
           "|cff9d9d9d|Hitem:3299:0:0:0:0:0:0:0:0|h[Fractured Canine]|h|r");
     CHECK(game::itemChatLink(19019, 4, "Thunderfury") ==

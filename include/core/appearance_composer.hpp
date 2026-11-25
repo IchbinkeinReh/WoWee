@@ -147,9 +147,9 @@ private:
     /// The field's state for the player, or nothing without the field.
     std::optional<SheathState> fieldSheathState() const;
 
-    // Attach the enchant visual (sharpening-stone glint, weapon glow) of the item in
-    // the given equipment slot to the weapon already attached at attachmentId.
-    void applyEnchantVisuals(uint32_t charInstanceId, int equipSlotIndex, uint32_t attachmentId);
+    /// What hangs on the weapon attached at attachmentId - a staff's own glow, an enchant's -
+    /// as on every other player's (0x006e1290).
+    void applyItemVisual(uint32_t charInstanceId, game::EquipSlot slot, uint32_t displayId, uint32_t attachmentId);
 
     rendering::Renderer* renderer_;
     pipeline::AssetManager* assetManager_;

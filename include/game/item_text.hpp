@@ -13,6 +13,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 #include "game/protocol_constants.hpp"
 
@@ -275,6 +276,22 @@ inline std::string itemChatLink(uint32_t itemId, uint32_t quality,
            ":" + std::to_string(viewerLevel) + "|h[" + name + "]|h|r";
 }
 
+
+/// The enchants an item's link names: the item's own and its four gems' (0x0050f630).
+inline std::array<uint32_t, 5> itemLinkEnchants(std::string_view link) {
+    std::array<uint32_t, 5> out{};
+    size_t at = link.find("item:");
+    if (at == std::string_view::npos) return out;
+    at += 5;
+    for (uint32_t& enchant : out) {
+        at = link.find(':', at);
+        if (at == std::string_view::npos) break;
+        ++at;
+        for (; at < link.size() && link[at] >= '0' && link[at] <= '9'; ++at)
+            enchant = enchant * 10 + static_cast<uint32_t>(link[at] - '0');
+    }
+    return out;
+}
 
 /// A chat hyperlink for a spell.
 ///

@@ -3,6 +3,7 @@
 #include "rendering/glue_scene.hpp"
 #include "rendering/imgui_texture.hpp"
 #include "rendering/vk_utils.hpp"
+#include "rendering/m2_renderer.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/vk_render_target.hpp"
@@ -177,6 +178,12 @@ void CharacterPreview::shutdown() {
     auto* appRenderer = core::Application::getInstance().getRenderer();
     if (appRenderer) appRenderer->unregisterPreview(this);
 
+    if (effects_) {
+        effects_->shutdown();
+        effects_.reset();
+    }
+    effectTwins_.clear();
+    effectless_.clear();
     if (charRenderer_) {
         charRenderer_->shutdown();
         charRenderer_.reset();
@@ -1099,8 +1106,10 @@ void CharacterPreview::attachWeapons(const std::vector<core::PreviewWeapon>& hel
                                          texturePath)) {
             continue;
         }
-        // SMSG_CHAR_ENUM already reports the enchant as its ItemVisual id.
-        attachWeaponEnchantVisual(w.point, w.enchant);
+        // An ItemVisuals row, as SMSG_CHAR_ENUM has an enchant's; none is the display's own
+        // (0x004eacd0).
+        attachWeaponEnchantVisual(
+            w.point, w.enchant != 0 ? w.enchant : pipeline::displayItemVisual(*displayInfoDbc, w.display));
     }
 }
 
@@ -1263,7 +1272,75 @@ void CharacterPreview::update(float deltaTime) {
         const glm::vec3 cameraPos = camera_ ? camera_->getPosition()
                                             : previewStandPosition_;
         charRenderer_->update(deltaTime, cameraPos);
+        syncEffects(deltaTime);
     }
+}
+
+bool CharacterPreview::makeEffects() {
+    if (effects_) return true;
+    auto* appRenderer = core::Application::getInstance().getRenderer();
+    if (!appRenderer || !renderTarget_ || !vkCtx_) return false;
+    effects_ = std::make_unique<M2Renderer>();
+    effects_->setRenderPassOverride(renderTarget_->getRenderPass(), renderTarget_->getSampleCount());
+    effects_->setOverNothing(true);
+    if (!effects_->initialize(vkCtx_, appRenderer->getPerFrameSetLayout(), assetManager_)) {
+        LOG_ERROR("CharacterPreview: no renderer for its particles");
+        effects_.reset();
+        return false;
+    }
+    effects_->setForceNoCull(true);
+    return true;
+}
+
+void CharacterPreview::syncEffects(float deltaTime) {
+    // A portrait is of the face, and a still.
+    std::vector<CharacterRenderer::AttachedInstance> shown;
+    if (!portraitFraming_ && instanceId_ != 0) {
+        charRenderer_->collectAttachedInstances(shown);
+        shown.push_back({.instanceId = instanceId_, .modelId = PREVIEW_MODEL_ID, .alpha = 1.0f});
+    }
+    std::unordered_set<uint32_t> present;
+    for (const auto& a : shown) present.insert(a.instanceId);
+    std::erase_if(effectless_, [&](uint32_t id) { return !present.count(id); });
+    for (auto it = effectTwins_.begin(); it != effectTwins_.end();) {
+        if (present.count(it->first)) {
+            ++it;
+            continue;
+        }
+        effects_->removeInstance(it->second.instance);
+        effects_->unloadModel(it->second.model);
+        it = effectTwins_.erase(it);
+    }
+    for (const auto& a : shown) {
+        if (effectTwins_.count(a.instanceId) || effectless_.count(a.instanceId)) continue;
+        const auto* data = charRenderer_->getModelData(a.modelId);
+        if (!data) continue;
+        const bool any = !data->particleEmitters.empty() || !data->ribbonEmitters.empty();
+        const uint32_t model = nextEffectModel_;
+        if (!any || !makeEffects() || !effects_->loadModel(*data, model)) {
+            effectless_.insert(a.instanceId);
+            continue;
+        }
+        ++nextEffectModel_;
+        effects_->setModelParticlesOnly(model);
+        const uint32_t twin = effects_->createInstance(model, glm::vec3(0.0f), glm::vec3(0.0f), 1.0f, false);
+        if (a.instanceId == instanceId_ && particleColors_) effects_->setInstanceParticleColors(twin, *particleColors_);
+        effectTwins_[a.instanceId] = {.instance = twin, .model = model};
+    }
+    if (effectTwins_.empty() || !camera_) return;
+    effects_->update(deltaTime, camera_->getPosition(), camera_->getViewProjectionMatrix());
+    for (const auto& a : shown) {
+        const auto it = effectTwins_.find(a.instanceId);
+        if (it == effectTwins_.end()) continue;
+        glm::mat4 model(1.0f);
+        const std::vector<glm::mat4>* bones = nullptr;
+        int sequence = 0;
+        float time = 0.0f, globalTime = 0.0f;
+        if (charRenderer_->getInstancePose(a.instanceId, model, bones, sequence, time, globalTime) && bones)
+            effects_->setInstanceExternalPose(it->second.instance, model, *bones, sequence, time, globalTime);
+        effects_->setInstanceFade(it->second.instance, a.alpha);
+    }
+    effects_->stepPosedParticles(deltaTime);
 }
 
 void CharacterPreview::render() {
@@ -1346,6 +1423,12 @@ void CharacterPreview::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // Render the character model
     charRenderer_->render(cmd, previewPerFrameSet_[fi], *camera_);
+    if (effects_ && !effectTwins_.empty()) {
+        effects_->prepareRender(fi);
+        effects_->render(cmd, previewPerFrameSet_[fi], *camera_);
+        effects_->renderM2Particles(cmd, previewPerFrameSet_[fi]);
+        effects_->renderClientRibbons(cmd, previewPerFrameSet_[fi]);
+    }
 
     renderTarget_->endPass(cmd);
 

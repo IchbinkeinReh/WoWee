@@ -46,10 +46,12 @@ inline uint32_t hideBits(bool helmShown, bool cloakShown) {
 /// that hangs on it (0x005975e0), or for a dressing room dressed again slot by
 /// slot, the head and the back not where the flags hide them (0x00598b80).
 /// `displayIds` as resolveOtherPlayerEquipment leaves them where that knew
-/// any; before, the character list's, which is by slot as well.
+/// any; before, the character list's, which is by slot as well. `visuals` are the
+/// ItemVisuals rows of the two hands' weapons, which the list has with its items.
 inline std::vector<EquipmentItem> wornByPlayer(bool known, const std::array<uint32_t, 19>& displayIds,
                                                const std::array<uint8_t, 19>& inventoryTypes,
-                                               const std::vector<EquipmentItem>& listed, uint32_t playerFlags) {
+                                               const std::vector<EquipmentItem>& listed, uint32_t playerFlags,
+                                               const std::array<uint32_t, 2>& visuals = {}) {
     std::vector<EquipmentItem> worn;
     if (known) {
         for (size_t slot = 0; slot < displayIds.size(); ++slot) {
@@ -59,6 +61,7 @@ inline std::vector<EquipmentItem> wornByPlayer(bool known, const std::array<uint
             // in the off hand was a second main hand, and not shown.
             if (slot == 15) worn.back().hand = EquipmentItem::Hand::Main;
             if (slot == 16) worn.back().hand = EquipmentItem::Hand::Off;
+            if (slot == 15 || slot == 16) worn.back().enchantment = visuals[slot - 15];
         }
         return worn;
     }
@@ -73,7 +76,8 @@ inline std::vector<EquipmentItem> wornByPlayer(bool known, const std::array<uint
 /// The same by equipment slot, for a dressing room (0x005989e0).
 inline std::array<EquipmentItem, 19> wornBySlot(bool known, const std::array<uint32_t, 19>& displayIds,
                                                 const std::array<uint8_t, 19>& inventoryTypes,
-                                                const std::vector<EquipmentItem>& listed, uint32_t playerFlags) {
+                                                const std::vector<EquipmentItem>& listed, uint32_t playerFlags,
+                                                const std::array<uint32_t, 2>& visuals = {}) {
     std::array<EquipmentItem, 19> out{};
     const std::vector<EquipmentItem> worn =
         known ? std::vector<EquipmentItem>{}
@@ -82,6 +86,7 @@ inline std::array<EquipmentItem, 19> wornBySlot(bool known, const std::array<uin
         if (known) {
             out[slot].displayModel = displayIds[slot];
             out[slot].inventoryType = inventoryTypes[slot];
+            if (slot == 15 || slot == 16) out[slot].enchantment = visuals[slot - 15];
         } else if (slot < worn.size()) {
             out[slot] = worn[slot];
         }

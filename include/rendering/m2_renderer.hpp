@@ -581,10 +581,14 @@ public:
     [[nodiscard]] bool initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout,
                     pipeline::AssetManager* assets);
     /// Build the pipelines for an off-screen pass instead of the scene's,
-    /// before initialize(): a UI model frame's own view.
+    /// before initialize(): a UI model frame's own view, with room for what one shows (the
+    /// world's is some hundred megabytes).
     void setRenderPassOverride(VkRenderPass pass, VkSampleCountFlagBits samples) {
         renderPassOverride_ = pass;
         samplesOverride_ = samples;
+        boneCapacity_ = 4096;
+        instanceCapacity_ = 4096;
+        particleCapacity_ = 16384;
     }
     /// Drawn into a picture with nothing behind it (PipelineBuilder::overNothing); before
     /// initialize().
@@ -1308,6 +1312,7 @@ private:
     // budget matches the old 4096 x 128 slots; models under the old stride
     // now leave room for the ones above it.
     static constexpr uint32_t MEGA_BONE_MATRIX_CAPACITY = MEGA_BONE_MAX_INSTANCES * 128;
+    uint32_t boneCapacity_ = MEGA_BONE_MATRIX_CAPACITY;   ///< what there is room for
     ::VkBuffer megaBoneBuffer_[2] = {};
     VmaAllocation megaBoneAlloc_[2] = {};
     void* megaBoneMapped_[2] = {};
@@ -1370,6 +1375,7 @@ private:
     // verge looked down a road, which reached 65536 with clutter alone; so
     // twice that, and the clutter is what gives way should even that fill.
     static constexpr uint32_t MAX_INSTANCE_DATA = 131072;
+    uint32_t instanceCapacity_ = MAX_INSTANCE_DATA;   ///< what there is room for
 
     // Ground cover by chunk (registerDetailChunk).
     //
@@ -1783,6 +1789,7 @@ private:
     /// Vertices the particle buffer holds. Not MAX_M2_PARTICLES, which is the
     /// cap on one instance's particles: this has to hold a whole frame's.
     static constexpr size_t MAX_M2_PARTICLE_VERTS = 131072;
+    size_t particleCapacity_ = MAX_M2_PARTICLE_VERTS;   ///< what there is room for
     // A particle's record: position 3, colour 4, size, cell, the turn's sine
     // and cosine, and the plane of a flat (XYQuad) particle - its X and Y
     // axes in the world, zero for one facing the camera.

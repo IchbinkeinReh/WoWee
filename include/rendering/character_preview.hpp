@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
+#include <array>
 #include <memory>
 #include <cstdint>
 #include <string>
@@ -25,6 +26,7 @@ namespace pipeline { class AssetManager; struct M2Model; struct M2Camera; }
 namespace rendering {
 
 class CharacterRenderer;
+class M2Renderer;
 class Camera;
 class VkContext;
 class VkTexture;
@@ -113,6 +115,8 @@ public:
         figureLight_ = light;
         figureFog_ = fog;
     }
+    /// The colours of its display's particles (ParticleColor.dbc), for the next model loaded.
+    void setParticleColors(const std::optional<std::array<glm::vec3, 9>>& colors) { particleColors_ = colors; }
     /// Plays an animation of the model, where it has it.
     void playModelAnimation(uint32_t animationId, bool loop);
     /// How far back from the model's portrait camera to stand, along its own
@@ -191,6 +195,21 @@ private:
 
     // Off-screen render target (color + depth)
     std::unique_ptr<VkRenderTarget> renderTarget_;
+
+    /// The particles and ribbons of the model and of all that hangs on it - an enchant's are
+    /// nothing else -, which charRenderer_ draws none of: a model for each, posed as it is, as in
+    /// the world (EntitySpawner::syncAttachmentParticleTwins). Made when the first has any.
+    struct EffectTwin {
+        uint32_t instance = 0;
+        uint32_t model = 0;
+    };
+    void syncEffects(float deltaTime);
+    bool makeEffects();
+    std::unique_ptr<M2Renderer> effects_;
+    std::unordered_map<uint32_t, EffectTwin> effectTwins_;   ///< by charRenderer_'s instance
+    std::unordered_set<uint32_t> effectless_;
+    uint32_t nextEffectModel_ = 1;
+    std::optional<std::array<glm::vec3, 9>> particleColors_;
 
     // Per-frame UBO for preview camera/lighting (double-buffered)
     static constexpr uint32_t MAX_FRAMES = 2;

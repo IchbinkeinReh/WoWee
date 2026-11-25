@@ -58,6 +58,7 @@ bool UnitPortrait::load(const UnitLook& look) {
     // Declared before the model loads, so the racial backdrop is never built
     // in the first place.
     preview_->setTransparentBackground(true, framing_ == Framing::Face);
+    preview_->setParticleColors(look.particleColors);
     if (look.character) {
         preview_->setCharacterClass(look.classId);
         preview_->setTabardDesigner(look.tabardDesigner);

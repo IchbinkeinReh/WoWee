@@ -7,6 +7,9 @@
 #include "game/character.hpp"
 #include "game/guild_emblem.hpp"
 
+#include <glm/vec3.hpp>
+
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -36,6 +39,7 @@ struct UnitLook {
 
     std::string model;
     std::vector<std::pair<uint32_t, std::string>> skins;   ///< by M2 texture type
+    std::optional<std::array<glm::vec3, 9>> particleColors;   ///< the display's (ParticleColor.dbc)
 
     [[nodiscard]] bool any() const { return character || !model.empty(); }
     friend bool operator==(const UnitLook&, const UnitLook&) = default;

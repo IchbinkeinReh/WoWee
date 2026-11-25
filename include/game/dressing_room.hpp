@@ -20,6 +20,8 @@ struct Item {
     uint32_t itemId = 0;
     uint32_t display = 0;
     uint8_t inventoryType = 0;
+    /// The ItemVisuals row on it, 0 for its display's own (0x004eacd0).
+    uint32_t visual = 0;
 };
 
 /// What the player the figure is of can hold.
@@ -129,11 +131,11 @@ public:
         }
         if (main_.item.display != 0) {
             out.push_back({.displayModel = main_.item.display, .inventoryType = main_.item.inventoryType,
-                           .enchantment = 0u, .hand = EquipmentItem::Hand::Main});
+                           .enchantment = main_.item.visual, .hand = EquipmentItem::Hand::Main});
         }
         if (off_.item.display != 0) {
             out.push_back({.displayModel = off_.item.display, .inventoryType = off_.item.inventoryType,
-                           .enchantment = 0u, .hand = EquipmentItem::Hand::Off});
+                           .enchantment = off_.item.visual, .hand = EquipmentItem::Hand::Off});
         }
         return out;
     }

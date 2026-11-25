@@ -47,6 +47,10 @@ class Application;
 
 class EntitySpawner {
 public:
+    /// ItemVisuals.dbc's effects for the item model at `point` (pipeline/item_visual.hpp).
+    void attachDisplayItemVisual(uint32_t instanceId, uint32_t point, uint32_t itemVisualId);
+    /// The colours a creature's display gives its particles (ParticleColor.dbc).
+    [[nodiscard]] std::optional<std::array<glm::vec3, 9>> particleColorsOf(uint32_t displayId) const;
     /// After the interface is loaded again: the player's own seat, said
     /// again - UNIT_ENTERING_VEHICLE while climbing in, and with
     /// UNIT_ENTERED_VEHICLE once seated - so the new interface puts its
@@ -1089,13 +1093,6 @@ private:
     std::unordered_map<uint32_t, uint32_t> attachmentParticleTwins_;
     std::unordered_set<uint32_t> attachmentsWithoutParticles_;
     void syncAttachmentParticleTwins();
-    /// ItemDisplayInfo.dbc's ItemVisual: ItemVisuals.dbc's effects for the
-    /// item model at `point`.
-    static constexpr uint32_t kItemDisplayItemVisualColumn = 23;
-    void attachDisplayItemVisual(uint32_t instanceId, uint32_t point, uint32_t itemVisualId);
-    /// What a player's main or off hand shows on top of its display's own
-    /// visual: an enchant's, where the display has none (0x00759050).
-    uint32_t playerWeaponVisual(uint32_t displayVisual, uint32_t enchantField) const;
     /// The model of the game object a held ground-targeted spell summons, at
     /// the cursor's place (0x0080cce0 -> 0x007fe9e0, drawn by 0x004f66c0).
     void syncGroundTargetModel();

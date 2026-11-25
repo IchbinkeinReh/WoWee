@@ -13,7 +13,9 @@
 #include "game/game_handler.hpp"
 #include "game/player_display_flags.hpp"
 #include "game/update_field_table.hpp"
+#include "game/visible_item_fields.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/item_visual.hpp"
 #include "rendering/figure_camera.hpp"
 #include "rendering/model_frame_view.hpp"
 #include "rendering/renderer.hpp"
@@ -33,11 +35,28 @@ struct SeenEquipment {
     bool known = false;
     std::array<uint32_t, 19> displayIds{};
     std::array<uint8_t, 19> invTypes{};
+    std::array<uint32_t, 2> visuals{};   ///< the ItemVisuals rows on the two hands' weapons
 };
 
-SeenEquipment seenEquipment(const game::GameHandler& gameHandler, uint64_t guid) {
+SeenEquipment seenEquipment(const game::GameHandler& gameHandler, pipeline::AssetManager* assets, uint64_t guid) {
     SeenEquipment seen;
     seen.known = gameHandler.getOtherPlayerEquipment(guid, seen.displayIds, seen.invTypes);
+    if (!seen.known || !assets || !assets->isInitialized()) return seen;
+    // As the model in the world has them (0x00759050).
+    const auto* enchants = gameHandler.getOtherPlayerVisibleEnchants(guid);
+    for (const size_t hand : {0u, 1u}) {
+        std::array<uint32_t, 2> of{};
+        if (guid == gameHandler.getPlayerGuid()) {
+            const auto [permanent, temporary] =
+                gameHandler.getItemEnchantIds(gameHandler.getEquipSlotGuid(static_cast<int>(15 + hand)));
+            of = {permanent, temporary};
+        } else if (enchants) {
+            of = {game::visibleItemEnchantField((*enchants)[15 + hand]),
+                  game::visibleItemTempEnchantField((*enchants)[15 + hand])};
+        }
+        if (of != std::array<uint32_t, 2>{})
+            seen.visuals[hand] = pipeline::itemVisualOf(*assets, seen.displayIds[15 + hand], of);
+    }
     return seen;
 }
 
@@ -49,11 +68,12 @@ uint32_t hiddenOf(const game::GameHandler& gameHandler) {
 
 /// A dressing room's figure (game/dressing_room.hpp): the unit's own slot by slot
 /// (0x005989e0), and what is tried on put where it belongs (0x005980d0).
-std::vector<game::EquipmentItem> dressedFor(const game::GameHandler& gameHandler, const ui::Widget& frame) {
+std::vector<game::EquipmentItem> dressedFor(const game::GameHandler& gameHandler, pipeline::AssetManager* assets,
+                                            const ui::Widget& frame) {
     namespace room = game::dressing_room;
     const uint64_t guid = frame.modelUnit;
     const bool self = guid == gameHandler.getPlayerGuid();
-    const SeenEquipment seen = seenEquipment(gameHandler, guid);
+    const SeenEquipment seen = seenEquipment(gameHandler, assets, guid);
     static const std::vector<game::EquipmentItem> kNone;
     const auto listed = [&]() -> const std::vector<game::EquipmentItem>& {
         for (const auto& c : gameHandler.getCharacters())
@@ -61,17 +81,22 @@ std::vector<game::EquipmentItem> dressedFor(const game::GameHandler& gameHandler
         return kNone;
     };
     const auto own = game::player_display::wornBySlot(seen.known, seen.displayIds, seen.invTypes, listed(),
-                                                      self ? hiddenOf(gameHandler) : 0u);
+                                                      self ? hiddenOf(gameHandler) : 0u, seen.visuals);
     std::array<room::Item, 19> bySlot{};
     for (size_t slot = 0; slot < bySlot.size(); ++slot) {
-        bySlot[slot] = {.display = own[slot].displayModel, .inventoryType = own[slot].inventoryType};
+        bySlot[slot] = {.display = own[slot].displayModel,
+                        .inventoryType = own[slot].inventoryType,
+                        .visual = own[slot].enchantment};
         if (self)
             bySlot[slot].itemId =
                 gameHandler.getInventory().getEquipSlot(static_cast<game::EquipSlot>(slot)).item.itemId;
     }
     std::vector<room::Item> tried;
     for (const auto& t : frame.tryOnItems)
-        tried.push_back({.itemId = t.itemId, .display = t.displayInfoId, .inventoryType = t.inventoryType});
+        tried.push_back({.itemId = t.itemId,
+                         .display = t.displayInfoId,
+                         .inventoryType = t.inventoryType,
+                         .visual = t.visual});
     return room::dressed(bySlot, frame.undressed, tried,
                          {.dualWield = [&] { return self && gameHandler.playerCanDualWield(); },
                           .fitsOffHand = [&](uint32_t itemId) { return self && gameHandler.itemFitsOffHand(itemId); }});
@@ -108,6 +133,7 @@ const ui::UnitLook& Application::displayLook(uint32_t displayId) {
     } else {
         look.model = entitySpawner_->getModelPathForDisplayId(displayId);
         if (!look.model.empty()) look.skins = entitySpawner_->getCreatureSkinPaths(displayId, look.model);
+        look.particleColors = entitySpawner_->particleColorsOf(displayId);
     }
     if (!look.any()) return kNone;
     return displayLooks_.emplace(displayId, std::move(look)).first->second;
@@ -143,9 +169,9 @@ ui::UnitLook Application::unitLook(uint64_t guid) {
                 look.classId = static_cast<uint8_t>(c.characterClass);
                 look.appearance = c.appearanceBytes;
                 look.facialFeatures = c.facialFeatures;
-                const SeenEquipment seen = seenEquipment(*gameHandler, guid);
+                const SeenEquipment seen = seenEquipment(*gameHandler, assetManager.get(), guid);
                 look.worn = game::player_display::wornByPlayer(seen.known, seen.displayIds, seen.invTypes, c.equipment,
-                                                               hiddenOf(*gameHandler));
+                                                               hiddenOf(*gameHandler), seen.visuals);
                 // The guild tabard's design (0x006db510): the guild's, once
                 // known, or the tabard designer's while it is open (0x004ec1c0).
                 look.emblem = gameHandler->getPlayerTabardEmblem();
@@ -157,8 +183,9 @@ ui::UnitLook Application::unitLook(uint64_t guid) {
             look.character = true;
             look.femaleModel = look.gender == 1;
             look.classId = gameHandler->lookupPlayerClass(guid);
-            const SeenEquipment seen = seenEquipment(*gameHandler, guid);
-            look.worn = game::player_display::wornByPlayer(seen.known, seen.displayIds, seen.invTypes, {}, 0u);
+            const SeenEquipment seen = seenEquipment(*gameHandler, assetManager.get(), guid);
+            look.worn = game::player_display::wornByPlayer(seen.known, seen.displayIds, seen.invTypes, {}, 0u,
+                                                           seen.visuals);
             look.emblem = gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(guid));
             return look;
         }
@@ -199,7 +226,7 @@ void Application::drawUnitModels(ui::WidgetTree& widgets, float screenW, float s
             if (frame->objectType == "DressUpModel") addons::tryOnAskedItems(*frame, gameHandler.get());
             if (look.character && frame->objectType == "DressUpModel" &&
                 frame->modelSource == ui::Widget::ModelSource::Unit)
-                look.worn = dressedFor(*gameHandler, *frame);
+                look.worn = dressedFor(*gameHandler, assetManager.get(), *frame);
             frame->modelShown = look.character
                                     ? game::getPlayerModelPath(static_cast<game::Race>(look.race),
                                                                static_cast<game::Gender>(look.gender), look.femaleModel)

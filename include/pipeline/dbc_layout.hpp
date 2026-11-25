@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <unordered_map>
 
@@ -208,41 +209,26 @@ uint32_t detectEnchantmentItemVisualField(const DBCFile* dbc, const DBCFieldMap*
 uint32_t detectEnchantmentGemItemField(const DBCFile* dbc, const DBCFieldMap* sieL);
 
 /**
- * Model paths for the effect an enchant puts on the item it is applied to - the
- * glint on a freshly sharpened blade.
- *
- * Chain: SpellItemEnchantment.ItemVisual → ItemVisuals.dbc (5 effect slots) →
- * ItemVisualEffects.dbc (M2 path). Slot index is meaningful: it selects which
- * attachment point on the item model the effect hangs from, so gaps are kept.
+ * Model paths for the effects an ItemVisuals row puts on the item - the glint on a freshly
+ * sharpened blade: ItemVisuals.dbc (5 effect slots) -> ItemVisualEffects.dbc (M2 path). Slot
+ * index is meaningful: it selects which attachment point on the item model the effect hangs
+ * from, so gaps are kept.
  *
  * @return Per-slot model paths; empty strings for unused slots.
- */
-std::array<std::string, 5> resolveEnchantItemVisuals(uint32_t enchantId,
-                                                     const DBCFile* spellItemEnchantment,
-                                                     const DBCFile* itemVisuals,
-                                                     const DBCFile* itemVisualEffects,
-                                                     const DBCFieldMap* sieL);
-
-/**
- * The tail of that chain, entered directly with an ItemVisuals.dbc id.
- *
- * SMSG_CHAR_ENUM reports an equipped item's enchant as its ItemVisual id already,
- * so the character-select preview has no SpellItemEnchantment lookup to do.
  */
 std::array<std::string, 5> resolveItemVisualModels(uint32_t itemVisualId,
                                                    const DBCFile* itemVisuals,
                                                    const DBCFile* itemVisualEffects);
 
+/// A display's own ItemVisuals row (ItemDisplayInfo's column 23; 22 where it has one icon).
+uint32_t displayItemVisual(const DBCFile& itemDisplayInfo, uint32_t displayId);
+
 /**
- * The ItemVisuals.dbc id another player's weapon shows (0x00759050, put on
- * by 0x006e1290 for the main and off hand): the display's own where
- * ItemVisuals has that row, else the permanent enchant's, else the
- * temporary one's - the two halves of PLAYER_VISIBLE_ITEM_n_ENCHANTMENT.
- * 0 for none.
+ * The ItemVisuals.dbc id an item shows: its display's own where ItemVisuals has that row, else
+ * that of the first of its enchants that has one (0x00759050, 0x00597fc0). 0 for none.
  */
-uint32_t playerWeaponItemVisual(uint32_t displayItemVisual, uint32_t permanentEnchant, uint32_t temporaryEnchant,
-                                const DBCFile* spellItemEnchantment, const DBCFile* itemVisuals,
-                                const DBCFieldMap* sieL);
+uint32_t itemVisualOf(uint32_t displayItemVisual, std::span<const uint32_t> enchants,
+                      const DBCFile* spellItemEnchantment, const DBCFile* itemVisuals, const DBCFieldMap* sieL);
 
 } // namespace pipeline
 } // namespace wowee

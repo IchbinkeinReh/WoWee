@@ -5566,6 +5566,11 @@ public:
         if (it == onlineItems_.end()) return {0, 0};
         return {it->second.permanentEnchantId, it->second.temporaryEnchantId};
     }
+    /// The same of the first such item carried.
+    [[nodiscard]] std::pair<uint32_t, uint32_t> carriedItemEnchants(uint32_t itemId) const {
+        const auto item = findCarriedItem(itemId);
+        return item ? getItemEnchantIds(item->guid) : std::pair<uint32_t, uint32_t>{};
+    }
     /// The temporary enchant's ms left, run down from when it was given, and
     /// its charges (0x005e8290, 0x005e82c0).
     std::pair<uint32_t, uint32_t> getItemTempEnchantTime(uint64_t guid) const {

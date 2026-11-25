@@ -8,6 +8,7 @@
 #include <cstdio>
 #include "rendering/m2_model_classifier.hpp"
 #include "core/appearance_composer.hpp"
+#include "pipeline/item_visual.hpp"
 #include "pipeline/char_sections.hpp"
 #include "core/geoset_rules.hpp"
 #include "pipeline/item_textures.hpp"
@@ -862,22 +863,14 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntrie
         // the client puts on any unit's item model, a creature's included
         // (ItemDisplayInfo column 23); a player's main and off hand show
         // their enchant's instead where the display has none (0x006e1290).
-        uint32_t visual = displayDbc->getUInt32(static_cast<uint32_t>(rec), kItemDisplayItemVisualColumn);
-        if (dress.isPlayer && i < 2) visual = playerWeaponVisual(visual, slots.enchants[i]);
+        const std::array<uint32_t, 2> enchants = {game::visibleItemEnchantField(slots.enchants[i]),
+                                                  game::visibleItemTempEnchantField(slots.enchants[i])};
+        const uint32_t visual = dress.isPlayer && i < 2
+                                    ? pipeline::itemVisualOf(*assetManager_, displays[i], enchants)
+                                    : pipeline::displayItemVisual(*displayDbc, displays[i]);
         attachDisplayItemVisual(instanceId, point, visual);
     }
     return true;
-}
-
-uint32_t EntitySpawner::playerWeaponVisual(uint32_t displayVisual, uint32_t enchantField) const {
-    if (!assetManager_) return displayVisual;
-    auto sie = assetManager_->loadDBC("SpellItemEnchantment.dbc");
-    auto visuals = assetManager_->loadDBC("ItemVisuals.dbc");
-    const auto* sieL =
-        pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("SpellItemEnchantment") : nullptr;
-    return pipeline::playerWeaponItemVisual(
-        displayVisual, game::visibleItemEnchantField(enchantField), game::visibleItemTempEnchantField(enchantField),
-        sie && sie->isLoaded() ? sie.get() : nullptr, visuals && visuals->isLoaded() ? visuals.get() : nullptr, sieL);
 }
 
 void EntitySpawner::attachDisplayItemVisual(uint32_t instanceId, uint32_t point, uint32_t itemVisualId) {
@@ -2980,13 +2973,16 @@ uint32_t EntitySpawner::spawnParticleTwin(uint32_t displayId, uint32_t charModel
                                             /*allowPositionDedup=*/false);
     if (twin == 0) return 0;
     m2->setInstanceExternalPose(twin, model, *bones, seq, t, gt);
-    if (auto disp = displayDataMap_.find(displayId);
-        disp != displayDataMap_.end() && disp->second.particleColorId != 0) {
-        if (auto pc = particleColors_.find(disp->second.particleColorId); pc != particleColors_.end()) {
-            m2->setInstanceParticleColors(twin, pc->second);
-        }
-    }
+    if (const auto colors = particleColorsOf(displayId)) m2->setInstanceParticleColors(twin, *colors);
     return twin;
+}
+
+std::optional<std::array<glm::vec3, 9>> EntitySpawner::particleColorsOf(uint32_t displayId) const {
+    const auto disp = displayDataMap_.find(displayId);
+    if (disp == displayDataMap_.end() || disp->second.particleColorId == 0) return std::nullopt;
+    const auto colors = particleColors_.find(disp->second.particleColorId);
+    if (colors == particleColors_.end()) return std::nullopt;
+    return colors->second;
 }
 
 void EntitySpawner::syncCreatureParticleTwins() {

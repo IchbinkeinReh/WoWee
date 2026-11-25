@@ -604,7 +604,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
     // Mega bone SSBO - consolidates all animated instance bones into one buffer per frame.
     // Slot 0 = identity matrix (for non-animated instances), slots 1..N = animated instances.
     {
-        const VkDeviceSize megaSize = VkDeviceSize(MEGA_BONE_MATRIX_CAPACITY) * sizeof(glm::mat4);
+        const VkDeviceSize megaSize = VkDeviceSize(boneCapacity_) * sizeof(glm::mat4);
         glm::mat4 identity(1.0f);
         for (int i = 0; i < 2; i++) {
             VkBufferCreateInfo bci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -651,7 +651,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
     // Shader reads instanceData[push.instanceDataOffset + gl_InstanceIndex].
     {
         static_assert(sizeof(M2InstanceGPU) == 192, "M2InstanceGPU must be 192 bytes (std430)");
-        const VkDeviceSize instBufSize = MAX_INSTANCE_DATA * sizeof(M2InstanceGPU);
+        const VkDeviceSize instBufSize = VkDeviceSize(instanceCapacity_) * sizeof(M2InstanceGPU);
 
         // Descriptor pool for 2 sets (double-buffered), four buffers each
         VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 8};
@@ -770,7 +770,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         // particles flickered whenever the two overlapped.
         static_assert(kDynamicVBSlots == MAX_FRAMES_IN_FLIGHT);
         for (uint32_t i = 0; i < kDynamicVBSlots; ++i) {
-            bci.size = MAX_M2_PARTICLE_VERTS * kParticleVertexFloats * sizeof(float);
+            bci.size = particleCapacity_ * kParticleVertexFloats * sizeof(float);
             vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &m2ParticleVB_[i], &m2ParticleVBAlloc_[i], &allocInfo);
             m2ParticleVBMapped_[i] = allocInfo.pMappedData;
 

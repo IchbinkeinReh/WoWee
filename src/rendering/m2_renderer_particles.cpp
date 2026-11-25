@@ -676,7 +676,7 @@ void M2Renderer::prepareM2Particles() {
                     pWorld, color * emitterGlowTexel, alpha, scale * p.sizeVary * cachedModelScale, emitterGlowWeight);
             }
 
-            if (vbWritten >= MAX_M2_PARTICLE_VERTS) {
+            if (vbWritten >= particleCapacity_) {
                 droppedParticles += 1;
                 continue;
             }

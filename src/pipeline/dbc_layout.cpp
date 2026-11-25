@@ -336,33 +336,22 @@ std::array<std::string, 5> resolveItemVisualModels(uint32_t itemVisualId,
     return models;
 }
 
-std::array<std::string, 5> resolveEnchantItemVisuals(uint32_t enchantId,
-                                                     const DBCFile* spellItemEnchantment,
-                                                     const DBCFile* itemVisuals,
-                                                     const DBCFile* itemVisualEffects,
-                                                     const DBCFieldMap* sieL) {
-    std::array<std::string, 5> models;
-    if (enchantId == 0 || !spellItemEnchantment) return models;
-
-    int32_t enchantRow = spellItemEnchantment->findRecordById(enchantId);
-    if (enchantRow < 0) return models;
-
-    const uint32_t visualField = detectEnchantmentItemVisualField(spellItemEnchantment, sieL);
-    const uint32_t visualId = spellItemEnchantment->getUInt32(static_cast<uint32_t>(enchantRow), visualField);
-    if (visualId == 0) return models;  // most enchants have no visual
-
-    return resolveItemVisualModels(visualId, itemVisuals, itemVisualEffects);
+uint32_t displayItemVisual(const DBCFile& itemDisplayInfo, uint32_t displayId) {
+    const int32_t row = displayId != 0 ? itemDisplayInfo.findRecordById(displayId) : -1;
+    const uint32_t column = itemDisplayInfo.getFieldCount() >= 25 ? 23u : 22u;
+    if (row < 0 || column >= itemDisplayInfo.getFieldCount()) return 0;
+    const uint32_t visual = itemDisplayInfo.getUInt32(static_cast<uint32_t>(row), column);
+    return visual == 0xFFFFFFFFu ? 0u : visual;
 }
 
-uint32_t playerWeaponItemVisual(uint32_t displayItemVisual, uint32_t permanentEnchant, uint32_t temporaryEnchant,
-                                const DBCFile* spellItemEnchantment, const DBCFile* itemVisuals,
-                                const DBCFieldMap* sieL) {
+uint32_t itemVisualOf(uint32_t displayItemVisual, std::span<const uint32_t> enchants,
+                      const DBCFile* spellItemEnchantment, const DBCFile* itemVisuals, const DBCFieldMap* sieL) {
     if (displayItemVisual != 0 && itemVisuals && itemVisuals->findRecordById(displayItemVisual) >= 0) {
         return displayItemVisual;
     }
     if (!spellItemEnchantment) return 0;
     const uint32_t visualField = detectEnchantmentItemVisualField(spellItemEnchantment, sieL);
-    for (const uint32_t enchant : {permanentEnchant, temporaryEnchant}) {
+    for (const uint32_t enchant : enchants) {
         if (enchant == 0) continue;
         const int32_t row = spellItemEnchantment->findRecordById(enchant);
         if (row < 0) continue;
