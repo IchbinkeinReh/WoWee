@@ -1530,6 +1530,7 @@ public:
     /// 0x005237e0 as useUiScale is, 0x005240e0 as the screen changes), so the
     /// chosen value is kept and capped again for each screen size.
     void setUserScale(float scale) {
+        scaledByScript_ = false;
         // A scale the player chose, which the default no longer overrides.
         userScaleIsDefault_ = false;
         chosenUserScale_ = scale;
@@ -1541,22 +1542,38 @@ public:
         floatingChatUpdateDue_ = true;
         if (clamped == userScale_) return;
         userScale_ = clamped;
-        // Every rect is stale after a scale change, and this said so through
-        // layoutDirty_ - the half of the mechanism nothing read. The live half
-        // is the generation counter, so it says it through that now.
-        markLayoutDirty();
+        rescaled();
     }
     [[nodiscard]] float userScale() const { return userScale_; }
+
+    /// The player's scale is UIParent's and of what is below it (0x00513240 -> 0x0048f580). The
+    /// rects are all in UIParent's units, so a scale here is so many of those: UIParent's own is
+    /// 1, and a frame without a parent - the WorldFrame - is larger by as much as UIParent is
+    /// smaller. This is a widget's effective scale as the client counts it, in which a frame
+    /// without a parent has its own and the screen is 768 high.
+    [[nodiscard]] float trueScale(const Widget& w) const { return w.effScale * userScale_; }
+    /// UIParent:SetScale: until the player's scale or the screen sets it again.
+    void setParentScale(float scale) {
+        if (!(scale > 0.0f)) return;
+        if (!scaledByScript_) playerScale_ = userScale_;
+        scaledByScript_ = true;
+        if (scale == userScale_) return;
+        userScale_ = scale;
+        rescaled();
+    }
+    /// What the player's scale comes to, whatever a script has set.
+    [[nodiscard]] float playerScale() const { return scaledByScript_ ? playerScale_ : userScale_; }
 
     /// Back to the scale the interface has while the player has not chosen
     /// one - "Use UI Scale" turned off. On a desktop the client's own default
     /// for the screen (defaultUserScale); with fitScaleByDefault, the largest
     /// the frames fit at. Worked out again at every layout.
     void useDefaultUserScale() {
+        scaledByScript_ = false;
         userScaleIsDefault_ = true;
         floatingChatUpdateDue_ = true;   // 0x0051fb80 raises it too
         if (lastPixelW_ > 0.0f && lastPixelH_ > 0.0f) applyDefaultUserScale(lastPixelW_, lastPixelH_);
-        markLayoutDirty();
+        rescaled();
     }
 
     /// The UI scale the client gives a screen while "Use UI Scale" is off
@@ -1875,6 +1892,10 @@ private:
     /// references valid when it grows, which is the guarantee this needs.
     float uiScale_ = 1.0f;
     float userScale_ = 1.0f;
+    bool scaledByScript_ = false;   // UIParent:SetScale
+    float playerScale_ = 1.0f;      // the scale that took the place of
+    /// Another scale: the screen and UIParent are of it at once, and every rect is stale.
+    void rescaled();
     /// No UI Scale chosen: the default applies (see useDefaultUserScale).
     bool userScaleIsDefault_ = true;
     /// The uiScale the player chose, before the narrow-screen cap.
@@ -1886,6 +1907,7 @@ private:
 #endif
     /// The default scale for this screen and safe area, when it applies.
     void applyDefaultUserScale(float pixelW, float pixelH) {
+        if (scaledByScript_) return;
         if (!userScaleIsDefault_) {
             // The chosen scale, capped again for this screen (0x005240e0).
             const float s = narrowAspectCap(chosenUserScale_, pixelW, pixelH);

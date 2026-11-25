@@ -7447,7 +7447,7 @@ void Application::render() {
                         // Held at the frame's middle, in its own units: half its
                         // width and height (0x005446f0).
                         if (frame->modelCentered) {
-                            const float eff = frame->effScale > 0.0f ? frame->effScale : 1.0f;
+                            const float eff = frame->effScale > 0.0f ? widgets.trueScale(*frame) : 1.0f;
                             frame->modelPosition[0] = viewW * ddcPerUnit / eff * 0.5f;
                             frame->modelPosition[1] = viewH * ddcPerUnit / eff * 0.5f;
                             frame->modelPosition[2] = 0.0f;
@@ -7456,7 +7456,7 @@ void Application::render() {
                                                   frame->modelPosition[2]);
                         pose.facing = frame->modelFacing;
                         pose.modelScale = frame->modelScale;
-                        pose.effectiveScale = frame->effScale;
+                        pose.effectiveScale = widgets.trueScale(*frame);
                         // A PlayerModel's camera stays where the model came.
                         std::optional<rendering::model_frame::Pose> came;
                         if (frame->isPlayerModel() && frame->modelCamera < 0) {

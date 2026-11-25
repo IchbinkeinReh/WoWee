@@ -220,7 +220,7 @@ void Application::drawUnitModels(ui::WidgetTree& widgets, float screenW, float s
             const bool drawn = figure.view->show(look, assetManager.get(), renderer.get(), deltaTime);
             figure.view->setFigureLight(
                 rendering::model_frame::lightOf(*frame),
-                rendering::model_frame::fogOf(*frame, frame->effScale * rendering::figure_camera::unit(
+                rendering::model_frame::fogOf(*frame, widgets.trueScale(*frame) * rendering::figure_camera::unit(
                                                                             frame->modelCameScale, ddcH)));
             figure.view->setTurning(frame->modelTurn, frame->modelTurnSerial);
             figure.view->setSequence(frame->modelSequence, frame->modelSequenceSerial);

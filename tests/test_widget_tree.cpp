@@ -587,7 +587,7 @@ TEST_CASE("The interface is laid out in units, whatever the display is",
     }
 
     SECTION("a frame keeps its authored size in units on every display") {
-        const uint32_t f = tree.create(WidgetKind::Frame, tree.root(), "F");
+        const uint32_t f = tree.create(WidgetKind::Frame, tree.uiParentId(), "F");
         tree.get(f)->width = 232.0f;
         tree.get(f)->height = 100.0f;
         tree.addPoint(f, Anchor{"BOTTOMLEFT", 0, "BOTTOMLEFT", 0.0f, 0.0f});
@@ -5102,4 +5102,43 @@ TEST_CASE("what a font string's size comes of", "[widget][fontstring]") {
     CHECK_FALSE(textLayout(w()) == same);
     w().indentedWordWrap = false;
     CHECK(textLayout(w()) == same);
+}
+
+// 0x00513240 -> 0x0048f580; 0x00510a10, 0x0051aef0
+TEST_CASE("the player's scale is UIParent's, and not of what has no parent", "[widget_tree][scale]") {
+    WidgetTree tree;
+    tree.noteScreenSize(1920.0f, 1080.0f);
+    tree.setUserScale(0.8f);
+    const uint32_t world = tree.create(WidgetKind::Frame, tree.rootId(), "World");
+    const uint32_t in = tree.create(WidgetKind::Frame, tree.uiParentId(), "In");
+    for (const uint32_t id : {world, in}) {
+        Widget* w = tree.get(id);
+        w->width = w->height = 100.0f;
+        Anchor p;
+        p.point = p.relativePoint = "BOTTOMLEFT";
+        p.relativeTo = id == world ? tree.rootId() : tree.uiParentId();
+        p.x = p.y = 10.0f;
+        tree.addPoint(id, p);
+    }
+    tree.layout(1920.0f, 1080.0f);
+    const auto& ui = *tree.get(tree.uiParentId());
+    CHECK(ui.rectH == Catch::Approx(960.0f));
+    CHECK(tree.trueScale(ui) == Catch::Approx(0.8f));
+    CHECK(tree.trueScale(*tree.get(in)) == Catch::Approx(0.8f));
+    CHECK(tree.trueScale(*tree.get(world)) == Catch::Approx(1.0f));
+    // On the screen: a hundred of its own units each, which are a 768th of the screen's height
+    // for the one and four fifths of that for the other.
+    CHECK(tree.get(world)->rectW * tree.uiScale() == Catch::Approx(100.0f * 1080.0f / 768.0f));
+    CHECK(tree.get(in)->rectW * tree.uiScale() == Catch::Approx(80.0f * 1080.0f / 768.0f));
+    CHECK(tree.get(world)->left * tree.uiScale() == Catch::Approx(10.0f * 1080.0f / 768.0f));
+    // UIParent:SetScale, at once, till the player's scale is set again.
+    tree.setParentScale(0.5f);
+    CHECK(tree.get(tree.uiParentId())->rectH == Catch::Approx(1536.0f));
+    CHECK(tree.playerScale() == Catch::Approx(0.8f));
+    tree.layout(1920.0f, 1080.0f);
+    CHECK(tree.userScale() == Catch::Approx(0.5f));
+    CHECK(tree.trueScale(*tree.get(world)) == Catch::Approx(1.0f));
+    tree.setUserScale(0.64f);
+    CHECK(tree.get(tree.uiParentId())->rectH == Catch::Approx(1200.0f));
+    CHECK(tree.playerScale() == Catch::Approx(0.64f));
 }

@@ -2060,7 +2060,7 @@ static int lua_GetCVar(lua_State* L) {
         // rather than what was applied - which is how a control comes to show a
         // number the interface is not using.
         if (auto* tree = getWidgetTree(L)) {
-            lua_pushstring(L, ui::settingNumberText(tree->userScale()).c_str());
+            lua_pushstring(L, ui::settingNumberText(tree->playerScale()).c_str());
             return 1;
         }
     }

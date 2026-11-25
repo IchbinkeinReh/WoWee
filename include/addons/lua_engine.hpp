@@ -71,8 +71,8 @@ public:
     /// Whether all of it was built; lastError is the first that was not.
     bool buildElements(const ui::EmitResult& emitted, const std::string& fileName,
                        const std::function<void(const ui::EmitResult::FileAt&)>& onFile);
-    /// The chat bubbles there are, at this scale (chat_bubble_lua.hpp).
-    void showChatBubbles(float scale, const std::vector<ui::ChatBubbleView>& bubbles);
+    /// The chat bubbles there are (chat_bubble_lua.hpp).
+    void showChatBubbles(const std::vector<ui::ChatBubbleView>& bubbles);
 
     /// Run typed text the way RunScript does (0x00819210): tainted by
     /// `taint`, with a failure handed to the interface's error handler.

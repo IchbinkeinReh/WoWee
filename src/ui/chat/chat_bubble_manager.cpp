@@ -40,7 +40,7 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
     auto* camera = renderer ? renderer->getCamera() : nullptr;
     if (!engine) return;
     if (bubbles_.empty() || !camera) {
-        engine->showChatBubbles(1.0f, {});
+        engine->showChatBubbles({});
         return;
     }
 
@@ -102,9 +102,7 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
         views.push_back({.id = bubble.id, .text = bubble.message, .type = chat_bubble::typeName(bubble.chatType),
                          .alpha = bubble.alpha, .x = px / unit, .y = (screenH - py) / unit});
     }
-    // Units of 768 to the screen's height, whatever the interface's own scale.
-    const float interfaceUnit = engine->widgets().uiScale();
-    engine->showChatBubbles(interfaceUnit > 0.0f ? screenH / 768.0f / interfaceUnit : 1.0f, views);
+    engine->showChatBubbles(views);
 }
 
 void ChatBubbleManager::setupCallback(game::GameHandler& gameHandler) {

@@ -955,7 +955,10 @@ void WidgetTree::noteScreenSize(float pixelW, float pixelH) {
     if (pixelW <= 0.0f || pixelH <= 0.0f) return;
     // A new size for a screen already laid out (0x005240e0 -> 0x0051fb80 or
     // 0x00513240) raises UPDATE_FLOATING_CHAT_WINDOWS.
-    if (lastPixelW_ > 0.0f && (lastPixelW_ != pixelW || lastPixelH_ != pixelH)) floatingChatUpdateDue_ = true;
+    if (lastPixelW_ > 0.0f && (lastPixelW_ != pixelW || lastPixelH_ != pixelH)) {
+        floatingChatUpdateDue_ = true;
+        scaledByScript_ = false;   // 0x005240e0
+    }
     lastPixelW_ = pixelW;
     lastPixelH_ = pixelH;
     applyDefaultUserScale(pixelW, pixelH);
@@ -968,6 +971,14 @@ void WidgetTree::noteScreenSize(float pixelW, float pixelH) {
     placeScreen();
 }
 
+void WidgetTree::rescaled() {
+    if (lastPixelW_ > 0.0f && lastPixelH_ > 0.0f && !layingOut_) {
+        uiScale_ = (lastPixelH_ / kInterfaceHeight) * userScale_;
+        placeScreen();
+    }
+    markLayoutDirty();
+}
+
 void WidgetTree::placeScreen() {
     const float units = uiScale_ > 0.0f ? uiScale_ : 1.0f;
     const float screenW = lastPixelW_ / units;
@@ -977,7 +988,7 @@ void WidgetTree::placeScreen() {
         if (screen->rectW != screenW || screen->rectH != screenH) markResizePending(rootId_);
         screen->rectW = screenW;
         screen->rectH = screenH;
-        screen->effScale = 1.0f;
+        screen->effScale = userScale_ > 0.0f ? 1.0f / userScale_ : 1.0f;   // trueScale
     }
     // UIParent inside the safe area, where the display has one: in landscape
     // an iPhone's notch covers one side and its home indicator the bottom.
@@ -1069,7 +1080,10 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     if (layingOut_) return;
     layingOut_ = true;
     struct Done { bool& f; ~Done() { f = false; } } done{layingOut_};
-    if (lastPixelW_ > 0.0f && (lastPixelW_ != pixelW || lastPixelH_ != pixelH)) floatingChatUpdateDue_ = true;
+    if (lastPixelW_ > 0.0f && (lastPixelW_ != pixelW || lastPixelH_ != pixelH)) {
+        floatingChatUpdateDue_ = true;
+        scaledByScript_ = false;   // 0x005240e0
+    }
     lastPixelW_ = pixelW;
     lastPixelH_ = pixelH;
     // How many pixels one interface unit is worth. Everything below works in
@@ -1277,7 +1291,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     w->effStrata = w->strataExplicit ? w->strata : (parent ? parent->effStrata : FrameStrata::Medium);
     w->effLevel  = w->levelExplicit  ? w->level  : (parent ? levelIn(*parent) : 0);
     // Multiplied down the chain, so scaling a window scales everything in it.
-    w->effScale  = (parent ? parent->effScale : 1.0f) * w->scale;
+    w->effScale  = (parent ? parent->effScale : userScale_ > 0.0f ? 1.0f / userScale_ : 1.0f) * w->scale;
     const float es = w->effScale;
 
     // Solve each axis from the anchors. An anchor says "this fraction of my rect

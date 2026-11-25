@@ -5,8 +5,7 @@ namespace wowee::addons {
 /// The chat bubbles' frames (0x0056cad0, 0x0056c7f0, 0x0056c340): children of the
 /// WorldFrame without a name, which addons find among them, made as they are needed
 /// and used again. The chunk answers a function that is handed the bubbles there are,
-/// each frame: their scale, then of each its id, text, type, alpha and place
-/// (ChatBubbleView).
+/// each frame: of each its id, text, type, alpha and place (ChatBubbleView).
 ///
 /// The text in NAMEPLATE_FONT at 12.8 units - 0.01 of the screen's 0.6 high -, as wide
 /// as it runs between 32 and 256; the backdrop 12.8 larger on each side, its tail below
@@ -45,7 +44,7 @@ local function fill(b, words, kind)
     b.frame:SetHeight(b.text:GetHeight() + 2 * PAD)
 end
 
-return function(scale, ...)
+return function(...)
     local seen = {}
     for i = 1, select('#', ...), 6 do
         local id, words, kind, alpha, x, y = select(i, ...)
@@ -54,7 +53,6 @@ return function(scale, ...)
         if not b then
             b = table.remove(free) or make()
             byId[id] = b
-            b.frame:SetScale(scale)
             fill(b, words, kind)
             b.x, b.y = nil, nil
             b.frame:Show()

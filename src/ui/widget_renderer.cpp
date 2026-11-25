@@ -1373,7 +1373,8 @@ void WidgetRenderer::drawCooldown(ImDrawList* dl, const Widget& w,
     if (w.cooldownDrawEdge) {
         if (const VkDescriptorSet edge = resident(kCooldownEdge); edge != kMissing) {
             const float full[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-            quad(edge, cooldown_sweep::turned(cooldown_sweep::edgeAngle(progress), w.effScale > 0.0f ? w.effScale : 1.0f),
+            quad(edge, cooldown_sweep::turned(cooldown_sweep::edgeAngle(progress),
+                                             w.effScale > 0.0f ? w.effScale * textScreen().uiScale : 1.0f),
                  packColor(full, w.drawAlpha));
         }
     }

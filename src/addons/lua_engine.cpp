@@ -2174,13 +2174,12 @@ int lua_Region_GetRect(lua_State* L) {
     lua_pushnumber(L, ownUnits(w, w->rectH));
     return 4;
 }
-/// Per-frame scale is not modelled - the tree scales the whole interface at
-/// once, which is what UIParent's scale means and where the number FrameXML
-/// wants comes from. One is therefore the true answer for every frame, and it
-/// is a number, which is the part that matters where it is divided by.
+/// GetScale(): a frame's own; UIParent's is the player's (0x00513240).
 int lua_Region_GetScale(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushnumber(L, w ? w->scale : 1.0);
+    const auto* tree = wowee::addons::getWidgetTree(L);
+    if (w && tree && w->id == tree->uiParentId()) lua_pushnumber(L, tree->userScale());
+    else lua_pushnumber(L, w ? w->scale : 1.0);
     return 1;
 }
 // SetScale(scale) (0x0049f820): a number, or the usage error; one not above
@@ -2192,19 +2191,25 @@ int lua_Region_SetScale(lua_State* L) {
         if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetScale(scale)", who);
         const auto v = static_cast<float>(lua_tonumber(L, 2));
         if (!(v > 0.0f)) return luaL_error(L, "%s:SetScale(): Scale must be > 0", who);
+        auto* tree = wowee::addons::getWidgetTree(L);
+        if (tree && w->id == tree->uiParentId()) {
+            tree->setParentScale(v);
+            return 0;
+        }
         w->scale = v;
         // What hangs on it is to be worked out again, by whoever asks (0x00489e90).
-        if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markLayoutDirty();
+        if (tree) tree->markLayoutDirty();
     }
     return 0;
 }
 int lua_Region_GetEffectiveScale(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    if (auto* tree = w ? wowee::addons::getWidgetTree(L) : nullptr) {
+    auto* tree = w ? wowee::addons::getWidgetTree(L) : nullptr;
+    if (tree) {
         tree->resolveWidget(w->id);
         w = tree->get(w->id);
     }
-    lua_pushnumber(L, w ? w->effScale : 1.0);
+    lua_pushnumber(L, w ? (tree ? tree->trueScale(*w) : w->effScale) : 1.0);
     return 1;
 }
 int lua_Frame_GetFrameLevel(lua_State* L) {
@@ -11092,23 +11097,10 @@ static int lua_GetFramerate(lua_State* L) {
     return 1;
 }
 
-// GetCursorPosition() → x, y - pixels, measured from the BOTTOM left.
-//
-// Pixels rather than interface units is right, and deliberate: every caller
-// divides by UIParent:GetScale() itself. channelframe.lua does exactly that on
-// the line after asking, and then anchors what it dragged to BOTTOMLEFT - which
-// is the half that was wrong. ImGui measures the cursor from the top, so y came
-// back mirrored and anything positioned from it landed as far from the bottom
-// as the cursor was from the top.
+// GetCursorPosition() → x, y from the bottom left (0x00510a10), in the units of a frame without a
+// parent: the screen is 768 high, whatever UIParent's scale. Callers divide by a frame's
+// effective scale for its own.
 static int lua_GetCursorPosition(lua_State* L) {
-    // Interface units with y growing upward - the same conversion the input
-    // path and GetMouseFocus make, and the space every frame coordinate is in.
-    //
-    // This alone answered in raw pixels. Callers divide by GetEffectiveScale
-    // and then use the result as a frame position, and effective scale at the
-    // root is one, so the pixels went straight through: on a 1080-tall window
-    // every such position was out by forty percent, and on a 4K one by nearly
-    // three times. The loot window opened under the mouse landed well off it.
     // Through ui::mouseToTreeSpace, which is the one definition of it. This
     // was a third hand-written copy - the flip in application.cpp, the scale
     // in dispatchMouse, and both again here - and the copies are how the
@@ -11130,15 +11122,13 @@ static int lua_GetCursorPosition(lua_State* L) {
         py = io.DisplaySize.y * 0.5f;
     }
     ui::mouseToTreeSpace(px, py, io.DisplaySize.y, tree ? tree->uiScale() : 1.0f);
-    lua_pushnumber(L, px);
-    lua_pushnumber(L, py);
+    const float of = tree ? tree->userScale() : 1.0f;
+    lua_pushnumber(L, px * of);
+    lua_pushnumber(L, py * of);
     return 2;
 }
 
-// GetScreenWidth() → width
-/// The screen in interface units, not pixels - which is what FrameXML means
-/// by it. On a 1528-tall window GetScreenHeight() is 768, the same as it would
-/// be on any other, and a frame sized against it comes out the same size.
+// GetScreenWidth(), GetScreenHeight() (0x0051aef0, 0x0051af50): the screen in UIParent's units.
 static int lua_GetScreenWidth(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const auto* root = tree ? tree->get(tree->rootId()) : nullptr;
@@ -11149,7 +11139,6 @@ static int lua_GetScreenWidth(lua_State* L) {
     return 1;
 }
 
-// GetScreenHeight() → height
 static int lua_GetScreenHeight(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const auto* root = tree ? tree->get(tree->rootId()) : nullptr;
@@ -20442,7 +20431,7 @@ bool LuaEngine::executeFile(const std::string& path) {
 /// The stack is left as it was found, whatever the chunk does: this runs from
 /// the input path, once per key press, and a value left behind on each one
 /// grows until the state is exhausted.
-void LuaEngine::showChatBubbles(float scale, const std::vector<ui::ChatBubbleView>& bubbles) {
+void LuaEngine::showChatBubbles(const std::vector<ui::ChatBubbleView>& bubbles) {
     if (!L_ || (bubbles.empty() && !chatBubblesUp_)) return;
     chatBubblesUp_ = !bubbles.empty();
     taint::Quiet quiet;   // the client's own frames
@@ -20461,7 +20450,6 @@ void LuaEngine::showChatBubbles(float scale, const std::vector<ui::ChatBubbleVie
     }
     if (lua_isfunction(L_, -1)) {
         luaL_checkstack(L_, static_cast<int>(bubbles.size()) * 6 + 2, "too many chat bubbles");
-        lua_pushnumber(L_, scale);
         for (const ui::ChatBubbleView& b : bubbles) {
             lua_pushnumber(L_, b.id);
             lua_pushstring(L_, b.text.c_str());
@@ -20470,7 +20458,7 @@ void LuaEngine::showChatBubbles(float scale, const std::vector<ui::ChatBubbleVie
             lua_pushnumber(L_, b.x);
             lua_pushnumber(L_, b.y);
         }
-        if (lua_pcall(L_, static_cast<int>(bubbles.size()) * 6 + 1, 0, 0) != 0)
+        if (lua_pcall(L_, static_cast<int>(bubbles.size()) * 6, 0, 0) != 0)
             LOG_WARNING("Chat bubbles: ", lua_tostring(L_, -1) ? lua_tostring(L_, -1) : "(unknown)");
     }
     lua_settop(L_, base);

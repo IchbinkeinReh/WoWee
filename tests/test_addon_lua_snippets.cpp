@@ -385,7 +385,7 @@ local function thing()
     local t = {shown = true}
     local function keep(name) return function(self, ...) self['got' .. name] = {...} end end
     for _, n in ipairs({'SetFrameStrata', 'SetBackdrop', 'SetTexture', 'SetHeight', 'SetFont', 'SetTextColor',
-                        'SetScale', 'SetAlpha', 'SetFrameLevel', 'ClearAllPoints'}) do t[n] = keep(n) end
+                        'SetAlpha', 'SetFrameLevel', 'ClearAllPoints'}) do t[n] = keep(n) end
     t.points = 0
     function t:SetPoint(...) self.points = self.points + 1; self.at = {...} end
     function t:SetWidth(w) self.w = w end
@@ -416,27 +416,27 @@ TEST_CASE("chat bubbles are the WorldFrame's frames, used again", "[addons][lua]
         {kFakeBubbleWorldLua, "world"},
         {(std::string("show = (function() ") + wowee::addons::kChatBubblesLua + " end)()").c_str(), "bubbles"},
         {R"LUA(
-show(1.5, 1, 'Hi', 'YELL', 0.5, 100, 200)
+show(1, 'Hi', 'YELL', 0.5, 100, 200)
 local f = frames[1]
-local out = made .. ' ' .. f.text.w .. ' ' .. f.w .. ' ' .. f.gotSetScale[1] .. ' ' .. f.gotSetAlpha[1] .. ' ' .. f.gotSetFrameLevel[1]
+local out = made .. ' ' .. f.text.w .. ' ' .. f.w .. ' ' .. f.gotSetAlpha[1] .. ' ' .. f.gotSetFrameLevel[1]
 out = out .. ' ' .. f.at[1] .. ' ' .. f.at[3] .. ' ' .. f.at[4] .. ' ' .. f.at[5] .. ' ' .. f.text.gotSetTextColor[2]
 -- Less than a unit off: where it was.
-show(1.5, 1, 'Hi', 'YELL', 1, 100.9, 199.5)
+show(1, 'Hi', 'YELL', 1, 100.9, 199.5)
 out = out .. ' ' .. f.points
-show(1.5, 1, 'Hi', 'YELL', 1, 101.1, 199.5)
+show(1, 'Hi', 'YELL', 1, 101.1, 199.5)
 out = out .. ' ' .. f.points .. ' ' .. f.at[4]
 -- A second, long one over it; the first is gone, and its frame the next one's.
-show(1.5, 1, 'Hi', 'YELL', 1, 101, 200, 2, 'x', 'SAY', 1, 0, 0)
+show(1, 'Hi', 'YELL', 1, 101, 200, 2, 'x', 'SAY', 1, 0, 0)
 out = out .. ' ' .. made .. ' ' .. frames[2].gotSetFrameLevel[1] .. ' ' .. frames[2].text.gotSetTextColor[2]
-show(1.5, 2, 'x', 'SAY', 1, 0, 0)
+show(2, 'x', 'SAY', 1, 0, 0)
 out = out .. ' ' .. tostring(f.shown)
-show(1.5, 2, 'x', 'SAY', 1, 0, 0, 3, '0123456789012345678901234567890123456789', 'SAY', 1, 0, 0)
+show(2, 'x', 'SAY', 1, 0, 0, 3, '0123456789012345678901234567890123456789', 'SAY', 1, 0, 0)
 out = out .. ' ' .. made .. ' ' .. tostring(f.shown) .. ' ' .. f.text.w
-show(1.5)
+show()
 out = out .. ' ' .. tostring(f.shown) .. ' ' .. tostring(frames[2].shown)
 return out
 )LUA", "check"}});
-    CHECK(result == "1 32 57.6 1.5 0.5 2 BOTTOM BOTTOMLEFT 100 187.2 0.25 1 2 101.1 2 3 1 false 2 true 256 false false");
+    CHECK(result == "1 32 57.6 0.5 2 BOTTOM BOTTOMLEFT 100 187.2 0.25 1 2 101.1 2 3 1 false 2 true 256 false false");
 }
 
 // The Sound and Effects pages are among the removed ones (kRemovedCategories),
