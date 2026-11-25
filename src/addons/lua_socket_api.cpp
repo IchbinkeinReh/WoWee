@@ -62,6 +62,17 @@ uint32_t gemColorMask(game::GameHandler* gh, uint32_t gemItemId) {
     return dbc->getUInt32(static_cast<uint32_t>(row), 4);
 }
 
+/// The enchantment a gem is in a socket (GemProperties.dbc), 0 for none.
+uint32_t gemEnchant(game::GameHandler* gh, uint32_t gemItemId) {
+    const auto* info = gh && gemItemId != 0 ? gh->getItemInfo(gemItemId) : nullptr;
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!info || info->gemProperties == 0 || !am || !am->isInitialized()) return 0;
+    const auto dbc = am->loadDBC("GemProperties.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 5) return 0;
+    const int32_t row = dbc->findRecordById(info->gemProperties);
+    return row >= 0 ? dbc->getUInt32(static_cast<uint32_t>(row), 1) : 0;
+}
+
 /// The template of the item whose sockets are on screen.
 const game::ItemQueryResponseData* socketItemInfo(game::GameHandler* gh) {
     if (!gh || !gh->isSocketingOpen()) return nullptr;
@@ -360,6 +371,17 @@ int lua_GetSocketItemBoundTradeable(lua_State* L) {
 }
 
 }  // namespace
+
+std::array<uint32_t, 3> socketsAsTheyWouldBe(game::GameHandler* gh) {
+    std::array<uint32_t, 3> sockets{};
+    if (!gh || !gh->isSocketingOpen()) return sockets;
+    const auto there = gh->getItemSocketEnchantIds(gh->getSocketItemGuid());
+    for (int i = 0; i < 3; ++i) {
+        const uint32_t put = gemEnchant(gh, gh->getSocketPendingGemItemId(i));
+        sockets[static_cast<size_t>(i)] = put != 0 ? put : there[static_cast<size_t>(i)];
+    }
+    return sockets;
+}
 
 namespace {
 

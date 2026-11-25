@@ -969,6 +969,9 @@ inline void askItemForEvent(game::GameHandler* gh, uint32_t itemId, const char* 
 const game::GameHandler::QuestLogEntry* questOfLogRow(game::GameHandler* gh, int index);
 /// The spell using an item casts (0x00510ef0), 0 for none.
 uint32_t itemUseSpell(game::GameHandler* gh, uint32_t itemId);
+/// The enchantments of the sockets on screen as they would be with the gems put
+/// in so far: theirs, else those already there (0x006301a0).
+std::array<uint32_t, 3> socketsAsTheyWouldBe(game::GameHandler* gh);
 /// The quest's item the player carries or wears and can use (0x005e0da0).
 QuestSpecialItem questSpecialItemAt(game::GameHandler* gh, int questIndex);
 

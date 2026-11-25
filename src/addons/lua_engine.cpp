@@ -6831,7 +6831,8 @@ int lua_Tooltip_SetExistingSocketGem(lua_State* L) {
 int lua_Tooltip_SetSocketedItem(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     if (!widgetOf(L, 1) || !gh) { lua_pushboolean(L, 0); return 1; }
-    lua_pushboolean(L, fillItemTooltipById(L, gh, gh->getSocketItemId()) ? 1 : 0);
+    const auto sockets = wowee::addons::socketsAsTheyWouldBe(gh);
+    lua_pushboolean(L, fillItemTooltipById(L, gh, gh->getSocketItemId(), nullptr, &sockets) ? 1 : 0);
     return 1;
 }
 
