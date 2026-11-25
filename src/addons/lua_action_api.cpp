@@ -4008,10 +4008,33 @@ void applyAccountBindingsText(lua_State* L, const std::string& text) {
     if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
 }
 
-// RunBinding(command, keystate) → runs what bindings.xml says the command does
+// RunBinding(command, keystate) → runs what bindings.xml says the command does.
+//
+// 0x0055fad0: "up", whatever its case, is a release; anything else and nothing
+// at all a press. 0x0055f860 then runs a release only of a binding declared
+// runOnUp (+0x20). The stack splitter runs the binding of each key it does not
+// use itself, press and release, and a window's key opened it and closed it.
 static int lua_RunBinding(lua_State* L) {
-    const std::string command = luaL_checkstring(L, 1);
-    const char* keystate = lua_isnoneornil(L, 2) ? "down" : luaL_checkstring(L, 2);
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: RunBinding(\"COMMAND\")");
+    const std::string command = lua_tostring(L, 1);
+    bool up = false;
+    if (lua_isstring(L, 2)) {
+        std::string state = lua_tostring(L, 2);
+        toLowerInPlace(state);
+        up = state == "up";
+    }
+    if (up) {
+        taint::Quiet quiet;
+        lua_getglobal(L, "__WoweeBindingRunOnUp");
+        bool onUp = false;
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, command.c_str());
+            onUp = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+        if (!onUp) return 0;
+    }
 
     // Run under the caller's own taint (0x0055fad0 hands 0x0055f860 the
     // running one), the script found without tainting it further.
@@ -4023,7 +4046,7 @@ static int lua_RunBinding(lua_State* L) {
         lua_getfield(L, -1, command.c_str());
         if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return 0; }
     }
-    lua_pushstring(L, keystate);
+    lua_pushstring(L, up ? "up" : "down");
     int rc = 0;
     {
         taint::Scope binding(caller);

@@ -444,3 +444,24 @@ TEST_CASE("a multi-line box is as tall as its text", "[replay][interface]") {
     ui.engine.dispatchOnUpdate(0.05f);
     CHECK(ui.is("line:GetHeight() == 20"));
 }
+
+// P76: the stack splitter runs the binding of each key it does not use, press and release; a
+// release runs only a binding declared runOnUp (0x0055f860).
+TEST_CASE("RunBinding's release runs a binding that asks for it alone", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("opened, walked = {}, {} "
+           "__WoweeBindingScripts = {TOGGLECHARACTER0 = function(k) opened[#opened + 1] = k end, "
+           "  MOVEFORWARD = function(k) walked[#walked + 1] = k end} "
+           "__WoweeBindingRunOnUp = {MOVEFORWARD = true}");
+    ui.run("RunBinding('TOGGLECHARACTER0') RunBinding('TOGGLECHARACTER0', 'up') RunBinding('TOGGLECHARACTER0', 'UP')");
+    CHECK(ui.is("#opened == 1 and opened[1] == 'down'"));
+    ui.run("RunBinding('MOVEFORWARD') RunBinding('MOVEFORWARD', 'up') RunBinding('MOVEFORWARD', 'Up')");
+    CHECK(ui.is("#walked == 3 and walked[1] == 'down' and walked[2] == 'up' and walked[3] == 'up'"));
+    // Anything else is a press, and no command is the client's own error.
+    ui.run("RunBinding('TOGGLECHARACTER0', 'sideways')");
+    CHECK(ui.is("#opened == 2 and opened[2] == 'down'"));
+    CHECK(ui.is("(function() local ok, e = pcall(RunBinding) return not ok and e:find('Usage: RunBinding') ~= nil end)()"));
+    ui.run("RunBinding('') RunBinding('NOSUCH') RunBinding('NOSUCH', 'up')");
+}
