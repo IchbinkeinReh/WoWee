@@ -15828,8 +15828,6 @@ void LuaEngine::registerCoreAPI() {
         // is later. GetPetActionInfo, GetNumShapeshiftForms and the rest had
         // working implementations that never ran once.
         //
-        // Binding functions
-        "function GetCurrentBindingSet() return 1 end\n"
         // Stance bar
         // Pet action bar
         "NUM_PET_ACTION_SLOTS = 10\n"
