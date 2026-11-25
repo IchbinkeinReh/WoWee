@@ -4014,3 +4014,51 @@ TEST_CASE("the HIGHLIGHT layer is there while the mouse is on its frame", "[widg
     tree.get(frame)->highlightLocked = true;
     CHECK(drawn(glow));
 }
+
+// 0x0096fe30
+TEST_CASE("a button's state without a picture keeps the one shown", "[widgets][buttonart]") {
+    WidgetTree tree;
+    Anchor a;
+    a.point = "CENTER";
+    a.relativePoint = "CENTER";
+    const uint32_t button = tree.create(WidgetKind::Frame, tree.rootId(), "");
+    tree.setWidth(button, 50.0f);
+    tree.setHeight(button, 50.0f);
+    tree.addPoint(button, a);
+    const auto art = [&](ButtonArt kind) {
+        const uint32_t id = tree.create(WidgetKind::Texture, button, "");
+        tree.get(id)->solidColor = true;
+        tree.get(id)->buttonArt = kind;
+        return id;
+    };
+    const uint32_t normal = art(ButtonArt::Normal);
+    const auto shown = [&] {
+        tree.layout(800.0f, 600.0f);
+        uint32_t out = 0;
+        for (const auto* w : tree.drawOrder()) out = w->id;
+        return out;
+    };
+    auto* b = tree.get(button);
+    CHECK(shown() == normal);
+    b->enabled = false;
+    CHECK(shown() == normal);
+    b->enabled = true;
+    b->pushed = true;
+    CHECK(shown() == normal);
+    const uint32_t pushed = art(ButtonArt::Pushed);
+    CHECK(shown() == pushed);
+    // Disabled while it is pressed.
+    b->enabled = false;
+    CHECK(shown() == pushed);
+    const uint32_t disabled = art(ButtonArt::Disabled);
+    CHECK(shown() == disabled);
+    b->enabled = true;
+    b->pushed = false;
+    CHECK(shown() == normal);
+    // One without a normal picture shows none of the others when it is up.
+    tree.get(normal)->buttonArt = ButtonArt::Highlight;
+    b->pushed = true;
+    CHECK(shown() == pushed);
+    b->pushed = false;
+    CHECK(shown() == 0);
+}

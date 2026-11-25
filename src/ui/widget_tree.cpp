@@ -1500,6 +1500,22 @@ uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
     return best ? best->id : 0;
 }
 
+int WidgetTree::shownButtonArt(const Widget& button) const {
+    std::array<bool, 3> there{};
+    for (const uint32_t id : button.children) {
+        const Widget* art = get(id);
+        if (!art) continue;
+        if (art->buttonArt == ButtonArt::Disabled) there[ButtonArtShown::Disabled] = true;
+        else if (art->buttonArt == ButtonArt::Normal) there[ButtonArtShown::Normal] = true;
+        else if (art->buttonArt == ButtonArt::Pushed) there[ButtonArtShown::Pushed] = true;
+    }
+    button.artShown.note(!button.enabled  ? ButtonArtShown::Disabled
+                         : button.pushed ? ButtonArtShown::Pushed
+                                         : ButtonArtShown::Normal,
+                         there);
+    return button.artShown.shown;
+}
+
 bool WidgetTree::buttonArtVisible(const Widget& w) const {
     if (w.buttonArt == ButtonArt::None) {
         // The HIGHLIGHT layer of a frame is there while the mouse is on it - a
@@ -1526,14 +1542,13 @@ bool WidgetTree::buttonArtVisible(const Widget& w) const {
         if (!a) break;
         at = a->parent;
     }
-    const bool pressed = owner->pushed;
     const bool usable = owner->enabled;
 
     switch (w.buttonArt) {
         case ButtonArt::Highlight:       return (hovered || owner->highlightLocked) && usable;
-        case ButtonArt::Disabled:        return !usable;
-        case ButtonArt::Pushed:          return usable && pressed;
-        case ButtonArt::Normal:          return usable && !pressed;
+        case ButtonArt::Disabled:        return shownButtonArt(*owner) == ButtonArtShown::Disabled;
+        case ButtonArt::Pushed:          return shownButtonArt(*owner) == ButtonArtShown::Pushed;
+        case ButtonArt::Normal:          return shownButtonArt(*owner) == ButtonArtShown::Normal;
         case ButtonArt::Checked:         return owner->checked && usable;
         case ButtonArt::DisabledChecked: return owner->checked && !usable;
         default:                         return true;

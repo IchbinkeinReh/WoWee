@@ -31,6 +31,7 @@
 
 #include "core/platform.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "ui/button_art.hpp"
 #include "ui/cooldown_sweep.hpp"
 #include "ui/edit_history.hpp"
 #include "ui/simple_html.hpp"
@@ -454,6 +455,8 @@ struct Widget {
     bool  motionScriptsWhileDisabled = false;
     /// Whether this region is one of its owner's state textures, and which.
     ButtonArt buttonArt = ButtonArt::None;
+    /// A button's, as of the draw order's last making.
+    mutable ButtonArtShown artShown;
     /// Whether a check button is checked, which decides between its checked
     /// art and none.
     bool  checked = false;
@@ -1802,6 +1805,8 @@ private:
     std::vector<uint32_t> ownedTooltips_;
 
     /// Whether a state texture should be drawn given what the mouse is doing.
+    /// Which of a button's pictures is shown (button_art.hpp).
+    int shownButtonArt(const Widget& button) const;
     [[nodiscard]] bool buttonArtVisible(const Widget& w) const;
     std::deque<Widget> widgets_;   ///< Index 0 is a placeholder; id == index.
     /// What findByName last answered for a name, and how far up widgets_ it
