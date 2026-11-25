@@ -4730,7 +4730,7 @@ void Application::performLeaveWorld(LeaveTo to) {
     lastSentCanonicalYaw_ = kFacingFromServer;
     idleYawned_ = false;
 
-    playerSplineLastFrame_ = false;
+    splineCarriedLastFrame_ = 0;
 
     // --- Player identity ---
     spawnedPlayerGuid_ = 0;
@@ -4976,8 +4976,25 @@ void Application::applyServerMovementState(float deltaTime) {
         gameHandler && rendering::camera_smooth::playerOnServerSpline(gameHandler->onMoveSpline(playerGuid), onTaxi,
                                                                       seatedPassenger, gameHandler->cameraTarget(),
                                                                       playerGuid);
-    const bool splineCarried = carriedBySpline || playerSplineLastFrame_;
-    playerSplineLastFrame_ = carriedBySpline;
+    // The unit the keys drive in the player's stead (the active mover,
+    // DAT_00ca1238): its movement is the camera's, and the player rides it.
+    // None moves while there is no mover.
+    const uint64_t activeMover = gameHandler ? gameHandler->activeMover() : 0;
+    uint64_t drivenUnit = 0;
+    std::shared_ptr<game::Entity> drivenEntity;
+    if (activeMover != 0 && activeMover != playerGuid) {
+        drivenEntity = gameHandler->getEntityManager().getEntity(activeMover);
+        if (drivenEntity) drivenUnit = activeMover;
+    }
+    // Its own move spline carries it as the player's does the player.
+    const uint64_t splineUnit =
+        gameHandler ? game::vehicle::splineCarriedUnit(playerGuid, carriedBySpline, drivenUnit,
+                                                       drivenUnit != 0 && gameHandler->onMoveSpline(drivenUnit),
+                                                       gameHandler->vehicleRoster().passenger(drivenUnit).has_value())
+                    : 0;
+    const uint64_t characterUnit = drivenUnit != 0 ? drivenUnit : playerGuid;
+    const bool splineCarried = splineUnit != 0 || (splineCarriedLastFrame_ != 0 && splineCarriedLastFrame_ == characterUnit);
+    splineCarriedLastFrame_ = splineUnit;
     if (renderer && renderer->getCameraController()) {
     // A ship carries the player's reference frame, but it must not
     // freeze local controls like a taxi flight. On-deck walking is
@@ -4996,16 +5013,6 @@ void Application::applyServerMovementState(float deltaTime) {
     // the camera looks at it where it is drawn on the vehicle.
     const auto seatState = entitySpawner_ ? entitySpawner_->localPassengerState() : std::nullopt;
     const bool vehiclePassenger = seatState.has_value();
-    // The unit the keys drive in the player's stead (the active mover,
-    // DAT_00ca1238): its movement is the camera's, and the player rides it.
-    // None moves while there is no mover.
-    const uint64_t activeMover = gameHandler->activeMover();
-    uint64_t drivenUnit = 0;
-    std::shared_ptr<game::Entity> drivenEntity;
-    if (activeMover != 0 && activeMover != gameHandler->getPlayerGuid()) {
-        drivenEntity = gameHandler->getEntityManager().getEntity(activeMover);
-        if (drivenEntity) drivenUnit = activeMover;
-    }
     const bool noMover = activeMover == 0;
     {
         auto* cc = renderer->getCameraController();
@@ -5518,15 +5525,16 @@ void Application::applyServerMovementState(float deltaTime) {
         }
         gameHandler->updateM2TransportBoarding(canonical);
     } else if (splineCarried) {
-        // Where the spline has the player's own entity (0x0073c8e0), to its
-        // end once it has run out, and facing as it does.
-        if (auto playerEntity = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid())) {
-            const glm::vec3 canonical = carriedBySpline
-                ? glm::vec3(playerEntity->getX(), playerEntity->getY(), playerEntity->getZ())
-                : glm::vec3(playerEntity->getLatestX(), playerEntity->getLatestY(), playerEntity->getLatestZ());
+        // Where the spline has the player's own entity, or that of the unit
+        // moved in its stead (0x0073c8e0), to its end once it has run out, and
+        // facing as it does.
+        if (auto carried = gameHandler->getEntityManager().getEntity(characterUnit)) {
+            const glm::vec3 canonical = splineUnit != 0
+                ? glm::vec3(carried->getX(), carried->getY(), carried->getZ())
+                : glm::vec3(carried->getLatestX(), carried->getLatestY(), carried->getLatestZ());
             const glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             renderer->getCharacterPosition() = renderPos;
-            const float yawDeg = core::coords::canonicalToCharacterYawDeg(playerEntity->getOrientation());
+            const float yawDeg = core::coords::canonicalToCharacterYawDeg(carried->getOrientation());
             renderer->setCharacterYaw(yawDeg);
             renderer->getCameraController()->setFacingYaw(yawDeg);
             // The movement the client keeps goes with it; the entity is not
@@ -5535,7 +5543,7 @@ void Application::applyServerMovementState(float deltaTime) {
             move.x = canonical.x;
             move.y = canonical.y;
             move.z = canonical.z;
-            gameHandler->setOrientation(playerEntity->getOrientation());
+            gameHandler->setOrientation(carried->getOrientation());
             if (glm::vec3* followTarget = renderer->getCameraController()->getFollowTargetMutable())
                 *followTarget = renderPos;
         }

@@ -126,6 +126,18 @@ struct MoveSpline {
     return s.cyclic || static_cast<int32_t>(nowMs - s.startMs) < static_cast<int32_t>(s.durationMs);
 }
 
+/// The unit whose move spline the client's own character goes along instead of
+/// stepping by the keys, 0 for none: SMSG_MONSTER_MOVE is any unit's, the active
+/// mover's as well (0x0073c8e0) - the player's own Charge, and the charge of the
+/// vehicle or the possessed unit it moves, where that rides in no seat itself
+/// (its vehicle has it there). `playerCarried` is camera_smooth's
+/// playerOnServerSpline, `driven` the unit moved in the player's stead.
+[[nodiscard]] inline uint64_t splineCarriedUnit(uint64_t player, bool playerCarried, uint64_t driven,
+                                                bool drivenOnSpline, bool drivenSeated) {
+    if (driven != 0 && driven != player) return drivenOnSpline && !drivenSeated ? driven : 0;
+    return playerCarried ? player : 0;
+}
+
 /// Whether the mover may not move for its seat (0x0074ba40): its own seat
 /// state is on the way in or out (not 0 or 3), or a move of its is held for
 /// its vehicle's animation (+0x10 0x200); or - where a driver controls it -

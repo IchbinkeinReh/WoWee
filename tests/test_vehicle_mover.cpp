@@ -135,3 +135,16 @@ TEST_CASE("a cast's stop keeps the mover stopped while its key is held (0x0071ae
     CHECK_FALSE(forwardBackStopHolds(true, true, false, true));
     CHECK_FALSE(forwardBackStopHolds(false, true, false, false));
 }
+
+// 0x0073c8e0
+TEST_CASE("the unit a move spline carries: the player's, or the one moved in its stead", "[vehicle]") {
+    CHECK(splineCarriedUnit(kPlayer, true, 0, false, false) == kPlayer);
+    CHECK(splineCarriedUnit(kPlayer, false, 0, false, false) == 0);
+    // A jousting charge: the vehicle's, the player seated on it.
+    CHECK(splineCarriedUnit(kPlayer, false, kVehicle, true, false) == kVehicle);
+    CHECK(splineCarriedUnit(kPlayer, false, kVehicle, false, false) == 0);
+    // The vehicle that rides in a seat has its vehicle's place.
+    CHECK(splineCarriedUnit(kPlayer, false, kVehicle, true, true) == 0);
+    // The player's body on a spline while it moves another unit.
+    CHECK(splineCarriedUnit(kPlayer, true, kVehicle, false, false) == 0);
+}
