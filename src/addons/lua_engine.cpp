@@ -14482,6 +14482,18 @@ void LuaEngine::registerCoreAPI() {
         "    __WoweeTooltipEquippedHeader = nil\n"
         "    if not ok then error(filled, 0) end\n"
         "    if not filled then return __cmpNo('no tooltip could be built for the worn item') end\n"
+        // With the item's own tooltip given, what would change with it
+        // (0x00631850 -> 0x00631590, 0x0062d930).
+        "    local _, itemLink\n"
+        "    if type(anchor) == 'table' and anchor.GetItem then _, itemLink = anchor:GetItem() end\n"
+        "    if itemLink then\n"
+        "        local deltas = {__WoweeItemDeltaLines(itemLink, wornLink)}\n"
+        "        if #deltas > 0 then\n"
+        "            self:AddLine(' ')\n"
+        "            self:AddLine(ITEM_DELTA_DESCRIPTION or ' ', 1, 0.8235294, 0, 1)\n"
+        "        end\n"
+        "        for _, line in ipairs(deltas) do self:AddLine(line, 1, 1, 1) end\n"
+        "    end\n"
         "    self:Show()\n"
         "    return true\n"
         "end\n"

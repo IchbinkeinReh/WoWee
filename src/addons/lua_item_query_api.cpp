@@ -5,6 +5,7 @@
 // function.
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "game/item_delta_lines.hpp"
 #include "game/interface_text.hpp"
 #include "game/item_stat_summary.hpp"
 #include "game/spell_handler.hpp"
@@ -688,6 +689,21 @@ int getItemStatDelta(lua_State* L) {
     return pushSummary(L, game::item_stats::delta(*a, *b));
 }
 
+/// __WoweeItemDeltaLines(itemLink, wornLink): the lines of 0x0062d930, none
+/// where one of the two is not known.
+int itemDeltaLines(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto a = lua_isstring(L, 1) ? linkSummary(gh, lua_tostring(L, 1)) : std::nullopt;
+    const auto b = lua_isstring(L, 2) ? linkSummary(gh, lua_tostring(L, 2)) : std::nullopt;
+    if (!a || !b) return 0;
+    const auto lines = game::item_stats::deltaLines(game::item_stats::delta(*a, *b), [](const std::string& k) {
+        return game::interfaceString(k.c_str(), k.c_str());
+    });
+    luaL_checkstack(L, static_cast<int>(lines.size()), "too many lines");
+    for (const auto& line : lines) lua_pushstring(L, line.c_str());
+    return static_cast<int>(lines.size());
+}
+
 /// GetItemGem(item, index) (0x0051c150) → name, link: the gem in socket
 /// 1-3 - from a link's gem fields, else an item carried by that name's
 /// socket enchantments - by its enchantment's gem (SpellItemEnchantment
@@ -796,6 +812,7 @@ void registerItemQueryLuaAPI(lua_State* L) {
         {"FindSpellBookSlotByID",   findSpellBookSlotByID},
         {"GetItemStats",            getItemStats},
         {"GetItemStatDelta",        getItemStatDelta},
+        {"__WoweeItemDeltaLines",   itemDeltaLines},
         {"GetItemGem",              getItemGem},
         {"GetItemUniqueness",       getItemUniqueness},
         {nullptr, nullptr},

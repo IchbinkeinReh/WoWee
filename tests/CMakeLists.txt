@@ -4407,6 +4407,10 @@ target_link_libraries(test_edit_typing PRIVATE catch2_main SDL3::SDL3)
 add_test(NAME edit_typing COMMAND test_edit_typing)
 register_test_target(test_edit_typing)
 
+# ── test_item_delta_lines ────────────────────────────────────
+wowee_add_test(test_item_delta_lines
+    SOURCES test_item_delta_lines.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
