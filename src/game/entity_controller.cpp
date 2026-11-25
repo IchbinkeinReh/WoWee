@@ -3601,7 +3601,7 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         // a quest log slot (0x006df370), a quest done today (0x006d9f20), the
         // money (0x006da070) and a skill's value - the low half of its second
         // dword (0x006da4a0). Once per block however many moved.
-        bool questStatusMoved = false;
+        bool questStatusMoved = false, dailyQuestsMoved = false;
         {
             const auto moved = [&](uint16_t key, uint32_t mask) {
                 const auto now = block.fields.find(key);
@@ -3617,9 +3617,9 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                 }
                 return false;
             };
+            dailyQuestsMoved = range(UF::PLAYER_FIELD_DAILY_QUESTS_1, kDailyQuests, 1, 0, 0xFFFFFFFFu);
             questStatusMoved =
-                range(UF::PLAYER_QUEST_LOG_START, 25 * 5, 1, 0, 0xFFFFFFFFu) ||
-                range(UF::PLAYER_FIELD_DAILY_QUESTS_1, 25, 1, 0, 0xFFFFFFFFu) ||
+                range(UF::PLAYER_QUEST_LOG_START, 25 * 5, 1, 0, 0xFFFFFFFFu) || dailyQuestsMoved ||
                 range(UF::PLAYER_FIELD_COINAGE, 1, 1, 0, 0xFFFFFFFFu) ||
                 range(UF::PLAYER_SKILL_INFO_START, 128, 3, 1, 0x0000FFFFu);
         }
@@ -3630,7 +3630,10 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             owner_.lastPlayerFieldsRef().insert_or_assign(key, val);
         }
         if (questStatusMoved) {
-            if (auto* qh = owner_.getQuestHandler()) qh->queryAllQuestGiverStatuses();
+            if (auto* qh = owner_.getQuestHandler()) {
+                qh->queryAllQuestGiverStatuses();
+                if (dailyQuestsMoved) qh->dailyQuestsChanged();
+            }
         }
         if (needCoinageDetectSnapshot) {
             maybeDetectCoinageIndex(oldFieldsSnapshot, owner_.lastPlayerFieldsRef());

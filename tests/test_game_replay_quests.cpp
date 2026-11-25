@@ -199,3 +199,37 @@ TEST_CASE("a credit is named by the quest's objective", "[replay][quest]") {
     CHECK(watched.empty());
     s.handler().setAddonEventCallback(nullptr);
 }
+
+// 0x006d9f20, 0x0058db30
+TEST_CASE("how many daily quests are left is said as one is done", "[replay][quest]") {
+    std::vector<std::string> lines;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    const auto field = [](int i) {
+        return static_cast<uint16_t>(wowee::game::fieldIndex(UF::PLAYER_FIELD_DAILY_QUESTS_1) + i);
+    };
+    const auto said = [&] {
+        size_t n = 0;
+        for (const auto& m : s.handler().getChatHistory())
+            if (m.message.find("daily") != std::string::npos) ++n;
+        return n;
+    };
+    CHECK(s.handler().getQuestHandler()->dailyQuestsDone() == 0);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{field(0), 13829}}));
+    CHECK(s.handler().getQuestHandler()->dailyQuestsDone() == 1);
+    CHECK(said() == 1);
+    // The same again: no news.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{field(0), 13829}}));
+    CHECK(said() == 1);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{field(1), 13830}}));
+    CHECK(said() == 2);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{field(0), 0}, {field(1), 0}}));
+    CHECK(s.handler().getQuestHandler()->dailyQuestsDone() == 0);
+    CHECK(said() == 3);
+    wowee::game::DailyQuestLine line;
+    CHECK(line.changed(1) == 24);
+    CHECK(line.changed(25) == 0);
+    CHECK(line.changed(0) == 25);
+    CHECK_FALSE(line.changed(0).has_value());
+    CHECK(line.changed(1) == 24);
+}

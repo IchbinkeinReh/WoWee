@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/daily_quests.hpp"
 #include "game/quest_progress.hpp"
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
@@ -277,6 +278,10 @@ public:
     // Quest giver status (! and ? markers)
     [[nodiscard]] QuestGiverStatus getQuestGiverStatus(uint64_t guid) const;
     [[nodiscard]] const std::unordered_map<uint64_t, QuestGiverStatus>& getNpcQuestStatuses() const { return npcQuestStatus_; }
+    /// The daily quests done, of the player's fields (0x0058db30), and the line
+    /// said as they change.
+    [[nodiscard]] int dailyQuestsDone() const;
+    void dailyQuestsChanged();
 
     // Shared quest
     [[nodiscard]] bool hasPendingSharedQuest() const { return pendingSharedQuest_; }
@@ -448,6 +453,7 @@ private:
 
     // Quest giver status per NPC
     std::unordered_map<uint64_t, QuestGiverStatus> npcQuestStatus_;
+    DailyQuestLine dailyQuestLine_;
 
     // NPC gossip text cache (textId → its eight options)
     std::unordered_map<uint32_t, npc_text::NpcText> npcTextCache_;

@@ -189,6 +189,25 @@ void QuestHandler::announceQuestLogChanged(uint32_t questId) {
     owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
 }
 
+int QuestHandler::dailyQuestsDone() const {
+    const uint16_t first = fieldIndex(UF::PLAYER_FIELD_DAILY_QUESTS_1);
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (first == 0xFFFF || !player) return 0;
+    int done = 0;
+    for (int i = 0; i < kDailyQuests; ++i)
+        if (player->getField(static_cast<uint16_t>(first + i)) != 0) ++done;
+    return done;
+}
+
+void QuestHandler::dailyQuestsChanged() {
+    const auto left = dailyQuestLine_.changed(dailyQuestsDone());
+    if (!left) return;
+    owner_.addSystemChatMessage(
+        *left == 0 ? interfaceString("NO_DAILY_QUESTS_REMAINING", "You cannot complete any more daily quests today.")
+                   : interfaceFormat("DAILY_QUESTS_REMAINING", "You may complete %d more daily |4quest:quests; today.",
+                                     {std::to_string(*left)}));
+}
+
 void QuestHandler::queryAllQuestGiverStatuses() {
     if (!owner_.getSocket() || wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY) == 0xFFFF) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY));

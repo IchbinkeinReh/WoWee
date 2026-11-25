@@ -4629,21 +4629,17 @@ static int pushRewardAt(lua_State* L, game::GameHandler* gh,
 //
 // The giver's packet carries the number. The log's does not, and zero is what
 // stops the line being drawn at all.
-// GetDailyQuestsCompleted() / GetMaxDailyQuests() → the daily allowance
-//
-// The quest log tests the first against zero before drawing the line at all, so
-// an absent answer is an error rather than a hidden line. Nothing here counts
-// dailies, and zero completed is what keeps the line hidden - which is the same
-// thing the count would do if it were counting and found none.
+// GetDailyQuestsCompleted() / GetMaxDailyQuests() (0x0058db30, 0x0058c470): the
+// quests done today and how many there may be.
 static int lua_GetDailyQuestsCompleted(lua_State* L) {
-    lua_pushnumber(L, 0);
+    auto* gh = getGameHandler(L);
+    const auto* quests = gh ? gh->getQuestHandler() : nullptr;
+    lua_pushnumber(L, quests ? quests->dailyQuestsDone() : 0);
     return 1;
 }
 
-// Twenty-five is the allowance in this era. Only ever shown beside the count
-// above, which stays at zero, so it is a label rather than a limit here.
 static int lua_GetMaxDailyQuests(lua_State* L) {
-    lua_pushnumber(L, 25);
+    lua_pushnumber(L, game::kDailyQuests);
     return 1;
 }
 
