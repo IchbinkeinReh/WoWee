@@ -10,6 +10,7 @@
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
+#include "ui/edit_typing.hpp"
 #include "ui/mouse_over.hpp"
 #include "ui/macro_text.hpp"
 #include "ui/tooltip_layout.hpp"
@@ -9711,11 +9712,7 @@ static bool insertEditText(wowee::ui::Widget& w, const std::string& add) {
                                            {true, w.selStart, w.selEnd});
         w.hasSelection = false;
     }
-    if (w.editNumeric) {
-        for (const char c : add) {
-            if (c < '0' || c > '9') return w.editText != before;
-        }
-    }
+    if (w.editNumeric && wowee::ui::numericRefuses(add)) return w.editText != before;
     const size_t at = std::min(w.cursorPos, w.editText.size());
     w.editText.insert(at, add);
     w.cursorPos = at + add.size();
@@ -17255,46 +17252,22 @@ void LuaEngine::dispatchText(const char* utf8) {
     auto* w = widgets_.get(focusedWid_);
     if (!w || !w->isEditBox) return;
 
-    std::string add(utf8);
-    if (add.empty()) return;
-    // One character at a time, as the client takes them (0x00965ce0, and
-    // a paste through it too, 0x00965ed0). A control character is dropped,
-    // except a tab, which is four spaces, and a line break in a multi-line
-    // box. A typed '|' goes in doubled, as a literal bar: the player types
-    // what they see and cannot type an escape - "|cff" colours nothing.
+    // A piece at a time; each is OnChar's, a blank OnSpacePressed's as well, and
+    // with the last OnTextChanged (0x00965960) - to one that a numeric box refuses
+    // nothing. What a handler does to the focus is none of the rest's doing.
+    const uint32_t box = focusedWid_;
     bool changed = false;
-    for (size_t i = 0; i < add.size();) {
-        const unsigned char c = static_cast<unsigned char>(add[i]);
-        size_t n = 1;
-        if (c >= 0xF0) n = 4;
-        else if (c >= 0xE0) n = 3;
-        else if (c >= 0xC0) n = 2;
-        n = std::min(n, add.size() - i);
-        std::string one = add.substr(i, n);
-        i += n;
-        if (c < 0x20 || c == 0x7f) {
-            if (c == '\t') one = "    ";
-            else if (!(c == '\n' && w->editMultiLine)) continue;
-        } else if (c == '|') {
-            one = "||";
-        }
-        if (insertEditText(*w, one)) changed = true;
-        w = widgets_.get(focusedWid_);
+    for (const std::string& piece : ui::typedPieces(utf8, w->editMultiLine)) {
+        w = widgets_.get(box);
         if (!w) return;
+        const bool refused = w->editNumeric && ui::numericRefuses(piece);
+        if (insertEditText(*w, piece)) changed = true;
+        if (refused) continue;
+        callFrameScript(box, "OnChar", piece.c_str());
+        // The chat box reads a whisper's target out of "/w Bob " by it.
+        if (piece.find(' ') != std::string::npos) callFrameScript(box, "OnSpacePressed");
     }
-    if (!changed) return;
-
-    // The handler that tells a search field to filter, and a chat box to look
-    // for a channel prefix.
-    fireTextChanged(focusedWid_, /*userInput=*/true);
-    // A space is its own handler, and the chat box is what wants it: typing
-    // "/w Bob " is how a whisper gets its target, and ChatEdit_OnSpacePressed
-    // is what reads the name out and turns the box into a whisper with a
-    // header. Without it the slash command stayed literal text until it was
-    // sent.
-    if (add.find(' ') != std::string::npos) {
-        callFrameScript(focusedWid_, "OnSpacePressed");
-    }
+    if (changed) fireTextChanged(box, /*userInput=*/true);
 }
 
 /// SDL's keycode as WoW names it, or empty for one WoW has no name for.
@@ -17321,7 +17294,7 @@ static std::string wowKeyName(int sym) {
         case 0x4000004D: return "END";
         case 0x4000004B: return "PAGEUP";
         case 0x4000004E: return "PAGEDOWN";
-        case 0x4000004C: return "DELETE";
+        case wowee::ui::edit_key::kDelete: return "DELETE";
         case 0x40000049: return "INSERT";
         case 0x40000050: return "LEFT";
         case 0x4000004F: return "RIGHT";
@@ -17755,8 +17728,8 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
     //
     // Shift+Insert pastes as Ctrl+V does, Ctrl+Insert copies and Shift+Delete
     // cuts as Ctrl+C and Ctrl+X do (0x00967760's 0x208 and 0x209).
-    constexpr int kInsertKey = 0x40000049;  // SDLK_INSERT
-    constexpr int kDeleteKey = 0x4000004C;  // SDLK_DELETE
+    constexpr int kInsertKey = ui::edit_key::kInsert;
+    constexpr int kDeleteKey = ui::edit_key::kDelete;
     const int letter = sdlKeycode >= 'A' && sdlKeycode <= 'Z' ? sdlKeycode - 'A' + 'a' : sdlKeycode;
     if ((ctrlHeld && letter == 'v') || (!ctrlHeld && shiftHeld && sdlKeycode == kInsertKey)) {
         char* clip = SDL_GetClipboardText();
@@ -17851,18 +17824,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
 
     // Keycodes are SDL's, which is what the window reports; the caller does not
     // translate them so this stays the only place that knows.
-    constexpr int kBackspace = '\b';
-    constexpr int kReturn    = '\r';
-    constexpr int kEscape    = 27;
-    constexpr int kDelete    = 0x4000004C;  // SDLK_DELETE
-    constexpr int kLeft      = 0x40000050;
-    constexpr int kRight     = 0x4000004F;
-    constexpr int kHome      = 0x4000004A;
-    constexpr int kEnd       = 0x4000004D;
-    constexpr int kTab       = '\t';
-    // Same convention as the four above: SDL's scancode with its keycode bit.
-    constexpr int kUp        = 0x40000052;
-    constexpr int kDown      = 0x40000051;
+    using namespace ui::edit_key;
 
     const size_t len = w->editText.size();
     switch (sdlKeycode) {
@@ -18001,8 +17963,9 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 // character, going in by the same path (0x00965960); inserting
                 // it directly would let a full box grow by one every time
                 // return was pressed.
-                if (!insertEditText(*w, "\n")) break;
-                fireTextChanged(focusedWid_, /*userInput=*/true);
+                const bool changed = insertEditText(*w, "\n");
+                callFrameScript(focusedWid_, "OnChar", "\n");
+                if (changed) fireTextChanged(focusedWid_, /*userInput=*/true);
                 break;
             }
             // The handler decides what to do with it, including whether to let

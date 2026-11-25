@@ -4398,6 +4398,15 @@ wowee_add_test(test_trade_skill_verb
 wowee_add_test(test_reputation_tree
     SOURCES test_reputation_tree.cpp)
 
+# ── test_edit_typing ─────────────────────────────────────────
+# Header-only; SDL3 for the key codes it is held against.
+add_executable(test_edit_typing test_edit_typing.cpp)
+target_include_directories(test_edit_typing PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_edit_typing SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_edit_typing PRIVATE catch2_main SDL3::SDL3)
+add_test(NAME edit_typing COMMAND test_edit_typing)
+register_test_target(test_edit_typing)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
