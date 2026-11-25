@@ -890,13 +890,18 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
         if (!unit) return;
         unit->setName(name);
         LOG_INFO("Pet name: 0x", std::hex, guid, std::dec, " is '", name, "'");
-        // Both, because the two frames listen for different ones: the pet
-        // frame redraws its name from UNIT_NAME_UPDATE, and the pet bar and
-        // anything else keyed on the pet rebuild from PET_UI_UPDATE.
-        if (guid == owner_.petGuidRef()) {
-            owner_.fireAddonEvent("UNIT_NAME_UPDATE", {"pet"});
-            owner_.fireAddonEvent("PET_UI_UPDATE", {});
+        // UNIT_NAME_UPDATE for every token the unit has (0x00728ca0 ->
+        // 0x00512b00 -> 0x0060bf10), whoever's pet it is: a chair that became
+        // the player's kept its old name on the target frame. A totem's slot
+        // is redrawn with the name (0x005139b0), and the pet bar from
+        // PET_UI_UPDATE.
+        for (const auto& unitId : owner_.unitTokensForGuid(guid))
+            owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
+        for (int slot = 0; slot < GameHandler::NUM_TOTEM_SLOTS; ++slot) {
+            if (owner_.getTotemSlot(slot).guid == guid)
+                owner_.fireAddonEvent("PLAYER_TOTEM_UPDATE", {std::to_string(slot + 1)});
         }
+        if (guid == owner_.petGuidRef()) owner_.fireAddonEvent("PET_UI_UPDATE", {});
     };
 
     table[Opcode::SMSG_INITIAL_SPELLS] = [this](network::Packet& packet) { handleInitialSpells(packet); };

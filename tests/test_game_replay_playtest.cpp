@@ -1427,3 +1427,32 @@ TEST_CASE("getting onto a mount puffs, as one in sight already does not", "[repl
     CHECK(puffed == std::vector<uint64_t>{kGiver, kGiver, Session::kPlayerGuid});
     gh.setUnitEffectCallback({});
 }
+
+// P60: a chair that became the player's kept its old name on the target frame.
+TEST_CASE("a pet's name is told by every token it has", "[replay][playtest]") {
+    constexpr uint64_t kPet = 0xF15000880700042Aull;
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kPet, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    auto& gh = s.handler();
+    gh.setTarget(kPet);
+    gh.setFocus(kPet);
+    gh.getSpellHandler()->requestPetName(kPet);
+    REQUIRE_FALSE(s.sent().of(Opcode::CMSG_PET_NAME_QUERY).empty());
+    const uint32_t key = s.sent().of(Opcode::CMSG_PET_NAME_QUERY).back().readUInt32();
+    std::vector<std::string> told;
+    gh.setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event == "UNIT_NAME_UPDATE") told.push_back(args.empty() ? "-" : args[0]);
+    });
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_PET_NAME_QUERY_RESPONSE));
+    answer.writeUInt32(key);
+    answer.writeString("The Cranberry Chair");
+    answer.writeUInt32(0);
+    answer.writeUInt8(0);
+    s.receive(answer);
+    CHECK(std::count(told.begin(), told.end(), "target") == 1);
+    CHECK(std::count(told.begin(), told.end(), "focus") == 1);
+    CHECK(told.size() == 2);
+    gh.setAddonEventCallback({});
+}
