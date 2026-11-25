@@ -66,6 +66,10 @@ void QuestPOILayer::render(const LayerContext& ctx) {
     if (!pois_ || pois_->empty()) return;
     const auto projection = currentProjection(ctx);
     if (!projection) return;
+    // Those of the map that is shown: another's places are numbers on this one.
+    const auto ofMap = [&, shown = (*ctx.zones)[static_cast<size_t>(ctx.currentZoneIdx)].mapID](const QuestPOI& qp) {
+        return qp.mapId == shown;
+    };
 
     ImVec2 mp = ImGui::GetMousePos();
     ImFont* qFont = ImGui::GetFont();
@@ -74,7 +78,7 @@ void QuestPOILayer::render(const LayerContext& ctx) {
     // rather than under the next one along.
     const ImVec2 imgMax(ctx.imgMin.x + ctx.displayW, ctx.imgMin.y + ctx.displayH);
     for (const auto& qp : *pois_) {
-        if (qp.area.size() < 3) continue;
+        if (qp.area.size() < 3 || !ofMap(qp)) continue;
         std::vector<ImVec2> screen;
         std::vector<glm::vec2> flat;
         screen.reserve(qp.area.size());
@@ -192,6 +196,7 @@ void QuestPOILayer::render(const LayerContext& ctx) {
     // shaded areas are WorldMapBlobFrame's, which the client draws itself.
     if (ctx.hostedInFrame) return;
     for (const auto& qp : *pois_) {
+        if (!ofMap(qp)) continue;
         glm::vec3 rPos = core::coords::canonicalToRender(
             glm::vec3(qp.wowX, qp.wowY, 0.0f));
         glm::vec2 uv = renderPosToMapUV(rPos, projection->bounds, projection->isContinent);

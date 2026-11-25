@@ -388,6 +388,7 @@ struct GossipPoi {
     // SMSG_QUEST_POI objective index. -2 means this is a normal
     // SMSG_GOSSIP_POI; -1 identifies the quest endpoint/turn-in POI.
     int32_t  questObjectiveIndex = -2;
+    uint32_t mapId = 0;   ///< a quest point's map
     std::string name;
     /// The outline the server sent, canonical, in order. x and y above are its
     /// centre; this is the shape the map shades when the quest is selected -

@@ -360,6 +360,7 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
             rendering::WorldMap::QuestPoi qp;
             qp.wowX = entity->getX();
             qp.wowY = entity->getY();
+            qp.mapId = gameHandler.getCurrentMapId();
             qp.name = std::static_pointer_cast<game::Unit>(entity)->getName();
             const auto marker = game::questGiverMarker(status);
             if (!marker.symbol) continue;
@@ -448,6 +449,7 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
             bool duplicatesQuestGiver = false;
             for (const auto& existing : qpois) {
                 if (existing.kind == rendering::WorldMap::QuestPoi::Kind::OBJECTIVE) continue;
+                if (poi.questObjectiveIndex != -2 && existing.mapId != poi.mapId) continue;
                 const float dx = existing.wowX - poi.x;
                 const float dy = existing.wowY - poi.y;
                 if (dx * dx + dy * dy <= kQuestGiverPoiMergeDistanceSq) {
@@ -460,6 +462,8 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
             rendering::WorldMap::QuestPoi qp;
             qp.wowX = poi.x;
             qp.wowY = poi.y;
+            // A gossip point is of the map it was told on, which is this one.
+            qp.mapId = poi.questObjectiveIndex != -2 ? poi.mapId : gameHandler.getCurrentMapId();
             qp.name = poi.name;
             // The shaded area, for the quest the map has selected - its blob
             // as worked out above, where it is one the client draws.

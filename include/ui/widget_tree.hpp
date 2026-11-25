@@ -636,6 +636,7 @@ struct Widget {
     bool  isCooldown = false;
     /// A MovieFrame: draws its movie (WidgetRenderer::drawMovie).
     bool  isMovieFrame = false;
+    bool  isQuestAreas = false;   ///< a QuestPOIFrame: the quests' areas are drawn in it
     /// Its time and its star's (ui/cooldown_sweep.hpp).
     cooldown_sweep::State cooldown;
     /// The shade grows instead of shrinking. An ability's cooldown shrinks as

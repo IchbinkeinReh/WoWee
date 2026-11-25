@@ -2497,8 +2497,7 @@ void QuestHandler::handleQuestPoiQueryResponse(network::Packet& packet) {
                 }),
             gossipPois_.end());
 
-        // Every area, whatever its map, for the client's icon list
-        // (0x005e7370); the markers below keep only this map's.
+        // Every area, whatever its map, for the client's icon list (0x005e7370).
         std::vector<QuestPoiArea> iconAreas;
         bool complete = true;
 
@@ -2540,9 +2539,9 @@ void QuestHandler::handleQuestPoiQueryResponse(network::Packet& packet) {
             }
             iconAreas.push_back(std::move(area));
             if (pointCount == 0) continue;
-            // Skip POIs for maps other than the player's current map.
-            if (mapId != owner_.currentMapIdRef()) continue;
+            // Every one is kept with its map (0x005e7370); what shows them asks for its own.
             GossipPoi poi;
+            poi.mapId = mapId;
             // QuestPOIPoint uses the opposite axis order from the canonical
             // world coordinates used by movement and the map renderer. Store
             // it canonically here so canonicalToRender() does not place every
@@ -2558,7 +2557,8 @@ void QuestHandler::handleQuestPoiQueryResponse(network::Packet& packet) {
             if (outline.size() >= 3) poi.area = std::move(outline);
             LOG_DEBUG("Quest POI: questId=", questId, " mapId=", mapId,
                       " centroid=(", poi.x, ",", poi.y, ") title=", poi.name);
-            if (gossipPois_.size() >= 200) gossipPois_.erase(gossipPois_.begin());
+            // Twenty-five quests' of every map.
+            if (gossipPois_.size() >= 1000) gossipPois_.erase(gossipPois_.begin());
             gossipPois_.push_back(std::move(poi));
         }
         if (!complete) break;

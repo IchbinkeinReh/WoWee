@@ -2829,6 +2829,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             if (w->isSlider) drawSlider(dl, *w, x0, y0, x1, y1);
             if (w->isCooldown) drawCooldown(dl, *w, x0, y0, x1, y1);
             if (w->isMovieFrame) drawMovie(dl, *w, x0, y0, x1, y1);
+            if (w->isQuestAreas && questAreaDrawer_) questAreaDrawer_(dl);
             // A tooltip reads downward from the top, which is the other way
             // round from chat.
             if (isGameTooltip) {

@@ -11308,6 +11308,7 @@ static int lua_CreateFrame(lua_State* L) {
             if (w->isSlider) w->barVertical = true;
             if (ft == "Cooldown") tree->markCooldownFrame(id);
             w->isMovieFrame = (ft == "MovieFrame");
+            w->isQuestAreas = (ft == "QuestPOIFrame");
             // Marked at creation rather than only when a child is set, so a
             // scroll frame clips what is under it even while it is empty.
             if (ft == "ScrollFrame") tree->markScrollFrame(id);

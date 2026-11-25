@@ -167,6 +167,8 @@ struct WorldMapFacade::Impl {
     std::vector<PartyDot> partyDots;
     std::vector<TaxiNode> taxiNodes;
     std::vector<QuestPOI> questPois;
+    std::optional<LayerContext> hostedContext;   // of the last frame drawn in the interface's
+    bool areasHaveFrame = false;                 // drawQuestAreas was asked for
 
     // Flight-map (taxi selection) mode - locks the view to the continent and
     // renders only the map, player marker, and interactive flight nodes.
@@ -1183,6 +1185,14 @@ void WorldMapFacade::setQuestPois(std::vector<QuestPOI> pois) {
     impl_->questPois = std::move(pois);
 }
 
+void WorldMapFacade::drawQuestAreas(ImDrawList* drawList) {
+    impl_->areasHaveFrame = true;
+    if (!impl_->hostedContext || !impl_->hasFrameRect || !impl_->questPOILayer || !drawList) return;
+    LayerContext ctx = *impl_->hostedContext;
+    ctx.drawList = drawList;
+    impl_->questPOILayer->render(ctx);
+}
+
 void WorldMapFacade::setQuestBlobStyle(const std::string& fill, uint8_t fillAlpha, const std::string& border,
                                        uint8_t borderAlpha, float borderScalar) {
     if (impl_->questPOILayer) impl_->questPOILayer->setBlobStyle(fill, fillAlpha, border, borderAlpha, borderScalar);
@@ -1194,7 +1204,10 @@ void WorldMapFacade::setFrameRect(float x, float y, float w, float h) {
     impl_->hasFrameRect = true;
 }
 
-void WorldMapFacade::clearFrameRect() { impl_->hasFrameRect = false; }
+void WorldMapFacade::clearFrameRect() {
+    impl_->hasFrameRect = false;
+    impl_->hostedContext.reset();
+}
 bool WorldMapFacade::hasFrameRect() const { return impl_->hasFrameRect; }
 
 void WorldMapFacade::setCorpsePos(bool hasCorpse, glm::vec3 renderPos) {
@@ -1450,7 +1463,9 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
         }
 
         if (hostedDraw) {
-            if (questPOILayer) questPOILayer->render(layerCtx);
+            hostedContext = layerCtx;
+            if (questPOILayer && !areasHaveFrame) questPOILayer->render(layerCtx);
+            areasHaveFrame = false;
             if (playerMarkerLayer && !interfaceDrawsPlayerArrow) playerMarkerLayer->render(layerCtx);
             ImGui::End();
             if (!windowOpen) closeMap();

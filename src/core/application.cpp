@@ -1819,6 +1819,9 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         // device to upload it; both exist by now.
         widgetRenderer_.initialize(assetManager.get(),
                                    window ? window->getVkContext() : nullptr);
+        widgetRenderer_.setQuestAreaDrawer([this](ImDrawList* list) {
+            if (auto* map = renderer ? renderer->getWorldMap() : nullptr) map->drawQuestAreas(list);
+        });
         if (addonManager_->initialize(gameHandler.get(), luaSvc)) {
             // FrameXML and the AddOns folder are loose directories on disk, not
             // assets reached through the manifest, and they belong to the

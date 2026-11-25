@@ -198,6 +198,7 @@ struct QuestPOI {
     };
 
     float wowX = 0, wowY = 0;  ///< Canonical WoW coordinates (centroid)
+    uint32_t mapId = 0;         ///< of this map
     std::string name;           ///< Quest title
     Kind kind = Kind::OBJECTIVE;
     /// The objective's outline, canonical, when the map is shading it. Empty

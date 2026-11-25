@@ -11,6 +11,7 @@
 // is shipped; it is the player's own install being drawn.
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -40,6 +41,10 @@ public:
     WidgetRenderer& operator=(const WidgetRenderer&) = delete;
     ~WidgetRenderer();
     void initialize(pipeline::AssetManager* assets, rendering::VkContext* vkCtx);
+
+    /// What draws the quests' areas in their frame (a QuestPOIFrame's, which the interface
+    /// keeps under the quests' buttons: worldmapframe.lua 1417).
+    void setQuestAreaDrawer(std::function<void(ImDrawList*)> drawer) { questAreaDrawer_ = std::move(drawer); }
 
     /// Lay the tree out for this screen and draw it. Safe to call with no
     /// device or assets - it simply does nothing, which is what the headless
@@ -109,6 +114,7 @@ private:
     void sizeTextureWidget(Widget* w);
     void sizeFontStringWidget(Widget* w, ImFont* font);
     void sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree);
+    std::function<void(ImDrawList*)> questAreaDrawer_;
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
     /// How big the picture is, without uploading it. No Vulkan context needed:
     /// asking a file its dimensions does not require a GPU, and requiring one

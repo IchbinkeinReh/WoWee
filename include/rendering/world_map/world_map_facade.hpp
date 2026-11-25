@@ -13,6 +13,8 @@
 #include <memory>
 #include <vulkan/vulkan.h>
 
+struct ImDrawList;
+
 namespace wowee {
 namespace rendering {
 class VkContext;
@@ -55,6 +57,9 @@ public:
     void setPartyDots(std::vector<PartyDot> dots);
     void setTaxiNodes(std::vector<TaxiNode> nodes);
     void setQuestPois(std::vector<QuestPOI> pois);
+    /// The quest areas as the map in the interface's frame last had them, where the interface
+    /// has their frame (WorldMapBlobFrame, under the quests' buttons).
+    void drawQuestAreas(ImDrawList* drawList);
     /// WorldMapBlobFrame's textures, alphas and border width for the quest
     /// areas (see QuestPOILayer::setBlobStyle).
     void setQuestBlobStyle(const std::string& fill, uint8_t fillAlpha, const std::string& border,
