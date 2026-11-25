@@ -4905,6 +4905,15 @@ void InventoryHandler::queryGuildBankTab(uint8_t tabId) {
 
 void InventoryHandler::buyGuildBankTab() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return;
+    // For less than it costs the bank and the buyer together hold it is not
+    // asked for (0x005a5d30).
+    static constexpr uint32_t kTabCost[6] = {1000000u, 2500000u, 5000000u, 10000000u, 25000000u, 50000000u};
+    if (guildBankTabCount_ < 6 &&
+        owner_.getGuildBankData().money + owner_.getMoneyCopper() < kTabCost[guildBankTabCount_]) {
+        owner_.addUIError(uiText("ERR_BANKSLOT_INSUFFICIENT_FUNDS", "You can't afford that."));
+        owner_.playGameErrorSound("ERR_BANKSLOT_INSUFFICIENT_FUNDS");
+        return;
+    }
     // The next tab is the count bought (0x005a5010 sends 0x00c1dc0c).
     auto packet = GuildBankBuyTabPacket::build(guildBankerGuid_, guildBankTabCount_);
     owner_.getSocket()->send(packet);
@@ -4912,6 +4921,12 @@ void InventoryHandler::buyGuildBankTab() {
 
 void InventoryHandler::depositGuildBankMoney(uint32_t amount) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return;
+    // 0x005a5e20.
+    if (amount > owner_.getMoneyCopper()) {
+        owner_.addUIError(uiText("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        owner_.playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+        return;
+    }
     auto packet = GuildBankDepositMoneyPacket::build(guildBankerGuid_, amount);
     owner_.getSocket()->send(packet);
 }

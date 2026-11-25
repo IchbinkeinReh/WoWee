@@ -9796,6 +9796,9 @@ void SpellHandler::abandonPet() {
     pkt.writeUInt64(owner_.petGuidRef());
     owner_.getSocket()->send(pkt);
     LOG_INFO("Sent CMSG_PET_ABANDON for pet=0x", std::hex, owner_.petGuidRef(), std::dec);
+    // At a stable master's, what is kept there asked for again (0x005d4900).
+    if (owner_.isStableWindowOpen() && owner_.stableMasterGuidRef() != 0)
+        owner_.getSocket()->send(ListStabledPetsPacket::build(owner_.stableMasterGuidRef()));
 }
 
 void SpellHandler::swapStablePet(uint32_t petNumber) {

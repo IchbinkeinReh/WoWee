@@ -2407,3 +2407,27 @@ TEST_CASE("a closing door is in the way once it is shut", "[replay][gameobject]"
     // Where it came into view shut, it is.
     CHECK(game::stateCollides(0, 1, gi::stateForChange(1, 1)) == true);
 }
+
+// 0x005a5e20, 0x005a5d30: more than one has is not offered to the guild's bank,
+// and a tab nobody can pay is not asked for.
+TEST_CASE("the guild bank is asked for what can be paid", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FIELD_COINAGE, 900000}});
+    auto& gh = s.handler();
+    REQUIRE(gh.getMoneyCopper() == 900000);
+    wowee::game::Character self;
+    self.guid = Session::kPlayerGuid;
+    self.guildId = 5;
+    gh.charactersRef().push_back(self);
+    gh.setActiveCharacterGuid(self.guid);
+    gh.openGuildBank(0x77);
+    gh.depositGuildBankMoney(900001);
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_DEPOSIT_MONEY).empty());
+    gh.depositGuildBankMoney(900000);
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_DEPOSIT_MONEY).size() == 1);
+    gh.buyGuildBankTab();   // the first is a hundred gold
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_BUY_TAB).empty());
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FIELD_COINAGE, 1000000}}));
+    gh.buyGuildBankTab();
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_BUY_TAB).size() == 1);
+}
