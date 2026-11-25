@@ -1814,8 +1814,16 @@ StaticPopupDialogs = StaticPopupDialogs or {}
 -- What GlobalStrings has is its own: the buttons and the seconds.
 local german = GetLocale and GetLocale() == "deDE"
 local seconds = D_SECONDS or "%d |4second:seconds;"
--- What the scale goes back to while the question stands.
+-- What the scale goes back to while the question stands: its value, and whether it is
+-- used at all (the check box).
 local pending
+local function goBack(was)
+    SetCVar("uiscale", was.baseline)
+    if was.use then SetCVar("useUiScale", was.use) end
+    local slider, box = VideoOptionsResolutionPanelUIScaleSlider, VideoOptionsResolutionPanelUseUIScale
+    if slider and slider.SetDisplayValue then slider:SetDisplayValue(tonumber(was.baseline) or 1) end
+    if box and was.use and box.SetChecked then box:SetChecked(was.use == "1") end
+end
 local question = german
     and "Möchtet Ihr diese UI-Skalierung behalten?\n\nSie wird in " .. seconds .. " zurückgesetzt."
     or "Keep this interface scale?\n\nReverting in " .. seconds .. "."
@@ -1826,22 +1834,15 @@ StaticPopupDialogs["WOWEE_CONFIRM_UI_SCALE"] = {
     button2 = NO or "No",
     timeout = kRevertSeconds,
     whileDead = 1,
-    -- Escape would dismiss the dialog and leave the untried scale applied,
-    -- which is the state this exists to prevent.
-    hideOnEscape = 0,
+    -- Escape is no.
+    hideOnEscape = 1,
     OnAccept = function(self, data)
         if data then data.baseline = nil end
         pending = nil
     end,
     OnCancel = function(self, data, reason)
         pending = nil
-        if data and data.baseline then
-            SetCVar("uiscale", data.baseline)
-            local slider = VideoOptionsResolutionPanelUIScaleSlider
-            if slider and slider.SetDisplayValue then
-                slider:SetDisplayValue(tonumber(data.baseline) or 1)
-            end
-        end
+        if data and data.baseline then goBack(data) end
     end,
     OnUpdate = function(self, elapsed)
         local text = _G[self:GetName() .. "Text"]
@@ -1858,7 +1859,7 @@ if watcher then
     watcher:RegisterEvent("PLAYER_LOGOUT")
     watcher:SetScript("OnEvent", function()
         if pending then
-            SetCVar("uiscale", pending)
+            goBack(pending)
             pending = nil
         end
     end)
@@ -1871,6 +1872,7 @@ local panel = VideoOptionsResolutionPanel
 if panel and panel.HookScript then
     panel:HookScript("OnShow", function(self)
         self.woweeUiScaleBaseline = GetCVar("uiscale")
+        self.woweeUseUiScale = GetCVar("useUiScale")
     end)
 end
 
@@ -1881,10 +1883,11 @@ if okay and okay.HookScript then
         local baseline = p and p.woweeUiScaleBaseline
         local current = GetCVar("uiscale")
         if baseline and current and baseline ~= current then
-            StaticPopup_Show("WOWEE_CONFIRM_UI_SCALE", kRevertSeconds, nil,
-                             { baseline = baseline })
-            pending = baseline
-            if p then p.woweeUiScaleBaseline = current end
+            local was = { baseline = baseline, use = p.woweeUseUiScale }
+            StaticPopup_Show("WOWEE_CONFIRM_UI_SCALE", kRevertSeconds, nil, was)
+            pending = was
+            p.woweeUiScaleBaseline = current
+            p.woweeUseUiScale = GetCVar("useUiScale")
         end
     end)
 end

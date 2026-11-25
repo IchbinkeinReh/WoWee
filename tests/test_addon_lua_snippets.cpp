@@ -517,6 +517,26 @@ TEST_CASE("the interface scale question is asked in the client's language", "[ad
         });
         CHECK(got == "1");
     }
+    // Whether the scale is used at all was left as it had been tried.
+    SECTION("no takes the check box back as well") {
+        const std::string got = runChunks({
+            {stubs, "Stubs"},
+            {german, "GlobalStrings"},
+            {"cvars = { uiscale = '0.9', useUiScale = '0' } "
+             "function GetCVar(n) return cvars[n] end function SetCVar(n, v) cvars[n] = v end "
+             "VideoOptionsResolutionPanelUseUIScale = { SetChecked = function(self, on) box = on end }",
+             "CVars"},
+            {wowee::addons::kUiScaleConfirmLua, "UiScaleConfirm"},
+            {"VideoOptionsResolutionPanel._hooks.OnShow(VideoOptionsResolutionPanel) "
+             "cvars.uiscale, cvars.useUiScale = '0.76', '1' "
+             "VideoOptionsFrameOkay._hooks.OnClick(VideoOptionsFrameOkay)",
+             "Change"},
+            {"StaticPopupDialogs[asked.which].OnCancel({}, asked.data, 'clicked') "
+             "return cvars.uiscale .. ' ' .. cvars.useUiScale .. ' ' .. tostring(box)",
+             "No"},
+        });
+        CHECK(got == "0.9 0 false");
+    }
 }
 
 TEST_CASE("the About entry is in the client's language", "[addonlua]") {
