@@ -177,7 +177,7 @@ TEST_CASE("a texture may animate itself", "[framexml][emit]") {
     const std::string lua = emitFrameXml(root).lua;
     INFO(lua);
     // The group is created on the texture, not on the frame that holds it.
-    CHECK(has(lua, ":CreateAnimationGroup(\"AlertGlowAnimIn\")"));
+    CHECK(has(lua, ":CreateAnimationGroup(\"$parentAnimIn\")"));
     CHECK(has(lua, ".animIn = "));
     CHECK(has(lua, ":SetDuration(0.2)"));
 }
@@ -1357,7 +1357,7 @@ TEST_CASE("An Animations block becomes group and animation calls",
         "<Translation offsetX=\"10\" offsetY=\"-5\" duration=\"1\"/>"
         "</AnimationGroup></Animations></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
-    REQUIRE(has(r.lua, "CreateAnimationGroup(\"PulseGroup\")"));
+    REQUIRE(has(r.lua, "CreateAnimationGroup(\"$parentGroup\")"));
     REQUIRE(has(r.lua, "SetLooping(\"BOUNCE\")"));
     REQUIRE(has(r.lua, "CreateAnimation(\"Alpha\")"));
     REQUIRE(has(r.lua, "SetChange(-0.7)"));
@@ -1636,7 +1636,7 @@ TEST_CASE("A virtual AnimationGroup becomes a template a group can inherit", "[f
     REQUIRE(has(r.lua, "__WoweeAnimGroupTemplates[\"PulseTemplate\"] = function(__g)"));
     REQUIRE(has(r.lua, "__g:SetLooping(\"BOUNCE\")"));
     REQUIRE(has(r.lua, "__g:CreateAnimation(\"Alpha\")"));
-    REQUIRE(has(r.lua, "CreateAnimationGroup(\"PulserPulse\", (__WoweeAnimGroupTemplates and "
+    REQUIRE(has(r.lua, "CreateAnimationGroup(\"$parentPulse\", (__WoweeAnimGroupTemplates and "
                        "__WoweeAnimGroupTemplates[\"PulseTemplate\"] and \"PulseTemplate\" or nil))"));
 }
 

@@ -508,7 +508,7 @@ struct Emitter {
         // substitution is made against is the region's own.
         const std::string regionName =
             substituteParent(node.attrOr("name", ""), parentName);
-        emitAnimations(node, var, regionName.empty() ? parentName : regionName);
+        emitAnimations(node, var);
     }
 
     /// A virtual Texture or FontString: recorded, not built, and replayed onto
@@ -587,8 +587,9 @@ struct Emitter {
     /// What an <AnimationGroup> declares, onto the group in `gvar`: its
     /// looping and initial offset, its scripts and its animations. Shared by
     /// a frame's own groups and by a virtual group a template is made of.
-    void emitAnimationGroupBody(const XmlNode& group, const std::string& gvar,
-                                const std::string& name) {
+    /// $parent in a name below a group is resolved as the object is made (0x0048b540): its
+    /// group, an animation's Path, and what they are on.
+    void emitAnimationGroupBody(const XmlNode& group, const std::string& gvar) {
         if (const std::string* loop = group.attr("looping")) {
             line(gvar + ":SetLooping(" + quote(*loop) + ")");
         }
@@ -607,8 +608,7 @@ struct Emitter {
                 continue;
             }
             const std::string avar = nextVar();
-            const std::string aname = substituteParent(
-                a.attrOr("name", ""), name);
+            const std::string aname = a.attrOr("name", "");
             line(avar + " = " + gvar + ":CreateAnimation(" +
                  quote(a.name == "Animation" ? "Alpha" : a.name) +
                  (aname.empty() ? "" : ", " + quote(aname)) + ")");
@@ -640,7 +640,7 @@ struct Emitter {
             if (const XmlNode* cps = a.child("ControlPoints")) {
                 for (const XmlNode& cp : cps->children) {
                     if (cp.name != "ControlPoint") continue;
-                    const std::string cpName = substituteParent(cp.attrOr("name", ""), name);
+                    const std::string cpName = cp.attrOr("name", "");
                     const std::string cpVar = nextVar();
                     line(cpVar + " = " + avar + ":CreateControlPoint(" +
                          (cpName.empty() ? "nil" : quote(cpName)) + ", nil, " +
@@ -700,7 +700,7 @@ struct Emitter {
         // A virtual group can itself inherit one, which is copied first.
         if (const std::string* inh = group.attr("inherits"); inh && !inh->empty())
             line("__WoweeApplyAnimGroupTemplate(__g, " + quote(*inh) + ", " + quote(name) + ")");
-        emitAnimationGroupBody(group, "__g", "");
+        emitAnimationGroupBody(group, "__g");
         line("end");
     }
 
@@ -714,8 +714,7 @@ struct Emitter {
     /// raised on a nil and everything after it was lost, including the
     /// waitAndAnimOut that hides the banner. It appeared and stayed for the
     /// rest of the session.
-    void emitAnimations(const XmlNode& node, const std::string& var,
-                        const std::string& name) {
+    void emitAnimations(const XmlNode& node, const std::string& var) {
         // <Animations> - one or more <AnimationGroup>, each holding <Alpha>,
         // <Translation> and friends. The group is a Lua object rather than a
         // widget, so this emits the calls a script would make.
@@ -724,8 +723,7 @@ struct Emitter {
             for (const XmlNode& group : anims.children) {
                 if (group.name != "AnimationGroup") continue;
                 const std::string gvar = nextVar();
-                const std::string gname = substituteParent(
-                    group.attrOr("name", ""), name);
+                const std::string gname = group.attrOr("name", "");
                 // inherits= copies a virtual group, if there is one by that
                 // name; the loader warns and goes on where there is not.
                 std::string inherits;
@@ -738,7 +736,7 @@ struct Emitter {
                 if (const std::string* pk = group.attr("parentKey")) {
                     line(var + "." + *pk + " = " + gvar);
                 }
-                emitAnimationGroupBody(group, gvar, name);
+                emitAnimationGroupBody(group, gvar);
             }
         }
     }
@@ -1394,7 +1392,7 @@ struct Emitter {
             }
             if (const XmlNode* anchors = tr->child("Anchors")) emitAnchors(*anchors, trVar, var, name);
         }
-        emitAnimations(node, var, name);
+        emitAnimations(node, var);
 
         // <NormalFont style="GameFontNormal"/> - the font a button's label is
         // drawn in. Only the normal one: this renderer does not draw a button's

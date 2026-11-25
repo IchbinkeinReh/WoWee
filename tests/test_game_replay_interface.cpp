@@ -858,6 +858,34 @@ TEST_CASE("an error in an addon's XML ends no more than itself", "[replay][inter
     CHECK(ui.is("rawget(_G, 'Xd3') and Xd3:IsShown()"));
 }
 
+// T262: 0x004a8340 and 0x004a4220 answer nil for one without a name; 0x0048b540: what is above
+// an animation is its group.
+TEST_CASE("an animation's name is of its group", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("f = CreateFrame('Frame', 'PlayAn', UIParent) g = f:CreateAnimationGroup() a = g:CreateAnimation('Path') "
+           "p = a:CreateControlPoint()");
+    CHECK(ui.is("select('#', g:GetName()) == 1 and g:GetName() == nil"));
+    CHECK(ui.is("select('#', a:GetName()) == 1 and a:GetName() == nil"));
+    CHECK(ui.is("select('#', p:GetName()) == 1 and p:GetName() == nil"));
+    wowee::ui::XmlNode root;
+    std::string error;
+    REQUIRE(wowee::ui::parseXml(
+        "<Ui><Frame name=\"PlayAnT\" virtual=\"true\"><Animations><AnimationGroup name=\"$parentG\">"
+        "<Path name=\"$parentA\"><ControlPoints><ControlPoint name=\"$parentP\"/></ControlPoints></Path></AnimationGroup>"
+        "<AnimationGroup><Alpha name=\"$parentB\"/></AnimationGroup></Animations></Frame>"
+        "<Frame name=\"PlayAn2\" inherits=\"PlayAnT\"/></Ui>",
+        root, error));
+    CHECK(ui.engine.buildElements(wowee::ui::emitFrameXml(root), "t.xml", [](const auto&) {}));
+    CHECK(ui.is("rawget(_G, 'PlayAn2G') and PlayAn2GA:GetParent() == PlayAn2G and PlayAn2GAP:GetParent() == PlayAn2GA"));
+    // A group without a name: what it is on.
+    CHECK(ui.is("rawget(_G, 'PlayAn2B') and PlayAn2B:GetName() == 'PlayAn2B'"));
+    CHECK(ui.is("not rawget(_G, 'PlayAnTG') and not rawget(_G, 'PlayAn2A')"));
+    // A script's too.
+    ui.run("h = PlayAn2:CreateAnimationGroup('$parentH') b = h:CreateAnimation('Alpha', '$parentC')");
+    CHECK(ui.is("h:GetName() == 'PlayAn2H' and b:GetName() == 'PlayAn2HC' and PlayAn2HC == b"));
+}
+
 // 0x0061e6b0: every kind of link shows its tooltip, a quest's once it is known.
 TEST_CASE("a quest's link shows its tooltip", "[replay][interface]") {
     Session s;

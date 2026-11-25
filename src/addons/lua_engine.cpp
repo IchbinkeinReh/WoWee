@@ -13187,7 +13187,21 @@ void LuaEngine::registerCoreAPI() {
         "function pointMeta:GetOrder() return self.order or 1 end\n"
         "function pointMeta:GetParent() return self.path end\n"
         "function pointMeta:GetRegionParent() return self.path and self.path:GetRegionParent() end\n"
+        // A script object's own name (0x0048b540): $parent is the name of the first
+        // above it that has one - of an animation its group, of a group its region.
+        "local function ownName(name, parent)\n"
+        "    if name == nil then return nil end\n"
+        "    name = tostring(name)\n"
+        "    if name:sub(1, 7):lower() ~= '$parent' then return name end\n"
+        "    while parent do\n"
+        "        local n = parent.GetName and parent:GetName()\n"
+        "        if type(n) == 'string' and n ~= '' then return n .. name:sub(8) end\n"
+        "        parent = parent.GetParent and parent:GetParent()\n"
+        "    end\n"
+        "    return name:sub(8)\n"
+        "end\n"
         "function animMeta:CreateControlPoint(name, inherits, order)\n"
+        "    name = ownName(name, self)\n"
         "    local cp = setmetatable({path = self, name = name, order = tonumber(order) or 1}, pointMeta)\n"
         "    if type(inherits) == 'string' and __WoweeTemplates and __WoweeTemplates[inherits] then\n"
         "        __WoweeTemplates[inherits](cp)\n"
@@ -13343,12 +13357,13 @@ void LuaEngine::registerCoreAPI() {
         // has (0x004a8240 GetObjectType, 0x004a8290 IsObjectType, 0x004a8340
         // GetName, 0x004a83a0 GetParent). None of them existed for animations
         // or groups, so an addon asking an animation its name or its group
-        // raised. IsObjectType follows the client's chains without regard to
+        // raised. One without a name answers nil. IsObjectType follows the client's chains without regard to
         // case: Translation, Rotation, Scale, Alpha and Path are Animations,
         // and everything is an Object (0x00498770 - 0x00499ff0).
         "local function scriptName(self)\n"
         "    local n = self.name\n"
         "    if type(n) == 'string' and n ~= '' then return n end\n"
+        "    return nil\n"
         "end\n"
         "local function typeChain(self)\n"
         "    local mt = getmetatable(self)\n"
@@ -13443,6 +13458,7 @@ void LuaEngine::registerCoreAPI() {
         "                   scale = 'Scale', path = 'Path', alpha = 'Alpha'}\n"
         "function groupMeta:CreateAnimation(kind, name)\n"
         "    kind = type(kind) == 'string' and animKinds[kind:lower()] or 'Animation'\n"
+        "    name = ownName(name, self)\n"
         "    local a = setmetatable({kind = kind, group = self, name = name,\n"
         "                            duration = 0, order = 1, startDelay = 0}, animMeta)\n"
         "    table.insert(self.animations, a)\n"
@@ -13660,6 +13676,7 @@ void LuaEngine::registerCoreAPI() {
         "            error(('%s:CreateAnimationGroup(): Couldn\\'t find inherited node \"%s\"'):format(who, inherits), 3)\n"
         "        end\n"
         "    end\n"
+        "    name = ownName(name, self)\n"
         "    local g = setmetatable({parent = self, name = name, animations = {}}, groupMeta)\n"
         "    if name then _G[name] = g end\n"
         "    self.__animGroups = self.__animGroups or {}\n"
