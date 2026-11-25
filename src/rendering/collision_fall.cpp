@@ -392,6 +392,20 @@ void startFallAt(Mover& m, float v0) {
     m.fallV0 = v0;
 }
 
+float fallSpeedNow(const Mover& m) {
+    const float T = terminal(m.safeFall);
+    return std::min(std::min(m.fallV0, T) + kGravity * static_cast<float>(m.fallMs) * 0.001f, T);
+}
+
+void setSafeFall(Mover& m, bool on) {
+    if (m.falling) {
+        m.fallV0 = fallSpeedNow(m);
+        m.fallMs = 0;
+        m.fallStartZ = m.pos.z;
+    }
+    m.safeFall = on;
+}
+
 float fallDropped(const Mover& m) {
     float d = m.fallStartZ - m.pos.z;
     if (m.fallV0 < -kEpsA) d += m.fallV0 * m.fallV0 * 0.025918681f;

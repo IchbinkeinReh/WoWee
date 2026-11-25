@@ -455,9 +455,17 @@ public:
         moverNoStrafe_ = noStrafe;
         moverNoJump_ = noJump;
     }
-    void setGravityDisabled(bool disabled) { gravityDisabled_ = disabled; }
+    // Over, each of them lets the unit fall from where it is (0x0098b710): levitating
+    // (0x006eba60), walking on water (0x006ef860's case 0x28), hovering (0x006e9920).
+    void setGravityDisabled(bool disabled) {
+        if (gravityDisabled_ && !disabled) queuePlacedFall();
+        gravityDisabled_ = disabled;
+    }
     void setFeatherFallActive(bool active) { featherFallActive_ = active; }
-    void setWaterWalkActive(bool active) { waterWalkActive_ = active; }
+    void setWaterWalkActive(bool active) {
+        if (waterWalkActive_ && !active) queuePlacedFall();
+        waterWalkActive_ = active;
+    }
     /// The mover is a player's ghost (0x0075e3d0's 0x8000).
     void setMoverGhost(bool ghost) { moverGhost_ = ghost; }
     /// Permission to fly - a flying mount where flight is allowed, or .gm fly.
@@ -490,7 +498,13 @@ public:
     [[nodiscard]] bool isSwimRising() const { return swimming && swimRising_; }
     [[nodiscard]] bool isSwimDiving() const { return swimming && swimDiving_; }
     [[nodiscard]] bool isDescending() const { return wasDescending_; }
-    void setHoverActive(bool active) { hoverActive_ = active; }
+    void setHoverActive(bool active) {
+        if (hoverActive_ && !active) {
+            queuePlacedFall();
+            portHoverOver_ = true;
+        }
+        hoverActive_ = active;
+    }
     void setMounted(bool m) { mounted_ = m; }
     void setIntoxication(float amount) { intoxication_ = std::clamp(amount, 0.0f, 1.0f); }
     void setMountHeightOffset(float offset) { mountHeightOffset_ = offset; }
@@ -1325,6 +1339,7 @@ private:
     // Server-driven gravity disable (levitate/hover): skip gravity accumulation.
     bool gravityDisabled_ = false;
     // Server-driven feather fall: cap downward velocity to slow-fall terminal.
+    bool portHoverOver_ = false;  // hovering has ended since the last step
     bool featherFallActive_ = false;
     // Server-driven water walk: the liquid's surface is ground (portMove).
     bool waterWalkActive_ = false;

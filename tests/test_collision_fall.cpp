@@ -211,3 +211,42 @@ TEST_CASE("over nothing a fall goes on and on", "[collision_fall]") {
     CHECK(fallUntilLanded(m, 0.0f, {1, 0}, s, 200) == -1);
     CHECK(m.pos.z < -100.0f);
 }
+
+// 0x00987410, 0x00987440, 0x00986e10: Slow Fall cast in a fall, and gone again in one.
+TEST_CASE("a slow fall begins and ends in a fall", "[collision][fall]") {
+    Mover m;
+    m.pos.z = 100.0f;
+    startFallAt(m, 0.0f);
+    CHECK(fallSpeedNow(m) == 0.0f);
+    m.fallMs = 2000;
+    m.pos.z = 100.0f - fallDistance(2.0f, false, 0.0f);
+    const float fast = fallSpeedNow(m);
+    CHECK(fast == Catch::Approx(2.0f * kGravity));
+    const float z = m.pos.z;
+    setSafeFall(m, true);
+    CHECK(m.fallStartZ == z);
+    CHECK(m.fallMs == 0);
+    CHECK(m.fallV0 == fast);
+    CHECK(fallSpeedNow(m) == kSafeFallSpeed);
+    // Seven yards a second from here.
+    CHECK(fallDistance(3.0f, m.safeFall, m.fallV0) == Catch::Approx(21.0f));
+    m.fallMs = 3000;
+    m.pos.z -= 21.0f;
+    setSafeFall(m, false);
+    CHECK(m.fallV0 == kSafeFallSpeed);
+    m.fallMs = 1000;
+    CHECK(fallSpeedNow(m) == Catch::Approx(kSafeFallSpeed + kGravity));
+    // A jump rises as ever, and comes down slowly.
+    Mover jump;
+    startFallAt(jump, kJumpSpeed);
+    setSafeFall(jump, true);
+    CHECK(jump.fallV0 == kJumpSpeed);
+    jump.fallMs = 5000;
+    CHECK(fallSpeedNow(jump) == kSafeFallSpeed);
+    // Standing: the flag alone.
+    Mover still;
+    still.pos.z = 5.0f;
+    setSafeFall(still, true);
+    CHECK(still.safeFall);
+    CHECK(still.fallStartZ == 0.0f);
+}

@@ -42,6 +42,11 @@ float timeToApex(const Mover& m);
 
 /// 0x00988370 with the speed it starts at (0 walking off an edge).
 void startFallAt(Mover& m, float v0);
+/// 0x00986e10: how fast it falls now, down positive.
+float fallSpeedNow(const Mover& m);
+/// A slow fall begun or over: a fall under way goes on from where it is, as fast as it is
+/// (0x00987410), slower or faster from here (0x00987440).
+void setSafeFall(Mover& m, bool on);
 /// 0x00986fb0: how far it is below the highest point of its fall - below where
 /// it began, and what a jump rose above that (v0 * v0 / 2g).
 float fallDropped(const Mover& m);

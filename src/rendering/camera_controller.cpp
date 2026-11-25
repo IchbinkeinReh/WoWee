@@ -145,6 +145,11 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
         airborneSeconds_ = 0.0f;
     }
     m.pos = from;
+    // A slow fall (feather fall, levitation, a parachute): +0x44 0x20000000.
+    if (m.safeFall != featherFallActive_) {
+        collision::setSafeFall(m, featherFallActive_);
+        if (m.falling) airborneSeconds_ = 0.0f;
+    }
     const uint32_t ms = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(dt * 1000.0f)));
     const glm::vec2 horiz(wanted.x - from.x, wanted.y - from.y);
     const float dist = glm::length(horiz);
@@ -171,8 +176,9 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // A flyer, and a unit with gravity disabled (MOVEMENTFLAG 0x400,
     // levitating), move by the swim-and-fly step (0x0075eda0 -> 0x00760b40).
     m.flying = isFlightAirborne() || gravityDisabled_;
-    // Taking to the air ends the fall it did it from (0x00989890).
-    if (isFlightAirborne() && m.falling) collision::land(m);
+    // Taking to the air ends the fall it did it from (0x00989890), and so does
+    // levitating (0x006eba60).
+    if (m.flying && m.falling) collision::land(m);
     if (m.swimming || m.flying) {
         // 0x00760b40: a plain sweep along the move in three dimensions; a
         // swimmer also against the liquid's surface turned over.
@@ -298,6 +304,8 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
             m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
         }
+        // Let go of by hovering it falls far at once (0x006e9920).
+        if (portHoverOver_) m.fallingFar = true;
         const auto r = collision::fallStep(m, ms, m.fallSpeed * dt, m.fallDir, sweeper);
         // WOWEE_FLOOR_DEBUG: a rise stopped by a ceiling over the body (0x0075de40).
         static const bool kCeilingDebug = std::getenv("WOWEE_FLOOR_DEBUG") != nullptr;
@@ -313,12 +321,11 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             how = "land";
         } else {
             // The fall's speed now, up positive, for whatever reads it.
-            const float t = static_cast<float>(m.fallMs) * 0.001f;
-            const float T = m.safeFall ? collision::kSafeFallSpeed : collision::kTerminalSpeed;
-            verticalVelocity = -std::min(m.fallV0 + collision::kGravity * t, T);
+            verticalVelocity = -collision::fallSpeedNow(m);
             grounded = false;
         }
     }
+    portHoverOver_ = false;
     static const bool kFloorDebug = [] {
         const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
         return v && v[0] && v[0] != '0';
@@ -836,9 +843,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             else verticalVelocity *= std::max(0.0f, 1.0f - 3.0f * f.physicsDeltaTime);
         } else {
             verticalVelocity += f.gravity * f.physicsDeltaTime;
-            // Feather Fall / Slow Fall: cap downward terminal velocity to ~2 m/s
-            if (featherFallActive_ && verticalVelocity < -2.0f)
-                verticalVelocity = -2.0f;
+            if (featherFallActive_) verticalVelocity = std::max(verticalVelocity, -collision::kSafeFallSpeed);
             underGravity = true;
         }
         const float stepVerticalVelocity = underGravity
