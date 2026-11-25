@@ -626,6 +626,40 @@ TEST_CASE("a ghost takes the spirit guide it comes to", "[replay][playtest]") {
     gh.setAddonEventCallback({});
 }
 
+// T291: the teleport named the player and put the eye it moved there.
+TEST_CASE("a teleport is the named unit's", "[replay][playtest]") {
+    constexpr uint64_t kEye = 0xABull;
+    Session s;
+    spawnPlayer(s);
+    s.receive(replay::UpdateObject().create(kEye, wowee::game::ObjectType::UNIT,
+                                            {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_FLAGS, 0x1000000u}}));
+    auto& gh = s.handler();
+    const auto eye = gh.getEntityManager().getEntity(kEye);
+    REQUIRE(eye);
+    eye->setPosition(500.0f, 600.0f, 70.0f, 0.0f);
+    s.receive(replay::UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FARSIGHT, static_cast<uint32_t>(kEye)}}));
+    wowee::network::Packet control(wowee::game::wireOpcode(Opcode::SMSG_CLIENT_CONTROL_UPDATE));
+    control.writePackedGuid(kEye);
+    control.writeUInt8(1);
+    s.receive(control);
+    REQUIRE(gh.activeMover() == kEye);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::MSG_MOVE_TELEPORT_ACK));
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt32(3);
+    p.writeUInt32(0);
+    p.writeUInt16(0);
+    p.writeUInt32(1000);
+    for (float f : {-100.0f, 200.0f, 30.0f, 1.0f}) p.writeFloat(f);
+    p.writeUInt32(0);
+    s.receive(p);
+    CHECK(gh.activeMover() == Session::kPlayerGuid);
+    const glm::vec3 there = wowee::core::coords::serverToCanonical(glm::vec3(-100.0f, 200.0f, 30.0f));
+    CHECK(gh.playerMovementInfo().x == Catch::Approx(there.x));
+    CHECK(gh.playerMovementInfo().y == Catch::Approx(there.y));
+    CHECK(eye->getX() == Catch::Approx(500.0f));
+    CHECK(eye->getY() == Catch::Approx(600.0f));
+}
+
 // What is read of a packet is counted: too little or too much of it.
 TEST_CASE("packets read short or past their end are counted", "[replay][playtest]") {
     Session s;

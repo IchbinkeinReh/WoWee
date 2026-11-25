@@ -2822,6 +2822,11 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
                 " pos=(", serverX, ", ", serverY, ", ", serverZ, ")",
                 " currentPos=(", movementInfo.x, ", ", movementInfo.y, ", ", movementInfo.z, ")");
 
+    // The player's, while it moves another unit: the place is the player's and
+    // not that unit's, which movementInfo is the movement of. The server ends
+    // what it moves the unit by, so the player moves itself again here already.
+    if (guid == owner_.getPlayerGuid() && activeMover() != 0 && activeMover() != guid) setActiveMover(guid);
+
     if (guid != owner_.getPlayerGuid()) {
         glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(serverX, serverY, serverZ));
         auto entity = owner_.getEntityManager().getEntity(guid);
