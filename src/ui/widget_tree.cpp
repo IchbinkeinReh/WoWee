@@ -898,6 +898,14 @@ void WidgetTree::noteScreenSize(float pixelW, float pixelH) {
     markLayoutDirty();
 }
 
+void WidgetTree::sizeTooltip(uint32_t id) {
+    Widget* w = get(id);
+    if (!w || !w->isTooltip || w->tooltipLines.empty() || !tooltipSizer_ || layingOut_) return;
+    const float width = w->width, height = w->height;
+    tooltipSizer_(*w);
+    if (w->width != width || w->height != height) markLayoutDirty();
+}
+
 void WidgetTree::resolveWidget(uint32_t id) {
     if (layingOut_) return;
     // Nothing has run a full pass yet, so there is no screen size to resolve

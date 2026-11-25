@@ -18,6 +18,7 @@
 // grows upward. Converting at the point of drawing keeps every anchor rule here
 // readable against Blizzard's own documentation, rather than mirrored.
 
+#include <functional>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -1278,6 +1279,12 @@ public:
     /// Free when nothing has moved: each widget records the generation it was
     /// resolved in, and a repeat asks nothing.
     void resolveWidget(uint32_t id);
+    /// Who measures a tooltip's lines (the renderer, which has the fonts), and a
+    /// tooltip measured now: what it is filled with it is sized for at once
+    /// (0x0061caf0), not with the next frame.
+    void setTooltipSizer(std::function<void(Widget&)> sizer) { tooltipSizer_ = std::move(sizer); }
+    [[nodiscard]] bool hasTooltipSizer() const { return static_cast<bool>(tooltipSizer_); }
+    void sizeTooltip(uint32_t id);
 
     /// How far a scroll child's contents actually reach, in interface units.
     ///
@@ -1388,6 +1395,7 @@ public:
 private:
     /// The levels of a strata without gaps (0x00495060); how many there are.
     int compactLevels(FrameStrata strata);
+    std::function<void(Widget&)> tooltipSizer_;
 
     template <typename Tell>
     void comeUp(uint32_t id, const Tell& tell) {

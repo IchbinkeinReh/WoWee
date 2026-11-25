@@ -1339,6 +1339,12 @@ void WidgetRenderer::render(WidgetTree& tree, float screenW, float screenH) {
 }
 
 void WidgetRenderer::layout(WidgetTree& tree, float screenW, float screenH) {
+    if (!tree.hasTooltipSizer()) {
+        tree.setTooltipSizer([this, &tree, alive = std::weak_ptr<bool>(alive_)](Widget& w) {
+            if (alive.expired() || !ImGui::GetCurrentContext()) return;
+            if (ImFont* font = interfaceFaceOrDefault(w.fontFace)) sizeTooltipWidget(&w, font, tree);
+        });
+    }
     linkScreenH_ = screenH;
     linkScale_ = tree.uiScale();
     // Every descriptor set in this cache belongs to the context, which frees

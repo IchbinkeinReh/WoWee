@@ -108,6 +108,7 @@ private:
     void sizeTextureWidget(Widget* w);
     void sizeFontStringWidget(Widget* w, ImFont* font);
     void sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree);
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
     /// How big the picture is, without uploading it. No Vulkan context needed:
     /// asking a file its dimensions does not require a GPU, and requiring one
     /// would put this beyond the reach of the headless harness.

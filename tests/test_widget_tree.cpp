@@ -4282,3 +4282,31 @@ TEST_CASE("A model held in a frame without a size is drawn about its point", "[w
     tree.layout(kScreenW, kScreenH);
     CHECK(drawn());
 }
+
+// 0x0061caf0
+TEST_CASE("A tooltip is sized for what it was filled with at once", "[widget][tooltip]") {
+    WidgetTree tree;
+    const uint32_t tip = tree.create(WidgetKind::Frame, tree.rootId(), "Tip");
+    Anchor p;
+    p.point = "CENTER";
+    p.relativePoint = "CENTER";
+    tree.addPoint(tip, p);
+    tree.layout(kScreenW, kScreenH);
+    tree.setTooltipSizer([](Widget& w) {
+        w.width = 20.0f * static_cast<float>(w.tooltipLines.size());
+        w.height = 30.0f;
+    });
+    // Nothing to size it for, and none but a tooltip.
+    tree.get(tip)->isTooltip = true;
+    tree.sizeTooltip(tip);
+    CHECK(tree.get(tip)->width == 0.0f);
+    tree.get(tip)->tooltipLines.resize(3);
+    tree.get(tip)->isTooltip = false;
+    tree.sizeTooltip(tip);
+    CHECK(tree.get(tip)->width == 0.0f);
+    tree.get(tip)->isTooltip = true;
+    tree.sizeTooltip(tip);
+    tree.resolveWidget(tip);
+    CHECK(tree.get(tip)->rectW == Catch::Approx(60.0f));
+    CHECK(tree.get(tip)->rectH == Catch::Approx(30.0f));
+}
