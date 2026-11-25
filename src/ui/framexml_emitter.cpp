@@ -1390,11 +1390,9 @@ struct Emitter {
             }
             break;
         }
-        if (const std::string* sc = node.attr("scale")) {
-            line(var + ":SetScale(" + *sc + ")");
-        }
         // A model frame's model and its model scale (CSimpleModel's XML,
-        // 0x0095f800: file, and scale into +0x32c when above 0).
+        // 0x0095f800: file, and scale into +0x32c when above 0). "scale" is an
+        // attribute of models alone, and no frame's scale.
         if (node.name == "Model" || node.name == "PlayerModel" || node.name == "DressUpModel" ||
             node.name == "TabardModel" || node.name == "CinematicModel") {
             if (const std::string* file = node.attr("file"); file && !file->empty())

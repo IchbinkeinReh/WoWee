@@ -1647,3 +1647,11 @@ TEST_CASE("a font string's element says how its text is drawn and broken", "[fra
     // Once: the texture has no text.
     CHECK(lua.find(":SetNonSpaceWrap(") == lua.rfind(":SetNonSpaceWrap("));
 }
+
+// 0x0095f800: "scale" is a model's, whose frame keeps its own.
+TEST_CASE("a model's scale is none of its frame's", "[framexml]") {
+    XmlNode root = parseOrFail("<Ui><DressUpModel name=\"Dress\" scale=\"2.0\"/><Frame name=\"Plain\" scale=\"3.0\"/></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE(has(r.lua, ":SetModelScale(2.0)"));
+    REQUIRE_FALSE(has(r.lua, ":SetScale("));
+}
