@@ -8,6 +8,7 @@
 #include <optional>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -310,7 +311,11 @@ public:
     /// first drawn with.
     void setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware);
     /// This frame's ray traced water, before render().
-    void setRtWaterFrame(const RtWaterFrame& frame) { rtFrame_ = frame; }
+    /// The traced water's pipelines are compiled beside the frames, the first
+    /// time it is asked for; the liquids are the client's until then.
+    void setRtWaterFrame(const RtWaterFrame& frame);
+    /// Asked for and still compiling.
+    [[nodiscard]] bool rtWaterPending() const { return !rtBuilds_.empty(); }
     /// The lamps the traced water takes this frame, nearest first.
     void setWaterLamps(const std::vector<rt_lights::PointLight>& lights, const glm::vec3& from);
     /// The swimmer's rings this frame (swim_wave.hpp).
@@ -324,7 +329,7 @@ public:
     /// LiquidType textures, depth ramps and blending, client_liquid.hpp), as
     /// magma and slime always are.
     [[nodiscard]] bool rtWaterDrawn() const {
-        return rtFrame_.on && rtFrame_.sceneSet != VK_NULL_HANDLE && rtPipelineLayout_ != VK_NULL_HANDLE;
+        return rtFrame_.on && rtDrawn_ != VK_NULL_HANDLE;
     }
 
     /// LiquidType.dbc and LiquidMaterial.dbc, for the client's liquid. Textures
@@ -552,9 +557,22 @@ private:
     // setting on (RtWaterFrame::tessellation).
     VkPipeline rtTessPipeline_ = VK_NULL_HANDLE;
     VkPipeline rt1xTessPipeline_ = VK_NULL_HANDLE;
+    /// A pipeline being compiled on a thread of its own (with ray queries it
+    /// takes the driver seconds), and where it goes.
+    struct RtBuild {
+        std::future<VkPipeline> pipeline;
+        VkPipeline* into = nullptr;
+    };
+    std::vector<RtBuild> rtBuilds_;
+    /// This frame's, none while the traced water is not drawn.
+    VkPipeline rtDrawn_ = VK_NULL_HANDLE;
+    VkPipeline readyRtPipeline();
+    /// The compiles under way, finished: before what they are made against goes.
+    void finishRtBuilds();
     /// Set once the device is found without tessellation shaders, or their
     /// pipeline failed to build: the grid is drawn as it is from then on.
     bool tessellationOff_ = false;
+    bool rtPipelineFailed_ = false;  ///< said once, the client's liquid from then on
     // The stages the water's push constants reach: the tessellation stages
     // as well where the device has them.
     VkShaderStageFlags pushStages_ = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;

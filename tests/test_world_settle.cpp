@@ -19,3 +19,11 @@ TEST_CASE("the screen goes at the cap whatever the frames do", "[world_settle]")
     CHECK(verdict(kMaxSeconds, 0) != nullptr);
     CHECK(verdict(kMaxSeconds - 0.01f, 0) == nullptr);
 }
+
+TEST_CASE("the screen waits for what the world is drawn with", "[world_settle]") {
+    // The traced water's pipeline compiles beside the frames: calm ones are
+    // not the settled world's yet.
+    CHECK(verdict(2.0f, kCalmFramesNeeded, true) == nullptr);
+    CHECK(verdict(kMaxSeconds, 0, true) == nullptr);
+    CHECK(verdict(kMaxCompileSeconds, 0, true) != nullptr);
+}

@@ -2710,6 +2710,7 @@ void VkContext::destroyImGuiResources() {
     destroyOverlayRenderPass();
     destroySceneCutPasses();
     if (imguiRenderPass) {
+        if (beforePassesDestroyed_) beforePassesDestroyed_();
         vkDestroyRenderPass(device, imguiRenderPass, nullptr);
         imguiRenderPass = VK_NULL_HANDLE;
     }
@@ -3123,6 +3124,7 @@ bool VkContext::recreateSwapchain(int width, int height) {
     destroyOverlayRenderPass();
     destroySceneCutPasses();
     if (imguiRenderPass) {
+        if (beforePassesDestroyed_) beforePassesDestroyed_();
         vkDestroyRenderPass(device, imguiRenderPass, nullptr);
         imguiRenderPass = VK_NULL_HANDLE;
     }
@@ -3254,6 +3256,7 @@ bool VkContext::recreateSwapchain(int width, int height) {
     destroyOverlayRenderPass();
     destroySceneCutPasses();
     if (imguiRenderPass) {
+        if (beforePassesDestroyed_) beforePassesDestroyed_();
         vkDestroyRenderPass(device, imguiRenderPass, nullptr);
         imguiRenderPass = VK_NULL_HANDLE;
     }

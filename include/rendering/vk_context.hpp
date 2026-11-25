@@ -350,6 +350,10 @@ public:
 
     // For ImGui
     [[nodiscard]] VkRenderPass getImGuiRenderPass() const { return imguiRenderPass; }
+    /// Called before the scene's passes are destroyed, to be made again or for
+    /// good: whoever compiles a pipeline against them on a thread of its own
+    /// waits for it there.
+    void setBeforePassesDestroyed(std::function<void()> fn) { beforePassesDestroyed_ = std::move(fn); }
     // Single-sampled, colour-only pass that loads the swapchain. The UI draws
     // here, after the scene has resolved and after water refraction has copied
     // it, so the capture never contains the UI.
@@ -793,6 +797,7 @@ private:
 
     // ImGui resources
     VkRenderPass imguiRenderPass = VK_NULL_HANDLE;
+    std::function<void()> beforePassesDestroyed_;
     VkRenderPass overlayRenderPass = VK_NULL_HANDLE;
     VkRenderPass overlayClearRenderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> overlayFramebuffers;

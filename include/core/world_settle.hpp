@@ -13,10 +13,14 @@ inline constexpr int kCalmFramesNeeded = 30;
 inline constexpr float kMinSeconds = 0.3f;
 /// Never longer, whatever the frames do.
 inline constexpr float kMaxSeconds = 8.0f;
+/// But while what the world is drawn with is still compiled beside them - the
+/// traced water's pipeline, once a driver's cache.
+inline constexpr float kMaxCompileSeconds = 30.0f;
 
 /// Why the screen may go now, or nullptr while it stays.
-[[nodiscard]] constexpr const char* verdict(float elapsedSeconds, int calmFrames) {
-    if (elapsedSeconds >= kMaxSeconds) return "capped";
+[[nodiscard]] constexpr const char* verdict(float elapsedSeconds, int calmFrames, bool compiling = false) {
+    if (elapsedSeconds >= (compiling ? kMaxCompileSeconds : kMaxSeconds)) return "capped";
+    if (compiling) return nullptr;
     if (elapsedSeconds >= kMinSeconds && calmFrames >= kCalmFramesNeeded) return "frames settled";
     return nullptr;
 }

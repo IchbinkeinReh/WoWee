@@ -3475,7 +3475,8 @@ void Application::stepWorldSettle(std::chrono::steady_clock::time_point frameSta
     constexpr float kCalmFrameMs = core::world_settle::kCalmFrameMs;
     const bool queued = entitySpawner_ && entitySpawner_->hasWorkPending();
     settleCalmFrames_ = (frameMs <= kCalmFrameMs && !queued) ? settleCalmFrames_ + 1 : 0;
-    const char* why = core::world_settle::verdict(elapsed, settleCalmFrames_);
+    const auto* water = renderer ? renderer->getWaterRenderer() : nullptr;
+    const char* why = core::world_settle::verdict(elapsed, settleCalmFrames_, water && water->rtWaterPending());
     if (why) endWorldSettle(why);
 }
 

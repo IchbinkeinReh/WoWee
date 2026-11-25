@@ -27,6 +27,7 @@
 #include "core/logger.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -252,11 +253,79 @@ void WaterRenderer::setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hard
 
 void WaterRenderer::destroyRtPipelines() {
     if (!vkCtx) return;
+    finishRtBuilds();
+    rtDrawn_ = VK_NULL_HANDLE;
+    rtPipelineFailed_ = false;
     VkDevice device = vkCtx->getDevice();
     destroy(device, rtPipeline_);
     destroy(device, rt1xPipeline_);
     destroy(device, rtTessPipeline_);
     destroy(device, rt1xTessPipeline_);
+}
+
+void WaterRenderer::finishRtBuilds() {
+    for (RtBuild& b : rtBuilds_) *b.into = b.pipeline.get();
+    rtBuilds_.clear();
+}
+
+// The pipeline the traced water draws with, against the pass it draws in: none
+// while it compiles. Built as the water was first drawn with, on the main
+// thread, it stopped the picture for ten seconds and more - behind the loading
+// screen where there was water at the place of arrival, and in the middle of
+// the play where the first lake came into view.
+VkPipeline WaterRenderer::readyRtPipeline() {
+    if (!vkCtx || !rtPipelineLayout_ || rtPipelineFailed_) return VK_NULL_HANDLE;
+    for (size_t i = 0; i < rtBuilds_.size();) {
+        if (rtBuilds_[i].pipeline.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++i;
+            continue;
+        }
+        VkPipeline* into = rtBuilds_[i].into;
+        *into = rtBuilds_[i].pipeline.get();
+        rtBuilds_.erase(rtBuilds_.begin() + static_cast<std::ptrdiff_t>(i));
+        if (*into) continue;
+        if (into == &rtTessPipeline_ || into == &rt1xTessPipeline_) {
+            LOG_WARNING("WaterRenderer: the tessellated water's pipeline did not build; drawing the grid");
+            tessellationOff_ = true;
+        } else {
+            LOG_ERROR("WaterRenderer: could not build the ray traced water's pipeline");
+            rtPipelineFailed_ = true;
+        }
+    }
+    const bool onePass = vkCtx->getMsaaSamples() > VK_SAMPLE_COUNT_1_BIT && water1xRenderPass != VK_NULL_HANDLE;
+    // Tessellated near the camera when asked for and the device can; where it
+    // cannot, or its pipeline will not build, the grid as it is, said once and
+    // not tried again every frame.
+    bool tessellated = rtFrame_.tessellation && !tessellationOff_;
+    if (tessellated && !vkCtx->isTessellationSupported()) {
+        LOG_INFO("WaterRenderer: no tessellation shaders on this device; 'Tessellated water' has no effect");
+        tessellationOff_ = true;
+        tessellated = false;
+    }
+    VkPipeline& pipe = tessellated ? (onePass ? rt1xTessPipeline_ : rtTessPipeline_)
+                                   : (onePass ? rt1xPipeline_ : rtPipeline_);
+    if (pipe || rtPipelineFailed_) return pipe;
+    if (std::none_of(rtBuilds_.begin(), rtBuilds_.end(), [&](const RtBuild& b) { return b.into == &pipe; })) {
+        const VkRenderPass pass = onePass ? water1xRenderPass : vkCtx->getImGuiRenderPass();
+        const VkSampleCountFlagBits samples = onePass ? VK_SAMPLE_COUNT_1_BIT : vkCtx->getMsaaSamples();
+        const char* frag = rtHardware_ ? "assets/shaders/water_rt_hw.frag.spv" : "assets/shaders/water.frag.spv";
+        vkCtx->setBeforePassesDestroyed([this] { finishRtBuilds(); });
+        auto build = [this, pass, samples, frag, tessellated] {
+            const auto from = std::chrono::steady_clock::now();
+            const VkPipeline built = buildWaterPipeline(pass, samples, frag, rtPipelineLayout_, tessellated);
+            LOG_INFO("WaterRenderer: the ray traced water's pipeline compiled in ",
+                     std::chrono::duration<float>(std::chrono::steady_clock::now() - from).count(), " s");
+            return built;
+        };
+        rtBuilds_.push_back({std::async(std::launch::async, std::move(build)), &pipe});
+    }
+    // Till then with the grid's, where that is there.
+    return tessellated ? (onePass ? rt1xPipeline_ : rtPipeline_) : VK_NULL_HANDLE;
+}
+
+void WaterRenderer::setRtWaterFrame(const RtWaterFrame& frame) {
+    rtFrame_ = frame;
+    rtDrawn_ = rtFrame_.on && rtFrame_.sceneSet ? readyRtPipeline() : VK_NULL_HANDLE;
 }
 
 void WaterRenderer::recreatePipelines() {
@@ -395,6 +464,7 @@ void WaterRenderer::shutdown() {
     vkCtx->flushDeferredCleanup();
 
     destroyWater1xResources();
+    vkCtx->setBeforePassesDestroyed({});
     destroyFrameUBO();
     destroySceneHistoryResources();
     destroyClientLiquid();
@@ -1290,44 +1360,10 @@ void WaterRenderer::clear() {
 
 void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                             const Camera& camera, float time, bool use1x, uint32_t frameIndex) {
-    // The ray traced water this frame (water_rt.glsli): its pipelines are
-    // built the first time it is drawn with, against the pass it draws in.
+    // The ray traced water this frame (water_rt.glsli).
     VkPipelineLayout layout = rtPipelineLayout_;
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    bool traced = rtWaterDrawn();
-    if (traced) {
-        const char* frag = rtHardware_ ? "assets/shaders/water_rt_hw.frag.spv" : "assets/shaders/water.frag.spv";
-        const bool onePass = use1x && water1xRenderPass;
-        auto pipelineFor = [&](VkPipeline& pipe, bool tessellated) {
-            if (!pipe) {
-                pipe = onePass ? buildWaterPipeline(water1xRenderPass, VK_SAMPLE_COUNT_1_BIT, frag, rtPipelineLayout_,
-                                                    tessellated)
-                               : buildWaterPipeline(vkCtx->getImGuiRenderPass(), vkCtx->getMsaaSamples(), frag,
-                                                    rtPipelineLayout_, tessellated);
-            }
-            return pipe;
-        };
-        // Tessellated near the camera when asked for and the device can; where
-        // it cannot, or its pipeline will not build, the grid as it is, said
-        // once and not tried again every frame.
-        if (rtFrame_.tessellation && !tessellationOff_) {
-            if (!vkCtx->isTessellationSupported()) {
-                LOG_INFO("WaterRenderer: no tessellation shaders on this device; 'Tessellated water' has no effect");
-                tessellationOff_ = true;
-            } else {
-                pipeline = pipelineFor(onePass ? rt1xTessPipeline_ : rtTessPipeline_, true);
-                if (!pipeline) {
-                    LOG_WARNING("WaterRenderer: the tessellated water's pipeline did not build; drawing the grid");
-                    tessellationOff_ = true;
-                }
-            }
-        }
-        if (!pipeline) pipeline = pipelineFor(onePass ? rt1xPipeline_ : rtPipeline_, false);
-        if (!pipeline) {
-            LOG_ERROR("WaterRenderer: could not build the ray traced water's pipeline");
-            traced = false;
-        }
-    }
+    VkPipeline pipeline = rtDrawn_;
+    const bool traced = rtWaterDrawn();
     // The client's own liquid: all of it, or with the traced water its magma
     // and slime.
     clientTimeSeconds_ = time;
@@ -2667,6 +2703,8 @@ void WaterRenderer::destroyWater1xResources() {
         if (fb) vkDestroyFramebuffer(device, fb, nullptr);
     }
     water1xFramebuffers.clear();
+    finishRtBuilds();
+    rtDrawn_ = VK_NULL_HANDLE;
     destroy(device, rt1xPipeline_);
     destroy(device, rt1xTessPipeline_);
     destroy(device, clientWater1xPipeline_);
