@@ -991,7 +991,8 @@ inline int pushFactionInfo(lua_State* L, game::GameHandler* gh,
         (f.flags & game::GameHandler::FACTION_FLAG_PEACE_FORCED) != 0;
 
     lua_pushstring(L, f.name.c_str());                          // 1: name
-    lua_pushstring(L, "");                                      // 2: description
+    // +0x60 of the row (0x005d0da0): the reputation window's detail shows it.
+    lua_pushstring(L, gh->getFactionDescription(f.factionId).c_str());  // 2: description
     lua_pushnumber(L, band.id);                                 // 3: standingId
     lua_pushnumber(L, band.floor);                              // 4: barMin
     // The bar's top is one past the last value still at this standing, so a

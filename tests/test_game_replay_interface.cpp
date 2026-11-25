@@ -9,11 +9,13 @@
 #include "game/dressing_room.hpp"
 #include "game/player_display_flags.hpp"
 #include "game_replay.hpp"
+#include "pipeline/dbc_loader.hpp"
 #include "ui/widget_tree.hpp"
 
 #include <algorithm>
 #include <array>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using replay::Session;
@@ -591,4 +593,77 @@ TEST_CASE("a press in an edit box puts the caret there", "[replay][interface]") 
     // Left of the text it is at the text's start, whatever the line.
     ui.engine.placeEditCaret(id, left + 2.0f, top - 5.0f - line * 1.5f);
     CHECK(tree.get(id)->cursorPos == 0);
+}
+
+namespace {
+
+/// Faction.dbc as 3.3.5 has it, 57 fields: each row an id, its reputation list
+/// entry, the faction it is under, a name and what is said of it.
+wowee::pipeline::DBCFile factionTable(
+    const std::vector<std::tuple<uint32_t, uint32_t, uint32_t, std::string, std::string>>& rows) {
+    std::vector<uint8_t> data;
+    const auto u32 = [&data](uint32_t v) {
+        for (int k = 0; k < 4; ++k) data.push_back(static_cast<uint8_t>(v >> (8 * k)));
+    };
+    std::string strings(1, '\0');
+    std::vector<std::array<uint32_t, 57>> fields;
+    for (const auto& [id, list, parent, name, description] : rows) {
+        auto& f = fields.emplace_back();
+        f.fill(0);
+        f[0] = id;
+        f[1] = list;
+        f[18] = parent;
+        f[23] = static_cast<uint32_t>(strings.size());
+        strings += name + '\0';
+        if (!description.empty()) {
+            f[40] = static_cast<uint32_t>(strings.size());
+            strings += description + '\0';
+        }
+    }
+    for (const char c : {'W', 'D', 'B', 'C'}) data.push_back(static_cast<uint8_t>(c));
+    u32(static_cast<uint32_t>(fields.size()));
+    u32(57);
+    u32(57 * 4);
+    u32(static_cast<uint32_t>(strings.size()));
+    for (const auto& f : fields)
+        for (const uint32_t v : f) u32(v);
+    data.insert(data.end(), strings.begin(), strings.end());
+    wowee::pipeline::DBCFile dbc;
+    REQUIRE(dbc.load(data));
+    return dbc;
+}
+
+// Burning Crusade (980) with Shattrath (936) and two factions in it, Thrallmar
+// right in it, and the Hydraxian Waterlords under nothing.
+struct Reputation : Interface {
+    explicit Reputation(Session& s) : Interface(s) {
+        s.handler().readFactionTable(factionTable({{980, 0xFFFFFFFFu, 0, "The Burning Crusade", ""},
+                                                   {936, 4, 980, "Shattrath City", ""},
+                                                   {942, 0, 936, "Cenarion Expedition", "An expedition."},
+                                                   {932, 1, 936, "The Aldor", ""},
+                                                   {947, 2, 980, "Thrallmar", "Sent by Thrall."},
+                                                   {749, 3, 0, "Hydraxian Waterlords", ""}}));
+        for (int i = 0; i < 5; ++i) s.handler().initialFactionsRef().push_back({0x1, 100});
+        s.handler().initialFactionsRef()[4].flags = 0;
+    }
+    /// The rows as "name", "+name" for a heading, ">" before a child.
+    bool rowsAre(const std::string& want) {
+        run("text = '' for i = 1, GetNumFactions() do "
+            "local name, _, _, _, _, _, _, _, isHeader, collapsed, _, _, isChild = GetFactionInfo(i) "
+            "text = text .. (isChild and '>' or '') .. (isHeader and (collapsed and '-' or '+') or '') .. name .. ';' end");
+        return is("text == '" + want + "'");
+    }
+};
+
+}  // namespace
+
+// P72: 0x005d0da0 answers the row's description, +0x60.
+TEST_CASE("a faction's description is told", "[replay][interface][reputation]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Reputation ui(s);
+    ui.run("told = {} for i = 1, GetNumFactions() do local n, d = GetFactionInfo(i) told[n] = d end");
+    CHECK(ui.is("told['Thrallmar'] == 'Sent by Thrall.'"));
+    CHECK(ui.is("told['Cenarion Expedition'] == 'An expedition.'"));
+    CHECK(ui.is("told['The Aldor'] == ''"));
 }

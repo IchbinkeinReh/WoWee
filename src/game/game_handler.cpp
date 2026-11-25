@@ -3037,7 +3037,18 @@ void GameHandler::loadFactionNameCache() const {
 
     auto dbc = am->loadDBC("Faction.dbc");
     if (!dbc || !dbc->isLoaded()) return;
+    readFactionTable(*dbc);
+}
 
+const std::string& GameHandler::getFactionDescription(uint32_t factionId) const {
+    static const std::string kNone;
+    loadFactionNameCache();
+    const auto it = factionDescriptions_.find(factionId);
+    return it != factionDescriptions_.end() ? it->second : kNone;
+}
+
+void GameHandler::readFactionTable(const pipeline::DBCFile& table) const {
+    const pipeline::DBCFile* dbc = &table;
     // Faction.dbc WotLK 3.3.5a field layout:
     //   0: ID
     //   1: ReputationListID  (-1 / 0xFFFFFFFF = no reputation tracking)
@@ -3049,6 +3060,8 @@ void GameHandler::loadFactionNameCache() const {
     //  19-20: SpilloverRateIn, SpilloverRateOut (floats)
     //  21-22: SpilloverMaxRankIn, SpilloverMaxRankOut
     //  23:    Name (English locale, string ref)
+    //  40:    Description, after the name's sixteen locales and its flags
+    constexpr uint32_t DESCRIPTION_FIELD = 40;
     constexpr uint32_t ID_FIELD      = 0;
     constexpr uint32_t REPLIST_FIELD = 1;
     constexpr uint32_t PARENT_FIELD  = 18;
@@ -3075,6 +3088,12 @@ void GameHandler::loadFactionNameCache() const {
             if (!name.empty()) {
                 factionNameCache_[factionId] = std::move(name);
             }
+        }
+        // 3.3.5's 57 fields: the shorter tables of the older expansions have
+        // their own columns there.
+        if (dbc->getFieldCount() == 57) {
+            std::string description = dbc->getString(i, DESCRIPTION_FIELD);
+            if (!description.empty()) factionDescriptions_[factionId] = std::move(description);
         }
         if (hasParentField) {
             const uint32_t parentId = dbc->getUInt32(i, PARENT_FIELD);

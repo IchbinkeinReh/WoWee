@@ -93,6 +93,7 @@ namespace wowee::game {
 namespace wowee {
 namespace network { class WorldSocket; class Packet; }
 namespace audio { enum class PlayerErrorSpeech : uint8_t; }
+namespace pipeline { class DBCFile; }
 
 namespace game {
 
@@ -4006,6 +4007,10 @@ public:
     void setFactionCollapsed(uint32_t factionId, bool collapsed);
     /// The faction this one is grouped under, or 0 for a top-level one.
     uint32_t getFactionParentId(uint32_t factionId) const;
+    /// What Faction.dbc says of it (+0x60 of the client's row), "" for nothing.
+    const std::string& getFactionDescription(uint32_t factionId) const;
+    /// Faction.dbc's rows: names, descriptions, parents, the reputation list.
+    void readFactionTable(const pipeline::DBCFile& dbc) const;
 
     const std::vector<FactionStandingInit>& getInitialFactions() const { return initialFactions_; }
     const std::unordered_map<uint32_t, int32_t>& getFactionStandings() const { return factionStandings_; }
@@ -7192,6 +7197,7 @@ private:
     std::unordered_map<uint32_t, int32_t> factionStandings_;
     // Faction name cache (factionId → name), populated lazily from Faction.dbc
     mutable std::unordered_map<uint32_t, std::string> factionNameCache_;
+    mutable std::unordered_map<uint32_t, std::string> factionDescriptions_;
     // repListId → factionId mapping (populated with factionNameCache)
     mutable std::unordered_map<uint32_t, uint32_t> factionRepListToId_;
     // factionId → repListId reverse mapping
