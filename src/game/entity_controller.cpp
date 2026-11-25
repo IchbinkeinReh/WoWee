@@ -3093,12 +3093,8 @@ void EntityController::handleDisplayIdChange(const UpdateBlock& block,
     dispatchEntitySpawn(block.guid, entity->getType(), entity, unit,
                         isDeadNow && !result.npcDeathNotified);
     if (owner_.addonEventCallbackRef()) {
-        std::string uid;
-        if (block.guid == owner_.getTargetGuid()) uid = "target";
-        else if (block.guid == owner_.focusGuidRef()) uid = "focus";
-        else if (block.guid == owner_.petGuidRef()) uid = "pet";
-        if (!uid.empty())
-            pendingEvents_.emit("UNIT_MODEL_CHANGED", {uid});
+        for (const auto& token : owner_.unitTokensForGuid(block.guid))
+            if (token != "player") pendingEvents_.emit("UNIT_MODEL_CHANGED", {token});
     }
 }
 

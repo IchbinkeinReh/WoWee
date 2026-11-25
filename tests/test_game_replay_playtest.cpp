@@ -1482,5 +1482,14 @@ TEST_CASE("a unit's tokens hear of its fields", "[replay][fieldevents]") {
     CHECK(heard(UF::UNIT_FIELD_FLAGS, 0x80000) == "UNIT_FLAGS focus;UNIT_FLAGS target;");
     CHECK(heard(UF::UNIT_DYNAMIC_FLAGS, 4) ==
           "UNIT_DYNAMIC_FLAGS focus;UNIT_DYNAMIC_FLAGS target;UNIT_FACTION focus;UNIT_FACTION target;");
+    // 0x006143f0
+    events.clear();
+    wowee::network::Packet aura(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+    aura.writePackedGuid(kWolf);
+    aura.writeUInt8(0);
+    aura.writeUInt32(0);
+    s.receive(aura);
+    CHECK(std::count(events.begin(), events.end(), "UNIT_AURA target") == 1);
+    CHECK(std::count(events.begin(), events.end(), "UNIT_AURA focus") == 1);
     s.handler().setAddonEventCallback({});
 }

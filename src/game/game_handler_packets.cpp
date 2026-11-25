@@ -320,7 +320,7 @@ void GameHandler::predictedPowerSaid(const Unit& unit, uint64_t guid, int type) 
     // 0x0060bf10 0x13 + type: UNIT_MANA .. UNIT_RUNIC_POWER, none for runes.
     if (unit.predictedPower().value[type] == static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type))) &&
         power_prediction::kPowerEvents[type] != nullptr)
-        if (const auto uid = guidToUnitId(guid); !uid.empty()) fireAddonEvent(power_prediction::kPowerEvents[type], {uid});
+        for (const auto& token : unitTokensForGuid(guid)) fireAddonEvent(power_prediction::kPowerEvents[type], {token});
     // Then, for the player or its pet (0x004d3790, 0x005d3390), 0x0053d1b0.
     if (guid == playerGuid || (petGuid_ != 0 && guid == petGuid_)) predictedPowerUsability();
 }
@@ -4498,8 +4498,8 @@ void game::GameHandler::announceMinimapPing(uint64_t sender, float wowX, float w
     // pinged and where.
     if (playerGuid == 0) return;
     lastMinimapPing_ = {wowX, wowY};
-    std::string unitId = guidToUnitId(sender);
-    if (unitId.empty()) unitId = "player";
+    const auto tokens = unitTokensForGuid(sender);
+    const std::string unitId = tokens.empty() ? std::string("player") : tokens.front();
     const glm::vec2 offset = minimapPingOffset(wowX, wowY);
     fireAddonEvent("MINIMAP_PING", {unitId, std::to_string(offset.x), std::to_string(offset.y)});
 }

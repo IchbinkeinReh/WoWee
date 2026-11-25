@@ -751,6 +751,8 @@ public:
     /// (cast_failure::gameError), where the client's table gives it one
     /// (0x00808200 -> 0x005216f0 -> 0x00986d00).
     void sayCastFailure(uint32_t spellId, uint8_t result) const;
+    /// UNIT_AURA for a unit, and what hangs on the player's.
+    void announceAuras(uint64_t guid) const;
     /// The fizzle of a spell that failed, at a unit (0x004cff30).
     void playFizzle(uint32_t spellId, uint64_t unitGuid) const;
     /// Its sounds by school, read from Resistances.dbc where none were given.
