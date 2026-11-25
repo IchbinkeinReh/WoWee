@@ -3009,7 +3009,7 @@ int lua_FontString_SetAlphaGradient(lua_State* L) {
 }
 
 int lua_FontString_SetWordWrap(lua_State* L) {
-    auto* w = widgetOf(L, 1);
+    auto* w = widgetToRemeasure(L, 1);
     if (w) w->wordWrap = luaClientSwitchArg(L, 2, true);
     return 0;
 }
@@ -8368,7 +8368,7 @@ int lua_FontString_GetSpacing(lua_State* L) {
 
 // SetSpacing(spacing) (0x0048dd00): a number, or the usage error.
 int lua_FontString_SetSpacing(lua_State* L) {
-    auto* w = widgetOf(L, 1);
+    auto* w = widgetToRemeasure(L, 1);
     if (!w) return 0;
     if (!lua_isnumber(L, 2))
         return luaL_error(L, "Usage: %s:SetSpacing(spacing)", w->name.empty() ? "<unnamed>" : w->name.c_str());

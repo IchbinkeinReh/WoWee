@@ -512,6 +512,8 @@ void WidgetTree::setWidth(uint32_t id, float width) {
         // inside, which is the whole of what that meant.
         w->wrapsToWidth = false;
     }
+    // One of its own: its text is not its width any more.
+    if (width > 0.0f && w->kind == WidgetKind::FontString) w->autoSized = false;
     w->width = width;
     w->widthFromImage = false;
     // Provisional, so a read before the next layout sees what was just set.

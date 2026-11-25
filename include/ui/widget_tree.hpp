@@ -371,6 +371,14 @@ struct Widget {
     float measuredSize = 0.0f;
     std::string measuredFace;
     float measuredScale = 0.0f;   ///< and the frame's, where the text has pictures
+    /// And what else its lines came of: another of any of it, and it is laid out anew, as
+    /// each of the client's setters has it (+0x100 and +0x104 nothing again).
+    struct TextLayout {
+        float given = 0.0f, spacing = 0.0f;
+        bool wordWrap = true, nonSpaceWrap = false, indented = false, heightGiven = false;
+        friend bool operator==(const TextLayout&, const TextLayout&) = default;
+    };
+    TextLayout measuredLayout;
     /// A label that declared a width and left its height at zero: WoW's
     /// wrapping paragraph. The width is the box to wrap inside and the height
     /// is however many lines that takes - the opposite of autoSized, where the
@@ -1051,6 +1059,7 @@ struct Widget {
     mutable std::string fittedText, fittedFrom, fittedFace;
     mutable float fittedWidth = -1.0f, fittedSize = -1.0f;
     mutable int fittedLines = -1;
+    mutable bool fittedNonSpace = false;
     std::string justifyH = "CENTER";
     /// TOP, MIDDLE or BOTTOM. FrameXML declares it on 93 font strings - a
     /// multi-line label in a fixed box sits differently for each.
@@ -1128,6 +1137,22 @@ struct LinkRect {
 /// they are counted (0x00483fa0): never that between its sides. 0 for none.
 [[nodiscard]] inline float givenWidth(const Widget& w) {
     return w.wrapsToWidth || (!w.autoSized && w.width > 0.0f) ? w.width : 0.0f;
+}
+
+[[nodiscard]] inline Widget::TextLayout textLayout(const Widget& w) {
+    return {.given = givenWidth(w), .spacing = w.lineSpacing, .wordWrap = w.wordWrap,
+            .nonSpaceWrap = w.nonSpaceWrap, .indented = w.indentedWordWrap, .heightGiven = w.heightGiven};
+}
+
+/// What a font string's size comes of (0x00483f30, 0x00483fa0): its sides on both axes;
+/// its left and right, and its own lines; a width it was given, and the lines that takes;
+/// a width and a height; its own text.
+enum class TextSizing : uint8_t { Held, BetweenSides, Paragraph, Box, OwnText };
+[[nodiscard]] inline TextSizing textSizing(const Widget& w) {
+    if (anchorsSpanAxis(w.anchors, true))
+        return anchorsSpanAxis(w.anchors, false) ? TextSizing::Held : TextSizing::BetweenSides;
+    if (givenWidth(w) <= 0.0f) return TextSizing::OwnText;
+    return w.heightGiven ? TextSizing::Box : TextSizing::Paragraph;
 }
 
 /// What of a widget is drawn at a place of the draw order: the ground and the border of

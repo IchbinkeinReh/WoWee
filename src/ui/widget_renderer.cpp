@@ -304,8 +304,6 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     // button. The entries were there and the buttons were there; the names
     // were invisible, so nothing could be read or clicked, and no setting
     // added to the schema could be reached however correctly it registered.
-    const bool spansX = anchorsSpanAxis(w->anchors, true);
-    const bool spansY = anchorsSpanAxis(w->anchors, false);
     // What it was measured as before it was held there is not its size.
     const auto forget = [w] {
         if (w->autoSized) w->width = 0.0f;
@@ -313,11 +311,19 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         w->autoSized = w->wrapsBetweenAnchors = false;
         w->measuredText.clear();
     };
-    if (spansX && spansY) {
+    TextSizing sizing = textSizing(*w);
+    if (sizing == TextSizing::Held) {
         if (w->autoSized || w->wrapsBetweenAnchors) forget();
         return;
     }
-    if (!spansX && w->wrapsBetweenAnchors) forget();
+    if (sizing != TextSizing::BetweenSides && w->wrapsBetweenAnchors) {
+        forget();
+        sizing = textSizing(*w);
+    }
+    if (sizing == TextSizing::Box) {
+        w->wrapsToWidth = false;
+        return;
+    }
 
     // A width with no height is a paragraph, not a request to be measured.
     //
@@ -331,9 +337,8 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     // So it drew one line out through the side of the scroll frame that
     // clips it, and everything anchored beneath it sat on top of the lines
     // that should have pushed it down.
-    const bool paragraph =
-        w->wrapsToWidth ||
-        (!w->autoSized && w->width > 0.0f && w->height <= 0.0f);
+    const bool paragraph = sizing == TextSizing::Paragraph;
+    const bool spansX = sizing == TextSizing::BetweenSides;
 
     // The size the draw will use, not a flat twelve.
     //
@@ -360,7 +365,9 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     // box it was given, the backpack's coin amounts among them: that rect
     // is anchored to end exactly where the coin picture begins, so the
     // overspill lands on the coin.
+    const Widget::TextLayout layout = textLayout(*w);
     const bool sameMeasurement = w->measuredText == w->text &&
+                                 w->measuredLayout == layout &&
                                  w->measuredSize == size &&
                                  w->measuredFace == w->fontFace &&
                                  (w->measuredScale == w->effScale * textScreen().uiScale ||
@@ -372,10 +379,9 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         if (sameMeasurement && w->wrapsBetweenAnchors) return;
         if (w->autoSized) forget();
     } else if (paragraph) {
-        if (sameMeasurement) return;
-    } else {
-        if (w->autoSized && sameMeasurement) return;
-        if (!w->autoSized && w->width > 0.0f && w->height > 0.0f) return;
+        if (sameMeasurement && w->wrapsToWidth) return;
+    } else if (w->autoSized && sameMeasurement) {
+        return;
     }
 
     // The face only once there is something to measure: looking it up
@@ -400,6 +406,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         if (!w->heightGiven) w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
         w->wrapsBetweenAnchors = true;
         w->measuredText = w->text;
+        w->measuredLayout = textLayout(*w);
         w->measuredSize = size;
         w->measuredFace = w->fontFace;
         w->measuredScale = w->effScale * textScreen().uiScale;
@@ -420,6 +427,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         w->wrappedLines = rows > 0 ? rows : 1;
         w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
         w->measuredText = w->text;
+        w->measuredLayout = textLayout(*w);
         w->measuredSize = size;
         w->measuredFace = w->fontFace;
         w->measuredScale = w->effScale * textScreen().uiScale;
@@ -437,6 +445,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     if (!w->heightGiven) w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
     w->autoSized = true;
     w->measuredText = w->text;
+    w->measuredLayout = textLayout(*w);
     w->measuredSize = size;
     w->measuredFace = w->fontFace;
     w->measuredScale = w->effScale * textScreen().uiScale;
@@ -3467,7 +3476,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             } clipPop{.dl = dl, .on = clipToBox};
             const float indent = w->indentedWordWrap ? kIndentedWrapPixels : 0.0f;
             if (boxed && (w->fittedFrom != w->text || w->fittedWidth != boxWidth || w->fittedSize != size ||
-                          w->fittedLines != (w->wordWrap ? most : -most - 2) || w->fittedFace != w->fontFace)) {
+                          w->fittedLines != (w->wordWrap ? most : -most - 2) || w->fittedFace != w->fontFace ||
+                          w->fittedNonSpace != w->nonSpaceWrap)) {
                 w->fittedText = interfaceFittedText(w->text, font, size, boxWidth, w->wordWrap ? most : std::min(most, 1), w->wordWrap,
                                                     w->nonSpaceWrap, indent, w->effScale);
                 w->fittedFrom = w->text;
@@ -3475,6 +3485,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 w->fittedSize = size;
                 w->fittedLines = w->wordWrap ? most : -most - 2;
                 w->fittedFace = w->fontFace;
+                w->fittedNonSpace = w->nonSpaceWrap;
             }
             const std::string& shown = boxed ? w->fittedText : w->text;
             ImVec2 extent = ImGui::CalcTextSize("");

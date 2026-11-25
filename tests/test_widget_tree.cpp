@@ -5054,3 +5054,52 @@ TEST_CASE("a toplevel window comes up in front of what covers it", "[widget][fra
     tree.raise(help);
     CHECK(level(help) == now);
 }
+
+// 0x00483f30, 0x00483fa0; each setter has the size worked out anew.
+TEST_CASE("what a font string's size comes of", "[widget][fontstring]") {
+    WidgetTree tree;
+    const uint32_t id = tree.create(WidgetKind::FontString, tree.uiParentId(), "Words");
+    const auto w = [&]() -> Widget& { return *tree.get(id); };
+    Anchor left, right, bottom;
+    left.point = "TOPLEFT";
+    right.point = "RIGHT";
+    bottom.point = "BOTTOMRIGHT";
+    w().anchors = {left};
+    CHECK(textSizing(w()) == TextSizing::OwnText);
+    // Measured by its text, and then given a width: its text is not its width any more.
+    w().autoSized = true;
+    w().width = 168.0f;
+    w().height = 12.0f;
+    CHECK(textSizing(w()) == TextSizing::OwnText);
+    const auto before = textLayout(w());
+    tree.setWidth(id, 100.0f);
+    CHECK(textSizing(w()) == TextSizing::Paragraph);
+    CHECK_FALSE(textLayout(w()) == before);
+    // And a height: a box, whatever it was before.
+    w().wrapsToWidth = true;
+    tree.setHeight(id, 12.0f);
+    CHECK(textSizing(w()) == TextSizing::Box);
+    tree.setHeight(id, 0.0f);
+    CHECK(textSizing(w()) == TextSizing::Paragraph);
+    tree.setWidth(id, 0.0f);
+    CHECK(textSizing(w()) == TextSizing::OwnText);
+    w().anchors = {left, right};
+    CHECK(textSizing(w()) == TextSizing::BetweenSides);
+    w().anchors = {left, bottom};
+    CHECK(textSizing(w()) == TextSizing::Held);
+
+    const auto same = textLayout(w());
+    w().wordWrap = !w().wordWrap;
+    CHECK_FALSE(textLayout(w()) == same);
+    w().wordWrap = !w().wordWrap;
+    w().nonSpaceWrap = true;
+    CHECK_FALSE(textLayout(w()) == same);
+    w().nonSpaceWrap = false;
+    w().lineSpacing = 8.0f;
+    CHECK_FALSE(textLayout(w()) == same);
+    w().lineSpacing = 0.0f;
+    w().indentedWordWrap = true;
+    CHECK_FALSE(textLayout(w()) == same);
+    w().indentedWordWrap = false;
+    CHECK(textLayout(w()) == same);
+}

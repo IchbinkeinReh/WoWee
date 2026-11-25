@@ -156,8 +156,9 @@ int interfaceTextLines(const std::string& text, const std::string& fontFace,
 std::string interfaceFittedText(const std::string& text, ImFont* font, float size, float width, int lines,
                                 bool wordWrap, bool nonSpaceWrap, float indent, float frameScale) {
     // 0x00483a40: one without a height is not shortened - its lines are broken
-    // at its width, and end where a word is too long for one.
-    if (text.empty() || width <= 0.0f || (lines <= 0 && !wordWrap)) return text;
+    // at its width, and end where a word is too long for one; one that is not
+    // broken ends before the first letter that does not fit whole (0x006c205e).
+    if (text.empty() || width <= 0.0f) return text;
     const auto measure = [&](const std::string& piece) {
         if (font) return font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
         return static_cast<float>(piece.size()) * size * 0.5f;
@@ -168,6 +169,7 @@ std::string interfaceFittedText(const std::string& text, ImFont* font, float siz
         const auto wrapped = wrapText(parseMarkup(t, pictures), wordWrap ? width : 0.0f, nonSpaceWrap, measure, indent, &stopped);
         if (stopped || (lines > 0 && wrapped.size() > static_cast<size_t>(lines))) return false;
         if (wordWrap) return true;
+        if (lines <= 0 && wrapped.size() > 1) return true;   // its own breaks
         float wide = 0.0f;
         if (!wrapped.empty()) {
             for (const WrapRun& run : wrapped.front()) wide += run.texture.empty() ? measure(run.text) : run.texWidth;
