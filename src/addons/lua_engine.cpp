@@ -11755,9 +11755,7 @@ void LuaEngine::setLuaServices(const LuaServices& services) {
 /// ItemTextFrame does that for every page it opens.
 ///
 /// P is the frame's own font, which the wrapped method already reaches. A
-/// heading here draws in the frame's font, with a colour of its own once one
-/// is set; that colour is all a heading keeps, so its other setters do
-/// nothing and its getters answer what P has.
+/// heading's is a font of its own (pushHeadingFont).
 static bool isSimpleHtmlFontMethod(lua_CFunction fn) {
     static const lua_CFunction kMethods[] = {
         lua_FontString_SetFontObject, lua_FontString_GetFontObject, lua_FontString_SetFont,
@@ -11770,13 +11768,40 @@ static bool isSimpleHtmlFontMethod(lua_CFunction fn) {
     };
     return std::find(std::begin(kMethods), std::end(kMethods), fn) != std::end(kMethods);
 }
-static bool isSimpleHtmlFontGetter(lua_CFunction fn) {
-    static const lua_CFunction kGetters[] = {
-        lua_FontString_GetFontObject, lua_FontString_GetFont, lua_FontString_GetTextColor,
-        lua_FontString_GetShadowColor, lua_FontString_GetShadowOffset, lua_FontString_GetSpacing,
-        lua_FontString_GetJustifyH, lua_FontString_GetJustifyV, lua_FontString_GetIndentedWordWrap,
-    };
-    return std::find(std::begin(kGetters), std::end(kGetters), fn) != std::end(kGetters);
+/// The font of a heading, 1 to 3, of the SimpleHTML at `html`, on top of the stack.
+static bool pushHeadingFont(lua_State* L, int html, int heading) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t owner = widgetIdOf(L, html);
+    if (!tree || !tree->get(owner)) return false;
+    taint::Quiet quiet;   // the client's, whoever asks first
+    lua_pushliteral(L, "__htmlFonts");
+    lua_rawget(L, html);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushliteral(L, "__htmlFonts");
+        lua_pushvalue(L, -2);
+        lua_rawset(L, html);
+    }
+    lua_rawgeti(L, -1, heading);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        const uint32_t id = tree->create(wowee::ui::WidgetKind::FontString, 0, "");
+        if (auto* w = tree->get(id)) {
+            w->objectType = "FontString";
+            w->shown = false;
+        }
+        if (auto* w = tree->get(owner)) w->htmlHeadingFont[heading - 1] = id;
+        lua_pushinteger(L, static_cast<lua_Integer>(id));
+        lua_setfield(L, -2, "__wid");
+        setFrameHandle(L, id);
+        installRegionMethods(L, /*isTexture=*/false, /*isFontString=*/true);
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, -3, heading);
+    }
+    lua_remove(L, -2);
+    return true;
 }
 static int simpleHtmlFontMethodTrampoline(lua_State* L) {
     takeSelfByHandle(L);
@@ -11795,21 +11820,9 @@ static int simpleHtmlFontMethodTrampoline(lua_State* L) {
     if (element < 0) return fn(L);
     lua_remove(L, 2);
     if (element == 0) return fn(L);
-    auto* html = widgetOf(L, 1);
-    const int h = element - 1;
-    if (fn == lua_FontString_SetTextColor) {
-        html->htmlHeadingColor[h][0] = static_cast<float>(luaL_optnumber(L, 2, 1.0));
-        html->htmlHeadingColor[h][1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-        html->htmlHeadingColor[h][2] = static_cast<float>(luaL_optnumber(L, 4, 1.0));
-        html->htmlHeadingColor[h][3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
-        html->htmlHeadingColorSet[h] = true;
-        return 0;
-    }
-    if (fn == lua_FontString_GetTextColor && html->htmlHeadingColorSet[h]) {
-        for (float component : html->htmlHeadingColor[h]) lua_pushnumber(L, component);
-        return 4;
-    }
-    return isSimpleHtmlFontGetter(fn) ? fn(L) : 0;
+    if (!pushHeadingFont(L, 1, element)) return 0;
+    lua_replace(L, 1);
+    return fn(L);
 }
 
 void LuaEngine::registerCoreAPI() {
@@ -12819,6 +12832,8 @@ void LuaEngine::registerCoreAPI() {
         {"GetDontSavePosition",   lua_Frame_GetDontSavePosition},
         {"GetDrawEdge",           lua_Cooldown_GetDrawEdge},
         {"GetShadowColor",        lua_FontString_GetShadowColor},
+        {"SetSpacing",            lua_FontString_SetSpacing},
+        {"GetSpacing",            lua_FontString_GetSpacing},
         {"GetShadowOffset",       lua_FontString_GetShadowOffset},
         {"CanNonSpaceWrap",       lua_FontString_CanNonSpaceWrap},
         {"SetIndentedWordWrap",   lua_FontString_SetIndentedWordWrap},

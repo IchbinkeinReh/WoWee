@@ -68,11 +68,12 @@ uint32_t textureColor(const Widget& w) {
 
 
 /// The shadow under words of this alpha (region_colour.hpp).
-uint32_t shadowColor(const Widget& w, float words) {
-    const float rgba[4] = {w.shadowColor[0], w.shadowColor[1], w.shadowColor[2],
-                           region_colour::shadow(w.shadowColor[3], words)};
-    return packColor(rgba, w.drawAlpha);
+uint32_t shadowColor(const Widget& font, float words, float drawAlpha) {
+    const float rgba[4] = {font.shadowColor[0], font.shadowColor[1], font.shadowColor[2],
+                           region_colour::shadow(font.shadowColor[3], words)};
+    return packColor(rgba, drawAlpha);
 }
+uint32_t shadowColor(const Widget& w, float words) { return shadowColor(w, words, w.drawAlpha); }
 
 /// WoW's inline markup, split into runs of text that share a colour.
 ///
@@ -851,14 +852,18 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size, f
 void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
                                     const Widget& w, float ws,
                                     float x0, float y0, float x1) {
-    ImFont* font = interfaceFaceOrDefault(w.fontFace);
-    const float size = interfaceFontSize(w.fontHeight) * ws;
-    const float spacing = w.lineSpacing * ws;
     const float boxW = x1 - x0;
-    const float wrapW = boxW > size ? boxW : 0.0f;
     float y = y0;
     for (const HtmlBlock& b : parseSimpleHtml(w.text, w.htmlLinkFormat)) {
-        const std::string& align = b.align.empty() ? w.justifyH : b.align;
+        // A heading's own font, where it has one (0x0096cc90).
+        const Widget* heading = b.element >= 1 && b.element <= 3 ? tree.get(w.htmlHeadingFont[b.element - 1]) : nullptr;
+        const Widget& of = heading && !heading->fontFace.empty() ? *heading : w;
+        ImFont* font = interfaceFaceOrDefault(of.fontFace);
+        const float size = interfaceFontSize(of.fontHeight) * ws;
+        const float spacing = of.lineSpacing * ws;
+        const float wrapW = boxW > size ? boxW : 0.0f;
+        const float indent = of.indentedWordWrap ? kIndentedWrapPixels : 0.0f;
+        const std::string& align = b.align.empty() ? of.justifyH : b.align;
         if (b.kind == HtmlBlock::Kind::Image) {
             // The size the tag asked for, the picture's own where it asked
             // nothing, and the other side in proportion where it gave one.
@@ -897,19 +902,16 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
             y += dh;
             continue;
         }
-        // A heading in its own colour where one was set for it.
-        const float* color = (b.element >= 1 && b.element <= 3 && w.htmlHeadingColorSet[b.element - 1])
-                                 ? w.htmlHeadingColor[b.element - 1]
-                                 : w.color;
-        if (w.hasShadow) {
+        const float* color = of.color;
+        if (of.hasShadow) {
             drawMarkupText(dl, font, size, w.effScale,
-                           ImVec2(x0 + w.shadowX * ws, y - w.shadowY * ws),
-                           shadowColor(w, color[3]), w.drawAlpha,
-                           b.text, wrapW, false, align.c_str(), true, nullptr, 0, 0.0f, spacing);
+                           ImVec2(x0 + of.shadowX * ws, y - of.shadowY * ws),
+                           shadowColor(of, color[3], w.drawAlpha), w.drawAlpha,
+                           b.text, wrapW, false, align.c_str(), true, nullptr, 0, indent, spacing);
         }
         float h = drawMarkupText(dl, font, size, w.effScale, ImVec2(x0, y),
                                  packColor(color, w.drawAlpha), w.drawAlpha * color[3], b.text,
-                                 wrapW, false, align.c_str(), false, &tree, w.id, 0.0f, spacing);
+                                 wrapW, false, align.c_str(), false, &tree, w.id, indent, spacing);
         // A break at the end of a block finishes its last line rather than
         // opening another: "text<BR/></P>" is one line, and a lone <BR/>
         // between paragraphs is one blank line, not two.

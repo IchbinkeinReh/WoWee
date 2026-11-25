@@ -19,7 +19,7 @@ inline constexpr std::string_view kNames[] = {
     "__CheckedTexture", "__DisabledCheckedTexture", "__DisabledTexture", "__HighlightTexture", "__NormalTexture",
     "__PushedTexture",  "__achievementId",          "__animBaseAlpha",   "__animGroups",       "__attributes",
     "__barTexture",     "__clicks",                 "__disabledFontObject", "__events",        "__fontString",
-    "__g",              "__highlightFontObject",    "__hyperlink",       "__id",               "__initFunc",
+    "__g",              "__highlightFontObject",    "__htmlFonts",      "__hyperlink",       "__id",               "__initFunc",
     "__isEditBox",      "__isSimpleHtml",           "__itemId",          "__lines",            "__linkRolled",
     "__name",           "__normalFontObject",       "__onUpdateFailures", "__own",             "__owner",
     "__parent",         "__pendingQuestId",         "__scripts",         "__scrollChild",      "__setPieces",

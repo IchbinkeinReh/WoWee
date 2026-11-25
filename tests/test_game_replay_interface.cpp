@@ -878,6 +878,44 @@ TEST_CASE("a frame to be clicked is found by its name", "[replay][interface]") {
     CHECK(ui.is("not pcall(GetClickFrame)"));
 }
 
+// T110: 0x009748f0: each element of a SimpleHTML has a font of its own (0x0096cc90).
+TEST_CASE("a SimpleHTML's headings have their own fonts", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("h = CreateFrame('SimpleHTML', 'PlayHtml') h:SetFont('Fonts\\\\FRIZQT__.TTF', 12) "
+           "h:SetFont('h1', 'Fonts\\\\MORPHEUS.TTF', 24) h:SetJustifyH('h2', 'RIGHT') h:SetSpacing('H1', 5) "
+           "h:SetTextColor('H1', 1, 0, 0) h:SetTextColor(0, 1, 0) big = CreateFont('PlayBig') "
+           "big:SetFont('Fonts\\\\ARIALN.TTF', 18) h:SetFontObject('H3', 'PlayBig')");
+    CHECK(ui.is("select(2, h:GetFont('H1')) == 24 and select(2, h:GetFont()) == 12 and select(2, h:GetFont('p')) == 12"));
+    CHECK(ui.is("h:GetFont('h1') == 'Fonts\\\\MORPHEUS.TTF' and h:GetFont('h2') == nil"));
+    CHECK(ui.is("h:GetFont('h3') == 'Fonts\\\\ARIALN.TTF' and h:GetFontObject('h3') == big"));
+    CHECK(ui.is("h:GetJustifyH('h2') == 'RIGHT' and h:GetJustifyH() ~= 'RIGHT'"));
+    CHECK(ui.is("h:GetSpacing('h1') == 5 and h:GetSpacing() == 0"));
+    CHECK(ui.is("h:GetTextColor('h1') > .99 and h:GetTextColor() == 0"));
+    // It is nothing of the frame's.
+    CHECK(ui.is("h:GetNumRegions() == 0 and h:GetNumChildren() == 0"));
+    ui.run("n = '' for k in pairs(h) do n = n .. tostring(k) end");
+    CHECK(ui.is("n == '0'"));
+    const auto* html = ui.engine.widgets().findByName("PlayHtml");
+    REQUIRE(html != nullptr);
+    const auto* first = ui.engine.widgets().get(html->htmlHeadingFont[0]);
+    REQUIRE(first != nullptr);
+    CHECK(first->fontHeight == 24.0f);
+    CHECK_FALSE(first->shown);
+
+    wowee::ui::XmlNode root;
+    std::string error;
+    REQUIRE(wowee::ui::parseXml(
+        "<Ui><SimpleHTML name=\"PlayHtml2\"><FontString inherits=\"PlayBig\"/>"
+        "<FontStringHeader1 inherits=\"PlayBig\" spacing=\"4\" justifyH=\"CENTER\"><Color r=\"0\" g=\"0\" b=\"1\"/>"
+        "</FontStringHeader1></SimpleHTML></Ui>",
+        root, error));
+    CHECK(ui.engine.buildElements(wowee::ui::emitFrameXml(root), "t.xml", [](const auto&) {}));
+    CHECK(ui.is("PlayHtml2:GetFontObject('H1') == big and PlayHtml2:GetSpacing('H1') == 4 and PlayHtml2:GetSpacing() == 0"));
+    CHECK(ui.is("PlayHtml2:GetJustifyH('H1') == 'CENTER' and select(3, PlayHtml2:GetTextColor('H1')) > .99"));
+    CHECK(ui.is("PlayHtml2:GetFont('H2') == nil"));
+}
+
 // T274: 0x0048b6c0 -> 0x0048b540, 0x00819880.
 TEST_CASE("$parent in the name of what a script makes", "[replay][interface]") {
     Session s;

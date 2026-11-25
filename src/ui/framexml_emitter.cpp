@@ -368,7 +368,7 @@ struct Emitter {
     }
 
     /// <Shadow> of a font string or a frame's own font.
-    void emitShadow(const XmlNode& sh, const std::string& var) {
+    void emitShadow(const XmlNode& sh, const std::string& var, const std::string& of = std::string()) {
         float sx = 1.0f, sy = -1.0f;
         if (const XmlNode* off = sh.child("Offset")) {
             if (const XmlNode* abs = off->child("AbsDimension")) {
@@ -376,9 +376,9 @@ struct Emitter {
                 sy = abs->attrFloat("y", -1.0f);
             }
         }
-        line(var + ":SetShadowOffset(" + std::to_string(sx) + ", " + std::to_string(sy) + ")");
+        line(var + ":SetShadowOffset(" + of + std::to_string(sx) + ", " + std::to_string(sy) + ")");
         if (const XmlNode* sc = sh.child("Color"))
-            line(var + ":SetShadowColor(" + xmlColorArgs(*sc) + ")");   // 0x00815c30
+            line(var + ":SetShadowColor(" + of + xmlColorArgs(*sc) + ")");   // 0x00815c30
     }
 
     /// Everything a region declares about itself, applied to a region that
@@ -746,13 +746,19 @@ struct Emitter {
     /// The font instance only. A <Size> or <Anchors> here belongs to a region
     /// this frame does not have, and applying either would resize or move the
     /// frame itself.
-    void emitFontInstance(const XmlNode& node, const std::string& var) {
+    /// Of a SimpleHTML's headings (FontStringHeader1 to 3) with the element's name first.
+    void emitFontInstance(const XmlNode& node, const std::string& var, const char* element = nullptr) {
+        const std::string of = element ? quote(element) + ", " : std::string();
+        const auto got = [&](const char* at) {
+            return "(select(" + std::string(at) + ", " + var + ":GetFont(" + (element ? quote(element) : std::string()) + ")))";
+        };
         if (const std::string* inh = node.attr("inherits"); inh && !inh->empty()) {
             // Ambiguous the same way a region's is: nearly always a font
             // object, occasionally a virtual FontString. Asked at runtime.
-            line("if __WoweeTemplates[" + quote(*inh) + "] then __WoweeTemplates[" +
-                 quote(*inh) + "](" + var + ") else " + var +
-                 ":SetFontObject(" + quote(*inh) + ") end");
+            const std::string set = var + ":SetFontObject(" + of + quote(*inh) + ")";
+            if (element) line(set);
+            else line("if __WoweeTemplates[" + quote(*inh) + "] then __WoweeTemplates[" +
+                 quote(*inh) + "](" + var + ") else " + set + " end");
         }
         float height = 0.0f;
         if (const XmlNode* fh = node.child("FontHeight")) {
@@ -764,20 +770,26 @@ struct Emitter {
         if (face || outline) {
             // SetFont takes all three together: what this node does not state is
             // what it inherited.
-            line(var + ":SetFont(" + (face ? quote(*face) : "(" + var + ":GetFont())") + ", " +
-                 (height > 0.0f ? std::to_string(height) : "select(2, " + var + ":GetFont())") + ", " +
-                 (outline || node.attr("monochrome") ? quote(fontFlags(node)) : "select(3, " + var + ":GetFont())") + ")");
-        } else if (height > 0.0f) {
+            line(var + ":SetFont(" + of + (face ? quote(*face) : got("1")) + ", " +
+                 (height > 0.0f ? std::to_string(height) : got("2")) + ", " +
+                 (outline || node.attr("monochrome") ? quote(fontFlags(node)) : got("3")) + ")");
+        } else if (height > 0.0f && !element) {
             line(var + ":SetTextHeight(" + std::to_string(height) + ")");
         }
         if (const XmlNode* col = node.child("Color")) {
-            line(var + ":SetTextColor(" + xmlColorArgs(*col) + ")");   // 0x00815c30
+            line(var + ":SetTextColor(" + of + xmlColorArgs(*col) + ")");   // 0x00815c30
         }
-        if (const XmlNode* sh = node.child("Shadow")) emitShadow(*sh, var);
+        if (const XmlNode* sh = node.child("Shadow")) emitShadow(*sh, var, of);
+        if (element) {
+            if (node.attr("spacing"))
+                line(var + ":SetSpacing(" + of + std::to_string(node.attrFloat("spacing", 0.0f)) + ")");
+            if (node.attr("indented"))
+                line(var + ":SetIndentedWordWrap(" + of + (node.attrBool("indented") ? "true" : "false") + ")");
+        }
         if (const std::string* j = node.attr("justifyH"))
-            line(var + ":SetJustifyH(" + quote(*j) + ")");
+            line(var + ":SetJustifyH(" + of + quote(*j) + ")");
         if (const std::string* jv = node.attr("justifyV"))
-            line(var + ":SetJustifyV(" + quote(*jv) + ")");
+            line(var + ":SetJustifyV(" + of + quote(*jv) + ")");
     }
 
     void emitAnchors(const XmlNode& anchors, const std::string& var,
@@ -1697,6 +1709,11 @@ struct Emitter {
         // The frame's own font, which is a <FontString> child of the frame
         // itself rather than one inside a Layer. See emitFontInstance.
         for (const XmlNode& child : node.children) {
+            if (node.name == "SimpleHTML") {
+                for (const char* heading : {"1", "2", "3"})
+                    if (child.name == std::string("FontStringHeader") + heading)
+                        emitFontInstance(child, var, (std::string("H") + heading).c_str());
+            }
             if (child.name != "FontString") continue;
             emitFontInstance(child, var);
             // An edit box reads its byte limit off that font string
@@ -1806,6 +1823,7 @@ const char* const kElementNames[] = {
     "ColorValueThumbTexture", "ColorWheelTexture", "ColorWheelThumbTexture",
     "Cooldown", "DisabledCheckedTexture", "DisabledFont", "DisabledTexture",
     "DressUpModel", "EdgeSize", "EditBox", "Font", "FontHeight", "FontString",
+    "FontStringHeader1", "FontStringHeader2", "FontStringHeader3",
     "Frame", "Frames", "GameTooltip", "HighlightFont", "HighlightTexture",
     "HitRectInsets", "Include", "Layer", "Layers", "MessageFrame", "Minimap",
     "Model", "ModifiedClick", "NormalFont", "NormalTexture", "Offset",
