@@ -4349,3 +4349,56 @@ TEST_CASE("A scroll child's extent is that of what is in it now", "[widget][scro
     tree.setHeight(child, 300.0f);
     CHECK(extent() == Catch::Approx(300.0f));
 }
+
+// 0x00489230
+TEST_CASE("what has a place of its own is drawn in a frame without one", "[widgets][points]") {
+    WidgetTree tree;
+    const uint32_t window = tree.create(WidgetKind::Frame, tree.rootId(), "Window");
+    Anchor corner;
+    corner.point = "BOTTOMLEFT";
+    corner.relativePoint = "BOTTOMLEFT";
+    tree.addPoint(window, corner);
+    tree.setWidth(window, 300.0f);
+    tree.setHeight(window, 200.0f);
+    const uint32_t holder = tree.create(WidgetKind::Frame, window, "Holder");
+    const uint32_t border = tree.create(WidgetKind::Texture, holder, "Border");
+    tree.setWidth(border, 64.0f);
+    tree.setHeight(border, 64.0f);
+    Anchor toWindow;
+    toWindow.point = "BOTTOMRIGHT";
+    toWindow.relativePoint = "BOTTOMRIGHT";
+    toWindow.relativeTo = window;
+    tree.addPoint(border, toWindow);
+    const uint32_t art = tree.create(WidgetKind::Texture, holder, "Art");   // the holder's own, where it is
+    const uint32_t row = tree.create(WidgetKind::Frame, holder, "Row");
+    Anchor toBorder;
+    toBorder.point = "TOPLEFT";
+    toBorder.relativePoint = "TOPLEFT";
+    toBorder.relativeTo = border;
+    tree.addPoint(row, toBorder);
+    const uint32_t below = tree.create(WidgetKind::Frame, holder, "Below");
+    Anchor toHolder;
+    toHolder.point = "TOP";
+    toHolder.relativePoint = "TOP";
+    tree.addPoint(below, toHolder);
+    tree.layout(kScreenW, kScreenH);
+    CHECK_FALSE(tree.get(holder)->visible);
+    CHECK(tree.get(holder)->visibleChain);
+    CHECK(tree.get(border)->visible);
+    CHECK(tree.get(border)->left == Catch::Approx(300.0f - 64.0f));
+    CHECK(tree.get(row)->visible);
+    CHECK_FALSE(tree.get(art)->visible);
+    CHECK_FALSE(tree.get(below)->visible);
+    // Hidden with its window, shown with it.
+    tree.get(window)->shown = false;
+    tree.layout(kScreenW, kScreenH);
+    CHECK_FALSE(tree.get(border)->visible);
+    tree.get(window)->shown = true;
+    tree.layout(kScreenW, kScreenH);
+    CHECK(tree.get(border)->visible);
+    // And what hangs on the holder once it has a place.
+    tree.addPoint(holder, corner);
+    tree.layout(kScreenW, kScreenH);
+    CHECK(tree.get(below)->visible);
+    CHECK(tree.get(art)->visible);
+}

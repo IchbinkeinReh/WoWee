@@ -302,6 +302,9 @@ struct Widget {
     /// The layout generation this widget's rect was last resolved in. Zero
     /// means never, which is older than any generation.
     uint64_t resolvedGen = 0;
+    /// WidgetTree::placedOnce's answer, and when it was given.
+    uint64_t placedAt = 0;
+    bool placedThen = false;
 
     /// How far a button's label shifts while the button is held. Declared as
     /// <PushedTextOffset> on 11 templates; it is the small movement that makes
@@ -1302,7 +1305,10 @@ public:
     void scrollContentExtent(uint32_t childId, float& outW, float& outH);
 
     /// Something moved, resized or changed parent - every rect is stale.
-    void markLayoutDirty() { ++layoutGeneration_; }
+    void markLayoutDirty() {
+        ++layoutGeneration_;
+        ++placedKey_;
+    }
 
     /// Whether an id names a widget. The marks below take ids from Lua, and a
     /// set grows to hold whatever it is given - a stray huge number would be
@@ -1697,6 +1703,10 @@ private:
     /// Bumped whenever anything moves. A widget resolved in this generation
     /// needs no further work; one from an older generation is stale.
     uint64_t layoutGeneration_ = 1;
+    /// placed() as the layout asks it, of each widget once until something moves.
+    [[nodiscard]] bool placedOnce(uint32_t id, int depth = 0);
+    [[nodiscard]] bool placedBy(const Widget& w, const std::function<bool(uint32_t)>& other) const;
+    uint64_t placedKey_ = 1;
     // What the last full pass cost and whether it needed to run. Read by the
     // frame profile; see WidgetTree::layout.
     double lastWalkMs_ = 0.0;

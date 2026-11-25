@@ -775,20 +775,34 @@ const Anchor* WidgetTree::pointAt(uint32_t id, int index) const {
     return at < points.size() ? points[at] : nullptr;
 }
 
+bool WidgetTree::placedBy(const Widget& w, const std::function<bool(uint32_t)>& other) const {
+    if (w.anchors.empty()) {
+        // What the client places itself: the art and the text of a frame, a
+        // scroll frame's child, a tooltip.
+        const Widget* parent = get(w.parent);
+        const bool bySelf = w.needsPoint || (w.kind == WidgetKind::Frame && !w.isTooltip &&
+                                             !(parent && parent->scrollChild == w.id));
+        return !bySelf && other(w.parent);
+    }
+    return std::all_of(w.anchors.begin(), w.anchors.end(),
+                       [&](const Anchor& a) { return other(a.relativeTo != 0 ? a.relativeTo : w.parent); });
+}
+
 bool WidgetTree::placed(uint32_t id, int depth) const {
     const Widget* w = get(id);
     if (!w || id == rootId_ || id == uiParentId_ || depth > 64) return true;
-    const Widget* parent = get(w->parent);
-    if (w->anchors.empty()) {
-        // What the client places itself: the art and the text of a frame, a
-        // scroll frame's child, a tooltip.
-        const bool bySelf = w->needsPoint || (w->kind == WidgetKind::Frame && !w->isTooltip &&
-                                              !(parent && parent->scrollChild == id));
-        return !bySelf && placed(w->parent, depth + 1);
-    }
-    return std::all_of(w->anchors.begin(), w->anchors.end(), [&](const Anchor& a) {
-        return placed(a.relativeTo != 0 ? a.relativeTo : w->parent, depth + 1);
-    });
+    return placedBy(*w, [this, depth](uint32_t other) { return placed(other, depth + 1); });
+}
+
+bool WidgetTree::placedOnce(uint32_t id, int depth) {
+    Widget* w = get(id);
+    if (!w || id == rootId_ || id == uiParentId_ || depth > 256) return true;
+    if (w->placedAt == placedKey_) return w->placedThen;
+    w->placedAt = placedKey_;   // before its own, which may come back to it
+    w->placedThen = true;
+    const bool is = placedBy(*w, [this, depth](uint32_t other) { return placedOnce(other, depth + 1); });
+    w->placedThen = is;
+    return is;
 }
 
 void WidgetTree::pinPoints(uint32_t id) {
@@ -990,6 +1004,7 @@ void WidgetTree::layout(float pixelW, float pixelH) {
 
     const auto solveStart = std::chrono::steady_clock::now();
     visibleThisPass_ = 0;
+    ++placedKey_;
 
     Widget& rootW = widgets_[rootId_];
     rootW.left = 0.0f;
@@ -1145,34 +1160,19 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     const float oldRectW = w->rectW, oldRectH = w->rectH;
     const Widget* parent = get(w->parent);
 
-    // A frame with no anchor points is not displayed. That is WoW's rule, and
-    // without it every frame FrameXML declares without anchors - a money
-    // frame, a dropdown, a quest reward panel - falls to the centre-on-parent
-    // default and sits in the middle of the screen looking like a bug in
-    // something else. Regions differ: an unanchored one fills its parent, and
-    // that is handled below.
-    //
-    // The root is the exception: it is the screen, and has nothing to anchor
-    // to.
-    // A scroll frame's scroll child is the other exception: it carries no
-    // anchors because SetScrollChild positions it, not the anchor solver - the
-    // scroll frame places it at its own top-left and slides it by the scroll
-    // offset. Treating it as unanchored marked it, and therefore every element
-    // inside it, invisible: the quest dialog's title, description and
-    // objectives are all children of QuestDetailScrollChildFrame, so the whole
-    // dialog read as blank while every frame in it measured correct. It draws
-    // where it is placed like any other frame, so it must not be hidden for
-    // lacking anchors it was never meant to have.
-    const bool isScrollChild = parent && parent->isScrollFrame &&
-                               parent->scrollChild == id;
-    const bool unanchoredFrame = (w->kind == WidgetKind::Frame) &&
-                                 w->anchors.empty() && id != rootId_ &&
-                                 !isScrollChild;
-    const bool nowhere = unanchoredFrame || (w->needsPoint && w->anchors.empty());
+    // What has no rect is not displayed: a frame without points, a region a
+    // script made without one, and what is placed by them (0x00489230) - but for
+    // what the client places itself, a scroll frame's child among it. That is
+    // WoW's rule, and without it every frame FrameXML declares without anchors -
+    // a money frame, a dropdown, a quest reward panel - falls to the
+    // centre-on-parent default and sits in the middle of the screen looking like
+    // a bug in something else. A child or region of such a frame with a point
+    // elsewhere has a rect and is displayed: the tabard designer's rows are in a
+    // frame without points.
+    const bool nowhere = !placedOnce(id);
     // Two questions, and they are not the same one. Running is shown with
     // every ancestor shown; drawing additionally needs somewhere to be drawn.
-    // Inherited from the parent's chain rather than its `visible`, or a child
-    // of an unanchored driver frame would stop running too.
+    // Both by the parent's chain alone.
     const bool wasChain = w->visibleChain;
     const bool wasVisible = w->visible;
     w->visibleChain = w->shown && (!parent || parent->visibleChain);
@@ -1181,11 +1181,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // is already re-derived on demand by resolveWidget when something asks
     // for it - so if most of these are hidden, not walking them is the fix.
     if (w->visibleChain) ++visibleThisPass_;
-    // Drawing inherits from the parent's *drawing*, not from the chain: an
-    // anchored child of an unanchored frame has nowhere to be either, because
-    // the thing it is anchored to has no position. Deriving this from the
-    // chain instead put those children back on screen.
-    setVisible(*w, w->shown && (!parent || parent->visible) && !nowhere);
+    setVisible(*w, w->visibleChain && !nowhere);
     // Every pass and not only on the change, so the draw order cannot lose a
     // widget whose flag was written some other way - a test sets it directly.
     if (w->visible) mayBeVisible_.set(id);
