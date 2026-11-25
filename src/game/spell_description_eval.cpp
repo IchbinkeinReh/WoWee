@@ -1,3 +1,4 @@
+#include "core/crt_round.hpp"
 #include "game/spell_description_eval.hpp"
 
 #include "ui/plural_escape.hpp"
@@ -587,8 +588,10 @@ std::string formatSpellNumbers(const std::string& fmt, std::initializer_list<dou
             spec += "ld";
             std::snprintf(buf, sizeof(buf), spec.c_str(), static_cast<long>(v));
         } else {
+            const std::size_t dot = spec.find('.');
+            const int decimals = dot == std::string::npos ? 6 : std::atoi(spec.c_str() + dot + 1);
             spec += conv;
-            std::snprintf(buf, sizeof(buf), spec.c_str(), v);
+            std::snprintf(buf, sizeof(buf), spec.c_str(), conv == 'f' ? core::halfUp(v, decimals) : v);
         }
         out += buf;
         i = j;
@@ -605,7 +608,7 @@ bool isWhole(float v) {
 }
 std::string oneDecimal(float v) {
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(v));
+    std::snprintf(buf, sizeof(buf), "%.1f", core::halfUp(v, 1));
     return buf;
 }
 }  // namespace
@@ -722,7 +725,7 @@ std::string formatSpellPeriod(int ms) {
     if (spellTimeIsWhole(static_cast<float>(ms)))
         std::snprintf(buf, sizeof(buf), "%d", ms / 1000);
     else
-        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(static_cast<float>(ms) * 0.001f));
+        std::snprintf(buf, sizeof(buf), "%.2f", core::halfUp(static_cast<float>(ms) * 0.001f, 2));
     return buf;
 }
 
@@ -874,7 +877,7 @@ std::string formatSpellExpressionValue(float v, int decimals) {
         // The CRT's "%.0f": halves away from zero.
         std::snprintf(buf, sizeof(buf), "%ld", std::lround(static_cast<double>(v)));
     } else {
-        std::snprintf(buf, sizeof(buf), "%.*f", decimals, static_cast<double>(v));
+        std::snprintf(buf, sizeof(buf), "%.*f", decimals, core::halfUp(v, decimals));
     }
     return buf;
 }

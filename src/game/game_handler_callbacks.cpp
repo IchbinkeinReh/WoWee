@@ -1,3 +1,4 @@
+#include "core/crt_round.hpp"
 #include "core/app_clock.hpp"
 #include "game/weapon_icon.hpp"
 #include "game/mail_text.hpp"
@@ -5809,7 +5810,7 @@ std::string GameHandler::formatAuraDescription(uint32_t selfSpellId, const std::
     auto printed = [](const char* fmt, double v) {
         char buf[64];
         if (std::strcmp(fmt, "%d") == 0) std::snprintf(buf, sizeof(buf), "%ld", static_cast<long>(v));
-        else std::snprintf(buf, sizeof(buf), fmt, v);
+        else std::snprintf(buf, sizeof(buf), fmt, core::halfUp(v, 1));
         return std::string(buf);
     };
 

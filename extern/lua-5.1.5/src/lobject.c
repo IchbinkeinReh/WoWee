@@ -144,6 +144,31 @@ static void nonfinite (char *s, const char *man, char conv, int prec, int alt) {
 /* WoWee: a number as the client's runtime (MSVC 8) writes it by a format of
 ** e, E, f, g or G: three digits to an exponent at least, 1.#INF, -1.#IND (what
 ** 0/0 gives) and 1.#QNAN. Addons compare with them. */
+/* The client's runtime rounds by the decimal digits, an exact half up (__fptostr, 0x00414ac5);
+   the system's such to the even digit. Of `a', not below 0: the next number up where it is one. */
+static double halfup (double a, char conv, int prec) {
+  int places = prec;
+  double t = ldexp(a, 40);
+  if (a == 0 || t != floor(t) || a >= 1e22) return a;  /* not near a half of anything asked for */
+  if (conv != 'f') {
+    char num[64];
+    if (conv == 'g' || conv == 'G') places = prec > 0 ? prec - 1 : 0;
+    sprintf(num, "%.17e", a);
+    places -= atoi(strchr(num, 'e') + 1);
+  }
+  if (places > 50) return a;
+  if (places >= 0) {
+    t = ldexp(a, places + 1);
+    if (t >= 9007199254740992.0 || t != floor(t) || fmod(t, 2) != 1) return a;
+  }
+  else {
+    t = pow(10, -places);
+    if (fmod(a, t) != t / 2) return a;
+  }
+  return nextafter(a, HUGE_VAL);
+}
+
+
 void luaO_crtnumber (char *s, const char *form, lua_Number n) {
   char num[480], f[8], *e;
   int left = 0, plus = 0, space = 0, alt = 0, zero = 0, width = 0, prec = 6, len, pad, neg = signbit(n) != 0;
@@ -176,7 +201,7 @@ void luaO_crtnumber (char *s, const char *form, lua_Number n) {
   }
   else {
     sprintf(f, "%%%s.*%c", alt ? "#" : "", conv);
-    sprintf(num, f, prec, fabs(n));
+    sprintf(num, f, prec, halfup(fabs(n), conv, prec));
     if (conv != 'f' && (e = strpbrk(num, "eE")) != NULL) {
       int digits = cast_int(strlen(e + 2));
       if (digits < 3) {

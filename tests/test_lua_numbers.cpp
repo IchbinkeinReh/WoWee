@@ -2,6 +2,7 @@
 // lstrlib.c) and addons/lua_text_functions.hpp.
 #include <catch_amalgamated.hpp>
 
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -13,6 +14,7 @@ extern int luaStr_decimalcomma;
 }
 
 #include "addons/lua_text_functions.hpp"
+#include "core/crt_round.hpp"
 
 namespace {
 struct Lua {
@@ -55,7 +57,7 @@ TEST_CASE("a number is written as the client's runtime does", "[lua][number]") {
     CHECK(lua("1.5") == "1.5");
     CHECK(lua("100") == "100");
     CHECK(lua("12345678901234") == "12345678901234");
-    CHECK(lua("123456789012345") == "1.2345678901234e+014");
+    CHECK(lua("123456789012345") == "1.2345678901235e+014");
     CHECK(lua("'a'..(1/0)") == "a1.#INF");
 }
 
@@ -93,7 +95,7 @@ TEST_CASE("format writes numbers as the client's", "[lua][format]") {
     CHECK(f("'%12.2E|', 12345.678") == "   1.23E+004|");
     CHECK(f("'%-12.2e|', -12345.678") == "-1.23e+004  |");
     CHECK(f("'%012.2e|', -12345.678") == "-001.23e+004|");
-    CHECK(f("'%5.1f|%-6.2f|%06.1f|%+d|%+.1f', 1.25, 2.5, -3.5, 7, 0.5") == "  1.2|2.50  |-003.5|+7|+0.5");
+    CHECK(f("'%5.1f|%-6.2f|%06.1f|%+d|%+.1f', 1.25, 2.5, -3.5, 7, 0.5") == "  1.3|2.50  |-003.5|+7|+0.5");
     CHECK(f("'%#.0f', 3") == "3.");
     CHECK(f("'%d', 2^31") == "-2147483648");
     CHECK(f("'%d', 2^32 + 5") == "5");
@@ -144,4 +146,35 @@ TEST_CASE("date with a ! is Greenwich's", "[lua][date]") {
     CHECK(lua("type(date('*t').isdst)") == "boolean");
     CHECK(lua("date('')").find("'date' format too long") != std::string::npos);
     CHECK(lua("date('%Y', 'x')")[0] == '!');
+}
+
+// 0x00414ac5: the digits are rounded, so an exact half goes up; the system's goes to the even.
+TEST_CASE("what is half way goes up", "[lua][number]") {
+    Lua lua;
+    CHECK(lua("string.format('%.0f %.0f %.0f %.0f', .5, 1.5, 2.5, -.5)") == "1 2 3 -1");
+    CHECK(lua("string.format('%.1f %.1f %.1f', 2.25, 12.25, .75)") == "2.3 12.3 0.8");
+    CHECK(lua("string.format('%.2f %.2f %.2f', .125, 1.005, 2.675)") == "0.13 1.00 2.67");
+    CHECK(lua("string.format('%.1f %.1f %.1f', .05, .35, 2.5)") == "0.1 0.3 2.5");
+    CHECK(lua("string.format('%6.1f|%-6.1f|%+.1f', 2.25, 2.25, 2.25)") == "   2.3|2.3   |+2.3");
+    CHECK(lua("string.format('%.1e %.2g %.2g %.3g', 2.25, 125, 135, 1.125)") == "2.3e+000 1.3e+002 1.4e+002 1.13");
+    CHECK(lua("string.format('%.0f %.1f', 1e15 + .5, 0)") == "1000000000000001 0.0");
+    CHECK(lua("0.5") == "0.5");
+    CHECK(lua("1/8192") == "0.0001220703125");
+}
+
+TEST_CASE("the client's rounding for what is printed besides", "[number]") {
+    using wowee::core::halfUp;
+    const auto text = [](double v, int decimals) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.*f", decimals, halfUp(v, decimals));
+        return std::string(buf);
+    };
+    CHECK(text(12.25, 1) == "12.3");
+    CHECK(text(-12.25, 1) == "-12.3");
+    CHECK(text(12.35, 1) == "12.3");
+    CHECK(text(12.75, 1) == "12.8");
+    CHECK(text(0.5, 0) == "1");
+    CHECK(text(1.125, 2) == "1.13");
+    CHECK(text(3.0, 1) == "3.0");
+    CHECK(halfUp(1.0 / 3.0, 1) == 1.0 / 3.0);
 }

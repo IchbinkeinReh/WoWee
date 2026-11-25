@@ -1,3 +1,4 @@
+#include "core/crt_round.hpp"
 #include "game/lfg_roles.hpp"
 #include "game/group_defines.hpp"
 #include "core/local_time.hpp"
@@ -6779,7 +6780,7 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
                 std::string fmt = interfaceString("FACTION_STANDING_INCREASED_BONUS",
                     "Reputation with %s increased by %d. (+%.1f Refer-A-Friend bonus)");
                 char bonus[32];
-                std::snprintf(bonus, sizeof(bonus), "%.1f", static_cast<double>(rafBonus));
+                std::snprintf(bonus, sizeof(bonus), "%.1f", core::halfUp(rafBonus, 1));
                 if (const auto at = fmt.find("%.1f"); at != std::string::npos) fmt.replace(at, 4, bonus);
                 line = chat_channels::luaFormat(fmt, {name, amount});
             } else {

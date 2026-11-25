@@ -1,3 +1,4 @@
+#include "core/crt_round.hpp"
 #include "addons/saved_variables.hpp"
 #include "addons/chat_bubble_lua.hpp"
 #include "addons/chunk_name.hpp"
@@ -6389,10 +6390,10 @@ static void appendItemStats(wowee::ui::Widget* w, const game::ItemQueryResponseD
         if (info.delayMs > 0) {
             const double speed = info.delayMs / 1000.0;
             char buf[32];
-            std::snprintf(buf, sizeof(buf), "%.2f", speed);
+            std::snprintf(buf, sizeof(buf), "%.2f", core::halfUp(speed, 2));
             white(text("SPEED", "Speed") + " " + buf);
             const double dps = (info.damageMin + info.damageMax) / 2.0 / speed;
-            std::snprintf(buf, sizeof(buf), "%.1f", dps);
+            std::snprintf(buf, sizeof(buf), "%.1f", core::halfUp(dps, 1));
             std::string dpsLine = text("DPS_TEMPLATE", "(%.1f damage per second)");
             if (const size_t at = dpsLine.find("%.1f"); at != std::string::npos) dpsLine.replace(at, 4, buf);
             white(dpsLine);

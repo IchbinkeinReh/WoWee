@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/crt_round.hpp"
 #include "game/item_stat_summary.hpp"
 
 #include <cmath>
@@ -21,7 +22,7 @@ namespace wowee::game::item_stats {
     };
     if (std::fabs(delta.dps) > 1.1920929e-07f) {
         char amount[32];
-        std::snprintf(amount, sizeof(amount), "%.1f", static_cast<double>(std::fabs(delta.dps)));
+        std::snprintf(amount, sizeof(amount), "%.1f", core::halfUp(std::fabs(delta.dps), 1));
         line(delta.dps > 0.0f, amount, text("ITEM_MOD_DAMAGE_PER_SECOND_SHORT"));
     }
     // The two attack powers ITEM_MOD folds in, and the sockets, are not among these.
