@@ -933,8 +933,19 @@ struct Widget {
     bool modelLightEnabled = false;
     bool modelLightOmni = true;
     float modelLightVec[3] = {0.0f, 0.0f, 0.0f};
-    float modelLightAmbient[3] = {0.0f, 0.0f, 0.0f};
-    float modelLightDiffuse[3] = {0.0f, 0.0f, 0.0f};
+    float modelLightAmbient[3] = {1.0f, 1.0f, 1.0f};
+    float modelLightDiffuse[3] = {1.0f, 1.0f, 1.0f};
+    /// A plain Model starts without one, its colours white (0x0095f680); a PlayerModel has
+    /// its own on (0x00597370).
+    void takePlayerModelLight() {
+        if (!isPlayerModel()) return;
+        modelLightEnabled = true;
+        modelLightOmni = false;
+        modelLightVec[1] = 1.0f;
+        for (float& v : modelLightAmbient) v = 0.7f;
+        modelLightDiffuse[0] = modelLightDiffuse[1] = 0.8f;
+        modelLightDiffuse[2] = 0.64f;
+    }
     /// The frame's fog (+0x330 bit 0, colour +0x334, near +0x338, far +0x33c):
     /// SetFogColor turns it on, ClearFog off; near starts at 0, far at 1.
     bool modelFogEnabled = false;

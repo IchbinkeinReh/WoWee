@@ -101,6 +101,10 @@ void UnitPortrait::setFigure(int camera, const rendering::figure_camera::Pose& p
     if (preview_ && loadedWell_ && framing_ == Framing::Figure) frame();
 }
 
+void UnitPortrait::setFigureLight(const rendering::model_frame::Light& light, const rendering::model_frame::Fog& fog) {
+    if (preview_) preview_->setFigureLight(light, fog);
+}
+
 void UnitPortrait::setTurning(int direction, uint32_t serial) {
     if (serial == turnSerial_) return;
     turnSerial_ = serial;

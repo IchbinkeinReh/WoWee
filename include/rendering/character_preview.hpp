@@ -5,6 +5,7 @@
 #include "core/character_geosets.hpp"
 #include "core/preview_dressing.hpp"
 #include "rendering/figure_camera.hpp"
+#include "rendering/model_frame_view.hpp"
 
 #include "game/character.hpp"
 #include <glm/glm.hpp>
@@ -104,6 +105,11 @@ public:
     /// the model's camera `index`, which goes with it, or - -1, or one it has
     /// not - the one it came with, the model standing under it as `pose` says.
     void setFigureFraming(int index, const figure_camera::Pose& pose);
+    /// The model frame's light and fog, for a figure.
+    void setFigureLight(const model_frame::Light& light, const model_frame::Fog& fog) {
+        figureLight_ = light;
+        figureFog_ = fog;
+    }
     /// Plays an animation of the model, where it has it.
     void playModelAnimation(uint32_t animationId, bool loop);
     /// How far back from the model's portrait camera to stand, along its own
@@ -238,6 +244,8 @@ private:
     /// creature's has to be handed back or the next player portrait wears it.
     float defaultFovDegrees_ = 0.0f;
     figure_camera::Camera portraitCamera_;
+    model_frame::Light figureLight_;
+    model_frame::Fog figureFog_;
     /// All of the model's, and the middle of its box, for a model frame.
     std::vector<pipeline::M2Camera> modelCameras_;
     glm::vec3 modelBoxMiddle_{0.0f};

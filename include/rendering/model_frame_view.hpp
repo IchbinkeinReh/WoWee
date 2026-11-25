@@ -62,6 +62,75 @@ inline glm::mat4 modelMatrix(const Pose& pose, float ddcScreenHeight) {
     return glm::scale(m, glm::vec3(scale));
 }
 
+/// Model:SetLight's light (the M2Light at +0x2b0): its ambient and diffuse,
+/// from a point (omni) or along a direction, in the frame's space.
+struct Light {
+    bool enabled = false;
+    bool omni = true;
+    glm::vec3 vec{0.0f};
+    glm::vec3 ambient{0.0f};
+    glm::vec3 diffuse{0.0f};
+};
+
+/// The frame's fog, set into the model's lighting by its callback
+/// (0x00960070 -> 0x00834940): colour, near and far, while it is on.
+struct Fog {
+    bool enabled = false;
+    glm::vec3 color{0.0f};
+    float nearDist = 0.0f, farDist = 1.0f;
+};
+
+template <typename Frame>
+[[nodiscard]] Light lightOf(const Frame& f) {
+    const auto vec = [](const float (&v)[3]) { return glm::vec3(v[0], v[1], v[2]); };
+    return {.enabled = f.modelLightEnabled, .omni = f.modelLightOmni, .vec = vec(f.modelLightVec),
+            .ambient = vec(f.modelLightAmbient), .diffuse = vec(f.modelLightDiffuse)};
+}
+
+/// `unit`: what one of the view's own units is in the frame's.
+template <typename Frame>
+[[nodiscard]] Fog fogOf(const Frame& f, float unit = 1.0f) {
+    const float per = unit > 1e-6f ? 1.0f / unit : 1.0f;
+    return {.enabled = f.modelFogEnabled,
+            .color = glm::vec3(f.modelFogColor[0], f.modelFogColor[1], f.modelFogColor[2]),
+            .nearDist = f.modelFogNear * per, .farDist = f.modelFogFar * per};
+}
+
+/// What a lit surface gets: a point light shines from where it is toward the model, a
+/// directional one along its vector. Off, the model's lighting starts at nothing each frame
+/// (0x00831af0 -> 0x00834900) and the frame's callback adds none (0x00960070), so that only
+/// unlit batches and particles show; the direction is the one 0x00835280 falls back to.
+struct Lighting {
+    glm::vec3 direction{0.0f, 0.0f, -1.0f};
+    glm::vec3 diffuse{0.0f};
+    glm::vec3 ambient{0.0f};
+};
+[[nodiscard]] inline Lighting lighting(const Light& light) {
+    Lighting out;
+    if (!light.enabled) return out;
+    const glm::vec3 dir = light.omni ? -light.vec : light.vec;
+    if (glm::dot(dir, dir) >= 1e-12f) out.direction = glm::normalize(dir);
+    out.diffuse = light.diffuse;
+    out.ambient = light.ambient;
+    return out;
+}
+
+/// The same for a frame's data, as the shaders take them.
+template <typename PerFrame>
+void put(const Light& light, const Fog& fog, PerFrame& ubo) {
+    const Lighting l = lighting(light);
+    ubo.lightDir = glm::vec4(l.direction, 0.0f);
+    ubo.lightColor = glm::vec4(l.diffuse, 0.0f);
+    ubo.ambientColor = glm::vec4(l.ambient, 0.0f);
+    if (fog.enabled && fog.farDist > fog.nearDist) {
+        ubo.fogColor = glm::vec4(fog.color, 1.0f);
+        ubo.fogParams = glm::vec4(fog.nearDist, fog.farDist, 0.0f, 0.0f);
+    } else {
+        ubo.fogColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        ubo.fogParams = glm::vec4(99999.0f, 100000.0f, 0.0f, 0.0f);
+    }
+}
+
 }  // namespace model_frame
 
 class ModelFrameView {
@@ -80,24 +149,9 @@ public:
     bool setModel(const std::string& path, const std::string& iconTexture = std::string());
     /// The frame's rect in DDC (its width and height) and its pose; the
     /// camera index (-1 none) and sequence (-1 the model's own).
-    /// Model:SetLight's light (the M2Light at +0x2b0): off, the view's own
-    /// stand-in; on, its ambient and diffuse, from a point (omni) or along a
-    /// direction, in the frame's space.
-    struct Light {
-        bool enabled = false;
-        bool omni = true;
-        glm::vec3 vec{0.0f};
-        glm::vec3 ambient{0.0f};
-        glm::vec3 diffuse{0.0f};
-    };
+    using Light = model_frame::Light;
     void setLight(const Light& light) { light_ = light; }
-    /// The frame's fog, set into the model's lighting by its callback
-    /// (0x00960070 -> 0x00834940): colour, near and far, while it is on.
-    struct Fog {
-        bool enabled = false;
-        glm::vec3 color{0.0f};
-        float nearDist = 0.0f, farDist = 1.0f;
-    };
+    using Fog = model_frame::Fog;
     void setFog(const Fog& fog) { fog_ = fog; }
     /// The pose, projection and animation: `sequence` (-1 the model's own)
     /// started at `sequenceTimeMs` each time `sequenceSerial` changes

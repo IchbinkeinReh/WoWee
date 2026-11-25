@@ -174,6 +174,10 @@ void Application::drawUnitModels(ui::WidgetTree& widgets, float screenW, float s
                                                                   frame->modelFacing, vec(frame->modelCameAt),
                                                                   frame->modelCameScale, ddcH));
             const bool drawn = figure.view->show(look, assetManager.get(), renderer.get(), deltaTime);
+            figure.view->setFigureLight(
+                rendering::model_frame::lightOf(*frame),
+                rendering::model_frame::fogOf(*frame, frame->effScale * rendering::figure_camera::unit(
+                                                                            frame->modelCameScale, ddcH)));
             figure.view->setTurning(frame->modelTurn, frame->modelTurnSerial);
             figure.view->setSequence(frame->modelSequence, frame->modelSequenceSerial);
             frame->externalTexture = drawn ? figure.view->textureId() : 0;

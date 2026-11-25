@@ -16,6 +16,7 @@
 // model its display id names.
 
 #include "rendering/figure_camera.hpp"
+#include "rendering/model_frame_view.hpp"
 #include "ui/unit_look.hpp"
 
 #include <cstdint>
@@ -51,6 +52,8 @@ public:
 
     /// How a model frame looks at its model; applied as it changes.
     void setFigure(int camera, const rendering::figure_camera::Pose& pose);
+    /// And the frame's light and fog on it.
+    void setFigureLight(const rendering::model_frame::Light& light, const rendering::model_frame::Fog& fog);
     /// The model turns (SetRotation, 0x005970f0): its feet shuffle to the
     /// left (below 0) or the right until it has not been turned for a tenth of
     /// a second. `serial` counts the turns.

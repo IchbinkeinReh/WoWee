@@ -190,34 +190,8 @@ void ModelFrameView::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
     ubo.view = camera_->getViewMatrix();
     ubo.projection = camera_->getProjectionMatrix();
     ubo.lightSpaceMatrix = glm::mat4(1.0f);
-    // The interface's light: the model frame's default (0x0095f650) is white
-    // from the viewer's side.
-    if (light_.enabled) {
-        // SetLight's: a point light shines from where it is toward the
-        // model, a directional one along its vector.
-        glm::vec3 dir = light_.omni ? -light_.vec : light_.vec;
-        if (glm::dot(dir, dir) < 1e-12f) dir = glm::vec3(0.0f, 0.0f, -1.0f);
-        ubo.lightDir = glm::vec4(glm::normalize(dir), 0.0f);
-        ubo.lightColor = glm::vec4(light_.diffuse, 0.0f);
-        ubo.ambientColor = glm::vec4(light_.ambient, 0.0f);
-    } else {
-        // No light set: the model's lighting starts at nothing each frame
-        // (0x00831af0 -> 0x00834900) and the frame's callback adds its
-        // M2Light only while SetLight has it on (0x00960070), so a lit
-        // surface is dark and only unlit batches and particles show. The
-        // direction is the one 0x00835280 falls back to, straight down.
-        ubo.lightDir = glm::vec4(0.0f, 0.0f, -1.0f, 0.0f);
-        ubo.lightColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
-        ubo.ambientColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
-    }
+    model_frame::put(light_, fog_, ubo);
     ubo.viewPos = glm::vec4(camera_->getPosition(), 0.0f);
-    if (fog_.enabled && fog_.farDist > fog_.nearDist) {
-        ubo.fogColor = glm::vec4(fog_.color, 1.0f);
-        ubo.fogParams = glm::vec4(fog_.nearDist, fog_.farDist, 0.0f, 0.0f);
-    } else {
-        ubo.fogColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-        ubo.fogParams = glm::vec4(99999.0f, 100000.0f, 0.0f, 0.0f);
-    }
     ubo.shadowParams = glm::vec4(0.0f);
     ubo.cascadeInfo = glm::vec4(0.0f);
     std::memcpy(uboMapped_[fi], &ubo, sizeof(GPUPerFrameData));

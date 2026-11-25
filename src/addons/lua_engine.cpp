@@ -11232,6 +11232,7 @@ static int lua_CreateFrame(lua_State* L) {
             // Kept as it was asked for, so GetObjectType and IsObjectType
             // can answer with it rather than with "Frame" for everything.
             w->objectType = ft;
+            w->takePlayerModelLight();
             w->mouseEnabled = (ft == "Button" || ft == "CheckButton");
             w->isStatusBar = (ft == "StatusBar");
             createdStatusBar = w->isStatusBar;

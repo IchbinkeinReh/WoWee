@@ -44,15 +44,19 @@ struct Pose {
     friend bool operator==(const Pose&, const Pose&) = default;
 };
 
+/// What one of the model's own units is in its frame's space.
+[[nodiscard]] inline float unit(float cameScale, float ddcScreenHeight) {
+    return std::max(std::abs(cameScale) * ddcScreenHeight * (5.0f / 3.0f), 1e-6f);
+}
+
 /// A frame's SetPosition, SetModelScale and facing, against the position and
 /// the scale it had as the model came. A model is drawn at its position times
 /// the frame's effective scale and sized by its scale, the effective scale, the
 /// screen's height in DDC and 1.6666 (0x0095fba0).
 [[nodiscard]] inline Pose pose(const glm::vec3& position, float modelScale, float facing,
                                const glm::vec3& cameAt, float cameScale, float ddcScreenHeight) {
-    const float unit = std::max(std::abs(cameScale) * ddcScreenHeight * (5.0f / 3.0f), 1e-6f);
     Pose out;
-    out.offset = (position - cameAt) / unit;
+    out.offset = (position - cameAt) / unit(cameScale, ddcScreenHeight);
     out.facing = facing;
     out.scale = cameScale != 0.0f ? modelScale / cameScale : 1.0f;
     return out;

@@ -7393,22 +7393,8 @@ void Application::render() {
                         view->setFrame(viewW * ddcPerUnit, viewH * ddcPerUnit, pose, ddcH,
                                        frame->modelCamera, frame->modelSequence, frame->modelSequenceTime,
                                        frame->modelSequenceSerial, came ? &*came : nullptr);
-                        rendering::ModelFrameView::Light light;
-                        light.enabled = frame->modelLightEnabled;
-                        light.omni = frame->modelLightOmni;
-                        light.vec = glm::vec3(frame->modelLightVec[0], frame->modelLightVec[1], frame->modelLightVec[2]);
-                        light.ambient = glm::vec3(frame->modelLightAmbient[0], frame->modelLightAmbient[1],
-                                                  frame->modelLightAmbient[2]);
-                        light.diffuse = glm::vec3(frame->modelLightDiffuse[0], frame->modelLightDiffuse[1],
-                                                  frame->modelLightDiffuse[2]);
-                        view->setLight(light);
-                        rendering::ModelFrameView::Fog fog;
-                        fog.enabled = frame->modelFogEnabled;
-                        fog.color = glm::vec3(frame->modelFogColor[0], frame->modelFogColor[1],
-                                              frame->modelFogColor[2]);
-                        fog.nearDist = frame->modelFogNear;
-                        fog.farDist = frame->modelFogFar;
-                        view->setFog(fog);
+                        view->setLight(rendering::model_frame::lightOf(*frame));
+                        view->setFog(rendering::model_frame::fogOf(*frame));
                         view->update(io.DeltaTime);
                         view->requestComposite();
                         modelsUpdated.push_back(id);
