@@ -97,6 +97,16 @@ TEST_CASE("a key taken by a frame is taken whatever key it is", "[keybindings]")
         const auto end = src.find("continue;", at);
         return src.substr(at, end - at).find("noteInterfaceConsumedKeycode(") != std::string::npos;
     };
-    CHECK(takes("engine->dispatchFrameKey(event.key.key, true)"));
+    CHECK(takes("engine->dispatchFrameKey(event.key.key, true, event.key.repeat)"));
+    // And what reads the keyboard itself, which moving does (P75).
+    const auto spends = [&src](const std::string& call) {
+        const auto at = src.find(call);
+        REQUIRE(at != std::string::npos);
+        const auto end = src.find("continue;", at);
+        return src.substr(at, end - at).find("setKeySpent(event.key.scancode)") != std::string::npos;
+    };
+    CHECK(spends("engine->dispatchFrameKey(event.key.key, true, event.key.repeat)"));
+    CHECK(src.find("setKeySpent(event.key.scancode);\n                        engine->dispatchKey(") !=
+          std::string::npos);
     CHECK(takes("engine->dispatchBindingKey(\n                                event.key.key,\n"));
 }

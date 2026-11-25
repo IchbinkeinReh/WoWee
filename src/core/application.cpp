@@ -2865,9 +2865,9 @@ void Application::run() {
                     // frame acts on the release (MovieFrame_OnKeyUp: Escape
                     // closes it, Space and Enter stop the movie), and with
                     // only presses reaching frames the movie could not be
-                    // skipped.
-                    if ((!engine->editBoxHasFocus() || engine->keyIsTheGames(event.key.key, event.key.mod)) &&
-                        engine->dispatchFrameKey(event.key.key, false)) continue;
+                    // skipped. Its own press's alone, whatever has the
+                    // keyboard by then (0x00494490).
+                    if (engine->dispatchFrameKey(event.key.key, false)) continue;
                     (void)engine->dispatchBindingKey(event.key.key, false, false, false,
                                                      false, false);
                 }
@@ -2917,6 +2917,9 @@ void Application::run() {
                             default: break;
                         }
                         const bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+                        // The box's until it is let go of, also where the box
+                        // gives the keyboard up before that.
+                        if (!event.key.repeat) Input::getInstance().setKeySpent(event.key.scancode);
                         engine->dispatchKey(event.key.key, ctrl, shift);
                         continue;
                     }
@@ -2926,7 +2929,7 @@ void Application::run() {
                     // actually takes it, so with nothing up the movement
                     // keys and every binding carry on exactly as before.
                     if (auto* engine = addonManager_->getLuaEngine()) {
-                        if (engine->dispatchFrameKey(event.key.key, true)) {
+                        if (engine->dispatchFrameKey(event.key.key, true, event.key.repeat)) {
                             // Taken, so not also acted on by the ImGui side
                             // of the chain (GameScreen reads the same press):
                             // a key a frame takes goes nowhere else (0x004943c0
@@ -2935,6 +2938,12 @@ void Application::run() {
                             // menu, and the world map's M, which closes it in
                             // its OnKeyDown, opened it again.
                             ui::noteInterfaceConsumedKeycode(static_cast<int>(event.key.key));
+                            // Nor by what reads the keyboard itself, as long
+                            // as it is held: moving and jumping are bindings
+                            // in the client, and the character walked and
+                            // jumped under the open world map. One held from
+                            // before goes on until it is let go of.
+                            if (!event.key.repeat) Input::getInstance().setKeySpent(event.key.scancode);
                             // Escape says so, because "Escape does nothing"
                             // is a live report and this is one of the three
                             // ways the press can end before the chain that

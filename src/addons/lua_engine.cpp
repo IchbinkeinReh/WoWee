@@ -17635,7 +17635,7 @@ void LuaEngine::dispatchFrameChar(const char* utf8) {
     }
 }
 
-bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
+bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down, bool repeat) {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return false;
     const std::string key = wowKeyName(sdlKeycode);
@@ -17652,6 +17652,11 @@ bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
         callFrameScript(id, "OnKeyUp", key.c_str());
         return true;
     }
+
+    // 0x00494530: a repeat goes to the frame that took the press (+0x9c,
+    // which for a frame does nothing, 0x004899f0) and to no other. Each one
+    // was a press of its own, and M held opened the world map and closed it.
+    if (repeat) return frameKeysHeld_.count(sdlKeycode) != 0;
 
     // 0x0048fb80: one with a script for the press or for the release.
     const uint32_t id = topKeyboardFrame("OnKeyDown", "OnKeyUp");

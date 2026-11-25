@@ -228,8 +228,9 @@ public:
     void dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld = false);
     /// A key for a frame rather than an edit box. Returns true when a frame
     /// took it, so the caller knows not to also treat it as a movement key or
-    /// a binding - which is the whole reason a dialog can be typed into.
-    bool dispatchFrameKey(int sdlKeycode, bool down);
+    /// a binding - which is the whole reason a dialog can be typed into. A
+    /// repeat is the frame's that holds the key and runs nothing.
+    bool dispatchFrameKey(int sdlKeycode, bool down, bool repeat = false);
 
     /// A typed character, for a frame that asked for the keyboard and is not an
     /// edit box. OnChar is where a dialog reads digits: StackSplitFrame's own

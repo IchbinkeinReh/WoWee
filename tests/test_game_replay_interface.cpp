@@ -4,6 +4,7 @@
 
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_engine.hpp"
+#include "core/input.hpp"
 #include "core/preview_dressing.hpp"
 #include "game/dressing_room.hpp"
 #include "game/player_display_flags.hpp"
@@ -464,4 +465,52 @@ TEST_CASE("RunBinding's release runs a binding that asks for it alone", "[replay
     CHECK(ui.is("#opened == 2 and opened[2] == 'down'"));
     CHECK(ui.is("(function() local ok, e = pcall(RunBinding) return not ok and e:find('Usage: RunBinding') ~= nil end)()"));
     ui.run("RunBinding('') RunBinding('NOSUCH') RunBinding('NOSUCH', 'up')");
+}
+
+// P75: the character walked and jumped under the open world map. A key a frame takes goes
+// nowhere else (0x004943c0), its repeats and its release to the same frame (0x00494530, 0x00494490).
+TEST_CASE("a key a frame takes is nobody else's until it is let go of", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("down, up = 0, 0 f = CreateFrame('Frame', 'MapFrame') f:SetAllPoints() f:EnableKeyboard(true) "
+           "f:SetScript('OnKeyDown', function() down = down + 1 end) "
+           "f:SetScript('OnKeyUp', function() up = up + 1 end) f:Hide()");
+    ui.layout();
+    // Pressed before the frame is up, the key is the game's, its repeats and its release too.
+    CHECK_FALSE(ui.engine.dispatchFrameKey('w', true));
+    ui.run("f:Show()");
+    ui.layout();
+    CHECK_FALSE(ui.engine.dispatchFrameKey('w', true, true));
+    CHECK_FALSE(ui.engine.dispatchFrameKey('w', false));
+    CHECK(ui.is("down == 0 and up == 0"));
+    // Pressed under it, it is the frame's: once, however long it is held.
+    CHECK(ui.engine.dispatchFrameKey('w', true));
+    CHECK(ui.engine.dispatchFrameKey('w', true, true));
+    CHECK(ui.engine.dispatchFrameKey('w', true, true));
+    CHECK(ui.is("down == 1 and up == 0"));
+    CHECK(ui.engine.dispatchFrameKey('w', false));
+    CHECK(ui.is("down == 1 and up == 1"));
+
+    // What reads the keyboard itself does not see it either, until it is let go of.
+    auto& input = wowee::core::Input::getInstance();
+    input.setVirtualKey(SDL_SCANCODE_W, true);
+    input.setKeySpent(SDL_SCANCODE_W);
+    input.update();
+    CHECK_FALSE(input.isKeyPressed(SDL_SCANCODE_W));
+    CHECK_FALSE(input.isKeyJustPressed(SDL_SCANCODE_W));
+    input.update();
+    CHECK_FALSE(input.isKeyPressed(SDL_SCANCODE_W));
+    input.setVirtualKey(SDL_SCANCODE_W, false);
+    input.update();
+    input.setVirtualKey(SDL_SCANCODE_W, true);
+    input.update();
+    CHECK(input.isKeyJustPressed(SDL_SCANCODE_W));
+    // A modifier is asked about as it stands.
+    input.setVirtualKey(SDL_SCANCODE_LSHIFT, true);
+    input.setKeySpent(SDL_SCANCODE_LSHIFT);
+    input.update();
+    CHECK(input.isKeyPressed(SDL_SCANCODE_LSHIFT));
+    input.clearVirtualKeys();
+    input.update();
 }
