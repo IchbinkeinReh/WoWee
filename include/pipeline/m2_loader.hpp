@@ -573,6 +573,10 @@ struct M2Model {
     /// doodad's and a game object's collision is its bounding triangles whatever
     /// is drawn (0x0070f550 -> +0x20c, 0x0082ec30).
     [[nodiscard]] bool hasWorldContent() const { return hasDrawableContent() || !collisionIndices.empty(); }
+    /// Something a unit can be shown as: a display's model is put in the place of
+    /// its figure whatever it holds - InvisibleMan's is bones alone, and a unit
+    /// transformed into it is not seen.
+    [[nodiscard]] bool hasUnitContent() const { return hasDrawableContent() || !bones.empty(); }
     /// The same of a file whose skin is not read yet.
     [[nodiscard]] bool hasContent() const { return !vertices.empty() || hasWorldContent(); }
 };

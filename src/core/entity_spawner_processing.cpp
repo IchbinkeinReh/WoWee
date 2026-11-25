@@ -2086,12 +2086,12 @@ uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec
         if (m2Data.empty()) return 0;
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = modelPath;
-        if (!model.hasContent()) return 0;
+        if (!model.hasContent() && !model.hasUnitContent()) return 0;
         if (model.version >= 264) {
             auto skinData = assetManager_->readFile(pipeline::skinPathForM2(modelPath));
             if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
         }
-        if (!model.hasDrawableContent()) return 0;
+        if (!model.hasUnitContent()) return 0;
         pipeline::loadExternalAnimations(*assetManager_, modelPath, m2Data, model);
         modelId = nextCreatureModelId_++;
         if (!cr->loadModel(model, modelId)) return 0;

@@ -2070,8 +2070,8 @@ void CharacterRenderer::setModelTexture(uint32_t modelId, uint32_t textureSlot, 
 }
 bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
     // Emitters alone are taken: nothing of it is drawn here (no vertex buffer),
-    // and its particle twin is posed from its bones.
-    if (!model.hasDrawableContent()) {
+    // and its particle twin is posed from its bones. Bones alone too (T320).
+    if (!model.hasUnitContent()) {
         core::Logger::getInstance().error("Cannot load invalid M2 model");
         return false;
     }

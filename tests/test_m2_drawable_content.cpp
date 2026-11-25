@@ -142,3 +142,14 @@ TEST_CASE("nothing that draws a unit or its items asks for a vertex", "[m2]") {
         CHECK(text.find("out.isValid()") == std::string::npos);
     }
 }
+
+// T320: a unit's display is put in the place of its figure whatever it holds:
+// InvisibleMan is bones alone.
+TEST_CASE("a unit can be shown as bones alone", "[m2][content]") {
+    wowee::pipeline::M2Model invisible;
+    CHECK_FALSE(invisible.hasUnitContent());
+    invisible.bones.emplace_back();
+    CHECK(invisible.hasUnitContent());
+    CHECK_FALSE(invisible.hasDrawableContent());
+    CHECK_FALSE(invisible.hasContent());
+}
