@@ -1383,15 +1383,42 @@ static int lua_UnitPVPName(lua_State* L) {
     return 1;
 }
 
+/// The unit named by the first argument, 0 for none.
+static uint64_t namedUnitGuid(lua_State* L, game::GameHandler* gh) {
+    const char* uid = lua_tostring(L, 1);
+    if (!gh || !uid) return 0;
+    std::string unit(uid);
+    toLowerInPlace(unit);
+    return resolveUnitGuid(gh, unit);
+}
+
+/// 0x0052c680.
+static bool inPlayersParty(const game::GameHandler* gh, uint64_t guid) {
+    if (guid == 0) return false;
+    if (guid == gh->getPlayerGuid()) return true;
+    for (int slot = 1; slot <= 4; ++slot) {
+        if (game::partySlotGuid(gh->getPartyData(), gh->getPlayerGuid(), slot) == guid) return true;
+    }
+    return false;
+}
+
+/// 0x005726f0.
+static bool inPlayersRaid(const game::GameHandler* gh, uint64_t guid) {
+    const auto& group = gh->getPartyData();
+    if (guid == 0 || !game::groupIsRaid(group.groupType)) return false;
+    return std::any_of(group.members.begin(), group.members.end(),
+                       [&](const game::GroupMember& m) { return m.guid == guid; });
+}
+
+// UnitIsPlayer(unit) (0x0060c4b0): a player in view, or one of the party or
+// the raid wherever it is (0x00512a00).
 static int lua_UnitIsPlayer(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "");
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    auto entity = guid ? gh->getEntityManager().getEntity(guid) : nullptr;
-    luaPushOneOrNil(L, entity && entity->getType() == game::ObjectType::PLAYER);
+    const uint64_t guid = namedUnitGuid(L, gh);
+    if (guid == 0) { return luaReturnNil(L); }
+    const auto entity = gh->getEntityManager().getEntity(guid);
+    luaPushOneOrNil(L, (entity && entity->getType() == game::ObjectType::PLAYER) || inPlayersParty(gh, guid) ||
+                           inPlayersRaid(gh, guid));
     return 1;
 }
 
@@ -1683,37 +1710,38 @@ static int lua_UnitInBattleground(lua_State* L) {
     return luaReturnNil(L);
 }
 
-/// True for a unit in the player's own group, and for its pet. The party
-/// frames use this to decide whether a unit is one of ours at all.
+// UnitPlayerOrPetInParty(unit) (0x0060c9a0 -> 0x0052c8c0): one of the four in
+// the party slots - not the player - or what one of them charms, else its
+// summon; of one out of view the pet the group's stats name.
 static int lua_UnitPlayerOrPetInParty(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "");
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    // "partypet2" asks about party member 2's pet, and the answer is whatever
-    // holds for the member.
-    const size_t petPos = uidStr.find("pet");
-    if (petPos != std::string::npos) uidStr.erase(petPos, 3);
-    if (uidStr.empty() || uidStr == "player") {
-        luaPushOneOrNil(L, gh->isInGroup());
-        return 1;
-    }
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
+    const uint64_t guid = namedUnitGuid(L, gh);
     if (guid == 0) { return luaReturnNil(L); }
-    const auto& pd = gh->getPartyData();
-    bool found = false;
-    for (const auto& m : pd.members) {
-        if (m.guid == guid) { found = true; break; }
+    for (int slot = 1; slot <= 4; ++slot) {
+        const uint64_t member = game::partySlotGuid(gh->getPartyData(), gh->getPlayerGuid(), slot);
+        if (member != 0 && (member == guid || resolveUnitGuid(gh, "partypet" + std::to_string(slot)) == guid)) {
+            lua_pushnumber(L, 1.0);
+            return 1;
+        }
     }
-    luaPushOneOrNil(L, found);
-    return 1;
+    return luaReturnNil(L);
 }
 
+// UnitPlayerOrPetInRaid(unit) (0x0060cb20 -> 0x00573200): the same of the
+// raid's roster, the player among it.
 static int lua_UnitPlayerOrPetInRaid(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !game::groupIsRaid(gh->getPartyData().groupType)) { return luaReturnNil(L); }
-    return lua_UnitPlayerOrPetInParty(L);
+    const uint64_t guid = namedUnitGuid(L, gh);
+    if (guid == 0 || !game::groupIsRaid(gh->getPartyData().groupType)) { return luaReturnNil(L); }
+    for (int n = 1; n <= 40; ++n) {
+        const std::string number = std::to_string(n);
+        const uint64_t member = resolveUnitGuid(gh, "raid" + number);
+        if (member != 0 && (member == guid || resolveUnitGuid(gh, "raidpet" + number) == guid)) {
+            lua_pushnumber(L, 1.0);
+            return 1;
+        }
+    }
+    return luaReturnNil(L);
 }
 
 // UnitCharacterPoints(unit) → the two points fields, talent points then skill points
@@ -3157,24 +3185,11 @@ static int lua_GetNumPartyMembers(lua_State* L) {
     return 1;
 }
 
+// UnitInParty(unit) (0x0060c920 -> 0x0052c680): the player, group or none, or
+// one of the four in the party slots - in a raid its own subgroup's.
 static int lua_UnitInParty(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "");
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    if (uidStr == "player") {
-        luaPushOneOrNil(L, gh->isInGroup());
-    } else {
-        uint64_t guid = resolveUnitGuid(gh, uidStr);
-        if (guid == 0) { return luaReturnNil(L); }
-        const auto& pd = gh->getPartyData();
-        bool found = false;
-        for (const auto& m : pd.members) {
-            if (m.guid == guid) { found = true; break; }
-        }
-        luaPushOneOrNil(L, found);
-    }
+    luaPushOneOrNil(L, gh && inPlayersParty(gh, namedUnitGuid(L, gh)));
     return 1;
 }
 
@@ -3454,7 +3469,9 @@ static int lua_UnitClassification(lua_State* L) {
     }
     auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
     if (!unit) { lua_pushstring(L, "normal"); return 1; }
-    int rank = gh->getCreatureRank(unit->getEntry());
+    // A pet's is none (0x00718a00 asks UNIT_FIELD_PETNUMBER).
+    const int rank = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER)) != 0
+                         ? 0 : gh->getCreatureRank(unit->getEntry());
     switch (rank) {
         case 1:  lua_pushstring(L, "elite"); break;
         case 2:  lua_pushstring(L, "rareelite"); break;

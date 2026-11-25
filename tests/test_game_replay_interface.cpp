@@ -1484,3 +1484,123 @@ TEST_CASE("a quest's link shows its tooltip", "[replay][interface]") {
     ui.run("tip:SetOwner(UIParent, 'ANCHOR_NONE') tip:SetHyperlink('|cffffff00|Hquest:435:20|h[x]|h|r')");
     CHECK(ui.is("tip:IsShown() and tip:NumLines() == 3"));
 }
+
+// 0x0052c680, 0x0052c8c0, 0x005726f0, 0x00573200: the party is the four of its
+// slots - in a raid the player's own subgroup - and the player itself, the raid
+// its whole roster; whoever of them is out of view is a player all the same.
+TEST_CASE("who is in the player's party and in its raid", "[replay][interface]") {
+    constexpr uint64_t kNear = 0x1001, kFar = 0x1002, kPet = 0x5001, kOther = 0x2001;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    CHECK(ui.is("UnitInParty('player') == 1 and not UnitInRaid('player')"));
+    const auto group = [&](uint8_t type) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+        p.writeUInt8(type);
+        for (int i = 0; i < 3; ++i) p.writeUInt8(0);
+        p.writeUInt64(0x1234);
+        p.writeUInt32(1);
+        p.writeUInt32(2);
+        for (int i = 0; i < 2; ++i) {
+            p.writeString(i == 0 ? "Nah" : "Fern");
+            p.writeUInt64(i == 0 ? kNear : kFar);
+            p.writeUInt8(1);
+            p.writeUInt8(static_cast<uint8_t>(i));   // its subgroup
+            p.writeUInt8(0);
+            p.writeUInt8(0);
+        }
+        p.writeUInt64(Session::kPlayerGuid);
+        for (int i = 0; i < 12; ++i) p.writeUInt8(0);
+        s.receive(p);
+    };
+    group(2);
+    s.receive(UpdateObject()
+                  .create(kNear, wowee::game::ObjectType::PLAYER,
+                          {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                           {UF::UNIT_FIELD_SUMMON, static_cast<uint32_t>(kPet)}}));
+    s.receive(UpdateObject()
+                  .create(kPet, wowee::game::ObjectType::UNIT,
+                          {{UF::OBJECT_FIELD_ENTRY, 416}, {UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                           {UF::UNIT_FIELD_PETNUMBER, 77}}));
+    s.receive(UpdateObject().create(kOther, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    const auto all = [&](uint64_t target, const char* party, const char* raid, const char* withPetParty,
+                         const char* withPetRaid, const char* player) {
+        gh.setTarget(target);
+        const auto same = [&](const std::string& call, const char* answer) {
+            INFO(target << " " << call);
+            CHECK(ui.is(call + "('target') == " + answer));
+        };
+        same("UnitInParty", party);
+        ui.run("inRaid = UnitInRaid('target') and 1");
+        CHECK(ui.is(std::string("inRaid == ") + raid));
+        same("UnitPlayerOrPetInParty", withPetParty);
+        same("UnitPlayerOrPetInRaid", withPetRaid);
+        same("UnitIsPlayer", player);
+    };
+    all(kNear, "1", "1", "1", "1", "1");
+    all(kFar, "nil", "1", "nil", "1", "1");       // another subgroup, out of view
+    all(kPet, "nil", "nil", "1", "1", "nil");
+    all(kOther, "nil", "nil", "nil", "nil", "1");
+    CHECK(ui.is("UnitInParty('player') == 1 and UnitPlayerOrPetInParty('player') == nil"));
+    CHECK(ui.is("UnitPlayerOrPetInRaid('player') == 1"));
+
+    // 0x00718a00: a pet is of no rank, whatever its kind's.
+    wowee::network::Packet creature(wowee::game::wireOpcode(Opcode::SMSG_CREATURE_QUERY_RESPONSE));
+    creature.writeUInt32(416);
+    creature.writeString("Wichtel");
+    for (int i = 0; i < 5; ++i) creature.writeString("");
+    for (uint32_t v : {0u, 3u, 23u, 1u}) creature.writeUInt32(v);
+    for (uint32_t v : {0u, 0u, 4449u, 0u, 0u, 0u}) creature.writeUInt32(v);
+    for (int i = 0; i < 12; ++i) creature.writeUInt32(0);
+    s.receive(creature);
+    CHECK(gh.getCreatureRank(416) == 1);
+    gh.setTarget(kPet);
+    CHECK(ui.is("UnitClassification('target') == 'normal'"));
+}
+
+// 0x005efb00: a mount display; not one water can be walked on with.
+TEST_CASE("a macro's mounted is true on water too", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::UNIT_FIELD_MOUNTDISPLAYID, 2404}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    REQUIRE(gh.isMounted());
+    CHECK(ui.is("SecureCmdOptionParse('[mounted] a; b') == 'a'"));
+    gh.movementInfoRef().flags |= static_cast<uint32_t>(wowee::game::MovementFlags::WATER_WALK);
+    CHECK(ui.is("SecureCmdOptionParse('[mounted] a; b') == 'a'"));
+}
+
+// 0x005cf040: a guild's charter is not for one in a guild.
+TEST_CASE("a guild's charter is signed by those without a guild", "[replay][interface]") {
+    constexpr uint64_t kOwner = 0x1001, kCharter = 0x4000000000000444ull;
+    for (const bool arena : {false, true}) {
+        for (const bool guilded : {false, true}) {
+            INFO(arena << guilded);
+            Session s;
+            s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+            Interface ui(s);
+            wowee::game::Character self;
+            self.guid = Session::kPlayerGuid;
+            self.guildId = guilded ? 5 : 0;
+            s.handler().charactersRef().push_back(self);
+            s.handler().setActiveCharacterGuid(self.guid);
+            wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_PETITION_SHOW_SIGNATURES));
+            list.writeUInt64(kCharter);
+            list.writeUInt64(kOwner);
+            list.writeUInt32(77);
+            list.writeUInt8(0);
+            s.receive(list);
+            wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_PETITION_QUERY_RESPONSE));
+            p.writeUInt32(77);
+            p.writeUInt64(kOwner);
+            p.writeString("The Seven");
+            p.writeUInt8(0);
+            for (uint32_t v : {9u, 9u, arena ? 2u : 0u}) p.writeUInt32(v);
+            s.receive(p);
+            CHECK(ui.is("CanSignPetition() == 1") == (arena || !guilded));
+        }
+    }
+}

@@ -1721,17 +1721,15 @@ static int lua_GetPetitionInfo(lua_State* L) {
     return 7;
 }
 
-// CanSignPetition() → whether the Sign button should be live.
-//
-// The originator cannot sign their own charter, and neither can someone who
-// already has. Both are answered from the signature list rather than assumed,
-// so the button greys out the moment the server confirms the signature.
+// CanSignPetition() (0x005cf040) → whether the Sign button should be live: not
+// for the charter's owner, for whoever is among its signatures, for a full one,
+// nor for one in a guild where it is a guild's.
 static int lua_CanSignPetition(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* info = shownPetition(L);
     if (!gh || !info) { luaPushOneOrNil(L, 0); return 1; }
     const uint64_t me = gh->getPlayerGuid();
-    if (info->ownerGuid == me) { luaPushOneOrNil(L, 0); return 1; }
+    if (info->ownerGuid == me || (!info->isArena && gh->isInGuild())) { luaPushOneOrNil(L, 0); return 1; }
     for (const auto& sig : info->signatures) {
         if (sig.playerGuid == me) { luaPushOneOrNil(L, 0); return 1; }
     }

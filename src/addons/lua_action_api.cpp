@@ -614,10 +614,12 @@ public:
     bool outdoors() override { return globalTruth(L_, "IsOutdoors"); }
     bool hasPlayer() override { return gh_.getEntityManager().getEntity(gh_.getPlayerGuid()) != nullptr; }
     // The player's movement flags: SWIMMING 0x200000 and FLYING 0x2000000;
-    // mounted is a mount display with WATER_WALK (0x10000000) clear.
+    // mounted (0x005efb00) is a mount display; its +0xa30 0x10000000 is a
+    // dismount that waits on the mount, which this client never holds - not the
+    // movement flag WATER_WALK, with which a mount on water was none.
     bool swimming() override { return (gh_.getMovementInfo().flags & 0x200000u) != 0; }
     bool flying() override { return (gh_.getMovementInfo().flags & 0x2000000u) != 0; }
-    bool mounted() override { return gh_.isMounted() && (gh_.getMovementInfo().flags & 0x10000000u) == 0; }
+    bool mounted() override { return gh_.isMounted(); }
     bool stealthed() override { return units_.isStealthed(); }
     bool inParty() override { return gh_.isInGroup(); }
     bool inRaid() override { return gh_.isInGroup() && game::groupIsRaid(gh_.getPartyData().groupType); }
