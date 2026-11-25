@@ -1571,6 +1571,8 @@ bool WidgetTree::buttonArtVisible(const Widget& w) const {
 
 void WidgetTree::collectDrawOrder() {
     drawOrder_.clear();
+    drawParts_.clear();
+    drawEntries_.clear();
     // Only what has been visible since the last look, in id order - the order
     // the walk over every widget went in, so the sort below is handed the same
     // list it always was. That walk was most of a millisecond a frame to find
@@ -1627,41 +1629,57 @@ void WidgetTree::collectDrawOrder() {
         if (w.kind == WidgetKind::FontString && w.text.empty()) continue;
         // A button shows one of its state textures, not all of them.
         if (!buttonArtVisible(w)) continue;
-        drawOrder_.push_back(&w);
+        const bool backdrop = w.kind == WidgetKind::Frame && w.hasBackdrop;
+        const bool border = backdrop && !w.edgeFile.empty() && w.edgeSize > 0.0f;
+        if (backdrop && (!border || !w.bgFile.empty())) drawEntries_.emplace_back(&w, DrawPart::Ground);
+        if (border) drawEntries_.emplace_back(&w, DrawPart::Border);
+        // And what else the frame paints.
+        if (backdrop && !w.isStatusBar && !w.isSlider && !w.isEditBox && w.externalTexture == 0 && !w.isMovieFrame &&
+            !w.isCooldown && !w.isSimpleHtml && !w.isMessageFrame && !w.isTooltip) continue;
+        drawEntries_.emplace_back(&w, DrawPart::Own);
     }
 
     // The client draws level by level, the layers of a level one after the other,
     // and of a layer its textures, then its strings, then what is drawn by
     // callback - models (0x00484b00). What a frame draws of its own here is put
     // where that stands there: a status bar's fill is a texture of its layer, an
-    // edit box's and a message frame's text are strings in ARTWORK, a model the
-    // layer's callback, with its frame's backdrop. A backdrop is else under all of
-    // the frame's own regions, which are a level above it in this tree (effLevel),
-    // and over all of its parent's.
+    // edit box's, a message frame's and a tooltip's text are strings in ARTWORK, a
+    // model the layer's callback. A backdrop's border is the first of its frame's
+    // textures in BORDER (0x004a2e00), its ground is under all of the frame's own
+    // regions, which are a level above it in this tree (effLevel), and over all of its
+    // parent's.
     struct Place {
         int level, layer, kind;
         auto operator<=>(const Place&) const = default;
     };
-    const auto placeOf = [](const Widget* w) -> Place {
+    const auto placeOf = [](const std::pair<const Widget*, DrawPart>& entry) -> Place {
         constexpr int kTexture = 0, kString = 1, kCallback = 2;
+        const Widget* w = entry.first;
         const int artwork = layerRank(DrawLayer::Artwork);
+        if (entry.second == DrawPart::Ground) return {2 * w->effLevel, layerRank(w->layer), kTexture};
+        if (entry.second == DrawPart::Border) return {2 * w->effLevel + 1, layerRank(DrawLayer::Border), kTexture};
         if (w->kind != WidgetKind::Frame)
             return {2 * w->effLevel - 1, layerRank(w->layer), w->kind == WidgetKind::FontString ? kString : kTexture};
         if (w->isStatusBar && !w->barTexture.empty()) return {2 * w->effLevel + 1, layerRank(w->barLayer), kTexture};
-        if (w->isEditBox || w->isMessageFrame || w->isSimpleHtml) return {2 * w->effLevel + 1, artwork, kString};
+        if (w->isEditBox || w->isMessageFrame || w->isSimpleHtml || (w->isTooltip && w->objectType == "GameTooltip"))
+            return {2 * w->effLevel + 1, artwork, kString};
         if (w->externalTexture != 0) return {2 * w->effLevel + 1, artwork, kCallback};
         return {2 * w->effLevel, layerRank(w->layer), kTexture};
     };
-    std::sort(drawOrder_.begin(), drawOrder_.end(),
-              [&](const Widget* a, const Widget* b) {
-                  const int sa = strataRank(a->effStrata), sb = strataRank(b->effStrata);
-                  if (sa != sb) return sa < sb;
-                  if (const Place pa = placeOf(a), pb = placeOf(b); pa != pb) return pa < pb;
-                  // Ties resolve by creation order, so a region added later sits
-                  // on top of one added earlier - the same rule the real client
-                  // uses within a layer.
-                  return a->creationOrder < b->creationOrder;
-              });
+    using Entry = std::pair<const Widget*, DrawPart>;
+    std::sort(drawEntries_.begin(), drawEntries_.end(), [&](const Entry& a, const Entry& b) {
+        const int sa = strataRank(a.first->effStrata), sb = strataRank(b.first->effStrata);
+        if (sa != sb) return sa < sb;
+        if (const Place pa = placeOf(a), pb = placeOf(b); pa != pb) return pa < pb;
+        // Ties resolve by creation order, so a region added later sits
+        // on top of one added earlier - the same rule the real client
+        // uses within a layer.
+        return a.first->creationOrder < b.first->creationOrder;
+    });
+    for (const auto& [w, part] : drawEntries_) {
+        drawOrder_.push_back(w);
+        drawParts_.push_back(part);
+    }
 }
 
 void hsvToRgb(const float hsv[3], float rgb[3]) {

@@ -31,6 +31,7 @@ namespace ui {
 
 class WidgetTree;
 struct Widget;
+enum class DrawPart : uint8_t;
 
 class WidgetRenderer {
 public:
@@ -148,7 +149,7 @@ private:
     int gradientStart_ = -1;
     int gradientLength_ = 0;
     int gradientGlyph_ = 0;
-    void drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
+    void drawBackdrop(ImDrawList* dl, const Widget& w, DrawPart part, float scale,
                       float x0, float y0, float x1, float y1);
     void drawStatusBar(ImDrawList* dl, const Widget& w,
                        float x0, float y0, float x1, float y1);

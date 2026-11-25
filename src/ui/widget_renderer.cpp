@@ -901,8 +901,11 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
     }
 }
 
-void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
+void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, DrawPart part, float scale,
                                   float x0, float y0, float x1, float y1) {
+    // Textures of the frame in BACKGROUND and BORDER, which it can have disabled.
+    const DrawLayer layer = part == DrawPart::Ground ? DrawLayer::Background : DrawLayer::Border;
+    if ((w.drawLayersOff >> static_cast<unsigned>(layer)) & 1u) return;
     // Background sits inside the insets, which is what keeps it from showing
     // through the border drawn over it. The insets are interface units and the
     // rect is pixels, so they are scaled here - without it a tooltip's border
@@ -912,7 +915,7 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
     const float by0 = y0 + w.insetTop * scale;
     const float bx1 = x1 - w.insetRight * scale;
     const float by1 = y1 - w.insetBottom * scale;
-    if (bx1 > bx0 && by1 > by0) {
+    if (part == DrawPart::Ground && bx1 > bx0 && by1 > by0) {
         VkDescriptorSet bg = resident(w.bgFile, backdropVariantOf(w));
         const uint32_t col = packColor(w.backdropColor, w.drawAlpha);
         if (bg != kMissing) {
@@ -933,6 +936,7 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
         // still being read.
     }
 
+    if (part != DrawPart::Border) return;
     VkDescriptorSet edge = resident(w.edgeFile);
     if (edge == kMissing || w.edgeSize <= 0.0f) return;
 
@@ -2506,7 +2510,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                      ImVec2(440.0f, 440.0f));
     }
 
-    for (const Widget* w : order) {
+    for (size_t at = 0; at < order.size(); ++at) {
+        const Widget* w = order[at];
         // A title region draws nothing; it is only where the frame is held.
         if (w->isTitleRegion) continue;
         // A tooltip's line font strings hold its lines for the interface to
@@ -2745,10 +2750,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // With the frame's own scale in it: a backdrop's insets and edge
             // size are in the frame's units, the same as a font height, and a
             // scaled frame's border is drawn to the same ruler as its rect.
-            if (w->hasBackdrop) {
-                drawBackdrop(dl, *w, ws, x0, boxY0, x1, boxY1);
-                drawModel();
+            if (const auto part = tree.drawPart(at); part != DrawPart::Own) {
+                drawBackdrop(dl, *w, part, ws, x0, boxY0, x1, boxY1);
+                continue;
             }
+            if (w->hasBackdrop) drawModel();
             if (w->isStatusBar) drawStatusBar(dl, *w, x0, y0, x1, y1);
             if (w->isSlider) drawSlider(dl, *w, x0, y0, x1, y1);
             if (w->isCooldown) drawCooldown(dl, *w, x0, y0, x1, y1);

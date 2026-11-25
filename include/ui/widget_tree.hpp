@@ -1097,6 +1097,10 @@ struct LinkRect {
     return w.wrapsToWidth || (!w.autoSized && w.width > 0.0f) ? w.width : 0.0f;
 }
 
+/// What of a widget is drawn at a place of the draw order: the ground and the border of
+/// a frame's backdrop have places of their own.
+enum class DrawPart : uint8_t { Own, Ground, Border };
+
 /// Whether two sizes are one to OnSizeChanged (0x0048fa20).
 [[nodiscard]] inline bool sameSize(float wasW, float wasH, float w, float h) {
     return !(std::fabs(wasW - w) >= 1e-3f) && !(std::fabs(wasH - h) >= 1e-3f);
@@ -1694,6 +1698,8 @@ public:
     /// Widgets to draw, in the order to draw them. Only those that resolved to a
     /// visible, non-empty rect. Valid until the next layout().
     [[nodiscard]] const std::vector<const Widget*>& drawOrder() const { return drawOrder_; }
+    /// What of the widget at a place of the draw order is drawn there.
+    [[nodiscard]] DrawPart drawPart(size_t at) const { return drawParts_[at]; }
 
 private:
     /// Both hit tests, which differ only in whether a frame that took the
@@ -1870,6 +1876,8 @@ private:
     std::string sizingPoint_;
     uint32_t nextOrder_ = 1;
     std::vector<const Widget*> drawOrder_;
+    std::vector<DrawPart> drawParts_;
+    std::vector<std::pair<const Widget*, DrawPart>> drawEntries_;   ///< to sort
 };
 
 /// Hue-saturation-value to red-green-blue and back, with hue in turns rather

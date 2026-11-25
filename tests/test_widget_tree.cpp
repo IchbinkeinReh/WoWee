@@ -417,6 +417,50 @@ TEST_CASE("A frame with a backdrop draws; a bare frame does not",
     REQUIRE(tree.drawOrder()[0]->id == f);
 }
 
+// 0x004a2e00: the ground is a texture in BACKGROUND, the border eight in BORDER.
+TEST_CASE("A backdrop's border draws over its frame's BACKGROUND textures", "[widget][backdrop][draworder]") {
+    WidgetTree tree;
+    const uint32_t f = tree.create(WidgetKind::Frame, 0, "F");
+    tree.get(f)->width = 100.0f;
+    tree.get(f)->height = 60.0f;
+    tree.get(f)->hasBackdrop = true;
+    tree.get(f)->bgFile = "ground.blp";
+    tree.get(f)->edgeFile = "edge.blp";
+    tree.get(f)->edgeSize = 16.0f;
+    tree.addPoint(f, Anchor{});
+    uint32_t art[3];
+    const DrawLayer layers[3] = {DrawLayer::Artwork, DrawLayer::Border, DrawLayer::Background};
+    for (int i = 0; i < 3; ++i) {
+        art[i] = tree.create(WidgetKind::Texture, f, "");
+        tree.get(art[i])->texturePath = "x.blp";
+        tree.get(art[i])->layer = layers[i];
+        tree.setAllPoints(art[i], f);
+    }
+    tree.layout(kScreenW, kScreenH);
+    const auto& order = tree.drawOrder();
+    REQUIRE(order.size() == 5);
+    using Part = DrawPart;
+    const uint32_t ids[5] = {f, art[2], f, art[1], art[0]};
+    const Part parts[5] = {Part::Ground, Part::Own, Part::Border, Part::Own, Part::Own};
+    for (size_t i = 0; i < 5; ++i) {
+        CHECK(order[i]->id == ids[i]);
+        CHECK(tree.drawPart(i) == parts[i]);
+    }
+    // A frame that paints itself does that between the two, or over both.
+    tree.get(f)->isEditBox = true;
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().size() == 6);
+    CHECK(tree.drawPart(0) == Part::Ground);
+    CHECK(tree.drawPart(5) == Part::Own);
+    CHECK(tree.drawOrder()[5]->id == f);
+    // Without a ground there is the border alone.
+    tree.get(f)->isEditBox = false;
+    tree.get(f)->bgFile.clear();
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.drawOrder().size() == 4);
+    CHECK(tree.drawPart(1) == Part::Border);
+}
+
 TEST_CASE("A frame's backdrop draws beneath its own regions",
           "[widget][backdrop][draworder]") {
     // The backdrop is the panel; anything the frame owns belongs on top of it.
@@ -425,6 +469,7 @@ TEST_CASE("A frame's backdrop draws beneath its own regions",
     tree.get(f)->width = 100.0f;
     tree.get(f)->height = 60.0f;
     tree.get(f)->hasBackdrop = true;
+    tree.get(f)->bgFile = "ground.blp";
     tree.addPoint(f, Anchor{});
 
     const uint32_t art = tree.create(WidgetKind::Texture, f, "");
@@ -4227,9 +4272,10 @@ TEST_CASE("A layer's textures, then its strings, then its models", "[widget][dra
     tree.layout(kScreenW, kScreenH);
     const auto at = [&](uint32_t id) {
         const auto& order = tree.drawOrder();
+        int last = -1;   // past its backdrop, where it has one
         for (size_t i = 0; i < order.size(); ++i)
-            if (order[i]->id == id) return static_cast<int>(i);
-        return -1;
+            if (order[i]->id == id) last = static_cast<int>(i);
+        return last;
     };
     CHECK(at(background) >= 0);
     CHECK(at(background) < at(picture));
