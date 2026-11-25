@@ -1456,3 +1456,81 @@ TEST_CASE("a pet's name is told by every token it has", "[replay][playtest]") {
     CHECK(told.size() == 2);
     gh.setAddonEventCallback({});
 }
+
+// P59: the player stayed, for the game, where it got on, and stood there when it was let go;
+// jumped onto it, it fell on from there.
+TEST_CASE("the player in a vehicle's seat is its place there, and is let go at it", "[replay][playtest]") {
+    constexpr uint64_t kChair = 0xF15000880700042Aull;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    auto* mh = gh.getMovementHandler();
+    s.receive(UpdateObject().create(kChair, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    const auto chair = gh.getEntityManager().getEntity(kChair);
+    REQUIRE(chair);
+    chair->setPosition(gh.movementInfoRef().x + 5.0f, gh.movementInfoRef().y + 2.0f, gh.movementInfoRef().z,
+                       wowee::core::coords::serverToCanonicalYaw(0.0f));
+    auto& move = gh.movementInfoRef();
+    move.flags |= static_cast<uint32_t>(wowee::game::MovementFlags::FALLING);
+    move.z += 1.5f;
+    // SMSG_MONSTER_MOVE_TRANSPORT to seat 0: a yard ahead on the chair, half a yard up.
+    wowee::network::Packet in(wowee::game::wireOpcode(Opcode::SMSG_MONSTER_MOVE_TRANSPORT));
+    in.writePackedGuid(Session::kPlayerGuid);
+    in.writePackedGuid(kChair);
+    in.writeUInt8(0);
+    in.writeUInt8(0);
+    for (float v : {1.0f, 0.0f, 0.5f}) in.writeFloat(v);
+    in.writeUInt32(1);
+    in.writeUInt8(1);
+    s.receive(in);
+    CHECK((gh.movementInfoRef().flags & static_cast<uint32_t>(wowee::game::MovementFlags::FALLING)) == 0);
+    const auto self = gh.getEntityManager().getEntity(Session::kPlayerGuid);
+    REQUIRE(self);
+    const auto isAt = [&](const glm::vec3& place) {
+        CHECK(gh.movementInfoRef().x == Catch::Approx(place.x).margin(0.01f));
+        CHECK(gh.movementInfoRef().y == Catch::Approx(place.y).margin(0.01f));
+        CHECK(gh.movementInfoRef().z == Catch::Approx(place.z).margin(0.01f));
+        CHECK(self->getX() == Catch::Approx(place.x).margin(0.01f));
+        CHECK(self->getY() == Catch::Approx(place.y).margin(0.01f));
+    };
+    const auto seatNow = [&] { return glm::vec3(chair->getX(), chair->getY() + 1.0f, chair->getZ() + 0.5f); };
+    mh->updateAttachedTransportChildren(0.016f);
+    isAt(seatNow());
+    chair->setPosition(chair->getX() + 30.0f, chair->getY(), chair->getZ() + 4.0f, chair->getOrientation());
+    mh->updateAttachedTransportChildren(0.016f);
+    isAt(seatNow());
+    const auto seat = mh->seatPlace(Session::kPlayerGuid);
+    REQUIRE(seat);
+    CHECK(seat->x == Catch::Approx(seatNow().x));
+
+    // Off it (0x006ec400): where it sat, in the world.
+    const glm::vec3 last = seatNow();
+    gh.vehicleRoster().leave(Session::kPlayerGuid);
+    chair->setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    mh->updateAttachedTransportChildren(0.016f);
+    isAt(last);
+    CHECK_FALSE(mh->seatPlace(Session::kPlayerGuid));
+}
+
+// Logged in on one, the create block says where.
+TEST_CASE("a player made in a vehicle's seat is there", "[replay][playtest]") {
+    constexpr uint64_t kChair = 0xF15000880700042Aull;
+    Session s;
+    s.receive(UpdateObject().create(kChair, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    UpdateObject::Spline self;
+    self.objectType = wowee::game::ObjectType::PLAYER;
+    self.moveFlags = 0x200u;
+    self.transport = kChair;
+    self.onTransport = {1.0f, 0.0f, 0.5f};
+    self.seat = 0;
+    s.receive(UpdateObject().onSpline(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 10}}, self));
+    const auto chair = s.handler().getEntityManager().getEntity(kChair);
+    REQUIRE(chair);
+    chair->setPosition(100.0f, 200.0f, 30.0f, wowee::core::coords::serverToCanonicalYaw(0.0f));
+    s.handler().getMovementHandler()->updateAttachedTransportChildren(0.016f);
+    CHECK(s.handler().movementInfoRef().x == Catch::Approx(100.0f).margin(0.01f));
+    CHECK(s.handler().movementInfoRef().y == Catch::Approx(201.0f).margin(0.01f));
+    CHECK(s.handler().movementInfoRef().z == Catch::Approx(30.5f).margin(0.01f));
+}

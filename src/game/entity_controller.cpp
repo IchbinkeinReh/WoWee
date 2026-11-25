@@ -529,7 +529,13 @@ void EntityController::updateNonPlayerTransportAttachment(const UpdateBlock& blo
             roster.setPitch(block.guid, block.pitch);
         }
     }
-    if (block.guid == owner_.getPlayerGuid()) return;
+    if (block.guid == owner_.getPlayerGuid()) {
+        // Its place in its vehicle, as the others' attachments have theirs.
+        if ((block.updateFlags & 0x0020) && block.onTransport && owner_.getMovementHandler())
+            owner_.getMovementHandler()->noteSeatOffset(
+                block.guid, block.transportGuid, glm::vec3(block.transportX, block.transportY, block.transportZ));
+        return;
+    }
     // A dynamic object rides one too (UPDATEFLAG_POSITION, 0x004d3890): its
     // place is its offset there (0x00705230 -> 0x004f4230).
     if (entityType != ObjectType::UNIT && entityType != ObjectType::GAMEOBJECT &&

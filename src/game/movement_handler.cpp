@@ -1363,7 +1363,9 @@ void MovementHandler::setPosition(float x, float y, float z) {
     // (the Eye of Kilrogg flies off, the warlock keeps channelling).
     if (moverPossessed()) return;
     if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
-        player->setPosition(x, y, z, movementInfo.orientation);
+        // Driving, it is on its seat and not where the vehicle is.
+        const glm::vec3 at = seatPlace(owner_.getPlayerGuid()).value_or(glm::vec3(x, y, z));
+        player->setPosition(at.x, at.y, at.z, movementInfo.orientation);
     }
 }
 
@@ -2520,6 +2522,7 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
             entity->setPosition(vehicle->getX(), vehicle->getY(), vehicle->getZ(), entity->getOrientation());
         }
         // Where the move ends in it: the seat's offset.
+        endFallForServerMove(moverGuid, true);
         SeatOffset& seat = seatOffsets_[moverGuid];
         seat = {.vehicle = transportGuid, .offset = glm::vec3(localX, localY, localZ)};
         if (packet.hasRemaining(5)) {
@@ -4388,37 +4391,59 @@ void MovementHandler::clearTransportAttachment(uint64_t childGuid) {
     owner_.transportAttachmentsRef().erase(childGuid);
 }
 
+void MovementHandler::noteSeatOffset(uint64_t guid, uint64_t vehicle, const glm::vec3& wireOffset) {
+    seatOffsets_[guid] = {.vehicle = vehicle, .offset = wireOffset};
+}
+
+std::optional<glm::vec3> MovementHandler::seatPlace(uint64_t guid) const {
+    const uint64_t player = owner_.getPlayerGuid();
+    const auto passenger = owner_.vehicleRoster().passenger(guid);
+    if (!passenger || passenger->vehicleGuid == 0) return std::nullopt;
+    const auto vehicle = owner_.getEntityManager().getEntity(passenger->vehicleGuid);
+    if (!vehicle || !vehicle->isUnit()) return std::nullopt;
+    glm::vec3 at(vehicle->getX(), vehicle->getY(), vehicle->getZ());
+    float yaw = vehicle->getOrientation();
+    if (passenger->vehicleGuid == player && owner_.activeMover() == player) {
+        at = glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
+        yaw = movementInfo.orientation;
+    }
+    glm::vec3 offset(0.0f);
+    if (const auto seat = seatOffsets_.find(guid); seat != seatOffsets_.end() &&
+                                                   seat->second.vehicle == passenger->vehicleGuid) {
+        offset = seat->second.offset;
+    } else if (guid == player) {
+        return std::nullopt;
+    } else if (const auto held = owner_.transportAttachmentsRef().find(guid);
+               held != owner_.transportAttachmentsRef().end() &&
+               held->second.transportGuid == passenger->vehicleGuid) {
+        // The create block's, as it came.
+        offset = held->second.offsetNeedsTransportResolution
+                     ? held->second.localOffset
+                     : transport_local::toWire(false, held->second.localOffset);
+    }
+    return passengerPlace(at, yaw, offset);
+}
+
 void MovementHandler::carryVehiclePassengers() {
     // A passenger is its place on its vehicle wherever that goes (0x004f4460):
-    // its distance, its click and its sounds were left where it got on.
+    // its distance, its click and its sounds were left where it got on. The
+    // player's own as well, and what it is taken off the vehicle with: leaving
+    // a transport takes the place through it into the world (0x006ec400 ->
+    // 0x00722010).
     const uint64_t player = owner_.getPlayerGuid();
     for (const auto& [guid, passenger] : owner_.vehicleRoster().passengers()) {
-        if (guid == player || passenger.vehicleGuid == 0) continue;
         const auto entity = owner_.getEntityManager().getEntity(guid);
-        const auto vehicle = owner_.getEntityManager().getEntity(passenger.vehicleGuid);
-        if (!entity || !vehicle || !vehicle->isUnit() || entity->isActivelyMoving()) continue;
-        glm::vec3 at(vehicle->getX(), vehicle->getY(), vehicle->getZ());
-        float yaw = vehicle->getOrientation();
-        if (passenger.vehicleGuid == player && owner_.activeMover() == player) {
-            at = glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
-            yaw = movementInfo.orientation;
+        if (!entity || entity->isActivelyMoving()) continue;
+        const auto place = seatPlace(guid);
+        if (!place) continue;
+        if (guid == player && moverInfoOwner_ == 0) {
+            movementInfo.x = place->x;
+            movementInfo.y = place->y;
+            movementInfo.z = place->z;
         }
-        glm::vec3 offset(0.0f);
-        if (const auto seat = seatOffsets_.find(guid); seat != seatOffsets_.end() &&
-                                                       seat->second.vehicle == passenger.vehicleGuid) {
-            offset = seat->second.offset;
-        } else if (const auto held = owner_.transportAttachmentsRef().find(guid);
-                   held != owner_.transportAttachmentsRef().end() &&
-                   held->second.transportGuid == passenger.vehicleGuid) {
-            // The create block's, as it came.
-            offset = held->second.offsetNeedsTransportResolution
-                         ? held->second.localOffset
-                         : transport_local::toWire(false, held->second.localOffset);
-        }
-        const glm::vec3 place = passengerPlace(at, yaw, offset);
         const glm::vec3 was(entity->getX(), entity->getY(), entity->getZ());
-        if (glm::dot(place - was, place - was) > 0.0001f)
-            entity->setPosition(place.x, place.y, place.z, entity->getOrientation());
+        if (glm::dot(*place - was, *place - was) > 0.0001f)
+            entity->setPosition(place->x, place->y, place->z, entity->getOrientation());
     }
     std::erase_if(seatOffsets_, [this](const auto& seat) {
         const auto passenger = owner_.vehicleRoster().passenger(seat.first);
@@ -4639,8 +4664,7 @@ bool MovementHandler::unitHasClientControl(uint64_t guid) const {
     return it != unitControl_.end() && it->second;
 }
 
-void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs,
-                                     uint32_t splineId) {
+void MovementHandler::endFallForServerMove(uint64_t guid, bool hasPath) {
     // A move of the server's ends the fall the unit is in, unless it is on one
     // already (0x0073c8e0 -> 0x006ed7e0(0, 0) -> 0x006e9980 -> 0x00988490); a
     // stop in any case (0x006f11b0 -> 0x006ed7e0(0, 1)). What steps the player
@@ -4655,6 +4679,11 @@ void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splin
         }
         if (owner_.fallEndsCallbackRef()) owner_.fallEndsCallbackRef()();
     }
+}
+
+void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs,
+                                     uint32_t splineId) {
+    endFallForServerMove(guid, hasPath);
     const uint32_t now = movementClockMs();
     if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now)) {
         spline->splineId = splineId;
@@ -4989,12 +5018,14 @@ void MovementHandler::setActiveMover(uint64_t guid) {
         if (owner == player) heldPlayerMovement_ = movementInfo;
         if (guid == player) {
             movementInfo = heldPlayerMovement_;
-            // A vehicle carried the player to where it stopped; a possessed
-            // unit went off without it, and the player is where it stood.
+            // A vehicle carried the player to where it stopped, on its seat;
+            // a possessed unit went off without it, and the player is where
+            // it stood.
             if (!moverPossessed_) {
-                movementInfo.x = last.x;
-                movementInfo.y = last.y;
-                movementInfo.z = last.z;
+                const auto self = entities.getEntity(player);
+                movementInfo.x = self ? self->getX() : last.x;
+                movementInfo.y = self ? self->getY() : last.y;
+                movementInfo.z = self ? self->getZ() : last.z;
             }
             movementInfo.flags &= ~kTransient;
             moverInfoOwner_ = 0;

@@ -65,8 +65,14 @@ public:
     void checkAreaTriggers();
 
     // Transport attachment
-    /// Each vehicle's passengers where it carries them (passengerPlace).
+    /// Each vehicle's passengers where it carries them (passengerPlace), the
+    /// player too.
     void carryVehiclePassengers();
+    /// The place on its vehicle a passenger holds, in the world; none for one
+    /// in no vehicle, or whose place in it is not known.
+    [[nodiscard]] std::optional<glm::vec3> seatPlace(uint64_t guid) const;
+    /// The place a create block gives the player on its vehicle.
+    void noteSeatOffset(uint64_t guid, uint64_t vehicle, const glm::vec3& wireOffset);
     void setTransportAttachment(uint64_t childGuid, ObjectType type, uint64_t transportGuid,
                                 const glm::vec3& localOffset, bool hasLocalOrientation,
                                 float localOrientation,
@@ -398,6 +404,8 @@ private:
         glm::vec3 offset{0.0f};
     };
     std::unordered_map<uint64_t, SeatOffset> seatOffsets_;
+    /// 0x0073c8e0 -> 0x006ed7e0: a server's move ends the fall the mover is in.
+    void endFallForServerMove(uint64_t guid, bool hasPath);
     void sendWorldportAck();
     void sendTeleportAck(const TeleportAckGate::Ack& pending);
 

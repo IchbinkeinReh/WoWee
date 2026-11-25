@@ -5070,6 +5070,10 @@ void Application::applyServerMovementState(float deltaTime) {
                 cc->turnWithVehicle(facing - cc->getFacingYaw());
                 cc->setFacingYaw(facing);
                 renderer->setCharacterYaw(facing);
+            } else if (activeMover == gameHandler->getPlayerGuid() && !drivenPossessedLastFrame_) {
+                // Out of what it drove, at its seat's place.
+                const auto& own = gameHandler->getMovementInfo();
+                renderer->getCharacterPosition() = core::coords::canonicalToRender(glm::vec3(own.x, own.y, own.z));
             }
             drivenUnitLastFrame_ = drivenUnit;
         }
@@ -5607,6 +5611,15 @@ void Application::applyServerMovementState(float deltaTime) {
         lastWMORideTransportGuid_ = 0;
         lastWMORideMapId_ = 0xFFFFFFFFu;
         deckFloorPending_ = false;
+        // In a vehicle's seat the player is its place there (0x004f4460), and
+        // stands there when it is let go: what the camera's character and the
+        // keys had was the place it got on at.
+        if (gameHandler->activeMover() == 0 || gameHandler->activeMover() == gameHandler->getPlayerGuid()) {
+            if (auto* movement = gameHandler->getMovementHandler()) {
+                if (const auto seat = movement->seatPlace(gameHandler->getPlayerGuid()))
+                    renderer->getCharacterPosition() = core::coords::canonicalToRender(*seat);
+            }
+        }
         glm::vec3 renderPos = renderer->getCharacterPosition();
 
         // M2 transport riding: resolve in canonical space and lock once per frame.

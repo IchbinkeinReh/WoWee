@@ -123,6 +123,7 @@ public:
         uint32_t moveFlags = 0x08000001;
         uint64_t transport = 0;  // with ONTRANSPORT, and its place there
         glm::vec3 onTransport{0.0f};
+        uint8_t seat = 0xff;
         glm::vec3 at{0.0f};
         float facing = 0.5f;
         uint32_t flags = 0;
@@ -150,7 +151,7 @@ public:
             body_.writePackedGuid(s.transport);
             for (float f : {s.onTransport.x, s.onTransport.y, s.onTransport.z, s.facing}) body_.writeFloat(f);
             body_.writeUInt32(0);
-            body_.writeUInt8(0xff);
+            body_.writeUInt8(s.seat);
         }
         body_.writeUInt32(0);
         for (int i = 0; i < 9; ++i) body_.writeFloat(7.0f);
