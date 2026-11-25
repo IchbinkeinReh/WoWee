@@ -4402,3 +4402,36 @@ TEST_CASE("what has a place of its own is drawn in a frame without one", "[widge
     CHECK(tree.get(below)->visible);
     CHECK(tree.get(art)->visible);
 }
+
+// 0x004817d0, 0x00481850
+TEST_CASE("a texture's size is its picture's until one is set", "[widgets]") {
+    WidgetTree tree;
+    const uint32_t frame = tree.create(WidgetKind::Frame, tree.rootId(), "Frame");
+    const uint32_t art = tree.create(WidgetKind::Texture, frame, "Art");
+    float picture = 512.0f;
+    int asked = 0;
+    tree.setTextureSizer([&](Widget& w) {
+        ++asked;
+        if (w.width <= 0.0f || w.widthFromImage) {
+            w.width = picture;
+            w.widthFromImage = true;
+        }
+    });
+    tree.markMeasureDirty(art);
+    tree.sizeTexture(art);
+    CHECK(tree.get(art)->width == 512.0f);
+    picture = 64.0f;
+    tree.sizeTexture(art);
+    CHECK(tree.get(art)->width == 64.0f);
+    // One that was set is none of the picture's.
+    tree.setWidth(art, 100.0f);
+    CHECK_FALSE(tree.get(art)->widthFromImage);
+    tree.sizeTexture(art);
+    CHECK(tree.get(art)->width == 100.0f);
+    // Not asked while nothing it is measured from has changed.
+    (void)tree.takeMeasureDirty(art);
+    const int before = asked;
+    tree.sizeTexture(art);
+    tree.sizeTexture(frame);
+    CHECK(asked == before);
+}

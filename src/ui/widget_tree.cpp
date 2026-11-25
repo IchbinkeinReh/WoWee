@@ -494,6 +494,7 @@ void WidgetTree::setWidth(uint32_t id, float width) {
         w->wrapsToWidth = false;
     }
     w->width = width;
+    w->widthFromImage = false;
     // Provisional, so a read before the next layout sees what was just set.
     // The layout overwrites it from the anchors, which is the final answer
     // where anchors decide the size.
@@ -527,6 +528,7 @@ void WidgetTree::setHeight(uint32_t id, float height) {
     }
     w->wrapsBetweenAnchors = false;
     w->height = height;
+    w->heightFromImage = false;
     w->rectH = height;
 }
 
@@ -921,6 +923,14 @@ void WidgetTree::sizeTooltip(uint32_t id) {
     if (!w || !w->isTooltip || w->tooltipLines.empty() || !tooltipSizer_ || layingOut_) return;
     const float width = w->width, height = w->height;
     tooltipSizer_(*w);
+    if (w->width != width || w->height != height) markLayoutDirty();
+}
+
+void WidgetTree::sizeTexture(uint32_t id) {
+    Widget* w = get(id);
+    if (!w || w->kind != WidgetKind::Texture || !textureSizer_ || layingOut_ || !measureDirty_.test(id)) return;
+    const float width = w->width, height = w->height;
+    textureSizer_(*w);
     if (w->width != width || w->height != height) markLayoutDirty();
 }
 

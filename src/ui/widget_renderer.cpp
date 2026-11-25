@@ -1,3 +1,4 @@
+#include <utility>
 #include <cstring>
 #include "pipeline/tga_image.hpp"
 #include "ui/alpha_gradient.hpp"
@@ -241,6 +242,9 @@ bool WidgetRenderer::textureSize(const std::string& path, float& w, float& h) {
 /// One texture, sized from its own image. See sizeArtAndText.
 void WidgetRenderer::sizeTextureWidget(Widget* w) {
     if (!assets_) return;
+    // Of the picture it has now, whatever it had before.
+    if (std::exchange(w->widthFromImage, false)) w->width = 0.0f;
+    if (std::exchange(w->heightFromImage, false)) w->height = 0.0f;
     if (w->texturePath.empty()) return;
     // A texture with no anchors at all fills its parent, and that rule is
     // older and stronger than this one. Sizing it from its image instead
@@ -273,6 +277,8 @@ void WidgetRenderer::sizeTextureWidget(Widget* w) {
     if (!textureSize(w->texturePath, iw, ih)) return;
     if (needsW) w->width = iw;
     if (needsH) w->height = ih;
+    w->widthFromImage = needsW;
+    w->heightFromImage = needsH;
 }
 
 /// One label, sized from its own text. See sizeArtAndText.
@@ -1343,6 +1349,9 @@ void WidgetRenderer::layout(WidgetTree& tree, float screenW, float screenH) {
         tree.setTooltipSizer([this, &tree, alive = std::weak_ptr<bool>(alive_)](Widget& w) {
             if (alive.expired() || !ImGui::GetCurrentContext()) return;
             if (ImFont* font = interfaceFaceOrDefault(w.fontFace)) sizeTooltipWidget(&w, font, tree);
+        });
+        tree.setTextureSizer([this, alive = std::weak_ptr<bool>(alive_)](Widget& w) {
+            if (!alive.expired()) sizeTextureWidget(&w);
         });
     }
     linkScreenH_ = screenH;

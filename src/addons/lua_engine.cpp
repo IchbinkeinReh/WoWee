@@ -794,6 +794,7 @@ wowee::ui::Widget* measuredWidgetOf(lua_State* L, int index) {
     if (!tree) return nullptr;
     const uint32_t id = widgetIdOf(L, index);
     tree->sizeTooltip(id);
+    tree->sizeTexture(id);
     tree->resolveWidget(id);
     return tree->get(id);
 }

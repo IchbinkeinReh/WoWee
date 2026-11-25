@@ -344,6 +344,9 @@ struct Widget {
     /// forever - the character sheet's level line stayed the width of the
     /// placeholder its XML shipped with, long after it read something else.
     bool autoSized = false;
+    /// A texture's width and height are its picture's, the one it has now
+    /// (0x004817d0, 0x00481850): nothing was set.
+    bool widthFromImage = false, heightFromImage = false;
     std::string measuredText;
     /// The size and face the rect above was measured with.
     ///
@@ -1286,6 +1289,9 @@ public:
     /// tooltip measured now: what it is filled with it is sized for at once
     /// (0x0061caf0), not with the next frame.
     void setTooltipSizer(std::function<void(Widget&)> sizer) { tooltipSizer_ = std::move(sizer); }
+    /// A texture sized by its picture as soon as it is asked, not with the next frame.
+    void sizeTexture(uint32_t id);
+    void setTextureSizer(std::function<void(Widget&)> sizer) { textureSizer_ = std::move(sizer); }
     [[nodiscard]] bool hasTooltipSizer() const { return static_cast<bool>(tooltipSizer_); }
     void sizeTooltip(uint32_t id);
 
@@ -1402,6 +1408,7 @@ private:
     /// The levels of a strata without gaps (0x00495060); how many there are.
     int compactLevels(FrameStrata strata);
     std::function<void(Widget&)> tooltipSizer_;
+    std::function<void(Widget&)> textureSizer_;
 
     template <typename Tell>
     void comeUp(uint32_t id, const Tell& tell) {
