@@ -1061,25 +1061,31 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         }
         // And the liquids' surfaces, from above and below, with
         // cameraWaterCollision (the trace's 0x20000).
+        static thread_local std::vector<glm::vec3> waterTris;
+        waterTris.clear();
         if (waterCollision_) {
             const glm::vec3 tip = pivot + camDir * probeDistance;
             const glm::vec3 pad(1.5f);
-            gatherWaterTriangles(glm::min(pivot, tip) - pad, glm::max(pivot, tip) + pad, doodadTris);
+            gatherWaterTriangles(glm::min(pivot, tip) - pad, glm::max(pivot, tip) + pad, waterTris);
         }
-        auto doodadHit = [&](const glm::vec3& from, const glm::vec3& dir, float reach) -> float {
+        const auto hitOf = [](const std::vector<glm::vec3>& tris, const glm::vec3& from, const glm::vec3& dir, float reach) {
             float nearest = reach;
-            for (size_t i = 0; i + 2 < doodadTris.size(); i += 3) {
-                const float t = rayTriangleIntersect(from, dir, doodadTris[i], doodadTris[i + 1], doodadTris[i + 2]);
+            for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+                const float t = rayTriangleIntersect(from, dir, tris[i], tris[i + 1], tris[i + 2]);
                 if (t > 0.0f && t < nearest) nearest = t;
             }
             return nearest;
         };
+        const auto doodadHit = [&](const glm::vec3& from, const glm::vec3& dir, float reach) {
+            return hitOf(doodadTris, from, dir, reach);
+        };
         auto wmoLimitAlong = [&](const glm::vec3& dir) -> float {
-            if (!wmoRenderer && !m2Renderer) return probeDistance;
+            if (!wmoRenderer && !m2Renderer && waterTris.empty()) return probeDistance;
             // hit == maxDistance means no hit
             float nearest = wmoRenderer ? wmoRenderer->raycastBoundingBoxes(pivot, dir, probeDistance)
                                         : probeDistance;
             nearest = std::min(nearest, doodadHit(pivot, dir, nearest));
+            nearest = hitOf(waterTris, pivot, dir, nearest);
             glm::vec3 right = glm::cross(dir, glm::vec3(0.0f, 0.0f, 1.0f));
             const float rightLen = glm::length(right);
             right = rightLen > 1e-4f ? right / rightLen : glm::vec3(1.0f, 0.0f, 0.0f);
@@ -1099,6 +1105,19 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                     nearest = std::min(nearest, wmoRenderer->raycastBoundingBoxes(
                                                     pivot + offset, dir, nearest));
                 nearest = std::min(nearest, doodadHit(pivot + offset, dir, nearest));
+            }
+            // The liquids with the near clip's own rectangle: the larger one, at a
+            // pivot two ninths over the water, would lie in it wherever it looks.
+            if (!waterTris.empty()) {
+                for (const glm::vec2& o : camera_sweep::sweepOffsets(camera->getNearPlane(), camera->getFovDegrees(),
+                                                                     camera->getAspectRatio(), 1.0f)) {
+                    glm::vec3 offset = right * o.x + up * o.y;
+                    const float offsetLen = glm::length(offset);
+                    if (offsetLen < 1e-4f) continue;
+                    if (const float side = hitOf(waterTris, pivot, offset / offsetLen, offsetLen); side < offsetLen)
+                        offset *= std::max(0.0f, side - 0.02f) / offsetLen;
+                    nearest = hitOf(waterTris, pivot + offset, dir, nearest);
+                }
             }
             return camera_sweep::sweptDistance(probeDistance, nearest, MIN_DISTANCE);
         };

@@ -35,10 +35,12 @@ inline glm::vec2 nearHalfExtents(float nearClip, float fovYDegrees, float aspect
 }
 
 /// The points of the swept rectangle the sweep is sampled at, as (right, up)
-/// offsets from the line: its corners and the middles of its sides, at the
-/// larger of the client's two sizes - which holds the smaller.
-inline std::array<glm::vec2, 8> sweepOffsets(float nearClip, float fovYDegrees, float aspect) {
-    const glm::vec2 h = nearHalfExtents(nearClip, fovYDegrees, aspect) * kNearRectScale;
+/// offsets from the line: its corners and the middles of its sides. The larger size
+/// is swept against all but the liquids, the near clip's own against them alone
+/// (0x006059e0: flags & ~0x30000 and & 0x30000).
+inline std::array<glm::vec2, 8> sweepOffsets(float nearClip, float fovYDegrees, float aspect,
+                                             float scale = kNearRectScale) {
+    const glm::vec2 h = nearHalfExtents(nearClip, fovYDegrees, aspect) * scale;
     return {{{-h.x, -h.y}, {h.x, -h.y}, {h.x, h.y}, {-h.x, h.y},
              {0.0f, -h.y}, {h.x, 0.0f}, {0.0f, h.y}, {-h.x, 0.0f}}};
 }

@@ -88,6 +88,12 @@ TEST_CASE("the camera sweep holds the near plane at 1.75 times its size", "[came
     CHECK(h.y == Catch::Approx(0.2f * std::tan(glm::radians(27.0f))));
     CHECK(h.x == Catch::Approx(h.y * 16.0f / 9.0f));
     const auto offsets = camera_sweep::sweepOffsets(0.2f, 54.0f, 16.0f / 9.0f);
+    // The near clip's own, which the liquids are swept with (0x006059e0).
+    const auto own = camera_sweep::sweepOffsets(0.2f, 54.0f, 16.0f / 9.0f, 1.0f);
+    for (size_t i = 0; i < own.size(); ++i) {
+        CHECK(std::abs(own[i].x * camera_sweep::kNearRectScale - offsets[i].x) < 1e-6f);
+        CHECK(std::abs(own[i].y * camera_sweep::kNearRectScale - offsets[i].y) < 1e-6f);
+    }
     float maxX = 0.0f, maxY = 0.0f;
     for (const auto& o : offsets) {
         maxX = std::max(maxX, std::abs(o.x));
