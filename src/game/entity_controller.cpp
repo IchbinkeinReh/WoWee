@@ -1333,6 +1333,8 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 // names UPDATE_SHAPESHIFT_USABLE (0x17a) if any button changed
                 // its mind, and only then SPELL_UPDATE_USABLE (0xf5). The
                 // watcher's own 0x15e comes last, after the rescan returns.
+                for (const std::string& name : owner_.reactiveSpellsRescan())
+                    pendingEvents_.emit("COMBAT_TEXT_UPDATE", {"SPELL_ACTIVE", name});
                 if (owner_.shapeshiftCastabilityChanged())
                     pendingEvents_.emit("UPDATE_SHAPESHIFT_USABLE", {});
                 pendingEvents_.emit("SPELL_UPDATE_USABLE", {});
@@ -1378,6 +1380,8 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 // the rescan the client runs answers that too, and names the
                 // bar when it changes. Same order as the watcher: the bar
                 // first, then SPELL_UPDATE_USABLE.
+                for (const std::string& name : owner_.reactiveSpellsRescan())
+                    pendingEvents_.emit("COMBAT_TEXT_UPDATE", {"SPELL_ACTIVE", name});
                 if (owner_.shapeshiftCastabilityChanged())
                     pendingEvents_.emit("UPDATE_SHAPESHIFT_USABLE", {});
                 pendingEvents_.emit("SPELL_UPDATE_USABLE", {});

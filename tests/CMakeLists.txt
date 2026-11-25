@@ -4431,6 +4431,10 @@ wowee_add_test(test_achievement_category
 wowee_add_test(test_font_flags
     SOURCES test_font_flags.cpp)
 
+# ── test_reactive_spell ──────────────────────────────────────
+wowee_add_test(test_reactive_spell
+    SOURCES test_reactive_spell.cpp)
+
 # ── test_trade_skill_list ────────────────────────────────────
 wowee_add_test(test_trade_skill_list
     SOURCES test_trade_skill_list.cpp)

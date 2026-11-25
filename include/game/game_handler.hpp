@@ -44,6 +44,7 @@
 #include "game/combat_log_feed.hpp"
 #include "game/arena_opponents.hpp"
 #include "game/spell_handler.hpp"
+#include "game/reactive_spell.hpp"
 #include "game/trade_skill_list.hpp"
 #include "game/quest_handler.hpp"
 #include "game/movement_handler.hpp"
@@ -5816,6 +5817,9 @@ public:
     /// buttons changed its mind, which is when the client names
     /// UPDATE_SHAPESHIFT_USABLE - once for the bar, not once per button.
     bool shapeshiftCastabilityChanged();
+    /// The same rescan's other half: the reactive spells that can be cast now and could
+    /// not before, by their names (COMBAT_TEXT_UPDATE "SPELL_ACTIVE").
+    std::vector<std::string> reactiveSpellsRescan();
 
     // ── Skills ───────────────────────────────────────────────────────
     auto& playerSkillsRef() { return playerSkills_; }
@@ -7874,6 +7878,7 @@ private:
     /// UPDATE_SHAPESHIFT_USABLE where one of them flipped.
     void predictedPowerUsability();
     std::array<bool, 144> actionShortOfPower_{};             ///< 0x00c1dc98
+    std::map<uint32_t, reactive_spell::State> reactiveSpells_;   ///< 0x00be8e5c
     std::unordered_map<uint32_t, bool> formShortOfPower_;   ///< 0x00be8e2c's +5
     /// The same stance-bar buttons, as the castability rescan last saw them.
     std::unordered_map<uint32_t, bool> formCastable_;       ///< 0x00be8e2c's +4

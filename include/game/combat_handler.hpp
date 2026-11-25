@@ -195,6 +195,8 @@ public:
     void removeCombatTextForGuid(uint64_t guid);
 
 private:
+    /// What can be cast now and could not before (0x0053cf10), said as combat text.
+    void announceReactiveSpells();
     // Exhaustion.dbc, read once, for the experience line's rest-state forms.
     xp_gain_line::ExhaustionRow exhaustionRow(int id);
     std::unordered_map<int, xp_gain_line::ExhaustionRow> exhaustionRows_;

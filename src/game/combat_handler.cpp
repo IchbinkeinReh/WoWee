@@ -1242,27 +1242,14 @@ void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {
     // in the shipped interface registers it - the combo points only ever lit up
     // when the target changed, which is the other event ComboFrame listens for.
     //
-    // The rescan that comes with the store is a thread still open. 0x0053cf10
-    // walks the action list (DAT_00be8e58 of them, DAT_00be8e5c holding each
-    // slot's two flags) and the form list (DAT_00be8e28) through the whole cast
-    // check; the first thing it calls, 0x005aa470, rewrites the 144 per-slot
-    // pairs the buttons are drawn from (DAT_00c1ded8, DAT_00c1dc98) and
-    // announces a change with ACTIONBAR_UPDATE_USABLE (0xb2). A form flipping is
-    // UPDATE_SHAPESHIFT_USABLE (0x17a), a spell of that list becoming affordable
-    // again says so as COMBAT_TEXT_UPDATE("SPELL_ACTIVE", name) - 0x0074d520 is
-    // not a sound: it fires 0x1e4 with "%s%s", the type name being that call's
-    // first argument read out of the combat-text type table at 0xadb820, slot
-    // 0x23 - and the rescan's own name SPELL_UPDATE_USABLE (0xf5)
-    // reaches no frame of this interface. WoWee's action flags hold the power
-    // half only (0x0053d1b0, the power-only variant), which is the half the
-    // buttons actually read: IsUsableAction (0x005a7e60) reads nothing else
-    // either, and a finisher wanting a combo point stays bright on the client's
-    // bar too - the points gate the *cast* (0x0080b5d0, through the per-target
-    // store 0x00513920), which WoWee already checks. What the rescan would add
-    // is the cast-check walk over the slots behind those pairs, so a button can
-    // go grey for the other reasons; announcing ACTIONBAR_UPDATE_USABLE from
-    // this packet only pays once that walk exists.
+    // The rescan that comes with the store (0x0053cf10): what can be cast now.
+    announceReactiveSpells();
     owner_.fireAddonEvent("UNIT_COMBO_POINTS", {"player"});
+}
+
+void CombatHandler::announceReactiveSpells() {
+    for (const std::string& name : owner_.reactiveSpellsRescan())
+        owner_.fireAddonEvent("COMBAT_TEXT_UPDATE", {"SPELL_ACTIVE", name});
 }
 
 void CombatHandler::handlePetUpdateComboPoints(network::Packet& packet) {
@@ -1880,6 +1867,7 @@ void CombatHandler::setTarget(uint64_t guid) {
         LOG_INFO("Target set: 0x", std::hex, guid, std::dec);
     }
     owner_.fireAddonEvent("PLAYER_TARGET_CHANGED", {});
+    announceReactiveSpells();
     // 0x006e4950 at the new target.
     if (wasAttacking && !stopsOnChange && guid != 0) startAutoAttack(guid);
 
@@ -1922,6 +1910,7 @@ void CombatHandler::clearTarget() {
         // command among them - still went at a creature long let go.
         if (owner_.isInWorld() && owner_.getSocket()) owner_.getSocket()->send(SetSelectionPacket::build(0));
         owner_.fireAddonEvent("PLAYER_TARGET_CHANGED", {});
+        announceReactiveSpells();
         // A repeating shot has nothing left to shoot at (0x00524bf0 with
         // none -> 0x00807560(1)).
         owner_.stopAutoRepeat(true);
@@ -1943,6 +1932,7 @@ void CombatHandler::forgetUnit(uint64_t guid) {
         owner_.setTargetGuidRaw(0);
         if (owner_.isInWorld() && owner_.getSocket()) owner_.getSocket()->send(SetSelectionPacket::build(0));
         owner_.fireAddonEvent("PLAYER_TARGET_CHANGED", {});
+        announceReactiveSpells();
     }
     if (owner_.lastTargetGuidRef() == guid) owner_.lastTargetGuidRef() = 0;
     if (lastEnemyTargetGuid_ == guid) lastEnemyTargetGuid_ = 0;

@@ -332,40 +332,18 @@ void GameHandler::predictedPowerUsability() {
     // 0x005a8d30: the spell each action slot holds against the player's
     // power; ACTIONBAR_UPDATE_USABLE (0xb2) where any flipped.
     bool actions = false;
-    // The rescan that comes with the same power update (0x0053d1b0) walks the
-    // player's spell list (0xbe8e58, eight bytes each: the id, a castable byte
-    // and a power-short byte) rather than the bars, and a spell whose power
-    // shortage lifts speaks on its way out: 0x0074d520(0x23, record + 0x220),
-    // which is COMBAT_TEXT_UPDATE (0x1e4) through the "%s%s" at 0x9e1ad0 - the
-    // first being slot 0x23 of the combat-text type names at 0xadb820, i.e.
-    // "SPELL_ACTIVE", and the record's +0x220 the spell name the cast events
-    // read too (spell_handler.cpp's spellcastArgs). blizzard_combattext.lua:303
-    // draws it as "<name>" in the crit size, gold by its own type table, gated on
-    // COMBAT_TEXT_SHOW_REACTIVES. It speaks on the way back only - a spell
-    // falling short of its cost says nothing - and not for a spell the client's
-    // full rescan (0x0053cf10) had left marked uncastable, which is what that
-    // record's castable byte gates its loop on. WoWee keeps no castable byte:
-    // everything it holds an action for is what IsUsableAction already calls
-    // usable. And it walks the bars the 0x005a8d30 half walks instead of the
-    // spell list, so a spell the player knows but never put on a bar has no line
-    // of its own to announce, and one sitting on two bars says it once.
-    constexpr size_t kAnnouncedMax = 16;
-    uint32_t announced[kAnnouncedMax]{};
-    size_t announcedCount = 0;
     for (size_t i = 0; i < actionBar.size(); ++i) {
         const auto& a = actionBar[i];
         const bool held = a.type == ActionBarSlot::SPELL && a.id != 0;
-        const bool shortNow = held && !spellHandler_->enoughPower(a.id, *player);
-        const bool wasShort = actionShortOfPower_[i];
-        actions |= power_prediction::noteShort(actionShortOfPower_[i], shortNow);
-        if (!held || !wasShort || shortNow) continue;
-        // One line per spell: the client's list holds each spell once.
-        const auto seen = std::find(announced, announced + announcedCount, a.id);
-        if (seen != announced + announcedCount) continue;
-        if (announcedCount < std::size(announced)) announced[announcedCount++] = a.id;
-        fireAddonEvent("COMBAT_TEXT_UPDATE", {"SPELL_ACTIVE", getSpellName(a.id)});
+        actions |= power_prediction::noteShort(actionShortOfPower_[i], held && !spellHandler_->enoughPower(a.id, *player));
     }
     if (actions) fireAddonEvent("ACTIONBAR_UPDATE_USABLE", {});
+    // 0x0053d1b0: a reactive spell there is the power for again, which is not a sound
+    // (0x0074d520(0x23, its name)) but COMBAT_TEXT_UPDATE (0x1e4) with the type's name
+    // of 0x00adb820: blizzard_combattext.lua draws it.
+    for (auto& [spell, state] : reactiveSpells_)
+        if (reactive_spell::powerChanged(state, !spellHandler_->enoughPower(spell, *player)))
+            fireAddonEvent("COMBAT_TEXT_UPDATE", {"SPELL_ACTIVE", getSpellName(spell)});
     // The forms the same way, UPDATE_SHAPESHIFT_USABLE (0x17a).
     bool forms = false;
     for (const auto& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
@@ -388,6 +366,32 @@ bool GameHandler::shapeshiftCastabilityChanged() {
         changed |= power_prediction::noteShort(formCastable_[form.spellId],
                                                spellHandler_->spellUsable(form.spellId, nullptr));
     return changed;
+}
+
+std::vector<std::string> GameHandler::reactiveSpellsRescan() {
+    std::vector<std::string> active;
+    const Unit* player = getUnitByGuid(playerGuid);
+    if (!spellHandler_ || !player) return active;
+    // The list (0x00542030): of the spells of one name the highest known.
+    loadSpellNameCache();
+    std::map<std::string, uint32_t> best;
+    for (const uint32_t spell : getKnownSpells()) {
+        const auto it = spellNameCache_.find(spell);
+        if (it == spellNameCache_.end() || (it->second.attrEx4 & reactive_spell::kAttribute) == 0) continue;
+        uint32_t& taken = best[it->second.name];
+        const auto old = spellNameCache_.find(taken);
+        if (taken == 0 || old == spellNameCache_.end() || old->second.spellLevel < it->second.spellLevel) taken = spell;
+    }
+    std::map<uint32_t, reactive_spell::State> states;
+    for (const auto& [name, spell] : best) {
+        reactive_spell::State& state = states[spell];
+        if (const auto known = reactiveSpells_.find(spell); known != reactiveSpells_.end()) state = known->second;
+        if (reactive_spell::rescanned(state, spellHandler_->spellUsable(spell, nullptr),
+                                      !spellHandler_->enoughPower(spell, *player)))
+            active.push_back(name);
+    }
+    reactiveSpells_ = std::move(states);
+    return active;
 }
 
 void GameHandler::addPredictedHealth(uint64_t guid, int32_t delta) {
