@@ -1263,63 +1263,79 @@ const std::string& GameHandler::getMacroText(uint32_t macroId) const {
     return (it != macros_.end()) ? it->second : EMPTY_MACRO_TEXT;
 }
 
-int GameHandler::getRecipeDifficulty(uint32_t spellId) const {
-    auto cit = spellNameCache_.find(spellId);
-    if (cit == spellNameCache_.end()) return 0;
-    const auto& se = cit->second;
-    // No thresholds means the recipe never greys out.
-    if (se.trivialSkillHigh == 0 && se.trivialSkillLow == 0) return 0;
-    auto slIt = spellToSkillLine_.find(spellId);
-    if (slIt == spellToSkillLine_.end()) return 0;
-    auto skIt = getPlayerSkills().find(slIt->second);
-    if (skIt == getPlayerSkills().end()) return 0;
-    const uint32_t skill = skIt->second.effectiveValue();
-    if (skill >= se.trivialSkillHigh) return 3;
-    if (skill >= se.trivialSkillLow)  return 2;
-    const uint32_t yellow = se.minSkillRank +
-                            (se.trivialSkillLow - se.minSkillRank) / 2;
-    if (skill >= yellow) return 1;
-    return 0;
-}
-
 uint32_t GameHandler::countItemInBags(uint32_t itemId) const {
     return getInventory().countItem(itemId);
 }
 
-std::vector<GameHandler::CraftRecipe> GameHandler::getCraftingRecipes() const {
-    std::vector<CraftRecipe> out;
-    const uint32_t skillLine = getCraftingSkillLine();
-    if (skillLine == 0) return out;
-    for (uint32_t spellId : getKnownSpells()) {
-        auto slIt = spellToSkillLine_.find(spellId);
-        if (slIt == spellToSkillLine_.end() || slIt->second != skillLine) continue;
-        auto cit = spellNameCache_.find(spellId);
-        if (cit == spellNameCache_.end()) continue;
-        const auto& se = cit->second;
-
-        bool hasReagents = false;
-        for (const auto& r : se.reagents) {
-            if (r.itemId != 0) { hasReagents = true; break; }
-        }
-        // The window-opener spell and passive skill ranks are not recipes.
-        if (!hasReagents && se.createdItemId == 0) continue;
-
-        CraftRecipe row;
-        row.spellId = spellId;
-        row.name = se.name;
-        row.difficulty = getRecipeDifficulty(spellId);
-        row.canMake = hasReagents ? 999 : 0;
-        for (const auto& r : se.reagents) {
-            if (r.itemId == 0 || r.count == 0) continue;
-            row.canMake = std::min(row.canMake,
-                static_cast<int>(countItemInBags(r.itemId) / r.count));
-        }
-        out.push_back(std::move(row));
+bool GameHandler::getCraftingRank(int& rank, int& maxRank) const {
+    rank = maxRank = 0;
+    const uint32_t line = getCraftingSkillLine();
+    if (line == 0 || !spellHandler_) return false;
+    if (const auto& link = spellHandler_->getCraftingLink(); link && link->guid != playerGuid) {
+        rank = link->rank;
+        maxRank = link->maxRank;
+        return true;
     }
-    std::sort(out.begin(), out.end(),
-              [](const CraftRecipe& a, const CraftRecipe& b) {
-                  return a.name < b.name;
-              });
+    if (const auto it = getPlayerSkills().find(line); it != getPlayerSkills().end()) {
+        // 0x0051a250, 0x00594710: with the lasting bonus, where there is any.
+        const PlayerSkill& sk = it->second;
+        rank = sk.value != 0 ? sk.value + sk.bonusPerm : 0;
+        maxRank = sk.maxValue != 0 ? sk.maxValue + sk.bonusPerm : 0;
+    }
+    return true;
+}
+
+// 0x005dd5a0
+std::vector<trade_skill::Recipe> GameHandler::getCraftingRecipes(std::vector<uint32_t>* unknownItems) const {
+    std::vector<trade_skill::Recipe> out;
+    const uint32_t line = getCraftingSkillLine();
+    if (line == 0 || !spellHandler_) return out;
+    const auto& link = spellHandler_->getCraftingLink();
+    // The rank the colours go by: the link's, or the player's without a bonus.
+    int rank = 0;
+    if (link && link->guid != playerGuid) rank = link->rank;
+    else if (const auto it = getPlayerSkills().find(line); it != getPlayerSkills().end()) rank = it->second.value;
+
+    const auto add = [&](uint32_t spellId) {
+        const auto it = spellNameCache_.find(spellId);
+        if (it == spellNameCache_.end() || (it->second.attr & 0x20u) == 0) return;   // a trade spell's attribute
+        const SpellNameEntry& se = it->second;
+        trade_skill::Recipe r;
+        r.spellId = spellId;
+        r.name = se.name;
+        r.trivialAt = static_cast<int>(se.trivialSkillHigh);
+        r.difficulty = trade_skill::difficulty(rank, r.trivialAt, static_cast<int>(se.trivialSkillLow));
+        for (const auto& reagent : se.reagents) {
+            if (reagent.itemId == 0 || reagent.count == 0) continue;
+            const int enough = static_cast<int>(countItemInBags(reagent.itemId) / reagent.count);
+            r.canMake = r.canMake < 0 ? enough : std::min(r.canMake, enough);
+        }
+        const uint32_t effect = se.effectIds[0];
+        if ((effect == 24 || effect == 157 || effect == 59) && se.effectItemType0 != 0) {
+            if (const auto* item = getItemInfo(se.effectItemType0)) {
+                if (item->valid) {
+                    r.itemClass = static_cast<int32_t>(item->itemClass);
+                    r.itemSubClass = static_cast<int32_t>(item->subClass);
+                    r.itemLevel = item->itemLevel;
+                    r.slots = trade_skill::itemSlots(item->inventoryType);
+                }
+            } else if (unknownItems) {
+                unknownItems->push_back(se.effectItemType0);
+            }
+        } else {
+            r.slots = trade_skill::enchantSlots(se.equippedItemClass, se.equippedItemSubClassMask,
+                                                se.equippedItemInventoryTypes);
+        }
+        out.push_back(std::move(r));
+    };
+    if (link) {
+        for (const uint32_t spellId : link->spells) add(spellId);
+    } else {
+        for (const uint32_t spellId : getKnownSpells()) {
+            const auto it = spellToSkillLine_.find(spellId);
+            if (it != spellToSkillLine_.end() && it->second == line) add(spellId);
+        }
+    }
     return out;
 }
 
@@ -4047,7 +4063,7 @@ bool GameHandler::isCurrentSpell(uint32_t spellId) const {
     // Effect 0 TRADE_SKILL (0x2f): while its profession's window is open
     // (0x0071a670, DAT_00c235a4), and not a linked one (DAT_00c235e4).
     if (spell.effectIds[0] == 0x2f) {
-        return spellHandler_ && spellHandler_->isCraftingWindowOpen() &&
+        return spellHandler_ && spellHandler_->isCraftingWindowOpen() && !spellHandler_->getCraftingLink() &&
                spellHandler_->getCraftingSpellId() == spellId;
     }
     // A mount (effect 0's aura 78, 0x008009b0) or a shapeshift (any aura 36,

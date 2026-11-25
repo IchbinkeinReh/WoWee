@@ -1149,7 +1149,7 @@ static int lua_IsSelectedSpell(lua_State* L) {
         const auto& cache = gh->spellNameCacheRef();
         if (const auto it = cache.find(id); it != cache.end()) {
             const auto& e = it->second;
-            if (e.effectIds[0] == 47 && gh->isCraftingWindowOpen() &&
+            if (e.effectIds[0] == 47 && gh->isCraftingWindowOpen() && gh->getCraftingLinkGuid() == 0 &&
                 gh->getCraftingSkillLine() == gh->spellSkillLine(id)) {
                 selected = true;
             } else {

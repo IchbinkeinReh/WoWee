@@ -4669,8 +4669,16 @@ static int setHyperlink(lua_State* L, bool again) {
     }
 
     const size_t colon = link.find(':');
-    if (colon == std::string::npos) { lua_pushboolean(L, 0); return 1; }
-    const std::string kind = link.substr(0, colon);
+    const std::string kind = colon == std::string::npos ? std::string() : link.substr(0, colon);
+    static constexpr const char* kKinds[] = {"item",   "enchant", "dance",       "spell", "unit",
+                                             "quest",  "talent",  "trade",       "achievement", "glyph"};
+    if (std::none_of(std::begin(kKinds), std::end(kKinds), [&kind](const char* k) { return kind == k; }))
+        return luaL_error(L, "%s:SetHyperlink(): Unknown link type", usageName(L, 1));
+    // A profession's opens its window, no tooltip.
+    if (kind == "trade") {
+        gh->openCraftingLink(link.substr(colon + 1));
+        return 0;
+    }
     uint32_t id = 0;
     for (size_t i = colon + 1; i < link.size() && link[i] >= '0' && link[i] <= '9'; ++i)
         id = id * 10 + static_cast<uint32_t>(link[i] - '0');

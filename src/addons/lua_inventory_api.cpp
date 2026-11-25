@@ -3574,6 +3574,10 @@ static std::string itemSubclassDisplayName(game::GameHandler* gh, uint32_t itemC
     return it->second.first;
 }
 
+std::string itemSubclassVerboseName(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass) {
+    return itemSubclassDisplayName(gh, itemClass, subClass, true);
+}
+
 /// ItemSubClass.dbc's display flags (field 5) for a class and subclass; zero
 /// where the row is unknown.
 static uint32_t itemSubclassDisplayFlags(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass) {

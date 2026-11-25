@@ -1641,12 +1641,14 @@ int lua_QuestBlob_GetTooltipIndex(lua_State* L);
 /// recipe. The tooltip did exactly that: hovering "Enchant Bracer - Lesser
 /// Spirit" described "Enchant Bracer - Minor Deflection", three rows further
 /// down, because that is what index 4 is in a list with no heading in it.
+const game::trade_skill::Recipe* recipeAtTradeSkillRow(game::GameHandler* gh, int index);
+
 /// The item in the auction house's sell slot, or null - what
 /// GetAuctionSellItemInfo describes and SetAuctionSellItem shows.
 const game::ItemSlot* auctionSellHeldItem(game::GameHandler* gh);
 
-const game::GameHandler::CraftRecipe* recipeAtTradeSkillRow(game::GameHandler* gh,
-                                                            int index);
+/// A subclass's name (ItemSubClass.dbc): its verbose one, else the other.
+std::string itemSubclassVerboseName(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass);
 
 /// Let the trade skill row list be rebuilt on the next read.
 ///

@@ -4235,16 +4235,72 @@ void SpellHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uin
     owner_.getSocket()->send(LearnPreviewTalentsPacket::build(talentRanks));
 }
 
-void SpellHandler::openCraftingWindow(uint32_t skillLine, uint32_t spellId) {
+void SpellHandler::endCraftRepeat() {
+    if (craftQueueRemaining_ <= 0) return;
+    cancelCraftQueue();
+    owner_.fireAddonEvent("UPDATE_TRADESKILL_RECAST", {});
+}
+
+// 0x005de120
+void SpellHandler::showCraftingWindow(uint32_t skillLine, uint32_t spellId, std::optional<CraftingLink> link) {
+    endCraftRepeat();
     craftingWindowOpen_ = true;
     craftingSkillLine_ = skillLine;
     craftingSpellId_ = spellId;
-    owner_.fireAddonEvent("TRADE_SKILL_SHOW", {});
+    craftingLink_ = std::move(link);
+    if (!owner_.getCraftingRecipes().empty()) owner_.fireAddonEvent("TRADE_SKILL_SHOW", {});
 }
 
+void SpellHandler::openCraftingWindow(uint32_t skillLine, uint32_t spellId) {
+    // The spell of the window that is open closes it.
+    if (craftingWindowOpen_ && !craftingLink_ && craftingSkillLine_ == skillLine) {
+        closeCraftingWindow();
+        return;
+    }
+    showCraftingWindow(skillLine, spellId, std::nullopt);
+}
+
+void SpellHandler::openCraftingLink(const std::string& data, bool asked) {
+    trade_skill::Link link;
+    if (!trade_skill::readLink(data, link)) return;
+    // Whose it is must be known: the line is the one of their race and class.
+    if (link.guid != owner_.getPlayerGuid() && owner_.lookupPlayerRace(link.guid) == 0) {
+        if (asked) return;
+        owner_.askNameThen(link.guid, "trade skill link", [this, data](bool found, const std::string&) {
+            if (found) openCraftingLink(data, true);
+        });
+        return;
+    }
+    owner_.loadSpellNameCache();
+    owner_.loadSkillLineDbc();
+    owner_.loadSkillLineAbilityDbc();
+    const auto it = owner_.spellToSkillLineRef().find(link.spellId);
+    if (it == owner_.spellToSkillLineRef().end() || linkableSkillLines_.count(it->second) == 0) return;
+    const uint32_t line = it->second;
+    auto* am = owner_.services().assetManager;
+    const auto abilities = am && am->isInitialized() ? am->loadDBC("SkillLineAbility.dbc") : nullptr;
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("SkillLineAbility") : nullptr;
+    if (!abilities || !abilities->isLoaded() || !layout) return;
+    const uint32_t lineCol = (*layout)["SkillLineID"], spellCol = (*layout)["SpellID"];
+    // The line's first run of rows (0x008104a0).
+    std::vector<uint32_t> run;
+    for (uint32_t i = 0; i < abilities->getRecordCount(); ++i) {
+        if (abilities->getUInt32(i, lineCol) == line) run.push_back(abilities->getUInt32(i, spellCol));
+        else if (!run.empty()) break;
+    }
+    if (run.empty() || !trade_skill::linkFits(link.known, run.size())) return;
+    CraftingLink shown{link.guid, link.rank, link.maxRank, {}};
+    for (size_t i = 0; i < run.size(); ++i)
+        if (trade_skill::linkKnows(link.known, i)) shown.spells.push_back(run[i]);
+    showCraftingWindow(line, link.spellId, std::move(shown));
+}
+
+// 0x005da8b0
 void SpellHandler::closeCraftingWindow() {
     if (!craftingWindowOpen_) return;
+    endCraftRepeat();
     craftingWindowOpen_ = false;
+    craftingSkillLine_ = craftingSpellId_ = 0;
     owner_.fireAddonEvent("TRADE_SKILL_CLOSE", {});
 }
 
@@ -6770,6 +6826,7 @@ struct CastCheckColumns {
         entry.requiresSpellFocus = u(spellFocus);
         if (itemClass < fieldCount) entry.equippedItemClass = n(itemClass);
         entry.equippedItemSubClassMask = u(itemSubClassMask);
+        if (itemSubClassMask != 0xFFFFFFFFu) entry.equippedItemInventoryTypes = u(itemSubClassMask + 1);
         entry.runeCostId = u(runeCost);
         entry.targetAuraStateNot = u(targetStateNot);
         entry.targetAuraSpell = u(targetAura);
@@ -8086,6 +8143,7 @@ void SpellHandler::loadSkillLineDbc() {
     // carries seventeen name columns, 12 where it carries nine. Read off the
     // files rather than assumed, like the icon beside it.
     const uint32_t slDescField = slL ? (*slL)["Description"] : 20;
+    const uint32_t slLinkField = slL ? slL->tryField("CanLink") : 0xFFFFFFFFu;
     const uint32_t fieldCount  = dbc->getFieldCount();
     for (uint32_t i = 0; i < dbc->getRecordCount(); i++) {
         uint32_t id = dbc->getUInt32(i, slIdField);
@@ -8108,6 +8166,7 @@ void SpellHandler::loadSkillLineDbc() {
                 std::string verb = dbc->getString(i, slIconField + 1);
                 if (!verb.empty()) skillLineVerbs_[id] = std::move(verb);
             }
+            if (slLinkField < fieldCount && dbc->getUInt32(i, slLinkField) != 0) linkableSkillLines_.insert(id);
             if (slDescField < fieldCount) {
                 std::string desc = dbc->getString(i, slDescField);
                 if (!desc.empty()) owner_.skillLineDescriptionsRef()[id] = std::move(desc);

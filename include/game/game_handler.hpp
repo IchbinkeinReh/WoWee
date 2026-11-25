@@ -44,6 +44,7 @@
 #include "game/combat_log_feed.hpp"
 #include "game/arena_opponents.hpp"
 #include "game/spell_handler.hpp"
+#include "game/trade_skill_list.hpp"
 #include "game/quest_handler.hpp"
 #include "game/movement_handler.hpp"
 #include "game/entity_controller.hpp"
@@ -5220,23 +5221,17 @@ public:
     void setAuctionActiveTab(int tab);
     float getAuctionSearchDelay() const;
 
-    /// One row of a profession's recipe list.
-    struct CraftRecipe {
-        uint32_t spellId = 0;
-        std::string name;
-        int difficulty = 0;   ///< 0 optimal, 1 medium, 2 easy, 3 trivial
-        int canMake = 0;      ///< how many the bags have reagents for
-    };
-    /// The known recipes of the profession whose window is open.
-    ///
-    /// Shared with the interface rather than rebuilt there: the difficulty
-    /// bands and the reagent arithmetic are fiddly enough that two copies
-    /// would drift, and a recipe that is orange in one window and yellow in
-    /// the other is a bug nobody can explain.
-    std::vector<CraftRecipe> getCraftingRecipes() const;
-    /// Where a recipe sits against the player's skill, in the same bands the
-    /// crafting window colours by.
-    int getRecipeDifficulty(uint32_t spellId) const;
+    /// The recipes of the profession whose window is open, without an order: the known
+    /// ones of its skill line, or those of the link it shows. Those whose item is not
+    /// known yet are among them with `unknownItems` saying which items those are.
+    std::vector<trade_skill::Recipe> getCraftingRecipes(std::vector<uint32_t>* unknownItems = nullptr) const;
+    /// The rank a profession's window shows, and the most of it (0x005db810): the
+    /// player's with the lasting bonus, or the link's. False where no window is open.
+    bool getCraftingRank(int& rank, int& maxRank) const;
+    /// Whose window is open where that is not the player's own (0x00c235e4), 0 otherwise.
+    uint64_t getCraftingLinkGuid() const { return spellHandler_ ? spellHandler_->getCraftingLinkGuid() : 0; }
+    /// A profession's link opened (0x005de300), what follows its "trade:".
+    void openCraftingLink(const std::string& data) { if (spellHandler_) spellHandler_->openCraftingLink(data); }
     /// How many of an item the backpack and equipped bags hold together.
     uint32_t countItemInBags(uint32_t itemId) const;
 
@@ -6387,6 +6382,7 @@ public:
         uint32_t areaGroupId = 0;
         int32_t equippedItemClass = -1;
         uint32_t equippedItemSubClassMask = 0;
+        uint32_t equippedItemInventoryTypes = 0;   ///< Spell.dbc's next column
         uint32_t runeCostId = 0;
         /// What 0x0080b5d0 reads beside 0x00739650's: TargetAuraStateNot
         /// [23], TargetAuraSpell [25], ExcludeTargetAuraSpell [27], Totem

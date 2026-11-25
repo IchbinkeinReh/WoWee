@@ -287,6 +287,17 @@ public:
     [[nodiscard]] uint32_t getCraftingSkillLine() const { return craftingSkillLine_; }
     /// The profession spell that opened the window (0x00c235a0).
     [[nodiscard]] uint32_t getCraftingSpellId() const { return craftingSpellId_; }
+    /// What the window shows of a link (0x00c23598, 0x00c235e4 to 0x00c235ec): whose the
+    /// profession is, their ranks and the recipes they know.
+    struct CraftingLink {
+        uint64_t guid = 0;
+        int rank = 0, maxRank = 0;
+        std::vector<uint32_t> spells;
+    };
+    [[nodiscard]] const std::optional<CraftingLink>& getCraftingLink() const { return craftingLink_; }
+    [[nodiscard]] uint64_t getCraftingLinkGuid() const { return craftingLink_ ? craftingLink_->guid : 0; }
+    /// A profession's link (0x005de300): `data` is what follows its "trade:".
+    void openCraftingLink(const std::string& data, bool asked = false);
     /// Opening and closing a profession announce themselves, because the
     /// interface's trade skill panel is driven entirely by these two events -
     /// it hides on TRADE_SKILL_CLOSE and fills itself on TRADE_SKILL_SHOW.
@@ -1198,6 +1209,10 @@ private:
     bool craftingWindowOpen_ = false;
     uint32_t craftingSkillLine_ = 0;
     uint32_t craftingSpellId_ = 0;
+    std::optional<CraftingLink> craftingLink_;
+    void showCraftingWindow(uint32_t skillLine, uint32_t spellId, std::optional<CraftingLink> link);
+    void endCraftRepeat();
+    std::unordered_set<uint32_t> linkableSkillLines_;   ///< SkillLine's CanLink (+0x1c)
 
     // SpellFocusObject.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> spellFocusNames_;

@@ -4431,6 +4431,10 @@ wowee_add_test(test_achievement_category
 wowee_add_test(test_font_flags
     SOURCES test_font_flags.cpp)
 
+# ── test_trade_skill_list ────────────────────────────────────
+wowee_add_test(test_trade_skill_list
+    SOURCES test_trade_skill_list.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
