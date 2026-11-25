@@ -21,6 +21,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/vk_context.hpp"
+#include "rendering/imgui_blend.hpp"
 #include "rendering/imgui_texture.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "ui/movie_playback.hpp"
@@ -2680,6 +2681,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // Over the frame's own backdrop.
             const auto drawModel = [&] {
                 if (w->externalTexture == 0) return;
+                float tint[4] = {w->color[0], w->color[1], w->color[2], w->color[3]};
+                if (w->externalPremultiplied) {
+                    rendering::beginPremultiplied(dl);
+                    for (int i = 0; i < 3; ++i) tint[i] *= w->color[3] * w->drawAlpha;
+                }
                 // NOLINTNEXTLINE(performance-no-int-to-ptr) - the widget holds
                 // the handle as an integer and ImTextureID is a pointer, so
                 // the cast is the API boundary rather than a choice.
@@ -2688,7 +2694,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                              ImVec2(x0 - w->modelPad * s, y0 - w->modelPad * s),
                              ImVec2(x1 + w->modelPad * s, y1 + w->modelPad * s),
                              ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                             packColor(w->color, w->drawAlpha));
+                             packColor(tint, w->drawAlpha));
+                if (w->externalPremultiplied) rendering::endPremultiplied(dl);
             };
             if (!w->hasBackdrop) drawModel();
             // A tooltip's rows, counted once: the box below is drawn to hold

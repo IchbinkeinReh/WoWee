@@ -49,6 +49,7 @@ bool ModelFrameView::ensureSize(pipeline::AssetManager* assets, int width, int h
     if (!m2_) {
         m2_ = std::make_unique<M2Renderer>();
         m2_->setRenderPassOverride(target_->getRenderPass(), target_->getSampleCount());
+        m2_->setOverNothing(true);
         if (!m2_->initialize(vkCtx_, renderer->getPerFrameSetLayout(), assets)) {
             LOG_ERROR("ModelFrameView: M2 renderer would not initialize");
             m2_.reset();

@@ -329,6 +329,29 @@ VkPipelineColorBlendAttachmentState PipelineBuilder::blendAdditive() {
     return state;
 }
 
+VkPipelineColorBlendAttachmentState PipelineBuilder::blendPremultiplied() {
+    VkPipelineColorBlendAttachmentState state = blendAlpha();
+    state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    return state;
+}
+
+VkPipelineColorBlendAttachmentState PipelineBuilder::overNothing(VkPipelineColorBlendAttachmentState state) {
+    if (state.blendEnable == VK_FALSE) {
+        // As much of it as its alpha says, in front of all that is there.
+        state.blendEnable = VK_TRUE;
+        state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        state.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+        state.colorBlendOp = VK_BLEND_OP_ADD;
+        state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        state.alphaBlendOp = VK_BLEND_OP_ADD;
+    } else if (state.dstColorBlendFactor != VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA) {
+        state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    }
+    return state;
+}
+
 VkPipelineLayout createPipelineLayout(VkDevice device,
     const std::vector<VkDescriptorSetLayout>& setLayouts,
     const std::vector<VkPushConstantRange>& pushConstants)

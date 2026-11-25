@@ -7410,6 +7410,7 @@ void Application::render() {
                         view->update(io.DeltaTime);
                         view->requestComposite();
                         frame->externalTexture = view->textureId();
+                        frame->externalPremultiplied = true;
                         shown.insert(id);
                     }
                 }
@@ -7422,7 +7423,10 @@ void Application::render() {
                 // A frame hidden, gone or cleared lets its view go.
                 for (auto it = modelFrameViews_.begin(); it != modelFrameViews_.end();) {
                     if (shown.count(it->first)) { ++it; continue; }
-                    if (ui::Widget* frame = widgets.get(it->first)) frame->externalTexture = 0;
+                    if (ui::Widget* frame = widgets.get(it->first)) {
+                        frame->externalTexture = 0;
+                        frame->externalPremultiplied = false;
+                    }
                     it = modelFrameViews_.erase(it);
                 }
             });

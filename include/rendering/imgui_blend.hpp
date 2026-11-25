@@ -19,6 +19,10 @@ void initImGuiBlend(VkContext* ctx);
 void shutdownImGuiBlend();
 void beginAdditive(ImDrawList* list);
 void endAdditive(ImDrawList* list);
+/// The same for a picture whose colours have their alpha in them already, a model
+/// frame's (its tint likewise): what is added in it is added to what is under it.
+void beginPremultiplied(ImDrawList* list);
+void endPremultiplied(ImDrawList* list);
 
 }  // namespace rendering
 }  // namespace wowee

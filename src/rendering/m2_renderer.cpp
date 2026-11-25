@@ -185,7 +185,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
             // before it occlude it, and a write would put the far plane over
             // everything drawn after.
             .setDepthTest(depthTest, skyMode_ ? false : depthWrite, depth::kNearerOrEqual)
-            .setColorBlendAttachment(blendState)
+            .setColorBlendAttachment(overNothing_ ? PipelineBuilder::overNothing(blendState) : blendState)
             .setMultisample(passSamples);
         // MSAA alpha-to-coverage dithers the shader's sharpened cutout alpha
         // across samples for smooth foliage/leaf silhouettes.
@@ -324,7 +324,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                 .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
                 .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
                 .setDepthTest(true, false, depth::kNearerOrEqual)
-                .setColorBlendAttachment(blend)
+                .setColorBlendAttachment(overNothing_ ? PipelineBuilder::overNothing(blend) : blend)
                 .setMultisample(passSamples)
                 .setLayout(particlePipelineLayout_)
                 .setRenderPass(mainPass)
@@ -399,7 +399,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                     .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
                     .setRasterization(VK_POLYGON_MODE_FILL, cull, VK_FRONT_FACE_COUNTER_CLOCKWISE)
                     .setDepthTest(depthTest, depthWrite, depth::kNearerOrEqual)
-                    .setColorBlendAttachment(blend)
+                    .setColorBlendAttachment(overNothing_ ? PipelineBuilder::overNothing(blend) : blend)
                     .setMultisample(passSamples)
                     .setLayout(ribbonPipelineLayout_)
                     .setRenderPass(mainPass)

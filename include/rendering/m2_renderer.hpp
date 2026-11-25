@@ -578,6 +578,9 @@ public:
         renderPassOverride_ = pass;
         samplesOverride_ = samples;
     }
+    /// Drawn into a picture with nothing behind it (PipelineBuilder::overNothing); before
+    /// initialize().
+    void setOverNothing(bool on) { overNothing_ = on; }
     /** Configure this renderer for camera-centered sky M2s before initialize(). */
     void setSkyMode(bool enabled) { skyMode_ = enabled; }
     void shutdown();
@@ -1843,6 +1846,7 @@ private:
     /// each frame in update().
     float furthestDrawnSq_ = 0.0f;
     bool forceNoCull_ = false;
+    bool overNothing_ = false;
     VkRenderPass renderPassOverride_ = VK_NULL_HANDLE;
     VkSampleCountFlagBits samplesOverride_ = VK_SAMPLE_COUNT_1_BIT;
 

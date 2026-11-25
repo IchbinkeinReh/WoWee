@@ -1003,6 +1003,7 @@ struct Widget {
     /// portrait is a live view of the character, not an image on disk. Zero
     /// means the path above is used instead.
     uint64_t externalTexture = 0;
+    bool externalPremultiplied = false;   ///< its colours have their alpha in them
 
     /// The typeface a font object named, as it wrote it. Empty means
     /// whatever the renderer is already using.

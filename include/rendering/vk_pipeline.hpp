@@ -119,6 +119,11 @@ public:
     static VkPipelineColorBlendAttachmentState blendDisabled();
     static VkPipelineColorBlendAttachmentState blendAlpha();
     static VkPipelineColorBlendAttachmentState blendAdditive();
+    /// Of a picture whose colours have their alpha in them already.
+    static VkPipelineColorBlendAttachmentState blendPremultiplied();
+    /// A blend as it goes into a picture that has nothing behind it and is drawn over
+    /// something later by blendPremultiplied: what is added or multiplied covers nothing.
+    static VkPipelineColorBlendAttachmentState overNothing(VkPipelineColorBlendAttachmentState state);
 
 private:
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages_;
