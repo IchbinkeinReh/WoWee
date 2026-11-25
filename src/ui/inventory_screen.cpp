@@ -266,14 +266,6 @@ void InventoryScreen::renderItemTargetCursor() {
         drawList->AddRect(pos, ImVec2(pos.x + size, pos.y + size),
                           IM_COL32(0, 220, 0, 230), 0.0f, 0, 2.0f);
     }
-
-    const char* hint = awaitingUnit ? "Select a target" : "Select an item";
-    ImVec2 hintSize = ImGui::CalcTextSize(hint);
-    ImVec2 hintPos(mousePos.x - hintSize.x * 0.5f, pos.y + size + 4.0f);
-    drawList->AddRectFilled(ImVec2(hintPos.x - 3.0f, hintPos.y - 2.0f),
-                            ImVec2(hintPos.x + hintSize.x + 3.0f, hintPos.y + hintSize.y + 2.0f),
-                            IM_COL32(0, 0, 0, 180));
-    drawList->AddText(hintPos, IM_COL32(0, 255, 0, 255), hint);
 }
 
 
