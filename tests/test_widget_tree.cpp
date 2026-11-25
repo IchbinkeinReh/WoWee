@@ -1288,6 +1288,34 @@ TEST_CASE("A clamped frame stops at the screen edge", "[widget][layout]") {
     REQUIRE(tree.get(f)->bottom == Catch::Approx(kScreenH - 100.0f));
 }
 
+// 0x004893c0
+TEST_CASE("A clamped frame's insets", "[widget][layout]") {
+    for (const float scale : {1.0f, 2.0f}) {   // in its own units
+        WidgetTree tree;
+        const uint32_t f = tree.create(WidgetKind::Frame, tree.root(), "Clamped");
+        tree.setWidth(f, 100.0f);
+        tree.setHeight(f, 100.0f);
+        Anchor a; a.point = "BOTTOMLEFT"; a.relativePoint = "BOTTOMLEFT";
+        a.x = a.y = 50.0f;
+        tree.addPoint(f, a);
+        tree.get(f)->scale = scale;
+        tree.get(f)->clampedToScreen = true;
+        tree.get(f)->clampInsetL = -10.0f;
+        tree.get(f)->clampInsetR = 12.0f;
+        tree.get(f)->clampInsetT = 14.0f;
+        tree.get(f)->clampInsetB = -16.0f;
+        tree.layout(kScreenW, kScreenH);
+        tree.nudge(f, -5000.0f, -5000.0f);
+        tree.layout(kScreenW, kScreenH);
+        CHECK(tree.get(f)->left == Catch::Approx(10.0f * scale));
+        CHECK(tree.get(f)->bottom == Catch::Approx(16.0f * scale));
+        tree.nudge(f, 5000.0f, 5000.0f);
+        tree.layout(kScreenW, kScreenH);
+        CHECK(tree.get(f)->left == Catch::Approx(kScreenW - (12.0f + 100.0f) * scale));
+        CHECK(tree.get(f)->bottom == Catch::Approx(kScreenH - (14.0f + 100.0f) * scale));
+    }
+}
+
 TEST_CASE("An unclamped frame is free to leave the screen", "[widget][layout]") {
     WidgetTree tree;
     const uint32_t f = tree.create(WidgetKind::Frame, tree.root(), "Free");
@@ -1360,8 +1388,8 @@ TEST_CASE("A clamped tooltip anchored past the right edge is pulled back in",
     REQUIRE(tree.get(tip)->left == Catch::Approx(kScreenW - 250.0f));
 }
 
-TEST_CASE("A frame wider than the screen is not snapped to a nonsense edge",
-          "[widget][layout]") {
+// 0x004893c0: the left edge first and the right one after it.
+TEST_CASE("A frame wider than the screen is held by its right edge", "[widget][layout]") {
     WidgetTree tree;
     const uint32_t f = tree.create(WidgetKind::Frame, tree.root(), "Huge");
     tree.setWidth(f, kScreenW + 400.0f);
@@ -1374,7 +1402,7 @@ TEST_CASE("A frame wider than the screen is not snapped to a nonsense edge",
 
     tree.nudge(f, -50.0f, 0.0f);
     tree.layout(kScreenW, kScreenH);
-    REQUIRE(tree.get(f)->left == Catch::Approx(-150.0f));  // moved, not pinned
+    REQUIRE(tree.get(f)->left == Catch::Approx(-400.0f));
 }
 
 TEST_CASE("Raise puts a frame in front of its strata", "[widget][layout]") {

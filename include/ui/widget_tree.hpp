@@ -239,9 +239,9 @@ struct Widget {
     /// move; without it a window dragged past the edge is gone for good, since
     /// the only way back is a drag on a title bar that is no longer reachable.
     bool clampedToScreen = false;
-    // How far past each screen edge a clamped frame may sit. Positive is
-    // inward, so a positive right lets that much hang off and a negative one
-    // holds it clear. Only read when clampedToScreen is set.
+    // How far a clamped frame's left and lower edge may be past the screen's, and how
+    // far its right and upper one have to stay clear of them (0x004893c0). Only read
+    // when clampedToScreen is set.
     float clampInsetL = 0.0f, clampInsetR = 0.0f;
     float clampInsetT = 0.0f, clampInsetB = 0.0f;
     /// Whether clicking this frame brings it to the front of its strata. WoW
