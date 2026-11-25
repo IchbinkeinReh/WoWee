@@ -332,9 +332,9 @@ struct CharMaterialUBO {
     float emissiveTintR, emissiveTintG, emissiveTintB;
     float specularIntensity;
     int32_t enableNormalMap;
-    // Into a picture of its own: 1 with its texture alone, 2 lit. What is not
-    // blended covers what is behind the picture, wholly.
-    int32_t previewSimpleTexture;
+    // 1: into a picture of its own. What is not blended covers what is behind
+    // the picture, wholly.
+    int32_t ownPicture;
     float normalMapStrength;
     int32_t hairMaterial;
     // How the shader hands its colour to a colour-only blend: 0 normally,
@@ -5115,8 +5115,8 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
                     matData.specularIntensity = 0.08f;
                     matData.enableNormalMap = 0;
                 }
-                if (renderPassOverride_ != VK_NULL_HANDLE)
-                    matData.previewSimpleTexture = previewMainModel && !litPreview_ ? 1 : 2;
+                matData.ownPicture = renderPassOverride_ != VK_NULL_HANDLE ? 1 : 0;
+                if (fogScenesOnly_ && !instance.isSceneModel) matData.fogMode = 0;
 
                 // WOWEE_SCENE_DIAG=1 dumps what each backdrop batch is actually told to
                 // draw - texture, blend mode, shader path - once per scene model.
@@ -5135,7 +5135,6 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
                         " blend=", blendMode, " matFlags=0x", std::hex, materialFlags, std::dec,
                         " alphaTest=", matData.alphaTest,
                         " unlit=", matData.unlit,
-                        " simplePath=", matData.previewSimpleTexture,
                         " whiteFallback=", (texPtr == whiteTexture_.get() ? 1 : 0),
                         " tex=", texName);
                 }
@@ -5200,8 +5199,8 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
             matData.normalMapStrength = normalMapStrength_;
             matData.hairMaterial = 0;
             matData.fogMode = 1;   // the world's fog, as this path always had
-            if (renderPassOverride_ != VK_NULL_HANDLE)
-                matData.previewSimpleTexture = previewMainModel && !litPreview_ ? 1 : 2;
+            matData.ownPicture = renderPassOverride_ != VK_NULL_HANDLE ? 1 : 0;
+            if (fogScenesOnly_ && !instance.isSceneModel) matData.fogMode = 0;
 
             // Sub-allocate material UBO from ring buffer
             uint32_t matOffset2 = 0;

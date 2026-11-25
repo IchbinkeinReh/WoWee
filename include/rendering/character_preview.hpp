@@ -4,6 +4,7 @@
 #include <optional>
 #include "core/character_geosets.hpp"
 #include "core/preview_dressing.hpp"
+#include "rendering/m2_vertex_lights.hpp"
 #include "rendering/figure_camera.hpp"
 #include "rendering/model_frame_view.hpp"
 
@@ -250,6 +251,7 @@ private:
     figure_camera::Camera portraitCamera_;
     model_frame::Light figureLight_;
     model_frame::Fog figureFog_;
+    m2_vertex_lights::Grid vertexLights_;
     /// All of the model's, and the middle of its box, for a model frame.
     std::vector<pipeline::M2Camera> modelCameras_;
     glm::vec3 modelBoxMiddle_{0.0f};

@@ -533,7 +533,7 @@ void CharacterRenderer::addVertexLights(m2_vertex_lights::Grid& grid) const {
     // its diffuse colour times its intensity times the model's alpha.
     for (const auto& [id, inst] : instances) {
         if (!inst.cachedModel || inst.cachedModel->data.lights.empty()) continue;
-        if (!inst.visible || inst.heldBack || inst.isSceneModel) continue;
+        if (!inst.visible || inst.heldBack) continue;
         if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
         const glm::mat4 modelMat = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
         const auto& data = inst.cachedModel->data;

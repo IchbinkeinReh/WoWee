@@ -59,9 +59,9 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     float emissiveTintB;
     float specularIntensity;
     int enableNormalMap;
-    // Into a picture of its own: 1 with its texture alone, 2 lit. What is not
-    // blended covers what is behind the picture, wholly.
-    int previewSimpleTexture;
+    // 1: into a picture of its own. What is not blended covers what is behind
+    // the picture, wholly.
+    int ownPicture;
     float normalMapStrength;
     int hairMaterial;
     // 0 normal; 1 Mod and 2 Mod2x, faded toward their neutral 1.0 and 0.5 by
@@ -231,49 +231,6 @@ bool finiteVec3(vec3 v) {
     return all(equal(v, v)) && all(lessThan(abs(v), vec3(1e10)));
 }
 
-bool isMagentaKeyColor(vec4 color) {
-    return color.r >= 0.58 && color.b >= 0.58 && color.g <= 0.48 &&
-           color.r >= color.g + 0.22 && color.b >= color.g + 0.22 &&
-           abs(color.r - color.b) <= 0.38;
-}
-
-ivec2 wrapPreviewTexel(ivec2 texel, ivec2 texSize) {
-    return ivec2((texel.x % texSize.x + texSize.x) % texSize.x,
-                 (texel.y % texSize.y + texSize.y) % texSize.y);
-}
-
-vec4 samplePreviewTexture(sampler2D tex, vec2 uv) {
-    ivec2 texSize = textureSize(tex, 0);
-    if (texSize.x <= 0 || texSize.y <= 0) {
-        return textureLod(tex, uv, 0.0);
-    }
-
-    vec2 wrappedUv = uv - floor(uv);
-    ivec2 baseTexel = ivec2(floor(wrappedUv * vec2(texSize)));
-    baseTexel = wrapPreviewTexel(baseTexel, texSize);
-
-    vec4 color = texelFetch(tex, baseTexel, 0);
-    if (!isMagentaKeyColor(color)) {
-        return color;
-    }
-
-    for (int radius = 1; radius <= 4; ++radius) {
-        for (int y = -radius; y <= radius; ++y) {
-            for (int x = -radius; x <= radius; ++x) {
-                if (abs(x) != radius && abs(y) != radius) {
-                    continue;
-                }
-                vec4 candidate = texelFetch(tex, wrapPreviewTexel(baseTexel + ivec2(x, y), texSize), 0);
-                if (!isMagentaKeyColor(candidate)) {
-                    return vec4(candidate.rgb, 0.0);
-                }
-            }
-        }
-    }
-
-    return vec4(0.0);
-}
-
 // The air between the camera and this point, out of the fog volume: rgb is
 // the light it scatters toward the camera, a how much of the point shows
 // through it. See VolumetricFog.
@@ -327,25 +284,6 @@ void main() {
     TexCoord2 = src1 == 2 ? inEnvCoord
               : src1 == 3 ? inTexCoord
               : vec2(uv2M00 * set1.x + uv2M01 * set1.y + uv2Tx, uv2M10 * set1.x + uv2M11 * set1.y + uv2Ty);
-    if (previewSimpleTexture == 1) {
-        vec4 texColor = samplePreviewTexture(uTexture, TexCoord);
-        if (isMagentaKeyColor(texColor)) {
-            discard;
-        }
-        if (alphaTest == 1 && texColor.a < ALPHA_KEY_REF) {
-            discard;
-        }
-        if (alphaTest == 2 && texColor.a * opacity < 1.0 / 255.0) {
-            discard;
-        }
-        // What is not blended covers: its texture's alpha is a mask of
-        // something else, and would let what is behind the picture through.
-        if (alphaTest != 2) {
-            texColor.a = 1.0;
-        }
-        outColor = colourBlendOutput(texColor.rgb, texColor.rgb, texColor.a * opacity);
-        return;
-    }
 
     float lodFactor = computeLodFactor();
     // Gradients of the UV, taken here before anything is discarded.
@@ -378,7 +316,7 @@ void main() {
     const float stageAlpha = combineStages(vec4(1.0, 1.0, 1.0, opacity), tex0, tex1).a;
     vec4 texColor = vec4(tex0.rgb, stageAlpha / max(opacity, 1e-6));
 
-    if (alphaTest == 1 && (hairMaterial != 0 || previewSimpleTexture == 2)) {
+    if (alphaTest == 1 && (hairMaterial != 0 || ownPicture != 0)) {
         if (texColor.a < ALPHA_KEY_REF) {
             discard;
         }
@@ -538,7 +476,7 @@ void main() {
     }
 
     shaded.rgb = rtGiDebug(shaded.rgb);
-    if (previewSimpleTexture == 2 && alphaTest != 2) shaded.a = opacity;
+    if (ownPicture != 0 && alphaTest != 2) shaded.a = opacity;
     outColor = shaded;
     rtWriteGbuffer(rtSurface, outColor.rgb);
 }

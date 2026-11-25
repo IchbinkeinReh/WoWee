@@ -38,3 +38,35 @@ TEST_CASE("a character on the character screens faces the scene's camera", "[glu
     CHECK(standsTurned({1.0f, 0.0f, 0.0f}, wowee::rendering::glue_scene::kCreateFacing) ==
           Catch::Approx(-0.261799f));
 }
+
+// GlueParent.lua: RaceLights, CharModelFogInfo; 0x004e3a20.
+TEST_CASE("a character screen's scene has its lights and its fog", "[glue_scene]") {
+    const auto light = [](const char* scene) {
+        const auto l = gs::lighting(scene);
+        REQUIRE(l.has_value());
+        return *l;
+    };
+    // One of nothing but ambient: straight down, as no direction is.
+    const auto dk = light("UI_DeathKnight");
+    CHECK(dk.direction == glm::vec3(0.0f, 0.0f, -1.0f));
+    CHECK(dk.diffuse == glm::vec3(0.0f));
+    CHECK(dk.ambient.r == Catch::Approx(99.0f / 255.0f));
+    CHECK(dk.ambient.g == Catch::Approx(169.0f / 255.0f));
+    // Two lights, the second of twice its colour.
+    const auto tauren = light("UI_Tauren");
+    CHECK(glm::length(tauren.direction) == Catch::Approx(1.0f));
+    CHECK(tauren.direction.x < -0.5f);
+    CHECK(tauren.diffuse.r > tauren.diffuse.b);
+    // An intensity of 0 has no colour, whatever stands behind it.
+    const auto dwarf = light("UI_Dwarf");
+    CHECK(dwarf.direction.x == Catch::Approx(-0.88314f).margin(1e-3));
+    CHECK(dwarf.diffuse.b == Catch::Approx(2.0f * 194.0f / 255.0f).margin(2e-3));
+    CHECK(dwarf.ambient.r == Catch::Approx(77.0f / 255.0f).margin(2e-3));
+    for (const Race race : {Race::HUMAN, Race::ORC, Race::DWARF, Race::NIGHT_ELF, Race::UNDEAD, Race::TAUREN, Race::GNOME,
+                            Race::TROLL, Race::BLOOD_ELF, Race::DRAENEI})
+        CHECK(gs::lighting(gs::backgroundScene(race, 1)).has_value());
+    CHECK_FALSE(gs::lighting("").has_value());
+    REQUIRE(gs::fog("UI_Scourge"));
+    CHECK(gs::fog("UI_Scourge")->farDist == 26.0f);
+    CHECK(gs::fog("UI_BloodElf") == nullptr);
+}

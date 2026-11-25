@@ -1304,7 +1304,21 @@ void CharacterPreview::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
                                     glm::vec4(light.direction, 0.0f));
         model_frame::put(light, {}, ubo);
     }
-    charRenderer_->setLitPreview(figureFraming_ || portraitFraming_);
+    // A character screen's: its scene's.
+    charRenderer_->setFogScenesOnly(false);
+    if (!figureFraming_ && !portraitFraming_) {
+        if (const auto light = glue_scene::lighting(backdropScene_)) {
+            model_frame::Fog fog;
+            if (const auto* f = glue_scene::fog(backdropScene_))
+                fog = {.enabled = true, .color = f->color, .nearDist = 0.0f, .farDist = f->farDist};
+            model_frame::put(*light, fog, ubo);
+            charRenderer_->setFogScenesOnly(true);
+        }
+    }
+    // The models' own point lights, as everywhere (m2_vertex_lights.hpp).
+    vertexLights_.clear();
+    charRenderer_->addVertexLights(vertexLights_);
+    charRenderer_->setVertexLightGrid(&vertexLights_);
     // Off-screen preview has no real shadow pass/light-space setup. Sampling
     // the global shadow binding here can produce unstable fragments on some
     // drivers, so keep the portrait on studio lighting only.
