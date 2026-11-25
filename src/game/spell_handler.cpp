@@ -103,15 +103,6 @@ std::string formatSkillRankUp(const std::string& format, const std::string& skil
 
 namespace {
 constexpr uint8_t kSpellFailedNotReady = 67;
-constexpr uint8_t kSpellFailedTryAgain = 132;
-constexpr uint8_t kSpellFailedItemNotReady = 45;
-constexpr uint8_t kSpellFailedMoving = 51;
-constexpr uint8_t kSpellFailedNotBehind = 57;
-constexpr uint8_t kSpellFailedNoPower = 85;
-constexpr uint8_t kSpellFailedOutOfRange = 97;
-constexpr uint8_t kSpellFailedSpellInProgress = 105;
-constexpr uint8_t kSpellFailedTooClose = 128;
-constexpr uint8_t kSpellFailedUnitNotInFront = 134;
 
 /// A spell's name as the learn and unlearn lines give it: "Name (Rank)", or
 /// the name alone where Spell.dbc has no rank (0x00542030, 0x006e71d0).
