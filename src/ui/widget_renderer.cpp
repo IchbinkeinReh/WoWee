@@ -2650,7 +2650,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // the cast is the API boundary rather than a choice.
                 dl->AddImage(reinterpret_cast<ImTextureID>(
                                  reinterpret_cast<VkDescriptorSet>(w->externalTexture)),
-                             ImVec2(x0, y0), ImVec2(x1, y1),
+                             ImVec2(x0 - w->modelPad * s, y0 - w->modelPad * s),
+                             ImVec2(x1 + w->modelPad * s, y1 + w->modelPad * s),
                              ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                              packColor(w->color, w->drawAlpha));
             }

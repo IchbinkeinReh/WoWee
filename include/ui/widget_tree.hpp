@@ -913,6 +913,10 @@ struct Widget {
     /// Held at the middle of its frame (0x005446f0, 0x00545ff0): the world
     /// map's arrows and its ping. The frame loop sets the position.
     bool modelCentered = false;
+    /// How far about a model frame without a size its model is drawn: the client
+    /// draws a model wherever it is, its frame's rect does not cut it (0x005448a0's
+    /// arrows are in frames of 0 by 0).
+    float modelPad = 0.0f;
     /// Model:SetLight (0x00960d20 -> 0x00960a10, the M2Light at +0x2b0):
     /// enabled, omni (a point at lightVec, else a direction along it), and
     /// the ambient and diffuse colours already times their intensities.

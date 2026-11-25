@@ -7345,13 +7345,19 @@ void Application::render() {
                     const float ddcPerUnit = ddcH / (screenH / uiScale);
                     for (const uint32_t id : widgets.modelFileFrames()) {
                         ui::Widget* frame = widgets.get(id);
-                        if (!frame || !frame->visible || frame->modelFile.empty() || frame->rectW <= 0.0f ||
-                            frame->rectH <= 0.0f)
-                            continue;
+                        if (!frame || !frame->visible || frame->modelFile.empty()) continue;
+                        // One held in the middle of a frame without a size is
+                        // drawn about that point.
+                        constexpr float kPointPad = 32.0f;
+                        frame->modelPad =
+                            frame->modelCentered && (frame->rectW <= 0.0f || frame->rectH <= 0.0f) ? kPointPad : 0.0f;
+                        const float viewW = frame->rectW + 2.0f * frame->modelPad;
+                        const float viewH = frame->rectH + 2.0f * frame->modelPad;
+                        if (viewW <= 0.0f || viewH <= 0.0f) continue;
                         auto& view = modelFrameViews_[id];
                         if (!view) view = std::make_unique<rendering::ModelFrameView>();
-                        const int pw = static_cast<int>(frame->rectW * uiScale + 0.5f);
-                        const int ph = static_cast<int>(frame->rectH * uiScale + 0.5f);
+                        const int pw = static_cast<int>(viewW * uiScale + 0.5f);
+                        const int ph = static_cast<int>(viewH * uiScale + 0.5f);
                         if (!view->ensureSize(assetManager.get(), pw, ph) || !view->setModel(frame->modelFile, frame->modelIconTexture)) {
                             frame->externalTexture = 0;
                             continue;
@@ -7361,8 +7367,8 @@ void Application::render() {
                         // width and height (0x005446f0).
                         if (frame->modelCentered) {
                             const float eff = frame->effScale > 0.0f ? frame->effScale : 1.0f;
-                            frame->modelPosition[0] = frame->rectW * ddcPerUnit / eff * 0.5f;
-                            frame->modelPosition[1] = frame->rectH * ddcPerUnit / eff * 0.5f;
+                            frame->modelPosition[0] = viewW * ddcPerUnit / eff * 0.5f;
+                            frame->modelPosition[1] = viewH * ddcPerUnit / eff * 0.5f;
                             frame->modelPosition[2] = 0.0f;
                         }
                         pose.position = glm::vec3(frame->modelPosition[0], frame->modelPosition[1],
@@ -7378,7 +7384,7 @@ void Application::render() {
                             came->facing = 0.0f;
                             came->modelScale = frame->modelCameScale;
                         }
-                        view->setFrame(frame->rectW * ddcPerUnit, frame->rectH * ddcPerUnit, pose, ddcH,
+                        view->setFrame(viewW * ddcPerUnit, viewH * ddcPerUnit, pose, ddcH,
                                        frame->modelCamera, frame->modelSequence, frame->modelSequenceTime,
                                        frame->modelSequenceSerial, came ? &*came : nullptr);
                         rendering::ModelFrameView::Light light;

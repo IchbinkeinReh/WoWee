@@ -4261,3 +4261,24 @@ TEST_CASE("A layer's textures, then its strings, then its models", "[widget][dra
     CHECK(at(model) < at(modelOver));
     CHECK(at(chatBack) < at(chat));
 }
+
+// 0x005448a0
+TEST_CASE("A model held in a frame without a size is drawn about its point", "[widget][draworder]") {
+    WidgetTree tree;
+    const uint32_t arrow = tree.create(WidgetKind::Frame, tree.rootId(), "Arrow");
+    Anchor p;
+    p.point = "CENTER";
+    p.relativePoint = "CENTER";
+    tree.addPoint(arrow, p);
+    tree.get(arrow)->externalTexture = 1;
+    tree.layout(kScreenW, kScreenH);
+    const auto drawn = [&] {
+        for (const Widget* w : tree.drawOrder())
+            if (w->id == arrow) return true;
+        return false;
+    };
+    CHECK_FALSE(drawn());
+    tree.get(arrow)->modelPad = 32.0f;
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drawn());
+}
