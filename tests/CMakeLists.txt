@@ -4342,6 +4342,10 @@ wowee_add_test(test_addon_files
 wowee_add_test(test_world_mouse
     SOURCES test_world_mouse.cpp)
 
+# ── test_quest_link ──────────────────────────────────────────
+wowee_add_test(test_quest_link
+    SOURCES test_quest_link.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

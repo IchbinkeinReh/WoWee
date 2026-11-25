@@ -1,6 +1,7 @@
 // lua_quest_api.cpp - Quest log, skills, talents, glyphs, and achievements Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "core/local_time.hpp"
+#include "game/quest_link.hpp"
 #include "game/item_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -1199,11 +1200,7 @@ static int lua_GetQuestLink(lua_State* L) {
     if (!gh || index < 1) { return luaReturnNil(L); }
     const auto* qp = questAtRow(gh, index);
     if (!qp) { return luaReturnNil(L); }
-    const auto& q = *qp;
-    // Yellow quest link format matching WoW
-    std::string link = "|cff808000|Hquest:" + std::to_string(q.questId) +
-                       ":0|h[" + q.title + "]|h|r";
-    lua_pushstring(L, link.c_str());
+    lua_pushstring(L, game::questChatLink(qp->questId, qp->level, qp->title, static_cast<int>(gh->getPlayerLevel())).c_str());
     return 1;
 }
 
