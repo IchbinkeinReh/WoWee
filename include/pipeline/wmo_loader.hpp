@@ -138,6 +138,14 @@ inline bool wmoGroupNeverReached(uint32_t mogpFlags, uint32_t portalCount) {
     return portalCount == 0 && (mogpFlags & 0x12088u) == 0x2080u;
 }
 
+/// A city's far shell: of the outside, with no portal, in a building whose
+/// streets are rooms under the sky (0x2040). It is seen from outside the city
+/// alone, and is bigger than what it stands for: it gives the streets no
+/// shadow.
+inline bool wmoGroupFarShell(uint32_t mogpFlags, uint32_t portalCount, bool streets) {
+    return streets && portalCount == 0 && (mogpFlags & 0x2008u) == 0x8u;
+}
+
 /// An old-style group's liquid whose MOGP names none (15 with MOHD flag 4
 /// clear): the client takes it from the first tile that has liquid (the
 /// first MLIQ tile flag whose low nibble is not 0xF), that nibble plus one

@@ -266,18 +266,22 @@ TEST_CASE("a camera over an exit in the floor is outside", "[wmo_portal]") {
     CHECK(walk::cameraGroups(inn.building(), {-26, -7, -1}, 10, 5.8f) == std::vector<uint32_t>{10});
 }
 
-TEST_CASE("the outside shows through groups lit by it, past them, and all over from within them", "[wmo_portal]") {
+// V394: a portal to a group lit by the sky, and a camera in one, is the sky's
+// rectangle (0xadf570), not the outside's (0xadf58c: 0x007a8f20's last argument).
+TEST_CASE("the outside shows through the outside's groups alone", "[wmo_portal]") {
     Data inn = goldshireInn();
-    inn.flags[11] = 0x2000u;  // no exterior group left to find
     const glm::vec3 eye(11.0f, -2.6f, 2.2f);
+    inn.flags[11] = 0x2000u;  // no exterior group left to find
     CHECK_FALSE(outsideFrom(inn, 1, eye, camera(eye, 0.0f)));
     inn.flags[0] = 0x2040u;  // lit by the outside, the room between
+    CHECK_FALSE(outsideFrom(inn, 1, eye, camera(eye, 0.0f)));
+    // Past it as before.
+    inn.flags[11] = 0x8u;
     CHECK(outsideFrom(inn, 1, eye, camera(eye, 0.0f)));
+    inn.flags[11] = 0x2000u;
     inn.flags[0] = 0x2000u;
-    inn.flags[1] = 0x2040u;
-    const auto outside = outsideFrom(inn, 1, eye, camera(eye, glm::radians(180.0f)));
-    REQUIRE(outside);
-    CHECK(*outside == walk::kWholeScreen);
+    inn.flags[1] = 0x2040u;  // a street, as Stormwind's
+    CHECK_FALSE(outsideFrom(inn, 1, eye, camera(eye, glm::radians(180.0f))));
 }
 
 TEST_CASE("portals without a plane and broken ones lose nothing and hang nothing", "[wmo_portal]") {

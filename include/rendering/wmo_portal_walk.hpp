@@ -4,12 +4,18 @@
 /// through the portals (0x007ad1f0, 0x007ac060).
 ///
 /// The client draws nothing of the outside from a room but through its exits.
-/// Wherever the walk meets a portal to a group open to the outside (0x007ac060,
-/// MOGI 0x50148) it adds that portal's outline on screen to one rectangle
-/// (0x007a8f20, 0x007905b0), and the whole outside - the ground, and every
+/// Wherever the walk meets a portal to a group of the outside (0x007ac060, MOGI
+/// 0x10008) it adds that portal's outline on screen to one rectangle (0xadf58c:
+/// 0x007a8f20 -> 0x00790ad0), and the whole outside - the ground, and every
 /// exterior group of every building, linked by a portal or not - is then drawn
 /// through that rectangle (0x0079a870, 0x0079a790, 0x0079a160, 0x007b3a10).
 /// Where the walk meets none, none of it is drawn (0x00794250).
+///
+/// A portal to a group lit by the sky (0x50148), and a camera in one (0x40140,
+/// 0x00795d40), add to another rectangle (0xadf570), which the sky is drawn
+/// for: Stormwind's streets are rooms (0x2040) with the sky over them, and the
+/// city's far shells, exterior groups no portal leads to, are not seen from
+/// there.
 ///
 /// So an exit never stands for the group behind it alone: Booty Bay is one
 /// building of 46 groups, its decks and streets a dozen exterior groups no
@@ -35,10 +41,7 @@ namespace wowee::rendering::wmo_portal_walk {
 constexpr uint32_t kExterior = 0x8u;
 constexpr uint32_t kAlways = 0x10000u;
 /// A portal to a group with any of these shows the outside (0x007ac060).
-constexpr uint32_t kShowsOutside = 0x50148u;
-/// A camera in a group with any of these sees the outside all over
-/// (0x00795d40, after it has found the camera's groups).
-constexpr uint32_t kOpenToOutside = 0x40140u;
+constexpr uint32_t kShowsOutside = kExterior | kAlways;
 /// How deep the walk goes (0x00adfe40, read into 0x00d1bee4).
 constexpr int kMaxDepth = 10;
 
@@ -252,7 +255,6 @@ inline std::optional<Rect> outsideRect(const Building& b, std::span<const uint32
     walk.rects.resize(b.portals.size());
     for (uint32_t g : groups) {
         if (g >= b.flags.size()) continue;
-        if ((b.flags[g] & kOpenToOutside) != 0) walk.addOutside(kWholeScreen);
         walk.from(g, 0xffffffffu, kWholeScreen, 0);
     }
     return walk.outside;

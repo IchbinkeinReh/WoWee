@@ -191,3 +191,11 @@ TEST_CASE("a room without a way in is seen from nowhere", "[wmo]") {
     CHECK_FALSE(wmoGroupNeverReached(0x122c1, 0));
     CHECK_FALSE(wmoGroupNeverReached(0x2805, 0));
 }
+
+TEST_CASE("a city's far shell casts nothing on its streets", "[wmo]") {
+    using wowee::pipeline::wmoGroupFarShell;
+    CHECK(wmoGroupFarShell(0xa09, 0, true));
+    CHECK_FALSE(wmoGroupFarShell(0xa09, 0, false));   // Dalaran's rocks
+    CHECK_FALSE(wmoGroupFarShell(0xa09, 1, true));
+    CHECK_FALSE(wmoGroupFarShell(0x2a41, 0, true));
+}
