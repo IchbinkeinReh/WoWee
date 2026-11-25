@@ -21,6 +21,8 @@
 
 #include "ui/text_wrap.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -169,62 +171,124 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
     return runs;
 }
 
-/// The next caret position after `at`, treating an escape as one step.
+/// What an edit box's text is of (0x006bd5a0), one after the other.
+struct EditToken {
+    enum Type { Plain = 0, Color = 1, ColorEnd = 2, Break = 3, Bar = 4, Link = 5, LinkEnd = 6, Picture = 7, PictureEnd = 8 };
+    size_t at = 0, size = 0;
+    Type type = Plain;
+    bool linked = false;  ///< of a link, its begin and end too (0x00962cc0)
+};
+
+/// A character's bytes at `at` (0x0047bd40).
+inline size_t utf8Size(const std::string& s, size_t at) {
+    const auto lead = static_cast<unsigned char>(s[at]);
+    const size_t more = (lead & 0xE0) == 0xC0   ? 1
+                        : (lead & 0xF0) == 0xE0 ? 2
+                        : (lead & 0xF8) == 0xF0 ? 3
+                        : (lead & 0xFC) == 0xF8 ? 4
+                        : (lead & 0xFE) == 0xFC ? 5
+                                                : 0;
+    size_t n = 1;
+    while (n <= more && at + n < s.size() && (static_cast<unsigned char>(s[at + n]) & 0xC0) == 0x80) ++n;
+    return n;
+}
+
+inline EditToken editTokenAt(const std::string& s, size_t at) {
+    const auto token = [at](EditToken::Type type, size_t size) { return EditToken{at, size, type, false}; };
+    const auto is = [&s](size_t i, char c) { return i < s.size() && s[i] == c; };
+    if (s[at] == '\r') return token(EditToken::Break, is(at + 1, '\n') ? 2 : 1);
+    if (s[at] == '\n') return token(EditToken::Break, 1);
+    if (s[at] != '|' || at + 1 >= s.size()) return token(EditToken::Plain, utf8Size(s, at));
+    switch (s[at + 1]) {
+        case 'c':
+        case 'C':
+            if (at + 10 > s.size()) break;
+            for (size_t i = at + 2; i < at + 10; ++i)
+                if (!std::isxdigit(static_cast<unsigned char>(s[i]))) return token(EditToken::Plain, 1);
+            return token(EditToken::Color, 10);
+        case 'H': {
+            // A target, and words that are not empty.
+            const size_t bar = s.find('|', at + 2);
+            if (bar == std::string::npos || bar == at + 2 || !is(bar + 1, 'h') || bar + 2 >= s.size() ||
+                (is(bar + 2, '|') && is(bar + 3, 'h')))
+                break;
+            return token(EditToken::Link, bar + 2 - at);
+        }
+        case 'n':
+        case 'N': return token(EditToken::Break, 2);
+        case 'r':
+        case 'R': return token(EditToken::ColorEnd, 2);
+        case 'T': {
+            const size_t bar = s.find('|', at + 2);
+            if (bar == std::string::npos || bar == at + 2 || !is(bar + 1, 't')) break;
+            return token(EditToken::Picture, bar + 2 - at);
+        }
+        case 'h': return token(EditToken::LinkEnd, 2);
+        case 't': return token(EditToken::PictureEnd, 2);
+        case '|': return token(EditToken::Bar, 2);
+        default: break;
+    }
+    return token(EditToken::Plain, 1);
+}
+
+inline std::vector<EditToken> editTokens(const std::string& s) {
+    std::vector<EditToken> out;
+    bool linked = false;
+    for (size_t at = 0; at < s.size(); at += out.back().size) {
+        out.push_back(editTokenAt(s, at));
+        if (out.back().type == EditToken::Link) linked = true;
+        out.back().linked = linked;
+        if (out.back().type == EditToken::LinkEnd) linked = false;
+    }
+    return out;
+}
+
+/// The next caret position after `at`, treating an escape as one step (0x00962d50).
 ///
 /// A caret walks what is drawn, not what is held. "|Hitem:3299|h[Fractured
 /// Canine]|h" is fifty-odd bytes and eighteen characters on screen, so
 /// stepping one byte at a time leaves the caret apparently frozen for forty
 /// keypresses while it crawls through the payload - and then jumping a whole
-/// word when it reaches the display text. Only reachable since links became
-/// clickable and shift-click began putting them in the box.
+/// word when it reaches the display text.
 ///
-/// A colour escape and an inline texture draw nothing at all, so the caret
-/// passes over them without stopping. A link is one step whole - the caret
-/// cannot rest inside it, the same way it cannot in the real client, and a
-/// backspace therefore removes the link rather than a byte of its payload.
+/// A colour and a picture are passed with the character after them, the ends of
+/// colours, links and pictures with the one before. A link is one step whole - the
+/// caret cannot rest inside it - and a backspace therefore removes the link, its
+/// colour with it, rather than a byte of its payload.
 inline size_t caretStepRight(const std::string& s, size_t at) {
-    if (at >= s.size()) return s.size();
-    while (at + 1 < s.size() && s[at] == '|') {
-        const char tag = s[at + 1];
-        if (tag == '|') return at + 2;                     // a literal bar
-        if (tag == 'c' || tag == 'C') { at += 10; continue; }
-        if (tag == 'r' || tag == 'R') { at += 2;  continue; }
-        if (tag == 'H') {
-            // A whole link is one step: payload, display text and closing
-            // marker together. The caret cannot rest inside one and a
-            // backspace takes all of it, which is the only arrangement where
-            // half an escape can never exist - erasing "]" out of
-            // "|Hitem:1|h[AB]|h" leaves "[AB|h", and the parser then reads the
-            // wreckage as whatever it resembles.
-            const size_t payload = s.find("|h", at + 2);
-            const size_t close = (payload == std::string::npos)
-                ? std::string::npos : s.find("|h", payload + 2);
-            return (close == std::string::npos) ? s.size() : close + 2;
-        }
-        if (tag == 'h') { at += 2; continue; }   // a stray closing marker
-        if (tag == 'T' || tag == 't') {
-            const size_t close = s.find("|t", at + 2);
-            at = (close == std::string::npos) ? s.size() : close + 2;
-            continue;
-        }
-        break;                                             // a bar meaning nothing
+    const auto tokens = editTokens(s);
+    size_t i = 0;
+    while (i < tokens.size() && tokens[i].at < at) ++i;
+    for (; i < tokens.size(); ++i) {
+        const EditToken& t = tokens[i];
+        if (t.type == EditToken::Color || t.type == EditToken::Link || t.type == EditToken::Picture) continue;
+        if (!t.linked || t.type == EditToken::LinkEnd) break;
     }
-    return (at >= s.size()) ? s.size() : at + 1;
+    if (i < tokens.size()) ++i;
+    while (i < tokens.size() && (tokens[i].type == EditToken::ColorEnd || tokens[i].type == EditToken::LinkEnd ||
+                                 tokens[i].type == EditToken::PictureEnd))
+        ++i;
+    return i < tokens.size() ? tokens[i].at : s.size();
 }
 
 /// The previous caret position, by the same rule. Walked forward from the
 /// start rather than backward: the escapes are only unambiguous read in the
 /// direction they were written, and a box holds a line of chat, not a book.
 inline size_t caretStepLeft(const std::string& s, size_t at) {
-    size_t prev = 0;
-    for (size_t p = 0; p < at;) {
-        const size_t next = caretStepRight(s, p);
-        if (next <= p) break;
-        if (next >= at) return p;
-        prev = next;
-        p = next;
-    }
-    return prev;
+    const auto tokens = editTokens(s);
+    size_t i = 0;
+    while (i < tokens.size() && tokens[i].at < at) ++i;
+    const auto trailing = [](const EditToken& t) {
+        return t.type == EditToken::ColorEnd || t.type == EditToken::LinkEnd || t.type == EditToken::PictureEnd ||
+               (t.linked && t.type != EditToken::Link);
+    };
+    const auto leading = [](const EditToken& t) {
+        return t.type == EditToken::Color || t.type == EditToken::Link || t.type == EditToken::Picture;
+    };
+    while (i > 0 && trailing(tokens[i - 1])) --i;
+    if (i > 0) --i;
+    while (i > 0 && leading(tokens[i - 1])) --i;
+    return i < tokens.size() ? tokens[i].at : 0;
 }
 
 /// The nearest position at or before `at` that the caret can actually occupy.
@@ -248,19 +312,45 @@ inline size_t caretSnap(const std::string& s, size_t at) {
     return p;
 }
 
-/// How many characters a string shows, ignoring the markup that draws none.
+/// How many characters a string shows (0x00962ea0), ignoring the markup that draws
+/// none: those of a link and breaks of the line among them, of UTF-8 each once.
 ///
-/// An edit box's letter limit counts these rather than bytes, unless the box
-/// asked for countInvisibleLetters. The chat box does not ask: it declares
-/// letters="255" and nothing else, so the colour codes and hyperlink escapes
-/// that a shift-clicked item link brings with it must not be charged against
-/// the limit. One such link is around sixty bytes and shows eighteen, so
-/// counting bytes let three of them fill a message that WoW would have let
-/// carry a dozen.
+/// An edit box's letter limit counts these, unless the box asked for
+/// countInvisibleLetters (0x0076eea0: every character, the markup's too). The chat
+/// box does not ask: it declares letters="255" and nothing else, so the colour codes
+/// and hyperlink escapes that a shift-clicked item link brings with it must not be
+/// charged against the limit.
+inline size_t codepoints(const std::string& s) {
+    size_t n = 0;
+    for (const char c : s)
+        if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++n;
+    return n;
+}
 inline size_t visibleLength(const std::string& s) {
     size_t n = 0;
-    for (const WrapRun& r : parseMarkup(s)) n += r.text.size();
+    for (const EditToken& t : editTokens(s))
+        if (t.type == EditToken::Plain || t.type == EditToken::Break || t.type == EditToken::Bar) ++n;
     return n;
+}
+
+/// An edit box's text after `add` at `cursor`, within its limits (0x00965960): what
+/// is over them - the bytes, then the letters; none for a limit under 0 and 1 - goes
+/// off the end of the text, whatever was put in and where. Returns the cursor.
+inline size_t insertIntoEditBox(std::string& text, size_t cursor, const std::string& add, int maxBytes, int maxLetters,
+                                bool countInvisible) {
+    cursor = std::min(cursor, text.size());
+    text.insert(cursor, add);
+    cursor += add.size();
+    const auto trimEnd = [&text](auto over) {
+        while (!text.empty() && over()) text.resize(caretStepLeft(text, text.size()));
+    };
+    if (maxBytes >= 0) trimEnd([&] { return text.size() > static_cast<size_t>(maxBytes); });
+    if (maxLetters > 0) {
+        trimEnd([&] {
+            return (countInvisible ? codepoints(text) : visibleLength(text)) > static_cast<size_t>(maxLetters);
+        });
+    }
+    return std::min(cursor, text.size());
 }
 
 /// What an edit box holds after a selected run is replaced.
@@ -383,16 +473,18 @@ inline bool editIsSpace(char c) {
 /// whitespace before the caret, then over the word before that.
 inline size_t wordDeleteBackFrom(const std::string& s, size_t at) {
     size_t p = (at < s.size()) ? at : s.size();
-    while (p > 0) {
-        const size_t q = caretStepLeft(s, p);
-        if (!editIsSpace(s[q])) break;
-        p = q;
-    }
-    while (p > 0) {
-        const size_t q = caretStepLeft(s, p);
-        if (editIsSpace(s[q])) break;
-        p = q;
-    }
+    const auto tokens = editTokens(s);
+    // The last of what is before the caret, whatever the step over it takes along.
+    const auto spaceBefore = [&] {
+        char last = 0;
+        for (const EditToken& t : tokens) {
+            if (t.at >= p) break;
+            last = s[t.at];
+        }
+        return editIsSpace(last);
+    };
+    while (p > 0 && spaceBefore()) p = caretStepLeft(s, p);
+    while (p > 0 && !spaceBefore()) p = caretStepLeft(s, p);
     return p;
 }
 

@@ -207,7 +207,7 @@ TEST_CASE("the caret steps by drawn characters", "[markup]") {
         // step from after 'a' crosses it and 'b' together.
         const std::string coloured = "a|cffff0000b|rc";
         REQUIRE(coloured.substr(11, 1) == "b");
-        REQUIRE(caretStepRight(coloured, 1) == 12);
+        REQUIRE(caretStepRight(coloured, 1) == 14);  // its end with it (0x00962d50)
     }
 }
 
@@ -472,4 +472,87 @@ TEST_CASE("an edit box may leave the arrows to the game", "[text_markup]") {
     CHECK(leavesArrows(true, false));
     CHECK_FALSE(leavesArrows(true, true));
     CHECK_FALSE(leavesArrows(false, false));
+}
+
+// 0x00965960, 0x00962ea0
+TEST_CASE("what an edit box cannot hold goes off its end", "[markup][editbox]") {
+    using wowee::ui::codepoints;
+    using wowee::ui::insertIntoEditBox;
+    using wowee::ui::visibleLength;
+    std::string t = "abcde";
+    CHECK(insertIntoEditBox(t, 0, "X", -1, 5, false) == 1);
+    CHECK(t == "Xabcd");
+    t = "abcde";
+    CHECK(insertIntoEditBox(t, 2, "YZ", -1, 5, false) == 4);
+    CHECK(t == "abYZc");
+    CHECK(insertIntoEditBox(t, 5, "Q", -1, 5, false) == 5);
+    CHECK(t == "abYZc");
+    CHECK(insertIntoEditBox(t, 1, "1234567", -1, 5, false) == 5);
+    CHECK(t == "a1234");
+    t = "abc";
+    CHECK(insertIntoEditBox(t, 1, "def", 4, 0, false) == 4);
+    CHECK(t == "adef");
+    CHECK(insertIntoEditBox(t, 4, "g", -1, 0, false) == 5);
+
+    // An umlaut is one letter and two bytes; a link shows its words alone.
+    CHECK(visibleLength("\xC3\xA4" "b") == 2);
+    CHECK(codepoints("\xC3\xA4" "b") == 2);
+    t = "\xC3\xA4\xC3\xB6";
+    CHECK(insertIntoEditBox(t, 0, "\xC3\xBC", -1, 3, false) == 2);
+    CHECK(t == "\xC3\xBC\xC3\xA4\xC3\xB6");
+    CHECK(insertIntoEditBox(t, 0, "x", 5, 0, false) == 1);
+    CHECK(t == "x\xC3\xBC\xC3\xA4");
+    t = "|cffffffff|Hitem:1|h[AB]|h|r";
+    CHECK(insertIntoEditBox(t, 0, "xy", -1, 6, false) == 2);
+    CHECK(visibleLength(t) == 6);
+    CHECK(insertIntoEditBox(t, 0, "z", -1, 6, false) == 1);
+    CHECK(t.substr(0, 3) == "zxy");
+    CHECK(t.find("item") == std::string::npos);
+    t = "|cffffffffab|r";
+    CHECK(insertIntoEditBox(t, 0, "", -1, 13, true) == 0);
+    CHECK(codepoints(t) <= 13);
+}
+
+// 0x006bd5a0, 0x00962d50
+TEST_CASE("an edit box's steps: whole characters, and the ends of escapes with them", "[markup][editbox]") {
+    const std::string umlauts = "a\xC3\xA4\xE2\x82\xAC" "b";
+    CHECK(caretStepRight(umlauts, 1) == 3);
+    CHECK(caretStepRight(umlauts, 3) == 6);
+    CHECK(caretStepLeft(umlauts, 6) == 3);
+    CHECK(caretStepLeft(umlauts, 3) == 1);
+    // A link is gone with one backspace, its colour too.
+    const std::string link = "x|cff9d9d9d|Hitem:1|h[AB]|h|r";
+    CHECK(caretStepLeft(link, link.size()) == 1);
+    CHECK(caretStepRight(link, 1) == link.size());
+    CHECK(caretStepRight(link + " y", 1) == link.size());
+    const std::string coloured = "|cffffffffab|rc";
+    CHECK(caretStepRight(coloured, 0) == 11);
+    CHECK(caretStepRight(coloured, 11) == 14);
+    CHECK(caretStepLeft(coloured, 15) == 14);
+    CHECK(caretStepLeft(coloured, 14) == 11);
+    CHECK(caretStepLeft(coloured, 11) == 0);
+    // A picture with the character after it, or alone at the end.
+    const std::string picture = "a|Tp:0|tb|Tq:0|t";
+    CHECK(caretStepRight(picture, 1) == 9);
+    CHECK(caretStepLeft(picture, 9) == 1);
+    CHECK(caretStepRight(picture, 9) == picture.size());
+    CHECK(caretStepLeft(picture, picture.size()) == 9);
+    // What is no escape is its characters.
+    CHECK(caretStepRight("|cxyz", 0) == 1);
+    CHECK(caretStepRight("|cgggggggga", 0) == 1);
+    CHECK(caretStepRight("|Hitem", 0) == 1);
+    CHECK(caretStepRight("|Ha|h|h", 0) == 1);
+    CHECK(caretStepRight("||a", 0) == 2);
+    CHECK(caretStepRight("|", 0) == 1);
+    CHECK(caretStepRight("a|r", 0) == 3);
+    CHECK(caretStepLeft("|r", 2) == 0);
+    using wowee::ui::visibleLength;
+    CHECK(visibleLength("a\nb|nc\r\nd") == 7);
+    CHECK(visibleLength("||") == 1);
+    CHECK(visibleLength("a|Tp:0|tb") == 2);
+    CHECK(visibleLength("|cxyz") == 5);
+    using wowee::ui::wordDeleteBackFrom;
+    const std::string words = "ab |cffffffff  |r";
+    CHECK(wordDeleteBackFrom(words, words.size()) == 14);  // the end of the colour is no blank
+    CHECK(wordDeleteBackFrom("ab \xC3\xA4x ", 7) == 3);
 }

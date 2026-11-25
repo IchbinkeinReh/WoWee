@@ -9701,12 +9701,10 @@ int lua_EditBox_GetNumber(lua_State* L) {
     return 1;
 }
 /// Text into an edit box at the caret, the way 0x00965960 puts it there for
-/// typing, pasting and Insert() alike. A highlighted run goes first. A
-/// numeric box then refuses the whole string if any of it is not a digit -
-/// not the digits out of it. What is inserted is then held to both limits
-/// in turn, the bytes (SetMaxBytes) and the letters (SetMaxLetters, counted
-/// as drawn unless countInvisibleLetters), by taking characters off before
-/// the caret until it fits. Returns whether the text changed.
+/// typing, pasting and Insert() alike. A highlighted run goes first. A numeric
+/// box then refuses the whole string if any of it is not a digit - not the
+/// digits out of it. Returns whether the text is to be told of as changed, which
+/// it is even where the box's limits leave it as it was.
 static bool insertEditText(wowee::ui::Widget& w, const std::string& add) {
     const std::string before = w.editText;
     if (w.hasSelection) {
@@ -9715,33 +9713,9 @@ static bool insertEditText(wowee::ui::Widget& w, const std::string& add) {
         w.hasSelection = false;
     }
     if (w.editNumeric && wowee::ui::numericRefuses(add)) return w.editText != before;
-    const size_t at = std::min(w.cursorPos, w.editText.size());
-    w.editText.insert(at, add);
-    w.cursorPos = at + add.size();
-    const auto trimBeforeCaret = [&w](auto over) {
-        while (over() && w.cursorPos > 0) {
-            const size_t from = ui::caretStepLeft(w.editText, w.cursorPos);
-            if (from >= w.cursorPos) break;
-            w.editText.erase(from, w.cursorPos - from);
-            w.cursorPos = from;
-        }
-    };
-    if (w.editMaxBytes >= 0) {
-        trimBeforeCaret([&w] { return static_cast<int>(w.editText.size()) > w.editMaxBytes; });
-    }
-    if (w.editMaxLetters > 0) {
-        // Counted the way the box asked to be counted. A limit is in
-        // characters shown, not bytes held, unless countInvisibleLetters says
-        // otherwise: the chat box declares letters="255" and nothing else, so
-        // the escapes a shift-clicked item link brings - about sixty bytes for
-        // eighteen visible characters - must not be charged against it.
-        trimBeforeCaret([&w] {
-            const size_t held = w.countInvisibleLetters ? w.editText.size()
-                                                         : ui::visibleLength(w.editText);
-            return static_cast<int>(held) > w.editMaxLetters;
-        });
-    }
-    return w.editText != before;
+    w.cursorPos = ui::insertIntoEditBox(w.editText, w.cursorPos, add, w.editMaxBytes, w.editMaxLetters,
+                                        w.countInvisibleLetters);
+    return true;
 }
 
 int lua_EditBox_Insert(lua_State* L) {
@@ -9900,20 +9874,16 @@ int lua_EditBox_GetCursorPosition(lua_State* L) {
     return 1;
 }
 
-/// GetNumLetters() - how many characters the box holds, not how many bytes.
+/// GetNumLetters() (0x009766a0): the letters the box's limit counts - those it
+/// shows, or with countInvisibleLetters every one.
 ///
 /// The macro editor writes its "%d/255 Characters Used" counter from this on
 /// every keystroke. Unanswered it was nil, and a nil through string.format is
 /// the counter reading back its own format string.
 int lua_EditBox_GetNumLetters(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    if (!w) { lua_pushnumber(L, 0); return 1; }
-    int chars = 0;
-    for (char c : w->editText) {
-        // A continuation byte is 10xxxxxx; every other byte opens a character.
-        if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++chars;
-    }
-    lua_pushnumber(L, chars);
+    const size_t n = !w ? 0 : w->countInvisibleLetters ? ui::codepoints(w->editText) : ui::visibleLength(w->editText);
+    lua_pushnumber(L, static_cast<lua_Number>(n));
     return 1;
 }
 
