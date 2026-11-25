@@ -489,6 +489,7 @@ void AddonManager::loadAllAddons() {
         // taint, as is everything this client runs in its place below.
         taint::Scope secure(0, 0);
         luaEngine_.setUiSoundsSuppressed(true);
+        luaEngine_.noteGlobalsBefore();
         loadFrameXml(frameXmlDir_);
         luaEngine_.setUiSoundsSuppressed(false);
         // The client's own options, as a category in FrameXML's Interface

@@ -67,6 +67,9 @@ struct EmitResult {
 /// virtual (template) frames are recorded in so later `inherits` can find them.
 EmitResult emitFrameXml(const XmlNode& root);
 
+/// Whether a name begins with "$parent", in any case (0x0048b540).
+[[nodiscard]] bool namedAfterParent(const std::string& name);
+
 /// Substitute FrameXML's $parent token. A child named "$parentText" inside
 /// "FooFrame" becomes "FooFrameText"; this is how nearly every region in the
 /// original interface is named.

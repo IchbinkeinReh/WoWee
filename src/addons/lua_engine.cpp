@@ -838,16 +838,66 @@ void syncTooltipLineStrings(lua_State* L, uint32_t tooltipId);
 void syncTooltipLineStringOf(lua_State* L, const wowee::ui::Widget* fontString);
 void tooltipLineStringWritten(lua_State* L, const wowee::ui::Widget* fontString);
 
+/// A script object's own name as it is given (0x0048b540): $parent is the name of the first
+/// above it that has one, "Top" where none has (0x009ea9f8).
+static std::string ownObjectName(const wowee::ui::WidgetTree& tree, uint32_t parent, const std::string& given) {
+    if (!ui::namedAfterParent(given)) return given;
+    std::string above = "Top";
+    for (const auto* w = tree.get(parent); w; w = tree.get(w->parent)) {
+        if (w->name.empty()) continue;
+        above = w->name;
+        break;
+    }
+    return above + given.substr(7);
+}
+
+/// The name of what a script makes, the argument at `at`; none is none.
+static std::string ownNameArg(lua_State* L, int at, uint32_t parent) {
+    const char* given = lua_isstring(L, at) ? lua_tostring(L, at) : nullptr;
+    if (!given || !*given) return {};
+    const auto* tree = wowee::addons::getWidgetTree(L);
+    return tree ? ownObjectName(*tree, parent, given) : std::string(given);
+}
+
+constexpr const char* kGlobalsBefore = "wowee.globals.before";
+
+/// The object on top of the stack under its name, where nothing else is there (0x00819880). What
+/// was there before the interface - a frame made in place of the XML's, a function in place of
+/// one the client has - makes way for it.
+static void publishObject(lua_State* L, const std::string& name) {
+    if (name.empty()) return;
+    {
+        taint::Quiet quiet;   // looked at, not used
+        const int top = lua_gettop(L);
+        lua_pushlstring(L, name.data(), name.size());
+        lua_rawget(L, LUA_GLOBALSINDEX);
+        bool free = lua_isnil(L, -1);
+        if (!free) {
+            lua_getfield(L, LUA_REGISTRYINDEX, kGlobalsBefore);
+            if (lua_istable(L, -1)) {
+                lua_pushlstring(L, name.data(), name.size());
+                lua_rawget(L, -2);
+                free = lua_rawequal(L, -1, top + 1) != 0;
+            }
+        }
+        lua_settop(L, top);
+        if (!free) return;
+    }
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, name.c_str());
+}
+static int lua_WoweePublish(lua_State* L) {
+    if (!lua_isstring(L, 1)) return 0;
+    lua_settop(L, 2);
+    publishObject(L, lua_tostring(L, 1));
+    return 0;
+}
+
 uint32_t widgetIdByAnchorName(lua_State* L, int selfIndex, const char* name) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree || !name) return 0;
-    std::string resolved = name;
-    if (resolved.compare(0, 7, "$parent") == 0) {
-        const wowee::ui::Widget* self = tree->get(widgetIdOf(L, selfIndex));
-        const wowee::ui::Widget* parent = self ? tree->get(self->parent) : nullptr;
-        if (!parent || parent->name.empty()) return 0;
-        resolved = parent->name + resolved.substr(7);
-    }
+    const wowee::ui::Widget* self = tree->get(widgetIdOf(L, selfIndex));
+    const std::string resolved = ownObjectName(*tree, self ? self->parent : 0, name);
     lua_getglobal(L, resolved.c_str());
     uint32_t id = lua_istable(L, -1) ? widgetIdOf(L, lua_gettop(L)) : 0;
     lua_pop(L, 1);
@@ -11019,12 +11069,12 @@ static int applyRegionTemplate(lua_State* L, int nameIndex, bool fontString, con
 static int lua_Frame_CreateTexture(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t parent = widgetIdOf(L, 1);
-    const char* name = luaL_optstring(L, 2, "");
-    const char* layer = luaL_optstring(L, 3, "ARTWORK");
+    const std::string name = ownNameArg(L, 2, parent);
+    const char* layer = lua_isstring(L, 3) ? lua_tostring(L, 3) : "ARTWORK";
 
     lua_newtable(L);
     if (tree) {
-        const uint32_t id = tree->create(wowee::ui::WidgetKind::Texture, parent, name ? name : "");
+        const uint32_t id = tree->create(wowee::ui::WidgetKind::Texture, parent, name);
         if (auto* w = tree->get(id)) {
             w->layer = wowee::ui::parseDrawLayer(layer);
             w->objectType = "Texture";
@@ -11044,10 +11094,7 @@ static int lua_Frame_CreateTexture(lua_State* L) {
     lua_pushvalue(L, 1);
     lua_setfield(L, -2, "__parent");
     installRegionMethods(L, /*isTexture=*/true, /*isFontString=*/false);
-    if (name && *name) {
-        lua_pushvalue(L, -1);
-        lua_setglobal(L, name);
-    }
+    publishObject(L, name);
     applyRegionTemplate(L, 4, /*fontString=*/false, "CreateTexture");
     return 1;
 }
@@ -11056,12 +11103,12 @@ static int lua_Frame_CreateTexture(lua_State* L) {
 static int lua_Frame_CreateFontString(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t parent = widgetIdOf(L, 1);
-    const char* name = luaL_optstring(L, 2, "");
-    const char* layer = luaL_optstring(L, 3, "ARTWORK");
+    const std::string name = ownNameArg(L, 2, parent);
+    const char* layer = lua_isstring(L, 3) ? lua_tostring(L, 3) : "ARTWORK";
 
     lua_newtable(L);
     if (tree) {
-        const uint32_t id = tree->create(wowee::ui::WidgetKind::FontString, parent, name ? name : "");
+        const uint32_t id = tree->create(wowee::ui::WidgetKind::FontString, parent, name);
         if (auto* w = tree->get(id)) {
             w->layer = wowee::ui::parseDrawLayer(layer);
             w->objectType = "FontString";
@@ -11081,10 +11128,7 @@ static int lua_Frame_CreateFontString(lua_State* L) {
     lua_pushvalue(L, 1);
     lua_setfield(L, -2, "__parent");
     installRegionMethods(L, /*isTexture=*/false, /*isFontString=*/true);
-    if (name && *name) {
-        lua_pushvalue(L, -1);
-        lua_setglobal(L, name);
-    }
+    publishObject(L, name);
     applyRegionTemplate(L, 4, /*fontString=*/true, "CreateFontString");
     return 1;
 }
@@ -11239,9 +11283,7 @@ static int lua_CreateFrame(lua_State* L) {
         if (!known) return luaL_error(L, "CreateFrame: Unknown frame type '%s'", asked);
     }
     const char* frameType = canonicalType;
-    const char* name = luaL_optstring(L, 2, nullptr);
-    // Which of the per-type methods go on this frame; see where they are set,
-    // below the metatable.
+    const std::string name = ownNameArg(L, 2, lua_istable(L, 3) ? widgetIdOf(L, 3) : 0);
 
     // Create the frame table
     lua_newtable(L);
@@ -11263,8 +11305,7 @@ static int lua_CreateFrame(lua_State* L) {
     // the screen, GetParent() answers nil and UIParent:Hide() leaves it.
     if (auto* tree = wowee::addons::getWidgetTree(L)) {
         const uint32_t parent = lua_istable(L, 3) ? widgetIdOf(L, 3) : 0;
-        const uint32_t id = tree->create(wowee::ui::WidgetKind::Frame, parent,
-                                         name ? name : "");
+        const uint32_t id = tree->create(wowee::ui::WidgetKind::Frame, parent, name);
         // A Button takes the mouse without being asked; a plain Frame does not,
         // which is what EnableMouse is for.
         if (auto* w = tree->get(id)) {
@@ -11343,12 +11384,10 @@ static int lua_CreateFrame(lua_State* L) {
     }
 
     // Set frame name
-    if (name && *name) {
-        lua_pushstring(L, name);
+    if (!name.empty()) {
+        lua_pushlstring(L, name.data(), name.size());
         lua_setfield(L, -2, "__name");
-        // Also set as a global so other addons can find it by name
-        lua_pushvalue(L, -1);
-        lua_setglobal(L, name);
+        publishObject(L, name);
     }
 
     // The fifth argument is the frame's id, and it has to be in place before
@@ -11597,6 +11636,7 @@ bool LuaEngine::initialize() {
     installMissingApiFallback();
 
     LOG_INFO("LuaEngine: initialized (Lua 5.1)");
+    noteGlobalsBefore();
     return true;
 }
 
@@ -11666,6 +11706,23 @@ void LuaEngine::setGameHandler(game::GameHandler* handler) {
         lua_pushlightuserdata(L_, handler);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_game_handler");
     }
+}
+
+void LuaEngine::noteGlobalsBefore() {
+    if (!L_) return;
+    taint::Quiet quiet;
+    lua_newtable(L_);
+    const int before = lua_gettop(L_);
+    lua_pushnil(L_);
+    while (lua_next(L_, LUA_GLOBALSINDEX) != 0) {
+        if (lua_type(L_, -2) == LUA_TSTRING) {
+            lua_pushvalue(L_, -2);
+            lua_pushvalue(L_, -2);
+            lua_rawset(L_, before);
+        }
+        lua_pop(L_, 1);
+    }
+    lua_setfield(L_, LUA_REGISTRYINDEX, kGlobalsBefore);
 }
 
 void LuaEngine::setLuaServices(const LuaServices& services) {
@@ -13152,7 +13209,7 @@ void LuaEngine::registerCoreAPI() {
         "        if type(n) == 'string' and n ~= '' then return n .. name:sub(8) end\n"
         "        parent = parent.GetParent and parent:GetParent()\n"
         "    end\n"
-        "    return name:sub(8)\n"
+        "    return 'Top' .. name:sub(8)\n"
         "end\n"
         "function animMeta:CreateControlPoint(name, inherits, order)\n"
         "    name = ownName(name, self)\n"
@@ -13163,7 +13220,7 @@ void LuaEngine::registerCoreAPI() {
         "    self.controlPoints = self.controlPoints or {}\n"
         "    table.insert(self.controlPoints, cp)\n"
         "    table.sort(self.controlPoints, function(a, b) return (a.order or 1) < (b.order or 1) end)\n"
-        "    if name then _G[name] = cp end\n"
+        "    if name then __WoweePublish(name, cp) end\n"
         "    return cp\n"
         "end\n"
         "function animMeta:GetControlPoints() return unpack(self.controlPoints or {}) end\n"
@@ -13416,7 +13473,7 @@ void LuaEngine::registerCoreAPI() {
         "    local a = setmetatable({kind = kind, group = self, name = name,\n"
         "                            duration = 0, order = 1, startDelay = 0}, animMeta)\n"
         "    table.insert(self.animations, a)\n"
-        "    if name then _G[name] = a end\n"
+        "    if name then __WoweePublish(name, a) end\n"
         "    return a\n"
         "end\n"
         "function groupMeta:GetAnimations() return unpack(self.animations) end\n"
@@ -13632,7 +13689,7 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    name = ownName(name, self)\n"
         "    local g = setmetatable({parent = self, name = name, animations = {}}, groupMeta)\n"
-        "    if name then _G[name] = g end\n"
+        "    if name then __WoweePublish(name, g) end\n"
         "    self.__animGroups = self.__animGroups or {}\n"
         "    table.insert(self.__animGroups, g)\n"
         "    if type(inherits) == 'string' and inherits ~= '' then\n"
@@ -14424,6 +14481,8 @@ void LuaEngine::registerCoreAPI() {
     // so it applies to every frame without another entry in the method list.
     lua_pushcfunction(L_, lua_Frame_SetWheelEnabled);
     lua_setglobal(L_, "__WoweeSetWheelEnabled");
+    lua_pushcfunction(L_, lua_WoweePublish);
+    lua_setglobal(L_, "__WoweePublish");
     lua_pushcfunction(L_, lua_WoweeSetStringText);
     lua_setglobal(L_, "__WoweeSetStringText");
     lua_pushcfunction(L_, lua_WoweeClientBoolean);

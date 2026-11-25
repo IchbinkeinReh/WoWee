@@ -213,28 +213,15 @@ struct Emitter {
     std::string nextVar() { return "__w[" + std::to_string(++temp) + "]"; }
 
     /// The Lua expression for a region or frame's name. A literal where the
-    /// owning frame is known, and a concatenation against the real frame's name
-    /// where it is not - which is what makes $parentBackdrop inside a template
-    /// become FooFrameBackdrop on the frame that inherits it, rather than
-    /// naming itself after the template.
-    std::string nameArg(const std::string& rawName, const std::string& parentName,
-                        const std::string& selfVar) {
+    /// owning frame's name is known; where it is not, "$parent" as it stands,
+    /// for whoever makes the object to resolve (0x0048b540) - which is what makes
+    /// $parentBackdrop inside a template become FooFrameBackdrop on the frame
+    /// that inherits it, rather than naming itself after the template, and what
+    /// is in an unnamed frame be called after the next one above with a name.
+    std::string nameArg(const std::string& rawName, const std::string& parentName) {
         if (rawName.empty()) return "nil";
-        const std::string token = "$parent";
-        const bool isParented = rawName.compare(0, token.size(), token) == 0;
-        if (!isParented) return quote(rawName);
-        const std::string suffix = rawName.substr(token.size());
-        if (runtimeParentName) {
-            // No name on the owner means no name on the region, which is what
-            // $parent means in WoW: a name is built from one, and there is
-            // nothing to build from. Falling back to an empty string instead
-            // published the bare suffix as a global - ContainerFrameTemplate
-            // replayed onto an unnamed frame created a texture called
-            // "Portrait", and every later frame doing the same overwrote it.
-            return "(" + selfVar + ":GetName() and (" + selfVar +
-                   ":GetName() .. " + quote(suffix) + ") or nil)";
-        }
-        return quote(parentName + suffix);
+        if (!namedAfterParent(rawName) || runtimeParentName || parentName.empty()) return quote(rawName);
+        return quote(substituteParent(rawName, parentName));
     }
 
     void line(const std::string& s) { result.lua += s; result.lua += "\n"; }
@@ -306,13 +293,13 @@ struct Emitter {
     /// <NormalTexture> is a texture and <ButtonText> a font string.
     std::string emitRegion(const XmlNode& node, const std::string& parentVar,
                            const std::string& parentName, const std::string& layerName,
-                           bool isTexture, const std::string& nameVar = std::string()) {
+                           bool isTexture) {
         const std::string var = nextVar();
         const std::string rawName = node.attrOr("name", "");
 
         line(var + " = " + parentVar +
              (isTexture ? ":CreateTexture(" : ":CreateFontString(") +
-             nameArg(rawName, parentName, nameVar.empty() ? parentVar : nameVar) +
+             nameArg(rawName, parentName) +
              ", " + quote(layerName) + ", true)");
 
         emitParentKey(node, var, parentVar);
@@ -807,11 +794,8 @@ struct Emitter {
             // what leaving it out means.
             std::string relative = parentVar;
             if (const std::string* rt = a.attr("relativeTo")) {
-                // Resolved against whatever owns this anchor, which is parentVar
-                // - the containing frame for a region, and the parent frame for
-                // a frame's own anchors. It used to say "self" regardless, which
-                // inside a template asked the wrong frame for its name.
-                relative = nameArg(*rt, parentNameForAnchors, parentVar);
+                // $parent is that of the region anchored, resolved as it is.
+                relative = nameArg(*rt, parentNameForAnchors);
                 if (relative == "nil") relative = parentVar;
             }
             const std::string relPoint = a.attrOr("relativePoint", point);
@@ -998,10 +982,11 @@ struct Emitter {
     /// one, so a caller that must hand it on - a scroll frame to its child -
     /// can name it.
     std::string emitFrame(const XmlNode& node, const std::string& parentVar,
-                          const std::string& parentName,
-                          const std::string& nameVar = std::string()) {
+                          const std::string& parentName) {
         const std::string rawName = node.attrOr("name", "");
-        const std::string name = substituteParent(rawName, parentName);
+        // Nothing where it is known only as the frame is made.
+        const std::string name = parentName.empty() && namedAfterParent(rawName) ? std::string()
+                                                                                 : substituteParent(rawName, parentName);
         // A template is declared at the top of a file. virtual= on a frame
         // inside another frame's <Frames> is a mistake, and the real client
         // treats it as one - it builds the frame, because a nested element has
@@ -1100,7 +1085,7 @@ struct Emitter {
         // so the _G[self:GetName().."ScrollBar"] its own handlers look up never
         // existed - which is what took down most of FrameXML.
         line(var + " = CreateFrame(" + frameTypeArg(node) + ", " +
-             nameArg(rawName, parentName, parentArg) + ", " + parentArg + ")");
+             nameArg(rawName, parentName) + ", " + parentArg + ")");
 
         // Identity before anything is built on top of it. FrameXML makes names
         // out of the id - a party member's pet frame opens its OnLoad with
@@ -1128,9 +1113,9 @@ struct Emitter {
                  " end");
         }
         emitInherits(node, var);
-        emitFrameBody(node, var, name.empty() ? parentName : name, parentArg,
-                      parentName, /*fireOnLoad=*/true,
-                      rawName.empty() ? nameVar : std::string());
+        // What is in an unnamed frame is called after the one it is in.
+        emitFrameBody(node, var, rawName.empty() ? parentName : name, parentArg,
+                      parentName, /*fireOnLoad=*/true);
         return var;
     }
 
@@ -1140,16 +1125,7 @@ struct Emitter {
     void emitFrameBody(const XmlNode& node, const std::string& var,
                        const std::string& name, const std::string& parentVar,
                        const std::string& ownerName = std::string(),
-                       bool fireOnLoad = true,
-                       const std::string& nameVar = std::string()) {
-        // What $parent resolves to for anything declared inside this frame. An
-        // unnamed frame is not the answer - WoW walks up to the nearest named
-        // ancestor, and PartyMemberPetFrameTemplate buries its $parentName two
-        // unnamed frames deep, expecting PartyMemberFrame1PetFrameName. Asking
-        // the unnamed frame for its name gave nil, so the region was called
-        // "Name" and the lookup that wanted it found nothing.
-        const std::string anchor = nameVar.empty() ? var : nameVar;
-
+                       bool fireOnLoad = true) {
         // hidden="true" is the frame's state from the moment it exists, not
         // something done to it once it is built. This ran last - after the
         // children were created, after every OnLoad had fired - so a frame the
@@ -1714,7 +1690,7 @@ struct Emitter {
                     // built despite the typo.
                     if (region.name == "Texture" || region.name == "FontString")
                         emitRegion(region, var, name, level,
-                                   region.name == "Texture", anchor);
+                                   region.name == "Texture");
                 }
             }
         }
@@ -1748,7 +1724,7 @@ struct Emitter {
         if (const XmlNode* scrollChild = node.child("ScrollChild")) {
             for (const XmlNode& child : scrollChild->children) {
                 if (!isFrameElement(child.name)) continue;
-                const std::string childVar = emitFrame(child, var, name, anchor);
+                const std::string childVar = emitFrame(child, var, name);
                 if (!childVar.empty())
                     line(var + ":SetScrollChild(" + childVar + ")");
             }
@@ -1759,7 +1735,7 @@ struct Emitter {
                 // name used as an element - see emitFrame. Unnamed and unknown
                 // is nothing this can build, and is left to the warning below.
                 if (isFrameElement(child.name) || child.attr("name")) {
-                    emitFrame(child, var, name, anchor);
+                    emitFrame(child, var, name);
                 }
             }
         }
@@ -1799,10 +1775,16 @@ struct Emitter {
 
 } // namespace
 
+bool namedAfterParent(const std::string& name) {
+    static constexpr std::string_view kToken = "$parent";
+    if (name.size() < kToken.size()) return false;
+    for (size_t i = 0; i < kToken.size(); ++i)
+        if (std::tolower(static_cast<unsigned char>(name[i])) != kToken[i]) return false;
+    return true;
+}
+
 std::string substituteParent(const std::string& name, const std::string& parentName) {
-    const std::string token = "$parent";
-    if (name.compare(0, token.size(), token) != 0) return name;
-    return parentName + name.substr(token.size());
+    return namedAfterParent(name) ? parentName + name.substr(std::string_view("$parent").size()) : name;
 }
 
 namespace {

@@ -878,6 +878,49 @@ TEST_CASE("a frame to be clicked is found by its name", "[replay][interface]") {
     CHECK(ui.is("not pcall(GetClickFrame)"));
 }
 
+// T274: 0x0048b6c0 -> 0x0048b540, 0x00819880.
+TEST_CASE("$parent in the name of what a script makes", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("tip = CreateFrame('GameTooltip', 'PlayPar') a = tip:CreateFontString('$parentTextLeft1') "
+           "t = tip:CreateTexture('$ParentTex') f = CreateFrame('Frame', '$parentKid', tip) "
+           "n = CreateFrame('Frame', nil, tip) u = n:CreateTexture('$parentIn') k = CreateFrame('Frame', '$parentKid2', n) "
+           "o = CreateFrame('Frame', '$parentZ') g = n:CreateAnimationGroup('$parentAnim')");
+    CHECK(ui.is("a:GetName() == 'PlayParTextLeft1' and rawget(_G, 'PlayParTextLeft1') == a"));
+    CHECK(ui.is("t:GetName() == 'PlayParTex' and rawget(_G, 'PlayParTex') == t"));
+    CHECK(ui.is("f:GetName() == 'PlayParKid' and rawget(_G, 'PlayParKid') == f"));
+    CHECK(ui.is("u:GetName() == 'PlayParIn' and k:GetName() == 'PlayParKid2' and rawget(_G, 'PlayParKid2') == k"));
+    CHECK(ui.is("g:GetName() == 'PlayParAnim' and rawget(_G, 'PlayParAnim') == g"));
+    CHECK(ui.is("o:GetName() == 'TopZ' and rawget(_G, 'TopZ') == o"));
+    // No string is no name.
+    CHECK(ui.is("tip:CreateTexture(true):GetName() == nil and CreateFrame('Frame', {}):GetName() == nil"));
+    // What is there already keeps the name in _G, whatever it is.
+    ui.run("x = CreateFrame('Frame', 'PlayDup') y = CreateFrame('Frame', 'PlayDup') z = y:CreateTexture('PlayDup') "
+           "PlayOwn = 5 w = CreateFrame('Frame', 'PlayOwn')");
+    CHECK(ui.is("PlayDup == x and y:GetName() == 'PlayDup' and z:GetName() == 'PlayDup'"));
+    CHECK(ui.is("PlayOwn == 5 and w:GetName() == 'PlayOwn'"));
+    // But for what the client has made in the interface's place.
+    ui.run("before = WorldFrame world = CreateFrame('Frame', 'WorldFrame')");
+    CHECK(ui.is("WorldFrame == world and before ~= world"));
+    ui.run("CreateFrame('Frame', 'WorldFrame')");
+    CHECK(ui.is("WorldFrame == world"));
+
+    // A template on a frame without a name, and points by such a name.
+    wowee::ui::XmlNode root;
+    std::string error;
+    REQUIRE(wowee::ui::parseXml(
+        "<Ui><Frame name=\"PlayParT\" virtual=\"true\"><Layers><Layer><Texture name=\"$parentA\"/>"
+        "<Texture name=\"$parentB\"><Anchors><Anchor point=\"LEFT\" relativeTo=\"$parentA\"/></Anchors></Texture>"
+        "</Layer></Layers><Frames><Frame><Frames><Frame name=\"$parentC\"/></Frames></Frame></Frames></Frame></Ui>",
+        root, error));
+    CHECK(ui.engine.buildElements(wowee::ui::emitFrameXml(root), "t.xml", [](const auto&) {}));
+    ui.run("CreateFrame('Frame', 'PlayParN', nil, 'PlayParT') CreateFrame('Frame', nil, PlayParN, 'PlayParT') "
+           "q = CreateFrame('Frame', 'PlayParQ') m = CreateFrame('Frame', nil, q, 'PlayParT')");
+    CHECK(ui.is("PlayParNA:GetParent() == PlayParN and select(2, PlayParNB:GetPoint()) == PlayParNA"));
+    CHECK(ui.is("PlayParNC:GetParent():GetParent() == PlayParN"));
+    CHECK(ui.is("PlayParQA:GetParent() == m and select(2, PlayParQB:GetPoint()) == PlayParQA and PlayParQC ~= nil"));
+}
+
 // T273: the player's scale is the UIParent's of the interface (0x00513240 -> 0x0048f580), which
 // is none the tree has of its own; and scroll frames of a scale (0x0096b4c0, 0x0096b1c0).
 TEST_CASE("UIParent has the player's scale", "[replay][interface]") {

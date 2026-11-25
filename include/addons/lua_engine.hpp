@@ -46,6 +46,9 @@ public:
     LuaEngine& operator=(const LuaEngine&) = delete;
 
     bool initialize();
+    /// What is in _G now is the client's, in place of what the interface will make: the interface's
+    /// own frames take its names (publishObject).
+    void noteGlobalsBefore();
     void shutdown();
 
     /// Runs a macro's commands as the interface does (0x00564db0): each line is

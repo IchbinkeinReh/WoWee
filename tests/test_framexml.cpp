@@ -630,8 +630,7 @@ TEST_CASE("$parent inside a template resolves to the frame that inherits it",
         "</Layer></Layers></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
 
-    REQUIRE(has(r.lua, "GetName()"));
-    REQUIRE(has(r.lua, "\"Bg\""));
+    REQUIRE(has(r.lua, ":CreateTexture(\"$parentBg\""));
     REQUIRE_FALSE(has(r.lua, "\"MyTemplateBg\""));
 }
 
@@ -697,10 +696,8 @@ TEST_CASE("$parent skips unnamed frames to the nearest named one",
         "</Frames></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
 
-    // Named from the template root, which is the only thing with a name -
-    // and only if it has one, since an owner with no name lends none.
-    REQUIRE(has(r.lua, "self:GetName() .. \"Name\""));
-    REQUIRE(has(r.lua, "self:GetName() and"));
+    // Named as it is made, after the first above it that has a name (0x0048b540).
+    REQUIRE(has(r.lua, ":CreateFontString(\"$parentName\""));
 }
 
 TEST_CASE("A frame can fill its parent instead of anchoring", "[framexml][emit]") {
@@ -898,8 +895,7 @@ TEST_CASE("A nested frame in a template also resolves $parent at replay time",
         "</Frames></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
 
-    REQUIRE(has(r.lua, "GetName()"));
-    REQUIRE(has(r.lua, "\"ScrollBar\""));
+    REQUIRE(has(r.lua, "\"$parentScrollBar\""));
     REQUIRE_FALSE(has(r.lua, "\"MyTemplateScrollBar\""));
 }
 
@@ -912,7 +908,7 @@ TEST_CASE("Outside a template $parent is resolved when emitted",
         "<Texture name=\"$parentBg\"/></Layer></Layers></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, "\"FooFrameBg\""));
-    REQUIRE_FALSE(has(r.lua, "GetName()"));
+    REQUIRE_FALSE(has(r.lua, "$parent"));
 }
 
 TEST_CASE("A nested frame anchors to its container, not the screen",
@@ -1149,22 +1145,26 @@ TEST_CASE("$parent follows the parent attribute, not the file structure",
     REQUIRE_FALSE(has(r.lua, "\"Edge\""));
 }
 
-TEST_CASE("A $parent name on an unnamed owner is no name at all",
+TEST_CASE("What an unnamed owner's $parent is, is known as it is made",
           "[framexml][emit]") {
-    // Inside a template the owner is not known until replay, so the name is
-    // built then. If the frame inheriting the template has no name there is
-    // nothing to build from, and WoW gives the region no name - where falling
-    // back to an empty string publishes the bare suffix as a global.
-    // ContainerFrameTemplate replayed onto an unnamed frame created a texture
-    // called "Portrait", and the next frame to do the same overwrote it.
+    // Inside a template the owner is not known until replay. If the frame
+    // inheriting it has no name, the next one above that has lends its own
+    // (0x0048b540) - never the bare suffix, which published ContainerFrameTemplate's
+    // portrait as "Portrait".
     XmlNode root = parseOrFail(
         "<Ui><Frame name=\"T\" virtual=\"true\"><Layers><Layer>"
-        "<Texture name=\"$parentPortrait\"/>"
-        "</Layer></Layers></Frame></Ui>");
+        "<Texture name=\"$parentPortrait\"><Anchors><Anchor point=\"LEFT\" relativeTo=\"$ParentBg\"/></Anchors></Texture>"
+        "</Layer></Layers></Frame>"
+        "<Frame><Layers><Layer><Texture name=\"$PARENTArt\"/></Layer></Layers>"
+        "<Frames><Frame name=\"$parentKid\"><Frames><Frame name=\"$parentOwn\"/></Frames></Frame></Frames></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
-    REQUIRE(has(r.lua, "self:GetName() and"));
-    REQUIRE(has(r.lua, "or nil)"));
-    REQUIRE_FALSE(has(r.lua, "or \"\") .. \"Portrait\""));
+    REQUIRE(has(r.lua, "\"$parentPortrait\""));
+    REQUIRE(has(r.lua, "\"$ParentBg\""));
+    REQUIRE(has(r.lua, "\"$PARENTArt\""));
+    REQUIRE(has(r.lua, "\"$parentKid\""));
+    REQUIRE(has(r.lua, "\"$parentOwn\""));
+    REQUIRE_FALSE(has(r.lua, "\"Portrait\""));
+    REQUIRE_FALSE(has(r.lua, "\"Kid"));
 }
 
 TEST_CASE("A frame with hover handlers takes the mouse without saying so",
