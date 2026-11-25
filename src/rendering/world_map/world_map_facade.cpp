@@ -1027,6 +1027,10 @@ std::string WorldMapFacade::currentMapFolder() const {
 }
 
 std::vector<OverlayEntry> WorldMapFacade::currentOverlays() const {
+    // Azeroth's map and the cosmic one have none, whatever zone was shown before
+    // (0x00546310).
+    const ViewLevel level = impl_->viewState.currentLevel();
+    if (level == ViewLevel::COSMIC || level == ViewLevel::WORLD) return {};
     const int idx = impl_->viewState.currentZoneIdx();
     const auto& zones = impl_->data.zones();
     if (idx < 0 || idx >= static_cast<int>(zones.size())) return {};
