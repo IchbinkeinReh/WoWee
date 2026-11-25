@@ -41,8 +41,12 @@ layout(location = 6) out vec2 EnvCoord;
 // The client's M2 point lights summed at this vertex (m2_vertex_lights.hpp),
 // outside the ray traced lighting: lights 1-3, in the two matrices past the
 // bones (CharacterRenderer::kVertexLightMatrices), a position (w 1 when set)
-// and a diffuse each.
+// and a diffuse each. Under it, for a unit drawn see-through, the traced
+// lights that reach it (rt_see_through.hpp): then vSeeThroughLit is 1.
 layout(location = 7) out vec3 vPointLight;
+layout(location = 8) flat out float vSeeThroughLit;
+
+#include "rt_lamp_light.glsli"
 
 vec3 safeNormalize(vec3 v, vec3 fallback) {
     float len2 = dot(v, v);
@@ -112,7 +116,14 @@ void main() {
     // diffuse x max(N.L, 0) / (0.7 d + 0.03 d^2), as the vertex programs
     // light a model by its point lights (0x008353d0, 0x00834a40).
     vPointLight = vec3(0.0);
-    for (int i = 0; i < 3; ++i) {
+    const vec4 traced = bones[MAX_BONES + 3u][3];  // wrap, realistic, count, 1 when set
+    vSeeThroughLit = traced.w;
+    for (int i = 0; traced.w > 0.5 && i < int(traced.z); ++i) {
+        vec4 lp = bones[MAX_BONES + uint((2 * i) / 4)][(2 * i) % 4];
+        vec4 lc = bones[MAX_BONES + uint((2 * i + 1) / 4)][(2 * i + 1) % 4];
+        vPointLight += lc.rgb * rtBodyLampLight(lp.xyz - worldPos.xyz, N, lc.w, lp.w, traced.x, traced.y > 0.5);
+    }
+    for (int i = 0; traced.w < 0.5 && i < 3; ++i) {
         mat4 lm = bones[MAX_BONES + uint((2 * i) / 4)];
         vec4 lp = lm[(2 * i) % 4];
         if (lp.w < 0.5) continue;

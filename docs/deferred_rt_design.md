@@ -288,8 +288,10 @@ closes in) is not in the G-buffer, so the texels at its pixels are what stands
 behind it. Rather than the non-RT look - whose weaker shadow and missing
 torchlight would change the body's light the moment it starts to fade - a unit
 that finds nothing of itself takes the shadow map's shadow at the traced
-strength, no occlusion, and the point lights of the surface right behind it
-(which it shares a place with). Particles, ribbons and water read nothing, as
+strength, no occlusion, and its own point lights: the seven that give its body
+most, what a building stops left out, summed at its vertices
+(`rt_see_through.hpp`; past 60 yards and 24 such units, those of the surface
+right behind it). Particles, ribbons and water read nothing, as
 today - water but for the ray traced water below.
 
 ## Ray traced water

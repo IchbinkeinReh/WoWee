@@ -4200,6 +4200,25 @@ glm::mat4 CharacterRenderer::getBoneTransform(const pipeline::M2Bone& bone, floa
 
 // --- Rendering ---
 
+namespace {
+
+// Drawn see-through as a whole - the player's body as the camera closes in, a
+// unit fading in or out, a ghost: all of it goes with the blended batches, the
+// world's last phase, so the depth it writes (for its own parts to sort) hides
+// nothing opaque drawn after the characters - a tree trunk behind the body.
+bool instanceDrawnFaded(float opacity, float kitAlpha, float cameraAlpha) {
+    return opacity * kitAlpha * cameraAlpha < 0.999f;
+}
+
+// How far from the camera an instance drawn see-through is lit by the traced
+// lights itself, how many of them, and the most a body is taken to reach from
+// its middle (setRtSeeThroughLights).
+constexpr float kSeeThroughLitRange = 60.0f;
+constexpr size_t kSeeThroughLit = 24;
+constexpr float kSeeThroughMaxRadius = 4.0f;
+
+} // namespace
+
 void CharacterRenderer::prepareRender(uint32_t frameIndex) {
     // A new frame for the bone ring, whether or not anything draws.
     ++boneFrame_;
@@ -4292,19 +4311,61 @@ void CharacterRenderer::writeFrameBones(CharacterInstance& inst) {
         // The client's point lights this frame (m2_vertex_lights.hpp), picked
         // round the model's middle; none under the ray traced lighting (the
         // grid is empty then).
-        glm::mat4 lights[kVertexLightMatrices] = {glm::mat4(0.0f), glm::mat4(0.0f)};
+        // An instance drawn see-through gets its own under it, later in the
+        // frame and on the main thread (setRtSeeThroughLights).
+        if (rtSeeThroughLights_ && instanceDrawnFaded(inst.opacity, inst.kitAlpha, inst.cameraAlpha)) return;
+        std::array<glm::mat4, kVertexLightMatrices> lights;
+        lights.fill(glm::mat4(0.0f));
         if (vertexLightGrid_ && !vertexLightGrid_->empty() && inst.cachedModel) {
             const glm::mat4 modelMat = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
             const glm::vec3 mid = 0.5f * (inst.cachedModel->visualBoundMin + inst.cachedModel->visualBoundMax);
             const auto picked = vertexLightGrid_->pick(glm::vec3(modelMat * glm::vec4(mid, 1.0f)));
             for (int i = 0; i < picked.count; ++i) {
                 const auto& l = picked.lights[static_cast<size_t>(i)];
-                glm::mat4& m = lights[(2 * i) / 4];
+                glm::mat4& m = lights[static_cast<size_t>((2 * i) / 4)];
                 m[(2 * i) % 4] = glm::vec4(l.position, 1.0f);
                 m[(2 * i + 1) % 4] = glm::vec4(l.diffuse, 0.0f);
             }
         }
-        memcpy(dst + MAX_BONES, lights, sizeof(lights));
+        memcpy(dst + MAX_BONES, lights.data(), sizeof(lights));
+    }
+}
+
+void CharacterRenderer::setRtSeeThroughLights(
+    const std::vector<rt_lights::PointLight>& lights, const glm::vec3& eye, float wrap, bool realistic,
+    const std::function<bool(const glm::vec3&, const glm::vec3&)>& clear) {
+    if (!rtSeeThroughLights_) return;
+    const int ring = static_cast<int>(boneFrame_ % CharacterInstance::kBoneRing);
+    std::vector<std::pair<float, CharacterInstance*>> faded;
+    for (auto& [id, inst] : instances) {
+        if (!inst.boneMapped[ring] || !instanceDrawnFaded(inst.opacity, inst.kitAlpha, inst.cameraAlpha)) continue;
+        // Nothing yet: a light of three frames ago is nobody's.
+        auto* at = static_cast<glm::mat4*>(inst.boneMapped[ring]) + MAX_BONES;
+        for (int j = 0; j < kVertexLightMatrices; ++j) at[j] = glm::mat4(0.0f);
+        if (!inst.visible || inst.heldBack || !inst.cachedModel) continue;
+        const glm::vec3 p = inst.hasOverrideModelMatrix ? glm::vec3(inst.overrideModelMatrix[3]) : inst.position;
+        const float d2 = glm::dot(p - eye, p - eye);
+        if (d2 < kSeeThroughLitRange * kSeeThroughLitRange) faded.emplace_back(d2, &inst);
+    }
+    // The nearest alone where a crowd of them stands: each asks the buildings.
+    std::sort(faded.begin(), faded.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    if (faded.size() > kSeeThroughLit) faded.resize(kSeeThroughLit);
+    for (const auto& [d2, inst] : faded) {
+        const glm::mat4 m = inst->hasOverrideModelMatrix ? inst->overrideModelMatrix : getModelMatrix(*inst);
+        const auto& model = *inst->cachedModel;
+        const glm::vec3 centre(m * glm::vec4(0.5f * (model.visualBoundMin + model.visualBoundMax), 1.0f));
+        const float radius = 0.5f * glm::length(model.visualBoundMax - model.visualBoundMin) *
+                             glm::length(glm::vec3(m[0]));
+        // Half of it through a doorway that the half of the body is seen by.
+        const glm::vec3 half(0.0f, 0.0f, 0.5f * std::min(radius, 2.0f));
+        const auto packed = rt_see_through::pack(
+            rt_see_through::pick(lights, centre, std::min(radius, kSeeThroughMaxRadius), realistic,
+                                 [&](const glm::vec3& from) {
+                                     return 0.5f * static_cast<float>(clear(centre + half, from)) +
+                                            0.5f * static_cast<float>(clear(centre - half, from));
+                                 }),
+            wrap, realistic);
+        memcpy(static_cast<glm::mat4*>(inst->boneMapped[ring]) + MAX_BONES, packed.data(), sizeof(packed));
     }
 }
 
@@ -4332,14 +4393,6 @@ float characterRenderRadiusSq() {
         return renderRadius * renderRadius;
     }();
     return renderRadiusSq;
-}
-
-// Drawn see-through as a whole - the player's body as the camera closes in, a
-// unit fading in or out, a ghost: all of it goes with the blended batches, the
-// world's last phase, so the depth it writes (for its own parts to sort) hides
-// nothing opaque drawn after the characters - a tree trunk behind the body.
-bool instanceDrawnFaded(float opacity, float kitAlpha, float cameraAlpha) {
-    return opacity * kitAlpha * cameraAlpha < 0.999f;
 }
 
 /// Whether any batch of the model is blended (blend mode 2 and up).

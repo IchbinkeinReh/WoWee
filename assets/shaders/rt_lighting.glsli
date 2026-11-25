@@ -235,8 +235,9 @@ RtLight rtLightAt(vec3 worldPos) {
 // in the G-buffer, and where it stands the result holds what shows through
 // it. Lit as the result would light it, without what the result holds of
 // it: the shadow map's shadow for the traced one, at the traced shadow's
-// strength, no occlusion, and the point lights of what stands right behind it,
-// which it shares a place with - not the light without the tracing, whose
+// strength, no occlusion, and its own point lights where the caller has them
+// (character.frag, rt_see_through.hpp), else those of what stands right behind
+// it, which it shares a place with - not the light without the tracing, whose
 // weaker shadow and missing torchlight would change the body's light the
 // moment it begins to fade. Where it does find its own texels (never, unless
 // something of it is opaque there), those. `seeThrough`: none of its own, so

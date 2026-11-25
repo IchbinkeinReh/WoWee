@@ -79,41 +79,8 @@ vec3 rtLightKindColour(int kind) {
 }
 layout(std430, set = 0, binding = 12) readonly buffer RtPointLights { RtPointLight rtPointLights[]; };
 
-// rt_lights::attenuation: all within the start, none past the end, a
-// smoothed ramp between.
-float rtLightFalloff(float d, float start, float end) {
-    if (d >= end) return 0.0;
-    start = clamp(start, 0.0, end);
-    if (d <= start) return 1.0;
-    float t = (end - d) / (end - start);
-    return t * t * (3.0 - 2.0 * t);
-}
+#include "rt_lamp_light.glsli"
 
-// A light is a sphere, so its shadows have a soft edge: the larger the
-// light's reach the larger its source - a candle's flame, a lantern's glass,
-// a hearth - from 0.15 to half a yard. At a fixed 0.15 every lamp's shadow of
-// a post or a door frame was knife-sharp to its end, a hard wedge and arc on
-// the floor (the Goldshire inn upstairs).
-float rtLightRadius(float reach) {
-    return clamp(0.04 * reach, 0.15, 0.5);
-}
-// The Ray Tracing page's "Realistic light falloff" (pass.tune5.z): the inverse
-// square of the distance from a core of radius r0, windowed to reach nothing
-// at the same end (rt_lights::realisticAttenuation, which must agree):
-//     I = 2 / (1 + (d / r0)^2) * (1 - (d / end)^4)^2
-// r0 is the light's full-strength window (its start), or its source's size
-// (rtLightRadius) where that is larger. The 2 makes it as strong as the
-// window at r0, where the two curves cross; nearer it is up to twice as
-// bright, farther a long soft tail instead of a ramp and an edge.
-const float RT_REALISTIC_GAIN = 2.0;
-float rtLightFalloffRealistic(float d, float start, float end) {
-    if (d >= end) return 0.0;
-    float r0 = max(clamp(start, 0.0, end), rtLightRadius(end));
-    float q = d / r0;
-    float x = d / end;
-    float w = 1.0 - x * x * x * x;
-    return RT_REALISTIC_GAIN * w * w / (1.0 + q * q);
-}
 // A light sits inside its lamp - a lantern's glass, a brazier's bowl - so a
 // shadow ray stops this short of it rather than finding the lamp itself.
 const float RT_LIGHT_STANDOFF = 0.45;

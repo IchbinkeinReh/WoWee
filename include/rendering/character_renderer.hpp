@@ -10,6 +10,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/m2_vertex_lights.hpp"
+#include "rendering/rt_see_through.hpp"
 #include "rendering/vehicle_seat.hpp"
 #include "rendering/animation/animation_data.hpp"
 #include "rendering/animation/upper_body.hpp"
@@ -616,6 +617,15 @@ public:
     /// The point lights the characters' models carry - a fire elemental's
     /// glow, a held torch - placed for this frame, within `range` of `eye`.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// Whether setRtSeeThroughLights comes this frame, asked before anything
+    /// records: the instances drawn see-through get no lights till then.
+    void expectRtSeeThroughLights(bool on) { rtSeeThroughLights_ = on; }
+    /// This frame's traced lights at the instances drawn see-through, which
+    /// the trace finds nothing of (rt_see_through.hpp). `clear(from, to)`:
+    /// nothing of a building between two places.
+    void setRtSeeThroughLights(const std::vector<rt_lights::PointLight>& lights, const glm::vec3& eye,
+                               float wrap, bool realistic,
+                               const std::function<bool(const glm::vec3&, const glm::vec3&)>& clear);
     /// Debug Glow, "Glow pulse strength": how much of a held light's card
     /// pulse the traced light keeps (rt_glow_pulse.hpp), 1 as it is.
     void setRtGlowPulseStrength(float s) { rtGlowPulseStrength_ = s; }
@@ -1275,9 +1285,11 @@ private:
     // Maximum bones supported
     float rtGlowPulseStrength_ = 1.0f;
     float rtModelFlickerStrength_ = 1.0f;
-    /// Past the bones in each bone buffer: two matrices of the client's
-    /// point lights (per light a position, w 1 when set, and a diffuse).
-    static constexpr int kVertexLightMatrices = 2;
+    /// Past the bones in each bone buffer: the client's point lights (per
+    /// light a position, w 1 when set, and a diffuse), or the traced lights
+    /// of an instance drawn see-through (rt_see_through::pack).
+    static constexpr int kVertexLightMatrices = rt_see_through::kMatrices;
+    bool rtSeeThroughLights_ = false;
     const m2_vertex_lights::Grid* vertexLightGrid_ = nullptr;
     static constexpr int MAX_BONES = 240;
     uint32_t numAnimThreads_ = 1;

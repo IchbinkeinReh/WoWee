@@ -1,0 +1,49 @@
+// How a point light of the ray traced lighting lights a surface, for the trace
+// (rt_trace.comp) and for a unit drawn see-through, which the trace holds
+// nothing of (character.vert). Only what GLSL and GLM write alike, so that the
+// unit test runs this file itself (test_rt_see_through).
+
+// rt_lights::attenuation: all within the start, none past the end, a
+// smoothed ramp between.
+float rtLightFalloff(float d, float start, float end) {
+    if (d >= end) return 0.0f;
+    start = clamp(start, 0.0f, end);
+    if (d <= start) return 1.0f;
+    float t = (end - d) / (end - start);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// A light is a sphere, so its shadows have a soft edge: the larger the
+// light's reach the larger its source - a candle's flame, a lantern's glass,
+// a hearth - from 0.15 to half a yard. At a fixed 0.15 every lamp's shadow of
+// a post or a door frame was knife-sharp to its end, a hard wedge and arc on
+// the floor (the Goldshire inn upstairs).
+float rtLightRadius(float reach) {
+    return clamp(0.04f * reach, 0.15f, 0.5f);
+}
+// The Ray Tracing page's "Realistic light falloff" (pass.tune5.z): the inverse
+// square of the distance from a core of radius r0, windowed to reach nothing
+// at the same end (rt_lights::realisticAttenuation, which must agree):
+//     I = 2 / (1 + (d / r0)^2) * (1 - (d / end)^4)^2
+// r0 is the light's full-strength window (its start), or its source's size
+// (rtLightRadius) where that is larger. The 2 makes it as strong as the
+// window at r0, where the two curves cross; nearer it is up to twice as
+// bright, farther a long soft tail instead of a ramp and an edge.
+const float RT_REALISTIC_GAIN = 2.0f;
+float rtLightFalloffRealistic(float d, float start, float end) {
+    if (d >= end) return 0.0f;
+    float r0 = max(clamp(start, 0.0f, end), rtLightRadius(end));
+    float q = d / r0;
+    float x = d / end;
+    float w = 1.0f - x * x * x * x;
+    return RT_REALISTIC_GAIN * w * w / (1.0f + q * q);
+}
+
+// A light's on a body of smooth normal n, `toLight` from the body to where it
+// shines from, as the trace lights one (smoothBody) before its shadow ray.
+float rtBodyLampLight(vec3 toLight, vec3 n, float start, float end, float wrap, bool realistic) {
+    float d = length(toLight);
+    float ndl = d > 1e-4f ? (dot(n, toLight / d) + wrap) / (1.0f + wrap) : 1.0f;
+    if (ndl <= 0.0f) return 0.0f;
+    return ndl * (realistic ? rtLightFalloffRealistic(d, start, end) : rtLightFalloff(d, start, end));
+}

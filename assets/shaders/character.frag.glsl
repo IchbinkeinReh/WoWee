@@ -201,6 +201,8 @@ layout(location = 5) in vec2 inTexCoord2;
 layout(location = 6) in vec2 inEnvCoord;
 // The client's point lights at this vertex (character.vert, m2_vertex_lights.hpp).
 layout(location = 7) in vec3 vPointLight;
+// 1 where they are the traced lights of a unit drawn see-through instead.
+layout(location = 8) flat in float vSeeThroughLit;
 // The second stage's coordinate, set with TexCoord.
 vec2 TexCoord2;
 
@@ -363,6 +365,13 @@ void main() {
         // (rtLightBehind): a unit drawn see-through is in no G-buffer.
         bool seeThrough = false;
         RtLight rt = kGbuffer ? rtNeutral() : rtLightBehind(FragPos, seeThrough);
+        // Its own lights, not those of what stands behind it: the torch in
+        // its hand lights the body, seen through or not.
+        if (seeThrough && vSeeThroughLit > 0.5) {
+            rt.point = rtCapLight(vPointLight * rtPointStrength(), rtMaxLight());
+            rt.pointOwn = rt.point;
+            rt = rtLightDebug(rt);
+        }
         // Its light as refreshInteriorLights samples it at its feet, as a
         // game object's (model_light.glsli): w 2 on an interior floor, 1 the
         // zone's light eased in, 0 not known yet (the zone's as it is). The
@@ -426,7 +435,7 @@ void main() {
     // The client's M2 point lights outside the ray traced lighting, summed
     // with the rest and held to 1 as the vertex programs do; where the rest
     // is already past 1 it is left as it is. None under the tracing.
-    if (unlit == 0) light = min(light + vPointLight, max(light, vec3(1.0)));
+    if (unlit == 0 && vSeeThroughLit < 0.5) light = min(light + vPointLight, max(light, vec3(1.0)));
 
     // The batch's colour times the light is the diffuse the stages combine
     // over (0x0081fe90).

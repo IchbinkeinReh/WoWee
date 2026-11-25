@@ -70,6 +70,7 @@
 #include "rendering/rt_lighting.hpp"
 #include "rendering/rt_water.hpp"
 #include "rendering/rt_point_lights.hpp"
+#include "rendering/rt_see_through.hpp"
 #include "rendering/rt_scene.hpp"
 #include <cstdio>
 #include "rendering/screen_capture.hpp"
@@ -1876,6 +1877,7 @@ void Renderer::beginFrame() {
         rtSceneColour_ = colour;
         rtSceneDepth_ = depthImage;
     }
+    if (characterRenderer) characterRenderer->expectRtSeeThroughLights(rtDeferredThisFrame_);
 
     // Compute fresh shadow matrix BEFORE UBO update so shaders get current-frame data.
     lightSpaceMatrix = computeLightSpaceMatrix();
@@ -7407,6 +7409,17 @@ void Renderer::recordRtLighting() {
         }
         rtLighting_->setPointLights(lightScratch);
         if (waterRenderer) waterRenderer->setWaterLamps(lightScratch, in.cameraPos);
+        if (characterRenderer) {
+            characterRenderer->setRtSeeThroughLights(
+                lightScratch, in.cameraPos, in.lampWrap, in.realisticFalloff,
+                [this](const glm::vec3& from, const glm::vec3& to) {
+                    const glm::vec3 way = to - from;
+                    const float d = glm::length(way);
+                    const float reach = d - rt_see_through::kStandoff;
+                    if (!wmoRenderer || reach <= 0.0f) return true;
+                    return wmoRenderer->raycastBoundingBoxes(from, way / d, reach) >= reach;
+                });
+        }
         // The view of the lights' kinds: where the traced lights are and
         // what gave each, for the interface's dots and legend. The ones the
         // pass holds, in the order it takes them.

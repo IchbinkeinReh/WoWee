@@ -1773,6 +1773,14 @@ wowee_add_test(test_rt_gbuffer
 target_compile_definitions(test_rt_gbuffer PRIVATE
     WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
+# ── test_rt_see_through ──────────────────────────────────────
+# Header-only: the traced lights of a unit drawn see-through, by the shader's
+# own source.
+wowee_add_test(test_rt_see_through
+    SOURCES test_rt_see_through.cpp)
+target_compile_definitions(test_rt_see_through PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # ── test_rt_upsample ─────────────────────────────────────────
 # Header-only: how a pixel finds its own surface among the half-resolution
 # traced texels at an edge, and how a texel keeps its history there.
