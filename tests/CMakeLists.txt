@@ -4370,6 +4370,10 @@ wowee_add_test(test_alpha_gradient
 wowee_add_test(test_mouse_over
     SOURCES test_mouse_over.cpp)
 
+# ── test_chunk_name ──────────────────────────────────────────
+wowee_add_test(test_chunk_name
+    SOURCES test_chunk_name.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

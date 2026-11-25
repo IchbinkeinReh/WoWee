@@ -1,3 +1,4 @@
+#include "addons/chunk_name.hpp"
 #include "addons/lua_engine.hpp"
 #include "addons/frame_attributes.hpp"
 #include "addons/frame_handle.hpp"
@@ -20057,7 +20058,7 @@ bool LuaEngine::executeFile(const std::string& path) {
         static_cast<unsigned char>(source[2]) == 0xBF) {
         source.erase(0, 3);
     }
-    const std::string chunkName = "@" + path;
+    const std::string chunkName = chunkNameOf(path, addonName_);
     int err = runChunk(L_, source.c_str(), source.size(), chunkName.c_str(), 0,
                        addonName_.empty() ? nullptr : addonName_.c_str(), addonTable_);
     if (err != 0) {
