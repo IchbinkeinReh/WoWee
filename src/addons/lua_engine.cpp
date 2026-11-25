@@ -1,4 +1,5 @@
 #include "core/crt_round.hpp"
+#include "addons/event_arg_text.hpp"
 #include "addons/saved_variables.hpp"
 #include "addons/chat_bubble_lua.hpp"
 #include "addons/nameplate_lua.hpp"
@@ -16531,8 +16532,13 @@ void LuaEngine::fireEvent(const std::string& eventName,
                            const std::vector<std::string>& args) {
     if (mcp::gate::heardEvent) mcp::gate::heardEvent(eventName, args);
     fireEventWith(eventName, static_cast<int>(args.size()),
-                  [&args](lua_State* L) {
-                      for (const auto& arg : args) pushEventArg(L, arg);
+                  [&args, &eventName](lua_State* L) {
+                      for (size_t i = 0; i < args.size(); ++i) {
+                          if (args[i] != wowee::game::kEventNil && eventArgIsText(eventName, i))
+                              lua_pushlstring(L, args[i].data(), args[i].size());
+                          else
+                              pushEventArg(L, args[i]);
+                      }
                   },
                   args.empty() ? std::string{} : args[0]);
 }

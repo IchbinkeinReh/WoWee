@@ -878,6 +878,32 @@ TEST_CASE("a frame to be clicked is found by its name", "[replay][interface]") {
     CHECK(ui.is("not pcall(GetClickFrame)"));
 }
 
+// T278: 0x004fdbc0: what a chat line's event has.
+TEST_CASE("the client's own chat lines are from no one", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("f = CreateFrame('Frame') f:RegisterEvent('CHAT_MSG_SYSTEM') f:RegisterEvent('CHAT_MSG_LOOT') "
+           "f:RegisterEvent('CHAT_MSG_EMOTE') f:SetScript('OnEvent', function(self, e, ...) "
+           "  got = {...} n = select('#', ...) event = e end)");
+    s.handler().addLocalChatLine(wowee::game::ChatType::LOOT, "Ihr erhaltet Beute: x.");
+    CHECK(ui.is("event == 'CHAT_MSG_LOOT' and n == 13 and got[2] == '' and got[3] == '' and got[12] == ''"));
+    CHECK(ui.is("got[7] == 0 and got[8] == 0 and got[10] == 0 and got[11] == 0 and got[13] == 0"));
+    // A line that is a number is text.
+    s.handler().addLocalChatLine(wowee::game::ChatType::SYSTEM, "25");
+    CHECK(ui.is("event == 'CHAT_MSG_SYSTEM' and got[1] == '25'"));
+    // A creature's guid is none.
+    wowee::game::MessageChatData line;
+    line.type = wowee::game::ChatType::EMOTE;
+    line.message = "x";
+    line.senderName = "y";
+    line.senderGuid = 0xF130000000000001ull;
+    s.handler().addLocalChatMessage(line);
+    CHECK(ui.is("got[2] == 'y' and got[12] == ''"));
+    line.senderGuid = 0xCull;
+    s.handler().addLocalChatMessage(line);
+    CHECK(ui.is("got[12] == '0x000000000000000C'"));
+}
+
 // T110: 0x009748f0: each element of a SimpleHTML has a font of its own (0x0096cc90).
 TEST_CASE("a SimpleHTML's headings have their own fonts", "[replay][interface]") {
     Session s;

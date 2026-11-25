@@ -872,6 +872,20 @@ std::string ChatHandler::hearInLanguage(uint32_t language, const std::string& te
         locale);
 }
 
+/// arg3 of a chat line (0x004fdbc0): its language by name; what everyone understands is no row of
+/// Languages.dbc and has none.
+static std::string chatLanguageArg(const GameHandler& owner, uint32_t language) {
+    return language == 0 ? std::string() : owner.getLanguageName(language);
+}
+/// arg12: a player's guid as text, nothing of another's or of none.
+static std::string chatGuidArg(uint64_t guid) {
+    const auto high = static_cast<uint32_t>(guid >> 32);
+    if ((high & 0xf0000000u) != 0 || (static_cast<uint32_t>(guid) == 0 && (high & 0xf07fffffu) == 0)) return {};
+    char text[32];
+    std::snprintf(text, sizeof(text), "0x%016llX", static_cast<unsigned long long>(guid));
+    return text;
+}
+
 void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& gmName) {
     LOG_DEBUG("Handling SMSG_MESSAGECHAT");
     if (chatPacketDiagEnabled()) {
@@ -1315,9 +1329,7 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
         // printed with its id in front of it - guild chat in Common came out
         // as "[7] Name: hello". Universal is the id the file does not carry
         // and the word the test above looks for.
-        const std::string lang = owner_.getLanguageName(static_cast<uint32_t>(data.language));
-        char guidBuf[32];
-        snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)data.senderGuid);
+        const std::string lang = chatLanguageArg(owner_, static_cast<uint32_t>(data.language));
         // arg8 is the channel's number and arg9 its name without the zone
         // after it, and both were sent empty. That is the whole of whether a
         // channel line is shown: the handler builds "CHANNEL"..arg8 and looks
@@ -1415,7 +1427,8 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
             chanSlot ? chanSlot->name : std::string(),
             std::to_string(chanSlot ? chanSlot->instanceId : 0u),
             std::to_string(lineId),
-            guidBuf
+            chatGuidArg(data.senderGuid),
+            "0"
         });
     }
 }
@@ -1949,9 +1962,6 @@ void ChatHandler::fireChannelNotice(ChatType type, const std::string& word, cons
     writeChatLogLine(type, word, player, channelName, 0, target);
 
     if (!owner_.addonEventCallbackRef()) return;
-    char guidBuf[32] = "";
-    if (senderGuid != 0)
-        snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)senderGuid);
     const uint32_t lineId = nextChatLineId_++;
     // 0x004fdbc0's arguments: the word, the player, no language, the channel
     // numbered, the second player, no flag, then the slot's zone channel id,
@@ -1964,7 +1974,8 @@ void ChatHandler::fireChannelNotice(ChatType type, const std::string& word, cons
         slot ? slot->name : std::string(),
         std::to_string(instance),
         std::to_string(lineId),
-        guidBuf
+        chatGuidArg(senderGuid),
+        "0"
     });
 }
 
@@ -2020,12 +2031,10 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
                 ? ChatType::CHANNEL_JOIN : ChatType::CHANNEL_LEAVE;
             writeChatLogLine(t, "", who, data.channelName, 0, "");
             if (!owner_.addonEventCallbackRef()) return;
-            char guidBuf[32];
-            snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)data.senderGuid);
             owner_.addonEventCallbackRef()(chatEventNameFor(t, who), {
                 "", who, "", cc::numberedName(slot, data.channelName), "", "",
                 std::to_string(slot->zoneChannelId), std::to_string(slot->number), slot->name,
-                std::to_string(slot->instanceId), std::to_string(nextChatLineId_++), guidBuf});
+                std::to_string(slot->instanceId), std::to_string(nextChatLineId_++), chatGuidArg(data.senderGuid), "0"});
             return;
         }
         case ChannelNotifyType::MODE_CHANGE:
@@ -2247,13 +2256,29 @@ void ChatHandler::addLocalChatMessage(const MessageChatData& msg) {
     fireChatEvent(msg);
 }
 
+/// Whether a line of this kind is somebody's words: the player's own where it names nobody.
+static bool isSaidBySomebody(ChatType type) {
+    switch (type) {
+        case ChatType::SAY:
+        case ChatType::YELL:
+        case ChatType::PARTY:
+        case ChatType::RAID:
+        case ChatType::GUILD:
+        case ChatType::OFFICER:
+        case ChatType::WHISPER:
+        case ChatType::WHISPER_INFORM:
+        case ChatType::EMOTE:
+        case ChatType::TEXT_EMOTE: return true;
+        default: return false;
+    }
+}
+
 void ChatHandler::fireChatEvent(const MessageChatData& msg) {
     const Character* ac = owner_.getActiveCharacter();
-    // A channel line with no sender at all - the defense notices - is from no
-    // one, and chatframe.lua prints it without a name only when it has none.
-    const bool fromNoOne = msg.type == ChatType::CHANNEL && msg.senderGuid == 0 && msg.senderName.empty();
-    std::string senderName = (msg.senderName.empty() && !fromNoOne)
-        ? (ac ? ac->name : std::string{}) : msg.senderName;
+    // The client's own lines - loot, money, errors, the defense notices of a
+    // channel - are from no one (0x00509dd0 is handed no sender for them).
+    const bool own = msg.senderName.empty() && msg.senderGuid == 0 && isSaidBySomebody(msg.type);
+    const std::string senderName = own && ac ? ac->name : msg.senderName;
     // arg2 is the name the interface prints, and for a whisper the player
     // sent that is who it went to, not who wrote it: CHAT_WHISPER_INFORM_GET
     // is "To %s: " and reads the same argument CHAT_WHISPER_GET does. The
@@ -2269,9 +2294,6 @@ void ChatHandler::fireChatEvent(const MessageChatData& msg) {
                      msg.receiverName);
     if (!owner_.addonEventCallbackRef()) return;
     const std::string eventName = chatEventNameFor(msg.type, shownName);
-    char guidBuf[32];
-    snprintf(guidBuf, sizeof(guidBuf), "0x%016llX",
-             (unsigned long long)(msg.senderGuid != 0 || fromNoOne ? msg.senderGuid : owner_.getPlayerGuid()));
     // The name, for the reason handleMessageChat gives: a number here is
     // printed as a language header in front of every line.
     {
@@ -2293,13 +2315,14 @@ void ChatHandler::fireChatEvent(const MessageChatData& msg) {
         msg.channelName.empty() ? nullptr : channelSlots_.byName(msg.channelName);
     owner_.addonEventCallbackRef()(eventName, {
         msg.message, shownName,
-        owner_.getLanguageName(static_cast<uint32_t>(msg.language)),
+        chatLanguageArg(owner_, static_cast<uint32_t>(msg.language)),
         msg.channelName.empty() ? std::string() : chat_channels::numberedName(chanSlot, msg.channelName),
         msg.receiverName, "",
         std::to_string(chanSlot ? chanSlot->zoneChannelId : 0u),
         std::to_string(chanSlot ? chanSlot->number : 0),
         chanSlot ? chanSlot->name : std::string(),
-        std::to_string(chanSlot ? chanSlot->instanceId : 0u), "0", guidBuf
+        std::to_string(chanSlot ? chanSlot->instanceId : 0u), "0",
+        chatGuidArg(own ? owner_.getPlayerGuid() : msg.senderGuid), "0"
     });
 }
 

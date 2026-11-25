@@ -724,16 +724,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         std::string itemName = owner_.itemNameWithProperty(info->name, randomProp);
         uint32_t quality = info->quality;
         std::string link = buildItemLink(itemId, quality, itemName, owner_.getPlayerLevel());
-        // LOOT_ITEM_SELF, LOOT_ITEM_PUSHED_SELF or LOOT_ITEM_CREATED_SELF (and
-        // their _MULTIPLE) as CHAT_MSG_LOOT, as 0x00523900 picks them from the
-        // packet's flags - and none when the server says not to show it. This
-        // printed "Received item: [x] x2" as a system line for all of them.
-        owner_.addLocalChatLine(ChatType::LOOT, interface_text::itemPushLine(push, link, who, uiText));
-        triggerItemPushTutorials(guid, *info, bagSlot, slot);
-        if (!self) return;
-        if (auto* qh = owner_.getQuestHandler())
-            qh->announceQuestItemPushed(itemId, count, totalCount, info->name);
-        if (owner_.addonEventCallbackRef()) {
+        // Before the line (0x00523900).
+        if (self && owner_.addonEventCallbackRef()) {
             fireBagUpdates();
             // ITEM_PUSH(bagSlot, icon), which is what the bag button's flash
             // animation reads: mainmenubarbagbuttons compares its own GetID
@@ -745,6 +737,15 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                     {std::to_string(bagButtonId),
                      owner_.getItemIconPath(info->displayInfoId)});
         }
+        // LOOT_ITEM_SELF, LOOT_ITEM_PUSHED_SELF or LOOT_ITEM_CREATED_SELF (and
+        // their _MULTIPLE) as CHAT_MSG_LOOT, as 0x00523900 picks them from the
+        // packet's flags - and none when the server says not to show it. This
+        // printed "Received item: [x] x2" as a system line for all of them.
+        owner_.addLocalChatLine(ChatType::LOOT, interface_text::itemPushLine(push, link, who, uiText));
+        triggerItemPushTutorials(guid, *info, bagSlot, slot);
+        if (!self) return;
+        if (auto* qh = owner_.getQuestHandler())
+            qh->announceQuestItemPushed(itemId, count, totalCount, info->name);
         if (owner_.itemLootCallbackRef())
             owner_.itemLootCallbackRef()(itemId, count, quality, itemName);
     };
@@ -6612,7 +6613,17 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                     it->randomProp);
                 std::string link = buildItemLink(data.entry, data.quality, itemName,
                                                  owner_.getPlayerLevel());
-                // The same line the immediate path prints (0x00523900).
+                // The event first (0x00523900), which this path had never fired. An item
+                // whose name was not cached when it arrived is exactly the
+                // first one of its kind the player picks up, so the interface
+                // heard nothing on precisely the pickups it most wanted to
+                // hear about - watchframe refreshes its objectives on this.
+                if (it->self && owner_.addonEventCallbackRef()) {
+                    owner_.addonEventCallbackRef()("ITEM_PUSH",
+                            {std::to_string(it->bagButtonId),
+                             owner_.getItemIconPath(data.displayInfoId)});
+                }
+                // The same line the immediate path prints.
                 const interface_text::ItemPush push{.self = it->self, .received = it->received,
                     .created = it->created, .showInChat = it->showInChat, .count = it->count};
                 owner_.addLocalChatLine(ChatType::LOOT,
@@ -6622,16 +6633,6 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                 if (auto* qh = owner_.getQuestHandler())
                     qh->announceQuestItemPushed(data.entry, it->count, it->totalCount, data.name);
                 if (owner_.itemLootCallbackRef()) owner_.itemLootCallbackRef()(data.entry, it->count, data.quality, itemName);
-                // ...and the event, which this path had never fired. An item
-                // whose name was not cached when it arrived is exactly the
-                // first one of its kind the player picks up, so the interface
-                // heard nothing on precisely the pickups it most wanted to
-                // hear about - watchframe refreshes its objectives on this.
-                if (owner_.addonEventCallbackRef()) {
-                    owner_.addonEventCallbackRef()("ITEM_PUSH",
-                            {std::to_string(it->bagButtonId),
-                             owner_.getItemIconPath(data.displayInfoId)});
-                }
                 it = owner_.pendingItemPushNotifsRef().erase(it);
             } else {
                 ++it;
