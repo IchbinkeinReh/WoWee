@@ -3063,7 +3063,10 @@ int lua_MessageFrame_SetInsertMode(lua_State* L) {
     const bool top = mode && sameWord(mode, "TOP");
     if (!top && !(mode && sameWord(mode, "BOTTOM")))
         return luaL_error(L, "Usage: %s:SetInsertMode(\"TOP\" or \"BOTTOM\")", usageName(L, 1));
-    if (auto* w = widgetOf(L, 1)) w->messagesInsertTop = top;
+    if (auto* w = widgetOf(L, 1); w && w->messagesInsertTop != top) {
+        w->messagesInsertTop = top;
+        std::reverse(w->messages.begin(), w->messages.end());   // the newest at the end that is inserted at
+    }
     return 0;
 }
 

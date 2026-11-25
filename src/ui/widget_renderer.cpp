@@ -2815,15 +2815,12 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         }, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                     return lines.empty() ? size_t{1} : lines.size();
                 };
-                // A plain MessageFrame - UIErrorsFrame is the one the interface
-                // has - is laid from its top down, not from its bottom up: the
-                // original anchors line slot k TOPLEFT to the frame at k line
-                // heights below its top inset (0x00968790), with the slots in
-                // insert order. With insertMode="TOP" the newest is in front
-                // of the list and so on the top line. Laid bottom-up, a lone
-                // "Nicht genug Mana" sat on the last of the frame's 60 units
-                // rather than its first, lower on screen than the original's.
-                const bool topDown = w->objectType == "MessageFrame";
+                // With insertMode TOP the newest line is the frame's uppermost and the
+                // older hang below it, with BOTTOM the lowest and they stand upon it
+                // (0x00969fa0: +0x344; 0x00968790: +0x2dc). A list with TOP has its
+                // newest in front, the other at its end. UIErrorsFrame asks for TOP: a
+                // lone "Nicht genug Mana" is on the first of its 60 units.
+                const bool topDown = w->messagesInsertTop;
                 const int count = static_cast<int>(w->messages.size());
                 // Every message's lines, measured again only where the width
                 // moved; a message that came in while the frame was scrolled
@@ -2841,24 +2838,28 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     totalLines += m.rows;
                 }
                 w->messageLinesTotal = totalLines;
-                float y = topDown ? y0 : y1 - lineH;
+                // The lines of a plain MessageFrame are counted from its top: its lowest
+                // is the last that fits whole.
+                const float lowest = w->objectType == "MessageFrame"
+                                         ? y0 + (std::max(std::floor((y1 - y0) / lineH + 1e-3f), 1.0f) - 1.0f) * lineH
+                                         : y1 - lineH;
+                float y = topDown ? y0 : lowest;
                 int painted = 0;
                 int paintedLines = 0;
                 // Scrolled back by display lines (the client's ring holds the
                 // wrapped lines): those at the newest end are passed over, a
-                // message only partly passed over showing its upper lines.
-                int skipLines = topDown ? 0 : std::max(w->messageScroll, 0);
-                const int firstK = topDown ? std::max(w->messageScroll, 0) : 0;
-                for (int k = firstK; k < count && (topDown ? y < y1 : y >= y0); ++k) {
+                // message only partly passed over showing the lines away from it.
+                int skipLines = std::max(w->messageScroll, 0);
+                for (int k = 0; k < count && (topDown ? y < y1 : y >= y0); ++k) {
                     const int i = topDown ? k : count - 1 - k;
                     const auto& m = w->messages[static_cast<size_t>(i)];
-                    int hiddenBelow = 0;
+                    int passedOver = 0;
                     if (skipLines > 0) {
                         if (skipLines >= m.rows) {
                             skipLines -= m.rows;
                             continue;
                         }
-                        hiddenBelow = skipLines;
+                        passedOver = skipLines;
                         skipLines = 0;
                     }
                     // A line whose time is up is still in the history - it
@@ -2880,13 +2881,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // starts as many lines above the cursor as it needs, and
                     // the cursor then moves past all of them.
                     const size_t rows = static_cast<size_t>(std::max(m.rows, 1));
-                    const size_t shownRows = rows - static_cast<size_t>(hiddenBelow);
-                    const float top = topDown ? y : y - static_cast<float>(shownRows - 1) * lineH;
+                    const size_t shownRows = rows - static_cast<size_t>(passedOver);
+                    const float top = topDown ? y - static_cast<float>(passedOver) * lineH
+                                              : y - static_cast<float>(shownRows - 1) * lineH;
                     // Top-down the block grows downward instead, and one that
                     // would run out of the bottom stops the same way - unless it
                     // is the first, which the original shows regardless.
                     if (topDown && painted > 0 &&
-                        top + static_cast<float>(rows) * lineH > y1 + 0.5f) break;
+                        y + static_cast<float>(shownRows) * lineH > y1 + 0.5f) break;
                     // A message that does not fit whole is not drawn at all.
                     //
                     // The loop's own bound only knows where the *last* row of
@@ -2900,7 +2902,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // Stopping rather than skipping: these are drawn newest
                     // first and upward, so the next one back starts higher
                     // still and nothing after this can fit either.
-                    if (top < y0) break;
+                    if (!topDown && top < y0) break;
                     // Under the line, the same single offset copy a font
                     // string draws. ChatFontNormal declares one; this surface
                     // ignored it, which is what left chat pale over bright
@@ -2919,8 +2921,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     };
                     const float bx = std::floor(x0);
                     const float by = std::floor(top);
-                    // The lines scrolled past are below the frame: cut there.
-                    if (hiddenBelow > 0) dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
+                    // The lines scrolled past are outside the frame: cut there.
+                    if (passedOver > 0) dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
                     if (w->hasShadow) {
                         float sc[4] = {w->shadowColor[0], w->shadowColor[1],
                                        w->shadowColor[2], w->shadowColor[3]};
@@ -2944,11 +2946,10 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                    packColor(rgba, w->drawAlpha), w->drawAlpha, m.text,
                                    wrapW, false, w->justifyH.c_str(), false, &tree, w->id,
                                    (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f), lineH - size);
-                    if (hiddenBelow > 0) dl->PopClipRect();
-                    if (topDown) y += lineH * static_cast<float>(rows);
-                    else         y -= lineH * static_cast<float>(shownRows);
+                    if (passedOver > 0) dl->PopClipRect();
+                    y += lineH * static_cast<float>(shownRows) * (topDown ? 1.0f : -1.0f);
                     ++painted;
-                    paintedLines += static_cast<int>(topDown ? rows : shownRows);
+                    paintedLines += static_cast<int>(shownRows);
                 }
                 // A window holding lines and painting none of them.
                 //
