@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -109,6 +110,7 @@ void RtGiProbes::initialize(VkContext* ctx, RtScene* scene) {
 
 void RtGiProbes::shutdown() {
     if (!ctx_) return;
+    if (building_.valid()) (void)building_.get();
     VkDevice dev = ctx_->getDevice();
     ::wowee::rendering::deviceWaitIdle(dev);
     destroyResources();
@@ -193,7 +195,7 @@ bool RtGiProbes::createPipelines() {
     pl.pSetLayouts = setLayouts;
     if (vkCreatePipelineLayout(dev, &pl, nullptr, &pipelineLayout_) != VK_SUCCESS) return false;
 
-    auto make = [&](const char* path, VkPipeline& out) {
+    auto make = [this, dev](const char* path, VkPipeline& out) {
         VkShaderModule module;
         if (!module.loadFromFile(dev, path)) {
             LOG_ERROR("RtGiProbes: failed to load ", path);
@@ -210,20 +212,31 @@ bool RtGiProbes::createPipelines() {
         return ok;
     };
     const bool hw = scene_->backend() == RtScene::Backend::Hardware;
-    pipelinesOk_ = make(hw ? "assets/shaders/rt_gi_relocate_hw.comp.spv"
-                           : "assets/shaders/rt_gi_relocate.comp.spv", relocate_) &&
-                   make(hw ? "assets/shaders/rt_gi_trace_hw.comp.spv"
-                           : "assets/shaders/rt_gi_trace.comp.spv", trace_) &&
-                   make("assets/shaders/rt_gi_update.comp.spv", update_) &&
-                   make("assets/shaders/rt_gi_exposure.comp.spv", exposure_);
+    building_ = std::async(std::launch::async, [this, make, hw] {
+        return make(hw ? "assets/shaders/rt_gi_relocate_hw.comp.spv"
+                       : "assets/shaders/rt_gi_relocate.comp.spv", relocate_) &&
+               make(hw ? "assets/shaders/rt_gi_trace_hw.comp.spv"
+                       : "assets/shaders/rt_gi_trace.comp.spv", trace_) &&
+               make("assets/shaders/rt_gi_update.comp.spv", update_) &&
+               make("assets/shaders/rt_gi_exposure.comp.spv", exposure_);
+    });
+    return true;
+}
+
+bool RtGiProbes::pipelinesDone(bool wait) {
+    if (!ctx_) return true;
+    if (!pipelinesTried_ && !createPipelines()) LOG_ERROR("RtGiProbes: pipelines unavailable, no probe light");
+    if (!building_.valid()) return true;
+    if (!wait && building_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
+    pipelinesOk_ = building_.get();
     if (!pipelinesOk_) LOG_ERROR("RtGiProbes: pipelines unavailable, no probe light");
-    return pipelinesOk_;
+    return true;
 }
 
 bool RtGiProbes::createResources() {
     if (!ctx_) return false;
     if (hasResources()) return true;
-    if (!pipelinesTried_) createPipelines();
+    (void)pipelinesDone(true);
     if (!pipelinesOk_) return false;
     VkDevice dev = ctx_->getDevice();
     VmaAllocator alloc = ctx_->getAllocator();

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 
 namespace wowee {
@@ -164,6 +165,7 @@ bool RtLighting::initialize(VkContext* ctx, RtScene* scene) {
 
 void RtLighting::shutdown() {
     if (!ctx_) return;
+    if (building_.valid()) (void)building_.get();
     VkDevice dev = ctx_->getDevice();
     VmaAllocator alloc = ctx_->getAllocator();
     ::wowee::rendering::deviceWaitIdle(dev);
@@ -259,7 +261,7 @@ bool RtLighting::createPipelines() {
     pl.pPushConstantRanges = &pcr;
     if (vkCreatePipelineLayout(dev, &pl, nullptr, &pipelineLayout_) != VK_SUCCESS) return false;
 
-    auto make = [&](const char* path, VkPipeline& out) {
+    auto make = [this, dev](const char* path, VkPipeline& out) {
         VkShaderModule module;
         if (!module.loadFromFile(dev, path)) {
             LOG_ERROR("RtLighting: failed to load ", path);
@@ -276,13 +278,35 @@ bool RtLighting::createPipelines() {
         return ok;
     };
     const bool hw = scene_->backend() == RtScene::Backend::Hardware;
-    pipelinesOk_ = make("assets/shaders/rt_prepare.comp.spv", prepare_) &&
-                   make("assets/shaders/rt_prepare_ms.comp.spv", prepareMs_) &&
-                   make(hw ? "assets/shaders/rt_trace_hw.comp.spv"
-                           : "assets/shaders/rt_trace.comp.spv", trace_) &&
-                   make("assets/shaders/rt_temporal.comp.spv", temporal_) &&
-                   make("assets/shaders/rt_filter.comp.spv", filter_);
-    if (!pipelinesOk_) LOG_ERROR("RtLighting: pipelines unavailable, ray traced lighting stays off");
+    building_ = std::async(std::launch::async, [this, make, hw] {
+        const auto from = std::chrono::steady_clock::now();
+        const bool ok = make("assets/shaders/rt_prepare.comp.spv", prepare_) &&
+                        make("assets/shaders/rt_prepare_ms.comp.spv", prepareMs_) &&
+                        make(hw ? "assets/shaders/rt_trace_hw.comp.spv"
+                                : "assets/shaders/rt_trace.comp.spv", trace_) &&
+                        make("assets/shaders/rt_temporal.comp.spv", temporal_) &&
+                        make("assets/shaders/rt_filter.comp.spv", filter_);
+        LOG_INFO("RtLighting: pipelines compiled in ",
+                 std::chrono::duration<float>(std::chrono::steady_clock::now() - from).count(), " s");
+        return ok;
+    });
+    return true;
+}
+
+// Made on the main thread, with the driver's cache empty, they stopped the login
+// screen for nine seconds, and the world for as long where the tracing was
+// switched on there. Beside the frames, which are drawn without it till then.
+bool RtLighting::pipelinesReady(bool wait) {
+    if (!pipelinesTried_ && !createPipelines())
+        LOG_ERROR("RtLighting: pipelines unavailable, ray traced lighting stays off");
+    // The probes' at the same time, for the same wait.
+    const bool probes = probes_.pipelinesDone(wait);
+    if (building_.valid()) {
+        if (!wait && building_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
+        pipelinesBuilt_ = building_.get();
+        if (!pipelinesBuilt_) LOG_ERROR("RtLighting: pipelines unavailable, ray traced lighting stays off");
+    }
+    pipelinesOk_ = pipelinesBuilt_ && probes;
     return pipelinesOk_;
 }
 
@@ -489,8 +513,7 @@ void RtLighting::destroyGbuffer() {
 
 void RtLighting::warmUp() {
     if (mode_ == Mode::Off || !scene_ || ctx_->getGbufferRenderPass() == VK_NULL_HANDLE) return;
-    if (!pipelinesTried_ && !createPipelines()) return;
-    if (!pipelinesOk_) return;
+    if (!pipelinesReady(true)) return;
     scene_->setActive(true);
     scene_->uploadAllPending();
 }
@@ -519,8 +542,7 @@ bool RtLighting::prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples) 
         resultFrame_ = 0;
         return true;
     }
-    if (!pipelinesTried_ && !createPipelines()) return false;
-    if (!pipelinesOk_) return false;
+    if (!pipelinesReady(false)) return false;
     // Switched on: the whole scene in one hitch here, before the first
     // traced frame, rather than seconds of frames each building a share.
     const bool wasActive = scene_->isActive();

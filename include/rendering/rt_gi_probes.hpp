@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <future>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -89,6 +90,10 @@ public:
     /// Create the atlas and buffers. With the device idle: the atlas is
     /// cleared and put in GENERAL with a submit of its own.
     bool createResources();
+    /// Its compute pipelines, begun on a thread of its own the first time they
+    /// are asked for (with ray queries the driver's work of seconds); whether
+    /// they are done, for better or worse - `wait`, once they are.
+    bool pipelinesDone(bool wait);
     /// Free them. With the device idle.
     void destroyResources();
     [[nodiscard]] bool hasResources() const { return atlas_.image != VK_NULL_HANDLE; }
@@ -125,6 +130,7 @@ public:
 
 private:
     bool createPipelines();
+    std::future<bool> building_;
     void writeSet(uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize, VkImageView gbuf);
 
     VkContext* ctx_ = nullptr;

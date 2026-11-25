@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <future>
 #include <map>
 #include <utility>
 #include <vector>
@@ -245,6 +246,10 @@ private:
     };
 
     bool createPipelines();
+    std::future<bool> building_;
+    /// The compute pipelines, begun on a thread of its own the first time they
+    /// are asked for; whether they are there - `wait`, once they are.
+    bool pipelinesReady(bool wait);
     bool createApplyPipeline();
     bool createImages(VkExtent2D traceExtent);
     void destroyImages();
@@ -261,6 +266,7 @@ private:
     bool fullResolution_ = false;
     bool pipelinesTried_ = false;
     bool pipelinesOk_ = false;
+    bool pipelinesBuilt_ = false;
 
     VkExtent2D traceExtent_{};
     Slot slots_[MAX_FRAMES_IN_FLIGHT];

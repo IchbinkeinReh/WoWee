@@ -131,6 +131,7 @@ int main() {
                                             ctx.getSwapchainFormat(), VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 
         lighting.setMode(RtLighting::Mode::Full);
+        lighting.warmUp();
         lighting.prepare(sceneExtent, VK_SAMPLE_COUNT_1_BIT);
 
         RtLighting::FrameInputs in{};
