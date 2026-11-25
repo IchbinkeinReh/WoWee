@@ -5340,6 +5340,12 @@ void Application::applyServerMovementState(float deltaTime) {
     }
     if (renderer) {
         if (auto* ac = renderer->getAnimationController()) ac->setTaxiFlight(onTaxi);
+        // The barber's cape on as its window opens, and off again (0x0052f9b0,
+        // 0x0052e9f0).
+        if (appearanceComposer_ && gameHandler &&
+            appearanceComposer_->setBarberDress(gameHandler->isBarberShopOpen())) {
+            gameHandler->markOnlineEquipmentDirty();
+        }
         // Round to the character's face while the barber has them in the chair,
         // and back to the player's own view when either ends.
         //

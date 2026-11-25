@@ -7,6 +7,7 @@
 #include "game/inventory.hpp"
 #include "pipeline/char_sections.hpp"
 #include <string>
+#include <utility>
 #include <vector>
 #include <unordered_set>
 #include <cstdint>
@@ -122,6 +123,9 @@ public:
     /// A spell's worn item over what the player wears in an equipment slot
     /// (CharProc 17, 0x006f82d0); display 0 takes it off again (0x00723730).
     void setItemOverride(int equipSlot, uint32_t displayId, uint8_t inventoryType);
+    /// In a barber's chair, its cape on and the helm, the shoulders and the
+    /// shield off (barber_dress.hpp); whether that changed.
+    bool setBarberDress(bool on) { return std::exchange(barberDress_, on) != on; }
     /// The player's inventory as it is drawn: those items over the equipped.
     [[nodiscard]] game::Inventory dressedInventory(const game::Inventory& inventory) const;
     /// The display worn over an equipment slot, if a spell put one there.
@@ -129,6 +133,7 @@ public:
 
 private:
     std::map<int, std::pair<uint32_t, uint8_t>> itemOverrides_;  ///< equipment slot → display, inventory type
+    bool barberDress_ = false;
     bool loadWeaponM2(const std::string& m2Path, pipeline::M2Model& outModel);
 
     /// Attach the equipped head item's model. Other players resolve this through

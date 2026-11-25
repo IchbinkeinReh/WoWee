@@ -1,4 +1,5 @@
 #include "catch_amalgamated.hpp"
+#include "game/barber_dress.hpp"
 #include "game/inventory.hpp"
 
 using namespace wowee::game;
@@ -430,4 +431,41 @@ TEST_CASE("a plan for an already sorted inventory is empty", "[inventory]") {
     inv.setBackpackSlot(1, makeItem(200, ItemQuality::RARE));
     inv.setBackpackSlot(2, makeItem(300, ItemQuality::COMMON));
     CHECK(inv.computeSortSwaps().empty());
+}
+
+// 0x0052f9b0: a barber's cape is put over what is worn, and helm, shoulders and
+// shield are put away.
+TEST_CASE("what is worn in a barber's chair", "[inventory][barber]") {
+    using namespace wowee::game;
+    Inventory worn;
+    const auto put = [&](EquipSlot slot, uint32_t id, uint32_t display, uint8_t type) {
+        ItemDef item;
+        item.itemId = id;
+        item.displayInfoId = display;
+        item.inventoryType = type;
+        worn.setEquipSlot(slot, item);
+    };
+    put(EquipSlot::HEAD, 10, 100, 1);
+    put(EquipSlot::SHOULDERS, 11, 101, 3);
+    put(EquipSlot::CHEST, 12, 102, 5);
+    put(EquipSlot::MAIN_HAND, 13, 103, 13);
+    put(EquipSlot::OFF_HAND, 14, 104, InvType::SHIELD);
+    const Inventory own = worn;
+    barber_dress::apply(worn);
+    CHECK(worn.getEquipSlot(EquipSlot::HEAD).empty());
+    CHECK(worn.getEquipSlot(EquipSlot::SHOULDERS).empty());
+    CHECK(worn.getEquipSlot(EquipSlot::OFF_HAND).empty());
+    CHECK(worn.getEquipSlot(EquipSlot::CHEST).item.displayInfoId == 102);
+    CHECK(worn.getEquipSlot(EquipSlot::MAIN_HAND).item.displayInfoId == 103);
+    CHECK_FALSE(worn.getEquipSlot(EquipSlot::TABARD).empty());
+    CHECK(worn.getEquipSlot(EquipSlot::TABARD).item.displayInfoId == 54559);
+    CHECK(worn.getEquipSlot(EquipSlot::TABARD).item.inventoryType == InvType::TABARD);
+
+    // A dagger in the off hand stays, and a tabard is covered by the cape.
+    worn = own;
+    put(EquipSlot::OFF_HAND, 15, 105, 13);
+    put(EquipSlot::TABARD, 16, 106, InvType::TABARD);
+    barber_dress::apply(worn);
+    CHECK(worn.getEquipSlot(EquipSlot::OFF_HAND).item.displayInfoId == 105);
+    CHECK(worn.getEquipSlot(EquipSlot::TABARD).item.displayInfoId == 54559);
 }

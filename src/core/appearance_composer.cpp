@@ -15,6 +15,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/char_sections.hpp"
 #include "pipeline/dbc_layout.hpp"
+#include "game/barber_dress.hpp"
 #include "game/game_handler.hpp"
 #include "core/item_attachments.hpp"
 #include "core/weapon_attachment.hpp"
@@ -308,6 +309,7 @@ game::Inventory AppearanceComposer::dressedInventory(const game::Inventory& inve
         item.inventoryType = worn.second;
         dressed.setEquipSlot(slot, item);
     }
+    if (barberDress_) game::barber_dress::apply(dressed);
     return dressed;
 }
 
@@ -322,7 +324,7 @@ void AppearanceComposer::loadEquippedHelm(game::Inventory& inventory) {
 
     // Hiding the helm is a display choice, not an unequip: the item stays on,
     // the model comes off, and the hair comes back.
-    if (!gameHandler_->isHelmVisible()) return;
+    if (!gameHandler_->isHelmVisible() || barberDress_) return;
 
     const auto& headSlot = inventory.getEquipSlot(game::EquipSlot::HEAD);
     // A spell's worn helm (CharProc 17) over the equipped one.
@@ -411,6 +413,7 @@ void AppearanceComposer::attachEquippedWeapons() {
             const auto* info = gameHandler_->getItemInfo(shoulders.item.itemId);
             shoulderDisplay = info && info->valid ? info->displayInfoId : shoulders.item.displayInfoId;
         }
+        if (barberDress_) shoulderDisplay = 0;
         attachShoulders(*charRenderer, *assetManager_, charInstanceId, shoulderDisplay,
                         [this] { return entitySpawner_->allocateWeaponModelId(); });
     }
@@ -454,6 +457,7 @@ void AppearanceComposer::attachEquippedWeapons() {
         const game::EquipSlot slot = kSlots[i];
         const auto& equipSlot = inventory.getEquipSlot(slot);
         if (!present[i] || equipSlot.item.displayInfoId == 0) continue;
+        if (barberDress_ && game::barber_dress::hides(slot, items[i].inventoryType)) continue;
 
         const uint32_t attachmentId = unitWeaponPoint(kWeaponSlots[i], present, dress);
         if (attachmentId == attachment::kNone) continue;
