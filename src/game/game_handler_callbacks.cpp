@@ -5037,6 +5037,22 @@ uint32_t GameHandler::itemSellPriceShown(uint64_t itemGuid, uint32_t itemId, uin
     return stackCount > 1 ? price * stackCount : price;
 }
 
+int GameHandler::discountStanding(uint64_t npcGuid) const {
+    const auto player = getEntityManager().getEntity(playerGuid);
+    const auto npc = npcGuid != 0 ? getEntityManager().getEntity(npcGuid) : nullptr;
+    const uint16_t ft = fieldIndex(UF::UNIT_FIELD_FACTIONTEMPLATE);
+    auto* am = services_.assetManager;
+    if (!player || !npc || !am || !am->isInitialized() || ft == 0xFFFF) return 3;
+    auto templates = am->loadDBCOptional("FactionTemplate.dbc");
+    auto factions = am->loadDBCOptional("Faction.dbc");
+    if (!templates || !templates->isLoaded() || !factions || !factions->isLoaded()) return 3;
+    const int32_t tr = templates->findRecordById(npc->getField(ft));
+    if (tr < 0) return 3;
+    const int32_t fr = factions->findRecordById(templates->getUInt32(static_cast<uint32_t>(tr), 1));
+    if (fr < 0 || static_cast<int32_t>(factions->getUInt32(static_cast<uint32_t>(fr), 1)) < 0) return 3;
+    return unitReaction(*npc, *player);
+}
+
 uint32_t GameHandler::itemRepairCostShown(uint64_t itemGuid) const {
     if (!inventoryHandler_ || itemGuid == 0) return 0;
     const uint32_t cost = inventoryHandler_->estimateItemRepairCost(itemGuid);

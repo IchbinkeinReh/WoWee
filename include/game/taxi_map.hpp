@@ -8,6 +8,8 @@
 #include "game/world_map_transforms.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
@@ -96,6 +98,13 @@ inline bool taxiNodeRefused(bool alliance, uint32_t mountA, uint32_t mountB) {
     return alliance ? (horde && !ally) : (ally && !horde);
 }
 
+/// A leg's fare for a standing (0 hated to 7 exalted, 3 neutral) with the
+/// flight master's faction: a twentieth less for each from friendly on.
+inline uint32_t taxiFare(uint32_t cost, int standing) {
+    const float part = 1.0f - 0.05f * static_cast<float>(std::clamp(standing, 3, 7) - 3);
+    return static_cast<uint32_t>(std::lrint(part * static_cast<float>(cost)));
+}
+
 struct TaxiLeg {
     uint32_t from = 0, to = 0;
     uint32_t cost = 0;
@@ -141,7 +150,10 @@ public:
                 const float length = here.length + leg->length;
                 const auto it = reached_.find(leg->to);
                 if (it != reached_.end() && !(length < it->second.length)) continue;
-                reached_[leg->to] = {next, here.cost + leg->cost, length};
+                Reached there{next, here.cost, length};
+                for (size_t s = 0; s < there.cost.size(); ++s)
+                    there.cost[s] += taxiFare(leg->cost, 3 + static_cast<int>(s));
+                reached_[leg->to] = there;
             }
         }
         // A path of its own is flown whatever its length (0x005914b0, 0x00590c30).
@@ -149,10 +161,11 @@ public:
     }
 
     [[nodiscard]] bool reaches(uint32_t id) const { return id != start_ && reached_.count(id) != 0; }
-    [[nodiscard]] uint32_t cost(uint32_t id) const {
-        if (const auto d = direct_.find(id); d != direct_.end()) return d->second;
+    /// Its fare (0x00591350): each stop's at the standing, rounded by itself.
+    [[nodiscard]] uint32_t cost(uint32_t id, int standing = 3) const {
+        if (const auto d = direct_.find(id); d != direct_.end()) return taxiFare(d->second, standing);
         const auto it = reached_.find(id);
-        return it == reached_.end() ? 0 : it->second.cost;
+        return it == reached_.end() ? 0 : it->second.cost[static_cast<size_t>(std::clamp(standing, 3, 7) - 3)];
     }
     /// The nodes from the current one to `id`, both included; empty without a way.
     [[nodiscard]] std::vector<uint32_t> to(uint32_t id) const {
@@ -168,7 +181,7 @@ public:
 private:
     struct Reached {
         uint32_t prev = 0;
-        uint32_t cost = 0;
+        std::array<uint32_t, 5> cost{};  // by the standing, neutral to exalted
         float length = 0.0f;
     };
     std::unordered_map<uint32_t, Reached> reached_;

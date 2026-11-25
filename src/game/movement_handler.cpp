@@ -4191,7 +4191,9 @@ std::pair<float, float> MovementHandler::taxiLegPosition(uint32_t nodeId) const 
     return taxiLegPos(taxiMap_, worldMapTransforms_, it->second.mapId, it->second.x, it->second.y);
 }
 
-uint32_t MovementHandler::getTaxiCostTo(uint32_t destNodeId) const { return taxiRoutes_.cost(destNodeId); }
+uint32_t MovementHandler::getTaxiCostTo(uint32_t destNodeId) const {
+    return taxiRoutes_.cost(destNodeId, owner_.discountStanding(taxiNpcGuid_));
+}
 
 bool MovementHandler::hasTaxiRouteTo(uint32_t destNodeId) const { return taxiRoutes_.reaches(destNodeId); }
 

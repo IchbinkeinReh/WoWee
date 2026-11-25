@@ -134,6 +134,13 @@ TEST_CASE("a flight takes the shortest way over the map's nodes", "[taxi][route]
     routes.build(map, legs, 1, open);
     CHECK(routes.to(5) == std::vector<uint32_t>{1, 3, 4, 5});
     CHECK(routes.cost(5) == 90);
+    // Friendly to exalted with the flight master's faction (0x00591350): each
+    // stop's fare by itself.
+    CHECK(routes.cost(5, 0) == 90);
+    CHECK(routes.cost(5, 5) == 18 + 27 + 36);
+    CHECK(routes.cost(5, 7) == 16 + 24 + 32);
+    CHECK(routes.cost(4, 6) == 84);
+    CHECK(taxiFare(43, 4) == 41);
     // A path of its own is flown however long it is - but not on the way on.
     CHECK(routes.to(4) == std::vector<uint32_t>{1, 4});
     CHECK(routes.cost(4) == 99);
