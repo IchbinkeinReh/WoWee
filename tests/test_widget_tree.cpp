@@ -1339,6 +1339,12 @@ TEST_CASE("Raise puts a frame in front of its strata", "[widget][layout]") {
     Anchor p; p.point = "CENTER"; p.relativePoint = "CENTER";
     tree.addPoint(a, p);
     tree.addPoint(b, p);
+    tree.setWidth(a, 50.0f);
+    tree.setHeight(a, 50.0f);
+    tree.get(a)->topLevel = true;
+    tree.setWidth(b, 50.0f);
+    tree.setHeight(b, 50.0f);
+    tree.get(b)->topLevel = true;
     tree.layout(kScreenW, kScreenH);
     REQUIRE(tree.get(a)->effLevel == tree.get(b)->effLevel);
 
@@ -1369,23 +1375,18 @@ TEST_CASE("Raising does not cross a strata boundary", "[widget][layout]") {
     tree.get(low)->strataExplicit  = true;
     tree.get(high)->strata = FrameStrata::Tooltip;
     tree.get(high)->strataExplicit = true;
+    tree.setWidth(low, 50.0f);
+    tree.setHeight(low, 50.0f);
+    tree.get(low)->topLevel = true;
+    tree.setWidth(high, 50.0f);
+    tree.setHeight(high, 50.0f);
+    tree.get(high)->topLevel = true;
     tree.layout(kScreenW, kScreenH);
 
     tree.raise(low);
     tree.layout(kScreenW, kScreenH);
     REQUIRE(tree.get(low)->effStrata == FrameStrata::Dialog);
     REQUIRE(tree.get(high)->effStrata == FrameStrata::Tooltip);
-}
-
-TEST_CASE("Lower never sends a frame below zero", "[widget][layout]") {
-    // A negative level sorts under the root and the frame stops being drawn.
-    WidgetTree tree;
-    const uint32_t f = tree.create(WidgetKind::Frame, tree.root(), "Sunk");
-    Anchor p; p.point = "CENTER"; p.relativePoint = "CENTER";
-    tree.addPoint(f, p);
-    tree.layout(kScreenW, kScreenH);
-    for (int i = 0; i < 5; ++i) { tree.lower(f); tree.layout(kScreenW, kScreenH); }
-    REQUIRE(tree.get(f)->effLevel >= 0);
 }
 
 TEST_CASE("Scale sizes a frame and its offsets, and compounds", "[widget][layout]") {
@@ -1497,6 +1498,12 @@ TEST_CASE("Raising a window carries its regions with it", "[widget][layout]") {
     tree.addPoint(label, p);
     const uint32_t other = tree.create(WidgetKind::Frame, tree.root(), "Other");
     tree.addPoint(other, p);
+    tree.setWidth(win, 50.0f);
+    tree.setHeight(win, 50.0f);
+    tree.get(win)->topLevel = true;
+    tree.setWidth(other, 50.0f);
+    tree.setHeight(other, 50.0f);
+    tree.get(other)->topLevel = true;
     tree.layout(kScreenW, kScreenH);
 
     tree.raise(win);
@@ -1517,17 +1524,23 @@ TEST_CASE("A child with its own level still follows when the parent is raised",
     Anchor p; p.point = "CENTER"; p.relativePoint = "CENTER";
     tree.addPoint(win, p);
     tree.addPoint(inner, p);
+    const uint32_t over = tree.create(WidgetKind::Frame, tree.root(), "Over");
+    tree.addPoint(over, p);
+    tree.setFrameLevel(over, 9);
+    for (const uint32_t f : {win, over}) {
+        tree.setWidth(f, 50.0f);
+        tree.setHeight(f, 50.0f);
+        tree.get(f)->topLevel = true;
+    }
     tree.layout(kScreenW, kScreenH);
     // What RaiseFrameLevelByTwo does.
     tree.get(inner)->level = tree.get(inner)->effLevel + 2;
     tree.get(inner)->levelExplicit = true;
     tree.layout(kScreenW, kScreenH);
-    const int before = tree.get(inner)->effLevel - tree.get(win)->effLevel;
-
     tree.raise(win);
     tree.layout(kScreenW, kScreenH);
-    const int after = tree.get(inner)->effLevel - tree.get(win)->effLevel;
-    REQUIRE(after == before);           // the gap is kept
+    // The levels between that no frame has go (0x00495060), the order stays.
+    REQUIRE(tree.get(win)->effLevel > tree.get(over)->effLevel);
     REQUIRE(tree.get(inner)->effLevel > tree.get(win)->effLevel);
 }
 
@@ -2237,44 +2250,102 @@ TEST_CASE("A bar with no fill still sorts as the frame it is",
     CHECK(indexOf(bar) < indexOf(sibling));
 }
 
-TEST_CASE("Raise and Lower are idempotent", "[widget][level]") {
+TEST_CASE("Raise is idempotent", "[widget][level]") {
     // ShowUIPanel raises on every panel open, so a Raise that adds one whether
     // or not anything is above it is a leak measured in panel opens. A quest
     // frame that starts at level 3 was found at 344 after a play session.
     WidgetTree tree;
-    const uint32_t root = tree.create(WidgetKind::Frame, 0, "Root");
-    const uint32_t a = tree.create(WidgetKind::Frame, root, "A");
-    const uint32_t b = tree.create(WidgetKind::Frame, root, "B");
+    Anchor p;
+    p.point = "CENTER";
+    p.relativePoint = "CENTER";
+    const auto window = [&](const char* name) {
+        const uint32_t id = tree.create(WidgetKind::Frame, tree.rootId(), name);
+        tree.setWidth(id, 50.0f);
+        tree.setHeight(id, 50.0f);
+        tree.addPoint(id, p);
+        tree.get(id)->topLevel = true;
+        return id;
+    };
+    const uint32_t a = window("A"), b = window("B");
     tree.layout(1920.0f, 1080.0f);
-
-    tree.raise(a);
-    tree.layout(1920.0f, 1080.0f);
-    const int afterFirst = tree.get(a)->effLevel;
-
-    // Nine more, with nothing else moving. A frame already on top is already
-    // where Raise is asking it to be.
     for (int i = 0; i < 9; ++i) {
         tree.raise(a);
         tree.layout(1920.0f, 1080.0f);
     }
-    CHECK(tree.get(a)->effLevel == afterFirst);
-
-    // And it still does its job: B raised above A goes higher, once.
-    tree.raise(b);
-    tree.layout(1920.0f, 1080.0f);
-    CHECK(tree.get(b)->effLevel > tree.get(a)->effLevel);
-    const int bLevel = tree.get(b)->effLevel;
-    tree.raise(b);
-    tree.layout(1920.0f, 1080.0f);
-    CHECK(tree.get(b)->effLevel == bLevel);
-
-    // Lower is the same shape in the other direction, and never goes below
-    // zero - a negative level sorts under the root and stops being drawn.
-    for (int i = 0; i < 12; ++i) {
-        tree.lower(a);
+    const int aLevel = tree.get(a)->effLevel;
+    CHECK(aLevel > tree.get(b)->effLevel);
+    CHECK(aLevel <= 2);
+    for (int i = 0; i < 99; ++i) {
+        tree.raise(i % 2 ? a : b);
         tree.layout(1920.0f, 1080.0f);
     }
-    CHECK(tree.get(a)->effLevel >= 0);
+    CHECK(tree.get(b)->effLevel > tree.get(a)->effLevel);
+    CHECK(tree.get(b)->effLevel <= 3);
+}
+
+// 0x004951a0, 0x00494d20, 0x00495060
+TEST_CASE("A window raised: over what covers it, with all that is in it", "[widget][level]") {
+    WidgetTree tree;
+    const auto frame = [&](const char* name, uint32_t parent, float x) {
+        const uint32_t id = tree.create(WidgetKind::Frame, parent, name);
+        tree.setWidth(id, 50.0f);
+        tree.setHeight(id, 50.0f);
+        Anchor p;
+        p.point = "CENTER";
+        p.relativePoint = "CENTER";
+        p.x = x;
+        tree.addPoint(id, p);
+        return id;
+    };
+    const uint32_t win = frame("Win", tree.rootId(), 0.0f);
+    const uint32_t button = frame("Button", win, 0.0f);
+    const uint32_t over = frame("Over", tree.rootId(), 20.0f);
+    const uint32_t far = frame("Far", tree.rootId(), 400.0f);
+    for (int i = 0; i < 3; ++i) tree.setFrameLevel(over, tree.get(over)->effLevel + 100);
+    tree.setFrameLevel(far, 120);
+    const uint32_t dialog = frame("Dialog", tree.rootId(), 0.0f);
+    tree.setFrameStrata(dialog, FrameStrata::Dialog);
+    tree.setFrameLevel(dialog, 77);
+    tree.layout(kScreenW, kScreenH);
+    const auto level = [&](uint32_t id) { return tree.get(id)->effLevel; };
+    const int inIt = level(button) - level(win), before = level(win);
+
+    // Nothing that is in no window.
+    tree.raise(button);
+    CHECK(level(win) == before);
+    tree.get(win)->topLevel = true;
+    tree.raise(button);
+    CHECK(level(win) > level(over));
+    CHECK(level(win) < 10);
+    CHECK(level(button) - level(win) == inIt);
+    CHECK(level(over) > level(far));
+    CHECK(level(dialog) == 77);
+    tree.layout(kScreenW, kScreenH);
+    CHECK(level(button) - level(win) == inIt);
+
+    // One that covers nothing of it, or is hidden, is none to come over.
+    tree.setFrameLevel(far, level(win) + 5);
+    tree.setFrameLevel(over, level(win) + 5);
+    tree.get(over)->shown = false;
+    tree.layout(kScreenW, kScreenH);
+    const int stays = level(win);
+    tree.raise(win);
+    CHECK(level(win) == stays);
+    tree.get(over)->shown = true;
+    tree.layout(kScreenW, kScreenH);
+    tree.raise(win);
+    CHECK(level(win) > level(over));
+
+    // Up by 128 at most, and what is in it as much (0x004910a0).
+    for (int i = 0; i < 150; ++i) {
+        const uint32_t one = frame("One", tree.rootId(), 0.0f);
+        while (level(one) < level(win) + 10 + i) tree.setFrameLevel(one, level(win) + 10 + i);
+    }
+    tree.layout(kScreenW, kScreenH);
+    tree.raise(win);
+    CHECK(level(button) - level(win) == inIt);
+    tree.layout(kScreenW, kScreenH);
+    CHECK(level(button) - level(win) == inIt);
 }
 
 TEST_CASE("A scroll frame clips its scroll child, not its scroll bar",
@@ -2728,11 +2799,20 @@ TEST_CASE("A frame raised takes what is in it along", "[widget][level]") {
     const uint32_t list = tree.create(WidgetKind::Frame, tree.uiParentId(), "List");
     const uint32_t item = tree.create(WidgetKind::Frame, list, "ListItem");
     tree.setFrameLevel(item, 4);
-    const int above = tree.get(item)->effLevel - tree.get(list)->effLevel;
+    Anchor p;
+    p.point = "CENTER";
+    p.relativePoint = "CENTER";
+    for (const uint32_t f : {other, list}) {
+        tree.setWidth(f, 50.0f);
+        tree.setHeight(f, 50.0f);
+        tree.addPoint(f, p);
+        tree.get(f)->topLevel = true;
+    }
+    tree.layout(1920.0f, 1080.0f);
     tree.raise(list);
     tree.layout(1920.0f, 1080.0f);
     CHECK(tree.get(list)->effLevel > tree.get(other)->effLevel);
-    CHECK(tree.get(item)->effLevel == tree.get(list)->effLevel + above);
+    CHECK(tree.get(item)->effLevel > tree.get(list)->effLevel);
 }
 
 TEST_CASE("Ordinary children still stack one above their parent", "[widget][level]") {

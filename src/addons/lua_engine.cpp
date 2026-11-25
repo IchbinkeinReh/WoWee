@@ -9062,10 +9062,8 @@ int lua_Frame_Raise(lua_State* L) {
     return 0;
 }
 int lua_Frame_Lower(lua_State* L) {
-    if (!protectedFrameAllows(L)) return 0;
-    auto* tree = wowee::addons::getWidgetTree(L);
-    const uint32_t id = widgetIdOf(L, 1);
-    if (tree && id) tree->lower(id);
+    // 0x0049ff50 -> 0x004899f0: nothing.
+    protectedFrameAllows(L);
     return 0;
 }
 
@@ -18142,6 +18140,9 @@ void LuaEngine::frameHidden(uint32_t id) {
 
 void LuaEngine::tellVisibility(uint32_t id, bool up, bool shown) {
     if (auto* button = widgets_.get(id); button && !up) button->mouseButtonState(false);   // 0x0096f410
+    // A toplevel frame comes to the front as it is shown, before its OnShow
+    // (0x00490410).
+    if (const auto* window = widgets_.get(id); up && window && window->topLevel) widgets_.raise(id);
     if (auto* model = widgets_.get(id); model && model->isPlayerModel()) {
         widgets_.modelFrameVisible(id, up);
         if (up && model->modelSource == ui::Widget::ModelSource::Unit)
@@ -18848,18 +18849,8 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
         if (b.down && !buttonDown_[i]) {
             buttonDown_[i] = true;
             pressedWid_[i] = clickOwnerOf(hit, b.name);
-            // Bring the window to the front, the way clicking one does in WoW.
-            // The nearest frame at or above what was hit that asked to be
-            // toplevel - a click lands on a button inside the window, not on
-            // the window itself, so raising only what was hit would raise
-            // nothing. Done on the press so the frame is already in front
-            // while the click is still being held.
-            for (uint32_t id = hit; id != 0;) {
-                const auto* cand = widgets_.get(id);
-                if (!cand) break;
-                if (cand->topLevel) { widgets_.raise(id); break; }
-                id = cand->parent;
-            }
+            // The window what was hit is in comes to the front, on the press.
+            widgets_.raise(hit);
             // Clicking a box is how you type into one.
             //
             // The nearest edit box at or above what was hit, because a click

@@ -1,6 +1,7 @@
 #include "ui/widget_tree.hpp"
 #include "ui/layout_cache.hpp"
 
+#include <map>
 #include <chrono>
 
 #include <algorithm>
@@ -676,11 +677,10 @@ void WidgetTree::nudge(uint32_t id, float dx, float dy) {
     for (Anchor& a : w->anchors) { a.x += dx / es; a.y += dy / es; }
 }
 
-void WidgetTree::setFrameLevel(uint32_t id, int level, bool capped) {
+void WidgetTree::setFrameLevel(uint32_t id, int level) {
     Widget* w = get(id);
     if (!w) return;
-    int delta = std::max(level, 0) - w->effLevel;
-    if (capped) delta = std::min(delta, 0x80);
+    const int delta = std::min(std::max(level, 0) - w->effLevel, 0x80);
     w->level = w->effLevel += delta;
     w->levelExplicit = true;
     markLayoutDirty();
@@ -711,47 +711,55 @@ void WidgetTree::setFrameStrata(uint32_t id, FrameStrata strata) {
 }
 
 void WidgetTree::raise(uint32_t id) {
-    Widget* w = get(id);
-    if (!w) return;
-    // The highest of the *others*, not of everything including this frame.
-    //
-    // Seeded with w->effLevel, a frame already on top still came out one
-    // higher, so every call added one whether or not anything was above it -
-    // and ShowUIPanel raises on every panel open. Levels ratcheted all session:
-    // a quest frame that starts at 3 was found at 344 in a play session, and
-    // two frames raising alternately climb without bound.
-    int highest = 0;
-    for (const Widget& other : widgets_) {
-        if (other.id == 0 || other.id == id) continue;
-        if (other.effStrata != w->effStrata) continue;
-        if (other.effLevel > highest) highest = other.effLevel;
-    }
-    // Already above everything: raising is what was asked for and it is
-    // already true, so leave the level alone. Raise has to be idempotent or
-    // repeating it is a slow leak.
-    if (w->effLevel > highest) return;
-    // Explicit from here on, or the next layout would recompute it from the
-    // parent and undo the raise immediately.
-    setFrameLevel(id, highest + 1, false);
+    Widget* top = get(id);
+    while (top && !top->topLevel) top = get(top->parent);
+    if (!top) return;
+    id = top->id;
+    resolveWidget(id);
+    if (!occluded(id)) return;
+    const int levels = compactLevels(get(id)->effStrata);
+    setFrameLevel(id, levels);
 }
 
-void WidgetTree::lower(uint32_t id) {
-    Widget* w = get(id);
-    if (!w) return;
-    // The lowest of the others, for the same reason raise takes the highest of
-    // the others: seeded with this frame's own level, a frame already at the
-    // bottom went one lower on every call, and level zero is the floor - so
-    // this leaked in the other direction until it hit it.
-    int lowest = INT_MAX;
+bool WidgetTree::occluded(uint32_t id) const {
+    const Widget* w = get(id);
+    if (!w) return false;
     for (const Widget& other : widgets_) {
-        if (other.id == 0 || other.id == id) continue;
-        if (other.effStrata != w->effStrata) continue;
-        if (other.effLevel < lowest) lowest = other.effLevel;
+        if (other.id == 0 || other.id == id || other.kind != WidgetKind::Frame || !other.visible) continue;
+        if (other.effStrata != w->effStrata || other.effLevel < w->effLevel) continue;
+        if (std::max(w->left, other.left) >= std::min(w->left + w->rectW, other.left + other.rectW) ||
+            std::max(w->bottom, other.bottom) >= std::min(w->bottom + w->rectH, other.bottom + other.rectH))
+            continue;
+        const Widget* in = get(other.parent);
+        while (in && in->id != id) in = get(in->parent);
+        if (!in) return true;
     }
-    if (lowest == INT_MAX || w->effLevel < lowest) return;
-    // Never below zero: a negative level sorts under the root and the frame
-    // stops being drawn at all.
-    setFrameLevel(id, (lowest > 0) ? lowest - 1 : 0, false);
+    return false;
+}
+
+int WidgetTree::compactLevels(FrameStrata strata) {
+    std::map<int, int> levels;
+    const auto has = [strata](const Widget& w) {
+        return w.id != 0 && w.kind == WidgetKind::Frame && w.effStrata == strata;
+    };
+    for (const Widget& w : widgets_)
+        if (has(w)) levels.emplace(w.effLevel, 0);
+    int next = 0;
+    for (auto& [level, place] : levels) place = next++;
+    for (Widget& w : widgets_) {
+        if (!has(w)) {
+            // One in another strata keeps its level whatever its parent's is.
+            if (w.kind == WidgetKind::Frame && w.id != 0 && !w.levelExplicit) {
+                w.level = w.effLevel;
+                w.levelExplicit = true;
+            }
+            continue;
+        }
+        w.level = w.effLevel = levels[w.effLevel];
+        w.levelExplicit = true;
+    }
+    markLayoutDirty();
+    return next;
 }
 
 const Anchor* WidgetTree::pointAt(uint32_t id, int index) const {

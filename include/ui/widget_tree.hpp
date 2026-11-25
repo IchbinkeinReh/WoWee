@@ -1160,18 +1160,17 @@ public:
     /// Shift every anchor by the same amount, which moves the frame.
     void nudge(uint32_t id, float dx, float dy);
 
-    /// Put a frame in front of everything else in its strata.
-    ///
-    /// Strata come first in the draw order, so this only moves the frame within
-    /// its own - a DIALOG frame raised above its peers still sits under a
-    /// TOOLTIP one, which is what the strata are for.
+    /// Raise() (0x004951a0): the window a frame is in - the nearest toplevel one,
+    /// itself or above it; none, nothing - comes over all of its strata, where
+    /// something shown covers it. The levels no frame of the strata has go first
+    /// (0x00495060), so the window stands on the level after the highest.
     void raise(uint32_t id);
-    /// The reverse, for Lower().
-    void lower(uint32_t id);
+    /// Whether a frame shown in its strata, none of those in it, is on its level
+    /// or above and shares a place with it (0x00494d20).
+    [[nodiscard]] bool occluded(uint32_t id) const;
     /// A frame's level, at once, and as much up or down for the frames in it
-    /// that are in its strata (0x004910a0); a script's call raises by 128 at
-    /// most.
-    void setFrameLevel(uint32_t id, int level, bool capped = true);
+    /// that are in its strata (0x004910a0): up by 128 at most.
+    void setFrameLevel(uint32_t id, int level);
     /// A frame's strata, at once, and that of every frame in it, whatever it was
     /// (0x00491020).
     void setFrameStrata(uint32_t id, FrameStrata strata);
@@ -1384,6 +1383,9 @@ public:
     }
 
 private:
+    /// The levels of a strata without gaps (0x00495060); how many there are.
+    int compactLevels(FrameStrata strata);
+
     template <typename Tell>
     void comeUp(uint32_t id, const Tell& tell) {
         Widget* w = get(id);
