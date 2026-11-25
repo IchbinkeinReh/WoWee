@@ -40,7 +40,10 @@ vec3 modelZoneLight(RtLight rt, vec3 n, vec3 worldPos, float mapShadow, vec3 amb
     s.occY *= k;
     s.occE *= k;
     s.kp = vec3(1.0);
-    return light + rtPointLight(rt);
+    // Drawn after the trace, the direct light's share by the sun alone, as
+    // the apply pass does it to what the G-buffer holds. The flat ambient, as
+    // there.
+    return clamp(ambientLit + d, 0.0, 1.0) * rtSunShade(rt, shadow, ambient, d) + rtPointLight(rt);
 }
 
 // Lit by a building's baked light: its colour as the ambient and as one

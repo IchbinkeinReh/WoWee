@@ -1735,6 +1735,8 @@ wowee_add_test(test_rt_reconstruct
 # the apply pass over it, against the forward shaders' own lighting formulas.
 wowee_add_test(test_rt_gbuffer
     SOURCES test_rt_gbuffer.cpp)
+target_compile_definitions(test_rt_gbuffer PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_rt_upsample ─────────────────────────────────────────
 # Header-only: how a pixel finds its own surface among the half-resolution

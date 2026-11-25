@@ -9,8 +9,16 @@
 #include "rendering/rt_gbuffer_pack.hpp"
 #include "rendering/rt_normal_blend.hpp"
 
+#include "test_support.hpp"
+
 #include <algorithm>
 #include <random>
+
+/// The shader's own source, as C++ (rt_sun_shade.glsli).
+namespace sun_shade {
+using namespace glm;
+#include "../assets/shaders/rt_sun_shade.glsli"
+}  // namespace sun_shade
 
 using namespace wowee::rendering::rt_gbuffer;
 
@@ -656,4 +664,42 @@ TEST_CASE("The normal blend sliders map to the rule's cosines", "[rt_gbuffer]") 
     REQUIRE(normalAgreement(face, lean40, wide.nearCos, wide.farCos) == 1.0f);
     const NormalBlendCosines narrow = normalBlendCosines(10, 25);
     REQUIRE(normalAgreement(face, lean40, narrow.nearCos, narrow.farCos) == 0.0f);
+}
+
+// A unit drawn see-through - the own body with the camera close, a ghost, a
+// unit fading - is in no G-buffer and is lit after the trace. In the dark it
+// has to come out as the opaque body does: the direct light none, the ambient
+// by the shadow's strength. It lit up, by the fifth of the sun the map's
+// strength leaves in every shadow, and by the direct light's share of the
+// colour going by the whole colour's darkening.
+TEST_CASE("A see-through body in the shade has no sun on it", "[rt_gbuffer]") {
+    const glm::vec3 ambient(0.2f, 0.25f, 0.3f), direct(0.6f, 0.5f, 0.3f);
+    const float k = 0.6f, mapStrength = 0.8f;
+    const auto lit = [&](float map, bool mapOn, float behind) {
+        const float sun = sun_shade::rtSeeThroughSun(mapOn, map, behind);
+        // rtShadow: the lesser of the map at its strength and the sun's.
+        const float shadow = std::min(1.0f - mapStrength * (1.0f - map), sun);
+        const float scale = sun_shade::rtShadeScale(1.0f, shadow, k);
+        return glm::clamp(ambient + direct, 0.0f, 1.0f) * sun_shade::rtDirectShade(1.0f, shadow, scale, ambient, direct);
+    };
+    // Wholly in the map's shadow, or without a map where it is dark behind:
+    // the ambient's 40 percent and nothing of the direct light.
+    for (const glm::vec3 dark : {lit(0.0f, true, 1.0f), lit(1.0f, false, 0.0f)}) {
+        for (int c = 0; c < 3; ++c) REQUIRE(std::abs(dark[c] - 0.4f * ambient[c]) < 1e-4f);
+    }
+    // In the sun, the whole light.
+    const glm::vec3 open = lit(1.0f, true, 0.0f);
+    for (int c = 0; c < 3; ++c) REQUIRE(std::abs(open[c] - (ambient + direct)[c]) < 1e-4f);
+
+    // Without a result of its own a colour keeps the client's one scale.
+    const float client = sun_shade::rtShadeScale(0.0f, 0.0f, k);
+    REQUIRE(std::abs(client - 0.7f) < 1e-5f);
+    REQUIRE(sun_shade::rtDirectShade(0.0f, 0.0f, client, ambient, direct) == glm::vec3(client));
+
+    // And the shaders ask it.
+    const std::string body = wowee::test::slurp("assets/shaders/character.frag.glsl");
+    REQUIRE(body.find("rt.sun = rtSeeThroughSun(shadowParams.x > 0.5, mapLight, rt.sun)") != std::string::npos);
+    const std::string model = wowee::test::slurp("assets/shaders/model_light.glsli");
+    REQUIRE(model.find("return clamp(ambientLit + d, 0.0, 1.0) * rtSunShade(rt, shadow, ambient, d)") !=
+            std::string::npos);
 }
