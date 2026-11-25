@@ -512,40 +512,6 @@ TEST_CASE("how long a thing can be handed back", "[replay][playtest]") {
     CHECK(s.handler().itemRefundLeft(kItem) == 0);
 }
 
-// T285: 0x0074b200 from the move's handler: what a seat's change says comes before the next
-// packet. The bar of a turret came while the engine's was not let go of yet.
-TEST_CASE("a change of seat is told of as its move comes", "[replay][playtest]") {
-    Session s;
-    spawnPlayer(s);
-    constexpr uint64_t kEngine = 0xF150008124000592ull, kTurret = 0xF15000812B000593ull;
-    auto& roster = s.handler().vehicleRoster();
-    std::vector<uint64_t> seats;
-    s.handler().setVehicleSeatMovedCallback([&](uint64_t guid) {
-        REQUIRE(guid == Session::kPlayerGuid);
-        const auto seat = roster.passenger(guid);
-        seats.push_back(seat ? seat->vehicleGuid : 0);
-    });
-    const auto move = [&](Opcode opcode, uint64_t vehicle, uint8_t seat) {
-        wowee::network::Packet p(wowee::game::wireOpcode(opcode));
-        p.writePackedGuid(Session::kPlayerGuid);
-        if (vehicle != 0) {
-            p.writePackedGuid(vehicle);
-            p.writeUInt8(seat);
-        }
-        p.writeUInt8(0);
-        for (int i = 0; i < 3; ++i) p.writeFloat(0.0f);
-        p.writeUInt32(7);
-        p.writeUInt8(1);   // a stop
-        s.receive(p);
-    };
-    move(Opcode::SMSG_MONSTER_MOVE_TRANSPORT, kEngine, 0);
-    move(Opcode::SMSG_MONSTER_MOVE_TRANSPORT, kEngine, 0);
-    move(Opcode::SMSG_MONSTER_MOVE, 0, 0);
-    move(Opcode::SMSG_MONSTER_MOVE_TRANSPORT, kTurret, 1);
-    CHECK(seats == std::vector<uint64_t>{kEngine, 0, kTurret});
-    s.handler().setVehicleSeatMovedCallback({});
-}
-
 // What is read of a packet is counted: too little or too much of it.
 TEST_CASE("packets read short or past their end are counted", "[replay][playtest]") {
     Session s;

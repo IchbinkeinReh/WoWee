@@ -203,8 +203,7 @@ public:
     /// passenger can come into view before its vehicle does.
     /// `animated` says the change is moved through (+0xa30 0x20000000,
     /// 0x0074b840): from a monster move, an 0xED movement packet.
-    /// Answers whether that changes its seat.
-    bool setTransport(uint64_t guid, uint64_t transportGuid, int8_t seat, float facing, bool animated = false);
+    void setTransport(uint64_t guid, uint64_t transportGuid, int8_t seat, float facing, bool animated = false);
     void leave(uint64_t guid) { setTransport(guid, 0, -1, 0.0f); }
     /// The unit's movement flags2 (+0x7d0), whose 0x40 makes a leaving one
     /// of its own will (0x0074bb60).
