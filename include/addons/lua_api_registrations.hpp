@@ -88,8 +88,11 @@ void applyAccountConfigText(lua_State* L, bool perCharacter, const std::string& 
 
 /// The key bindings kept on the realm (bindings-cache.wtf, account data 2):
 /// a "bind KEY COMMAND" line for each key, and the same text taken back.
-std::string accountBindingsText();
-void applyAccountBindingsText(lua_State* L, const std::string& text);
+std::string accountBindingsText(bool perCharacter);
+void applyAccountBindingsText(lua_State* L, bool perCharacter, const std::string& text);
+/// The keys a character begins with, once the interface is there; the file its
+/// own set is kept in, "" for none.
+void beginBindings(lua_State* L, const std::string& characterPath);
 void registerActionLuaAPI(lua_State* L);
 
 /// Whether the modifiers a modified click action is bound to are held now

@@ -4350,6 +4350,10 @@ wowee_add_test(test_quest_link
 wowee_add_test(test_replace_enchant
     SOURCES test_replace_enchant.cpp)
 
+# ── test_binding_sets ────────────────────────────────────────
+wowee_add_test(test_binding_sets
+    SOURCES test_binding_sets.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

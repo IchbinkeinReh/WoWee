@@ -563,6 +563,8 @@ void AddonManager::loadAllAddons() {
         }
     }
     addonsLoaded_ = true;
+    // The keys (0x00562d60): the character's own set, or the account's.
+    if (lua_State* L = luaEngine_.getState()) beginBindings(L, characterBindingsPath());
     // The frames the player placed, put back once the interface has loaded
     // (0x0052adbe reads layout-local.txt after it).
     if (const std::string path = layoutCachePath(); !path.empty()) {
@@ -734,6 +736,11 @@ std::string AddonManager::chatCachePath() const {
 std::string AddonManager::layoutCachePath() const {
     if (characterName_.empty()) return "";
     return core::getConfigRoot() + "/characters/" + characterName_ + ".layout-local.txt";
+}
+
+std::string AddonManager::characterBindingsPath() const {
+    if (characterName_.empty()) return "";
+    return core::getConfigRoot() + "/characters/" + characterName_ + ".bindings.cfg";
 }
 
 std::string AddonManager::getSavedVariablesPath(const TocFile& addon) const {

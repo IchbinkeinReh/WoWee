@@ -7,6 +7,7 @@
 // SoundEntries row by name, which is how the client asks them.
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
+#include "addons/binding_sets.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "game/inventory_handler.hpp"
@@ -3464,8 +3465,27 @@ bool& cursorBitCleared() {
     return cleared;
 }
 
-std::string bindingsFilePath() {
-    return core::getConfigRoot() + "/bindings.cfg";
+/// Where the character's own set is kept, empty while there is no character.
+std::string& characterBindingsPath() {
+    static std::string path;
+    return path;
+}
+
+/// The set the keys are of (0x00beadd8's +0x124).
+int& currentBindingSet() {
+    static int set = 1;
+    return set;
+}
+
+std::string bindingsFilePath(int set) {
+    return set == 2 ? characterBindingsPath() : core::getConfigRoot() + "/bindings.cfg";
+}
+
+/// Whether there is anything in a set's file.
+bool bindingSetKept(int set) {
+    const std::string path = bindingsFilePath(set);
+    std::error_code ec;
+    return !path.empty() && std::filesystem::file_size(path, ec) > 0 && !ec;
 }
 
 /// ImGui spells keys as "C" and "Space"; the interface expects "C" and "SPACE",
@@ -3904,16 +3924,9 @@ static int lua_SetBindingClick(lua_State* L) {
     return 1;
 }
 
-// SaveBindings(which) → writes what is bound where, for the next run
-static void writeBindingsFile();
-static int lua_SaveBindings(lua_State* L) {
-    if (!taint::allowed(L, 0xd)) return 0;   // 0x005640c0 -> 0x00562b80
-    writeBindingsFile();
-    return 0;
-}
-
-static void writeBindingsFile() {
-    const std::string path = bindingsFilePath();
+static void writeBindingsFile(int set, const BindingKeyMap& keys) {
+    const std::string path = bindingsFilePath(set);
+    if (path.empty()) return;
     std::error_code ec;
     std::filesystem::create_directories(
         std::filesystem::path(path).parent_path(), ec);
@@ -3922,46 +3935,49 @@ static void writeBindingsFile() {
         LOG_WARNING("Could not write the key bindings to ", path);
         return;
     }
-    for (const auto& [command, keys] : bindingKeys()) {
+    for (const auto& [command, slots] : keys) {
         // Both slots on one line, the second empty when there is no second key,
         // so a command that lost one is recorded as having lost it.
-        out << command << "=" << keys[0] << "," << keys[1] << "\n";
+        out << command << "=" << slots[0] << "," << slots[1] << "\n";
     }
 }
 
-// LoadBindings(which) → the default keys (0), with what was saved on top
-// (0x00562b80: the default set copied over, then the saved one read).
-static int lua_LoadBindings(lua_State* L) {
-    if (!taint::allowed(L, 0xd)) return 0;   // 0x00564070 -> 0x00562b80
+/// A set as it was saved (binding_sets.hpp), over the default keys.
+static BindingKeyMap readBindingSet(int asked) {
     BindingKeyMap keys = defaultBindingKeys();
-    if (lua_tointeger(L, 1) != 0) {
-        std::ifstream in(bindingsFilePath());
-        std::vector<std::array<std::string, 3>> saved;
-        std::string line;
-        while (in && std::getline(in, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            const size_t eq = line.find('=');
-            if (eq == std::string::npos) continue;
-            const std::string rest = line.substr(eq + 1);
-            // Between the keys; a key of a comma is one too.
-            const size_t comma = rest.find(',', rest.rfind(',', 0) == 0 && rest.size() > 1 && rest[1] == ',' ? 1 : 0);
-            saved.push_back({line.substr(0, eq), rest.substr(0, comma),
-                             comma == std::string::npos ? std::string() : rest.substr(comma + 1)});
-        }
-        // Written before the default keys were the client's: O stood on the
-        // guild's tab, and what is saved of it is that default.
-        const bool known = std::any_of(saved.begin(), saved.end(),
-                                       [](const auto& row) { return row[0] == "TOGGLESOCIAL"; });
-        for (const auto& row : saved) {
-            if (!known && row[0] == "TOGGLEGUILDTAB" && row[1] == "O") continue;
-            keys[row[0]] = {};
-        }
-        for (const auto& row : saved) {
-            if (!known && row[0] == "TOGGLEGUILDTAB" && row[1] == "O") continue;
-            placeBindingKey(keys, row[1], row[0]);
-            placeBindingKey(keys, row[2], row[0]);
-        }
+    const int set = bindingSetRead(asked, bindingSetKept(1), bindingSetKept(2));
+    if (set == 0) return keys;
+    std::ifstream in(bindingsFilePath(set));
+    std::vector<std::array<std::string, 3>> saved;
+    std::string line;
+    while (in && std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string rest = line.substr(eq + 1);
+        // Between the keys; a key of a comma is one too.
+        const size_t comma = rest.find(',', rest.rfind(',', 0) == 0 && rest.size() > 1 && rest[1] == ',' ? 1 : 0);
+        saved.push_back({line.substr(0, eq), rest.substr(0, comma),
+                         comma == std::string::npos ? std::string() : rest.substr(comma + 1)});
     }
+    // Written before the default keys were the client's: O stood on the
+    // guild's tab, and what is saved of it is that default.
+    const bool known = std::any_of(saved.begin(), saved.end(),
+                                   [](const auto& row) { return row[0] == "TOGGLESOCIAL"; });
+    for (const auto& row : saved) {
+        if (!known && row[0] == "TOGGLEGUILDTAB" && row[1] == "O") continue;
+        keys[row[0]] = {};
+    }
+    for (const auto& row : saved) {
+        if (!known && row[0] == "TOGGLEGUILDTAB" && row[1] == "O") continue;
+        placeBindingKey(keys, row[1], row[0]);
+        placeBindingKey(keys, row[2], row[0]);
+    }
+    return keys;
+}
+
+/// The keys from here on.
+static void takeBindings(lua_State* L, BindingKeyMap keys) {
     bindingKeys() = std::move(keys);
     // What was loaded is what the client should answer to, not what it started
     // with.
@@ -3972,30 +3988,72 @@ static int lua_LoadBindings(lua_State* L) {
                                                                     : it->second[0]);
     }
     if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
+}
+
+// SaveBindings(which) (0x005640c0): the keys as the account's set or the
+// character's, which is the one from then on; with the account's the character
+// has none of its own.
+static int lua_SaveBindings(lua_State* L) {
+    const int set = bindingSetSaved(lua_tonumber(L, 1));
+    if (set == 0) return luaL_error(L, "Usage: SaveBindings(1||2)");
+    if (!taint::allowed(L, 0xd)) return 0;   // 0x00562b80
+    currentBindingSet() = set == 2 && characterBindingsPath().empty() ? 1 : set;
+    seedBindingDefaults();
+    writeBindingsFile(currentBindingSet(), bindingKeys());
+    if (set == 1 && !characterBindingsPath().empty()) {
+        std::error_code ec;
+        std::filesystem::remove(characterBindingsPath(), ec);
+    }
     return 0;
 }
 
-std::string accountBindingsText() {
-    // bindings-cache.wtf as 0x0055f1b0 writes it: the keys that are not on
-    // their default, which is all the original reads back over its defaults.
-    seedBindingDefaults();
-    return bindingsCacheText(defaultBindingKeys(), bindingKeys());
+// LoadBindings(which) (0x00564070): the default keys (0), or what was saved on
+// top of them (0x00562b80).
+static int lua_LoadBindings(lua_State* L) {
+    const int which = static_cast<int>(lua_tonumber(L, 1));
+    if (which > 2) return luaL_error(L, "Usage: LoadBindings(0||1||2)");
+    if (!taint::allowed(L, 0xd)) return 0;   // 0x00562b80
+    takeBindings(L, readBindingSet(which));
+    return 0;
 }
 
-void applyAccountBindingsText(lua_State* L, const std::string& text) {
+void beginBindings(lua_State* L, const std::string& characterPath) {
+    characterBindingsPath() = characterPath;
+    currentBindingSet() = bindingSetAtLogin(bindingSetKept(2));
+    takeBindings(L, readBindingSet(currentBindingSet()));
+}
+
+std::string accountBindingsText(bool perCharacter) {
+    // bindings-cache.wtf as 0x0055f1b0 writes it: the keys that are not on
+    // their default, which is all the original reads back over its defaults.
+    // The character's only while it has a set of its own (0x0055f3a0).
+    if (perCharacter && (currentBindingSet() != 2 || !bindingSetKept(2))) return {};
+    return bindingsCacheText(defaultBindingKeys(), readBindingSet(perCharacter ? 2 : 1));
+}
+
+void applyAccountBindingsText(lua_State* L, bool perCharacter, const std::string& text) {
     // The realm's copy replaces the keys here, and is saved as them. Read over
     // the defaults (0x005641c0): the original's copy names only the keys moved
     // off them, and taking it as the whole list unbound everything else - Z
     // among them, which left TOGGLESHEATH on no key at all.
     seedBindingDefaults();
-    BindingKeyMap keys = bindingsFromCacheText(defaultBindingKeys(), text);
+    const int set = perCharacter ? 2 : 1;
+    if (perCharacter && characterBindingsPath().empty()) return;
+    if (perCharacter && text.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(characterBindingsPath(), ec);
+    } else {
+        writeBindingsFile(set, bindingsFromCacheText(defaultBindingKeys(), text));
+    }
+    currentBindingSet() = bindingSetAtLogin(bindingSetKept(2));
+    if (!perCharacter && currentBindingSet() != 1) return;
+    BindingKeyMap keys = readBindingSet(currentBindingSet());
     for (const auto& [command, old] : bindingKeys()) {
         (void)old;
         if (!keys.count(command)) pushBindingToClient(command, "");
     }
     bindingKeys() = std::move(keys);
     for (const auto& [command, k] : bindingKeys()) pushBindingToClient(command, k[0].empty() ? k[1] : k[0]);
-    writeBindingsFile();
     // 0x00564310 -> 0x00562d60 once the bindings are in: a key bound to
     // TOGGLEMOUSE (0x0055e750) turns the cursor off.
     if (const auto it = bindingKeys().find("TOGGLEMOUSE");
@@ -4542,16 +4600,11 @@ void registerActionLuaAPI(lua_State* L) {
             if (line && *line) LOG_INFO("Console: ", line);
             return 0;
         }},
-                // GetCurrentBindingSet() - which set SaveBindings should write.
-                //
-                // 1 is account-wide and 2 is per character. This client keeps
-                // one set of bindings, so it is always the first. It was
-                // missing rather than stubbed, and interfaceoptionspanels.lua
-                // calls SaveBindings(GetCurrentBindingSet()) from three
-                // separate option handlers - so changing an option would have
-                // thrown rather than saved.
+                // GetCurrentBindingSet() (0x0055dc30): 1, or 2 for a character
+                // with a set of its own.
                 {"GetCurrentBindingSet", [](lua_State* L) -> int {
-            lua_pushnumber(L, 1); return 1;
+            lua_pushnumber(L, currentBindingSet());
+            return 1;
         }},
                 {"__WoweeBindDefault", lua_WoweeBindDefault},
                 {"SaveBindings",        lua_SaveBindings},
