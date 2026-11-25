@@ -781,7 +781,10 @@ void DataRepository::buildAzerothView(pipeline::AssetManager& assetManager) {
             const float fy = ((20.875f - scale * 32.0f) + wmc->getFloat(r, 7)) / 41.75f;
             CosmicMapEntry e;
             e.mapId = mapId;
+            // Map.dbc's name (0x00545110), in the client's language.
             e.label = mapDisplayName(static_cast<uint32_t>(mapId));
+            for (const MapContinent& continent : continents(assetManager))
+                if (continent.mapId == static_cast<uint32_t>(mapId) && !continent.name.empty()) e.label = continent.name;
             e.uvLeft = static_cast<float>(wmc->getInt32(r, 2)) * scale / 62.625f + fx;
             e.uvRight = static_cast<float>(wmc->getInt32(r, 3) + 1) * scale / 62.625f + fx;
             e.uvTop = static_cast<float>(wmc->getInt32(r, 4)) * scale / 41.75f + fy;
