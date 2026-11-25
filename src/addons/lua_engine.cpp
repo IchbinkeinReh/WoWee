@@ -2263,6 +2263,19 @@ int lua_Region_IsObjectType(lua_State* L) {
     return 1;
 }
 
+/// GetClickFrame("name") (0x00564130 -> 0x00562990): what the interface has under that name, where
+/// it is a frame - any: /click asks whether it is a button - and has that name itself; else nil.
+int lua_GetClickFrame(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetClickFrame(\"name\")");
+    const std::string name = lua_tostring(L, 1);
+    lua_pushstring(L, name.c_str());
+    lua_rawget(L, LUA_GLOBALSINDEX);
+    const auto* w = lua_istable(L, -1) ? widgetOf(L, lua_gettop(L)) : nullptr;
+    if (w && w->kind == wowee::ui::WidgetKind::Frame && w->name == name) return 1;
+    lua_pushnil(L);
+    return 1;
+}
+
 /// One of a tooltip's line font strings, made as AddLine makes the next pair
 /// (0x0061fec0): an ARTWORK font string named "<tooltip>TextLeft<n>" (or
 /// TextRight), in the font of the one above it, hidden, the left one under
@@ -12299,6 +12312,8 @@ void LuaEngine::registerCoreAPI() {
 
     lua_pushcfunction(L_, lua_GetMouseFocus);
     lua_setglobal(L_, "GetMouseFocus");
+    lua_pushcfunction(L_, lua_GetClickFrame);
+    lua_setglobal(L_, "GetClickFrame");
     lua_pushcfunction(L_, lua_EnumerateFrames);
     lua_setglobal(L_, "EnumerateFrames");
     lua_pushcfunction(L_, lua_GetNumFrames);

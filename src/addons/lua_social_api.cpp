@@ -5380,10 +5380,6 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BNIsFriend", lua_BNNothing},
                 {"BNIsToonBlocked", lua_BNNothing},
                 {"BNGetNumFriendInvites", [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},
-                {"GetClickFrame",         [](lua_State* L) -> int {
-                    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetClickFrame(\"name\")");   // 0x00564130
-                    lua_pushnil(L); return 1;
-                }},
                 // Pet autocast is left alone deliberately rather than wired to
                 // togglePetSpellAutocast: these two say enable and disable, the
                 // client can only toggle, and nothing reads back which state a

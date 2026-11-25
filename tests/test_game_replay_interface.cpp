@@ -858,6 +858,20 @@ TEST_CASE("an error in an addon's XML ends no more than itself", "[replay][inter
     CHECK(ui.is("rawget(_G, 'Xd3') and Xd3:IsShown()"));
 }
 
+// 0x00564130 -> 0x00562990: what /click clicks.
+TEST_CASE("a frame to be clicked is found by its name", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("b = CreateFrame('Button', 'PlayClick', UIParent) c = CreateFrame('CheckButton', 'PlayClick2', UIParent) "
+           "f = CreateFrame('Frame', 'PlayClick3', UIParent) PlayClick4 = b PlayClick5 = {} PlayClick6 = 'PlayClick'");
+    CHECK(ui.is("GetClickFrame('PlayClick') == b and GetClickFrame('PlayClick2') == c"));
+    CHECK(ui.is("GetClickFrame('PlayClick3') == f"));
+    // Under a name that is not its own, no frame, nothing.
+    CHECK(ui.is("GetClickFrame('PlayClick4') == nil and GetClickFrame('PlayClick5') == nil"));
+    CHECK(ui.is("GetClickFrame('PlayClick6') == nil and select('#', GetClickFrame('PlayClick7')) == 1"));
+    CHECK(ui.is("not pcall(GetClickFrame)"));
+}
+
 // T262: 0x004a8340 and 0x004a4220 answer nil for one without a name; 0x0048b540: what is above
 // an animation is its group.
 TEST_CASE("an animation's name is of its group", "[replay][interface]") {
