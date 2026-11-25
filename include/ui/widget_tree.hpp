@@ -194,6 +194,7 @@ struct Widget {
     /// does not draw (CSimpleFrame +500, 0x00490620); EnableDrawLayer clears
     /// it (0x00490600).
     uint8_t drawLayersOff = 0;
+    bool highlightLayerOn = false;   ///< EnableDrawLayer("HIGHLIGHT")
     /// SetDontSavePosition (flag 0x80000 of +0xb4, 0x004a08c0).
     bool dontSavePosition = false;
     /// SetDepth (+0xc4) and IgnoreDepth (+0xcc): the frame's additive

@@ -1619,7 +1619,7 @@ bool WidgetTree::buttonArtVisible(const Widget& w) const {
         if (!owner) return true;
         const Widget* on = get(hoveredId_);
         while (on && on->kind != WidgetKind::Frame) on = on->parent != 0 ? get(on->parent) : nullptr;
-        return owner->highlightLocked || (owner->mouseEnabled && on == owner);
+        return owner->highlightLocked || owner->highlightLayerOn || (owner->mouseEnabled && on == owner);
     }
 
     // The art belongs to the frame holding it, not to itself: it is the button

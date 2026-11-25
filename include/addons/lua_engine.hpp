@@ -4,6 +4,7 @@
 #include "addons/lua_services.hpp"
 #include "game/combat_log.hpp"
 #include "ui/chat/chat_bubble_view.hpp"
+#include "ui/nameplate_view.hpp"
 #include "ui/world_mouse.hpp"
 #include "ui/text_changes.hpp"
 #include "ui/widget_tree.hpp"
@@ -25,7 +26,8 @@ namespace wowee::addons {
 struct TocFile;  // forward declaration
 
 class LuaEngine {
-    bool chatBubblesUp_ = false;   ///< any were shown the frame before
+    bool chatBubblesUp_ = false;
+    bool namePlatesUp_ = false;   ///< any were shown the frame before
 public:
     LuaEngine();
     ~LuaEngine();
@@ -71,8 +73,11 @@ public:
     /// Whether all of it was built; lastError is the first that was not.
     bool buildElements(const ui::EmitResult& emitted, const std::string& fileName,
                        const std::function<void(const ui::EmitResult::FileAt&)>& onFile);
-    /// The chat bubbles there are (chat_bubble_lua.hpp).
-    void showChatBubbles(const std::vector<ui::ChatBubbleView>& bubbles);
+    /// The chat bubbles there are (chat_bubble_lua.hpp); `unitsPerDdc`: how many units of a
+    /// 768th of the screen's height there are to the client's one (DDC, 0x0047bf90).
+    void showChatBubbles(float unitsPerDdc, const std::vector<ui::ChatBubbleView>& bubbles);
+    /// The nameplates there are (nameplate_lua.hpp).
+    void showNamePlates(float unitsPerDdc, const std::vector<ui::NamePlateView>& plates);
 
     /// Run typed text the way RunScript does (0x00819210): tainted by
     /// `taint`, with a failure handed to the interface's error handler.

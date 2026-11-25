@@ -5,6 +5,7 @@
 #include "rendering/camera.hpp"
 #include "core/coordinates.hpp"
 #include "core/window.hpp"
+#include <cmath>
 #include <imgui.h>
 #include "ui/chat/chat_utils.hpp"
 #include "ui/chat/chat_bubble_timing.hpp"
@@ -40,7 +41,7 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
     auto* camera = renderer ? renderer->getCamera() : nullptr;
     if (!engine) return;
     if (bubbles_.empty() || !camera) {
-        engine->showChatBubbles({});
+        engine->showChatBubbles(0.0f, {});
         return;
     }
 
@@ -102,7 +103,8 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
         views.push_back({.id = bubble.id, .text = bubble.message, .type = chat_bubble::typeName(bubble.chatType),
                          .alpha = bubble.alpha, .x = px / unit, .y = (screenH - py) / unit});
     }
-    engine->showChatBubbles(views);
+    // The client's units (DDC, 0x0047bf90): the screen's diagonal is 1.
+    engine->showChatBubbles(std::sqrt(screenW * screenW + screenH * screenH) / (screenH / 768.0f), views);
 }
 
 void ChatBubbleManager::setupCallback(game::GameHandler& gameHandler) {

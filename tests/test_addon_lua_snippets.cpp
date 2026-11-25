@@ -25,6 +25,7 @@ extern "C" {
 #include "addons/addon_lua_snippets.hpp"
 #include "addons/animation_lua.hpp"
 #include "addons/chat_bubble_lua.hpp"
+#include "addons/nameplate_lua.hpp"
 #include "addons/button_label_lua.hpp"
 
 namespace {
@@ -53,13 +54,16 @@ std::string compileError(const char* chunk, const char* name) {
 std::string runChunks(std::initializer_list<std::pair<const char*, const char*>> chunks) {
     lua_State* L = luaL_newstate();
     REQUIRE(L != nullptr);
-    // Only what the snippets under test use: pairs, ipairs, type and rawget
-    // from the base library, insert and remove from the table one.
+    // Only what the snippets under test use.
     lua_pushcfunction(L, luaopen_base);
     lua_call(L, 0, 0);
-    lua_pushcfunction(L, luaopen_table);
-    lua_pushstring(L, LUA_TABLIBNAME);
-    lua_call(L, 1, 0);
+    for (const auto& [open, name] : {std::pair<lua_CFunction, const char*>{luaopen_table, LUA_TABLIBNAME},
+                                     {luaopen_string, LUA_STRLIBNAME},
+                                     {luaopen_math, LUA_MATHLIBNAME}}) {
+        lua_pushcfunction(L, open);
+        lua_pushstring(L, name);
+        lua_call(L, 1, 0);
+    }
 
     std::string result;
     for (const auto& [chunk, name] : chunks) {
@@ -416,23 +420,23 @@ TEST_CASE("chat bubbles are the WorldFrame's frames, used again", "[addons][lua]
         {kFakeBubbleWorldLua, "world"},
         {(std::string("show = (function() ") + wowee::addons::kChatBubblesLua + " end)()").c_str(), "bubbles"},
         {R"LUA(
-show(1, 'Hi', 'YELL', 0.5, 100, 200)
+show(1280, 1, 'Hi', 'YELL', 0.5, 100, 200)
 local f = frames[1]
 local out = made .. ' ' .. f.text.w .. ' ' .. f.w .. ' ' .. f.gotSetAlpha[1] .. ' ' .. f.gotSetFrameLevel[1]
 out = out .. ' ' .. f.at[1] .. ' ' .. f.at[3] .. ' ' .. f.at[4] .. ' ' .. f.at[5] .. ' ' .. f.text.gotSetTextColor[2]
 -- Less than a unit off: where it was.
-show(1, 'Hi', 'YELL', 1, 100.9, 199.5)
+show(1280, 1, 'Hi', 'YELL', 1, 100.9, 199.5)
 out = out .. ' ' .. f.points
-show(1, 'Hi', 'YELL', 1, 101.1, 199.5)
+show(1280, 1, 'Hi', 'YELL', 1, 101.1, 199.5)
 out = out .. ' ' .. f.points .. ' ' .. f.at[4]
 -- A second, long one over it; the first is gone, and its frame the next one's.
-show(1, 'Hi', 'YELL', 1, 101, 200, 2, 'x', 'SAY', 1, 0, 0)
+show(1280, 1, 'Hi', 'YELL', 1, 101, 200, 2, 'x', 'SAY', 1, 0, 0)
 out = out .. ' ' .. made .. ' ' .. frames[2].gotSetFrameLevel[1] .. ' ' .. frames[2].text.gotSetTextColor[2]
-show(2, 'x', 'SAY', 1, 0, 0)
+show(1280, 2, 'x', 'SAY', 1, 0, 0)
 out = out .. ' ' .. tostring(f.shown)
-show(2, 'x', 'SAY', 1, 0, 0, 3, '0123456789012345678901234567890123456789', 'SAY', 1, 0, 0)
+show(1280, 2, 'x', 'SAY', 1, 0, 0, 3, '0123456789012345678901234567890123456789', 'SAY', 1, 0, 0)
 out = out .. ' ' .. made .. ' ' .. tostring(f.shown) .. ' ' .. f.text.w
-show()
+show(1280)
 out = out .. ' ' .. tostring(f.shown) .. ' ' .. tostring(frames[2].shown)
 return out
 )LUA", "check"}});
@@ -567,4 +571,76 @@ TEST_CASE("the About entry is in the client's language", "[addonlua]") {
     });
     CHECK(got == "Über WoWee|WoWee||Ein Client für World of Warcraft, von Grund auf neu geschrieben.|von Kelsi Davis|"
                  "https://github.com/IchbinkeinReh/WoWee|Im Browser öffnen");
+}
+
+namespace {
+/// Frames and regions that keep what is done to them last, by the name of the method.
+constexpr const char* kFakePlateWorldLua = R"LUA(
+made = {}
+local function thing(kind, parent, layer)
+    local t = {kind = kind, parent = parent, layer = layer, shown = true, regions = {}, children = {}, calls = 0}
+    return setmetatable(t, {__index = function(self, name)
+        if type(name) ~= 'string' or not name:find('^%u') then return nil end
+        if name == 'Show' then return function(x) x.shown = true end end
+        if name == 'Hide' then return function(x) x.shown = false end end
+        if name == 'CreateTexture' or name == 'CreateFontString' then
+            return function(x, _, l) local r = thing(name:sub(7), x, l) x.regions[#x.regions + 1] = r return r end
+        end
+        return function(x, ...)
+            x.calls = x.calls + 1
+            x['got' .. name] = {...}
+        end
+    end})
+end
+WorldFrame = thing('Frame')
+function CreateFrame(kind, _, parent)
+    local f = thing(kind, parent)
+    parent.children[#parent.children + 1] = f
+    return f
+end
+function GetSpellInfo(id) return 'n', 'r', 'icon' .. id end
+)LUA";
+}  // namespace
+
+// 0x0098f790, 0x0098f390, 0x0098f040
+TEST_CASE("nameplates are the WorldFrame's frames, with the client's regions", "[addons][lua][nameplates]") {
+    const std::string result = runChunks({
+        {kFakePlateWorldLua, "world"},
+        {(std::string("plate, done = (function() ") + wowee::addons::kNamePlatesLua + " end)()").c_str(), "plates"},
+        {R"LUA(
+local function wolf(guid, x, target, cast, shield)
+    plate(1280, guid, x, 300, target, 1, 'Wolf', 1, 1, 1, 5, 1, 1, 0, false, nil, 40, 60, 1, 0, 0, nil, nil, nil, false,
+          cast, 0, 2, 1, 1, .7, 0, 1, shield)
+end
+wolf('a', 100, false)
+done()
+local f = WorldFrame.children[1]
+local out = #WorldFrame.children .. ' ' .. #f.regions .. ' ' .. #f.children .. ' ' .. f.children[1].kind
+-- The regions an addon knows it by.
+out = out .. ' ' .. f.regions[2].gotSetTexture[1]:match('[^\\]*$') .. ' ' .. f.regions[7].kind .. ' ' .. f.regions[8].kind
+for _, r in ipairs(f.regions) do out = out .. ' ' .. (r.shown and r.layer:sub(1, 1) or '-') end
+out = out .. ' ' .. f.gotSetWidth[1] .. 'x' .. f.gotSetHeight[1] .. ' ' .. f.gotSetPoint[1] .. ' ' .. f.gotSetPoint[4]
+local health, cast = f.children[1], f.children[2]
+out = out .. ' ' .. health.gotSetValue[1] .. '/' .. health.gotSetMinMaxValues[2] .. ' ' .. f.gotSetFrameLevel[1] .. ' ' ..
+      health.gotSetFrameLevel[1] .. ' ' .. tostring(f.shown) .. ' ' .. tostring(cast.shown)
+-- Nothing is set again that is as it was.
+local before = f.calls + health.calls
+wolf('a', 100, false)
+done()
+out = out .. ' ' .. (f.calls + health.calls - before)
+-- The target, casting what cannot be interrupted.
+wolf('a', 100, true, 133, true)
+done()
+out = out .. ' ' .. f.gotSetFrameLevel[1] .. ' ' .. tostring(cast.shown) .. ' ' .. tostring(f.regions[3].shown) .. ' ' ..
+      tostring(f.regions[4].shown) .. ' ' .. f.regions[5].gotSetTexture[1] .. ' ' .. cast.gotSetPoint[5]
+-- Another unit: the frame again, with nothing of the one before.
+wolf('b', 50, false)
+done()
+out = out .. ' ' .. #WorldFrame.children .. ' ' .. tostring(f.shown) .. ' ' .. tostring(cast.shown)
+done()
+out = out .. ' ' .. tostring(f.shown)
+return out
+)LUA", "check"}});
+    CHECK(result == "1 11 2 StatusBar Nameplate-Border FontString FontString - A - - - - O O - - - 128x32 TOP 100 40/60 10 9 "
+                    "true false 0 20 true false true icon133 -4 2 false false false");
 }

@@ -1,6 +1,8 @@
 #include "core/crt_round.hpp"
 #include "addons/saved_variables.hpp"
 #include "addons/chat_bubble_lua.hpp"
+#include "addons/nameplate_lua.hpp"
+#include "ui/nameplate_view.hpp"
 #include "addons/chunk_name.hpp"
 #include "addons/lua_engine.hpp"
 #include "addons/frame_attributes.hpp"
@@ -10747,6 +10749,8 @@ int lua_Frame_SetDrawLayerEnabled(lua_State* L, bool on) {
     const auto layer = lua_isstring(L, 2) ? wowee::ui::parseDrawLayer(lua_tostring(L, 2))
                                           : wowee::ui::DrawLayer::Artwork;
     const auto bit = static_cast<uint8_t>(1u << static_cast<unsigned>(layer));
+    // The HIGHLIGHT layer is off but for what the mouse is on, and on where it is turned on.
+    if (layer == wowee::ui::DrawLayer::Highlight) w->highlightLayerOn = on;
     if (on) w->drawLayersOff = static_cast<uint8_t>(w->drawLayersOff & ~bit);
     else    w->drawLayersOff = static_cast<uint8_t>(w->drawLayersOff | bit);
     return 0;
@@ -20429,25 +20433,36 @@ bool LuaEngine::executeFile(const std::string& path) {
 /// The stack is left as it was found, whatever the chunk does: this runs from
 /// the input path, once per key press, and a value left behind on each one
 /// grows until the state is exhausted.
-void LuaEngine::showChatBubbles(const std::vector<ui::ChatBubbleView>& bubbles) {
+namespace {
+/// The chunk kept in the registry under `key`, run where it is not yet; its results are there by
+/// number. Pushed; nil where it does not run, which is said once.
+void pushClientChunk(lua_State* L, const char* key, const char* chunk, int results) {
+    lua_getfield(L, LUA_REGISTRYINDEX, key);
+    if (!lua_isnil(L, -1)) return;
+    lua_pop(L, 1);
+    lua_newtable(L);
+    const int table = lua_gettop(L);
+    if (luaL_loadstring(L, chunk) != 0 || lua_pcall(L, 0, results, 0) != 0) {
+        LOG_WARNING(key, ": ", lua_tostring(L, -1) ? lua_tostring(L, -1) : "(unknown)");
+    } else {
+        for (int i = results; i >= 1; --i) lua_rawseti(L, table, i);
+    }
+    lua_settop(L, table);
+    lua_pushvalue(L, table);
+    lua_setfield(L, LUA_REGISTRYINDEX, key);
+}
+}  // namespace
+
+void LuaEngine::showChatBubbles(float unitsPerDdc, const std::vector<ui::ChatBubbleView>& bubbles) {
     if (!L_ || (bubbles.empty() && !chatBubblesUp_)) return;
     chatBubblesUp_ = !bubbles.empty();
     taint::Quiet quiet;   // the client's own frames
     const int base = lua_gettop(L_);
-    static constexpr const char* kKey = "wowee.ChatBubbles";
-    lua_getfield(L_, LUA_REGISTRYINDEX, kKey);
-    if (lua_isnil(L_, -1)) {
-        lua_pop(L_, 1);
-        if (luaL_loadstring(L_, kChatBubblesLua) != 0 || lua_pcall(L_, 0, 1, 0) != 0) {
-            LOG_WARNING("Chat bubbles: ", lua_tostring(L_, -1) ? lua_tostring(L_, -1) : "(unknown)");
-            lua_settop(L_, base);
-            lua_pushboolean(L_, 0);   // not again
-        }
-        lua_pushvalue(L_, -1);
-        lua_setfield(L_, LUA_REGISTRYINDEX, kKey);
-    }
+    pushClientChunk(L_, "wowee.ChatBubbles", kChatBubblesLua, 1);
+    lua_rawgeti(L_, -1, 1);
     if (lua_isfunction(L_, -1)) {
         luaL_checkstack(L_, static_cast<int>(bubbles.size()) * 6 + 2, "too many chat bubbles");
+        lua_pushnumber(L_, unitsPerDdc);
         for (const ui::ChatBubbleView& b : bubbles) {
             lua_pushnumber(L_, b.id);
             lua_pushstring(L_, b.text.c_str());
@@ -20456,9 +20471,70 @@ void LuaEngine::showChatBubbles(const std::vector<ui::ChatBubbleView>& bubbles) 
             lua_pushnumber(L_, b.x);
             lua_pushnumber(L_, b.y);
         }
-        if (lua_pcall(L_, static_cast<int>(bubbles.size()) * 6, 0, 0) != 0)
+        if (lua_pcall(L_, static_cast<int>(bubbles.size()) * 6 + 1, 0, 0) != 0)
             LOG_WARNING("Chat bubbles: ", lua_tostring(L_, -1) ? lua_tostring(L_, -1) : "(unknown)");
     }
+    lua_settop(L_, base);
+}
+
+void LuaEngine::showNamePlates(float unitsPerDdc, const std::vector<ui::NamePlateView>& plates) {
+    if (!L_ || (plates.empty() && !namePlatesUp_)) return;
+    namePlatesUp_ = !plates.empty();
+    taint::Quiet quiet;   // the client's own frames
+    const int base = lua_gettop(L_);
+    pushClientChunk(L_, "wowee.NamePlates", kNamePlatesLua, 2);
+    const int chunk = lua_gettop(L_);
+    luaL_checkstack(L_, 64, "no room for a nameplate");
+    const auto color = [this](const glm::vec3& c) {
+        lua_pushnumber(L_, c.r);
+        lua_pushnumber(L_, c.g);
+        lua_pushnumber(L_, c.b);
+    };
+    const auto call = [this](int first) {
+        if (lua_pcall(L_, lua_gettop(L_) - first, 0, 0) == 0) return true;
+        LOG_WARNING("Nameplates: ", lua_tostring(L_, -1) ? lua_tostring(L_, -1) : "(unknown)");
+        lua_settop(L_, first - 1);
+        return false;
+    };
+    for (const ui::NamePlateView& v : plates) {
+        lua_rawgeti(L_, chunk, 1);
+        if (!lua_isfunction(L_, -1)) break;
+        const int first = lua_gettop(L_);
+        lua_pushnumber(L_, unitsPerDdc);
+        char guid[20];
+        std::snprintf(guid, sizeof(guid), "%llx", static_cast<unsigned long long>(v.guid));
+        lua_pushstring(L_, guid);
+        lua_pushnumber(L_, v.x);
+        lua_pushnumber(L_, v.y);
+        lua_pushboolean(L_, v.target);
+        lua_pushnumber(L_, v.alpha);
+        lua_pushstring(L_, v.name.c_str());
+        color(v.nameColor);
+        if (v.level > 0) lua_pushinteger(L_, v.level);
+        else lua_pushnil(L_);
+        color(v.levelColor);
+        lua_pushboolean(L_, v.elite);
+        if (v.raidIcon >= 0) lua_pushinteger(L_, v.raidIcon);
+        else lua_pushnil(L_);
+        lua_pushnumber(L_, v.health);
+        lua_pushnumber(L_, v.maxHealth);
+        color(v.healthColor);
+        if (v.threat) color(v.threatColor);
+        else lua_settop(L_, lua_gettop(L_) + 3);
+        lua_pushboolean(L_, v.glowing);
+        if (v.castSpell != 0) lua_pushnumber(L_, v.castSpell);
+        else lua_pushnil(L_);
+        lua_pushnumber(L_, v.castMin);
+        lua_pushnumber(L_, v.castMax);
+        lua_pushnumber(L_, v.castValue);
+        color(v.castColor);
+        lua_pushnumber(L_, v.castAlpha);
+        lua_pushboolean(L_, v.castShield);
+        if (!call(first)) break;
+    }
+    lua_settop(L_, chunk);
+    lua_rawgeti(L_, chunk, 2);
+    if (lua_isfunction(L_, -1)) call(lua_gettop(L_));
     lua_settop(L_, base);
 }
 

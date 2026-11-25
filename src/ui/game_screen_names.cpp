@@ -30,9 +30,9 @@
 #include "ui/interface_fonts.hpp"
 #include "ui/nameplate_cast_bar.hpp"
 #include "ui/nameplate_stacking.hpp"
+#include "ui/nameplate_view.hpp"
 #include "ui/ui_helpers.hpp"
 #include "ui/ui_raid_icons.hpp"
-#include "ui/ui_texture_load.hpp"
 
 #include <imgui.h>
 
@@ -206,18 +206,6 @@ ImU32 toU32(const glm::vec4& c, int alpha) {
                     static_cast<int>(c.b * 255.0f + 0.5f), alpha);
 }
 
-/// One interface texture, loaded once; a failed load is not retried.
-VkDescriptorSet plateTexture(pipeline::AssetManager* assets, const char* path) {
-    static std::unordered_map<std::string, VkDescriptorSet> cache;
-    static uint32_t generationSeen = 0;
-    if (uiTexturesReplaced(generationSeen)) cache.clear();
-    if (auto it = cache.find(path); it != cache.end()) return it->second;
-    VkDescriptorSet tex =
-        uploadUiTextureFromBlp(assets, path, core::Application::getInstance().getWindow());
-    cache[path] = tex;
-    return tex;
-}
-
 /// Where a world point lands on screen, or nothing behind the camera.
 std::optional<ImVec2> project(const glm::mat4& viewProj, const glm::vec3& p, float w, float h,
                               float* clipW = nullptr) {
@@ -233,12 +221,14 @@ std::optional<ImVec2> project(const glm::mat4& viewProj, const glm::vec3& p, flo
 void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     WOWEE_PROFILE_SCOPE("interface: names and plates", Cpu);
     plateMouseover_ = 0;
-    if (gameHandler.getState() != game::WorldState::IN_WORLD) return;
-
+    auto* plateFrames = services_.addonManager ? services_.addonManager->getLuaEngine() : nullptr;
     auto* appRenderer = services_.renderer;
     rendering::Camera* camera = appRenderer ? appRenderer->getCamera() : nullptr;
     auto* window = services_.window;
-    if (!camera || !window) return;
+    if (gameHandler.getState() != game::WorldState::IN_WORLD || !camera || !window) {
+        if (plateFrames) plateFrames->showNamePlates(0.0f, {});
+        return;
+    }
     const float screenW = static_cast<float>(window->getWidth());
     const float screenH = static_cast<float>(window->getHeight());
     const glm::mat4 proj = camera->getProjectionMatrix();
@@ -270,9 +260,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
 
     // UNIT_NAME_FONT and NAMEPLATE_FONT are both FRIZQT__ (enUS GlobalStrings).
     ImFont* font = interfaceFaceOrDefault("Fonts\\FRIZQT__.TTF");
-    // Interface units: the frame code counts the screen's height as 0.75 of
-    // a 1024-wide unit (0x00b2da70/74), and the interface draws 768 to it.
-    const float ui = screenH / 768.0f * 1024.0f;
+    // The client's units (DDC, 0x0047bf90): the screen's diagonal is 1, so that a plate of 0.1
+    // is 128 of the 1024 a 4:3 screen is wide, and as large a part of a wider one's.
+    const float ddc = std::sqrt(screenW * screenW + screenH * screenH);
 
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
     static thread_local std::vector<std::shared_ptr<game::Entity>> nearby;
@@ -524,7 +514,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     static uint64_t frameNo = 0;
     ++frameNo;
     const double now = ImGui::GetTime();
-    const float fw = 0.1f * ui, fh = 0.025f * ui;
+    const float fw = 0.1f * ddc, fh = 0.025f * ddc;
 
     {
     WOWEE_PROFILE_SCOPE("names: units", Cpu);
@@ -569,12 +559,12 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
             continue;
         }
 
-        // The frame is 0.1 by 0.025 (0x00b2da74, 0x00b2da70); its bottom
-        // centre stands on the projected point.
+        // The frame is 0.1 by 0.025 (0x00b2da74, 0x00b2da70); it hangs from the projected
+        // point by its top's middle (0x00725890).
         float left = plateAt->x - fw * 0.5f;
-        float bottom = plateAt->y;
+        float bottom = plateAt->y + fh;
         if (!allowPlateOverlap) {
-            const float top = ui::plateTopClearOf(placed, left, left + fw, bottom - fh, fh, 0.0f);
+            const float top = ui::plateTopClearOf(placed, left, left + fw, plateAt->y, fh, 0.0f);
             bottom = top + fh;
             placed.push_back({.x0 = left, .y0 = bottom - fh, .x1 = left + fw, .y1 = bottom});
         }
@@ -782,231 +772,98 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         if (end) castBarEndSerial = end->serial;
     }
 
-    // To the end of the function: the plates drawn.
+    // To the end of the function: the plates, which are the interface's frames (nameplate_lua.hpp).
     WOWEE_PROFILE_SCOPE("names: plates", Cpu);
-
-    // ---- The plates (0x0098f790, laid out by 0x0098f390, each frame
-    // 0x0098e9f0); the target's on top, at frame level 20 to the others' 10.
-    auto drawPlate = [&](const PlateRec& r) {
-        const game::Unit* unit = r.unit;
-        const uint64_t guid = r.guid;
-        const bool isPlayer = r.isPlayer;
-        const float left = r.left, bottom = r.bottom;
+    const auto rgb = [](ImU32 color) {
+        return glm::vec3(static_cast<float>((color >> IM_COL32_R_SHIFT) & 0xFF),
+                         static_cast<float>((color >> IM_COL32_G_SHIFT) & 0xFF),
+                         static_cast<float>((color >> IM_COL32_B_SHIFT) & 0xFF)) / 255.0f;
+    };
+    const auto rgbOf = [](uint32_t argb) {
+        return glm::vec3(static_cast<float>((argb >> 16) & 0xFF), static_cast<float>((argb >> 8) & 0xFF),
+                         static_cast<float>(argb & 0xFF)) / 255.0f;
+    };
+    const float unit = screenH / 768.0f;
+    static thread_local std::vector<NamePlateView> views;
+    views.clear();
+    for (const PlateRec& r : plateRecs) {
+        const game::Unit* unitOf = r.unit;
+        NamePlateView v;
+        v.guid = r.guid;
+        v.x = (r.left + fw * 0.5f) / unit;
+        v.y = (screenH - (r.bottom - fh)) / unit;
+        v.target = r.isTarget;
         // With a target, every other plate at alpha 0x7f (0x0098e9f0).
-        const int alpha =
-            static_cast<int>(rendering::unit_name_anchor::plateAlpha(targetGuid != 0, r.isTarget) * 255.0f);
-        auto box = [&](float x, float yUp, float w, float h) {
-            // Frame space: from the bottom-left, y up.
-            return std::pair<ImVec2, ImVec2>(ImVec2(left + x, bottom - yUp - h), ImVec2(left + x + w, bottom - yUp));
-        };
-        auto argb = [&](uint32_t c) {
-            const int a = static_cast<int>(((c >> 24) & 0xFF) * alpha / 255);
-            return IM_COL32((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF, a);
-        };
-        // Plate text: NAMEPLATE_FONT with a black shadow 0.001 right and
-        // down, no outline (0x0098f790).
-        const float shadowPx = std::max(1.0f, 0.001f * ui);
-        auto shadowedText = [&](float px, ImVec2 at, ImU32 color, const char* text) {
-            drawList->AddText(font, px, ImVec2(at.x + shadowPx, at.y + shadowPx),
-                              IM_COL32(0, 0, 0, (color >> IM_COL32_A_SHIFT) & 0xFF), text);
-            drawList->AddText(font, px, at, color, text);
-        };
-
-        // BACKGROUND: the threat flash, 0.11 by 0.029, its top 0.0065 under
-        // the frame's and 0.001 left of centre, UI-TargetingFrame-Flash's
-        // (0, 0.53)-(0.555, 0.6), tinted by the player's threat status on
-        // the unit (0x007374c0).
+        v.alpha = rendering::unit_name_anchor::plateAlpha(targetGuid != 0, r.isTarget);
+        // The threat flash, tinted by the player's threat status on the unit (0x007374c0).
         if (threatFlash) {
-            const int status = gameHandler.threatSituation(playerGuid, guid).standing.status - 1;
-            if (const uint32_t c = un::plateThreatColor(status)) {
-                if (VkDescriptorSet flash = plateTexture(assets, "Interface\\TargetingFrame\\UI-TargetingFrame-Flash.blp")) {
-                    const float w = 0.11f * ui, h = 0.029f * ui;
-                    const float cx = left + fw * 0.5f - 0.001f * ui;
-                    const float top = bottom - fh + 0.0065f * ui;
-                    drawList->AddImage((ImTextureID)(uintptr_t)flash, ImVec2(cx - w * 0.5f, top),
-                                       ImVec2(cx + w * 0.5f, top + h), ImVec2(0.0f, 0.53f), ImVec2(0.555f, 0.6f),
-                                       argb(c));
-                }
+            const int status = gameHandler.threatSituation(playerGuid, r.guid).standing.status - 1;
+            if (const uint32_t color = un::plateThreatColor(status)) {
+                v.threat = true;
+                v.threatColor = rgbOf(color);
             }
         }
-
-        // Health bar: 0.804 by 0.281 of the frame, 0.031 and 0.125 in from
-        // its bottom-left, filled with UI-TargetingFrame-BarFill in the
-        // colour 0x0098ee30 gives: a hostile player's class with
-        // ShowClassColorInNameplate, else red for hostile, blue for a
-        // friendly player, green for a friendly creature, yellow neutral.
-        const int reaction = gameHandler.unitReactionToPlayer(*unit);
-        ImU32 barColor;
-        if (classColours && isPlayer && reaction <= 2 && entityClassId(r.entity) != 0) {
-            barColor = classColorU32(entityClassId(r.entity), alpha);
-        } else if (reaction <= 2) {
-            barColor = IM_COL32(255, 0, 0, alpha);
-        } else if (isPlayer) {
-            barColor = IM_COL32(0, 0, 255, alpha);
-        } else if (reaction >= 5) {
-            barColor = IM_COL32(0, 255, 0, alpha);
-        } else {
-            barColor = IM_COL32(255, 255, 0, alpha);
-        }
-        const auto [hb0, hb1] = box(fw * 0.031f, fh * 0.125f, fw * 0.804f, fh * 0.281f);
-        const float health = unit->getMaxHealth() > 0
-            ? std::clamp(static_cast<float>(unit->getHealth()) / static_cast<float>(unit->getMaxHealth()), 0.0f, 1.0f)
-            : 0.0f;
-        const ImVec2 hbFill(hb0.x + (hb1.x - hb0.x) * health, hb1.y);
-        if (VkDescriptorSet fill = plateTexture(assets, "Interface\\TargetingFrame\\UI-TargetingFrame-BarFill.blp")) {
-            drawList->AddImage((ImTextureID)(uintptr_t)fill, hb0, hbFill, ImVec2(0, 0), ImVec2(health, 1), barColor);
-        } else {
-            drawList->AddRectFilled(hb0, hbFill, barColor);
-        }
-        // Nameplate-Border over the whole frame.
-        const auto [fr0, fr1] = box(0.0f, 0.0f, fw, fh);
-        if (VkDescriptorSet border = plateTexture(assets, "Interface\\Tooltips\\Nameplate-Border.blp")) {
-            drawList->AddImage((ImTextureID)(uintptr_t)border, fr0, fr1, ImVec2(0, 0), ImVec2(1, 1),
-                               IM_COL32(255, 255, 255, alpha));
-        } else {
-            drawList->AddRect(hb0, hb1, IM_COL32(0, 0, 0, alpha));
-        }
-
-        // The name in NAMEPLATE_FONT at 0.01, its bottom on the frame's
-        // centre: red while hurt, yellow under the glow, else white; the
-        // level at 0.009 in its difficulty colour, centred 0.092 in from the
-        // right and 0.284 up - or the skull for a hostile unit ten levels
-        // over the player, or a boss (0x0098ef10).
-        const std::string name = gameHandler.shownUnitName(*unit);
-        if (!name.empty()) {
-            const float px = 0.01f * ui;
-            const ImVec2 sz = font->CalcTextSizeA(px, FLT_MAX, 0.0f, name.c_str());
-            const auto hp = plateHealth.find(guid);
-            const bool hurt = hp != plateHealth.end() && now < hp->second.hurtUntil;
-            shadowedText(px, ImVec2(left + fw * 0.5f - sz.x * 0.5f, bottom - fh * 0.5f - sz.y),
-                         argb(un::plateNameColor(hurt, &r == glowing)), name.c_str());
-        } else if (isPlayer) {
-            gameHandler.queryPlayerName(guid);
-        }
-        const ImVec2 levelCentre(left + fw - fw * 0.092f, bottom - fh * 0.284f);
+        // The health's colour is the one 0x0098ee30 gives: a hostile player's class with
+        // ShowClassColorInNameplate, else red for hostile, blue for a friendly player, green for
+        // a friendly creature, yellow neutral.
+        const int reaction = gameHandler.unitReactionToPlayer(*unitOf);
+        if (classColours && r.isPlayer && reaction <= 2 && entityClassId(r.entity) != 0)
+            v.healthColor = rgb(classColorU32(entityClassId(r.entity), 255));
+        else if (reaction <= 2) v.healthColor = {1.0f, 0.0f, 0.0f};
+        else if (r.isPlayer) v.healthColor = {0.0f, 0.0f, 1.0f};
+        else if (reaction >= 5) v.healthColor = {0.0f, 1.0f, 0.0f};
+        else v.healthColor = {1.0f, 1.0f, 0.0f};
+        v.health = unitOf->getHealth();
+        v.maxHealth = unitOf->getMaxHealth();
+        // The name is red while hurt, yellow under the glow, else white.
+        v.name = gameHandler.shownUnitName(*unitOf);
+        if (v.name.empty() && r.isPlayer) gameHandler.queryPlayerName(r.guid);
+        const auto hp = plateHealth.find(r.guid);
+        const bool hurt = hp != plateHealth.end() && now < hp->second.hurtUntil;
+        v.glowing = &r == glowing;
+        v.nameColor = rgbOf(un::plateNameColor(hurt, v.glowing));
+        // The level in its difficulty colour - or the skull for a hostile unit ten levels over
+        // the player, or a boss (0x0098ef10).
         uint32_t typeFlags = 0, rank = 0;
-        if (!isPlayer) {
+        if (!r.isPlayer) {
             const auto& cache = gameHandler.getCreatureInfoCache();
-            if (auto it = cache.find(unit->getEntry()); it != cache.end()) {
+            if (auto it = cache.find(unitOf->getEntry()); it != cache.end()) {
                 typeFlags = it->second.typeFlags;
                 rank = it->second.rank;
             }
         }
         const bool boss = (typeFlags & 0x4) != 0;  // 0x00715d70
         const uint32_t playerLevel = gameHandler.getPlayerLevel();
-        const bool showLevel = !boss && (reaction > 2 || static_cast<int>(unit->getLevel()) - 10 <
-                                                             static_cast<int>(playerLevel));
-        if (showLevel) {
-            char buf[8];
-            std::snprintf(buf, sizeof(buf), "%u", unit->getLevel());
-            const float px = 0.009f * ui;
-            const ImVec2 sz = font->CalcTextSizeA(px, FLT_MAX, 0.0f, buf);
-            shadowedText(px, ImVec2(levelCentre.x - sz.x * 0.5f, levelCentre.y - sz.y * 0.5f),
-                         levelColor(unit->getLevel(), playerLevel, alpha), buf);
-        } else if (VkDescriptorSet skull = plateTexture(assets, "Interface\\TargetingFrame\\UI-TargetingFrame-Skull.blp")) {
-            const float sh = 0.01f * ui * 0.5f;
-            drawList->AddImage((ImTextureID)(uintptr_t)skull, ImVec2(levelCentre.x - sh, levelCentre.y - sh),
-                               ImVec2(levelCentre.x + sh, levelCentre.y + sh), ImVec2(0, 0), ImVec2(1, 1),
-                               IM_COL32(255, 255, 255, alpha));
+        if (!boss && (reaction > 2 || static_cast<int>(unitOf->getLevel()) - 10 < static_cast<int>(playerLevel))) {
+            v.level = static_cast<int>(unitOf->getLevel());
+            v.levelColor = rgb(levelColor(unitOf->getLevel(), playerLevel, 255));
         }
-        // The elite dragon over the level for an elite, a rare elite or a
-        // boss (0x0098e6e0), 0.0294 by 0.0215, 0.003 right and 0.001 down.
-        if (boss || rank == 1 || rank == 2) {
-            if (VkDescriptorSet elite = plateTexture(assets, "Interface\\Tooltips\\EliteNameplateIcon.blp")) {
-                const float w = 0.0294f * ui, h = 0.0215f * ui;
-                const ImVec2 c(levelCentre.x + 0.003f * ui, levelCentre.y + 0.001f * ui);
-                drawList->AddImage((ImTextureID)(uintptr_t)elite, ImVec2(c.x - w * 0.5f, c.y - h * 0.5f),
-                                   ImVec2(c.x + w * 0.5f, c.y + h * 0.5f), ImVec2(0, 0), ImVec2(0.578125f, 0.84375f),
-                                   IM_COL32(255, 255, 255, alpha));
-            }
-        }
-        // The raid icon, 0.02 square, its right edge on the frame's left
-        // (0x0098e740).
-        const uint8_t mark = gameHandler.getEntityRaidMark(guid);
-        if (mark < game::GameHandler::kRaidMarkCount) {
-            if (VkDescriptorSet tex = getRaidTargetIcon(mark, assets)) {
-                const float sq = 0.02f * ui;
-                const float cy = bottom - fh * 0.5f;
-                drawList->AddImage((ImTextureID)(uintptr_t)tex, ImVec2(left - sq, cy - sq * 0.5f),
-                                   ImVec2(left, cy + sq * 0.5f), ImVec2(0, 0), ImVec2(1, 1),
-                                   IM_COL32(255, 255, 255, alpha));
-            }
-        }
-
-        // The cast bar, for the target only (0x00720e50) and with
-        // showVKeyCastbar (0x0098f040). Its border is the plate's
-        // own mirrored left to right, centred on the frame's bottom edge
-        // (0x0098f390); for a cast that cannot be interrupted the shield,
-        // a frame's height under it, in its place. The bar, 0.804 by 0.281
-        // of the frame, hangs from the border's bottom-right 0.003125 in and
-        // 0.003125 up - down for the shield; the spell's icon, 0.01 square,
-        // is centred 0.0092 in from the border's bottom-left and 0.0071 up
-        // (0 for the shield).
+        // The elite dragon for an elite, a rare elite or a boss (0x0098e6e0).
+        v.elite = boss || rank == 1 || rank == 2;
+        if (const uint8_t mark = gameHandler.getEntityRaidMark(r.guid); mark < game::GameHandler::kRaidMarkCount)
+            v.raidIcon = mark;
+        // The cast bar, for the target only (0x00720e50) and with showVKeyCastbar (0x0098f040):
+        // orange while it runs, green at its end, red when handed over already there.
         if (r.isTarget && castBar.shown) {
-            const auto& bar = castBar;
-            const int barAlpha = alpha * bar.alpha / 255;
-            const float pct = std::clamp(bar.filled(), 0.0f, 1.0f);
-            const float borderUp = -fh * 0.5f;  // the border's bottom, from the frame's
-            const float inset = 0.003125f * ui;
-            const bool shield = bar.notInterruptible;
-            const float barUp = !shield ? borderUp + inset : borderUp - inset;
-            const auto [cb0, cb1] = box(fw - inset - fw * 0.804f, barUp, fw * 0.804f, fh * 0.281f);
-            // Orange while it runs, green at its end, red when handed over
-            // already there (0x0098f040, 0x0098e9f0).
-            const ImU32 fillColor = bar.colour == ui::PlateCastBar::Colour::Green ? IM_COL32(0, 255, 0, barAlpha)
-                                    : bar.colour == ui::PlateCastBar::Colour::Red ? IM_COL32(255, 0, 0, barAlpha)
-                                                                                  : IM_COL32(255, 178, 0, barAlpha);
-            const ImVec2 cbFill(cb0.x + (cb1.x - cb0.x) * pct, cb1.y);
-            if (VkDescriptorSet fill = plateTexture(assets, "Interface\\TargetingFrame\\UI-TargetingFrame-BarFill.blp")) {
-                drawList->AddImage((ImTextureID)(uintptr_t)fill, cb0, cbFill, ImVec2(0, 0), ImVec2(pct, 1), fillColor);
-            } else {
-                drawList->AddRectFilled(cb0, cbFill, fillColor);
-            }
-            if (!shield) {
-                if (VkDescriptorSet tex = plateTexture(assets, "Interface\\Tooltips\\Nameplate-Border.blp")) {
-                    const auto [cf0, cf1] = box(0.0f, borderUp, fw, fh);
-                    drawList->AddImage((ImTextureID)(uintptr_t)tex, cf0, cf1, ImVec2(1, 0), ImVec2(0, 1),
-                                       IM_COL32(255, 255, 255, barAlpha));
-                }
-            } else if (VkDescriptorSet tex = plateTexture(assets, "Interface\\Tooltips\\Nameplate-CastBar-Shield.blp")) {
-                const auto [cf0, cf1] = box(0.0f, borderUp - fh * 0.5f, fw, fh);
-                drawList->AddImage((ImTextureID)(uintptr_t)tex, cf0, cf1, ImVec2(0, 0), ImVec2(1, 1),
-                                   IM_COL32(255, 255, 255, barAlpha));
-            }
-            if (VkDescriptorSet icon = bar.spellId ? getSpellIcon(bar.spellId, assets) : VK_NULL_HANDLE) {
-                const float sq = 0.01f * ui;
-                const float cx = left + 0.0092f * ui;
-                const float cy = bottom - borderUp - (!shield ? 0.0071f * ui : 0.0f);
-                drawList->AddImage((ImTextureID)(uintptr_t)icon, ImVec2(cx - sq * 0.5f, cy - sq * 0.5f),
-                                   ImVec2(cx + sq * 0.5f, cy + sq * 0.5f), ImVec2(0, 0), ImVec2(1, 1),
-                                   IM_COL32(255, 255, 255, barAlpha));
-            }
+            v.castSpell = castBar.spellId;
+            v.castMin = castBar.min;
+            v.castMax = castBar.max;
+            v.castValue = castBar.value;
+            v.castColor = castBar.colour == ui::PlateCastBar::Colour::Green ? glm::vec3(0.0f, 1.0f, 0.0f)
+                          : castBar.colour == ui::PlateCastBar::Colour::Red ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                                                            : glm::vec3(1.0f, 178.0f / 255.0f, 0.0f);
+            v.castAlpha = static_cast<float>(castBar.alpha) / 255.0f;
+            v.castShield = castBar.notInterruptible;
         }
-
-        // HIGHLIGHT: Nameplate-Glow over the whole frame on the glowing
-        // plate (0x0098e910), added (blend mode 3).
-        if (&r == glowing) {
-            if (VkDescriptorSet glow = plateTexture(assets, "Interface\\Tooltips\\Nameplate-Glow.blp")) {
-                rendering::setImGuiBlend(drawList, rendering::ImGuiBlend::Add);
-                drawList->AddImage((ImTextureID)(uintptr_t)glow, fr0, fr1, ImVec2(0, 0), ImVec2(1, 1),
-                                   IM_COL32(255, 255, 255, alpha));
-                rendering::setImGuiBlend(drawList, rendering::ImGuiBlend::Blend);
-            }
+        views.push_back(std::move(v));
+        // The pointer over it makes the unit the mouseover, and a click targets it.
+        if (!ImGui::GetIO().WantCaptureMouse && mouse.x >= r.left && mouse.x <= r.left + fw &&
+            mouse.y >= r.bottom - fh && mouse.y <= r.bottom) {
+            plateMouseover_ = r.guid;
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) gameHandler.targetUnit(r.guid);
         }
-
-        // A plate is a button: the pointer over it makes the unit the
-        // mouseover, and a click targets it.
-        if (!ImGui::GetIO().WantCaptureMouse) {
-            if (mouse.x >= fr0.x && mouse.x <= fr1.x && mouse.y >= fr0.y && mouse.y <= fr1.y) {
-                plateMouseover_ = guid;
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) gameHandler.targetUnit(guid);
-            }
-        }
-    };
-    for (const PlateRec& r : plateRecs)
-        if (!r.isTarget) drawPlate(r);
-    for (const PlateRec& r : plateRecs)
-        if (r.isTarget) drawPlate(r);
+    }
+    if (plateFrames) plateFrames->showNamePlates(ddc / unit, views);
 }
 
 }  // namespace ui
