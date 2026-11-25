@@ -7413,11 +7413,11 @@ void Application::render() {
                         shown.insert(id);
                     }
                 }
-                // The interface's own player arrow on the world map, when it
-                // draws: the map shows none of its own under it.
+                // The interface's own player arrow on the world map: the map shows
+                // none of its own - where that is hidden, on another floor, neither.
                 if (auto* wm = renderer ? renderer->getWorldMap() : nullptr) {
                     const ui::Widget* arrow = widgets.findByName("PlayerArrowFrame");
-                    wm->setInterfaceDrawsPlayerArrow(arrow && arrow->visible && arrow->externalTexture != 0);
+                    wm->setInterfaceDrawsPlayerArrow(arrow && !(arrow->visible && arrow->externalTexture == 0));
                 }
                 // A frame hidden, gone or cleared lets its view go.
                 for (auto it = modelFrameViews_.begin(); it != modelFrameViews_.end();) {
