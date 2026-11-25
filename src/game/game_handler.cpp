@@ -1,7 +1,9 @@
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
+#include "game/macro_slots.hpp"
 #include "game/reputation_standing.hpp"
 
+#include <map>
 #include <set>
 
 #include "game/item_text.hpp"
@@ -707,17 +709,6 @@ size_t GameHandler::expireQuestWatches() {
 
 void GameHandler::updateTimers(float deltaTime) {
     if (spellHandler_) spellHandler_->updateTimers(deltaTime);
-
-    // Periodically clear stale pending item queries so they can be retried.
-    // Without this, a lost/malformed response leaves the entry stuck forever.
-    pendingItemQueryTimer_ += deltaTime;
-    if (pendingItemQueryTimer_ >= 5.0f) {
-        pendingItemQueryTimer_ = 0.0f;
-        if (!pendingItemQueries_.empty()) {
-            LOG_DEBUG("Clearing ", pendingItemQueries_.size(), " stale pending item queries");
-            pendingItemQueries_.clear();
-        }
-    }
 
     // Tick InventoryHandler's auction search cooldown (the authoritative
     // timer - GameHandler previously ticked its own never-set duplicate).
@@ -1437,6 +1428,10 @@ void GameHandler::setMacroText(uint32_t macroId, const std::string& text) {
 void GameHandler::saveCharacterConfig() {
     const Character* ch = getActiveCharacter();
     if (!ch || ch->name.empty()) return;
+    // Not before this character's own has been read: what is here until then
+    // is the one's before.
+    if (characterConfigOf_ != playerGuid) return;
+    saveAccountMacros();
 
     std::string dir = getCharacterConfigDir();
     std::error_code ec;
@@ -1460,9 +1455,13 @@ void GameHandler::saveCharacterConfig() {
         out << "action_bar_" << i << "_id=" << actionBar[i].id << "\n";
     }
 
-    // Save client-side macro text (escape newlines as \n literal)
+    // Macros by the client's ids; before this line was written, the
+    // character's were 37 to 54.
+    out << "macro_ids=12340\n";
+    // Save client-side macro text (escape newlines as \n literal), the
+    // character's: the account's have a file of their own
     for (const auto& [id, text] : macros_) {
-        if (!text.empty()) {
+        if (!text.empty() && macro_list::perCharacter(id)) {
             std::string escaped;
             escaped.reserve(text.size());
             for (char c : text) {
@@ -1475,10 +1474,10 @@ void GameHandler::saveCharacterConfig() {
         }
     }
     for (const auto& [id, name] : macroNames_) {
-        if (!name.empty()) out << "macro_" << id << "_name=" << name << "\n";
+        if (!name.empty() && macro_list::perCharacter(id)) out << "macro_" << id << "_name=" << name << "\n";
     }
     for (const auto& [id, icon] : macroIcons_) {
-        if (!icon.empty()) out << "macro_" << id << "_icon=" << icon << "\n";
+        if (!icon.empty() && macro_list::perCharacter(id)) out << "macro_" << id << "_icon=" << icon << "\n";
     }
 
     // The quest log itself is not saved: the server sends it on every login,
@@ -1530,9 +1529,19 @@ void GameHandler::loadCharacterConfig() {
     // questWatchExpiry_), so a new character starts with none at all.
     questWatchExpiry_.clear();
 
+    // The macros of the character before are not this one's. The account's
+    // are in a file of its own; what this character's has of them is from
+    // before there was one, and is taken for what that does not have.
+    putMacros(true, {});
+    (void)loadAccountMacros();
+    characterConfigOf_ = playerGuid;
+
     std::string path = getCharacterConfigDir() + "/" + ch->name + ".cfg";
     std::ifstream in(path);
     if (!in.is_open()) return;
+    bool macroIdsAreTheClients = false;
+    struct OldMacro { std::string text, name, icon; };
+    std::map<uint32_t, OldMacro> oldAccountMacros;
 
     uint64_t savedGuid = 0;
     std::array<int, ACTION_BAR_SLOTS> types{};
@@ -1554,6 +1563,8 @@ void GameHandler::loadCharacterConfig() {
             try { savedGender = std::stoi(val); } catch (...) {}
         } else if (key == "use_female_model") {
             try { savedUseFemaleModel = std::stoi(val); } catch (...) {}
+        } else if (key == "macro_ids") {
+            macroIdsAreTheClients = true;
         } else if (key.rfind("macro_", 0) == 0) {
             // Parse macro_N_text
             size_t firstUnder = 6; // length of "macro_"
@@ -1561,6 +1572,10 @@ void GameHandler::loadCharacterConfig() {
             if (secondUnder == std::string::npos) continue;
             uint32_t macroId = 0;
             try { macroId = static_cast<uint32_t>(std::stoul(key.substr(firstUnder, secondUnder - firstUnder))); } catch (...) { continue; }
+            if (!macroIdsAreTheClients && macroId > macro_list::kAccountMacros) macroId = macro_list::fileId(macroId, true);
+            const bool character = macro_list::perCharacter(macroId);
+            if (!character && macroIdsAreTheClients) continue;
+            OldMacro* old = character ? nullptr : &oldAccountMacros[macroId];
             if (key.substr(secondUnder + 1) == "text" && !val.empty()) {
                 // Unescape \n and \\ sequences
                 std::string unescaped;
@@ -1574,11 +1589,11 @@ void GameHandler::loadCharacterConfig() {
                         unescaped += val[i];
                     }
                 }
-                macros_[macroId] = std::move(unescaped);
+                (old ? old->text : macros_[macroId]) = std::move(unescaped);
             } else if (key.substr(secondUnder + 1) == "name" && !val.empty()) {
-                macroNames_[macroId] = val;
+                (old ? old->name : macroNames_[macroId]) = val;
             } else if (key.substr(secondUnder + 1) == "icon" && !val.empty()) {
-                macroIcons_[macroId] = val;
+                (old ? old->icon : macroIcons_[macroId]) = val;
             }
         } else if ((key == "tracked_quests" || key == "collapsed_factions" ||
                     key == "collapsed_skill_categories") && !val.empty()) {
@@ -1633,6 +1648,7 @@ void GameHandler::loadCharacterConfig() {
     // Validate guid matches current character
     if (savedGuid != 0 && savedGuid != playerGuid) {
         LOG_WARNING("Character config guid mismatch for ", ch->name, ", using defaults");
+        putMacros(true, {});
         return;
     }
 
@@ -1664,6 +1680,16 @@ void GameHandler::loadCharacterConfig() {
         }
         LOG_INFO("Character config loaded from ", path);
     }
+    for (auto& [id, old] : oldAccountMacros) {
+        if (old.text.empty() && old.name.empty()) continue;
+        const uint32_t to = macro_list::mergedId(macroList(), {id, old.name});
+        if (to == 0) continue;
+        if (!old.text.empty()) macros_[to] = std::move(old.text);
+        if (!old.name.empty()) macroNames_[to] = std::move(old.name);
+        if (!old.icon.empty()) macroIcons_[to] = std::move(old.icon);
+    }
+    saveAccountMacros();
+    settleMacroSlots(*this);
     // The macros are read with the rest, and the client announces them once
     // its file is read (0x00567c10 -> 0x00566240, UPDATE_MACROS 0x180).
     fireAddonEvent("UPDATE_MACROS", {});
@@ -4176,13 +4202,19 @@ void GameHandler::setInteractionObject(uint64_t guid, std::optional<go_interacti
     // closes (0x00512e60) - not the one opening now, which wowee has given
     // its object already.
     const uint64_t released = interactionObject_;
-    releaseInteractionObject();
+    releaseInteractionObject(guid == 0);
     if (const auto window = go_interaction::windowClosedWith(interactionWindowObjects(), released, opening)) {
         closeInteractionWindow(*window);
     }
     interactionObject_ = guid;
-    // A game object (type mask 0x20) plays its OPEN (0x0070bab0, slot 0x98).
     auto entity = guid ? getEntityManager().getEntity(guid) : nullptr;
+    // A creature (type mask 0x8, not a player) that was not it already says hello
+    // (0x00720860(1)), and its base animation is asked again.
+    if (entity && entity->getType() == ObjectType::UNIT && guid != released) {
+        sayNpcLine(static_cast<const Unit&>(*entity), NpcLine::Hello);
+        entity->requestBaseAnimation();
+    }
+    // A game object (type mask 0x20) plays its OPEN (0x0070bab0, slot 0x98).
     if (entity && entity->getType() == ObjectType::GAMEOBJECT && gameObjectInteractionCallback_) {
         gameObjectInteractionCallback_(guid, true);
     }
@@ -4203,18 +4235,40 @@ void GameHandler::releaseInteractionObject(bool farewell) {
     // 0x00518d50 with nothing to follow: a creature (type mask 0x8, not a
     // player) that is alive - health, no UNIT_DYNFLAG_DEAD - says farewell
     // (0x00720860(0)). Not when another object replaces it (0x0051fce0).
-    if (farewell && entity && entity->getType() == ObjectType::UNIT && npcFarewellCallback_) {
-        auto unit = std::static_pointer_cast<Unit>(entity);
-        if (unit->getHealth() > 0 && (unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0) {
-            npcFarewellCallback_(guid, glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
-        }
-    }
+    const bool unit = entity && entity->getType() == ObjectType::UNIT;
+    if (farewell && unit) sayNpcLine(static_cast<const Unit&>(*entity), NpcLine::Farewell);
     // 0x00512e60: cleared, and a game object plays its CLOSE (0x0070bac0,
     // slot 0x9c).
     interactionObject_ = 0;
+    if (unit) entity->requestBaseAnimation();
     if (entity && entity->getType() == ObjectType::GAMEOBJECT && gameObjectInteractionCallback_) {
         gameObjectInteractionCallback_(guid, false);
     }
+}
+
+void GameHandler::sayNpcLine(const Unit& unit, NpcLine line) {
+    // 0x00720860: not to a dead player, nor one that is dead or lies so
+    // (health, UNIT_DYNFLAG_DEAD).
+    if (!npcLineCallback_ || isPlayerDead() || isPlayerGhost()) return;
+    if (unit.getHealth() == 0 || (unit.getDynamicFlags() & UNIT_DYNFLAG_DEAD) != 0) return;
+    npcLineCallback_(unit.getGuid(), line, glm::vec3(unit.getX(), unit.getY(), unit.getZ()));
+}
+
+void GameHandler::clickVoice(uint64_t guid) {
+    const auto entity = getEntityManager().getEntity(guid);
+    if (!npcLineCallback_ || !entity || entity->getType() != ObjectType::UNIT || isPlayerDead() || isPlayerGhost())
+        return;
+    const auto& unit = static_cast<const Unit&>(*entity);
+    // Not dead, feigning it (0x0071f560) or asleep.
+    const uint16_t flags2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+    if (unit.getHealth() == 0 || (flags2 != 0xFFFF && (unit.getField(flags2) & 0x1u) != 0) ||
+        unit.getStandState() == 7 || unit.getStandState() == 3)
+        return;
+    const auto mover = getEntityManager().getEntity(activeMover());
+    if (!mover || !mover->isUnit()) return;
+    const auto& moving = static_cast<const Unit&>(*mover);
+    if (unitReaction(unit, moving) <= 2 || unitReaction(moving, unit) <= 2) return;
+    npcLineCallback_(guid, NpcLine::Click, glm::vec3(unit.getX(), unit.getY(), unit.getZ()));
 }
 
 std::array<uint64_t, go_interaction::kWindowCount> GameHandler::interactionWindowObjects() {
@@ -4518,10 +4572,8 @@ void GameHandler::updatePetActionBar() {
     if (player && farsightIdx != 0xFFFF) {
         const uint64_t farsight = (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(farsightIdx + 1))) << 32) |
                                   player->getField(farsightIdx);
-        auto pet = petGuid_ ? std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(petGuid_)) : nullptr;
-        // 0x005d35b0: the pet is there and alive.
         const auto passenger = vehicleRoster_.passenger(playerGuid);
-        on = vehicle::petActionsOnBonusBar(farsight, petGuid_, pet && pet->getHealth() > 0,
+        on = vehicle::petActionsOnBonusBar(farsight, petGuid_, pet::petHasActions(petBarContext()),
                                            passenger && passenger->vehicleGuid == petGuid_,
                                            vehicleRoster_.seatOf(playerGuid));
     }

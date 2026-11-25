@@ -2,8 +2,11 @@
 
 #include "game/achievement_list.hpp"
 #include "game/macro_list.hpp"
+#include "game/pet_action.hpp"
 #include "game/achievement_tracking.hpp"
 #include "game/npc_interaction.hpp"
+#include "game/soft_interact.hpp"
+#include "game/unit_pointer.hpp"
 #include "game/tutorials.hpp"
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
 #include "game/visible_item_fields.hpp"   // the visible-item pair as the client's record reads it
@@ -1403,6 +1406,10 @@ public:
     void toggleAfk(const std::string& message = "");
     void toggleDnd(const std::string& message = "");
     bool isAfk() const { return afkStatus_; }
+    /// The player moves: no longer away, where autoClearAFK says so (0x006d52d0).
+    void clearAfkMoving();
+    /// Thirty minutes without a key or the mouse: IDLE_MESSAGE, and out (0x0052af40).
+    void logoutIdle();
     bool isDnd() const { return dndStatus_; }
     void replyToLastWhisper(const std::string& message);
     std::string getLastWhisperSender() const {
@@ -1472,6 +1479,13 @@ public:
     /// frame to find.
     uint32_t getCreatureDisplayIdForEntry(uint32_t entry);
     void queryGameObjectInfo(uint32_t entry, uint64_t guid);
+    /// Names, creatures, game objects, pets and items asked for and not yet answered,
+    /// asked for again: the server drops what comes while it moves the player from map to
+    /// map. 12340 asks for none of them in that time - its load takes the thread its
+    /// packets are handled on (0x00403b70) - and knows most from its WDB files
+    /// (0x0067ba40); a query lost left an entry of the combat log waiting for it, and all
+    /// after it behind that (0x0074f910).
+    void askUnansweredAgain();
     const GameObjectQueryResponseData* getCachedGameObjectInfo(uint32_t entry) const override {
         return entityController_->getCachedGameObjectInfo(entry);
     }
@@ -1502,9 +1516,13 @@ public:
         return entityController_->getCreatureFamily(entry);
     }
 
-    void startAutoAttack(uint64_t targetGuid);
+    /// False where the player may not start one now (0x0072bdb0).
+    bool startAutoAttack(uint64_t targetGuid);
     void stopAutoAttack();
     bool isAutoAttacking() const;
+    /// The player's UNIT_FLAG_IN_COMBAT, as UnitAffectingCombat (0x0060f860) and
+    /// the macros' [combat] ask it; the fight of its own swings and those seen
+    /// against it is CombatHandler's (isInCombatWith).
     bool isInCombat() const;
     bool isInCombatWith(uint64_t guid) const;
     uint64_t getAutoAttackTargetGuid() const;
@@ -1537,9 +1555,9 @@ public:
     }
 
     // Threat
-    using ThreatEntry = CombatHandler::ThreatEntry;
-    const std::vector<ThreatEntry>* getThreatList(uint64_t unitGuid) const;
-    const std::vector<ThreatEntry>* getTargetThreatList() const;
+    [[nodiscard]] const ThreatTable* getThreatTable(uint64_t unit) const;
+    [[nodiscard]] CombatHandler::ThreatSituation threatSituation(uint64_t victim, uint64_t unit) const;
+    [[nodiscard]] uint8_t threatStatus(uint64_t victim) const;
 
     void castSpell(uint32_t spellId, uint64_t targetGuid = 0);
     void cancelCast();
@@ -1580,11 +1598,11 @@ public:
     std::optional<GroundTargetAim> aimGroundTarget(std::optional<ground_target::Place> place);
     void cancelAura(uint32_t spellId);
     void cancelOpenStableAuras();
-    /// A chest's cursor from its lock (0x0070f9b0): the LockType.dbc row its
-    /// Lock.dbc row's first Index names, that row's CursorName and its id.
-    /// Empty when the lock has no such row or the row no cursor.
-    std::pair<std::string, uint32_t> chestLockCursor(const GameObject& go,
-                                                     const GameObjectQueryResponseData* info) const;
+    /// A game object's lock's LockType CursorName and id; empty without.
+    std::pair<std::string, uint32_t> lockCursor(const GameObject& go, const GameObjectQueryResponseData* info) const;
+    /// The picture of the cursor over a game object (0x0070ce10), empty for the
+    /// pointer as it is.
+    std::string gameObjectCursorArt(uint64_t guid);
     /// 0x00725bf0's ring: the player's charm, else its summon, and the
     /// milliseconds since its UNIT_FIELD_TARGET was written, while that is
     /// under a second.
@@ -1644,6 +1662,10 @@ public:
     /// answer this client's own naming dialog is waiting for.
     bool isPetRenameable() const { return petRenameablePending_; }
     uint64_t getPetGuid() const { return petGuid_; }
+    /// Who "pet" is: the player's charm, else its summon (UNIT_FIELD_CHARM,
+    /// UNIT_FIELD_SUMMON: 0x0060abf0, 0x0060bb70) - not the pet of
+    /// SMSG_PET_SPELLS, which comes before those fields.
+    [[nodiscard]] uint64_t petUnitGuid() const;
 
     // ---- Pet state (populated by SMSG_PET_SPELLS / SMSG_PET_MODE) ----
     // 10 action bar slots; each entry is a packed uint32:
@@ -1833,7 +1855,6 @@ public:
 
     bool isCasting() const { return spellHandler_ ? spellHandler_->isCasting() : false; }
     bool isChanneling() const { return spellHandler_ ? spellHandler_->isChanneling() : false; }
-    bool isRestoring() const { return spellHandler_ ? spellHandler_->isRestoring() : false; }
     uint32_t getCurrentCastSpellId() const { return spellHandler_ ? spellHandler_->getCurrentCastSpellId() : 0; }
     float getCastProgress() const { return spellHandler_ ? spellHandler_->getCastProgress() : 0.0f; }
     float getCastTimeRemaining() const { return spellHandler_ ? spellHandler_->getCastTimeRemaining() : 0.0f; }
@@ -2082,7 +2103,6 @@ public:
     using PlayerModelRebuildCallback = std::function<void()>;
     void setPlayerModelRebuildCallback(PlayerModelRebuildCallback cb) { playerModelRebuildCallback_ = std::move(cb); }
 
-    // Ghost state callback - fired when player enters or leaves ghost (spirit) form
     /// Whether a unit's model is drawn (0x0077f0b0: not culled), which the
     /// target keys ask. Without a renderer everything is.
     using UnitDrawnCallback = std::function<bool(uint64_t guid)>;
@@ -2091,13 +2111,6 @@ public:
     /// CreatureType.dbc's flags for a type: 1 for critters, companions, gas
     /// clouds - those no target key picks.
     [[nodiscard]] uint32_t creatureTypeFlags(uint32_t creatureType) const;
-    using GhostStateCallback = std::function<void(bool isGhost)>;
-    void setGhostStateCallback(GhostStateCallback cb) { ghostStateCallback_ = std::move(cb); }
-
-    // Melee swing callback (for driving animation/SFX)
-    // spellId: 0 = regular auto-attack swing, non-zero = melee ability (special attack)
-    using MeleeSwingCallback = std::function<void(uint32_t spellId)>;
-    void setMeleeSwingCallback(MeleeSwingCallback cb) { meleeSwingCallback_ = std::move(cb); }
 
     // Snap the character to face the camera's current look direction and return the
     // resulting canonical orientation. Used by fishing so the bobber lands in front of
@@ -2202,25 +2215,28 @@ public:
         std::function<void(uint64_t guid, uint32_t moveFlags, uint32_t mask)>;
     void setUnitMoveFlagsCallback(UnitMoveFlagsCallback cb) { unitMoveFlagsCallback_ = std::move(cb); }
 
-    // NPC swing callback (plays attack animation on NPC)
-    using NpcSwingCallback = std::function<void(uint64_t guid)>;
-    void setNpcSwingCallback(NpcSwingCallback cb) { npcSwingCallback_ = std::move(cb); }
-
     /// A melee hit the victim bleeds from (0x00755e40 -> 0x00755380): who was
     /// hit, by whom, and whether the blow crushed (HITINFO 0x8000).
     using BloodSpurtCallback = std::function<void(uint64_t victimGuid, uint64_t attackerGuid, bool crushing)>;
     void setBloodSpurtCallback(BloodSpurtCallback cb) { bloodSpurtCallback_ = std::move(cb); }
     auto& bloodSpurtCallbackRef() { return bloodSpurtCallback_; }
 
-    // NPC greeting callback (plays voice line when NPC is clicked)
-    using NpcGreetingCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
-    void setNpcGreetingCallback(NpcGreetingCallback cb) { npcGreetingCallback_ = std::move(cb); }
+    /// The models the client puts on a unit of itself (0x006f9260's table at 0x00ada764).
+    enum class UnitEffect : uint8_t { LevelUp, Reputation, Achievement, MountPoof };
+    using UnitEffectCallback = std::function<void(uint64_t guid, UnitEffect effect)>;
+    void setUnitEffectCallback(UnitEffectCallback cb) { unitEffectCallback_ = std::move(cb); }
+    void playUnitEffect(uint64_t guid, UnitEffect effect) {
+        if (unitEffectCallback_) unitEffectCallback_(guid, effect);
+    }
 
-    using NpcFarewellCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
-    void setNpcFarewellCallback(NpcFarewellCallback cb) { npcFarewellCallback_ = std::move(cb); }
-
-    using NpcVendorCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
-    void setNpcVendorCallback(NpcVendorCallback cb) { npcVendorCallback_ = std::move(cb); }
+    /// A unit's lines: of a click (0x0072a680), of a window opening with it and of
+    /// its closing (0x00720860).
+    enum class NpcLine : uint8_t { Click, Hello, Farewell };
+    using NpcLineCallback = std::function<void(uint64_t guid, NpcLine line, const glm::vec3& position)>;
+    void setNpcLineCallback(NpcLineCallback cb) { npcLineCallback_ = std::move(cb); }
+    /// 0x0072a680: a click at a unit has it say something, where both regard each
+    /// other as neutral or better.
+    void clickVoice(uint64_t guid);
 
     // XP tracking
     uint32_t getPlayerXp() const { return playerXp_; }
@@ -3214,6 +3230,9 @@ public:
         bool interactive = false;
     };
     GameObjectPointer gameObjectPointer(uint64_t guid);
+    /// Whether the object may be used now (its type handler's +0x1c, asked
+    /// without a word).
+    bool gameObjectUseAllowed(uint64_t guid);
     void activateSpiritHealer(uint64_t npcGuid);
     bool isLootWindowOpen() const;
     /// Starting to move, turning or jumping lets go of the loot (0x0072e5d0
@@ -3301,6 +3320,14 @@ public:
     /// 0x00729620: whether the client offers this unit's services - its
     /// service cursor - at all.
     bool npcServiceOffered(uint64_t guid) const;
+    /// 0x00729530: whether the player may speak to the unit.
+    bool mayInteractWith(uint64_t guid) const;
+    /// The picture of the cursor over a unit (0x004f7a50), empty for the
+    /// pointer as it is; and what a right click on it does (0x00731260).
+    std::string unitCursorArt(uint64_t guid);
+    unit_pointer::Click unitClick(uint64_t guid);
+    /// 0x006d5a60's questions of the player, the same for every object.
+    soft_interact::LootCheck playerLootCheck() const;
     /// 0x005220b0: the object the client makes the mouseover while its cursor
     /// is turned off - the best in front of the mover by 0x00519e80's gates
     /// (game/soft_interact.hpp); 0 for none.
@@ -3316,6 +3343,8 @@ public:
     bool autoInteractOn() const;
     /// 0x00721f50: the player alive, the active mover, and autoInteract on.
     bool clickToMoveAllowed() const;
+    /// 0x00721f90.
+    bool clickToMoveUnderWay() const { return ctm_.kind != click_to_move::Kind::None; }
     /// 0x00721f90: a click-to-move under way for the player.
     bool isClickToMoving() const;
     /// 0x007272c0: given up or done; the mover stops moving forward. With
@@ -3761,6 +3790,7 @@ public:
     /// Let go once no window is open with it any more.
     void setInteractionObject(uint64_t guid, std::optional<go_interaction::Window> opening = std::nullopt);
     uint64_t getInteractionObject() const { return interactionObject_; }
+    void sayNpcLine(const Unit& unit, NpcLine line);
     /// Once a frame: lets it go when its window has closed.
     void settleInteractionObject();
     /// A quest window sets it too (0x0058c5a0), but not over a game object
@@ -3772,6 +3802,10 @@ public:
     /// (0x005ab800 with 0x005d3240), the offset is 5 (0x005a83c0) and the
     /// page reads 1 (0x005a7fd0).
     bool petActionsOnBonusBar() const { return petActionsOnBonusBar_; }
+    /// PetHasActionBar() (0x005d3720).
+    [[nodiscard]] bool petHasActionBar() const;
+    /// Whether a pet belongs to a hunter (0x0071b630).
+    [[nodiscard]] bool isHuntersPet(const Unit& pet) const;
     /// The override bar (DAT_00c1e5a0 0x4, 0x005abb40): PLAYER_FIELD_BYTES2's
     /// low word names an OverrideSpellData row - an aura of type 332 sets it -
     /// and while that row names a spell its ten fill slots 121..130, 131 and
@@ -4116,13 +4150,6 @@ public:
     /// zero when the file names no such language.
     uint32_t languageIdByName(const std::string& name) const;
 
-    // Other player level-up callback - fires when another player gains a level
-    using OtherPlayerLevelUpCallback = std::function<void(uint64_t guid, uint32_t newLevel)>;
-    void setOtherPlayerLevelUpCallback(OtherPlayerLevelUpCallback cb) { otherPlayerLevelUpCallback_ = std::move(cb); }
-
-    // Achievement earned callback - fires when SMSG_ACHIEVEMENT_EARNED is received
-    using AchievementEarnedCallback = std::function<void(uint32_t achievementId, const std::string& name)>;
-    void setAchievementEarnedCallback(AchievementEarnedCallback cb) { achievementEarnedCallback_ = std::move(cb); }
     const std::unordered_set<uint32_t>& getEarnedAchievements() const { return earnedAchievements_; }
 
     // Title system - earned title bits and the currently displayed title
@@ -5409,6 +5436,13 @@ public:
     /// weapon's ItemDisplayInfo SpellVisualID (0x00720f80).
     uint32_t getUnitSpellVisualId(uint64_t casterGuid, uint32_t spellId) const;
     /// The ItemDisplayInfo id of the unit's ranged weapon (vfunc +0x134(2)), 0 for none.
+    /// The display and inventory type of the item a unit shows in a hand, 2 its
+    /// ranged slot (vfunc +0x134, +0x12c); zeros for none.
+    struct HeldItemDisplay {
+        uint32_t displayId = 0;
+        uint32_t inventoryType = 0;
+    };
+    [[nodiscard]] HeldItemDisplay heldItemDisplay(uint64_t unitGuid, uint32_t hand) const;
     uint32_t rangedWeaponDisplayId(uint64_t unitGuid) const;
     /// 0x00804cc0: whether a missile of the cast a dynamic object carries
     /// (DYNAMICOBJECT_CASTER, SPELLID, CASTTIME) still flies.
@@ -5923,6 +5957,7 @@ public:
     /// (0x005d6550); the pet SMSG_PET_SPELLS names moves to its front, a
     /// list of its own when it is not on it, and none empties it (0x005d6900).
     void setActivePet(uint64_t guid) {
+        if (guid != petGuid_) petPossessed_ = false;   // 0x005d6900
         if (guid == 0) {
             petGuidList_.clear();
         } else if (auto it = std::find(petGuidList_.begin(), petGuidList_.end(), guid); it != petGuidList_.end()) {
@@ -5957,7 +5992,6 @@ public:
     auto& tabCycleStaleRef() { return tabCycleStale; }
 
     // ── UI & Event Callbacks ─────────────────────────────────────────
-    auto& achievementEarnedCallbackRef() { return achievementEarnedCallback_; }
     auto& addonEventCallbackRef() { return addonEventCallback_; }
     auto& combatLogEventCallbackRef() { return combatLogEventCallback_; }
     auto& appearanceChangedCallbackRef() { return appearanceChangedCallback_; }
@@ -5983,33 +6017,20 @@ public:
     auto& gameObjectMoveCallbackRef() { return gameObjectMoveCallback_; }
     auto& gameObjectSpawnCallbackRef() { return gameObjectSpawnCallback_; }
     auto& gameObjectStateCallbackRef() { return gameObjectStateCallback_; }
-    auto& ghostStateCallbackRef() { return ghostStateCallback_; }
     auto& hearthstonePreloadCallbackRef() { return hearthstonePreloadCallback_; }
     auto& itemLootCallbackRef() { return itemLootCallback_; }
     auto& knockBackCallbackRef() { return knockBackCallback_; }
     auto& moverEventCallbackRef() { return moverEventCallback_; }
-    auto& meleeSwingCallbackRef() { return meleeSwingCallback_; }
     auto& spellCastBeginCallbackRef() { return spellCastBeginCallback_; }
     auto& unitAttackSwingCallbackRef() { return unitAttackSwingCallback_; }
     auto& meleeHitCallbackRef() { return meleeHitCallback_; }
     auto& attackStopCallbackRef() { return attackStopCallback_; }
     auto& spellMissCallbackRef() { return spellMissCallback_; }
-    void suppressNextMeleeSwingAnim() { suppressMeleeSwingAnim_ = true; }
-    bool consumeSuppressMeleeSwingAnim() {
-        bool v = suppressMeleeSwingAnim_;
-        suppressMeleeSwingAnim_ = false;
-        return v;
-    }
     auto& mountCallbackRef() { return mountCallback_; }
     auto& npcDeathCallbackRef() { return npcDeathCallback_; }
     auto& unitDiedCallbackRef() { return unitDiedCallback_; }
-    auto& npcFarewellCallbackRef() { return npcFarewellCallback_; }
-    auto& npcGreetingCallbackRef() { return npcGreetingCallback_; }
     auto& npcRespawnCallbackRef() { return npcRespawnCallback_; }
-    auto& npcSwingCallbackRef() { return npcSwingCallback_; }
-    auto& npcVendorCallbackRef() { return npcVendorCallback_; }
     auto& openLfgCallbackRef() { return openLfgCallback_; }
-    auto& otherPlayerLevelUpCallbackRef() { return otherPlayerLevelUpCallback_; }
     auto& otherPlayerMountCallbackRef() { return otherPlayerMountCallback_; }
     auto& growthFitCallbackRef() { return growthFitCallback_; }
     auto& playerDespawnCallbackRef() { return playerDespawnCallback_; }
@@ -6592,6 +6613,18 @@ private:
     void applyAccountDataText(uint32_t type, const std::string& text);
     std::string accountDataMacros(bool perCharacter) const;
     void applyAccountDataMacros(bool perCharacter, const std::string& text);
+    /// One half of the macros as a macros-cache.txt has them.
+    void putMacros(bool perCharacter, const std::string& cacheText);
+    /// The account's macros, every character's, out of a file of the account's
+    /// own, as the client keeps them (WTF\\Account\\<name>\\macros-cache.txt).
+    /// Read once an account; false where there is no such file yet.
+    bool loadAccountMacros();
+    /// Written where they have changed.
+    void saveAccountMacros();
+    std::string accountMacrosOf_;        // whose account's the macros are
+    std::string accountMacrosWritten_;   // what the file has of them
+    bool accountMacrosKept_ = false;     // there is a file
+    uint64_t characterConfigOf_ = 0;     // whose own file is read; none is written before
     void requestAccountData(uint32_t type);
     void uploadAccountData(uint32_t type);
     AccountDataBridge accountDataBridge_;
@@ -6914,7 +6947,6 @@ private:
     std::unordered_set<uint32_t> pendingItemQueries_;
     std::unordered_set<uint32_t> trainerDescriptionItems_;
     std::vector<std::pair<uint32_t, uint32_t>> pendingQuestRewardItems_;
-    float pendingItemQueryTimer_ = 0.0f;
 
     // Deferred SMSG_ITEM_PUSH_RESULT notifications for items whose info wasn't
     // cached at arrival time; emitted once the query response arrives.
@@ -7292,6 +7324,10 @@ private:
     float gameObjectScale(const GameObject& go) const;
     glm::quat gameObjectRotation(const GameObject& go) const;
     bool playerInForm() const;
+    unit_pointer::Player unitPointerPlayer() const;
+    /// 0x00729a70 of the player.
+    bool playerMayAttackNow(const Unit& unit) const;
+    std::optional<npc_interaction::ServiceAsk> serviceAskOf(uint64_t guid) const;
     bool chairSeatInReach(const GameObject& go, const GameObjectFacts& f) const;
     bool ritualAllows(const GameObject& go, const GameObjectFacts& f);
     int gameObjectReactionToPlayer(const GameObject& go) const;
@@ -7377,7 +7413,9 @@ private:
     uint32_t overrideSpellsId_ = 0;
     std::optional<OverrideSpellRow> overrideSpellRow_;
     uint32_t possessSpellId_ = 0;
+    bool petPossessed_ = false;   ///< possessed since it became the pet (0xc234d8)
     void setPossessSpell(uint32_t spellId);
+    [[nodiscard]] pet::PetBarContext petBarContext() const;
 
     // Taxi / Flight Paths
     std::unordered_map<uint64_t, bool> taxiNpcHasRoutes_;  // guid -> has new/available routes
@@ -7745,8 +7783,6 @@ private:
     UnitDrawnCallback unitDrawnCallback_;
     mutable std::unordered_map<uint32_t, uint32_t> creatureTypeFlags_;
     mutable bool creatureTypeFlagsLoaded_ = false;
-    GhostStateCallback ghostStateCallback_;
-    MeleeSwingCallback meleeSwingCallback_;
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
     UnitAmmoCallback unitAmmoCallback_;
@@ -7755,17 +7791,13 @@ private:
     AttackStopCallback attackStopCallback_;
     SpellMissCallback spellMissCallback_;
     TextEmoteGateCallback textEmoteGateCallback_;
-    bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler
     SpellCastAnimCallback spellCastAnimCallback_;
     SpellCastFailedCallback spellCastFailedCallback_;
     UnitJumpCallback unitJumpCallback_;
     UnitMoveFlagsCallback unitMoveFlagsCallback_;
-    NpcSwingCallback npcSwingCallback_;
     BloodSpurtCallback bloodSpurtCallback_;
-    NpcGreetingCallback npcGreetingCallback_;
-    NpcFarewellCallback npcFarewellCallback_;
-    NpcVendorCallback npcVendorCallback_;
+    NpcLineCallback npcLineCallback_;
     LevelUpCallback levelUpCallback_;
     LevelUpDeltas lastLevelUpDeltas_;
     std::vector<TempEnchantTimer> tempEnchantTimers_;
@@ -7780,11 +7812,10 @@ private:
     /// Languages.dbc, read once on the first ask like the caches beside it.
     mutable std::unordered_map<uint32_t, std::string> languageNames_;
     mutable bool languageNamesLoaded_ = false;
-    OtherPlayerLevelUpCallback otherPlayerLevelUpCallback_;
     OtherPlayerMountCallback otherPlayerMountCallback_;
     GrowthFitCallback growthFitCallback_;
     MountRoomCallback mountRoomCallback_;
-    AchievementEarnedCallback achievementEarnedCallback_;
+    UnitEffectCallback unitEffectCallback_;
     AreaDiscoveryCallback areaDiscoveryCallback_;
     QuestProgressCallback questProgressCallback_;
     MountCallback mountCallback_;

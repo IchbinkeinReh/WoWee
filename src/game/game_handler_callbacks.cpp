@@ -585,6 +585,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     spellFlatMods_.clear();
     spellPctMods_.clear();
     actionBar = {};
+    characterConfigOf_ = 0;
     // The interface's own start (0x0052b550): no combo points, on nobody
     // (0xbd084d, 0xbd08a8) - the server says them again only when they
     // change, so the last character's stayed on the next one's frame.
@@ -2280,6 +2281,18 @@ void GameHandler::forfeitDuel() {
     if (socialHandler_) socialHandler_->forfeitDuel();
 }
 
+void GameHandler::clearAfkMoving() {
+    if (afkStatus_ && addons::storedCVarValue("autoClearAFK", "1") != "0") toggleAfk();
+}
+
+void GameHandler::logoutIdle() {
+    if (isLoggingOut()) return;
+    addSystemChatMessage(interfaceString(
+        "IDLE_MESSAGE", "You have been inactive for some time and will be logged out of the game. If you wish to "
+                        "remain logged in, hit the cancel button."));
+    requestLogout();
+}
+
 void GameHandler::toggleAfk(const std::string& message) {
     if (chatHandler_) chatHandler_->toggleAfk(message);
 }
@@ -2510,6 +2523,12 @@ uint32_t GameHandler::getCreatureDisplayIdForEntry(uint32_t entry) {
     return 0;
 }
 
+void GameHandler::askUnansweredAgain() {
+    if (entityController_) entityController_->askAgain();
+    if (spellHandler_) spellHandler_->askPetNamesAgain();
+    if (inventoryHandler_) inventoryHandler_->askItemsAgain();
+}
+
 void GameHandler::queryGameObjectInfo(uint32_t entry, uint64_t guid) {
     if (entityController_) entityController_->queryGameObjectInfo(entry, guid);
 }
@@ -2604,8 +2623,8 @@ void GameHandler::respawnKnownEntities() {
 // Combat (delegated to CombatHandler)
 // ============================================================
 
-void GameHandler::startAutoAttack(uint64_t targetGuid) {
-    if (combatHandler_) combatHandler_->startAutoAttack(targetGuid);
+bool GameHandler::startAutoAttack(uint64_t targetGuid) {
+    return combatHandler_ && combatHandler_->startAutoAttack(targetGuid);
 }
 
 void GameHandler::stopAutoAttack() {
@@ -2623,7 +2642,9 @@ bool GameHandler::shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGu
 }
 
 void GameHandler::updateCombatText(float deltaTime) {
-    if (combatHandler_) combatHandler_->updateCombatText(deltaTime);
+    if (!combatHandler_) return;
+    combatHandler_->updateCombatText(deltaTime);
+    combatHandler_->raiseUnitEvents();
 }
 
 bool GameHandler::isAutoAttacking() const {
@@ -2631,7 +2652,9 @@ bool GameHandler::isAutoAttacking() const {
 }
 
 bool GameHandler::isInCombat() const {
-    return combatHandler_ ? combatHandler_->isInCombat() : false;
+    const auto me = getEntityManager().getEntity(playerGuid);
+    const uint16_t flags = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    return me && flags != 0xFFFF && (me->getField(flags) & 0x80000u) != 0;
 }
 
 bool GameHandler::isInCombatWith(uint64_t guid) const {
@@ -2680,12 +2703,16 @@ void GameHandler::clearHostileAttackers() {
     if (combatHandler_) combatHandler_->clearHostileAttackers();
 }
 
-const std::vector<GameHandler::ThreatEntry>* GameHandler::getThreatList(uint64_t unitGuid) const {
-    return combatHandler_ ? combatHandler_->getThreatList(unitGuid) : nullptr;
+const ThreatTable* GameHandler::getThreatTable(uint64_t unit) const {
+    return combatHandler_ ? combatHandler_->getThreatTable(unit) : nullptr;
 }
 
-const std::vector<GameHandler::ThreatEntry>* GameHandler::getTargetThreatList() const {
-    return targetGuid ? getThreatList(targetGuid) : nullptr;
+CombatHandler::ThreatSituation GameHandler::threatSituation(uint64_t victim, uint64_t unit) const {
+    return combatHandler_ ? combatHandler_->threatSituation(victim, unit) : CombatHandler::ThreatSituation{};
+}
+
+uint8_t GameHandler::threatStatus(uint64_t victim) const {
+    return combatHandler_ ? combatHandler_->threatStatus(victim) : uint8_t{0};
 }
 
 bool GameHandler::isHostileAttacker(uint64_t guid) const {
@@ -3129,17 +3156,57 @@ uint64_t guidFieldOf(const Entity& e, UF low) {
 }
 }  // namespace
 
+bool GameHandler::isHuntersPet(const Unit& pet) const {
+    const uint16_t number = fieldIndex(UF::UNIT_FIELD_PETNUMBER);
+    if (number == 0xFFFF || pet.getField(number) == 0) return false;
+    const auto owner = getEntityManager().getEntity(guidFieldOf(pet, UF::UNIT_FIELD_CREATEDBY));
+    if (!owner || !owner->isUnit()) return false;
+    const uint16_t bytes = fieldIndex(UF::UNIT_FIELD_BYTES_0);
+    return bytes != 0xFFFF && ((owner->getField(bytes) >> 8) & 0xFFu) == static_cast<uint32_t>(Class::HUNTER);
+}
+
+pet::PetBarContext GameHandler::petBarContext() const {
+    pet::PetBarContext c;
+    c.pet = petGuid_;
+    const auto entity = petGuid_ != 0 ? getEntityManager().getEntity(petGuid_) : nullptr;
+    const auto* unit = entity && entity->isUnit() ? static_cast<const Unit*>(entity.get()) : nullptr;
+    c.possessed = petPossessed_;
+    c.possessSpell = possessSpellId_;
+    if (!unit) return c;
+    c.inView = true;
+    c.health = unit->getHealth();
+    const auto& templates = getCreatureInfoCache();
+    if (const auto it = templates.find(unit->getEntry()); it != templates.end()) c.creatureTypeFlags = it->second.typeFlags;
+    const auto passenger = vehicleRoster_.passenger(playerGuid);
+    c.playersVehicle = passenger && passenger->vehicleGuid == petGuid_;
+    if (const auto* seat = vehicleRoster_.seatOf(playerGuid)) {
+        c.seatKnown = true;
+        c.seatAbilityDisplay = static_cast<uint32_t>(seat->vehicleAbilityDisplay);
+    }
+    c.huntersPet = isHuntersPet(*unit);
+    return c;
+}
+
+bool GameHandler::petHasActionBar() const { return pet::petHasActionBar(petBarContext(), petActionsOnBonusBar_); }
+
 void GameHandler::setPossessSpell(uint32_t spellId) {
+    if (spellId != 0) petPossessed_ = true;   // 0x005d30e0, 0x005d62a0
     if (possessSpellId_ == spellId) return;
     possessSpellId_ = spellId;
     fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});  // event 0xb4
 }
 
-std::optional<std::pair<uint64_t, int>> GameHandler::petPulse() const {
+uint64_t GameHandler::petUnitGuid() const {
+    // The older expansions' tables name neither.
+    if (fieldIndex(UF::UNIT_FIELD_CHARM) == 0xFFFF && fieldIndex(UF::UNIT_FIELD_SUMMON) == 0xFFFF) return petGuid_;
     const auto player = getEntityManager().getEntity(playerGuid);
-    if (!player) return std::nullopt;
-    uint64_t pet = guidFieldOf(*player, UF::UNIT_FIELD_CHARM);
-    if (pet == 0) pet = guidFieldOf(*player, UF::UNIT_FIELD_SUMMON);
+    if (!player) return 0;
+    const uint64_t charm = guidFieldOf(*player, UF::UNIT_FIELD_CHARM);
+    return charm != 0 ? charm : guidFieldOf(*player, UF::UNIT_FIELD_SUMMON);
+}
+
+std::optional<std::pair<uint64_t, int>> GameHandler::petPulse() const {
+    const uint64_t pet = petUnitGuid();
     const auto entity = pet != 0 ? getEntityManager().getEntity(pet) : nullptr;
     const auto* unit = entity ? dynamic_cast<const Unit*>(entity.get()) : nullptr;
     if (!unit || !unit->targetChangedAt()) return std::nullopt;
@@ -3279,9 +3346,10 @@ void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
             return;
         }
         // 0x00805d70: its global cooldown into the pet's history.
+        if (unit_target::askedNoUnit(targetGuid)) return;
         if (spellHandler_) spellHandler_->notePetActionCast(spell, petGuid_);
     }
-    sendPetAction(packed, targetGuid != 0 ? targetGuid : petGuid_);
+    sendPetAction(packed, targetGuid != 0 && !unit_target::askedNoUnit(targetGuid) ? targetGuid : petGuid_);
 }
 
 void GameHandler::dismissCritter() {
@@ -4149,12 +4217,22 @@ void GameHandler::vehicleGone(uint64_t vehicleGuid) {
 }
 
 bool GameHandler::npcServiceOffered(uint64_t guid) const {
+    const auto ask = serviceAskOf(guid);
+    return ask && npc_interaction::serviceOffered(*ask);
+}
+
+bool GameHandler::mayInteractWith(uint64_t guid) const {
+    const auto ask = serviceAskOf(guid);
+    return ask && npc_interaction::mayInteract(*ask);
+}
+
+std::optional<npc_interaction::ServiceAsk> GameHandler::serviceAskOf(uint64_t guid) const {
     // 0x00729620 with the player as asker.
     auto entity = getEntityManager().getEntity(guid);
     auto* unit = dynamic_cast<Unit*>(entity.get());
     auto playerEntity = getEntityManager().getEntity(playerGuid);
     auto* player = dynamic_cast<Unit*>(playerEntity.get());
-    if (!unit || !player) return false;
+    if (!unit || !player) return std::nullopt;
     const auto field = [](const Entity& e, UF f) -> uint32_t {
         const uint16_t i = fieldIndex(f);
         return i == 0xFFFF ? 0u : e.getField(i);
@@ -4189,7 +4267,7 @@ bool GameHandler::npcServiceOffered(uint64_t guid) const {
     const auto [toPlayer, fromPlayer] = unitReactionsBothWays(*unit, *player);
     a.reactionToPlayer = toPlayer;
     a.playerReaction = fromPlayer;
-    return npc_interaction::serviceOffered(a);
+    return a;
 }
 
 uint64_t GameHandler::softInteractTarget() {
@@ -4229,30 +4307,9 @@ uint64_t GameHandler::softInteractTarget() {
             if (it->second.effectIds[e] == 116) skinPlayer = id;
         }
     }
-    const bool looting = isLootWindowOpen();
-    const uint64_t lootObject = looting ? getCurrentLoot().lootGuid : 0;
+    const uint64_t lootObject = isLootWindowOpen() ? getCurrentLoot().lootGuid : 0;
     const float playerReach = player->getCombatReach();
-    // 0x006d5a60's questions of the player, the same for every object.
-    si::LootCheck lootBase;
-    // 0x00721f50: the player alive (UNIT_FIELD_HEALTH above 0), the active
-    // mover, and autoInteract on - registered by 0x0051d990 with "1" for the
-    // koKR client (locale index 0x00c5de9c 1) and "0" for every other.
-    {
-        const auto* profile = services_.expansionRegistry ? services_.expansionRegistry->getActive() : nullptr;
-        const bool korean = profile && chat_profanity::localeIndex(profile->locale) == 1;
-        const bool autoInteract = addons::storedCVarValue("autoInteract", korean ? "1" : "0") != "0";
-        lootBase.anyDistance = player->getHealth() > 0 && activeMover() == playerGuid && autoInteract;
-    }
-    // 0x00721ca0 with the form's Flags 0x100.
-    if (playerInForm()) {
-        const auto* form = shapeshiftFormRow(getShapeshiftFormId());
-        lootBase.formForbids = form && (form->flags & 0x100u) != 0;
-    }
-    lootBase.looting = looting;
-    lootBase.deadOrGhost = isPlayerDead() || isPlayerGhost();
-    lootBase.falling = (movementInfo.flags & 0x1000u) != 0;
-    lootBase.stunned = (player->getUnitFlags() & 0x40000u) != 0;
-    lootBase.clientControl = movementHandler_ && movementHandler_->unitHasClientControl(playerGuid);
+    const si::LootCheck lootBase = playerLootCheck();
     // The race a corpse was, by CORPSE_FIELD_BYTES_1's second byte, and that
     // race's faction (ChrRaces FactionID, 0x00705a80) as the player regards
     // it (0x00718c20 -> 0x00715440).
@@ -4551,7 +4608,7 @@ std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
         if (const auto p = vehicleRoster_.passenger(playerGuid); p && p->vehicleGuid == guid)
             out.emplace_back("vehicle");
     }
-    if (guid == petGuid_) out.emplace_back("pet");
+    if (guid == petUnitGuid()) out.emplace_back("pet");
     if (isInGroup()) {
         const auto& group = getPartyData();
         for (int slot = 1; slot <= 4; ++slot) {
@@ -6090,30 +6147,33 @@ uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
                                                             std::to_string(spell_visual::kViolenceLevelLimit))));
 }
 
-uint32_t GameHandler::rangedWeaponDisplayId(uint64_t unitGuid) const {
-    // vfunc +0x134(2): a player's visible ranged item (Player_C +0x1008,
-    // record 17), a creature's third virtual item slot (Unit_C +0x998).
+GameHandler::HeldItemDisplay GameHandler::heldItemDisplay(uint64_t unitGuid, uint32_t hand) const {
+    // vfunc +0x134: a player's visible item (Player_C +0x1008, records 15 to
+    // 17), a creature's virtual item slot (Unit_C +0x998).
     const auto entity = entityController_->getEntityManager().getEntity(unitGuid);
-    if (!entity || !entity->isUnit()) return 0;
+    if (!entity || !entity->isUnit() || hand > 2) return {};
     uint32_t entry = 0;
     if (entity->getType() == ObjectType::PLAYER) {
-        constexpr int kSlotRanged = 17;
+        constexpr uint32_t kSlotMainHand = 15;
         if (visibleItemEntryBase_ >= 0)
-            entry = visibleItemEntryField(
-                entity->getField(static_cast<uint16_t>(visibleItemEntryBase_ + kSlotRanged * 2)));
+            entry = visibleItemEntryField(entity->getField(
+                static_cast<uint16_t>(visibleItemEntryBase_ + static_cast<int>((kSlotMainHand + hand) * 2))));
     } else {
         const uint16_t slots = fieldIndex(UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
-        if (slots != 0xFFFF) entry = entity->getField(static_cast<uint16_t>(slots + 2));
+        if (slots != 0xFFFF) entry = entity->getField(static_cast<uint16_t>(slots + hand));
     }
-    if (entry == 0) return 0;
-    if (const auto* info = getItemInfo(entry); info && info->valid) return info->displayInfoId;
-    // Item.dbc's display (WotLK's eight columns: display at 5) while the
-    // item's query is out.
+    if (entry == 0) return {};
+    if (const auto* info = getItemInfo(entry); info && info->valid) return {info->displayInfoId, info->inventoryType};
+    // Item.dbc's (WotLK's eight columns: display at 5, inventory type at 6)
+    // while the item's query is out.
     auto* am = services_.assetManager;
     auto items = am && am->isInitialized() ? am->loadDBCOptional("Item.dbc") : nullptr;
     const int32_t row = items && items->getFieldCount() >= 8 ? items->findRecordById(entry) : -1;
-    return row >= 0 ? items->getUInt32(static_cast<uint32_t>(row), 5) : 0u;
+    if (row < 0) return {};
+    return {items->getUInt32(static_cast<uint32_t>(row), 5), items->getUInt32(static_cast<uint32_t>(row), 6)};
 }
+
+uint32_t GameHandler::rangedWeaponDisplayId(uint64_t unitGuid) const { return heldItemDisplay(unitGuid, 2).displayId; }
 
 uint32_t GameHandler::getUnitSpellVisualId(uint64_t casterGuid, uint32_t spellId) const {
     const uint32_t own = getSpellVisualId(spellId);

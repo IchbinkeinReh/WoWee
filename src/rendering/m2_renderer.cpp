@@ -1203,7 +1203,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     bool hasGeometry = !model.vertices.empty() && !model.indices.empty();
     bool hasParticles = !model.particleEmitters.empty();
     bool hasRibbons   = !model.ribbonEmitters.empty();
-    if (!hasGeometry && !hasParticles && !hasRibbons) {
+    if (!hasGeometry && !hasParticles && !hasRibbons && model.collisionIndices.empty()) {
         LOG_WARNING("M2 model has no renderable content: id=", modelId,
                     " name=", model.name.empty() ? "<unnamed>" : model.name);
         return false;
@@ -1233,6 +1233,16 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
         if (tightMin.x > tightMax.x) {
             tightMin = glm::vec3(-1.0f);
             tightMax = glm::vec3(1.0f);
+        }
+    }
+
+    // One of collision without geometry is as large as that.
+    if (!hasGeometry && !model.collisionVertices.empty()) {
+        tightMin = glm::vec3(std::numeric_limits<float>::max());
+        tightMax = glm::vec3(-std::numeric_limits<float>::max());
+        for (const glm::vec3& v : model.collisionVertices) {
+            tightMin = glm::min(tightMin, v);
+            tightMax = glm::max(tightMax, v);
         }
     }
 

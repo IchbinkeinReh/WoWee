@@ -3,7 +3,9 @@
 #include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
+#include "game/cast_failure_names.hpp"
 #include "game/combat_text_filter.hpp"
+#include "game/threat_table.hpp"
 #include "game/unit_combat.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "game/game_handler.hpp"
@@ -52,23 +54,41 @@ float distanceSqTo(const MovementInfo& from, const Entity& to) {
 /// The on-screen line for the pet's failed cast, as 0x00805610 words it: its
 /// own ERR_PET_SPELL_* lines for the results it has one for, the cooldown and
 /// power lines, and otherwise the SPELL_FAILED_ text through
-/// ERR_SPELL_FAILED_S. An area (0x65) or focus object (0x66) is named from
-/// the first id after the result, as SMSG_CAST_FAILED's are, and nothing is
-/// shown when it is not known. Where the result names something not looked up
-/// here (an item class, a form, a mechanic, a custom error) the English this
-/// client had is kept rather than an unfilled %s.
+/// ERR_SPELL_FAILED_S. What that names - an area, a focus object, a kind of
+/// item, a form, a mechanic - is named from the ids after the result, as
+/// SMSG_CAST_FAILED's are (cast_failure_names.hpp), and nothing is shown when
+/// it is not known.
 std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, uint8_t result,
-                                  uint32_t miscArg) {
+                                  uint32_t miscArg, uint32_t miscArg2) {
+    const auto table = [&owner](const char* file) -> std::shared_ptr<pipeline::DBCFile> {
+        auto* am = owner.services().assetManager;
+        return am ? am->loadDBCOptional(file) : nullptr;
+    };
+    const auto named = [result](const std::string& name, const char* error = "ERR_SPELL_FAILED_S") -> std::string {
+        if (name.empty()) return {};
+        const std::string key = cast_failure::spellFailedKey(result);
+        const char* enUS = getSpellCastResultString(result);
+        const std::string text = chat_channels::luaFormat(interfaceString(key.c_str(), enUS ? enUS : "%s"), {name});
+        return chat_channels::luaFormat(interfaceString(error, "%s"), {text});
+    };
+    owner.loadSpellNameCache();
+    const auto row = owner.spellNameCacheRef().find(spellId);
+    const auto* spell = row != owner.spellNameCacheRef().end() ? &row->second : nullptr;
     switch (result) {
-        case 0x65: case 0x66: {
-            const std::string name = result == 0x65 ? owner.getAreaName(miscArg)
-                                                    : owner.getSpellFocusName(miscArg);
-            if (miscArg == 0 || name.empty()) return {};
-            const std::string key = cast_failure::spellFailedKey(result);
-            const char* enUS = getSpellCastResultString(result);
-            const std::string text = chat_channels::luaFormat(
-                interfaceString(key.c_str(), enUS ? enUS : "%s"), {name});
-            return chat_channels::luaFormat(interfaceString("ERR_SPELL_FAILED_S", "%s"), {text});
+        case 0x65: return named(miscArg != 0 ? owner.getAreaName(miscArg) : std::string());
+        case 0x66: return named(miscArg != 0 ? std::string(owner.getSpellFocusName(miscArg)) : std::string());
+        case 0x1d: case 0x1e: case 0x1f:
+            return named(cast_failure::itemClassName(table("ItemSubClassMask.dbc").get(), table("ItemSubClass.dbc").get(),
+                                                     miscArg, miscArg2));
+        case 0x5e:
+            return named(spell ? cast_failure::formNames(table("SpellShapeshiftForm.dbc").get(), spell->stances, 1)
+                               : std::string(),
+                         "ERR_SPELL_FAILED_SHAPESHIFT_FORM_S");
+        case 0x93: return named(cast_failure::rowName(table("SpellMechanic.dbc").get(), miscArg));
+        case 0xac: {  // CUSTOM_ERROR: the interface's line for its id (0x007fef10)
+            const std::string key = "SPELL_FAILED_CUSTOM_ERROR_" + std::to_string(miscArg);
+            return chat_channels::luaFormat(interfaceString("ERR_SPELL_FAILED_S", "%s"),
+                                            {interfaceString(key.c_str(), key.c_str())});
         }
         case 0x01: return interfaceString("ERR_PET_SPELL_AFFECTING_COMBAT", "Your pet is in combat");
         case 0x17: return interfaceString("ERR_PET_SPELL_DEAD", "Your pet is dead");
@@ -87,17 +107,14 @@ std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, ui
                 {"ERR_NOT_HAPPY_ENOUGH", "Your pet is not happy enough"},
                 {"ERR_OUT_OF_RUNES", "Not enough runes"}, {"ERR_OUT_OF_RUNIC_POWER", "Not enough runic power"},
             };
-            const uint8_t power = owner.getSpellData(spellId).powerType;
-            if (power < 7) return interfaceString(kOutOf[power][0], kOutOf[power][1]);
+            const int32_t power = spell ? static_cast<int32_t>(spell->powerType) : owner.getSpellData(spellId).powerType;
+            if (power == -2) return interfaceString("ERR_OUT_OF_HEALTH", "Not enough health");
+            if (power >= 0 && power < 7) return interfaceString(kOutOf[power][0], kOutOf[power][1]);
             break;
         }
         case 0x61: return interfaceString("ERR_PET_SPELL_OUT_OF_RANGE", "Your pet is out of range");
         case 0x67: return interfaceString("ERR_PET_SPELL_ROOTED", "Your pet can't move");
         case 0x6d: return interfaceString("ERR_PET_SPELL_TARGETS_DEAD", "Your pet's target is dead");
-        case 0x1d: case 0x1e: case 0x1f: case 0x5e: case 0x93: case 0xac: {
-            const char* enUS = getSpellCastResultString(result);
-            return enUS ? std::string(enUS) : std::string();
-        }
         default:
             break;
     }
@@ -120,12 +137,66 @@ std::string petSpellNameWithRank(const GameHandler& owner, uint32_t spellId) {
 CombatHandler::CombatHandler(GameHandler& owner)
     : owner_(owner) {}
 
-/// A unit event the client queues for a unit (0x006143f0): raised once for
-/// each unit token that names it, and not at all for a unit without one.
-void CombatHandler::fireUnitEvent(const char* event, uint64_t guid) {
-    if (!owner_.addonEventCallbackRef() || guid == 0) return;
-    for (const auto& unitId : owner_.unitTokensForGuid(guid))
-        owner_.addonEventCallbackRef()(event, {unitId});
+/// 0x006143f0: an event of a unit, queued once however often it comes.
+void CombatHandler::queueUnitEvent(const char* event, uint64_t guid) {
+    if (guid == 0) return;
+    std::pair<uint64_t, std::string> e{guid, event};
+    if (std::find(unitEvents_.begin(), unitEvents_.end(), e) == unitEvents_.end()) unitEvents_.push_back(std::move(e));
+}
+
+/// 0x00614760, once a frame: each is raised for every unit token its unit has
+/// (0x0060bf10), and not at all for a unit without one.
+void CombatHandler::raiseUnitEvents() {
+    const auto events = std::exchange(unitEvents_, {});
+    if (!owner_.addonEventCallbackRef()) return;
+    for (const auto& [guid, event] : events)
+        for (const auto& unitId : owner_.unitTokensForGuid(guid)) owner_.addonEventCallbackRef()(event, {unitId});
+}
+
+/// What a change of `unit`'s threat list calls for (threat_table.hpp).
+void CombatHandler::applyThreatChanges(uint64_t unit, const ThreatTable::Changes& c) {
+    for (const uint64_t guid : c.situations) queueUnitEvent("UNIT_THREAT_SITUATION_UPDATE", guid);
+    if (c.list) queueUnitEvent("UNIT_THREAT_LIST_UPDATE", unit);
+    for (const auto& [before, now] : c.floaters) raiseThreatFloater(unit, before, now);
+    if (!c.sounds.empty() && addons::storedCVarValue("threatPlaySounds", "1") != "0") {
+        if (auto* ac = owner_.services().audioCoordinator)
+            if (auto* sfx = ac->getUiSoundManager())
+                for (const uint32_t id : c.sounds) sfx->playById(id);
+    }
+    // 0x0052b370: the player new to a list while threat is shown and above
+    // level 13, tutorial 0x35.
+    if (std::find(c.joined.begin(), c.joined.end(), owner_.getPlayerGuid()) != c.joined.end() &&
+        threatWarningWanted() && owner_.getPlayerLevel() > 13)
+        owner_.triggerTutorial(0x35);
+}
+
+const ThreatTable* CombatHandler::getThreatTable(uint64_t unit) const {
+    const auto it = threatTables_.find(unit);
+    return it != threatTables_.end() ? &it->second : nullptr;
+}
+
+CombatHandler::ThreatSituation CombatHandler::threatSituation(uint64_t victim, uint64_t unit) const {
+    ThreatSituation out;
+    const auto mob = owner_.getEntityManager().getEntity(unit);
+    const ThreatTable* table = mob && mob->isUnit() ? getThreatTable(unit) : nullptr;
+    if (!table) return out;
+    out.standing = table->standing(victim);
+    bool inReach = false;
+    if (const auto it = owner_.getEntityManager().getEntity(victim); it && it->isUnit()) {
+        const auto& a = static_cast<const Unit&>(*mob);
+        const auto& b = static_cast<const Unit&>(*it);
+        const float reach = click_to_move::meleeReach(a.getCombatReach(), b.getCombatReach());
+        const float dx = a.getX() - b.getX(), dy = a.getY() - b.getY(), dz = a.getZ() - b.getZ();
+        inReach = dx * dx + dy * dy + dz * dz <= reach * reach;
+    }
+    out.scaledPercent = scaledThreatPercent(out.standing, inReach);
+    return out;
+}
+
+uint8_t CombatHandler::threatStatus(uint64_t victim) const {
+    uint8_t worst = 0;
+    for (const auto& [unit, table] : threatTables_) worst = worstThreatStatus(worst, table.standing(victim).status);
+    return worst;
 }
 
 /// The same rule the threat indicator uses, kept in step with it.
@@ -151,57 +222,21 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
     // 0x00756800 hands both of these to 0x006e1660.
     table[Opcode::SMSG_ATTACKSWING_DEADTARGET] = [this](network::Packet& /*packet*/) { stopAutoAttack(); };
     table[Opcode::SMSG_THREAT_CLEAR] = [this](network::Packet& packet) {
-        // 0x00734b00 -> 0x007345c0: the unit's own list, and only while the
-        // unit is in the world and its list has anyone on it. Each victim's
-        // situation is reset and UNIT_THREAT_SITUATION_UPDATE queued for it,
-        // then UNIT_THREAT_LIST_UPDATE for the unit and its threat display
-        // refreshed (0x00512ab0).
+        // 0x00734b00 -> 0x007345c0: a unit in the world.
         if (!packet.hasRemaining(1)) return;
         const uint64_t unitGuid = packet.readPackedGuid();
-        if (!owner_.getEntityManager().getEntity(unitGuid)) return;
-        auto it = threatLists_.find(unitGuid);
-        if (it == threatLists_.end() || it->second.empty()) return;
-        const std::vector<ThreatEntry> victims = std::move(it->second);
-        threatLists_.erase(it);
-        playerTopThreatOn_.erase(unitGuid);
-        playerThreatStatus_.erase(unitGuid);  // reset without a floater (0x0052a160)
-        for (const ThreatEntry& e : victims) fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", e.victimGuid);
-        fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
+        if (owner_.getEntityManager().getEntity(unitGuid)) clearThreat(unitGuid);
     };
     table[Opcode::SMSG_THREAT_REMOVE] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(1)) return;
-        uint64_t unitGuid   = packet.readPackedGuid();
+        const uint64_t unitGuid = packet.readPackedGuid();
         if (!packet.hasRemaining(1)) return;
-        uint64_t victimGuid = packet.readPackedGuid();
-        // 0x00737750: nothing unless the victim is on the unit's list. Its
-        // entry goes and its situation is reset (UNIT_THREAT_SITUATION_UPDATE
-        // for it); the top is picked again where it was the top (0x00737620,
-        // the list here is kept highest first); then UNIT_THREAT_LIST_UPDATE
-        // for the unit.
-        auto it = threatLists_.find(unitGuid);
-        if (it == threatLists_.end()) return;
-        auto& list = it->second;
-        const auto victim = std::find_if(list.begin(), list.end(),
-            [victimGuid](const ThreatEntry& e) { return e.victimGuid == victimGuid; });
-        if (victim == list.end()) return;
-        list.erase(victim);
-        if (list.empty()) threatLists_.erase(it);
-        if (victimGuid == owner_.getPlayerGuid()) {
-            playerTopThreatOn_.erase(unitGuid);
-            playerThreatStatus_.erase(unitGuid);  // reset without a floater (0x0052a160)
-        } else if (const auto left = threatLists_.find(unitGuid); left != threatLists_.end()) {
-            // The top picked again (0x00737620) may move the player's status.
-            std::vector<uint32_t> threats;
-            size_t mine = left->second.size();
-            for (size_t i = 0; i < left->second.size(); ++i) {
-                threats.push_back(left->second[i].threat);
-                if (left->second[i].victimGuid == owner_.getPlayerGuid()) mine = i;
-            }
-            if (mine < threats.size())
-                notePlayerThreatStatus(unitGuid, clientThreatStatus(threats.data(), threats.size(), mine));
-        }
-        fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", victimGuid);
-        fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
+        const uint64_t victimGuid = packet.readPackedGuid();
+        const auto it = threatTables_.find(unitGuid);
+        if (it == threatTables_.end()) return;
+        const auto changes = it->second.remove(victimGuid, owner_.getPlayerGuid());
+        if (it->second.entries().empty()) threatTables_.erase(it);
+        applyThreatChanges(unitGuid, changes);
     };
     // The attack stopped as the player stops it (0x006e2210 -> 0x006e1660).
     table[Opcode::SMSG_CANCEL_COMBAT] = [this](network::Packet& /*packet*/) {
@@ -297,97 +332,25 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         const bool hasVictimGuid = (op == Opcode::SMSG_HIGHEST_THREAT_UPDATE);
         table[op] = [this, hasVictimGuid](network::Packet& packet) {
             if (!packet.hasRemaining(1)) return;
-            uint64_t unitGuid = packet.readPackedGuid();
+            const uint64_t unitGuid = packet.readPackedGuid();
+            std::optional<uint64_t> victim;
             if (hasVictimGuid) {
                 if (!packet.hasRemaining(1)) return;
-                (void)packet.readPackedGuid();  // the new highest-threat target
+                victim = packet.readPackedGuid();
             }
             if (!packet.hasRemaining(4)) return;
-            uint32_t cnt = packet.readUInt32();
-            if (cnt > 100) { packet.skipAll(); return; } // sanity
-            std::vector<ThreatEntry> list;
-            list.reserve(cnt);
+            const uint32_t cnt = packet.readUInt32();
+            std::vector<std::pair<uint64_t, int32_t>> threats;
             for (uint32_t i = 0; i < cnt; ++i) {
                 if (!packet.hasRemaining(1)) return;
-                ThreatEntry entry;
-                entry.victimGuid = packet.readPackedGuid();
+                const uint64_t guid = packet.readPackedGuid();
                 if (!packet.hasRemaining(4)) return;
-                entry.threat = packet.readUInt32();
-                list.push_back(entry);
+                threats.emplace_back(guid, static_cast<int32_t>(packet.readUInt32()));
             }
-            // Sort descending by threat so highest is first
-            std::sort(list.begin(), list.end(),
-                [](const ThreatEntry& a, const ThreatEntry& b){ return a.threat > b.threat; });
-            // Play Aggro Sounds, which the panel offers and nothing read -
-            // here or in the interface. The threat indicator FrameXML draws is
-            // silent by design; in the real client the warning noise is the
-            // client's, which is why nothing in this tree ever made it.
-            //
-            // The sound marks the moment the player becomes the one being
-            // fought, not every update while they are: the list arrives on
-            // every threat change and a warning per packet would be a siren.
-            const bool topNow = !list.empty() &&
-                                list.front().victimGuid == owner_.getPlayerGuid();
-            const bool topBefore = playerTopThreatOn_.count(unitGuid) != 0;
-            if (topNow != topBefore) {
-                if (topNow) playerTopThreatOn_.insert(unitGuid);
-                else        playerTopThreatOn_.erase(unitGuid);
-                // Registered on (0x00510000 "1"), so losing the top of the
-                // threat list makes a noise until the player turns that off.
-                if (topNow && threatWarningWanted() &&
-                    addons::storedCVarValue("threatPlaySounds", "1") != "0") {
-                    // SoundEntries 15262 (0x0071c3b0 plays 0x3b9e).
-                    if (auto* ac = owner_.services().audioCoordinator) {
-                        if (auto* sfx = ac->getUiSoundManager()) sfx->playById(15262);
-                    }
-                }
-            }
-
-            // The player new to this unit's list (0x007416f0 -> 0x0052b370):
-            // with threat warnings on and above level 13, tutorial 0x35.
-            {
-                const uint64_t me = owner_.getPlayerGuid();
-                const auto onList = [me](const std::vector<ThreatEntry>& l) {
-                    return std::any_of(l.begin(), l.end(), [me](const ThreatEntry& e) { return e.victimGuid == me; });
-                };
-                const auto old = threatLists_.find(unitGuid);
-                const bool before = old != threatLists_.end() && onList(old->second);
-                if (!before && onList(list) && threatWarningWanted() && owner_.getPlayerLevel() > 13)
-                    owner_.triggerTutorial(0x35);
-            }
-            threatLists_[unitGuid] = std::move(list);
-            {
-                // The player's status on the unit, as the client keeps it, for
-                // its threat floater (0x0071c3b0, 0x00737620).
-                const auto& l = threatLists_[unitGuid];
-                std::vector<uint32_t> threats;
-                threats.reserve(l.size());
-                size_t mine = l.size();
-                for (size_t i = 0; i < l.size(); ++i) {
-                    threats.push_back(l[i].threat);
-                    if (l[i].victimGuid == owner_.getPlayerGuid()) mine = i;
-                }
-                notePlayerThreatStatus(unitGuid, clientThreatStatus(threats.data(), threats.size(), mine));
-            }
-            // The list changed, and separately: whether each unit on it is
-            // tanking. They are different events and unit frames read the
-            // second one - UnitFrameThreatIndicator_OnEvent is registered for
-            // UNIT_THREAT_SITUATION_UPDATE alone, and it is what puts the aggro
-            // border on a frame. It was never fired, so no frame ever showed
-            // one, and the list it would have been read from was misparsed
-            // anyway.
-            // Each by every token its unit has, and not at all by none
-            // (0x006143f0): a guard fighting out of the player's sight has none.
-            fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
-            // Named per unit, because the indicator compares the argument
-            // against its own frame's unit and ignores anything else. Every
-            // unit on the list that the interface has a token for, plus the mob
-            // itself - a target frame's indicator is fed by the player's
-            // situation against the target, so both ends have to be told.
-            for (const ThreatEntry& e : threatLists_[unitGuid]) {
-                fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", e.victimGuid);
-            }
-            fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", unitGuid);
+            // 0x00741c90: a unit that is not in the world has no list.
+            const auto mob = owner_.getEntityManager().getEntity(unitGuid);
+            if (!mob || !mob->isUnit()) return;
+            applyThreatChanges(unitGuid, threatTables_[unitGuid].update(victim, threats, owner_.getPlayerGuid()));
         };
     }
 
@@ -425,10 +388,10 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
 // Auto-attack
 // ============================================================
 
-void CombatHandler::startAutoAttack(uint64_t targetGuid) {
+bool CombatHandler::startAutoAttack(uint64_t targetGuid) {
     // Can't attack yourself
-    if (targetGuid == owner_.getPlayerGuid()) return;
-    if (targetGuid == 0) return;
+    if (targetGuid == owner_.getPlayerGuid()) return false;
+    if (targetGuid == 0) return false;
 
     // What the player's own state forbids, said as 0x0072bdb0 says it, in its
     // order: dead (ERR_ATTACK_DEAD); charmed by someone else; then
@@ -450,7 +413,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     };
     if (owner_.isPlayerDead() || owner_.isPlayerGhost()) {
         owner_.addUIError(interfaceString("ERR_ATTACK_DEAD", "You can't attack while dead."));
-        return;
+        return false;
     }
     if (auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
         const uint16_t charmedBy = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
@@ -459,25 +422,25 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
                   self->getField(charmedBy);
         if (charmer != 0 && charmer != owner_.getPlayerGuid()) {
             refuse({6u, 177u, 2u}, "ERR_ATTACK_CHARMED", "You can't attack while charmed.");
-            return;
+            return false;
         }
         const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
         const uint32_t flags = flagsIdx == 0xFFFF ? 0 : self->getField(flagsIdx);
         if ((flags & 0x00040000u) != 0) {
             refuse({12u}, "ERR_ATTACK_STUNNED", "You can't attack while stunned.");
-            return;
+            return false;
         }
         if ((flags & 0x00020000u) != 0) {
             refuse({25u, 60u}, "ERR_ATTACK_PACIFIED", "You can't attack while pacified.");
-            return;
+            return false;
         }
         if ((flags & 0x00800000u) != 0) {
             refuse({7u}, "ERR_ATTACK_FLEEING", "You can't attack while fleeing.");
-            return;
+            return false;
         }
         if ((flags & 0x00400000u) != 0) {
             refuse({5u}, "ERR_ATTACK_CONFUSED", "You can't attack while confused.");
-            return;
+            return false;
         }
         // Then a channel in progress (UNIT_CHANNEL_SPELL): no attack starts
         // while one runs, and ERR_ATTACK_CHANNEL says so when the channel is
@@ -488,7 +451,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
             if (const auto it = cache.find(channel); it != cache.end()) {
                 if ((it->second.channelInterruptFlags & 0x1000u) != 0)
                     owner_.addUIError(interfaceString("ERR_ATTACK_CHANNEL", "You can't attack while channeling."));
-                return;
+                return false;
             }
         }
     }
@@ -513,7 +476,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
                 if (theirUnit && owner_.unitMayAttack(me, theirTarget)) {
                     targetGuid = theirTarget;
                 } else {
-                    return;   // nothing of theirs worth swinging at
+                    return false;   // nothing of theirs worth swinging at
                 }
             }
         }
@@ -533,7 +496,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
             // ERR_ATTACK_MOUNTED, as 0x0072bdb0 refuses an attack it will not
             // dismount for (0x0071b0c0). This was English.
             owner_.addUIError(interfaceString("ERR_ATTACK_MOUNTED", "Can't attack while mounted."));
-            return;
+            return false;
         }
         if (victim && me) {
             const uint32_t ranged = owner_.autoRangedAttackSpell();
@@ -543,19 +506,19 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
                                     : click_to_move::meleeReach(me->getCombatReach(), victim->getCombatReach());
             if (reach * reach < distanceSqTo(owner_.movementInfoRef(), *victim)) {
                 owner_.raiseUiError(interfaceString("ERR_OUT_OF_RANGE", "Out of range."));
-                return;
+                return true;
             }
         }
         owner_.dismount();
     }
     // 0x006e2610: one that may not be attacked now (0x00729a70) ends a running
     // attack and starts none.
-    if (!victim || !me) return;
+    if (!victim || !me) return true;
     if (!unit_target::mayAttackNow(owner_.isPlayerDead(), owner_.isMounted(), true, victim->getHealth(),
                                    victim->getDynamicFlags(),
                                    owner_.unitMayAttack(owner_.getPlayerGuid(), targetGuid))) {
         if (attack_.attacking()) stopAutoAttack();
-        return;
+        return true;
     }
     // 0x00806550: the player's pending ranged casts (Attributes 0x2) are
     // cancelled, the server told of one with a cast time; then up from a seat
@@ -577,7 +540,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
         const auto& cache = owner_.spellNameCacheRef();
         if (const auto it = cache.find(owner_.getCurrentCastSpellId());
             it != cache.end() && (it->second.interruptFlags & 0x8u) != 0)
-            return;
+            return true;
     }
 
     // Face the target, once, on the command to attack it. This is the only
@@ -608,6 +571,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     // (0x00807560(1)).
     owner_.stopAutoRepeat(true);
     LOG_INFO("Starting auto-attack on 0x", std::hex, targetGuid, std::dec);
+    return true;
 }
 
 void CombatHandler::stopAutoAttack() {
@@ -849,12 +813,15 @@ void CombatHandler::addInterruptFloater(uint64_t unit, uint64_t caster, uint32_t
     addMechanicFloater(unit, caster, it->second.attrEx6, 26);
 }
 
-void CombatHandler::notePlayerThreatStatus(uint64_t unit, int now) {
-    int& was = playerThreatStatus_[unit];
-    const int before = was;
-    was = now;
-    if (now == 0) playerThreatStatus_.erase(unit);
-    if (before == now) return;
+void CombatHandler::clearThreat(uint64_t unit) {
+    const auto it = threatTables_.find(unit);
+    if (it == threatTables_.end()) return;
+    const auto changes = it->second.clear();
+    threatTables_.erase(it);
+    applyThreatChanges(unit, changes);
+}
+
+void CombatHandler::raiseThreatFloater(uint64_t unit, int before, int now) {
     // 0x00719220: while threat warnings apply and threatWorldText is on.
     if (!threatWarningWanted() || addons::storedCVarValue("threatWorldText", "1") == "0") return;
     if (!threatFloaterShown(before, now)) return;
@@ -1030,17 +997,6 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         lastMeleeSwingMs_ = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
-        // Skip melee animation if a ranged shot was just triggered from
-        // SMSG_SPELL_GO (Auto Shot / Shoot / Throw).  The ranged animation
-        // is already playing; firing the melee callback here would override it.
-        if (owner_.consumeSuppressMeleeSwingAnim()) {
-            LOG_DEBUG("Suppressed melee swing anim - ranged shot already triggered");
-        } else {
-            if (owner_.meleeSwingCallbackRef()) owner_.meleeSwingCallbackRef()(0);
-        }
-    }
-    if (!isPlayerAttacker && owner_.npcSwingCallbackRef()) {
-        owner_.npcSwingCallbackRef()(data.attackerGuid);
     }
     // Its voice as the hit arrives, and its victim's as it lands, are their
     // sound slots', played with the swing's sounds (rendering/melee_sound.hpp).
@@ -1213,6 +1169,8 @@ void CombatHandler::forgetAttack() {
 void CombatHandler::resetAllCombatState() {
     hostileAttackers_.clear();
     unitMeleeTargets_.clear();
+    threatTables_.clear();
+    unitEvents_.clear();
     combatText_.clear();
     forgetAttack();
     lastMeleeSwingMs_ = 0;
@@ -1673,6 +1631,7 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         // Up to two ids after the result, read when present, as
         // SMSG_CAST_FAILED's are (0x00806c30, 0x00809af0).
         const uint32_t miscArg = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+        const uint32_t miscArg2 = packet.hasRemaining(4) ? packet.readUInt32() : 0;
         LOG_DEBUG("SMSG_PET_CAST_FAILED: spell=", spellId,
                   " reason=", static_cast<int>(reason));
         // 0x00806c30 -> 0x00804720: its global cooldown off the pet's
@@ -1682,7 +1641,7 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         // see petCastFailureMessage. This was "Spell: reason" in English, in
         // chat.
         if (reason != 0) {
-            const std::string errMsg = petCastFailureMessage(owner_, spellId, reason, miscArg);
+            const std::string errMsg = petCastFailureMessage(owner_, spellId, reason, miscArg, miscArg2);
             if (!errMsg.empty()) owner_.addUIError(errMsg);
             // And the player's line for it, where the game error has one.
             if (!errMsg.empty())
@@ -1994,6 +1953,7 @@ void CombatHandler::forgetUnit(uint64_t guid) {
 }
 
 void CombatHandler::unitLeavesView(uint64_t guid) {
+    clearThreat(guid);   // 0x00734fd0
     const bool group = isGroupMemberGuid(guid);
     bool duel = false;
     if (group) {

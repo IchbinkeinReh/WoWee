@@ -272,6 +272,10 @@ public:
     const WMORenderer* queryWMORenderer() const { return wmoRenderer.get(); }
     /// What liquid_query asks, for reading only and past the workers the same
     /// way.
+    /// The AreaTable row a unit with its feet there is in, as its world object's links say
+    /// (0x0078f1f0): its building group's, else its building's; outside, the map's that is
+    /// one building, an exterior group's, or the ground's.
+    [[nodiscard]] uint32_t areaOfUnitAt(const glm::vec3& feet);
     [[nodiscard]] liquid_query::World liquidWorld() const {
         return {waterRenderer.get(), wmoRenderer.get(), terrainManager.get()};
     }

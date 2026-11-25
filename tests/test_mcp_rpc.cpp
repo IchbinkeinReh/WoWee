@@ -5,6 +5,7 @@
 
 #include <string>
 
+#include "mcp/event_args.hpp"
 #include "mcp/json_rpc.hpp"
 #include "mcp/lua_error.hpp"
 #include "mcp/redact.hpp"
@@ -289,4 +290,12 @@ TEST_CASE("a failure may be in parts", "[mcp][rpc]") {
     const json j = json::parse(*answer);
     CHECK(j["result"]["isError"] == true);
     CHECK(json::parse(j["result"]["content"][0]["text"].get<std::string>())["error"]["line"] == 3);
+}
+
+TEST_CASE("an event's nil is listed as nil", "[mcp]") {
+    using wowee::mcp::shownArgs;
+    CHECK(shownArgs({"player", wowee::game::eventBool(false), "Natural", wowee::game::eventBool(true)}) ==
+          std::vector<std::string>{"player", "nil", "Natural", "1"});
+    CHECK(shownArgs({std::string(500, 'x')}).front().size() == 400);
+    CHECK(shownArgs(std::vector<std::string>(30, "a")).size() == 20);
 }

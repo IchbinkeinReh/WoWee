@@ -101,6 +101,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             p = pipeline::modelPathToM2(p);
             effectPaths[id] = p;
             effectNamePaths_[id] = p;
+            effectIdsByName_[fxDbc->getString(i, 1)] = id;
             if (fxScaleField < fxDbc->getFieldCount()) {
                 effectScales[id] = fxDbc->getFloat(i, fxScaleField);
                 effectNameScales_[id] = effectScales[id];
@@ -314,6 +315,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                                      svColumn("ImpactAreaKit")};
     // The columns the cast's missile, kits and ends are read from, kept for
     // the visuals 0x00720f80 builds later (mergedVisual).
+    castColumns_.hasMissile = svColumn("HasMissile");
     castColumns_.missileModel = svMissileField < svFc ? svMissileField : 0xFFFFFFFFu;
     castColumns_.flags = svFlagsField;
     castColumns_.missileAttachment = svMissileAttField;
@@ -406,22 +408,30 @@ struct PreparedEffectModel {
 PreparedEffectModel prepareEffectModel(pipeline::AssetManager* assets, const std::string& modelPath,
                                        bool decodeTextures) {
     PreparedEffectModel prepared;
-    auto m2Data = assets->readFile(modelPath);
+    // "model|texture": the texture its item gives the model (item_missile.hpp).
+    const size_t bar = modelPath.find('|');
+    const std::string file = modelPath.substr(0, bar);
+    auto m2Data = assets->readFile(file);
     if (m2Data.empty()) {
         prepared.failure = "could not read model";
         return prepared;
     }
     prepared.model = pipeline::M2Loader::load(m2Data);
     if (prepared.model.name.empty()) prepared.model.name = modelPath;
-    if (prepared.model.vertices.empty() && prepared.model.particleEmitters.empty()) {
+    if (!prepared.model.hasContent()) {
         prepared.failure = "empty model";
         return prepared;
     }
     // Load skin file for WotLK-format M2s
     if (prepared.model.version >= 264) {
-        std::string skinPath = pipeline::skinPathForM2(modelPath);
+        std::string skinPath = pipeline::skinPathForM2(file);
         auto skinData = assets->readFile(skinPath);
         if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, prepared.model);
+    }
+    if (bar != std::string::npos) {
+        constexpr uint32_t kObjectSkin = 2;
+        for (auto& tex : prepared.model.textures)
+            if (tex.type == kObjectSkin) tex.filename = modelPath.substr(bar + 1);
     }
     // The textures, decoded as the terrain worker decodes a doodad's and
     // under the key M2Renderer looks them up by.
@@ -538,6 +548,14 @@ bool SpellVisualSystem::uploadEffectModel(uint32_t modelId, const std::string& m
     m2Renderer_->markModelAsSpellEffect(modelId);
     LOG_INFO("SpellVisual: loaded model id=", modelId, " path=", modelPath);
     return true;
+}
+
+EffectModelState SpellVisualSystem::effectModelState(const std::string& modelPath) {
+    const auto id = spellVisualModelIds_.find(modelPath);
+    if (id == spellVisualModelIds_.end() || spellVisualFailedModels_.count(id->second)) return EffectModelState::Failed;
+    if (m2Renderer_ && m2Renderer_->hasModel(id->second)) return EffectModelState::Ready;
+    // One turned away while a handful was in flight is asked for again.
+    return acquireEffectModel(modelPath) != 0 ? EffectModelState::Ready : EffectModelState::Loading;
 }
 
 void SpellVisualSystem::finishEffectModelLoads() {
@@ -853,7 +871,13 @@ void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>&
         glm::mat4 attachMat;
         if (!charRenderer->getAttachmentTransform(attachInstanceId, attachId, attachMat)) continue;
         const uint32_t modelId = acquireEffectModel(fx.modelPath);
-        if (modelId == 0) continue;
+        if (modelId == 0) {
+            if (effectModelState(fx.modelPath) == EffectModelState::Loading)
+                effectsWaiting_.add({fx.modelPath, [this, fx, attachInstanceId, isPrecast, castTimeMs] {
+                    playKitWeaponEffects({fx}, attachInstanceId, isPrecast, castTimeMs);
+                }});
+            continue;
+        }
         // 0x006f8c50: the model's scale, held within the effect's allowed
         // scales as the hand's scale makes it.
         const float scale = core::kitEffectScale(*attachedEffectScale, fx.scale, glm::length(glm::vec3(attachMat[0])),
@@ -892,59 +916,6 @@ void SpellVisualSystem::addKitModel(uint32_t instanceId, spell_kit::KitModelLife
     activeSpellVisuals_.push_back(shown);
 }
 
-void SpellVisualSystem::playPhysicalProjectile(const std::string& modelPath,
-                                                const std::string& texturePath,
-                                                const glm::vec3& start,
-                                                const glm::vec3& end,
-                                                float duration,
-                                                bool spin) {
-    if (!renderer_ || modelPath.empty()) return;
-    auto* characterRenderer = renderer_->getCharacterRenderer();
-    if (!characterRenderer) return;
-    if (!cachedAssetManager_)
-        cachedAssetManager_ = core::Application::getInstance().getAssetManager();
-    if (!cachedAssetManager_) return;
-
-    const std::string cacheKey = modelPath + "|" + texturePath;
-    uint32_t modelId = 0;
-    auto cached = projectileModelIds_.find(cacheKey);
-    if (cached != projectileModelIds_.end()) {
-        modelId = cached->second;
-    } else {
-        if (nextProjectileModelId_ >= 999000) return;
-        modelId = nextProjectileModelId_++;
-        projectileModelIds_[cacheKey] = modelId;
-    }
-
-    if (!characterRenderer->getModelData(modelId)) {
-        auto bytes = cachedAssetManager_->readFile(modelPath);
-        if (bytes.empty()) return;
-        pipeline::M2Model model = pipeline::M2Loader::load(bytes);
-        if (model.name.empty()) model.name = modelPath;
-        if (model.version >= 264) {
-            const std::string skinPath = pipeline::skinPathForM2(modelPath);
-            auto skin = cachedAssetManager_->readFile(skinPath);
-            if (!skin.empty()) pipeline::M2Loader::loadSkin(skin, model);
-        }
-        if (model.vertices.empty() || !characterRenderer->loadModel(model, modelId)) return;
-        if (!texturePath.empty()) {
-            if (auto* texture = characterRenderer->loadTexture(texturePath))
-                characterRenderer->setModelTexture(modelId, 0, texture);
-        }
-    }
-
-    const glm::vec3 delta = end - start;
-    const float horizontal = std::sqrt(delta.x * delta.x + delta.y * delta.y);
-    glm::vec3 rotation(0.0f);
-    rotation.z = std::atan2(delta.y, delta.x);
-    rotation.y = -std::atan2(delta.z, std::max(horizontal, 0.001f));
-
-    const uint32_t instanceId = characterRenderer->createInstance(modelId, start, rotation, 1.0f);
-    if (instanceId == 0) return;
-    physicalProjectiles_.push_back({.instanceId = instanceId, .start = start, .end = end, .rotation = rotation, .elapsed = 0.0f,
-                                    .duration = std::max(duration, 0.05f), .spin = spin});
-}
-
 void SpellVisualSystem::buildCastEntries(uint32_t vid, const spell_visual_merge::Row& row) {
     const CastColumns& c = castColumns_;
     auto at = [&](uint32_t field, int32_t fallback) {
@@ -959,7 +930,7 @@ void SpellVisualSystem::buildCastEntries(uint32_t vid, const spell_visual_merge:
     const auto flags = static_cast<uint32_t>(at(c.flags, 0));
     // Missile: MissileModel names a SpellVisualEffectName row. Negative
     // values are the caster's weapons and ammunition (FUN_00732ff0's -1
-    // to -5), which this does not fly.
+    // to -5), which itemMissileVisual gives a model.
     if (c.missileModel < row.size()) {
         const int32_t missileModel = row[c.missileModel];
         auto fxIt = missileModel > 0 ? effectNamePaths_.find(static_cast<uint32_t>(missileModel))
@@ -1018,13 +989,55 @@ uint32_t SpellVisualSystem::mergedVisual(uint32_t spellVisual, uint32_t weaponVi
     merged[0] = static_cast<int32_t>(id);
     buildCastEntries(id, merged);
     // What the merge leaves as the spell's own: its aura and area kits.
-    if (spellVisual != 0) {
-        if (auto it = visualAuraKits_.find(spellVisual); it != visualAuraKits_.end()) visualAuraKits_[id] = it->second;
-        if (auto it = visualStateKitAnim_.find(spellVisual); it != visualStateKitAnim_.end())
-            visualStateKitAnim_[id] = it->second;
-        if (auto it = persistentAreas_.find(spellVisual); it != persistentAreas_.end()) persistentAreas_[id] = it->second;
-    }
+    if (spellVisual != 0) copyOwnKits(spellVisual, id);
+    visualRows_[id] = std::move(merged);
     mergedVisualIds_[key] = id;
+    return id;
+}
+
+void SpellVisualSystem::copyOwnKits(uint32_t from, uint32_t to) {
+    if (auto it = visualAuraKits_.find(from); it != visualAuraKits_.end()) visualAuraKits_[to] = it->second;
+    if (auto it = visualStateKitAnim_.find(from); it != visualStateKitAnim_.end()) visualStateKitAnim_[to] = it->second;
+    if (auto it = persistentAreas_.find(from); it != persistentAreas_.end()) persistentAreas_[to] = it->second;
+}
+
+std::optional<SpellVisualSystem::MissileColumns> SpellVisualSystem::missileColumns(uint32_t visualId) {
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    const auto row = visualRows_.find(visualId);
+    const auto at = [&](uint32_t field) {
+        return row != visualRows_.end() && field < row->second.size() ? row->second[field] : 0;
+    };
+    if (row == visualRows_.end()) return std::nullopt;
+    return MissileColumns{at(castColumns_.hasMissile) != 0, at(castColumns_.missileModel)};
+}
+
+uint32_t SpellVisualSystem::itemMissileVisual(uint32_t visualId, const std::string& model) {
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    const auto row = visualRows_.find(visualId);
+    if (row == visualRows_.end() || model.empty()) return visualId;
+    const auto key = std::make_pair(visualId, model);
+    if (const auto it = itemMissileVisualIds_.find(key); it != itemMissileVisualIds_.end()) return it->second;
+    spell_visual_merge::Row own = row->second;
+    const uint32_t id = nextMergedVisualId_++;
+    own[0] = static_cast<int32_t>(id);
+    buildCastEntries(id, own);
+    const VisualEnds& ends = visualEnds_[id];
+    const auto at = [&](uint32_t field) {
+        return field < own.size() ? static_cast<uint32_t>(std::max(own[field], 0)) : 0u;
+    };
+    MissileVisual missile;
+    missile.modelPath = model;
+    missile.flags = ends.flags;
+    missile.sourceAttachment = ends.sourceAttachment;
+    missile.destinationAttachment = ends.destinationAttachment;
+    missile.castOffset = ends.castOffset;
+    missile.impactOffset = ends.impactOffset;
+    missile.soundId = at(castColumns_.missileSound);
+    missile.motionId = at(castColumns_.missileMotion);
+    missileVisuals_[id] = std::move(missile);
+    copyOwnKits(visualId, id);
+    visualRows_[id] = std::move(own);
+    itemMissileVisualIds_[key] = id;
     return id;
 }
 
@@ -1854,70 +1867,116 @@ glm::mat4 SpellVisualSystem::worldKitModelTransform(const KitModel& model, uint3
 
 std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitModels(
     const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId, const glm::vec3& position,
-    const glm::vec3* place, uint32_t castTimeMs) {
+    const glm::vec3* place, uint32_t castTimeMs, std::vector<size_t>* loading) {
     std::vector<KitModelInstance> shown;
     if (!m2Renderer_) return shown;
-    const spell_kit::KitModelLife life = spell_kit::kitModelLife(type);
-    for (const KitModel& model : kit.models) {
-        const auto where = spell_kit::kitModelPlace(type, model.kind, model.attachment, place != nullptr);
-        glm::mat4 transform(1.0f);
-        float scale = 1.0f;
-        if (where == spell_kit::KitModelPlace::None) continue;
-        if (where == spell_kit::KitModelPlace::Attachment) {
-            // Dropped where the unit's model lacks the attachment (0x006f8c50).
-            if (!kitModelTransform(renderInstanceId, model.attachment, model.local, model.scale, model.minScale,
-                                   model.maxScale, transform, scale))
-                continue;
-        } else {
-            transform = worldKitModelTransform(model, renderInstanceId, position,
-                                               where == spell_kit::KitModelPlace::AtPlace ? place : nullptr);
-        }
-        const uint32_t modelId = acquireEffectModel(model.path);
-        if (modelId == 0) continue;
-        const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(transform[3]), glm::vec3(0.0f), 1.0f);
-        if (instanceId == 0) continue;
-        m2Renderer_->restartInstanceAnimation(instanceId);
-        setEffectEventOwner(instanceId, renderInstanceId);
-        m2Renderer_->setInstanceTransform(instanceId, transform);
-        const bool attached = where == spell_kit::KitModelPlace::Attachment;
-        if (life == spell_kit::KitModelLife::Hold) {
-            // 0x007449c0: its Stand once, then its Hold (158) - its Stand
-            // again where the kit has Flags 0x20 or the model no Hold.
-            KitModelInstance held{.instanceId = instanceId, .attachment = attached ? model.attachment : -1,
-                                  .local = model.local, .scale = scale};
-            if ((kit.flags & spell_kit::kKitFlagStateStand) == 0 &&
-                m2Renderer_->hasAnimation(instanceId, spell_kit::kAnimHold))
-                held.holdAt = m2Renderer_->getInstanceAnimDuration(instanceId) * 0.001f;
-            shown.push_back(held);
+    const bool holds = spell_kit::kitModelLife(type) == spell_kit::KitModelLife::Hold;
+    for (size_t i = 0; i < kit.models.size(); ++i) {
+        const KitModel& model = kit.models[i];
+        if (playKitModel(model, kit.flags, type, renderInstanceId, position, place, castTimeMs, shown) !=
+            EffectModelState::Loading)
+            continue;
+        if (holds) {
+            if (loading) loading->push_back(i);
             continue;
         }
-        // A model in the world stays where it was put; one on an attachment
-        // rides it.
-        addKitModel(instanceId, life, type == spell_kit::KitType::Precast, castTimeMs, attached,
-                    attached ? static_cast<uint32_t>(model.attachment) : 0u, attached ? renderInstanceId : 0u, scale,
-                    model.local);
+        const std::optional<glm::vec3> at = place ? std::optional<glm::vec3>(*place) : std::nullopt;
+        effectsWaiting_.add({model.path, [this, model, flags = kit.flags, type, renderInstanceId, position, at, castTimeMs,
+                                          since = std::chrono::steady_clock::now()] {
+            // A cast's, for what is left of it.
+            uint32_t left = castTimeMs;
+            if (type == spell_kit::KitType::Precast && castTimeMs != 0) {
+                const auto gone = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - since).count();
+                if (gone >= static_cast<long long>(castTimeMs)) return;
+                left = castTimeMs - static_cast<uint32_t>(gone);
+            }
+            std::vector<KitModelInstance> none;
+            playKitModel(model, flags, type, renderInstanceId, position, at ? &*at : nullptr, left, none);
+        }});
     }
     return shown;
 }
 
-void SpellVisualSystem::playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment) {
+EffectModelState SpellVisualSystem::playKitModel(const KitModel& model, uint32_t kitFlags, spell_kit::KitType type,
+                                                 uint32_t renderInstanceId, const glm::vec3& position,
+                                                 const glm::vec3* place, uint32_t castTimeMs,
+                                                 std::vector<KitModelInstance>& heldModels) {
+    const spell_kit::KitModelLife life = spell_kit::kitModelLife(type);
+    const auto where = spell_kit::kitModelPlace(type, model.kind, model.attachment, place != nullptr);
+    glm::mat4 transform(1.0f);
+    float scale = 1.0f;
+    if (!m2Renderer_ || where == spell_kit::KitModelPlace::None) return EffectModelState::Failed;
+    if (where == spell_kit::KitModelPlace::Attachment) {
+        // Dropped where the unit's model lacks the attachment (0x006f8c50).
+        if (!kitModelTransform(renderInstanceId, model.attachment, model.local, model.scale, model.minScale,
+                               model.maxScale, transform, scale))
+            return EffectModelState::Failed;
+    } else {
+        transform = worldKitModelTransform(model, renderInstanceId, position,
+                                           where == spell_kit::KitModelPlace::AtPlace ? place : nullptr);
+    }
+    const uint32_t modelId = acquireEffectModel(model.path);
+    if (modelId == 0) return effectModelState(model.path);
+    const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(transform[3]), glm::vec3(0.0f), 1.0f);
+    if (instanceId == 0) return EffectModelState::Failed;
+    m2Renderer_->restartInstanceAnimation(instanceId);
+    setEffectEventOwner(instanceId, renderInstanceId);
+    m2Renderer_->setInstanceTransform(instanceId, transform);
+    const bool attached = where == spell_kit::KitModelPlace::Attachment;
+    if (life == spell_kit::KitModelLife::Hold) {
+        // 0x007449c0: its Stand once, then its Hold (158) - its Stand
+        // again where the kit has Flags 0x20 or the model no Hold.
+        KitModelInstance held{.instanceId = instanceId, .attachment = attached ? model.attachment : -1,
+                              .local = model.local, .scale = scale};
+        if ((kitFlags & spell_kit::kKitFlagStateStand) == 0 && m2Renderer_->hasAnimation(instanceId, spell_kit::kAnimHold))
+            held.holdAt = m2Renderer_->getInstanceAnimDuration(instanceId) * 0.001f;
+        heldModels.push_back(held);
+        return EffectModelState::Ready;
+    }
+    // A model in the world stays where it was put; one on an attachment
+    // rides it.
+    addKitModel(instanceId, life, type == spell_kit::KitType::Precast, castTimeMs, attached,
+                attached ? static_cast<uint32_t>(model.attachment) : 0u, attached ? renderInstanceId : 0u, scale,
+                model.local);
+    return EffectModelState::Ready;
+}
+
+bool SpellVisualSystem::playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment) {
     loadSpellVisualDbc();
-    if (!m2Renderer_ || renderInstanceId == 0) return;
+    if (!m2Renderer_ || renderInstanceId == 0) return false;
     const auto path = effectNamePaths_.find(effectNameId);
-    if (path == effectNamePaths_.end()) return;
+    if (path == effectNamePaths_.end()) return false;
     glm::mat4 transform(1.0f);
     float scale = 1.0f;
     if (!kitModelTransform(renderInstanceId, attachment, glm::mat4(1.0f), 1.0f, 0.0f, 1e30f, transform, scale))
-        return;
+        return false;
     const uint32_t modelId = acquireEffectModel(path->second);
-    if (modelId == 0) return;
+    if (modelId == 0) {
+        if (effectModelState(path->second) == EffectModelState::Loading)
+            effectsWaiting_.add({path->second, [this, effectNameId, renderInstanceId, attachment] {
+                playEffectModelOnUnit(effectNameId, renderInstanceId, attachment);
+            }});
+        return true;
+    }
     const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(transform[3]), glm::vec3(0.0f), 1.0f);
-    if (instanceId == 0) return;
+    if (instanceId == 0) return true;
     m2Renderer_->restartInstanceAnimation(instanceId);
     setEffectEventOwner(instanceId, renderInstanceId);
     m2Renderer_->setInstanceTransform(instanceId, transform);
     addKitModel(instanceId, spell_kit::KitModelLife::Once, false, 0, true,
                 static_cast<uint32_t>(attachment), renderInstanceId, scale, glm::mat4(1.0f));
+    return true;
+}
+
+void SpellVisualSystem::playNamedEffectOnUnit(const std::string& name, uint32_t renderInstanceId,
+                                              int32_t attachment) {
+    loadSpellVisualDbc();
+    constexpr int32_t kBase = 19;
+    const auto id = effectIdsByName_.find(name);
+    if (id == effectIdsByName_.end()) return;
+    if (!playEffectModelOnUnit(id->second, renderInstanceId, attachment) && attachment != kBase)
+        playEffectModelOnUnit(id->second, renderInstanceId, kBase);
 }
 
 void SpellVisualSystem::hideAuraKitModels(AuraKit& aura) {
@@ -1925,6 +1984,7 @@ void SpellVisualSystem::hideAuraKitModels(AuraKit& aura) {
         for (const KitModelInstance& model : aura.models) m2Renderer_->removeInstance(model.instanceId);
     }
     aura.models.clear();
+    aura.loading.clear();
     aura.boundInstance = 0;
 }
 
@@ -3310,7 +3370,7 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
             if (!aura.playing || aura.awaitingMissile || aura.awaitingChain) {
                 // Held hidden: its models are off the unit, and so is the
                 // looping sound it had - a kit of no models has only that.
-                if (!aura.models.empty() || aura.soundHandle != 0) hideAuraKit(aura);
+                if (!aura.models.empty() || !aura.loading.empty() || aura.soundHandle != 0) hideAuraKit(aura);
                 continue;
             }
             // Onto the unit's model as it now is: the kit is the unit's,
@@ -3322,7 +3382,8 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
                     glm::vec3 unitPos(0.0f);
                     const bool at = renderer_ && renderer_->getCharacterRenderer() &&
                                     renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos);
-                    aura.models = playKitModels(kitIt->second, spell_kit::KitType::State, instance, unitPos, nullptr);
+                    aura.models = playKitModels(kitIt->second, spell_kit::KitType::State, instance, unitPos, nullptr, 0,
+                                                &aura.loading);
                     aura.boundInstance = instance;
                     // The kit came whole onto the new model, its sound with it
                     // - unless its start already asked for it, unseen, while the
@@ -3333,6 +3394,17 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
             }
             CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
             if (!charRenderer) continue;
+            // Those of its models that were loading go on as they are there.
+            if (!aura.loading.empty()) {
+                const auto kitIt = kits_.find(aura.kitId);
+                glm::vec3 unitPos(0.0f);
+                (void)charRenderer->getInstancePosition(instance, unitPos);
+                std::erase_if(aura.loading, [&](size_t i) {
+                    return kitIt == kits_.end() || i >= kitIt->second.models.size() ||
+                           playKitModel(kitIt->second.models[i], kitIt->second.flags, spell_kit::KitType::State, instance,
+                                        unitPos, nullptr, 0, aura.models) != EffectModelState::Loading;
+                });
+            }
             // Its held sound goes where the unit goes (0x00879aa0).
             if (aura.soundHandle != 0) {
                 glm::vec3 unitPos(0.0f);
@@ -3361,6 +3433,10 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
 
 void SpellVisualSystem::update(float deltaTime) {
     finishEffectModelLoads();
+    if (!effectsWaiting_.empty()) {
+        effectsWaiting_.step([this](const EffectWaiting& e) { return effectModelState(e.modelPath); },
+                             [](const EffectWaiting& e) { e.play(); });
+    }
     // First: an arrival plays its impact kit, which joins activeSpellVisuals_.
     colourClockMs_ += static_cast<uint32_t>(std::lround(deltaTime * 1000.0f));
     updateMissiles(deltaTime);
@@ -3377,7 +3453,7 @@ void SpellVisualSystem::update(float deltaTime) {
     updateDynamicObjects(deltaTime);
     updateFallingModels(deltaTime);
     publishClientStrips();
-    if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
+    if (activeSpellVisuals_.empty()) return;
 
     // Get character bone tracking context (once per frame)
     CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
@@ -3412,25 +3488,6 @@ void SpellVisualSystem::update(float deltaTime) {
         }
     }
 
-    if (charRenderer) {
-        for (auto it = physicalProjectiles_.begin(); it != physicalProjectiles_.end(); ) {
-            it->elapsed += deltaTime;
-            const float t = std::min(it->elapsed / it->duration, 1.0f);
-            charRenderer->setInstancePosition(
-                it->instanceId, glm::mix(it->start, it->end, t));
-            if (it->spin) {
-                glm::vec3 rotation = it->rotation;
-                rotation.x += t * glm::two_pi<float>() * 2.0f;
-                charRenderer->setInstanceRotation(it->instanceId, rotation);
-            }
-            if (t >= 1.0f) {
-                charRenderer->removeInstance(it->instanceId);
-                it = physicalProjectiles_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
 }
 
 void SpellVisualSystem::addDynamicObject(uint64_t guid, uint32_t visualId, const DynamicObjectCast& cast,
@@ -3769,11 +3826,6 @@ void SpellVisualSystem::reset() {
     for (const auto& landed : landedMissiles_)
         if (m2Renderer_) m2Renderer_->removeInstance(landed.instanceId);
     landedMissiles_.clear();
-    if (renderer_ && renderer_->getCharacterRenderer()) {
-        for (const auto& projectile : physicalProjectiles_)
-            renderer_->getCharacterRenderer()->removeInstance(projectile.instanceId);
-    }
-    physicalProjectiles_.clear();
     // Reset the negative cache so models that failed during asset loading can retry.
     spellVisualFailedModels_.clear();
 }

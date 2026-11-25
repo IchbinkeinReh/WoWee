@@ -149,6 +149,27 @@ constexpr bool twoHanded(const std::optional<Item>& item) {
     }
 }
 
+/// The animation a unit swings with as its hit arrives (0x00755130), unless the hit
+/// is a melee spell's or flagged unanimated: by the hand that swings (hit info 0x4)
+/// and what it holds. A two-handed weapon beside anything in the other hand is swung
+/// as a one-handed one.
+constexpr uint32_t kAnimAttackUnarmed = 16, kAnimAttack1H = 17, kAnimAttack2H = 18, kAnimAttack2HL = 19;
+constexpr uint32_t kAnimAttack1HPierce = 85, kAnimAttackOff = 87, kAnimAttackOffPierce = 88, kAnimAttackUnarmedOff = 117;
+constexpr uint32_t swingAnimation(bool offHandSwing, const std::optional<Item>& main, const std::optional<Item>& off) {
+    if (offHandSwing) {
+        if (!off || off->itemClass != kClassWeapon) return kAnimAttackUnarmedOff;
+        return off->subClass == 15 ? kAnimAttackOffPierce : kAnimAttackOff;
+    }
+    if (!main || main->itemClass != kClassWeapon) return kAnimAttackUnarmed;
+    switch (main->subClass) {
+    case 0: case 4: case 7: case 11: case 14: return kAnimAttack1H;
+    case 1: case 5: case 8: case 12: return off ? kAnimAttack1H : kAnimAttack2H;
+    case 6: case 10: case 17: case 20: return kAnimAttack2HL;
+    case 15: return kAnimAttack1HPierce;
+    default: return kAnimAttackUnarmed;
+    }
+}
+
 /// The animation a unit parries with (0x0073b050): ParryUnarmed with no weapon in
 /// its main hand, one in its sheath or a fist weapon, Parry1H, Parry2H - Parry1H
 /// with something in the other hand - or Parry2HL; none with a bow or a wand.

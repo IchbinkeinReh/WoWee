@@ -39,6 +39,8 @@ struct GuardContext {
     /// The last CMSG_SET_SELECTION that went out: whom the realm has selected,
     /// which is somebody still where the client let go without saying so.
     uint64_t selectedOnRealm = 0;
+    /// The vehicle the character sits in, 0 for none.
+    uint64_t vehicleGuid = 0;
     /// Whether a guid is another player's pet, totem or guardian.
     std::function<bool(uint64_t)> belongsToOtherPlayer;
 };

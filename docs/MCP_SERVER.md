@@ -166,7 +166,8 @@ unlearning a profession, the game masters' and developers' own packets. Quitting
 - Whose doing something is, is who acted last. If a person plays along and presses a key, what an earlier act of the
   server's leads to afterwards is counted as theirs; and what they do without a key or button of their own, as the
   server's.
-- Spells without a target can land on others (areas, auras), and objects somebody else put down can be used.
+- Spells without a target can land on others (areas, auras), and objects somebody else put down can be used - a
+  spell aimed at one of them, or at a player's corpse, is held to be aimed at that player.
 - A group or a duel somebody else began is not left by the server: it can decline and cancel, and not accept.
 - Names are redacted from texts, not from pictures. A picture of the world shows the names over heads.
 - The token protects against other programs of *other* users and against web pages; a program of the same user can

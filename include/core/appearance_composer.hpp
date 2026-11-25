@@ -6,7 +6,6 @@
 #include "game/character.hpp"
 #include "game/inventory.hpp"
 #include "pipeline/char_sections.hpp"
-#include "rendering/animation/weapon_type.hpp"
 #include <string>
 #include <vector>
 #include <unordered_set>

@@ -95,19 +95,6 @@ bool anchorsSpanAxis(const std::vector<Anchor>& anchors, bool xAxis);
 
 struct Widget;
 
-/// How a font string comes by its size.
-enum class FontStringSizing : uint8_t {
-    Given,      ///< a box on both axes, from its anchors or its <Size>: wrapped in and held to
-    Paragraph,  ///< a declared width and no height: as tall as the lines in it
-    Measured,   ///< as wide as its text
-};
-FontStringSizing fontStringSizing(const Widget& w);
-
-/// The width a font string's text is broken at, in its own units; 0 for one
-/// that is as wide as its text. The width between two edges counts as much as
-/// a declared one (0x00486b20: the rect's, where it differs from +0x54).
-float fontStringWrapWidth(const Widget& w);
-
 /// How far left and right of the place its anchors give a font string without a
 /// width its text reaches, of a text this wide: all of it right of a left edge,
 /// left of a right one, half and half round a centre.
@@ -367,6 +354,11 @@ struct Widget {
     /// whatever anchored below sitting on top of the lines that should have
     /// pushed it down.
     bool wrapsToWidth = false;
+    /// The same of a label held by its left and right: its lines are broken at
+    /// the width between them, and its height is theirs where it has none of
+    /// its own. And the width they were broken at.
+    bool wrapsBetweenAnchors = false;
+    float measuredWidth = 0.0f;
 
     FrameStrata strata = FrameStrata::Medium;
     bool strataExplicit = false;
@@ -960,28 +952,9 @@ struct Widget {
     /// since, so every descendant is still marked hidden and the walk can be
     /// skipped.
     uint64_t hiddenMarkedAt = 0;
-    /// Whether the interface has been told this is on screen. Visibility is
-    /// not a property a frame sets - it is shown, and every ancestor shown too
-    /// - so becoming visible has to be noticed rather than announced at the
-    /// point something was hidden three levels up.
-    bool  reportedVisible = false;
-    /// Set when Show() already ran this frame's OnShow itself, so the deferred
-    /// visibility pass records the change without firing it a second time.
-    bool  onShowFired = false;
-    /// How many times Lua has flipped `shown` since the last visibility pass.
-    ///
-    /// Noticing a change by comparing to the last reported state cannot see a
-    /// change that undoes itself first. `panel:Hide(); panel:Show()` is how
-    /// FrameXML says "rebuild yourself" - it is the whole of QuestFrame's
-    /// QUEST_DETAIL handler - and between the two calls nothing looks. The
-    /// frame ends the frame exactly as it started, so a comparison finds
-    /// nothing and OnShow, which is where the panel is actually filled in,
-    /// never runs.
-    ///
-    /// Counted only from the Show and Hide bindings, so that the renderer
-    /// forcing a suppressed window hidden cannot be mistaken for the interface
-    /// asking for a rebuild.
-    uint8_t shownToggles = 0;
+    /// The interface has been told the frame is up (CSimpleFrame +0xe0): its
+    /// OnShow has run and its OnHide not since. See WidgetTree::showNow.
+    bool  toldShown = false;
     /// The nearest scroll frame above this one, or zero. Everything under a
     /// scroll frame is drawn clipped to it, which is what makes a window onto
     /// a taller child a window rather than a spill.
@@ -1001,6 +974,26 @@ struct LinkRect {
     std::string text;         ///< what it drew, brackets and all
     float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
 };
+
+/// The width a font string's lines are broken at, in its own units, whatever
+/// it comes from: its anchors where they hold both of its sides, else its
+/// declared width (0x00486b20: the rect's, where it differs from +0x54). 0
+/// where it is as wide as its text.
+[[nodiscard]] inline float textWrapWidth(const Widget& w) {
+    if (anchorsSpanAxis(w.anchors, true))
+        return w.rectW > 0.0f ? w.rectW / (w.effScale > 0.0f ? w.effScale : 1.0f) : 0.0f;
+    return w.wrapsToWidth || (!w.autoSized && w.width > 0.0f) ? w.width : 0.0f;
+}
+
+/// A font string whose box is given rather than its text's: held on both axes
+/// by its anchors, or with a height of its own and a width of its own or one
+/// between two sides - `<Size x="0" y="32"/>` with TOPLEFT and RIGHT is how
+/// every options page writes its sub text.
+[[nodiscard]] inline bool textBoxGiven(const Widget& w) {
+    const bool spansX = anchorsSpanAxis(w.anchors, true);
+    if (spansX && anchorsSpanAxis(w.anchors, false)) return true;
+    return !w.autoSized && !w.wrapsToWidth && !w.wrapsBetweenAnchors && w.height > 0.0f && (w.width > 0.0f || spansX);
+}
 
 class WidgetTree {
 public:
@@ -1117,6 +1110,14 @@ public:
     /// units. Held inside SetMinResize/SetMaxResize.
     void resizeBy(uint32_t id, const std::string& point, float dx, float dy);
     void addPoint(uint32_t id, const Anchor& anchor);
+    /// A region's points as GetPoint counts them (0x0049d950), by their names:
+    /// TOPLEFT, TOP, TOPRIGHT, LEFT, CENTER, RIGHT, BOTTOMLEFT, BOTTOM,
+    /// BOTTOMRIGHT, whenever each was set. The first for an index below 0, null
+    /// past the last.
+    [[nodiscard]] const Anchor* pointAt(uint32_t id, int index) const;
+    /// SetParent: the points stay where they are - by the region that was the
+    /// parent, where they were set by the parent (0x004911b0 leaves them).
+    void pinPoints(uint32_t id);
     void setAllPoints(uint32_t id, uint32_t relativeTo);
 
     /// Resolve every widget's rect and visibility for a screen of this size.
@@ -1209,10 +1210,16 @@ public:
     /// The next widget at or above `from` waiting to be measured, taken off
     /// the list; zero when there are no more.
     uint32_t takeMeasureDirty(uint32_t from) { return measureDirty_.takeFrom(from); }
+    /// Whether a layout since the last call has changed the width a font
+    /// string's lines are broken at: it is measured, and laid out, again.
+    [[nodiscard]] bool takeWrapChanged() {
+        const bool was = wrapChanged_;
+        wrapChanged_ = false;
+        return was;
+    }
 
     /// A widget whose `visible` may differ from what the interface was last
-    /// told, or whose `shownToggles` is not zero. Set wherever either changes;
-    /// read by LuaEngine::updateVisibility.
+    /// told, set wherever either changes; read by LuaEngine::updateVisibility.
     /// Whether the frame is shown now, and every ancestor with it - by the
     /// flags Show and Hide set, not by the last layout's visibleChain, which
     /// knows nothing of a Hide() since.
@@ -1226,6 +1233,44 @@ public:
         const Widget* w = get(id);
         return w && w->visibleChain && shownNow(id);
     }
+    /// What comes up with a frame just shown (0x004918f0): the shown frames in
+    /// it, in their order, and then the frame - `tell` runs the OnShow of each
+    /// once it and those over it are marked up, and nothing is told twice.
+    template <typename Tell>
+    void showNow(uint32_t id, const Tell& tell) {
+        if (const Widget* w = get(id); w && w->kind == WidgetKind::Frame && shownNow(id)) comeUp(id, tell);
+    }
+    /// What goes with a frame just hidden (0x00491830): those in it that were
+    /// up, in their order, and then the frame, its OnHide after theirs.
+    template <typename Tell>
+    void hideNow(uint32_t id, const Tell& tell) {
+        Widget* w = get(id);
+        if (!w || w->kind != WidgetKind::Frame) return;
+        const bool was = w->toldShown;
+        w->toldShown = false;
+        markVisibilityPending(id);
+        for (size_t i = 0; (w = get(id)) != nullptr && i < w->children.size(); ++i) {
+            const uint32_t child = w->children[i];
+            if (const Widget* in = get(child); in && in->shown) hideNow(child, tell);
+        }
+        if (was) tell(id);
+    }
+
+private:
+    template <typename Tell>
+    void comeUp(uint32_t id, const Tell& tell) {
+        Widget* w = get(id);
+        if (!w || w->kind != WidgetKind::Frame || !w->shown || w->toldShown) return;
+        w->toldShown = true;
+        markVisibilityPending(id);
+        // A handler may hide what it is in: what has not come up by then does
+        // not. Those it makes are shown, and told, as they are made.
+        for (size_t i = 0; (w = get(id)) != nullptr && w->toldShown && i < w->children.size(); ++i)
+            comeUp(w->children[i], tell);
+        tell(id);
+    }
+
+public:
     void markVisibilityPending(uint32_t id) { if (isWidgetId(id)) visibilityPending_.set(id); }
     uint32_t takeVisibilityPending(uint32_t from) { return visibilityPending_.takeFrom(from); }
 
@@ -1526,6 +1571,7 @@ private:
     uint32_t lastVisibleCount_ = 0;
     /// See markMeasureDirty, markVisibilityPending and markResizePending.
     IdBits measureDirty_;
+    bool wrapChanged_ = false;
     IdBits visibilityPending_;
     IdBits resizePending_;
     /// Every widget that has been `visible` since collectDrawOrder last saw it

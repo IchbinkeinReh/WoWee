@@ -29,7 +29,6 @@ public:
 
     /// Fire achievement earned toast + sound
     /// The sound an achievement makes. The badge is FrameXML's.
-    void playAchievementEarned();
 
     // UIServices injection (Phase B singleton breaking)
     void setServices(const UIServices& services) { services_ = services; }

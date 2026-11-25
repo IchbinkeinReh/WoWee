@@ -50,7 +50,7 @@ namespace ui { class UIManager; class MapWindow; }
 namespace auth { class AuthHandler; }
 namespace game { class GameHandler; class World; class ExpansionRegistry; struct ExpansionProfile; struct GameHandlerTestAccess; }
 namespace pipeline { class AssetManager; class DBCLayout; struct M2Model; struct WMOModel; }
-namespace audio { enum class VoiceType; class AudioCoordinator; }
+namespace audio { class AudioCoordinator; }
 namespace addons { class AddonManager; }
 namespace mcp { class Server; }
 

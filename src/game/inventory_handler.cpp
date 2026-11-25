@@ -435,12 +435,6 @@ void InventoryHandler::announceLootMoney(uint64_t lootGuid, uint32_t amount, boo
     // - "Ihr plündert 5 Kupfer". This printed "Looted: 5c" as a system line.
     owner_.addLocalChatLine(ChatType::MONEY,
                             interface_text::lootMoneyLine(amount, soleLooter, uiText));
-    if (auto* ac = owner_.services().audioCoordinator) {
-        if (auto* sfx = ac->getUiSoundManager()) {
-            if (amount >= 10000) sfx->playLootCoinLarge();
-            else sfx->playLootCoinSmall();
-        }
-    }
     if (lootGuid != 0) recentLootMoneyAnnounceCooldowns_[lootGuid] = 1.5f;
 }
 
@@ -738,10 +732,6 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         if (!self) return;
         if (auto* qh = owner_.getQuestHandler())
             qh->announceQuestItemPushed(itemId, count, totalCount, info->name);
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* sfx = ac->getUiSoundManager())
-                sfx->playLootItem();
-        }
         if (owner_.addonEventCallbackRef()) {
             fireBagUpdates();
             // ITEM_PUSH(bagSlot, icon), which is what the bag button's flash
@@ -827,10 +817,6 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                     LOG_WARNING("Successful sale had no pending buyback entry: itemGuid=0x",
                                 std::hex, itemGuid, std::dec);
                 }
-                if (auto* ac = owner_.services().audioCoordinator) {
-                    if (auto* sfx = ac->getUiSoundManager())
-                        sfx->playDropOnGround();
-                }
                 if (owner_.addonEventCallbackRef()) {
                     fireBagUpdates();
                     owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
@@ -867,10 +853,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                 }
                 const char* msg = err.key ? err.key : "no error text";
                 if (err.key) owner_.addUIError(uiText(err.key, err.enUS));
-                if (auto* ac = owner_.services().audioCoordinator) {
-                    if (auto* sfx = ac->getUiSoundManager())
-                        sfx->playError();
-                }
+                if (err.key) owner_.playGameErrorSound(err.key);
                 LOG_WARNING("SMSG_SELL_ITEM error: ", (int)result, " (", msg,
                             ") itemGuid=0x", std::hex, itemGuid,
                             " vendorGuid=0x", vendorGuid, std::dec);
@@ -929,11 +912,6 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // gives it one (0x005216f0): a full bag's for every code that ends
         // in ERR_BAG_FULL, a missing proficiency's own, none for a full bank.
         owner_.playGameErrorSound(shownKey);
-        if (error == 1) return;
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* sfx = ac->getUiSoundManager())
-                sfx->playError();
-        }
     };
 
     table[Opcode::SMSG_BUY_FAILED] = [this](network::Packet& packet) {
@@ -971,8 +949,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                     // purchase (0x006cdba0) - this said "That buyback item
                     // is no longer available." in English.
                     owner_.addUIError(uiText("ERR_ITEM_NOT_FOUND", "The item was not found."));
-                    if (auto* ac = owner_.services().audioCoordinator)
-                        if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
+                    owner_.playGameErrorSound("ERR_ITEM_NOT_FOUND");
                     return;
                 }
                 pendingBuybackSlot_ = -1;
@@ -996,10 +973,6 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             }
             if (!err.key) return;
             owner_.addUIError(uiText(err.key, err.enUS));
-            if (auto* ac = owner_.services().audioCoordinator) {
-                if (auto* sfx = ac->getUiSoundManager())
-                    sfx->playError();
-            }
             owner_.playGameErrorSound(err.key);
         }
     };
@@ -1043,24 +1016,14 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                 if (bought != buybackItems_.end()) buybackItems_.erase(bought);
                 pendingBuybackSlot_ = -1;
                 pendingBuybackWireSlot_ = 0;
-                if (auto* ac = owner_.services().audioCoordinator) {
-                    if (auto* sfx = ac->getUiSoundManager())
-                        sfx->playPickupBag();
-                }
                 if (owner_.addonEventCallbackRef()) {
                     owner_.addonEventCallbackRef()("MERCHANT_UPDATE", {});
                     fireBagUpdates();
                 }
                 return;
             }
-            if (pendingBuyItemId_ != 0) {
-                // Nor for a purchase - "Purchased: [item] xN" was this
-                // client's own English; the push result says what arrived.
-                if (auto* ac = owner_.services().audioCoordinator) {
-                    if (auto* sfx = ac->getUiSoundManager())
-                        sfx->playPickupBag();
-                }
-            }
+            // Nor for a purchase - "Purchased: [item] xN" was this client's
+            // own English; the push result says what arrived.
             pendingBuyItemId_   = 0;
             pendingBuyItemSlot_ = 0;
             if (owner_.addonEventCallbackRef()) {
@@ -2532,7 +2495,6 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
                                        const ItemDef& item, bool confirmed,
                                        uint64_t unitTarget) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (owner_.isRestoring()) owner_.cancelCast();
 
     // Bind-on-use, and not yet bound. Same warning as the equip prompt, one
     // step earlier: using the item is what binds it.
@@ -2652,6 +2614,21 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
         const bool wantsUnit =
             (useSpellId != 0 && spellNeedsAUnit(owner_.getSpellImplicitTargetA(useSpellId))) ||
             (useSpellId != 0 && !owner_.isSpellKnownToClient(useSpellId));
+        // A unit named that is not there, and "none": as a spell's
+        // (0x0080cce0).
+        if (unit_target::askedNoUnit(unitTarget)) {
+            if (wantsUnit && unitTarget == unit_target::kAskedNobody) {
+                if (auto* spells = owner_.getSpellHandler())
+                    spells->reportLocalCastFailure(useSpellId, unit_target::kFailedNoTarget);
+                return;
+            }
+            if (wantsUnit) {
+                pendingUnitTarget_ = PendingItemTarget{.bag = wowBag, .slot = wowSlot, .itemGuid = itemGuid, .spellId = useSpellId,
+                                                       .itemId = item.itemId, .itemName = item.name, .fromSpell = false};
+                return;
+            }
+            unitTarget = 0;
+        }
         const uint64_t chosen = unitTarget != 0
             ? unitTarget : targetGuidForUseItem(owner_, itemInfo, useSpellId);
         // Bandages and scrolls. Using either with nothing selected puts it on
@@ -3754,15 +3731,6 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
             repairAll(currentVendorItems_.vendorGuid, false);
         }
     }
-
-    // Play vendor sound
-    if (owner_.npcVendorCallbackRef() && currentVendorItems_.vendorGuid != 0) {
-        auto entity = owner_.getEntityManager().getEntity(currentVendorItems_.vendorGuid);
-        if (entity && entity->getType() == ObjectType::UNIT) {
-            glm::vec3 pos(entity->getX(), entity->getY(), entity->getZ());
-            owner_.npcVendorCallbackRef()(currentVendorItems_.vendorGuid, pos);
-        }
-    }
 }
 
 // ============================================================
@@ -4123,14 +4091,13 @@ void InventoryHandler::checkForMail(float delay) {
     // 0x005704d0: ask, then a zero delay is mail there now; any other delay
     // replaces the countdown unless one already runs out sooner.
     mailCheckOnClose_ = false;
-    const bool wasNew = hasNewMail();
     queryNextMailTime();
     if (std::fabs(delay) >= kMailTimeEpsilon) {
         if (!(nextMailTime_ >= 0.0f && nextMailTime_ <= delay)) nextMailTime_ = delay;
         return;
     }
     nextMailTime_ = 0.0f;
-    nextMailTimeChanged(wasNew);
+    nextMailTimeChanged();
 }
 
 void InventoryHandler::queryNextMailTime() {
@@ -4141,11 +4108,7 @@ void InventoryHandler::queryNextMailTime() {
     nextMailTime_ = -1.0f;
 }
 
-void InventoryHandler::nextMailTimeChanged(bool wasNew) {
-    if (!wasNew && hasNewMail()) {
-        if (auto* ac = owner_.services().audioCoordinator)
-            if (auto* sfx = ac->getUiSoundManager()) sfx->playMailReceived();
-    }
+void InventoryHandler::nextMailTimeChanged() {
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_PENDING_MAIL", {});
 }
 
@@ -4158,10 +4121,10 @@ void InventoryHandler::tickPendingMail(float deltaTime) {
         p.delay = std::max(0.0f, p.delay - deltaTime);
         if (std::fabs(p.delay) < kMailTimeEpsilon) changed = true;
     }
-    if (changed) nextMailTimeChanged(true);
+    if (changed) nextMailTimeChanged();
     if (nextMailTime_ > 0.0f) {
         nextMailTime_ = std::max(0.0f, nextMailTime_ - deltaTime);
-        if (std::fabs(nextMailTime_) < kMailTimeEpsilon) nextMailTimeChanged(false);
+        if (std::fabs(nextMailTime_) < kMailTimeEpsilon) nextMailTimeChanged();
     }
 }
 
@@ -4543,7 +4506,7 @@ void InventoryHandler::mailMarkAsRead(uint32_t mailId) {
         }
         if (hasNewMail() && !anyUnread) {
             nextMailTime_ = -1.0f;
-            nextMailTimeChanged(true);
+            nextMailTimeChanged();
         }
     }
 }
@@ -4742,7 +4705,6 @@ void InventoryHandler::handleQueryNextMailTime(network::Packet& packet) {
     // (sender guid, entry, message type, paper, seconds to go); slots the
     // packet leaves out are emptied.
     if (!packet.hasRemaining(8)) return;
-    const bool wasNew = hasNewMail();
     nextMailTime_ = packet.readFloat();
     const uint32_t count = packet.readUInt32();
     size_t i = 0;
@@ -4756,7 +4718,7 @@ void InventoryHandler::handleQueryNextMailTime(network::Packet& packet) {
     }
     for (; i < pendingMail_.size(); ++i) pendingMail_[i] = PendingMail{};
     packet.skipAll();
-    nextMailTimeChanged(wasNew);
+    nextMailTimeChanged();
 }
 
 // ============================================================
@@ -6428,6 +6390,15 @@ void InventoryHandler::queryItemInfo(uint32_t entry, uint64_t guid) {
     if (!owner_.isInWorld()) return;
 
     owner_.pendingItemQueriesRef().insert(entry);
+    sendItemQuery(entry, guid);
+}
+
+void InventoryHandler::askItemsAgain() {
+    if (!owner_.isInWorld()) return;
+    for (uint32_t entry : owner_.pendingItemQueriesRef()) sendItemQuery(entry, 0);
+}
+
+void InventoryHandler::sendItemQuery(uint32_t entry, uint64_t guid) {
     // Some cores reject CMSG_ITEM_QUERY_SINGLE when the GUID is 0.
     // If we don't have the item object's GUID (e.g. visible equipment decoding),
     // fall back to the player's GUID to keep the request non-zero.
@@ -6656,9 +6627,6 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                 if (!it->self) { it = owner_.pendingItemPushNotifsRef().erase(it); continue; }
                 if (auto* qh = owner_.getQuestHandler())
                     qh->announceQuestItemPushed(data.entry, it->count, it->totalCount, data.name);
-                if (auto* ac = owner_.services().audioCoordinator) {
-                    if (auto* sfx = ac->getUiSoundManager()) sfx->playLootItem();
-                }
                 if (owner_.itemLootCallbackRef()) owner_.itemLootCallbackRef()(data.entry, it->count, data.quality, itemName);
                 // ...and the event, which this path had never fired. An item
                 // whose name was not cached when it arrived is exactly the
@@ -8083,8 +8051,6 @@ void InventoryHandler::handleTrainerBuySucceeded(network::Packet& packet) {
     // No line: the real client has no handler for this opcode at all - the
     // spell's own SMSG_LEARNED_SPELL is what says it was learned. This
     // printed "You have learned X." in English beside it.
-    if (auto* ac = owner_.services().audioCoordinator)
-        if (auto* sfx = ac->getUiSoundManager()) sfx->playQuestActivate();
     owner_.fireAddonEvent("TRAINER_UPDATE", {});
     owner_.fireAddonEvent("SPELLS_CHANGED", {});
 }

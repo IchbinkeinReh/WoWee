@@ -76,15 +76,15 @@ const char* const kActionsChunk = R"lua(
 local out = {page = GetActionBarPage(), bonus_offset = GetBonusBarOffset(), bars = {}}
 local function slotInfo(slot)
   if not HasAction(slot) then return nil end
-  local kind, id = GetActionInfo(slot)
+  local kind, id, _, spell = GetActionInfo(slot)
   local usable, nomana = IsUsableAction(slot)
   local start, duration = GetActionCooldown(slot)
-  local a = {slot = slot, kind = kind, id = id, text = GetActionText(slot), usable = usable and true or false,
+  local a = {slot = slot, kind = kind, id = spell or id, text = GetActionText(slot), usable = usable and true or false,
     no_mana = nomana and true or nil, in_range = IsActionInRange(slot),
     current = IsCurrentAction(slot) and true or nil, attack = IsAttackAction(slot) and true or nil,
     count = GetActionCount(slot) > 0 and GetActionCount(slot) or nil,
     cooldown = duration and duration > 1.5 and start + duration - GetTime() or nil}
-  if kind == "spell" then a.name = GetSpellInfo(id) elseif kind == "item" then a.name = GetItemInfo(id) end
+  if spell then a.name = GetSpellInfo(spell) elseif kind == "item" then a.name = GetItemInfo(id) end
   return a
 end
 local function buttons(name, count, command)

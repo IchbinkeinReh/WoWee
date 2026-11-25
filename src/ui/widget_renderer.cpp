@@ -323,8 +323,20 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     // button. The entries were there and the buttons were there; the names
     // were invisible, so nothing could be read or clicked, and no setting
     // added to the schema could be reached however correctly it registered.
-    const FontStringSizing sizing = fontStringSizing(*w);
-    if (sizing == FontStringSizing::Given) return;
+    const bool spansX = anchorsSpanAxis(w->anchors, true);
+    const bool spansY = anchorsSpanAxis(w->anchors, false);
+    // What it was measured as before it was held there is not its size.
+    const auto forget = [w] {
+        if (w->autoSized) w->width = w->height = 0.0f;
+        if (w->wrapsBetweenAnchors) w->height = 0.0f;
+        w->autoSized = w->wrapsBetweenAnchors = false;
+        w->measuredText.clear();
+    };
+    if (spansX && spansY) {
+        if (w->autoSized || w->wrapsBetweenAnchors) forget();
+        return;
+    }
+    if (!spansX && w->wrapsBetweenAnchors) forget();
 
     // A width with no height is a paragraph, not a request to be measured.
     //
@@ -338,7 +350,9 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     // So it drew one line out through the side of the scroll frame that
     // clips it, and everything anchored beneath it sat on top of the lines
     // that should have pushed it down.
-    const bool paragraph = sizing == FontStringSizing::Paragraph;
+    const bool paragraph =
+        w->wrapsToWidth ||
+        (!w->autoSized && w->width > 0.0f && w->height <= 0.0f);
 
     // The size the draw will use, not a flat twelve.
     //
@@ -368,7 +382,20 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     const bool sameMeasurement = w->measuredText == w->text &&
                                  w->measuredSize == size &&
                                  w->measuredFace == w->fontFace;
-    if (sameMeasurement && (paragraph || w->autoSized)) return;
+    // Held by its sides: as wide as they are apart (textWrapWidth), and as
+    // tall as that makes it where it has no height of its own.
+    const float between = spansX ? textWrapWidth(*w) : 0.0f;
+    if (between > 0.0f) {
+        if (sameMeasurement && !w->autoSized && w->measuredWidth == between) return;
+        if (w->autoSized) forget();
+    } else if (paragraph) {
+        if (sameMeasurement) return;
+    } else {
+        if (w->autoSized && sameMeasurement) return;
+        // Between two sides that have not been solved yet a height of its own
+        // stays its own: measured now, it would be taken for its text's.
+        if (textBoxGiven(*w)) return;
+    }
 
     // The face only once there is something to measure: looking it up
     // normalises the name and searches a map, and this runs over every
@@ -380,6 +407,23 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     const auto measureRun = [&](const std::string& piece) {
         return runFont->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
     };
+
+    if (between > 0.0f) {
+        const int rows = static_cast<int>(
+            wrapText(parseMarkup(w->text), w->wordWrap ? between : 0.0f, w->nonSpaceWrap, measureRun,
+                     w->indentedWordWrap && linkScale_ > 0.0f ? kIndentedWrapPixels / linkScale_ : 0.0f)
+                .size());
+        w->wrappedLines = rows > 0 ? rows : 1;
+        if (w->height <= 0.0f || w->wrapsBetweenAnchors) {
+            w->height = size * 1.2f * static_cast<float>(w->wrappedLines);
+            w->wrapsBetweenAnchors = true;
+        }
+        w->measuredText = w->text;
+        w->measuredSize = size;
+        w->measuredFace = w->fontFace;
+        w->measuredWidth = between;
+        return;
+    }
 
     if (paragraph) {
         // The width stays as declared and the height follows the wrap.
@@ -1488,6 +1532,11 @@ void WidgetRenderer::layout(WidgetTree& tree, float screenW, float screenH) {
     mark(times.sizing, [&] { sizeArtAndText(tree); });
 
     mark(times.solve, [&] { tree.layout(screenW, screenH); });
+    // Labels whose sides have moved: as tall as that makes them.
+    if (tree.takeWrapChanged()) {
+        mark(times.sizing, [&] { sizeArtAndText(tree); });
+        mark(times.solve, [&] { tree.layout(screenW, screenH); });
+    }
 
     if (profile) {
         ++times.frames;
@@ -3451,10 +3500,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                                    piece.c_str()).x;
                     }, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                 w->wrappedLines = static_cast<int>(lines.size());
-                if (wrapW > 0.0f) {
-                    extent.x = wrapW;
-                    extent.y = size * 1.2f * static_cast<float>(lines.size());
-                }
+                if (wrapW > 0.0f) extent.x = wrapW;
+                // Measured by its letters alone, a string with a break at its
+                // end was one line shorter here than its box, and one set at
+                // the bottom a line too low (the world map's dashes).
+                extent.y = placedHeight(lines.size(), size * 1.2f, extent.y, wrapW > 0.0f);
             } else {
                 w->wrappedLines = 1;
             }

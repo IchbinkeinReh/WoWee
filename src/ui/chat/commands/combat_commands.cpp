@@ -194,7 +194,9 @@ public:
                 } else if (plow == "target") {
                     if (ctx.gameHandler.getTargetGuid() != seqState.lastTargetGuid) shouldReset = true;
                 } else if (plow == "combat") {
-                    if (ctx.gameHandler.isInCombat() != seqState.lastInCombat) shouldReset = true;
+                    // Leaving it, and not entering it (PLAYER_REGEN_ENABLED,
+                    // CastSequenceManager_OnEvent).
+                    if (seqState.lastInCombat && !ctx.gameHandler.isInCombat()) shouldReset = true;
                 }
                 if (slash == std::string::npos) break;
                 rpos = slash + 1;

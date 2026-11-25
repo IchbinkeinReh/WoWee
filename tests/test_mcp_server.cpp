@@ -16,6 +16,7 @@
 #include "mcp/http_server.hpp"
 #include "mcp/image.hpp"
 #include "mcp/main_queue.hpp"
+#include "mcp/object_kind.hpp"
 #include "mcp/ring_log.hpp"
 #include "mcp/script.hpp"
 #include "mcp/token_file.hpp"
@@ -525,6 +526,21 @@ TEST_CASE("a face says whose it is", "[mcp][probe]") {
     CHECK(probe::groundAt(world, 0, 0, 0.5f, 1.0f)->owner == 7);
     const auto grid = probe::groundGrid(world, {0, 0, 0}, 4, 2, 100);
     CHECK(grid.at(2, 2)->owner == 7);
+}
+
+TEST_CASE("a game object's kind is its type's", "[mcp][probe]") {
+    CHECK(std::string(objectKind(0)) == "door");
+    CHECK(std::string(objectKind(11)) == "transport");
+    CHECK(std::string(objectKind(15)) == "mo_transport");
+    CHECK(std::string(objectKind(19)) == "mailbox");
+    CHECK(std::string(objectKind(21)) == "guard_post");
+    CHECK(std::string(objectKind(25)) == "fishing_hole");
+    CHECK(std::string(objectKind(32)) == "barber_chair");
+    CHECK(std::string(objectKind(33)) == "destructible");
+    CHECK(std::string(objectKind(34)) == "guild_bank");
+    CHECK(std::string(objectKind(35)) == "trapdoor");
+    CHECK(std::string(objectKind(36)) == "?");
+    CHECK(std::string(objectKind(0xFFFFFFFFu)) == "?");
 }
 
 TEST_CASE("a long line is looked at a stretch at a time", "[mcp][probe]") {

@@ -7994,6 +7994,34 @@ void Renderer::renderVolumetricFog() {
     }
 }
 
+uint32_t Renderer::areaOfUnitAt(const glm::vec3& feet) {
+    namespace mi = minimap_indoor;
+    namespace wl = pipeline::wmo_doodad_light;
+    loadWmoAreaRows();
+    std::optional<WMORenderer::GroupArea> group;
+    if (wmoRenderer) {
+        const float startZ = feet.z + wl::kUnitFloorAbove;
+        const auto links = wmoRenderer->linksAlong(glm::vec3(feet.x, feet.y, startZ), startZ - wl::kFloorReach);
+        std::optional<float> ground;
+        if (terrainManager && !terrainManager->isHoleAt(feet.x, feet.y))
+            ground = terrainManager->getHeightAt(feet.x, feet.y);
+        if (links.collides && !wl::terrainNearer(startZ, ground, startZ - links.collides->dist))
+            group = wmoRenderer->groupArea(links.collides->ref);
+    }
+    const auto areaOf = [&](int32_t groupId) -> uint32_t {
+        const auto* row = mi::areaRow(&wmoAreaRows_, group->wmoId, group->nameSet, groupId);
+        return row ? row->areaId : 0u;
+    };
+    if (group && mi::isInteriorGroup(group->flags)) {
+        if (const uint32_t area = areaOf(group->areaGroupId); area != 0) return area;
+        return areaOf(-1);
+    }
+    if (globalWmoMapArea_ != 0) return globalWmoMapArea_;
+    if (group && !group->dynamic)
+        if (const uint32_t area = areaOf(group->areaGroupId); area != 0) return area;
+    return terrainManager ? terrainManager->getAreaIdAt(feet.x, feet.y).value_or(0u) : 0u;
+}
+
 void Renderer::loadWmoAreaRows() {
     if (wmoAreaRowsLoaded_ || !wmoRenderer) return;
     auto* assetManager = core::Application::getInstance().getAssetManager();

@@ -96,45 +96,16 @@ bool UiSoundManager::initialize(pipeline::AssetManager* assets) {
     lootCoinSmallSounds_.resize(1);
     bool lootCoinSmallLoaded = loadSound("Sound\\Interface\\LootCoinSmall.wav", lootCoinSmallSounds_[0], assets);
 
-    lootCoinLargeSounds_.resize(1);
-    bool lootCoinLargeLoaded = loadSound("Sound\\Interface\\LootCoinLarge.wav", lootCoinLargeSounds_[0], assets);
-
-    lootItemSounds_.resize(1);
-    bool lootItemLoaded = loadSound("Sound\\Interface\\igLootCreature.wav", lootItemSounds_[0], assets);
-
     // Load item pickup sounds
-    dropSounds_.resize(1);
-    bool dropLoaded = loadSound("Sound\\Interface\\DropOnGround.wav", dropSounds_[0], assets);
-
-    pickupBagSounds_.resize(1);
-    bool pickupBagLoaded = loadSound("Sound\\Interface\\PickUp\\PickUpBag.wav", pickupBagSounds_[0], assets);
-
     pickupBookSounds_.resize(1);
     bool pickupBookLoaded = loadSound("Sound\\Interface\\PickUp\\PickUpBook.wav", pickupBookSounds_[0], assets);
 
 
 
 
-    // Load eating/drinking sounds
-    eatingSounds_.resize(1);
-    bool eatingLoaded = loadSound("Sound\\Interface\\iEating1.wav", eatingSounds_[0], assets);
-
-    drinkingSounds_.resize(1);
-    bool drinkingLoaded = loadSound("Sound\\Interface\\iDrinking1.wav", drinkingSounds_[0], assets);
-
     // Load level up sound
     levelUpSounds_.resize(1);
     bool levelUpLoaded = loadSound("Sound\\Interface\\LevelUp.wav", levelUpSounds_[0], assets);
-
-    // Load achievement sound. The row the interface names AchievementSound
-    // (12891) keeps its file in Sound\Spells and misspells it - Achievment -
-    // and asking for the correctly spelled name asks for a file that is
-    // nowhere: every achievement alert was the level-up sound.
-    achievementSounds_.resize(1);
-    if (!loadSound("Sound\\Spells\\AchievmentSound1.wav", achievementSounds_[0], assets)) {
-        // Fallback to level-up sound if achievement sound is missing
-        achievementSounds_ = levelUpSounds_;
-    }
 
     // Load error/feedback sounds
     errorSounds_.resize(1);
@@ -146,20 +117,10 @@ bool UiSoundManager::initialize(pipeline::AssetManager* assets) {
     deselectTargetSounds_.resize(1);
     loadSound("Sound\\Interface\\iDeselectTarget.wav", deselectTargetSounds_[0], assets);
 
-    // Whisper notification. The table has no Whisper_Tell* row and no such file
-    // in this install; the cue it does have for a whisper arriving is row 3081
-    // TellMessage, whose file is Sound\Interface\iTellMessage.wav - the same
-    // cue the mail notification below plays. Falls back to iSelectTarget only
-    // if that file is missing.
+    // The cue for a whisper arriving: row 3081 TellMessage's file.
     whisperSounds_.resize(1);
     if (!loadSound("Sound\\Interface\\iTellMessage.wav", whisperSounds_[0], assets)) {
         whisperSounds_ = selectTargetSounds_;
-    }
-
-    // New-mail notification (dedicated cue, falling back to the whisper sound)
-    mailSounds_.resize(1);
-    if (!loadSound("Sound\\Interface\\iTellMessage.wav", mailSounds_[0], assets)) {
-        mailSounds_ = whisperSounds_;
     }
 
     // Minimap ping sound
@@ -176,13 +137,9 @@ bool UiSoundManager::initialize(pipeline::AssetManager* assets) {
     LOG_INFO("UISoundManager: Quest sounds - Activate: ", questActivateLoaded ? "YES" : "NO",
              ", Complete: ", questCompleteLoaded ? "YES" : "NO",
              ", Failed: ", questFailedLoaded ? "YES" : "NO");
-    LOG_INFO("UISoundManager: Loot sounds - Coins: ", (lootCoinSmallLoaded && lootCoinLargeLoaded) ? "YES" : "NO",
-             ", Items: ", lootItemLoaded ? "YES" : "NO");
-    LOG_INFO("UISoundManager: Item sounds - Pickup: ", (pickupBagLoaded && pickupBookLoaded) ? "YES" : "NO",
-             ", Drop: ", dropLoaded ? "YES" : "NO");
-    LOG_INFO("UISoundManager: Misc sounds - Eating: ", eatingLoaded ? "YES" : "NO",
-             ", Drinking: ", drinkingLoaded ? "YES" : "NO",
-             ", LevelUp: ", levelUpLoaded ? "YES" : "NO");
+    LOG_INFO("UISoundManager: Loot sounds - Coins: ", lootCoinSmallLoaded ? "YES" : "NO",
+             ", Book: ", pickupBookLoaded ? "YES" : "NO");
+    LOG_INFO("UISoundManager: Misc sounds - LevelUp: ", levelUpLoaded ? "YES" : "NO");
 
     initialized_ = true;
     LOG_INFO("UISoundManager: Initialization complete");
@@ -446,25 +403,13 @@ void UiSoundManager::playLootCoinSmall() {
     if (playByName("LOOTWINDOWCOINSOUND") != UiPlayResult::Unavailable) return;
     playSound(lootCoinSmallSounds_);   // no table: the clip preloaded at startup
 }
-/// LootCoinLarge.wav is in this install and named by no row of the table at
-/// all, so nothing is known of the level it wants and the small/large split by
-/// amount stays this manager's own.
-void UiSoundManager::playLootCoinLarge() { playSound(lootCoinLargeSounds_); }
-void UiSoundManager::playLootItem() { playSound(lootItemSounds_); }
 
 // Item sounds
-void UiSoundManager::playDropOnGround() { playSound(dropSounds_); }
-void UiSoundManager::playPickupBag() { playSound(pickupBagSounds_); }
 void UiSoundManager::playPickupBook() { playSound(pickupBookSounds_); }
 // Eating/drinking
-void UiSoundManager::playEating() { playSound(eatingSounds_); }
-void UiSoundManager::playDrinking() { playSound(drinkingSounds_); }
 
 // Level up
 void UiSoundManager::playLevelUp() { playSound(levelUpSounds_); }
-
-// Achievement
-void UiSoundManager::playAchievementAlert() { playSound(achievementSounds_); }
 
 // Error/feedback
 void UiSoundManager::playError() { playSound(errorSounds_); }
@@ -473,7 +418,6 @@ void UiSoundManager::playTargetDeselect() { playSound(deselectTargetSounds_); }
 
 // Chat notifications
 void UiSoundManager::playWhisperReceived() { playSound(whisperSounds_); }
-void UiSoundManager::playMailReceived() { playSound(mailSounds_); }
 
 // Minimap ping
 void UiSoundManager::playMinimapPing() { playSound(minimapPingSounds_); }

@@ -36,7 +36,6 @@ namespace wowee {
 // Forward declarations
 namespace rendering { class Renderer; namespace unit_event { class FootstepTerrainSounds; } }
 namespace pipeline { class AssetManager; class DBCFile; struct M2Model; struct WMOModel; }
-namespace audio { enum class VoiceType; }
 namespace game { class GameHandler; class Entity; class Unit; struct CorpseLook; struct AttackerStateUpdateData; }
 
 namespace core {
@@ -287,7 +286,6 @@ public:
     /// queued path in the second is the one most spawns actually take -
     /// so fixing the first left the bug on screen.
     static std::string transportModelPath(uint32_t entry, uint32_t displayId);
-    audio::VoiceType detectVoiceTypeFromDisplayId(uint32_t displayId) const;
 
     /// Every other unit's weapons as its items and sheath state have them,
     /// re-dressed when either changes (0x0072dbc0, 0x00731f40): creatures
@@ -463,6 +461,9 @@ public:
     /// (rendering/melee_sound.hpp).
     void onMeleeHit(const game::AttackerStateUpdateData& data);
     void onMeleeAttackStop(uint64_t attacker);
+    /// What a kit's animation is on the unit an instance draws, by what it holds
+    /// (kit_animation::specialAttack).
+    [[nodiscard]] uint32_t heldSpecialAttack(uint32_t renderInstanceId, uint32_t anim, uint32_t askFlags) const;
     /// The character instance a unit's animations play on, the player's too; 0 for none.
     [[nodiscard]] uint32_t unitAnimationInstance(uint64_t guid) const;
     /// A spell missing a target (SMSG_SPELL_GO): a parry's or block's
@@ -877,6 +878,8 @@ private:
         /// CreatureDisplayInfo.ParticleColorID: the ParticleColor record that
         /// recolours the model's emitters naming slot 11, 12 or 13.
         uint32_t particleColorId = 0;
+        /// CreatureDisplayInfo.CreatureModelAlpha, of 255.
+        uint32_t modelAlpha = 255;
     };
 
     /// CreatureModelData.ModelScale for a model id, the second half of the
@@ -889,6 +892,8 @@ private:
     /// asking this with one silently answered 1.0 for every creature there
     /// has ever been. 306 displays want 1.25 and two want 2.0.
     float creatureModelScale(uint32_t displayId) const;
+    /// The display's share of its model (unit_alpha.hpp).
+    float displayAlpha(uint32_t displayId) const;
 
     /// CreatureDisplayInfo.CreatureModelScale for a display id, or 1.0 where
     /// the display is unknown - an unknown display is already drawn at the
@@ -1044,8 +1049,6 @@ private:
     // Server waypoint scripts hold work/chop emotes for many seconds. Locomotion
     // temporarily overrides them, then the idle transition restores this loop.
     std::unordered_map<uint64_t, uint32_t> creatureActiveEmotes_;
-    std::unordered_map<uint64_t, bool> creatureWasStealthed_;
-    uint32_t stealthSyncFrameCounter_ = 0;  // throttles syncCreatureStealthVisuals()
     std::unordered_map<uint64_t, float> creatureAppliedScale_;  // guid → scale the instance was given
     // A creature's particle effects. The character renderer draws no
     // particles, so a creature whose model has emitters gets a particles-only
@@ -1179,7 +1182,6 @@ private:
     std::unordered_map<uint32_t, AmmoShown> ammoShown_;
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;
 
-    void syncCreatureStealthVisuals();
 
     // --- Creature async loads ---
     struct PreparedCreatureModel {
@@ -1636,6 +1638,14 @@ private:
     /// A unit's sound slot (0x00747310): by its chance unless `always`, at
     /// `at` or where the unit is.
     void playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at);
+    /// What a unit breathes (0x0071fa90), kept for ten seconds.
+    struct UnitAir {
+        bool underwater = false;
+        bool cold = false;
+        uint32_t askedMs = 0;
+    };
+    std::unordered_map<uint64_t, UnitAir> unitAir_;
+    void unitBreathes(const game::Unit& unit, const glm::vec3& at);
     /// A unit's voice line of some kind (0x007474b0): the column its kind reads
     /// from the CreatureSoundData row its display gives it.
     void playUnitVoiceKind(const game::Unit& unit, uint32_t kind);

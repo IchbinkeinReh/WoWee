@@ -9,6 +9,7 @@
 #include "addons/tooltip_setter_rules.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
+#include "game/cast_failure_names.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/spell_classification.hpp"
 #include "game/ground_target.hpp"
@@ -34,6 +35,7 @@
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/item_missile.hpp"
 #include "rendering/spell_missile.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "core/app_clock.hpp"
@@ -108,36 +110,6 @@ constexpr uint8_t kSpellFailedOutOfRange = 97;
 constexpr uint8_t kSpellFailedSpellInProgress = 105;
 constexpr uint8_t kSpellFailedTooClose = 128;
 constexpr uint8_t kSpellFailedUnitNotInFront = 134;
-
-/// A rejection the player caused by pressing a key a moment too early, or from
-/// half a step out of place.
-///
-/// These arrive once per keypress and a held key repeats them, so a few seconds
-/// of a fight produces several a second: the cooldown, the power cost, the
-/// range, the facing. The red line above the middle of the screen is what the
-/// real client shows for them - no chat line, and no error chime, since a beep
-/// per rejected keypress is the same spam in another channel. The character's
-/// line for them is still spoken (sayCastFailure), one at a time.
-///
-/// Codes checked against AzerothCore's SharedDefines.h rather than inferred:
-/// 128 is TOO_CLOSE, not the in-progress code it reads like.
-bool isRoutineCastRejection(uint8_t result) {
-    switch (result) {
-        case kSpellFailedItemNotReady:
-        case kSpellFailedMoving:
-        case kSpellFailedNotBehind:
-        case kSpellFailedNotReady:
-        case kSpellFailedNoPower:
-        case kSpellFailedOutOfRange:
-        case kSpellFailedSpellInProgress:
-        case kSpellFailedTooClose:
-        case kSpellFailedTryAgain:
-        case kSpellFailedUnitNotInFront:
-            return true;
-        default:
-            return false;
-    }
-}
 
 /// A spell's name as the learn and unlearn lines give it: "Name (Rank)", or
 /// the name alone where Spell.dbc has no rank (0x00542030, 0x006e71d0).
@@ -269,14 +241,22 @@ const char* powerTokenKey(int powerType) {
 /// This used to be English throughout, and invented lines of its own for
 /// fishing, bandages, aura states, crafting stations, tools and gathering;
 /// the original shows the same SPELL_FAILED_ text for those as for anything
-/// else. Where a result names something this client does not look up - an
-/// item class, a form, a mechanic, a custom error - the English it had is
-/// kept rather than showing an unfilled %s.
+/// else.
 std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
                                uint8_t result, int powerType, uint32_t miscArg = 0,
                                uint32_t miscArg2 = 0) {
     if (result == 0 || result == 0x1b) return {};  // SUCCESS, DONT_REPORT
-    std::string text = spellFailedText(result, powerType);
+    std::string text;
+    owner.loadSpellNameCache();
+    const auto row = owner.spellNameCacheRef().find(spellId);
+    const auto* spell = row != owner.spellNameCacheRef().end() ? &row->second : nullptr;
+    if (spell && cast_failure::hasPetText(spell->effectIds[0], spell->implicitTargetsA[0]))
+        text = interfaceString((cast_failure::spellFailedKey(result) + "_PET").c_str(), "");
+    if (text.empty()) text = spellFailedText(result, powerType);
+    const auto table = [&owner](const char* file) -> std::shared_ptr<pipeline::DBCFile> {
+        auto* am = owner.services().assetManager;
+        return am ? am->loadDBCOptional(file) : nullptr;
+    };
     auto fill = [&](const std::vector<std::string>& args) {
         text = chat_channels::luaFormat(text, args);
     };
@@ -321,6 +301,7 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
         }
         case kCastResultTotems:
         case 0x64: {  // TOTEMS, REAGENTS: the item's name, or nothing at all
+            if (miscArg == cast_failure::kNoReagentNamed) return {};
             const std::string name = itemName(miscArg);
             if (name.empty()) return {};
             fill({name});
@@ -346,9 +327,36 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
             text = interfaceString(key.c_str(), key.c_str());
             break;
         }
-        case 0x1d: case 0x1e: case 0x1f: case 0x36: case 0x5e: case 0x93: case 0xb0: {
-            const char* enUS = getSpellCastResultString(result, powerType);
-            if (enUS) text = enUS;
+        case 0x1d: case 0x1e: case 0x1f: {  // EQUIPPED_ITEM_CLASS: the realm's, or of our own refusal the spell's
+            const bool ours = miscArg == 0 && miscArg2 == 0 && spell && spell->equippedItemClass >= 0;
+            const std::string name = cast_failure::itemClassName(
+                table("ItemSubClassMask.dbc").get(), table("ItemSubClass.dbc").get(),
+                ours ? static_cast<uint32_t>(spell->equippedItemClass) : miscArg,
+                ours ? spell->equippedItemSubClassMask : miscArg2);
+            if (!name.empty()) fill({name});
+            break;
+        }
+        case 0x36: {  // NEED_EXOTIC_AMMO: a projectile's kind
+            const std::string name =
+                cast_failure::itemClassName<pipeline::DBCFile>(nullptr, table("ItemSubClass.dbc").get(), 6, 1u << (miscArg & 31u));
+            if (!name.empty()) fill({name});
+            break;
+        }
+        case 0x5e: {  // ONLY_SHAPESHIFT: the forms, or nothing at all
+            const std::string names =
+                spell ? cast_failure::formNames(table("SpellShapeshiftForm.dbc").get(), spell->stances) : std::string();
+            if (names.empty()) return {};
+            fill({names});
+            break;
+        }
+        case 0x81:  // TOO_MANY_OF_ITEM: how many of which category, in a line of its own
+            if (const auto limit = cast_failure::limitCategory(table("ItemLimitCategory.dbc").get(), miscArg))
+                return interfaceFormat("ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED_IS", "You can only carry %d %s",
+                                       {std::to_string(limit->count), limit->name});
+            break;
+        case 0x93: {  // PREVENTED_BY_MECHANIC
+            const std::string name = cast_failure::rowName(table("SpellMechanic.dbc").get(), miscArg);
+            if (!name.empty()) fill({name});
             break;
         }
         default:
@@ -456,70 +464,34 @@ void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, ui
                          owner_.resolveUnitRenderInstance(targetGuid), targetGuid == casterGuid, spellId);
 }
 
-void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid) {
-    if (targetGuid == 0) targetGuid = owner_.getTargetGuid();
+// The visual with the caster's item for its missile, where the visual has no model of
+// its own (item_missile.hpp): an arrow, a bullet, the weapon thrown.
+uint32_t SpellHandler::withItemMissile(const SpellGoData& data, uint32_t visualId) {
+    namespace im = rendering::item_missile;
     auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
     auto* assets = owner_.services().assetManager;
-    if (!renderer || !assets || targetGuid == 0) return;
-    auto* visuals = renderer->getSpellVisualSystem();
-    auto* characters = renderer->getCharacterRenderer();
-    if (!visuals || !characters) return;
-    // A weapon whose visual flies a missile of its own - a wand's bolt -
-    // has it flown with the cast's visual (0x00720f80); no second one here.
-    if (visuals->findMissileVisual(owner_.getUnitSpellVisualId(owner_.getPlayerGuid(), spellId))) return;
-
-    glm::vec3 start = renderer->getCharacterPosition() + glm::vec3(0.0f, 0.0f, 1.0f);
-    glm::mat4 handTransform(1.0f);
-    if (characters->getAttachmentTransform(renderer->getCharacterInstanceId(), 1, handTransform))
-        start = glm::vec3(handTransform[3]);
-
-    glm::vec3 end;
-    if (!resolveUnitPosition(targetGuid, end)) return;
-    end.z += 1.0f;
-
-    const auto& ranged = owner_.getInventory().getEquipSlot(EquipSlot::RANGED);
-    std::string modelPath;
-    std::string texturePath;
-    bool spin = false;
-
-    if (spellId == 2764 || (!ranged.empty() && ranged.item.inventoryType == InvType::THROWN)) {
-        spin = true;
-        if (!ranged.empty() && ranged.item.displayInfoId != 0) {
-            auto displayDbc = assets->loadDBC("ItemDisplayInfo.dbc");
-            if (displayDbc && displayDbc->isLoaded()) {
-                const int32_t row = displayDbc->findRecordById(ranged.item.displayInfoId);
-                if (row >= 0) {
-                    const auto* layout = pipeline::getActiveDBCLayout()
-                        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-                    std::string model = displayDbc->getString(
-                        static_cast<uint32_t>(row), layout ? (*layout)["LeftModel"] : 1);
-                    std::string texture = displayDbc->getString(
-                        static_cast<uint32_t>(row), layout ? (*layout)["LeftModelTexture"] : 3);
-                    if (!model.empty()) {
-                        const size_t dot = model.rfind('.');
-                        if (dot != std::string::npos) model = model.substr(0, dot);
-                        modelPath = "Item\\ObjectComponents\\Weapon\\" + model + ".m2";
-                    }
-                    if (!texture.empty())
-                        texturePath = "Item\\ObjectComponents\\Weapon\\" + texture + ".blp";
-                }
-            }
-        }
-        if (modelPath.empty())
-            modelPath = "Item\\ObjectComponents\\Weapon\\Thrown_1H_Dagger_A_01.m2";
-    } else if (spellId == 75 || (!ranged.empty() &&
-               (ranged.item.inventoryType == InvType::RANGED_BOW ||
-                ranged.item.subclassName == "Bow" || ranged.item.subclassName == "Crossbow"))) {
-        modelPath = "Item\\ObjectComponents\\Ammo\\ArrowFlight_01.m2";
-    } else {
-        modelPath = "Item\\ObjectComponents\\Ammo\\BulletFlight_01.m2";
-    }
-
-    const float distance = glm::length(end - start);
-    const float duration = std::clamp(distance / 35.0f, 0.12f, 0.8f);
-    visuals->playPhysicalProjectile(modelPath, texturePath, start, end, duration, spin);
+    if (!svs || !assets || svs->findMissileVisual(visualId)) return visualId;
+    const auto columns = svs->missileColumns(visualId);
+    if (!columns) return visualId;
+    const im::Source from = im::source(columns->model, columns->hasMissile, data.ammoDisplayId);
+    GameHandler::HeldItemDisplay item{data.ammoDisplayId, data.ammoInventoryType};
+    if (from == im::Source::MainHand) item = owner_.heldItemDisplay(data.casterUnit, 0);
+    if (from == im::Source::OffHand) item = owner_.heldItemDisplay(data.casterUnit, 1);
+    if (from == im::Source::Ranged) item = owner_.heldItemDisplay(data.casterUnit, 2);
+    if (from == im::Source::None || item.displayId == 0) return visualId;
+    auto displays = assets->loadDBCOptional("ItemDisplayInfo.dbc");
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo")
+                                                        : nullptr;
+    const int32_t row = displays ? displays->findRecordById(item.displayId) : -1;
+    if (row < 0) return visualId;
+    const auto text = [&](const char* column, uint32_t stock) {
+        return displays->getString(static_cast<uint32_t>(row), layout ? (*layout)[column] : stock);
+    };
+    const im::Display display{text("LeftModel", 1), text("RightModel", 2), text("LeftModelTexture", 3),
+                              text("RightModelTexture", 4)};
+    return svs->itemMissileVisual(visualId, im::model(from, display, item.inventoryType));
 }
-
 
 // FUN_007fffb0 and FUN_00732ff0: a spell with a speed flies its visual's
 // missile from the caster to each target it was cast at - hit or missed - or,
@@ -539,6 +511,7 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     auto spellIt = owner_.spellNameCacheRef().find(data.spellId);
     const float speed = spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
     if (!(speed > 0.0f)) return carried;
+    visualId = withItemMissile(data, visualId);
     const auto* missile = svs->findMissileVisual(visualId);
     if (!missile) return carried;
 
@@ -870,8 +843,20 @@ void SpellHandler::cancelCastsOnMove() {
 void SpellHandler::requestPetName(uint64_t petGuid) {
     if (petGuid == 0 || !owner_.getSocket()) return;
     if (owner_.getState() != WorldState::IN_WORLD) return;
+    // One that is out already is waited for with it (0x0067ea30).
+    for (const auto& [key, guid] : pendingPetNameQueries_)
+        if (guid == petGuid) return;
     const uint32_t key = nextPetNameQueryKey_++;
     pendingPetNameQueries_[key] = petGuid;
+    sendPetNameQuery(key, petGuid);
+}
+
+void SpellHandler::askPetNamesAgain() {
+    if (!owner_.isInWorld()) return;
+    for (const auto& [key, guid] : pendingPetNameQueries_) sendPetNameQuery(key, guid);
+}
+
+void SpellHandler::sendPetNameQuery(uint32_t key, uint64_t petGuid) {
     network::Packet pkt(wireOpcode(Opcode::CMSG_PET_NAME_QUERY));
     pkt.writeUInt32(key);
     pkt.writeUInt64(petGuid);
@@ -2412,12 +2397,9 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         owner_.addonEventCallbackRef()("START_AUTOREPEAT_SPELL", {});
     }
 
-    // Food and water are server auras, but using any action interrupts them.
-    // Cancel the aura and stand first, then allow the requested action to proceed.
-    if (restorationActive_) cancelCast();
-
     // Attack routes to auto-attack instead of cast
     if (spellId == SPELL_ID_ATTACK) {
+        if (unit_target::askedNoUnit(targetGuid)) return;
         uint64_t target = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
         if (target != 0) {
             if (owner_.isAutoAttacking()) {
@@ -2593,6 +2575,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // autoSelfCast - or the cursor holds it for one (0x0080cce0). Without
     // Spell.dbc, at what is selected.
     if (owner_.spellNameCacheRef().count(spellId) == 0) {
+        if (unit_target::askedNoUnit(targetGuid)) return;
         sendPlayerCast(spellId, targetGuid != 0 ? targetGuid : owner_.getTargetGuid());
         return;
     }
@@ -2634,7 +2617,6 @@ bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, u
             (rit->second.equippedItemSubClassMask & 0x80000u) != 0)
             owner_.stopAutoRepeat(true);
     }
-    if (restorationActive_) cancelCast();
     cancelGroundTargeting();
     if (!castChecksPass(spellId, 0)) return false;
     playCastActivateSound(spellId, itemGuid);
@@ -2881,7 +2863,7 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
     const uint64_t asked = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
     const auto kinds = unit_target::reachKinds(e.targetFlags, e.implicitTargetsA);
     const uint64_t unit = kinds.pet ? owner_.getPetGuid() : asked;
-    if (kinds.mask != 0 && unit != 0 && takeUnit(spellId, owner_.getPlayerGuid(), unit, kinds.mask, true).outOfReach)
+    if (kinds.mask != 0 && unit != 0 && !unit_target::askedNoUnit(unit) && takeUnit(spellId, owner_.getPlayerGuid(), unit, kinds.mask, true).outOfReach)
         return false;
     // 0x00739650.
     const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
@@ -3053,16 +3035,7 @@ SpellHandler::TooltipForms SpellHandler::tooltipForms(uint32_t spellId, uint64_t
     // SpellShapeshiftForm row k is form k + 1, as Stances' bit k is.
     if ((e.attrEx2 & 0x80000u) == 0) {
         auto* am = owner_.services().assetManager;
-        if (auto f = am ? am->loadDBCOptional("SpellShapeshiftForm.dbc") : nullptr; f && f->getFieldCount() > 2) {
-            const uint32_t n = std::min<uint32_t>(f->getRecordCount(), 64);
-            for (uint32_t r = 0; r < n; ++r) {
-                if (!bit(static_cast<int>(r))) continue;
-                const std::string named = f->getString(r, 2);
-                if (named.empty()) continue;
-                if (!out.names.empty()) out.names += ", ";
-                out.names += named;
-            }
-        }
+        out.names = cast_failure::formNames((am ? am->loadDBCOptional("SpellShapeshiftForm.dbc") : nullptr).get(), e.stances);
     }
     const auto player = owner_.getEntityManager().getEntity(caster ? caster : owner_.getPlayerGuid());  // the pet's for a pet action
     if (!player) return out;
@@ -3817,7 +3790,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     // One out of view goes as it is, for a spell reaching past 100 yards
     // (0x00802c30 with no unit).
     bool farReach = false;
-    if (required != 0 && asked != 0 && !unit) {
+    if (required != 0 && asked != 0 && !unit && !unit_target::askedNoUnit(asked)) {
         const auto casterEntity = em.getEntity(caster);
         unit_target::RangeInput in;
         in.attr = spell.attr;
@@ -3857,7 +3830,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     const bool byPlayer = caster == player;
     const bool mainhand = byPlayer && owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0;
     if (const uint8_t fail = unit_target::noUnitFailure(spell.attr, spell.attrEx5, required, byPlayer, mainhand,
-                                                        owner_.getTargetGuid() != 0)) {
+                                                        owner_.getTargetGuid() != 0, asked)) {
         const std::string text = castFailureMessage(owner_, spellId, fail, -1, 0, 0);
         if (byPlayer) showPlayerCastFailure(spellId, fail, text);
         else owner_.addUIError(text);
@@ -4020,14 +3993,6 @@ void SpellHandler::cancelChannelOnTurn() {
 }
 
 void SpellHandler::cancelCast(uint8_t reason) {
-    if (restorationActive_) {
-        const uint32_t auraSpell = restorationSpellId_;
-        cancelAura(auraSpell);
-        owner_.setStandState(0);
-        stopRestorationPresentation();
-        LOG_INFO("Cancelled restoration aura: spellId=", auraSpell);
-        return;
-    }
     if (!casting_) {
         // Sent and not started yet.
         const auto* sent = owner_.castVisuals().state(owner_.getPlayerGuid());
@@ -4080,7 +4045,7 @@ void SpellHandler::cancelPendingCasts(uint32_t attributeMask) {
         endOwnCast(swing.castCount, swing.spellId, kCancelDontReport);
     }
     // The running cast, which has a cast time; a channel is not in the list.
-    if (casting_ && !castIsChannel_ && !restorationActive_ && currentCastSpellId_ != 0 &&
+    if (casting_ && !castIsChannel_ && currentCastSpellId_ != 0 &&
         (attributesOf(currentCastSpellId_) & attributeMask) != 0)
         cancelCast();
 }
@@ -4603,23 +4568,6 @@ void SpellHandler::updateTimers(float dt) {
         castTimeRemaining_ -= dt;
         if (castTimeRemaining_ < 0.0f) castTimeRemaining_ = 0.0f;
     }
-    // Eating/drinking munch-gulp repeats for the whole restoration aura,
-    // matching the real client's looping consume sound.
-    if (restorationActive_) {
-        if (restorationTimeRemaining_ > 0.0f) {
-            restorationTimeRemaining_ = std::max(0.0f, restorationTimeRemaining_ - dt);
-        }
-        restorationSoundTimer_ -= dt;
-        if (restorationSoundTimer_ <= 0.0f) {
-            restorationSoundTimer_ = 1.0f;
-            if (auto* ac = owner_.services().audioCoordinator) {
-                if (auto* sfx = ac->getUiSoundManager()) {
-                    if (restorationIsFood_) sfx->playEating();
-                    else                    sfx->playDrinking();
-                }
-            }
-        }
-    }
     // Tick down unit cast states
     for (auto it = unitCastStates_.begin(); it != unitCastStates_.end(); ) {
         if (it->second.casting && it->second.timeRemaining > 0.0f) {
@@ -4632,80 +4580,6 @@ void SpellHandler::updateTimers(float dt) {
             }
         }
         ++it;
-    }
-}
-
-void SpellHandler::stopRestorationPresentation() {
-    if (!restorationActive_) return;
-    if (owner_.spellCastAnimCallbackRef()) {
-        owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, true,
-                                          SpellCastType::OMNI);
-    }
-    restorationActive_ = false;
-    restorationSpellId_ = 0;
-    restorationTimeRemaining_ = 0.0f;
-    restorationTimeTotal_ = 0.0f;
-}
-
-void SpellHandler::refreshRestorationFromPlayerAuras() {
-    owner_.loadSpellNameCache();
-    const uint64_t nowMs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
-
-    const AuraSlot* restorationAura = nullptr;
-    bool restorationIsFood = false;
-    for (const auto& aura : playerAuras_) {
-        if (aura.isEmpty()) continue;
-        auto nameIt = owner_.spellNameCacheRef().find(aura.spellId);
-        if (nameIt == owner_.spellNameCacheRef().end()) continue;
-        const auto kind = spellclass::classifyRestChannel(nameIt->second.name);
-        if (kind == spellclass::RestChannelKind::FOOD ||
-            kind == spellclass::RestChannelKind::DRINK) {
-            restorationAura = &aura;
-            restorationIsFood = kind == spellclass::RestChannelKind::FOOD;
-            break;
-        }
-    }
-
-    if (!restorationAura) {
-        stopRestorationPresentation();
-        return;
-    }
-
-    const uint32_t spellId = restorationAura->spellId;
-    const bool newlyActive = !restorationActive_ || restorationSpellId_ != spellId;
-    if (restorationActive_ && restorationSpellId_ != spellId) {
-        stopRestorationPresentation();
-    }
-
-    int32_t totalMs = restorationAura->maxDurationMs;
-    if (totalMs <= 0) totalMs = restorationAura->durationMs;
-    if (totalMs <= 0) {
-        const float dbcSeconds = getSpellDuration(spellId);
-        totalMs = dbcSeconds > 0.0f ? static_cast<int32_t>(dbcSeconds * 1000.0f) : 30000;
-    }
-    int32_t remainingMs = restorationAura->getRemainingMs(nowMs);
-    if (remainingMs < 0) {
-        remainingMs = (!newlyActive && restorationTimeRemaining_ > 0.0f)
-            ? static_cast<int32_t>(restorationTimeRemaining_ * 1000.0f)
-            : totalMs;
-    }
-
-    restorationActive_ = true;
-    restorationSpellId_ = spellId;
-    restorationIsFood_ = restorationIsFood;
-    restorationTimeTotal_ = static_cast<float>(totalMs) / 1000.0f;
-    restorationTimeRemaining_ = static_cast<float>(remainingMs) / 1000.0f;
-
-    if (newlyActive) {
-        restorationSoundTimer_ = 0.0f;
-        LOG_INFO("Restoration aura started: spellId=", spellId,
-                 " durationMs=", totalMs);
-        if (owner_.spellCastAnimCallbackRef()) {
-            owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), true, true,
-                                              SpellCastType::OMNI);
-        }
     }
 }
 
@@ -4853,7 +4727,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // callback and raises the line from there (0x00808200 -> 0x007feb50,
     // 0x007fea80). Asked of here it came back empty and was never shown.
     if ((data.result == 0x37 || data.result == 0x64 || data.result == kCastResultTotems) &&
-        data.miscArg != 0 &&
+        data.miscArg != 0 && data.miscArg != cast_failure::kNoReagentNamed &&
         !(owner_.getItemInfo(data.miscArg) && owner_.getItemInfo(data.miscArg)->valid)) {
         static uint32_t failureWaits = 0;
         owner_.askItemThen(data.miscArg, "cast failure " + std::to_string(++failureWaits),
@@ -4876,23 +4750,18 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     const auto holdNowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                      std::chrono::steady_clock::now().time_since_epoch())
                                                      .count());
-    if (!failureHold_.report(data.spellId, data.result, holdNowMs)) errMsg.clear();
+    // A custom error is said as it is worded (0x007fef10), each time, and is
+    // not in the log.
+    const bool custom = data.result == 0xac;
+    if (!failureHold_.report(data.spellId, data.result, holdNowMs) && !custom) errMsg.clear();
     if (!errMsg.empty()) owner_.addUIError(errMsg);
     // And the combat log, in the words the screen was given (0x00808200 ->
     // 0x00751ad0).
-    if (!errMsg.empty() && isActiveExpansion("wotlk")) owner_.combatLogFeed().castFailed(data.spellId, errMsg);
+    if (!errMsg.empty() && !custom && isActiveExpansion("wotlk")) owner_.combatLogFeed().castFailed(data.spellId, errMsg);
 
     // On screen and nowhere else. A cast failure went to the chat log as well
     // from here and from handleCastResult both, so the fix that took it out of
     // GameHandler::raiseUiError changed nothing that was being reported.
-    const bool routine = isRoutineCastRejection(data.result);
-
-    if (!routine && !errMsg.empty()) {
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* sfx = ac->getUiSoundManager())
-                sfx->playError();
-        }
-    }
 
     // And the character's line for the failure's game error ("Not enough
     // mana", "That ability isn't ready yet"), the routine ones included -
@@ -5259,23 +5128,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
 
     if (data.casterUnit == owner_.getPlayerGuid()) {
         owner_.loadSpellNameCache();
-        spellclass::RestChannelKind restKind = spellclass::RestChannelKind::NONE;
-        auto spellNameIt = owner_.spellNameCacheRef().find(data.spellId);
-        if (spellNameIt != owner_.spellNameCacheRef().end()) {
-            restKind = spellclass::classifyRestChannel(spellNameIt->second.name);
-            if (spellclass::hasInebriateEffect(spellNameIt->second.effectIds, 3)) {
-                restKind = spellclass::RestChannelKind::ALCOHOL;
-            }
-        }
-        const bool restorationLoop = restKind == spellclass::RestChannelKind::FOOD ||
-                                     restKind == spellclass::RestChannelKind::DRINK;
-        // The real client sits itself when consuming food/water. Servers apply
-        // the regen aura with AURA_INTERRUPT_FLAG_NOT_SEATED and remove it
-        // immediately unless the client sends CMSG_STANDSTATECHANGE(SIT) -
-        // without this the whole eat/drink presentation never starts.
-        if (restorationLoop) {
-            owner_.setStandState(1); // UNIT_STAND_STATE_SIT
-        }
         // 0x0080e1b0: a spell that ends in loot - pick pocket (71), skinning
         // (95, 116), and disenchanting, prospecting and milling (99, 127,
         // 158) while a click would auto loot (0x00513700) - has its loot
@@ -5291,57 +5143,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 }
             }
         }
-        // Ranged auto-attack spells (Auto Shot, Shoot, Throw) complete as timed
-        // casts and are NOT classified as instant melee abilities, so trigger the
-        // ranged shot animation explicitly here.
-        uint32_t sid = data.spellId;
-        if (spellclass::isRangedWeaponAutoAttack(sid)) {
-            if (owner_.meleeSwingCallbackRef()) owner_.meleeSwingCallbackRef()(sid);
-            owner_.suppressNextMeleeSwingAnim();
-            uint64_t projectileTarget = data.targetGuid;
-            if (projectileTarget == 0 && !data.hitTargets.empty())
-                projectileTarget = data.hitTargets.front();
-            if (projectileTarget == 0 && !data.missTargets.empty())
-                projectileTarget = data.missTargets.front().targetGuid;
-            launchRangedWeaponProjectile(sid, projectileTarget);
-        }
-
-        // Instant melee abilities → trigger attack animation. Range decides this, not
-        // school: physical abilities cast at range (Steady Shot, Taunt) would otherwise
-        // play a melee swing.
-        bool isMeleeAbility = false;
-        if (!owner_.isProfessionSpell(sid) && !spellclass::isRangedWeaponAutoAttack(sid)) {
-            if (spellclass::isMeleeRange(getSpellMaxRange(sid))) {
-                isMeleeAbility = (currentCastSpellId_ != sid);
-            }
-        }
-        // The ability's swing sounds by its animation's own events and the
-        // hit the server reports for it (rendering/melee_sound.hpp).
-        if (isMeleeAbility) {
-            if (owner_.meleeSwingCallbackRef()) owner_.meleeSwingCallbackRef()(sid);
-        }
-
-        const bool wasInTimedCast = casting_ && (data.spellId == currentCastSpellId_);
-
-        // Instant spell cast animation - if this wasn't a timed cast and isn't a
-        // melee ability, play a brief spell cast animation (one-shot)
-        if (!wasInTimedCast && !otherCastRuns && !isMeleeAbility && !rangedWeaponAttack && !restorationLoop &&
-            !owner_.isProfessionSpell(data.spellId)) {
-            // Classify instant spell from SPELL_GO packet target info
-            SpellCastType goType = SpellCastType::OMNI;
-            if (data.targetGuid != 0 && data.targetGuid != data.casterUnit)
-                goType = SpellCastType::DIRECTED;
-            else if (data.targetGuid == 0 && data.hitCount > 1)
-                goType = SpellCastType::AREA;
-            if (owner_.spellCastAnimCallbackRef()) {
-                // Instant item spells have no SMSG_SPELL_START, so publish the
-                // SPELL_GO id just long enough for the animation callback to
-                // distinguish potions from generic instant magic.
-                currentCastSpellId_ = data.spellId;
-                owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), true, false, goType);
-            }
-        }
-
         if (!otherCastRuns) {
             casting_ = false;
             castIsChannel_ = false;
@@ -5349,7 +5150,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             castTimeRemaining_ = 0.0f;
             castTimeTotal_ = 0.0f;
 
-            if (owner_.spellCastAnimCallbackRef() && !rangedWeaponAttack && !restorationLoop) {
+            if (owner_.spellCastAnimCallbackRef() && !rangedWeaponAttack) {
                 owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, false, SpellCastType::OMNI);
             }
         }
@@ -6008,10 +5809,6 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
                 }
             }
         }
-
-        if (data.guid == owner_.getPlayerGuid()) {
-            refreshRestorationFromPlayerAuras();
-        }
     }
 }
 
@@ -6401,6 +6198,10 @@ void SpellHandler::handleAchievementEarned(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;  // achievementId(4) + packedTime(4)
     uint32_t achievementId = packet.readUInt32();
     uint32_t earnDate      = packet.readUInt32();
+    const bool quiet = packet.hasRemaining(4) && packet.readUInt32() != 0;
+    // 0x005b3020: "HARDCODED Achievement Base" on whoever earned it - its
+    // model's one event is the sound (SoundEntries 12891).
+    if (!quiet) owner_.playUnitEffect(guid, GameHandler::UnitEffect::Achievement);
 
     owner_.loadAchievementNameCache();
     auto nameIt = owner_.achievementNameCacheRef().find(achievementId);
@@ -6415,13 +6216,6 @@ void SpellHandler::handleAchievementEarned(network::Packet& packet) {
         // "Achievement earned: X" in English on top.
         owner_.earnedAchievementsRef().insert(achievementId);
         owner_.achievementDatesRef()[achievementId] = earnDate;
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* sfx = ac->getUiSoundManager())
-                sfx->playAchievementAlert();
-        }
-        if (owner_.achievementEarnedCallbackRef()) {
-            owner_.achievementEarnedCallbackRef()(achievementId, achName);
-        }
         // Inside the branch, not after it. ACHIEVEMENT_EARNED is what raises
         // FrameXML's badge, and it is about the player who is reading it -
         // somebody else's is CHAT_MSG_ACHIEVEMENT, which the server sends
@@ -6777,10 +6571,6 @@ void SpellHandler::stopCasting() {
 
 void SpellHandler::resetCastState() {
     pendingSwing_ = PendingSwing{};
-    restorationActive_ = false;
-    restorationSpellId_ = 0;
-    restorationTimeRemaining_ = 0.0f;
-    restorationTimeTotal_ = 0.0f;
     casting_ = false;
     castIsChannel_ = false;
     currentCastSpellId_ = 0;
@@ -6855,7 +6645,6 @@ void SpellHandler::handleUpdateAuraDuration(uint8_t slot, uint32_t durationMs) {
     playerAuras_[slot].receivedAtMs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-    refreshRestorationFromPlayerAuras();
 }
 
 // ============================================================
@@ -9097,9 +8886,6 @@ void SpellHandler::handleExtraAuraInfo(network::Packet& packet, bool isInit) {
     }
     if (auraList) mirrorAurasByGuid(auraTargetGuid, *auraList);
     if (auraList) announceAuras(auraTargetGuid, /*companions=*/true);
-    if (auraTargetGuid == owner_.getPlayerGuid()) {
-        refreshRestorationFromPlayerAuras();
-    }
     packet.skipAll();
 }
 
@@ -9616,9 +9402,6 @@ void SpellHandler::handleClearExtraAuraInfo(network::Packet& packet) {
         }
         if (auraList) mirrorAurasByGuid(clearGuid, *auraList);
         if (auraList) announceAuras(clearGuid, /*companions=*/false);
-        if (clearGuid == owner_.getPlayerGuid()) {
-            refreshRestorationFromPlayerAuras();
-        }
     }
     packet.skipAll();
 }

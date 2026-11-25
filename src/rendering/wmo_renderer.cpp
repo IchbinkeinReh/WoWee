@@ -1352,13 +1352,19 @@ void WMORenderer::addDoodadToInstance(uint32_t instanceId, uint32_t m2InstanceId
     }
 }
 
+size_t WMORenderer::instanceDoodadCount(uint32_t instanceId) const {
+    const auto it = instanceIndexById.find(instanceId);
+    return it != instanceIndexById.end() && it->second < instances.size() ? instances[it->second].doodads.size() : 0;
+}
+
 size_t WMORenderer::setInstanceShipDoodadAnimation(uint32_t instanceId, uint32_t onlyWith,
-                                                   uint32_t animationId, int thenAnimationId) {
+                                                   uint32_t animationId, int thenAnimationId, size_t from) {
     if (!m2Renderer_) return 0;
     auto it = std::find_if(instances.begin(), instances.end(),
                            [instanceId](const WMOInstance& inst) { return inst.id == instanceId; });
     if (it == instances.end()) return 0;
-    for (const auto& doodad : it->doodads) {
+    for (size_t i = from; i < it->doodads.size(); ++i) {
+        const auto& doodad = it->doodads[i];
         if (!m2Renderer_->hasAnimation(doodad.m2InstanceId, onlyWith)) continue;
         if (thenAnimationId >= 0) {
             m2Renderer_->setInstanceAnimationThen(doodad.m2InstanceId, animationId,

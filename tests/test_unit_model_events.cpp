@@ -3,6 +3,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/unit_model_events.hpp"
+#include "rendering/unit_breath.hpp"
 #include "rendering/unit_splash.hpp"
 
 namespace ue = wowee::rendering::unit_event;
@@ -308,4 +309,26 @@ TEST_CASE("a sequence on a bone of its own passes the events under it") {
     // The body's passes all.
     CHECK(passesOnBone(0, 60, parentOf));
     CHECK(passesOnBone(0, 86, parentOf));
+}
+
+TEST_CASE("a breath: bubbles, the cold, the drunk", "[unit_events]") {
+    namespace ub = wowee::rendering::unit_breath;
+    using ub::Breath;
+    CHECK(ue::classify(ue::fourCC("$BTH")).kind == ue::Kind::Breath);
+    CHECK(ue::handedOn(ue::fourCC("$BTH")));
+    CHECK(ub::breathOf({}) == Breath::None);
+    CHECK(ub::breathOf({.cold = true}) == Breath::Cold);
+    CHECK(ub::breathOf({.underwater = true, .cold = true}) == Breath::Underwater);
+    CHECK(ub::breathOf({.player = true, .drunk = 0.5f, .underwater = true}) == Breath::Drunk);
+    CHECK(ub::breathOf({.player = true, .drunk = 0.49f, .underwater = true}) == Breath::Underwater);
+    CHECK(ub::breathOf({.drunk = 1.0f}) == Breath::None);
+    CHECK(ub::breathOf({.modelFlags = 0x2, .player = true, .drunk = 1.0f, .cold = true}) == Breath::None);
+    CHECK(ub::underwater(10.0f, 2.9f, 2.0f));
+    CHECK_FALSE(ub::underwater(10.0f, 3.0f, 2.0f));
+    CHECK_FALSE(ub::underwater(std::nullopt, 0.0f, 2.0f));
+    CHECK(ub::coldAir(0x1, std::nullopt));
+    CHECK_FALSE(ub::coldAir(0x1, 0x0));
+    CHECK(ub::coldAir(0x0, 0x1));
+    CHECK(ub::coldAir(0x3, 0x0));
+    CHECK_FALSE(ub::coldAir(0x2, 0x1));
 }

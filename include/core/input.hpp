@@ -63,6 +63,10 @@ public:
 
     [[nodiscard]] bool isMouseLocked() const { return mouseLocked; }
 
+    /// The last key, button, wheel or movement of the pointer (0x00b499a4).
+    void noteHardwareEvent();
+    [[nodiscard]] uint32_t idleMs() const;
+
 private:
     Input() = default;
     ~Input() = default;
@@ -88,6 +92,7 @@ private:
     glm::vec2 previousMousePosition = glm::vec2(0.0f);
     glm::vec2 mouseDelta = glm::vec2(0.0f);
     bool mouseLocked = false;
+    double lastHardwareEvent_ = 0.0;
 };
 
 } // namespace core

@@ -221,7 +221,7 @@ public:
         bool heard = true;          ///< has a voice: not silent for want of one, out of reach or held
         const char* why = "";       ///< where it is not heard
         int priority = voice_priority::kDefault;
-        double seconds = 0.0;       ///< in, and how long it is
+        double seconds = 0.0;       ///< in, and how long it is, a stream's not said
         double length = 0.0;
         double ago = 0.0;           ///< since it began
     };

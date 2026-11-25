@@ -190,6 +190,11 @@ public:
     /// Noticed after layout rather than fired from Show, because hiding a
     /// frame hides everything under it and none of those were told.
     void updateVisibility();
+    /// A frame the interface has shown or hidden: the OnShow and OnHide of all
+    /// that comes up or goes with it run now, as the client runs them inside
+    /// Show() and Hide() (0x004918f0, 0x00491830).
+    void frameShown(uint32_t id);
+    void frameHidden(uint32_t id);
 
     /// Fires OnSizeChanged for anything whose rect changed. Declared by
     /// FrameXML and used heavily by addons, and never fired until now.
@@ -415,6 +420,7 @@ private:
     bool runBindingScript(const std::string& command, bool down);
 
     void callFrameScript(uint32_t wid, const char* script, const char* arg = nullptr);
+    void tellVisibility(uint32_t id, bool up);
     /// The same, with a number. A handler that compares its argument against
     /// zero cannot be handed a numeric string.
     void callFrameScriptNumber(uint32_t wid, const char* script, double arg);

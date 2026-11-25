@@ -262,10 +262,6 @@ public:
             return;
         }
         resetMotionExtras();
-        // Snap position if in overrun phase: the renderer showed moveEnd.
-        if (isMoving_ && moveElapsed_ >= moveDuration_) {
-            x = moveEndX_; y = moveEndY_; z = moveEndZ_;
-        }
         if (smooth && clientCurve) {
             startCurvedPath(packetPath, destO, totalDuration, cyclic, entersCycle);
             return;
@@ -695,6 +691,11 @@ public:
         return std::exchange(locomotionRequested_, false);
     }
 
+    /// Its base animation is to be asked again, once what it reads has been
+    /// brought up to date (0x0073ac30 of a unit spoken to).
+    void requestBaseAnimation() { baseAnimationAsked_ = true; }
+    [[nodiscard]] bool takeBaseAnimationRequest() { return std::exchange(baseAnimationAsked_, false); }
+
     /// Moved down by gravity from a packet's fall (startMoveByFlags), rather
     /// than along the ground.
     [[nodiscard]] bool isFallingByFlags() const { return movingByFlags_ && falling_; }
@@ -861,9 +862,7 @@ public:
         }
     }
 
-    /// True only during the active interpolation phase (before reaching destination).
-    /// Unlike isEntityMoving(), this does NOT include the interval after arrival,
-    /// so animations (Run/Walk) should use this to avoid "running in place" after arrival.
+    /// On its way, along a spline or moved on by its flags.
     [[nodiscard]] bool isActivelyMoving() const {
         return isMoving_ && (moveElapsed_ < moveDuration_ || movingByFlags_);
     }
@@ -1226,14 +1225,15 @@ private:
             if (const auto facing = std::exchange(arrivalFacing_, nullptr)(glm::vec3(moveEndX_, moveEndY_, moveEndZ_)))
                 orientation = *facing;
         }
-        // And it stays where the move ends: a spline flown out is marked over
-        // (0x0098ca00's 0x100, 0x006eae70's 0x400) and puts the unit on its
-        // last point. It was carried on at its speed for as long again - drawn
-        // at the end all the same, but told of, aimed at and, in flight, flown
-        // out there: 60 yards past the flight master.
-        x = moveEndX_; y = moveEndY_; z = moveEndZ_;
-        // Under way for one more interval, for what the next packet continues.
-        if (moveElapsed_ - moveDuration_ >= moveDuration_) isMoving_ = false;
+        // And it stands there: a spline flown out is marked over (0x0098ca00's
+        // 0x100, 0x006eae70's 0x400), puts its unit on its last point
+        // (0x00987b50) and carries it no further. It ran on at its speed for
+        // as long again - drawn at the end all the same, but told of, aimed at
+        // and, in flight, flown out there: 60 yards past the flight master.
+        x = moveEndX_;
+        y = moveEndY_;
+        z = moveEndZ_;
+        isMoving_ = false;
     }
 
     void advanceByFlags(float deltaTime) {
@@ -1314,6 +1314,7 @@ private:
     bool launched_ = false;
     // Asked for its locomotion again; see takeLocomotionRequest.
     bool locomotionRequested_ = false;
+    bool baseAnimationAsked_ = false;
     // Moved on by its flags (startMoveByFlags): moveEnd is the packet's
     // position, the corr* offset is taken out over moveDuration_.
     bool movingByFlags_ = false;

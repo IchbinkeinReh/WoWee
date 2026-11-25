@@ -5,6 +5,8 @@
 
 #include "addons/header_fold.hpp"
 #include "addons/macro_icon_lists.hpp"
+#include "addons/optional_unit_arg.hpp"
+#include "addons/unit_token.hpp"
 #include <array>
 #include <functional>
 #include <string>
@@ -470,23 +472,6 @@ inline constexpr const char* kLuaRaces[] = {
     "Tauren","Gnome","Troll","","Blood Elf","Draenei"
 };
 
-/// Whether a quest of this level is grey to a player of that one.
-///
-/// The threshold is AzerothCore's Acore::XP::GetGrayLevel, which the server
-/// uses for the same judgement - `creatureOrQuestLevel <= GetGrayLevel(level)`.
-/// Written out rather than guessed at a "level - 8 or so", which is what the
-/// comment beside IsActiveQuestTrivial used to decline to do; the formula is
-/// three branches and it is the server's own.
-inline bool questIsTrivial(int playerLevel, int questLevel) {
-    if (questLevel <= 0 || playerLevel <= 0) return false;
-    int grey;
-    if (playerLevel <= 5)       grey = 0;
-    else if (playerLevel <= 39) grey = playerLevel - 5 - playerLevel / 10;
-    else if (playerLevel <= 59) grey = playerLevel - 1 - playerLevel / 5;
-    else                        grey = playerLevel - 9;
-    return questLevel <= grey;
-}
-
 /// The five loot methods, indexed by the value the group list carries, and the
 /// tokens the interface knows them by. unitpopup.lua does
 /// `UnitLootMethod[GetLootMethod()].text` - a table keyed by the token, with
@@ -700,78 +685,123 @@ inline bool playerVehicleSeatHasFlag(game::GameHandler* gh, uint32_t flag) {
     return seat && (seat->flags & flag) != 0;
 }
 
-// Resolve WoW unit IDs to GUID
-inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
-    if (uid == "player")      return gh->getPlayerGuid();
-    if (uid == "target")      return gh->getTargetGuid();
-    if (uid == "focus")       return gh->getFocusGuid();
-    if (uid == "mouseover")   return gh->getMouseoverGuid();
-    if (uid == "pet")         return gh->getPetGuid();
-    // The player's vehicle: its transport while it sits (state 3), else none
-    // (0x0060abf0 -> 0x004f6250).
-    if (uid == "vehicle") {
-        const uint64_t player = gh->getPlayerGuid();
-        if (gh->vehicleRoster().seatState(player) != 3) return 0;
-        const auto p = gh->vehicleRoster().passenger(player);
+/// What the unit tokens are read out of (unit_token.hpp).
+struct UnitWorld {
+    game::GameHandler* gh;
+
+    uint64_t player() const { return gh->getPlayerGuid(); }
+    uint64_t target() const { return gh->getTargetGuid(); }
+    uint64_t focus() const { return gh->getFocusGuid(); }
+    uint64_t mouseover() const { return gh->getMouseoverGuid(); }
+    uint64_t pet() const { return gh->petUnitGuid(); }
+    /// The player's vehicle: its transport while it sits (state 3), else none
+    /// (0x004f6250).
+    uint64_t vehicle() const {
+        if (gh->vehicleRoster().seatState(player()) != 3) return 0;
+        const auto p = gh->vehicleRoster().passenger(player());
         return p ? p->vehicleGuid : 0;
     }
-    // Whoever the open window belongs to (0x00bd07a8, which every window's
-    // opening sets: 0x0051fce0), and the quest window's own (0x006081b0).
-    if (uid == "npc") return gh->getInteractionObject();
-    if (uid == "questnpc") return gh->questNpcGuid();
-    // Compound unit IDs: targettarget, focustarget, pettarget, mouseovertarget
-    if (uid == "targettarget")    return getEntityTargetGuid(gh, gh->getTargetGuid());
-    if (uid == "focustarget")     return getEntityTargetGuid(gh, gh->getFocusGuid());
-    if (uid == "pettarget")       return getEntityTargetGuid(gh, gh->getPetGuid());
-    if (uid == "mouseovertarget") return getEntityTargetGuid(gh, gh->getMouseoverGuid());
-    // partypet1-partypet4 and raidpet1-raidpet40, tested before party and
-    // raid as 0x0060abf0 does: the member's pet (0x0052c6e0, 0x00518ce0).
-    if (uid.rfind("partypet", 0) == 0 && uid.size() > 8) {
-        int idx = 0;
-        try { idx = std::stoi(uid.substr(8)); } catch (...) { return 0; }
-        return gh->partyPetGuid(idx);
+    /// Whoever the open window belongs to (0x00bd07a8, which every window's
+    /// opening sets: 0x0051fce0), and the quest window's own (0x006081b0).
+    uint64_t npc() const { return gh->getInteractionObject(); }
+    uint64_t questNpc() const { return gh->questNpcGuid(); }
+    uint64_t partyPet(int n) const { return gh->partyPetGuid(n); }
+    uint64_t raidPet(int n) const { return gh->raidPetGuid(n); }
+    uint64_t party(int n) const {
+        return gh->isInGroup() ? game::partySlotGuid(gh->getPartyData(), player(), n) : 0;
     }
-    if (uid.rfind("raidpet", 0) == 0 && uid.size() > 7) {
-        int idx = 0;
-        try { idx = std::stoi(uid.substr(7)); } catch (...) { return 0; }
-        return gh->raidPetGuid(idx);
+    uint64_t raid(int n) const {
+        const auto& members = gh->getPartyData().members;
+        return n >= 1 && n <= 40 && n <= static_cast<int>(members.size()) ? members[static_cast<size_t>(n - 1)].guid : 0;
     }
-    // party1-party4, raid1-raid40
-    if (uid.rfind("party", 0) == 0 && uid.size() > 5) {
-        int idx = 0;
-        try { idx = std::stoi(uid.substr(5)); } catch (...) { return 0; }
-        if (!gh->isInGroup()) return 0;
-        return game::partySlotGuid(gh->getPartyData(), gh->getPlayerGuid(), idx);
+    /// The encounter frames', filled by SMSG_UPDATE_INSTANCE_ENCOUNTER_UNIT.
+    uint64_t boss(int n) const {
+        if (n < 1 || n > static_cast<int>(game::GameHandler::kMaxEncounterSlots)) return 0;
+        return gh->getEncounterUnitGuid(static_cast<uint32_t>(n - 1));
     }
-    // boss1-boss5, the encounter frames. Filled by
-    // SMSG_UPDATE_INSTANCE_ENCOUNTER_UNIT; without this every UnitExists("boss1")
-    // answered nil and the frames stayed hidden through the whole fight.
-    if (uid.rfind("boss", 0) == 0 && uid.size() > 4) {
-        int idx = 0;
-        try { idx = std::stoi(uid.substr(4)); } catch (...) { return 0; }
-        if (idx < 1 || idx > static_cast<int>(game::GameHandler::kMaxEncounterSlots)) return 0;
-        return gh->getEncounterUnitGuid(static_cast<uint32_t>(idx - 1));
+    /// The arena's opponents as the client keeps them (0xbe9f48, 0xbe9ef8).
+    uint64_t arena(int n) const {
+        if (n < 1 || n > static_cast<int>(game::arena::Roster::kSlots)) return 0;
+        return gh->arenaRoster().opponent(static_cast<size_t>(n - 1));
     }
-    // arena1-arena5 and arenapet1-arenapet5: the arena's opponents as the
-    // client keeps them (0xbe9f48, 0xbe9ef8).
-    if (uid.rfind("arena", 0) == 0 && uid.size() > 5) {
-        const bool pet = uid.rfind("arenapet", 0) == 0;
-        int idx = 0;
-        try { idx = std::stoi(uid.substr(pet ? 8 : 5)); } catch (...) { return 0; }
-        if (idx < 1 || idx > static_cast<int>(game::arena::Roster::kSlots)) return 0;
-        const auto& roster = gh->arenaRoster();
-        return pet ? roster.pet(static_cast<size_t>(idx - 1)) : roster.opponent(static_cast<size_t>(idx - 1));
+    uint64_t arenaPet(int n) const {
+        if (n < 1 || n > static_cast<int>(game::arena::Roster::kSlots)) return 0;
+        return gh->arenaRoster().pet(static_cast<size_t>(n - 1));
     }
-    if (uid.rfind("raid", 0) == 0 && uid.size() > 4 && uid[4] != 'p') {
-        int idx = 0;
-        try { idx = std::stoi(uid.substr(4)); } catch (...) { return 0; }
-        if (idx < 1 || idx > 40) return 0;
-        const auto& pd = gh->getPartyData();
-        if (idx <= static_cast<int>(pd.members.size()))
-            return pd.members[idx - 1].guid;
+    uint64_t commentator(int) const { return 0; }
+    uint64_t targetOf(uint64_t guid) const { return getEntityTargetGuid(gh, guid); }
+    /// The player's, and a group member's (0x00512a00).
+    bool petsKnown(uint64_t guid) const {
+        if (guid == player()) return true;
+        const auto& members = gh->getPartyData().members;
+        return guid != 0 && std::any_of(members.begin(), members.end(), [guid](const auto& m) { return m.guid == guid; });
+    }
+    uint64_t petOf(uint64_t guid) const {
+        if (guid == player()) return pet();
+        const auto& members = gh->getPartyData().members;
+        for (size_t i = 0; i < members.size(); ++i)
+            if (members[i].guid == guid) {
+                if (const uint64_t p = raidPet(static_cast<int>(i + 1))) return p;
+                for (int n = 1; n <= 4; ++n)
+                    if (party(n) == guid) return partyPet(n);
+            }
         return 0;
     }
-    return 0;
+    /// Who of the player's group, the player first, has the name, else whose
+    /// pet (0x0060a630).
+    uint64_t named(std::string_view name) const {
+        if (name.empty()) return 0;
+        const auto is = [name](const std::string& other) {
+            if (other.size() != name.size()) return false;
+            std::string a(name), b = other;
+            toLowerInPlace(a);
+            toLowerInPlace(b);
+            return a == b;
+        };
+        const auto nameOf = [this](uint64_t guid) -> std::string {
+            const auto e = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+            return e && e->isUnit() ? static_cast<const game::Unit&>(*e).getName() : std::string();
+        };
+        if (const auto* ch = gh->getActiveCharacter(); ch && is(ch->name)) return player();
+        const auto& members = gh->getPartyData().members;
+        for (const auto& m : members)
+            if (m.guid != 0 && is(m.name)) return m.guid;
+        if (const uint64_t p = pet(); p != 0 && is(nameOf(p))) return p;
+        for (size_t i = 0; i < members.size(); ++i)
+            if (const uint64_t p = members[i].guid != player() ? petOf(members[i].guid) : 0; p != 0 && is(nameOf(p)))
+                return p;
+        return 0;
+    }
+};
+
+/// The unit a token or a name of the group stands for (0x0060abf0): none for
+/// what is neither, and the two askedNoUnit tells for a token of nobody and
+/// "none".
+inline std::optional<uint64_t> unitAsked(game::GameHandler* gh, std::string_view text) {
+    if (!gh || text.empty()) return std::nullopt;
+    return unit_token::resolve(text, UnitWorld{gh});
+}
+
+/// The unit, 0 for none.
+inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
+    const auto unit = unitAsked(gh, uid);
+    return unit && !game::unit_target::askedNoUnit(*unit) ? *unit : 0;
+}
+
+/// The unit argument of what is done to a unit - a cast, a use, the focus:
+/// none or "" is the current target (0x0060abf0 with its third argument 1),
+/// and nothing is to be done where it is no unit's.
+inline std::optional<uint64_t> unitAskedOrTarget(lua_State* L, game::GameHandler* gh, int index) {
+    if (!gh) return std::nullopt;
+    return optionalUnitArg(L, index, gh->getTargetGuid(),
+                           [gh](const std::string& token) { return unitAsked(gh, token); });
+}
+
+/// The same of an item's use, with 0 for no argument - the item goes where it
+/// would of itself.
+inline std::optional<uint64_t> unitUsedOn(lua_State* L, game::GameHandler* gh, int index) {
+    const char* text = lua_tostring(L, index);
+    return text && *text ? unitAsked(gh, text) : std::optional<uint64_t>(0);
 }
 
 /// The typed-name half of the client's one name resolver: the token table
@@ -1506,6 +1536,11 @@ int cursorEquipSlot();
 /// and the prompt reads the cursor - so the drag has to end with the item still
 /// on it.
 bool cursorItemCameFromInventory();
+
+/// The pet's packed action a slot of the bonus bar (0-based) stands for while
+/// that bar is the pet's or the vehicle's; nothing for any other slot, 0 for
+/// one of them that is empty.
+std::optional<uint32_t> petActionAt(game::GameHandler* gh, int slot);
 
 /// What the cursor holds, as a click into the world asks it.
 game::action_drop::Held cursorHeld();

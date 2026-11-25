@@ -1,4 +1,5 @@
 #include "ui/widget_tree.hpp"
+#include "ui/layout_cache.hpp"
 
 #include <chrono>
 
@@ -67,31 +68,12 @@ bool anchorsSpanAxis(const std::vector<Anchor>& anchors, bool xAxis) {
     return lo < 0.01f && hi > 0.99f;
 }
 
-FontStringSizing fontStringSizing(const Widget& w) {
-    const bool spansX = anchorsSpanAxis(w.anchors, true);
-    if (spansX && anchorsSpanAxis(w.anchors, false)) return FontStringSizing::Given;
-    if (w.wrapsToWidth || (!w.autoSized && w.width > 0.0f && w.height <= 0.0f)) return FontStringSizing::Paragraph;
-    // A height of its own with a width of its own, or with one between two
-    // anchored edges: `<Size x="0" y="32"/>` with TOPLEFT and RIGHT is how every
-    // options page writes its sub text. Measuring that one made it as wide as
-    // its sentence, and a string sized by its text is not wrapped.
-    if (!w.autoSized && w.height > 0.0f && (w.width > 0.0f || spansX)) return FontStringSizing::Given;
-    return FontStringSizing::Measured;
-}
-
 FontStringReach fontStringReach(const std::vector<Anchor>& anchors, float textWidth) {
     for (const Anchor& a : anchors) {
         if (a.point.find("LEFT") != std::string::npos) return {0.0f, textWidth};
         if (a.point.find("RIGHT") != std::string::npos) return {textWidth, 0.0f};
     }
     return {textWidth * 0.5f, textWidth * 0.5f};
-}
-
-float fontStringWrapWidth(const Widget& w) {
-    if (w.wrapsToWidth) return w.width;
-    if (w.autoSized) return 0.0f;
-    if (w.rectW > 0.0f && anchorsSpanAxis(w.anchors, true)) return w.effScale > 0.0f ? w.rectW / w.effScale : w.rectW;
-    return w.width > 0.0f ? w.width : 0.0f;
 }
 
 DrawLayer parseDrawLayer(const std::string& rawName) {
@@ -496,6 +478,7 @@ void WidgetTree::setHeight(uint32_t id, float height) {
     if (height <= 0.0f && w->kind == WidgetKind::FontString) {
         w->measuredText.clear();
     }
+    w->wrapsBetweenAnchors = false;
     w->height = height;
     w->rectH = height;
 }
@@ -718,6 +701,25 @@ void WidgetTree::lower(uint32_t id) {
     shiftExplicitLevels(id, newLevel - w->effLevel);
     w->level = newLevel;
     w->levelExplicit = true;
+}
+
+const Anchor* WidgetTree::pointAt(uint32_t id, int index) const {
+    const Widget* w = get(id);
+    if (!w) return nullptr;
+    std::vector<const Anchor*> points;
+    for (const Anchor& a : w->anchors) points.push_back(&a);
+    const auto slot = [](const Anchor* a) { return layout_cache::pointIndex(a->point); };
+    std::stable_sort(points.begin(), points.end(),
+                     [&](const Anchor* a, const Anchor* b) { return slot(a) < slot(b); });
+    const size_t at = index > 0 ? static_cast<size_t>(index) : 0;
+    return at < points.size() ? points[at] : nullptr;
+}
+
+void WidgetTree::pinPoints(uint32_t id) {
+    Widget* w = get(id);
+    if (!w) return;
+    for (Anchor& a : w->anchors)
+        if (a.relativeTo == 0) a.relativeTo = w->parent;
 }
 
 void WidgetTree::addPoint(uint32_t id, const Anchor& anchor) {
@@ -1303,6 +1305,12 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
         if (w->buttonArt != ButtonArt::None && parent) {
             if (w->rectW <= 0.0f) { w->left   = pLeft;   w->rectW = pW; }
             if (w->rectH <= 0.0f) { w->bottom = pBottom; w->rectH = pH; }
+        }
+        // A label between two sides has its lines broken there.
+        if (w->kind == WidgetKind::FontString && !w->text.empty() && anchorsSpanAxis(w->anchors, true) &&
+            textWrapWidth(*w) != w->measuredWidth) {
+            markMeasureDirty(id);
+            wrapChanged_ = true;
         }
     }
     // After the solve, so it displaces the result rather than becoming another

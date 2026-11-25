@@ -625,6 +625,71 @@ target_link_libraries(test_addon_lua_snippets PRIVATE catch2_main lua51)
 add_test(NAME addon_lua_snippets COMMAND test_addon_lua_snippets)
 register_test_target(test_addon_lua_snippets)
 
+# ── test_stream_time ─────────────────────────────────────────
+# miniaudio's engine without a device, a decoder or anything of the system's.
+add_executable(test_stream_time
+    test_stream_time.cpp
+)
+target_include_directories(test_stream_time PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_stream_time SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern)
+find_package(Threads REQUIRED)
+target_link_libraries(test_stream_time PRIVATE catch2_main Threads::Threads ${CMAKE_DL_LIBS})
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_stream_time PRIVATE m)
+endif()
+add_test(NAME stream_time COMMAND test_stream_time)
+register_test_target(test_stream_time)
+
+# ── test_frame_handle ────────────────────────────────────────
+add_executable(test_frame_handle
+    test_frame_handle.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_frame_handle.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_std_libs.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_taint.cpp
+    ${TEST_COMMON_SOURCES}
+)
+target_include_directories(test_frame_handle PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_frame_handle SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_frame_handle PRIVATE catch2_main lua51)
+add_test(NAME frame_handle COMMAND test_frame_handle)
+register_test_target(test_frame_handle)
+
+# ── test_unit_token ──────────────────────────────────────────
+add_executable(test_unit_token
+    test_unit_token.cpp
+)
+target_include_directories(test_unit_token PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_unit_token SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_unit_token PRIVATE catch2_main)
+add_test(NAME unit_token COMMAND test_unit_token)
+register_test_target(test_unit_token)
+
+# ── test_green_range ─────────────────────────────────────────
+add_executable(test_green_range
+    test_green_range.cpp
+)
+target_include_directories(test_green_range PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_green_range SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_green_range PRIVATE catch2_main)
+add_test(NAME green_range COMMAND test_green_range)
+register_test_target(test_green_range)
+
+# ── test_lua_std_libs ────────────────────────────────────────
+# The Lua libraries the interface has, against the client's own tables.
+add_executable(test_lua_std_libs
+    test_lua_std_libs.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_std_libs.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_arg_guard.cpp
+)
+target_include_directories(test_lua_std_libs PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_lua_std_libs SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_lua_std_libs PRIVATE catch2_main lua51)
+add_test(NAME lua_std_libs COMMAND test_lua_std_libs)
+register_test_target(test_lua_std_libs)
+
 # ── test_unit_aura_call ─────────────────────────────────────
 # The UnitAura call GameTooltip:SetUnitAura makes. With no filter its missing
 # slot read as UnitAura itself, so SetUnitAura("player", 1) built nothing.
@@ -1933,6 +1998,14 @@ target_include_directories(test_combat_text_filter SYSTEM PRIVATE ${TEST_SYSTEM_
 target_link_libraries(test_combat_text_filter PRIVATE catch2_main)
 add_test(NAME combat_text_filter COMMAND test_combat_text_filter)
 register_test_target(test_combat_text_filter)
+
+# ── test_unit_pointer ────────────────────────────────────────
+wowee_add_test(test_unit_pointer
+    SOURCES test_unit_pointer.cpp)
+
+# ── test_threat_table ────────────────────────────────────────
+wowee_add_test(test_threat_table
+    SOURCES test_threat_table.cpp)
 
 # ── test_indoor_shadows ──────────────────────────────────────
 wowee_add_test(test_indoor_shadows
@@ -3277,13 +3350,6 @@ wowee_add_test(test_race_gender_suffix
     SOURCES test_race_gender_suffix.cpp
             ${TEST_COMMON_SOURCES})
 
-# ── test_melee_anim_chains ───────────────────────────────────
-# The attack animation fallback chains, which were written out twice - in the
-# controller that plays them and in the probe that reports what a model can do.
-wowee_add_test(test_melee_anim_chains
-    SOURCES test_melee_anim_chains.cpp
-            ${TEST_COMMON_SOURCES})
-
 # ── test_sample_pick ─────────────────────────────────────────
 # Which of a sound bank's samples to play. Three banks wrote out the same
 # loop, and its one rule - choose among the loaded ones - is a one-character
@@ -3871,6 +3937,9 @@ if(NOT ANDROID)
     target_sources(test_game_replay PRIVATE test_game_replay_taxi.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_spline.cpp)
     target_sources(test_game_replay PRIVATE test_game_replay_interface.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_macros.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_owner.cpp)
+    target_sources(test_game_replay PRIVATE test_game_replay_pet.cpp)
     register_test_target(test_game_replay)
 endif()
 
@@ -4270,6 +4339,11 @@ wowee_add_test(test_text_changes
 # The macros as the interface numbers them (0x00566240). Header-only.
 wowee_add_test(test_macro_list
     SOURCES test_macro_list.cpp)
+
+# ── test_glyph_tooltip ───────────────────────────────────────
+# A glyph socket's tooltip (0x00622ba0). Header-only.
+wowee_add_test(test_glyph_tooltip
+    SOURCES test_glyph_tooltip.cpp)
 
 # ── test_cursor_info ─────────────────────────────────────────
 # What GetCursorInfo says of a spell (0x00515200). Header-only.

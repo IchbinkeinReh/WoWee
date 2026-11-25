@@ -298,9 +298,6 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             owner_.inspectedPlayerItemInstancesRef().erase(guid);
             owner_.pendingAutoInspectRef().erase(guid);
             owner_.playerLeftSight(guid);
-            // Clear pending name query so the query is re-sent when this player
-            // comes back into range (entity is recreated as a new object).
-            pendingNameQueries.erase(guid);
         } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
             owner_.gameObjectDestroyCallbackRef()(guid);   // 0x004d7230
         } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
@@ -613,7 +610,6 @@ void EntityController::syncPreWotlkAurasFromFields(const std::shared_ptr<Entity>
         }
     }
     LOG_DEBUG("[pre-WotLK] Rebuilt playerAuras from UNIT_FIELD_AURAS");
-    owner_.getSpellHandler()->refreshRestorationState();
     // How many the player actually has, said once. "BuffButton1 - NOT BUILT"
     // means the interface asked UnitAura for the first buff and got nothing,
     // and a character with no buffs is the correct reason for that - this
@@ -1488,12 +1484,10 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 if (!uid.empty())
                     pendingEvents_.emit("UNIT_LEVEL", {uid});
             }
-            if (block.guid != owner_.getPlayerGuid() &&
-                entity->getType() == ObjectType::PLAYER &&
-                val > oldLvl && oldLvl > 0 &&
-                owner_.otherPlayerLevelUpCallbackRef()) {
-                owner_.otherPlayerLevelUpCallbackRef()(block.guid, val);
-            }
+            // Any unit's, as its level changes (0x00730050 -> 0x0072e3a0); the
+            // player's own comes with SMSG_LEVELUP_INFO.
+            if (block.guid != owner_.getPlayerGuid() && val != oldLvl && oldLvl > 0)
+                owner_.playUnitEffect(block.guid, GameHandler::UnitEffect::LevelUp);
         }
         else if (key == ufi.faction) {
             unit->setFactionTemplate(val);
@@ -1522,6 +1516,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                        owner_.otherPlayerMountCallbackRef()) {
                 owner_.otherPlayerMountCallbackRef()(block.guid, val);
             }
+            // 0x00740450: a puff of smoke as it gets onto a mount or another.
+            if (val != 0 && val != unit->getMountDisplayId())
+                owner_.playUnitEffect(block.guid, GameHandler::UnitEffect::MountPoof);
             unit->setMountDisplayId(val);
         } else if (ufi.attackPower != 0xFFFF && key >= ufi.attackPower &&
                    key < ufi.attackPower + 3 && block.guid == owner_.petGuidRef()) {
@@ -1769,8 +1766,15 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             uint64_t oldMoney = owner_.playerMoneyCopperRef();
             owner_.playerMoneyCopperRef() = val;
             LOG_DEBUG("Money ", isCreate ? "set from update fields: " : "updated via VALUES: ", val, " copper");
-            if (val != oldMoney)
+            if (val != oldMoney) {
+                // Any change of it, either way (0x006da070).
+                if (!isCreate) {
+                    if (auto* ac = owner_.services().audioCoordinator) {
+                        if (auto* sfx = ac->getUiSoundManager()) sfx->playLootCoinSmall();
+                    }
+                }
                 pendingEvents_.emit("PLAYER_MONEY", {});
+            }
         }
         else if (pfi.honor != 0xFFFF && key == pfi.honor) {
             owner_.playerHonorPointsRef() = val;
@@ -1923,6 +1927,13 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             // isCreate rather than from this cache is also what stops a
             // reconnect from comparing against the previous session's flags.
             const uint32_t prev = isCreate ? 0u : last.value;
+            // Away and busy are the server's as they change (0x006e0fd0: 0x00bcefec, and
+            // the field's own bit 4).
+            constexpr uint32_t PLAYER_FLAGS_AWAY_BITS = 0x0000800e;
+            if (!isCreate && last.known && ((prev ^ val) & PLAYER_FLAGS_AWAY_BITS) != 0) {
+                owner_.afkStatusRef() = (val & 0x2u) != 0;
+                owner_.dndStatusRef() = (val & 0x4u) != 0;
+            }
             constexpr uint32_t PLAYER_FLAGS_TAXI_BENCHMARK = 0x00020000;
             constexpr uint32_t PLAYER_FLAGS_XP_GAIN_OFF    = 0x02000000;
             constexpr uint32_t PLAYER_FLAGS_LOW_LEVEL_RAID = 0x00010000;
@@ -2019,7 +2030,6 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             if (!wasGhost && nowGhost) {
                 owner_.releasedSpiritRef() = true;
                 LOG_INFO("Player entered ghost form (PLAYER_FLAGS)");
-                if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
                 // 0x006df710: the ghost flag coming on triggers tutorial 0x18,
                 // and asks where the corpse lies (0x00524a30).
                 if (!isCreate) {
@@ -2040,7 +2050,6 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 owner_.forgetDeathRelease();
                 if (!isCreate) pendingEvents_.emit("PLAYER_UNGHOST", {});
                 if (owner_.refreshCorpsePlace()) pendingEvents_.emit("CORPSE_OUT_OF_RANGE", {});
-                if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(false);
             }
             // Which unit's flags, because that is the only thing the
             // handlers do with it: TargetFrame compares arg1 against its
@@ -2766,7 +2775,15 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
             owner_.releasedSpiritRef() = true;
             owner_.playerDeadRef() = true;
             LOG_INFO("Player logged in as ghost (PLAYER_FLAGS)");
-            if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
+        } else if (unit->getHealth() > 0 && (owner_.playerDeadRef() || owner_.releasedSpiritRef()) &&
+                   ((unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0 || playerFeigningDeath_)) {
+            // A death is over where the player's new object has health and is
+            // no ghost's: brought back between the maps (0x0073d530 asks the
+            // health, whatever the object before it had).
+            owner_.playerDeadRef() = false;
+            owner_.releasedSpiritRef() = false;
+            owner_.selfResAvailableRef() = false;
+            LOG_INFO("Player alive again in its new object");
         }
         // 0x00528010, a world entered: no corpse and no graveyard, and a ghost
         // asks where its own lies.
@@ -4091,6 +4108,19 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
 
     if (!keepsMoving) takeBlockSpline(block, entity);
 
+    // UNIT_PET for whoever charmed the unit, and for who summoned it
+    // (0x0073fcc0): its owner's fields may have come before it.
+    if (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) {
+        const uint16_t charmedBy = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
+        const uint64_t owners[2] = {
+            charmedBy == 0xFFFF ? 0
+                                : entity->getField(charmedBy) |
+                                      (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(charmedBy + 1))) << 32),
+            unitSummonedByGuid(*entity)};
+        for (const uint64_t who : owners)
+            for (const auto& uid : owner_.unitTokensForGuid(who)) pendingEvents_.emit("UNIT_PET", {uid});
+    }
+
     // A control update that waited for the unit (0x007402b0 -> 0x0072cca0).
     if (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) {
         if (auto* movement = owner_.getMovementHandler()) movement->onUnitCreated(block.guid);
@@ -4152,6 +4182,21 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
                                (block.fields.find(targetLo) != block.fields.end() ||
                                 block.fields.find(targetHi) != block.fields.end());
     const uint64_t oldTarget = watchesTarget ? unitTargetGuid(*entity) : 0;
+    // UNIT_PET, the same way: events 0 and 2 are UNIT_FIELD_CHARM and
+    // UNIT_FIELD_SUMMON, eight bytes each.
+    const uint16_t petLo[2] = {fieldIndex(UF::UNIT_FIELD_CHARM), fieldIndex(UF::UNIT_FIELD_SUMMON)};
+    const bool isUnit = entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::PLAYER;
+    const auto guidAt = [&entity](uint16_t low) -> uint64_t {
+        return entity->getField(low) | (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(low + 1))) << 32);
+    };
+    bool watchesPet[2] = {false, false};
+    uint64_t oldPet[2] = {0, 0};
+    for (int i = 0; i < 2 && isUnit; ++i) {
+        watchesPet[i] = petLo[i] != 0xFFFF &&
+                        (block.fields.find(petLo[i]) != block.fields.end() ||
+                         block.fields.find(static_cast<uint16_t>(petLo[i] + 1)) != block.fields.end());
+        if (watchesPet[i]) oldPet[i] = guidAt(petLo[i]);
+    }
     // The pet's name timestamp, which moves when it is renamed. The client
     // watches the field (0x00741d00 registers 0x0072cf70 on it) and says so
     // when the unit is the player's - its summoner, or its creator when it has
@@ -4199,6 +4244,10 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     if (watchesCharmer && charmerOf() != oldCharmer && owner_.getSpellHandler())
         owner_.getSpellHandler()->onUnitCharmedByChanged(block.guid, oldCharmer);
 
+    for (int i = 0; i < 2; ++i) {
+        if (!watchesPet[i] || guidAt(petLo[i]) == oldPet[i]) continue;
+        for (const auto& uid : owner_.unitTokensForGuid(block.guid)) pendingEvents_.emit("UNIT_PET", {uid});
+    }
     if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
         // 0x00716900: the time it moved, which the pet's ring reads.
         if (auto* unit = dynamic_cast<Unit*>(entity.get())) unit->noteTargetChanged(core::appTimeSeconds());
@@ -4418,7 +4467,6 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 owner_.inspectedPlayerItemInstancesRef().erase(data.guid);
                 owner_.pendingAutoInspectRef().erase(data.guid);
                 owner_.playerLeftSight(data.guid);
-                pendingNameQueries.erase(data.guid);
             } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
                 owner_.gameObjectDestroyCallbackRef()(data.guid);   // 0x004d7610
             } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
@@ -4527,7 +4575,7 @@ void EntityController::queryCreatureInfo(uint32_t entry, uint64_t guid) {
     if (creatureInfoCache.count(entry) || pendingCreatureQueries.count(entry)) return;
     if (!owner_.isInWorld()) return;
 
-    pendingCreatureQueries.insert(entry);
+    pendingCreatureQueries.emplace(entry, guid);
     auto packet = CreatureQueryPacket::build(entry, guid);
     owner_.getSocket()->send(packet);
 }
@@ -4536,9 +4584,18 @@ void EntityController::queryGameObjectInfo(uint32_t entry, uint64_t guid) {
     if (gameObjectInfoCache_.count(entry) || pendingGameObjectQueries_.count(entry)) return;
     if (!owner_.isInWorld()) return;
 
-    pendingGameObjectQueries_.insert(entry);
+    pendingGameObjectQueries_.emplace(entry, guid);
     auto packet = GameObjectQueryPacket::build(entry, guid);
     owner_.getSocket()->send(packet);
+}
+
+void EntityController::askAgain() {
+    if (!owner_.isInWorld()) return;
+    auto& socket = *owner_.getSocket();
+    for (uint64_t guid : pendingNameQueries) socket.send(NameQueryPacket::build(guid));
+    for (const auto& [entry, guid] : pendingCreatureQueries) socket.send(CreatureQueryPacket::build(entry, guid));
+    for (const auto& [entry, guid] : pendingGameObjectQueries_)
+        socket.send(GameObjectQueryPacket::build(entry, guid));
 }
 
 std::string EntityController::getCachedPlayerName(uint64_t guid) const {

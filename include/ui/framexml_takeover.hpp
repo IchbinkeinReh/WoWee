@@ -335,6 +335,11 @@ void frameXmlNoteAddOnLoaded(const std::string& addOnName);
 /// Whether a load-on-demand addon has loaded. Case-insensitive: the interface
 /// asks for "Blizzard_AuctionUI" and the directory is blizzard_auctionui.
 bool frameXmlAddOnLoaded(std::string_view addOnName);
+
+/// The interface has been taken down - a reload, or the character left the
+/// world. No addon of it is loaded any more, and what of it was found unbuilt
+/// says nothing about the next one: that is asked of the next one.
+void frameXmlInterfaceUnloaded();
 bool frameXmlDrawsCombatText();
 
 /// The icon of the item the cursor is carrying, or empty for nothing.

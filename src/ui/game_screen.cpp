@@ -382,15 +382,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     // Set up UI error frame callback (once)
     if (!uiErrorCallbackSet_) {
         gameHandler.setUIErrorCallback([this](const std::string& msg) {
-            // The sound first, and outside the gate. It belongs to no
-            // element - the error is the same error whoever draws the text -
-            // and it sat after the return, so handing the errors over would
-            // have taken the sound with them.
-            if (auto* ac = services_.audioCoordinator) {
-                if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
-            }
-            // UIErrorsFrame draws the text now. The sound above is still
-            // ours: FrameXML plays none for these, so it would go silent.
+            // UIErrorsFrame draws the text, and what is heard is the game
+            // error's own (0x005216f0, playGameErrorSound) - most have none.
             (void)msg;
         });
         uiErrorCallbackSet_ = true;
@@ -702,7 +695,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         renderer->getCameraController()->setDistanceMax(yards);
     }
     renderLightKindOverlay();       // Debug Graphics: the lights' kinds
-    combatUI_.playSoundsForNewChat(gameHandler);
     offerPendingTradeItem(gameHandler);
     // Not under enableCombatText: that is Blizzard_CombatText's switch, and
     // the numbers over the world answer to CombatDamage and CombatHealing,
@@ -819,52 +811,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         updateCharacterTextures(dressed);
         playerTabardDesigner_ = tabardDesigner;
         if (appearanceComposer_) appearanceComposer_->loadEquippedWeapons();
-        // Update renderer weapon type for animation selection
-        auto* r = services_.renderer;
-        if (r) {
-            const auto& mh = gameHandler.getInventory().getEquipSlot(game::EquipSlot::MAIN_HAND);
-            const auto& oh = gameHandler.getInventory().getEquipSlot(game::EquipSlot::OFF_HAND);
-            if (mh.empty()) {
-                if (auto* ac = r->getAnimationController()) ac->setEquippedWeaponType(0, false);
-            } else {
-                // Polearms and staves use ATTACK_2H_LOOSE instead of ATTACK_2H
-                bool is2HLoose = (mh.item.subclassName == "Polearm" || mh.item.subclassName == "Staff");
-                bool isFist = (mh.item.subclassName == "Fist Weapon");
-                bool isDagger = (mh.item.subclassName == "Dagger");
-                bool hasOffHand = !oh.empty() &&
-                    game::isOffHandWeaponInventoryType(oh.item.inventoryType);
-                bool hasShield = !oh.empty() && oh.item.inventoryType == game::InvType::SHIELD;
-                bool offHandIsFist = hasOffHand && oh.item.subclassName == "Fist Weapon";
-                bool offHandIsDagger = hasOffHand && oh.item.subclassName == "Dagger";
-                if (auto* ac = r->getAnimationController()) ac->setEquippedWeaponType(mh.item.inventoryType, is2HLoose, isFist, isDagger, hasOffHand, hasShield, offHandIsFist, offHandIsDagger);
-            }
-            // Detect ranged weapon type from RANGED slot
-            const auto& rangedSlot = gameHandler.getInventory().getEquipSlot(game::EquipSlot::RANGED);
-            if (rangedSlot.empty()) {
-                if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::NONE);
-            } else if (rangedSlot.item.inventoryType == game::InvType::RANGED_BOW) {
-                // subclassName distinguishes Bow vs Crossbow
-                if (rangedSlot.item.subclassName == "Crossbow") {
-                    if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::CROSSBOW);
-                } else {
-                    if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::BOW);
-                }
-            } else if (rangedSlot.item.inventoryType == game::InvType::RANGED_GUN) {
-                // That inventory type is guns, crossbows and wands together, so
-                // the subclass is what tells them apart - as it already does for
-                // a crossbow above. Without this a wand was shouldered and fired
-                // like a rifle.
-                if (rangedSlot.item.subclassName == "Wand") {
-                    if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::WAND);
-                } else if (auto* ac = r->getAnimationController()) {
-                    ac->setEquippedRangedType(rendering::RangedWeaponType::GUN);
-                }
-            } else if (rangedSlot.item.inventoryType == game::InvType::THROWN) {
-                if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::THROWN);
-            } else {
-                if (auto* ac = r->getAnimationController()) ac->setEquippedRangedType(rendering::RangedWeaponType::NONE);
-            }
-        }
     }
 
     // The ghost's opacity and the selection circle
@@ -1102,58 +1048,6 @@ std::string scriptCursorPath() {
     return cursorPathForKind(kind);
 }
 
-/// Which cursor a game object wears, by its GameObjectType.
-///
-/// The numbers are 3.3.5's own: 0 door, 1 button, 2 questgiver, 3 chest,
-/// 7 chair, 17 fishing node, 19 mailbox, 20 auction house. Anything else is
-/// something to interact with, which is what the hand with the gear says.
-const char* objectCursorPath(uint32_t goType) {
-    switch (goType) {
-        case 2:  return "Interface\\Cursor\\Quest.blp";
-        case 9:  return "Interface\\Cursor\\Inspect.blp";   // text: a book or plaque
-        case 17: return "Interface\\Cursor\\Fishing.blp";
-        case 19: return "Interface\\Cursor\\Mail.blp";
-        case 34: return "Interface\\Cursor\\Buy.blp";       // guild bank
-        default: return "Interface\\Cursor\\Interact.blp";
-    }
-}
-
-/// The cursor the 3.3.5 client gives a friendly unit, from its NPC flags, in
-/// the client's own order (FUN_004f7a50): the first flag it finds decides.
-/// Null for a unit that is none of these - the plain pointer, as there.
-const char* friendlyUnitCursorPath(uint32_t npcFlags) {
-    constexpr uint32_t kPetitioner = 0x00040000, kTabardDesigner = 0x00080000,
-                       kBattlemaster = 0x00100000, kStableMaster = 0x00400000,
-                       kGuildBanker = 0x00800000, kSpellClick = 0x01000000;
-    using namespace game;
-    if (npcFlags & NPC_FLAG_REPAIR)        return "Interface\\Cursor\\RepairNPC.blp";
-    if (npcFlags & NPC_FLAG_INNKEEPER)     return "Interface\\Cursor\\Innkeeper.blp";
-    if (npcFlags & NPC_FLAG_FLIGHT_MASTER) return "Interface\\Cursor\\Taxi.blp";
-    if (npcFlags & NPC_FLAG_TRAINER)       return "Interface\\Cursor\\Trainer.blp";
-    if (npcFlags & (NPC_FLAG_SPIRIT_HEALER | NPC_FLAG_SPIRIT_GUIDE))
-                                           return "Interface\\Cursor\\Speak.blp";
-    if (npcFlags & (NPC_FLAG_BANKER | kGuildBanker))
-                                           return "Interface\\Cursor\\Buy.blp";
-    if (npcFlags & (kPetitioner | kTabardDesigner | kBattlemaster))
-                                           return "Interface\\Cursor\\Speak.blp";
-    if (npcFlags & NPC_FLAG_AUCTIONEER)    return "Interface\\Cursor\\Buy.blp";
-    if (npcFlags & kStableMaster)          return "Interface\\Cursor\\Speak.blp";
-    // The merchant's bag, which the client names Pickup.
-    if (npcFlags & NPC_FLAG_VENDOR)        return "Interface\\Cursor\\Pickup.blp";
-    if (npcFlags & NPC_FLAG_GOSSIP)        return "Interface\\Cursor\\Speak.blp";
-    if (npcFlags & kSpellClick)            return "Interface\\Cursor\\Interact.blp";
-    return nullptr;
-}
-
-/// The cursor's "can't" art for one that has it: Attack.blp becomes
-/// UnableAttack.blp, as the client puts "Unable" before the name.
-std::string unableCursorPath(const char* path) {
-    std::string out = path;
-    const size_t slash = out.rfind('\\');
-    out.insert(slash == std::string::npos ? 0 : slash + 1, "Unable");
-    return out;
-}
-
 namespace {
 
 /// A unit's PvP flags as FUN_00729740 reads them: byte 1 of
@@ -1240,11 +1134,7 @@ glm::vec4 targetCircleColor(game::GameHandler& gameHandler, const game::Unit& un
     return rendering::selection_circle::color(in);
 }
 
-/// The cursor over a unit or another player, as the client picks it: the sword
-/// over what the player may attack, a loot bag or the skinning knife over a
-/// corpse with something on it, and over a friendly unit what it is for - a bag
-/// for a merchant, a speech bubble for a talker. Past the reach at which the
-/// client would answer a click, the cursor with its "can't" art.
+/// The cursor over a unit or another player (0x004f7a50).
 ///
 /// False when there is none, and the caller leaves the glove pointer, as the
 /// client does.
@@ -1263,72 +1153,8 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
     if (!entity) return false;
     const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
     if (entity->getType() != game::ObjectType::UNIT && !isPlayer) return false;
-    auto unit = std::static_pointer_cast<game::Unit>(entity);
-
-    // Where the click would reach: the unit's combat reach and four yards
-    // (FUN_004f7a50), measured from the player.
-    const auto& me = gameHandler.getMovementInfo();
-    const float dx = entity->getX() - me.x, dy = entity->getY() - me.y, dz = entity->getZ() - me.z;
-    const float reach = unit->getCombatReach() + 4.0f;
-    const bool outOfReach = dx * dx + dy * dy + dz * dz > reach * reach;
-
-    constexpr uint32_t kSkinnable = 0x04000000;
-    const uint32_t flags = unit->getUnitFlags();
-    std::string path;
-
-    if (unit->getHealth() == 0) {
-        // A corpse: the bag when there is loot on it, the knife when it can be
-        // skinned. Both are the client's, and both give way to "can't" past reach.
-        if (unit->getDynamicFlags() & game::UNIT_DYNFLAG_LOOTABLE) {
-            path = "Interface\\Cursor\\LootAll.blp";
-        } else if (flags & kSkinnable) {
-            // What it is skinned for, from the creature's type flags
-            // (FUN_00715e50): herbs, ore and engineering parts are gathered, the
-            // rest is skinned.
-            constexpr uint32_t kHerbLoot = 0x100, kMiningLoot = 0x200, kEngineerLoot = 0x8000;
-            uint32_t typeFlags = 0;
-            const auto& creatures = gameHandler.getCreatureInfoCache();
-            if (auto it = creatures.find(unit->getEntry()); it != creatures.end()) {
-                typeFlags = it->second.typeFlags;
-            }
-            path = (typeFlags & kHerbLoot)
-                       ? "Interface\\Cursor\\GatherHerbs.blp"
-                   : (typeFlags & (kMiningLoot | kEngineerLoot))
-                       ? "Interface\\Cursor\\Mine.blp"
-                       : "Interface\\Cursor\\Skin.blp";
-        } else {
-            return false;
-        }
-        if (outOfReach) path = unableCursorPath(path.c_str());
-    } else if (isPlayer ? playerMayAttackPlayer(gameHandler, *unit)
-                        : gameHandler.unitMayAttack(gameHandler.getPlayerGuid(), unit->getGuid())) {
-        // The sword over whatever the player may attack (0x00729a70): alive,
-        // not flagged out of reach, and not regarded as friendly by the player
-        // - so a neutral boar wears it as a hostile wolf does, and Dalaran's
-        // Kirin Tor, yellow at a neutral standing the player is not at war
-        // with, do not. No "can't" for it: the client sets it whatever the
-        // distance.
-        path = "Interface\\Cursor\\Attack.blp";
-    } else {
-        // The whole service ladder is behind 0x00729620: nothing is offered
-        // by a unit the player could not be served by now (dead, on a taxi,
-        // charmed, shapeshifted, the unit in combat or unfriendly, ...).
-        if (!gameHandler.npcServiceOffered(unit->getGuid())) return false;
-        // 0x00715ea0 at the head of the friendly ladder (0x004f7a50, a unit
-        // with npc flags): the creature template's IconName, "Unable" before
-        // it out of reach - a name the cursor table lacks still drawn as
-        // Interface\Cursor\<name>.blp (0x00715f20).
-        if (!isPlayer && unit->getNpcFlags() != 0) {
-            const auto& creatures = gameHandler.getCreatureInfoCache();
-            if (auto it = creatures.find(unit->getEntry()); it != creatures.end() && !it->second.iconName.empty())
-                path = std::string("Interface\\Cursor\\") + (outOfReach ? "Unable" : "") + it->second.iconName + ".blp";
-        }
-        if (path.empty()) {
-            const char* friendly = isPlayer ? nullptr : friendlyUnitCursorPath(unit->getNpcFlags());
-            if (!friendly) return false;
-            path = outOfReach ? unableCursorPath(friendly) : std::string(friendly);
-        }
-    }
+    const std::string path = gameHandler.unitCursorArt(guid);
+    if (path.empty()) return false;
 
     VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window, path.c_str());
     if (!tex) return false;
@@ -1355,43 +1181,9 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
     auto entity = gameHandler.getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
 
-    auto go = std::static_pointer_cast<game::GameObject>(entity);
-    const auto* info = gameHandler.getCachedGameObjectInfo(go->getEntry());
-    if (usable) {
-        // The art with "can't" on it when a click would be refused: the player
-        // is dead (the client's CanUse says no outright), or too far away for
-        // the use to go - the same ten yards the click itself allows.
-        const auto& me = gameHandler.getMovementInfo();
-        const float dx = entity->getX() - me.x, dy = entity->getY() - me.y,
-                    dz = entity->getZ() - me.z;
-        constexpr float kUseDistance = 10.0f;
-        const bool cannotUse = gameHandler.isPlayerDead() ||
-                               dx * dx + dy * dy + dz * dz > kUseDistance * kUseDistance;
-        std::string cursorPath;
-        if (info && !info->iconName.empty()) {
-            // 0x0070ce10 / 0x0070cec0: the template's IconName, "Unable"
-            // before it when the object cannot be used.
-            cursorPath = std::string("Interface\\Cursor\\") + (cannotUse ? "Unable" : "") + info->iconName + ".blp";
-        } else if (info && info->type == 3) {
-            // 0x0070f9b0, a chest: its lock's LockType CursorName - "Unable"
-            // before it when it cannot be used, but for LockType 1 - and only
-            // a name the cursor table has; with no LockType cursor, Interact
-            // (5) or UnableInteract (0x1f).
-            const auto [name, lockType] = gameHandler.chestLockCursor(*go, info);
-            if (!name.empty()) {
-                const std::string art = (cannotUse && lockType != 1) ? "Unable" + name : name;
-                const int kind = ui::cursorKindForArt(art);
-                if (kind == kCursorKindNone) return false;
-                cursorPath = cursorPathForKind(kind);
-            } else {
-                cursorPath = cursorPathForKind(cannotUse ? 0x1f : 5);
-            }
-        } else {
-            cursorPath = cannotUse ? unableCursorPath(objectCursorPath(info ? info->type : 0u))
-                                   : std::string(objectCursorPath(info ? info->type : 0u));
-        }
-        VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window,
-                                            cursorPath.c_str());
+    const std::string cursorPath = usable ? gameHandler.gameObjectCursorArt(guid) : std::string();
+    if (!cursorPath.empty()) {
+        VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window, cursorPath.c_str());
         if (!tex) return false;
         drawCursorTexture(tex);
     }
@@ -2254,6 +2046,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     if (picked && picked->getType() == game::ObjectType::GAMEOBJECT) {
                         gameHandler.interactWithGameObject(closestGuid);
                     } else {
+                        gameHandler.clickVoice(closestGuid);   // 0x005274f0
                         gameHandler.targetUnit(closestGuid);
                     }
                 } else if (addons::storedCVarValue("deselectOnClick", "1") != "0") {
@@ -2456,57 +2249,27 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
     if (gameHandler.hasTarget()) {
         auto target = gameHandler.getTarget();
         if (target) {
-            if (target->getType() == game::ObjectType::UNIT) {
-                // Check if unit is dead (health == 0) → loot, otherwise interact/attack
-                auto unit = std::static_pointer_cast<game::Unit>(target);
+            if (target->isUnit()) {
+                using Click = game::unit_pointer::Click;
+                const uint64_t guid = target->getGuid();
                 // With autoInteract each of these walks to it first when it
                 // is out of reach (0x00721f50 handed down).
                 const bool clickToMove = gameHandler.clickToMoveAllowed();
-                // 0x00731260: a dead unit (not one shown as dead, dynamic
-                // flag 0x20) clicked by the player as the mover is looted,
-                // skinned or left; anything else is spoken to or attacked.
-                const bool dead = unit->getHealth() == 0 && unit->getMaxHealth() > 0 &&
-                                  (unit->getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) == 0 &&
-                                  gameHandler.activeMover() == gameHandler.getPlayerGuid();
-                if (dead) {
-                    gameHandler.clickDeadUnit(target->getGuid(), clickToMove);
-                } else {
-                    // Interact with service NPCs; otherwise treat non-interactable living units
-                    // as attackable fallback (covers bad faction-template classification).
-                    auto isSpiritNpc = [&]() -> bool {
-                        constexpr uint32_t NPC_FLAG_SPIRIT_GUIDE = 0x00004000;
-                        constexpr uint32_t NPC_FLAG_SPIRIT_HEALER = 0x00008000;
-                        if (unit->getNpcFlags() & (NPC_FLAG_SPIRIT_GUIDE | NPC_FLAG_SPIRIT_HEALER)) {
-                            return true;
+                switch (gameHandler.unitClick(guid)) {
+                    case Click::Nothing: break;
+                    case Click::Dead: gameHandler.clickDeadUnit(guid, clickToMove); break;
+                    case Click::Speak: gameHandler.interactWithNpc(guid, clickToMove); break;
+                    case Click::Attack:
+                        if (gameHandler.startAutoAttack(guid)) {
+                            // Then closed in on, or turned to (0x0072ee20).
+                            gameHandler.clickToMoveAttack(guid);
+                        } else {
+                            gameHandler.clickVoice(guid);
                         }
-                        std::string name = unit->getName();
-                        std::transform(name.begin(), name.end(), name.begin(),
-                                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                        return (name.find("spirit healer") != std::string::npos) ||
-                               (name.find("spirit guide") != std::string::npos);
-                    };
-                    bool allowSpiritInteract = (gameHandler.isPlayerDead() || gameHandler.isPlayerGhost()) && isSpiritNpc();
-                    bool canInteractNpc = unit->isInteractable() || allowSpiritInteract;
-                    // 0x00731260: spoken to when the player may interact
-                    // with it (0x00729530 - something to talk to, each
-                    // regarding the other as neutral or better, else
-                    // UNIT_FLAG2 0x4000); else attacked when the player
-                    // may attack it (0x00729a70); else only targeted.
-                    const uint16_t flags2Field = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
-                    const uint32_t flags2 = flags2Field != 0xFFFF ? unit->getField(flags2Field) : 0u;
-                    const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
-                    const bool mayInteract =
-                        canInteractNpc && (unit->getUnitFlags() & game::UNIT_FLAG_NOT_SELECTABLE) == 0 &&
-                        ((me && gameHandler.unitReaction(*me, *unit) > 2 &&
-                          gameHandler.unitReaction(*unit, *me) > 2) ||
-                         (flags2 & 0x4000u) != 0);
-                    if (mayInteract) {
-                        gameHandler.interactWithNpc(target->getGuid(), clickToMove);
-                    } else if (gameHandler.unitMayAttack(gameHandler.getPlayerGuid(), target->getGuid())) {
-                        gameHandler.startAutoAttack(target->getGuid());
-                        // Then closed in on, or turned to (0x0072ee20).
-                        gameHandler.clickToMoveAttack(target->getGuid());
-                    }
+                        break;
+                    case Click::Voice: gameHandler.clickVoice(guid); break;
+                    // 0x005d4620: the attack command (0x7000002).
+                    case Click::PetAttack: gameHandler.sendPetAction(0x07000002u, guid); break;
                 }
             } else if (target->getType() == game::ObjectType::GAMEOBJECT) {
                 // Skip chairs: auto-sit must only happen when the chair is
@@ -2515,23 +2278,6 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
                 if (!goInfo || goInfo->type != 7) {
                     gameHandler.interactWithGameObject(target->getGuid());
-                }
-            } else if (target->getType() == game::ObjectType::PLAYER) {
-                // 0x00731260 for another player: nothing to talk to, so
-                // attacked when the player may attack them.
-                auto other = std::static_pointer_cast<game::Unit>(target);
-                // Dead, their insignia to take (0x00731260's dead unit).
-                if (other->getHealth() == 0 && other->getMaxHealth() > 0 &&
-                    (other->getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) == 0 && gameHandler.activeMover() == gameHandler.getPlayerGuid()) {
-                    gameHandler.clickDeadUnit(target->getGuid(), gameHandler.clickToMoveAllowed());
-                    return;
-                }
-                // 0x006ddbb0 for a group member: their vehicle, if it has a
-                // free seat (CMSG_PLAYER_VEHICLE_ENTER).
-                if (other->getHealth() > 0 && gameHandler.clickUnitBeyondHellos(target->getGuid())) return;
-                if (other->getHealth() > 0 && playerMayAttackPlayer(gameHandler, *other)) {
-                    gameHandler.startAutoAttack(target->getGuid());
-                    gameHandler.clickToMoveAttack(target->getGuid());
                 }
             }
         }

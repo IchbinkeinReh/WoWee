@@ -27,19 +27,6 @@ void ToastManager::renderLateToasts(game::GameHandler& gameHandler) {
     renderZoneText(gameHandler);
 }
 
-void ToastManager::playAchievementEarned() {
-    // alertframes.lua registers ACHIEVEMENT_EARNED and raises the badge, so
-    // there is nothing of ours left to put on screen. The sound stays:
-    // FrameXML's alert frame plays one only for LFG rewards, and an
-    // achievement earned in silence is worse than one announced twice.
-    auto* ac = services_.audioCoordinator;
-    if (ac) {
-        if (auto* sfx = ac->getUiSoundManager()) {
-            sfx->playAchievementAlert();
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 
 void ToastManager::renderZoneText(game::GameHandler& gameHandler) {

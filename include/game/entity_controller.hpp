@@ -36,6 +36,8 @@ public:
     void queryPlayerName(uint64_t guid);
     void queryCreatureInfo(uint32_t entry, uint64_t guid);
     void queryGameObjectInfo(uint32_t entry, uint64_t guid);
+    /// Every query still without its answer, once more (GameHandler::askUnansweredAgain).
+    void askAgain();
     [[nodiscard]] std::string getCachedPlayerName(uint64_t guid) const;
     [[nodiscard]] std::string getCachedCreatureName(uint32_t entry) const;
     void invalidatePlayerName(uint64_t guid) { playerNameCache.erase(guid); }
@@ -137,7 +139,7 @@ private:
     std::unordered_map<uint64_t, PlayerClassRace> playerClassRaceCache_;
     std::unordered_set<uint64_t> pendingNameQueries;
     std::unordered_map<uint32_t, CreatureQueryResponseData> creatureInfoCache;
-    std::unordered_set<uint32_t> pendingCreatureQueries;
+    std::unordered_map<uint32_t, uint64_t> pendingCreatureQueries;   // entry -> the guid asked with
     std::unordered_map<uint32_t, GameObjectQueryResponseData> gameObjectInfoCache_;
     /// Objects clicked to be read before their metadata arrived.
     ///
@@ -147,7 +149,7 @@ private:
     /// is a sign that does nothing the first time it is clicked and works the
     /// second.
     std::unordered_set<uint64_t> pendingPageTextGuids_;
-    std::unordered_set<uint32_t> pendingGameObjectQueries_;
+    std::unordered_map<uint32_t, uint64_t> pendingGameObjectQueries_;
 
     // --- Update Object work queue ---
     struct PendingUpdateObjectWork {

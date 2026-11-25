@@ -108,7 +108,7 @@ TEST_CASE("no UnitAura at all is no aura", "[tooltip][aura]") {
 TEST_CASE("FocusUnit without a unit means the target", "[unit]") {
     // 0x00522480: SecureCmdList["FOCUS"] calls FocusUnit() for "/focus" alone.
     State s;
-    const auto resolve = [](const std::string& token) { return token == "pet" ? uint64_t{7} : uint64_t{0}; };
+    const auto resolve = [](const std::string& token) { return token == "pet" ? std::optional<uint64_t>(7) : std::nullopt; };
     using wowee::addons::optionalUnitArg;
     CHECK(optionalUnitArg(s.L, 1, 42, resolve) == uint64_t{42});
     CHECK(optionalUnitArg(s.L, 1, 0, resolve) == uint64_t{0});

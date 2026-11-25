@@ -736,10 +736,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     if (owner_.questCompleteCallbackRef()) {
                         owner_.questCompleteCallbackRef()(questId, it->title);
                     }
-                    // Play quest-complete sound
+                    // 0x006d0e10.
                     if (auto* ac = owner_.services().audioCoordinator) {
-                        if (auto* sfx = ac->getUiSoundManager())
-                            sfx->playQuestComplete();
+                        if (auto* sfx = ac->getUiSoundManager()) sfx->playByName("igQuestListComplete");
                     }
                     questLog_.erase(it);
                     owner_.setQuestTracked(questId, false);
@@ -1288,8 +1287,6 @@ void QuestHandler::acceptQuest() {
         // and lets the server refuse. This was an English line in chat too.
         owner_.addUIError(interfaceString("ERR_QUEST_LOG_FULL", "Your quest log is full."));
         owner_.playGameErrorSound("ERR_QUEST_LOG_FULL");
-        if (auto* ac = owner_.services().audioCoordinator)
-            if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
         return;
     }
 
@@ -1309,12 +1306,6 @@ void QuestHandler::acceptQuest() {
     // through addQuestToLocalLogIfMissing without tracking, so the tracker's
     // "show all when nothing tracked" fallback still applies to those.
     owner_.setQuestTracked(questId, true);
-
-    // Play quest-accept sound
-    if (auto* ac = owner_.services().audioCoordinator) {
-        if (auto* sfx = ac->getUiSoundManager())
-            sfx->playQuestActivate();
-    }
 
     dismissQuestDetails();
 }
@@ -2166,14 +2157,6 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
     // Classify gossip quests and update quest log + overhead NPC markers.
     classifyGossipQuests(true);
 
-    // Play NPC greeting voice
-    if (owner_.npcGreetingCallbackRef() && currentGossip_.npcGuid != 0) {
-        auto entity = owner_.getEntityManager().getEntity(currentGossip_.npcGuid);
-        if (entity) {
-            glm::vec3 npcPos(entity->getX(), entity->getY(), entity->getZ());
-            owner_.npcGreetingCallbackRef()(currentGossip_.npcGuid, npcPos);
-        }
-    }
 }
 
 void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {

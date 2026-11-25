@@ -42,11 +42,13 @@ TEST_CASE("a threat list is told of by the tokens its unit has", "[replay][threa
     });
     // A guard at somebody else, nothing of the player's: no token, no event.
     s.receive(threatUpdate(0xF130004221000077ull));
+    s.handler().updateCombatText(0.0f);
     CHECK(events.empty());
 
     s.handler().setTarget(kGuard);
     events.clear();
     s.receive(threatUpdate(0xF130004221000077ull));
+    s.handler().updateCombatText(0.0f);  // 0x00614760, once a frame
     const auto has = [&](const char* name, const char* unit) {
         return std::count(events.begin(), events.end(), std::pair<std::string, std::string>(name, unit)) == 1;
     };

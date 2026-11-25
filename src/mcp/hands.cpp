@@ -96,11 +96,7 @@ json Aftermath::report(ToolContext& context) const {
     }
     if (!list.empty()) out["events"] = std::move(list);
     if (!errors.empty()) out["messages"] = std::move(errors);
-    json refused = json::array();
-    for (const auto& r : context.refusals.after(refusals, 5, [](const RefusedLine&) { return true; })) {
-        refused.push_back(r.value.what + ": " + r.value.why);
-    }
-    if (!refused.empty()) out["refused"] = std::move(refused);
+    if (json refused = refusedSince(context, refusals); !refused.empty()) out["refused"] = std::move(refused);
     json lines = json::array();
     for (const auto& c : context.chat.after(chat, 6, [](const EventLine& l) {
              return l.name == "CHAT_MSG_SYSTEM" || l.name == "CHAT_MSG_LOOT" || l.name == "CHAT_MSG_MONEY" ||
@@ -139,6 +135,14 @@ json luaErrorsSince(ToolContext& context, uint64_t logSeq, size_t most) {
          })) {
         if (out.size() >= most) break;
         out.push_back(luaErrorJson(*luaErrorOfLogLine(line.value.text)));
+    }
+    return out;
+}
+
+json refusedSince(ToolContext& context, uint64_t refusalSeq) {
+    json out = json::array();
+    for (const auto& r : context.refusals.after(refusalSeq, 5, [](const RefusedLine&) { return true; })) {
+        out.push_back(r.value.what + ": " + r.value.why);
     }
     return out;
 }

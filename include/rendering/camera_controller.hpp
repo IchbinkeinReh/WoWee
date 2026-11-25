@@ -293,36 +293,10 @@ public:
     /// reported, twice, as there being no preview.
     ///
     /// The player's own view is put back when the chair is left.
-    void setBarberShopView(bool on) {
-        if (on == barberView_) return;
-        barberView_ = on;
-        // Whatever the collision sweep had taken off the zoom goes with it.
-        // This view sets its own distance and restores the player's on the way
-        // out, and a debt carried across either edge is given back on top of a
-        // number it was never taken from.
-        collisionZoomDebt_ = 0.0f;
-        collisionClearSeconds_ = 0.0f;
-        if (on) {
-            savedBarberYaw_ = yaw;
-            savedBarberPitch_ = pitch;
-            savedBarberDistance_ = userTargetDistance;
-            savedBarberPivot_ = pivotHeight_;
-            // Round to the front: the camera yaw is the character's facing, so
-            // half a turn from it is looking back at them.
-            yaw = facingYaw + 180.0f;
-            // Slightly above level, so the face is in view rather than the top
-            // of the head, and close enough for hair to be worth choosing.
-            pitch = 8.0f;
-            userTargetDistance = 2.4f;
-            pivotHeight_ = 1.7f;
-        } else {
-            yaw = savedBarberYaw_;
-            pitch = savedBarberPitch_;
-            userTargetDistance = savedBarberDistance_;
-            pivotHeight_ = savedBarberPivot_;
-        }
-    }
+    void setBarberShopView(bool on);
     [[nodiscard]] bool isBarberShopView() const { return barberView_; }
+    /// Sits where X would: one of five idle minutes (0x0052af40).
+    void sitDown() { sitDownAsked_ = true; }
     [[nodiscard]] bool isOnTaxi() const { return externalFollow_; }
     [[nodiscard]] const glm::vec3* getFollowTarget() const { return followTarget; }
     /// The followed unit stands over ground that has not streamed in, so it is
@@ -480,6 +454,8 @@ public:
     void setGravityDisabled(bool disabled) { gravityDisabled_ = disabled; }
     void setFeatherFallActive(bool active) { featherFallActive_ = active; }
     void setWaterWalkActive(bool active) { waterWalkActive_ = active; }
+    /// The mover is a player's ghost (0x0075e3d0's 0x8000).
+    void setMoverGhost(bool ghost) { moverGhost_ = ghost; }
     /// Permission to fly - a flying mount where flight is allowed, or .gm fly.
     /// Not the same as being in the air: see isFlightAirborne.
     void setFlyingActive(bool active);
@@ -1304,6 +1280,7 @@ private:
     /// FALLING made to say what the step did.
     void tellFall();
     StandUpCallback standUpCallback_;
+    bool sitDownAsked_ = false;
     SitDownCallback sitDownCallback_;
 
     // Movement speeds
@@ -1341,6 +1318,7 @@ private:
     bool featherFallActive_ = false;
     // Server-driven water walk: the liquid's surface is ground (portMove).
     bool waterWalkActive_ = false;
+    bool moverGhost_ = false;
     // Player-controlled flight (CAN_FLY + FLYING): 3D movement, no gravity.
     bool flyingActive_ = false;
     bool flightAirborne_ = false;

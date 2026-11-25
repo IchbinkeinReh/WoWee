@@ -40,6 +40,9 @@ Script::Fn finishWith(ToolContext& context, Aftermath after, std::function<json(
 /// (lua_error.hpp); the first `most`.
 json luaErrorsSince(ToolContext& context, uint64_t logSeq, size_t most);
 
+/// The packets and acts refused since one, told shortly.
+json refusedSince(ToolContext& context, uint64_t refusalSeq);
+
 /// Waits for the loading screen to be gone, `seconds` at most.
 Script::Fn worldShown(ToolContext& context, double seconds);
 

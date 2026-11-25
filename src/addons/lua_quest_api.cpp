@@ -7011,16 +7011,12 @@ void registerQuestLuaAPI(lua_State* L) {
         }},
                 // The search box this client's trainer panel has and 3.3.5's
                 // does not; it redraws the way the type filter does.
-                {"SetTrainerServiceSearch", [](lua_State* L) -> int {
+                {"WoweeSetTrainerSearch", [](lua_State* L) -> int {
             std::string text = foldedForSearch(luaL_optstring(L, 1, ""));
             if (text == trainerSearch()) return 0;
             trainerSearch() = text;
             trainerRefilter(L);
             return 0;
-        }},
-                {"GetTrainerServiceSearch", [](lua_State* L) -> int {
-            lua_pushstring(L, trainerSearch().c_str());
-            return 1;
         }},
                 // GetTrainerSkillLines() (0x00594650): every header's skill
                 // line name in the list's order - nil for one SkillLine.dbc

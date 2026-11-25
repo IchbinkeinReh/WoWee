@@ -109,11 +109,11 @@ json spellActions(ToolContext& context) {
 local out, seen = {}, {}
 for slot = 1, 120 do
   if HasAction(slot) then
-    local kind, id = GetActionInfo(slot)
+    local kind, id, _, spell = GetActionInfo(slot)
     local usable = IsUsableAction(slot)
     local start, duration = GetActionCooldown(slot)
     local ready = not duration or duration <= 1.5 or start + duration <= GetTime()
-    local name = kind == "spell" and GetSpellInfo(id) or kind == "item" and GetItemInfo(id) or GetActionText(slot)
+    local name = spell and GetSpellInfo(spell) or kind == "item" and GetItemInfo(id) or GetActionText(slot)
     if usable and ready and name and not seen[name] then
       seen[name] = true
       out[#out + 1] = {name = name, kind = kind, in_range = IsActionInRange(slot)}

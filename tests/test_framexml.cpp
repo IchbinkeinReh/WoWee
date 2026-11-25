@@ -1610,3 +1610,25 @@ TEST_CASE("scale= is a model's and no frame's", "[framexml][emit]") {
     const EmitResult none = emitFrameXml(parseOrFail("<Ui><Model name=\"B\" scale=\"0\"/></Ui>"));
     CHECK_FALSE(has(none.lua, "Scale("));
 }
+
+TEST_CASE("a font string's element says how its text is drawn and broken", "[framexml][emit]") {
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"F\"><Layers><Layer>"
+        "<FontString name=\"A\" inherits=\"GameFontNormal\" nonspacewrap=\"true\" wordwrap=\"false\" spacing=\"3\">"
+        "<Shadow><Offset><AbsDimension x=\"2\" y=\"-2\"/></Offset><Color r=\"0\" g=\"0\" b=\"0\"/></Shadow></FontString>"
+        "<FontString name=\"B\" font=\"GameFontHighlight\"/>"
+        "<FontString name=\"C\" font=\"Fonts/ARIALN.TTF\" outline=\"NORMAL\"><FontHeight><AbsValue val=\"18\"/></FontHeight></FontString>"
+        "<Texture name=\"D\" nonspacewrap=\"true\"/>"
+        "</Layer></Layers></Frame></Ui>");
+    const std::string lua = emitFrameXml(root).lua;
+    CHECK(has(lua, ":SetNonSpaceWrap(true)"));
+    CHECK(has(lua, ":SetWordWrap(false)"));
+    CHECK(has(lua, ":SetSpacing(3.0"));
+    CHECK(has(lua, ":SetShadowOffset(2.0"));
+    CHECK(has(lua, ":SetShadowColor("));
+    CHECK(has(lua, ":SetFontObject(\"GameFontHighlight\")"));
+    CHECK(has(lua, ":SetFont(\"Fonts/ARIALN.TTF\", 18.0"));
+    CHECK(has(lua, "\"NORMAL\""));
+    // Once: the texture has no text.
+    CHECK(lua.find(":SetNonSpaceWrap(") == lua.rfind(":SetNonSpaceWrap("));
+}

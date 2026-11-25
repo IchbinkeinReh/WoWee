@@ -58,6 +58,8 @@ enum class Kind : uint8_t {
     Footstep,
     /// $DTH: the body meeting the ground (0x00746610).
     DeathThud,
+    /// $BTH: a breath let out (unit_breath.hpp).
+    Breath,
 };
 
 struct Action {
@@ -171,6 +173,7 @@ constexpr Action classify(uint32_t eventId) {
     if (eventId == fourCC("$SMD")) return {Kind::AtEvent, kColumnSubmerged};
     if (eventId == fourCC("$FSD")) return {Kind::Footstep, kColumnFootstep};
     if (eventId == fourCC("$DTH")) return {Kind::DeathThud, 0};
+    if (eventId == fourCC("$BTH")) return {Kind::Breath, 0};
     return {};
 }
 

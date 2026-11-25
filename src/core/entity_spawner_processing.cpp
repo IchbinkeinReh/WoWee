@@ -29,6 +29,7 @@
 #include "pipeline/m2_asset_loader.hpp"
 #include "pipeline/item_textures.hpp"
 #include "game/game_handler.hpp"
+#include "core/go_state_player.hpp"
 #include "game/go_interaction_anim.hpp"
 #include "game/game_services.hpp"
 #include "game/game_utils.hpp"
@@ -547,7 +548,7 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
                     if (model->name.empty()) model->name = m2Path;
                     // Emitters alone are a model (hasDrawableContent): the
                     // marshes' gas clouds have no vertex.
-                    if (model->vertices.empty() && !model->hasDrawableContent()) {
+                    if (!model->hasContent()) {
                         LOG_WARNING("Creature model parsed to nothing: displayId=",
                                     s.displayId, " ", m2Path, " (", m2Data.size(), " bytes)");
                         result.permanent_failure = true;
@@ -1690,7 +1691,7 @@ void EntitySpawner::processPendingMount() {
 
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = m2Path;
-        if (model.vertices.empty() && !model.hasDrawableContent()) {
+        if (!model.hasContent()) {
             LOG_WARNING("Failed to parse mount M2: ", m2Path);
             return;
         }
@@ -2041,7 +2042,7 @@ uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec
         if (m2Data.empty()) return 0;
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = modelPath;
-        if (model.vertices.empty() && !model.hasDrawableContent()) return 0;
+        if (!model.hasContent()) return 0;
         if (model.version >= 264) {
             auto skinData = assetManager_->readFile(pipeline::skinPathForM2(modelPath));
             if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
@@ -2061,6 +2062,7 @@ uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec
     const uint32_t instanceId = cr->createInstance(modelId, renderPos, glm::vec3(0.0f, 0.0f, renderYaw),
                                                    scale * creatureDisplayScale(displayId));
     if (instanceId == 0) return 0;
+    cr->setInstanceDisplayAlpha(instanceId, displayAlpha(displayId));
     applyHumanoidInstanceOverrides(instanceId, modelId, displayId);
     normalizeHumanoidClothingGeosets(instanceId, modelId, displayId);
     return instanceId;
@@ -2157,7 +2159,7 @@ bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
         if (m2Data.empty()) return false;
         pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
         if (model.name.empty()) model.name = modelPath;
-        if (model.vertices.empty() && !model.hasDrawableContent()) return false;
+        if (!model.hasContent()) return false;
 
         if (model.version >= 264 && modelPath.size() >= 3) {
             std::string skinPath = pipeline::skinPathForM2(modelPath);
@@ -2363,7 +2365,6 @@ void EntitySpawner::despawnCreature(uint64_t guid) {
     creatureSwimmingState_.erase(guid);
     creatureWalkingState_.erase(guid);
     creatureFlyingState_.erase(guid);
-    creatureWasStealthed_.erase(guid);
 
     LOG_DEBUG("Despawned creature: guid=0x", std::hex, guid, std::dec);
 }
@@ -2380,13 +2381,6 @@ enum GoAnimState : uint8_t {
     kGoSpawn = 0, kGoClosed = 1, kGoOpen = 2, kGoOpened = 3,
     kGoClose = 4, kGoDestroy = 5, kGoDestroyed = 6, kGoRebuild = 7,
 };
-constexpr uint32_t kGoStateAnim[13] = {
-    rendering::anim::SPAWN,   rendering::anim::CLOSED,  rendering::anim::OPEN,
-    rendering::anim::OPENED,  rendering::anim::CLOSE,   rendering::anim::DESTROY,
-    rendering::anim::DESTROYED, rendering::anim::REBUILD,
-    rendering::anim::CUSTOM_0, rendering::anim::CUSTOM_1, rendering::anim::CUSTOM_2,
-    rendering::anim::CUSTOM_3, rendering::anim::DESPAWN,
-};
 
 // FUN_0070d690: a change of the server's GOState (0 ACTIVE, 1 READY,
 // 2 ACTIVE_ALTERNATIVE) from `from` to `to`. The client also checks an
@@ -2400,62 +2394,6 @@ GoAnimState goAnimStateFor(uint8_t from, uint8_t to) {
     }
 }
 
-// FUN_0070d1e0: the state's own animation, or what stands in for it, and
-// whether the stand-in is held on its first frame (the client's speed 0).
-// The model may lack even that, and then plays what AnimationData's
-// fallbacks give (M2Renderer::shownAnimationId).
-struct GoStateAnimation { uint32_t anim; bool hold; };
-template <typename Has>
-GoStateAnimation goStateAnimation(uint8_t state, const Has& has) {
-    uint32_t anim = state < std::size(kGoStateAnim) ? kGoStateAnim[state] : rendering::anim::STAND;
-    bool hold = false;
-    if (!has(anim)) {
-        switch (anim) {
-            case rendering::anim::CLOSE:
-                if (!has(rendering::anim::OPEN)) anim = rendering::anim::CLOSED;
-                break;
-            case rendering::anim::CLOSED:
-                if (!has(rendering::anim::CLOSE)) {
-                    if (has(rendering::anim::OPEN)) { anim = rendering::anim::OPEN; hold = true; }
-                    else anim = rendering::anim::STAND;
-                }
-                break;
-            case rendering::anim::OPEN:
-                if (!has(rendering::anim::CLOSE)) {
-                    anim = has(rendering::anim::DESTROY) ? rendering::anim::DESTROY
-                                                         : rendering::anim::OPENED;
-                }
-                break;
-            case rendering::anim::OPENED:
-                if (!has(rendering::anim::OPEN)) {
-                    if (has(rendering::anim::CLOSE)) { anim = rendering::anim::CLOSE; hold = true; }
-                    else anim = rendering::anim::DESTROYED;
-                }
-                break;
-            default:
-                break;
-        }
-    }
-    return {anim, hold};
-}
-
-// Puts the model in a state's animation.
-void playGoStateAnimation(rendering::M2Renderer& m2, uint32_t instanceId, uint8_t state,
-                          uint32_t anim, bool hold) {
-    if (hold) {
-        m2.setInstanceAnimation(instanceId, anim, true);
-        m2.setInstanceAnimationFrozen(instanceId, true);
-    } else if (state == kGoOpen || state == kGoClose || state == kGoDestroy || state == kGoRebuild) {
-        // A transition plays once; the client then enters the state it leads
-        // to, whose pose is where this one ends.
-        m2.setInstanceAnimationHeld(instanceId, anim, false);
-    } else if (m2.hasAnimation(instanceId, anim)) {
-        m2.setInstanceAnimation(instanceId, anim, true);
-    } else {
-        m2.setInstanceAnimationFrozen(instanceId, false);
-    }
-}
-
 // 0x0070d510: a transition that reverses one still playing - Open and
 // Close, Destroy and Rebuild - is to start where that one got to, read
 // before the new one replaces it. Only while GAMEOBJECT_DYNAMIC's high half
@@ -2465,17 +2403,18 @@ std::optional<uint16_t> goReversalProgress(const rendering::M2Renderer& m2, uint
     if (!game::go_interaction::reversesTransition(from, to)) return std::nullopt;
     const auto playback = m2.getInstanceAnimPlayback(instanceId);
     if (!playback) return std::nullopt;
-    return game::go_interaction::reversedStartProgress(playback->timeMs, playback->durationMs,
-                                                       playback->speed);
+    // Counted from the start, also where it plays backwards (0x00826b00).
+    const float played = playback->speed < 0.0f ? playback->durationMs - playback->timeMs : playback->timeMs;
+    return game::go_interaction::reversedStartProgress(played, playback->durationMs, playback->speed);
 }
 
 // 0x0070d1e0: the new sequence started at that progress of its own length.
-void startGoAnimationPartWay(rendering::M2Renderer& m2, uint32_t instanceId, uint32_t anim,
-                             std::optional<uint16_t> progress) {
-    if (!progress || !m2.hasAnimation(instanceId, anim)) return;
-    const auto duration = static_cast<uint32_t>(std::max(m2.getInstanceAnimDuration(instanceId), 0.0f));
-    m2.setInstanceAnimTime(instanceId,
-                           static_cast<float>(game::go_interaction::progressStartTime(*progress, duration)));
+void startGoAnimationPartWay(rendering::M2Renderer& m2, uint32_t instanceId, std::optional<uint16_t> progress) {
+    const auto playback = progress ? m2.getInstanceAnimPlayback(instanceId) : std::nullopt;
+    if (!playback) return;
+    const auto duration = static_cast<uint32_t>(std::max(playback->durationMs, 0.0f));
+    const auto at = static_cast<float>(game::go_interaction::progressStartTime(*progress, duration));
+    m2.setInstanceAnimTime(instanceId, playback->speed < 0.0f ? playback->durationMs - at : at);
 }
 
 } // namespace
@@ -2509,7 +2448,10 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     // part-way, at a progress value the server sends in GAMEOBJECT_DYNAMIC;
     // that is not read here, and the end of the transition is where it goes.
     auto prevIt = gameObjectServerState_.find(guid);
-    const uint8_t from = prevIt != gameObjectServerState_.end() ? prevIt->second : goState;
+    // 0x00711050: the same state said again is nothing.
+    const bool first = prevIt == gameObjectServerState_.end();
+    if (!first && prevIt->second == goState) return;
+    const uint8_t from = first ? goState : prevIt->second;
     gameObjectServerState_[guid] = goState;
     const GoAnimState state = goAnimStateFor(from, goState);
 
@@ -2558,7 +2500,7 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     gameObjectTransitionEnd_.erase(guid);
 
     const auto has = [&](uint32_t anim) { return m2->hasAnimation(instanceId, anim); };
-    const auto [anim, hold] = goStateAnimation(state, has);
+    const uint32_t anim = game::go_interaction::stateAnimation(state, has).anim;
 
     // Kept from before, and not the client's rule: Undercity's lift doors are
     // one bone and one sequence, id 0, 3333ms, and that sequence is the
@@ -2566,15 +2508,14 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     // open and shut forever, and its first frame is shut.
     if (goState == 0 && !has(anim)) {
         if (const auto only = m2->soleSequenceId(instanceId)) {
-            m2->setInstanceAnimationHeld(instanceId, *only, prevIt == gameObjectServerState_.end());
+            m2->setInstanceAnimationHeld(instanceId, *only, first);
             return;
         }
     }
 
-    const uint32_t shown = m2->shownAnimationId(instanceId, anim);
-    playGoStateAnimation(*m2, instanceId, state, shown, hold);
-    startGoAnimationPartWay(*m2, instanceId, shown, progress);
-    noteGameObjectTransitionEnd(guid, instanceId, state, shown);
+    playGameObjectState(*m2, instanceId, state);
+    startGoAnimationPartWay(*m2, instanceId, progress);
+    noteGameObjectTransitionEnd(guid, instanceId, state, anim);
 }
 
 void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
@@ -2619,14 +2560,12 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
         case gi::Action::EnterIfModelHas:
         case gi::Action::PlayCustom:
             // 0x0070c480: the state's own animation, 0x00ada938[state].
-            if (step.state >= std::size(kGoStateAnim) || !has(kGoStateAnim[step.state])) return;
+            if (step.state >= std::size(gi::kStateAnimation) || !has(gi::kStateAnimation[step.state])) return;
             break;
         case gi::Action::EnterUnlessShowingOpen: {
             // 0x0070fe10: Open, or AnimationData's fallback for it, against
             // what the model shows now (0x008267e0).
-            const uint32_t target = m2->shownAnimationId(instanceId, rendering::anim::OPEN);
-            const uint32_t shown = m2->shownAnimationId(instanceId, goStateAnimation(current, has).anim);
-            if (shown == target) return;
+            if (m2->currentAnimationId(instanceId) == m2->shownAnimationId(instanceId, rendering::anim::OPEN)) return;
             break;
         }
     }
@@ -2655,7 +2594,7 @@ void EntitySpawner::playGameObjectCustomAnim(uint64_t guid, uint8_t state) {
     const uint32_t goType = (entity->getField(bytes1) >> 8) & 0xFFu;
     if (!gi::playsCustomAnimation(goType)) return;
     const uint32_t instanceId = it->second.instanceId;
-    if (state >= std::size(kGoStateAnim) || !m2->hasAnimation(instanceId, kGoStateAnim[state])) return;
+    if (state >= std::size(gi::kStateAnimation) || !m2->hasAnimation(instanceId, gi::kStateAnimation[state])) return;
     enterGameObjectAnimState(guid, instanceId, state);
 }
 
@@ -2683,7 +2622,7 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
     }
 
     if (state >= gi::kStateCustom0) {
-        const uint32_t anim = kGoStateAnim[state];
+        const uint32_t anim = gi::kStateAnimation[state];
         if (state == gi::kStateDespawn) {
             // Started as any state is (0x0070d1e0 -> 0x00832ab0), and nothing
             // ends it (0x0070d7e0 has no case): the model goes on as the M2
@@ -2705,12 +2644,10 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
             std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max<int64_t>(ms, 0));
         return;
     }
+    playGameObjectState(*m2, instanceId, state);
+    startGoAnimationPartWay(*m2, instanceId, progress);
     const auto has = [&](uint32_t anim) { return m2->hasAnimation(instanceId, anim); };
-    const auto [anim, hold] = goStateAnimation(state, has);
-    const uint32_t shown = m2->shownAnimationId(instanceId, anim);
-    playGoStateAnimation(*m2, instanceId, state, shown, hold);
-    startGoAnimationPartWay(*m2, instanceId, shown, progress);
-    noteGameObjectTransitionEnd(guid, instanceId, state, shown);
+    noteGameObjectTransitionEnd(guid, instanceId, state, gi::stateAnimation(state, has).anim);
 }
 
 void EntitySpawner::applyPendingGameObjectCustomAnim(uint64_t guid) {
@@ -2726,15 +2663,29 @@ void EntitySpawner::applyPendingGameObjectCustomAnim(uint64_t guid) {
     auto entity = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
     const uint16_t bytes1 = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
     if (!entity || bytes1 == 0xFFFF) return;
-    if (!game::go_interaction::playsCustomAnimation((entity->getField(bytes1) >> 8) & 0xFFu)) return;
-    if (state >= std::size(kGoStateAnim) || !m2->hasAnimation(it->second.instanceId, kGoStateAnim[state])) return;
+    namespace gi = game::go_interaction;
+    if (!gi::playsCustomAnimation((entity->getField(bytes1) >> 8) & 0xFFu)) return;
+    if (state >= std::size(gi::kStateAnimation) || !m2->hasAnimation(it->second.instanceId, gi::kStateAnimation[state]))
+        return;
     enterGameObjectAnimState(guid, it->second.instanceId, state);
 }
 
 void EntitySpawner::updateGameObjectCustomAnims() {
-    if (gameObjectCustomAnimEnd_.empty()) return;
     const auto now = std::chrono::steady_clock::now();
     std::vector<uint64_t> ended;
+    // A transition that has played leads to its pose (0x0070d7e0).
+    for (const auto& [guid, end] : gameObjectTransitionEnd_) {
+        if (now >= end) ended.push_back(guid);
+    }
+    for (uint64_t guid : ended) {
+        gameObjectTransitionEnd_.erase(guid);
+        const auto inst = gameObjectInstances_.find(guid);
+        const auto state = gameObjectAnimState_.find(guid);
+        if (inst == gameObjectInstances_.end() || inst->second.isWmo || state == gameObjectAnimState_.end()) continue;
+        if (const auto next = game::go_interaction::stateAfter(state->second))
+            enterGameObjectAnimState(guid, inst->second.instanceId, *next);
+    }
+    ended.clear();
     for (const auto& [guid, end] : gameObjectCustomAnimEnd_) {
         if (now >= end) ended.push_back(guid);
     }
@@ -2755,7 +2706,9 @@ void EntitySpawner::updateGameObjectCustomAnims() {
         // From the server's state to itself: its resting pose (0x0070d690
         // with +0x204 both times).
         if (auto st = gameObjectServerState_.find(guid); st != gameObjectServerState_.end()) {
-            applyGameObjectState(guid, st->second);
+            const uint8_t state = st->second;
+            gameObjectServerState_.erase(st);
+            applyGameObjectState(guid, state);
         }
     }
 }
@@ -2778,14 +2731,16 @@ bool EntitySpawner::gameObjectAnimationHolds(uint64_t guid) const {
 void EntitySpawner::noteGameObjectTransitionEnd(uint64_t guid, uint32_t instanceId, uint8_t state,
                                                 uint32_t anim) {
     gameObjectTransitionEnd_.erase(guid);
-    if (state != kGoOpen && state != kGoClose && state != kGoDestroy && state != kGoRebuild) return;
+    if (!game::go_interaction::stateAfter(state)) return;
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
-    if (!m2 || !m2->hasAnimation(instanceId, anim)) return;
+    if (!m2) return;
     // 0x0070d1e0: what is left of the sequence from where it starts, at its
     // speed; a speed of 0 ends it at once.
-    const auto playback = m2->getInstanceAnimPlayback(instanceId);
-    if (!playback || playback->speed <= 0.0f) return;
-    const float ms = std::max(playback->durationMs - playback->timeMs, 0.0f) / playback->speed;
+    float ms = 0.0f;
+    if (m2->hasAnimation(instanceId, m2->shownAnimationId(instanceId, anim))) {
+        if (const auto playback = m2->getInstanceAnimPlayback(instanceId))
+            ms = sequenceLeftMs(playback->timeMs, playback->durationMs, playback->speed);
+    }
     gameObjectTransitionEnd_[guid] =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<int64_t>(ms));
 }

@@ -2,6 +2,7 @@
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "rendering/animation_controller.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -81,12 +82,17 @@ void AudioCallbackHandler::setupCallbacks() {
         }
     });
 
-    // Achievement earned callback - show toast banner
-    gameHandler_.setAchievementEarnedCallback([this](uint32_t /*achievementId*/,
-                                                    const std::string& /*name*/) {
-        if (uiManager_) {
-            uiManager_->getGameScreen().toastManager().playAchievementEarned();
-        }
+    gameHandler_.setUnitEffectCallback([this](uint64_t guid, game::GameHandler::UnitEffect effect) {
+        auto* svs = renderer_ ? renderer_->getSpellVisualSystem() : nullptr;
+        uint32_t instance = gameHandler_.resolveUnitRenderInstance(guid);
+        if (instance == 0 && guid == gameHandler_.getPlayerGuid() && renderer_)
+            instance = renderer_->getCharacterInstanceId();
+        if (!svs || instance == 0) return;
+        const char* name = effect == game::GameHandler::UnitEffect::Achievement ? "HARDCODED Achievement Base"
+                           : effect == game::GameHandler::UnitEffect::Reputation ? "HARDCODED Reputation"
+                           : effect == game::GameHandler::UnitEffect::MountPoof ? "HARDCODED Mount Poof"
+                                                                                 : "HARDCODED Unit Level Up";
+        svs->playNamedEffectOnUnit(name, instance);
     });
 
     // SMSG_PLAY_MUSIC: the sound goes to the music's slot 3 (0x004c92b0).
@@ -162,31 +168,6 @@ void AudioCallbackHandler::setupCallbacks() {
             audio::advanced_kit::notePlay(kitId, pos, handle);
         } else {
             audio::AudioEngine::instance().playSound2D(entry->path, 1.0f, pitchOf(), audio::Channel::Effects);
-        }
-    });
-
-    // Other player level-up callback - trigger 3D effect + chat notification
-    gameHandler_.setOtherPlayerLevelUpCallback([this](uint64_t guid, uint32_t newLevel) {
-        if (!renderer_) return;
-
-        // Trigger 3D effect at the other player's position
-        auto entity = gameHandler_.getEntityManager().getEntity(guid);
-        if (entity) {
-            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
-            glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
-            if (auto* ac = renderer_->getAnimationController())
-                ac->triggerLevelUpEffect(renderPos, gameHandler_.resolveUnitRenderInstance(guid));
-        }
-
-        // Show chat message if in group
-        if (gameHandler_.isInGroup()) {
-            std::string name = gameHandler_.getCachedPlayerName(guid);
-            if (name.empty()) name = "A party member";
-            game::MessageChatData msg;
-            msg.type = game::ChatType::SYSTEM;
-            msg.language = game::ChatLanguage::UNIVERSAL;
-            msg.message = name + " has reached level " + std::to_string(newLevel) + "!";
-            gameHandler_.addLocalChatMessage(msg);
         }
     });
 

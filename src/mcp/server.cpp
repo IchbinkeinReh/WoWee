@@ -15,8 +15,10 @@
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
 #include "game/opcode_table.hpp"
+#include "mcp/event_args.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/gate.hpp"
+#include "mcp/owner_guid.hpp"
 #include "mcp/send_guard.hpp"
 #include "mcp/token_file.hpp"
 #include "rendering/renderer.hpp"
@@ -63,16 +65,6 @@ long long processId() {
 }
 
 /// What an event carries, cut to what is worth keeping.
-std::vector<std::string> cutArgs(const std::vector<std::string>& args) {
-    constexpr size_t kMostArgs = 20;
-    constexpr size_t kLongest = 400;
-    std::vector<std::string> out;
-    for (const auto& a : args) {
-        if (out.size() >= kMostArgs) break;
-        out.push_back(a.size() > kLongest ? a.substr(0, kLongest) : a);
-    }
-    return out;
-}
 
 }  // namespace
 
@@ -296,11 +288,12 @@ bool Server::sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload) 
     if (gh) {
         guard.ownGuid = gh->getPlayerGuid();
         guard.targetGuid = gh->getTargetGuid();
+        if (const auto seat = gh->vehicleRoster().passenger(guard.ownGuid)) guard.vehicleGuid = seat->vehicleGuid;
         if (const auto* c = gh->getActiveCharacter()) guard.ownName = c->name;
         guard.belongsToOtherPlayer = [gh](uint64_t guid) {
             const auto e = gh->getEntityManager().getEntity(guid);
             if (!e) return false;
-            const uint64_t owner = game::unitSummonedByGuid(*e);
+            const uint64_t owner = ownerGuid(*e);
             return owner != 0 && owner != gh->getPlayerGuid() && isPlayerGuid(owner);
         };
     }
@@ -314,7 +307,7 @@ bool Server::sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload) 
 
 void Server::heard(const std::string& event, const std::vector<std::string>& args) {
     if (event == "COMBAT_LOG_EVENT") return;  // the filtered copy of the next
-    EventLine line{.name = event, .args = cutArgs(args), .at = context_.now};
+    EventLine line{.name = event, .args = shownArgs(args), .at = context_.now};
     if (event == "COMBAT_LOG_EVENT_UNFILTERED") {
         context_.combat.push(std::move(line));
     } else if (event.rfind("CHAT_MSG_", 0) == 0) {

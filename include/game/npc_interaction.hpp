@@ -147,7 +147,23 @@ struct ServiceAsk {
     int playerReaction = 3;           ///< how the player regards it
 };
 
-/// 0x00729620 (and 0x00729530 at its end): whether the client offers the
+/// 0x00729530: whether the player may speak to the unit.
+[[nodiscard]] constexpr bool mayInteract(const ServiceAsk& a) {
+    // A ghost speaks only to what ghosts see (type flag 2).
+    if (a.playerGhost && (a.typeFlags & 0x2u) == 0) return false;
+    // A gossip creature flagged 0x800000 speaks only to whoever made it.
+    if ((a.npcFlags & 0x1u) != 0 && !a.isPlayer && (a.typeFlags & 0x800000u) != 0 && a.createdByOther)
+        return false;
+    // Selectable, with services, and neutral or better both ways round -
+    // or UNIT_FIELD_FLAGS_2 0x4000 on the unit.
+    if ((a.unitFlags & 0x2000000u) == 0 && a.npcFlags != 0) {
+        if (a.reactionToPlayer > 2 && a.playerReaction > 2) return true;
+        if ((a.flags2 & 0x4000u) != 0) return true;
+    }
+    return false;
+}
+
+/// 0x00729620 (0x00729530 at its end): whether the client offers the
 /// unit's services at all.
 [[nodiscard]] constexpr bool serviceOffered(const ServiceAsk& a) {
     // The player alive, off a taxi and not charmed.
@@ -163,18 +179,7 @@ struct ServiceAsk {
     if (a.inCombat && (a.typeFlags & 0x40000u) == 0 && (a.playerFlags2 & 0x4000u) == 0) return false;
     // A spell click unit must take the click (0x0071c570).
     if ((a.npcFlags & 0x1000000u) != 0 && !a.spellClickable) return false;
-    // 0x00729530: a ghost speaks only to what ghosts see (type flag 2).
-    if (a.playerGhost && (a.typeFlags & 0x2u) == 0) return false;
-    // A gossip creature flagged 0x800000 speaks only to whoever made it.
-    if ((a.npcFlags & 0x1u) != 0 && !a.isPlayer && (a.typeFlags & 0x800000u) != 0 && a.createdByOther)
-        return false;
-    // Selectable, with services, and neutral or better both ways round -
-    // or UNIT_FIELD_FLAGS_2 0x4000 on the unit.
-    if ((a.unitFlags & 0x2000000u) == 0 && a.npcFlags != 0) {
-        if (a.reactionToPlayer > 2 && a.playerReaction > 2) return true;
-        if ((a.flags2 & 0x4000u) != 0) return true;
-    }
-    return false;
+    return mayInteract(a);
 }
 
 }  // namespace wowee::game::npc_interaction

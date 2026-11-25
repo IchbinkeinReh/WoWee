@@ -2340,8 +2340,6 @@ void SocialHandler::handleDuelRequested(network::Packet& packet) {
     pendingDuelRequest_ = true;
     // The DUEL_REQUESTED popup says it; no chat line (0x005cfcd0). This
     // printed "X challenges you to a duel!"
-    if (auto* ac = owner_.services().audioCoordinator)
-        if (auto* sfx = ac->getUiSoundManager()) sfx->playTargetSelect();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("DUEL_REQUESTED", {duelChallengerName_});
 }
 
@@ -2854,8 +2852,6 @@ void SocialHandler::handleGroupInvite(network::Packet& packet) {
     gameError(owner_, ErrTo::Chat, "ERR_INVITED_TO_GROUP_SS",
               "|Hplayer:%s|h[%s]|h has invited you to join a group.",
               {data.inviterName, data.inviterName});
-    if (auto* ac = owner_.services().audioCoordinator)
-        if (auto* sfx = ac->getUiSoundManager()) sfx->playQuestActivate();
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("PARTY_INVITE_REQUEST", {data.inviterName});
 }
@@ -6697,10 +6693,11 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
     // Treating WotLK's first float byte as showVisual shifted the entire packet,
     // producing bogus counts, faction names, standings, and chat messages.
     float rafBonus = 0.0f;
+    bool showVisual = false;
     if (isActiveExpansion("wotlk")) {
         if (!packet.hasRemaining(9)) return;
         rafBonus = packet.readFloat();
-        /*uint8_t showVisual =*/ packet.readUInt8();
+        showVisual = packet.readUInt8() != 0;
     } else if (isActiveExpansion("tbc")) {
         if (!packet.hasRemaining(8)) return;
         rafBonus = packet.readFloat();
@@ -6711,6 +6708,7 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
     uint32_t count = packet.readUInt32();
     count = std::min(count, 128u);
     owner_.loadFactionNameCache();
+    bool rose = false;
     for (uint32_t i = 0; i < count && packet.hasRemaining(8); ++i) {
         // The packet carries Faction.dbc ReputationListID, not the faction ID.
         uint32_t repListId = packet.readUInt32();
@@ -6821,8 +6819,9 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
         // invisible unless flag 0x80 says otherwise - but not twice for one
         // that has just joined the list.
         if (newRank != oldRank && (flags & GameHandler::FACTION_FLAG_HIDDEN) == 0 &&
-            ((flags & GameHandler::FACTION_FLAG_INVISIBLE_FORCED) == 0 || (flags & 0x80) != 0) && !joined) {
-            standingChanged(newRank);
+            ((flags & GameHandler::FACTION_FLAG_INVISIBLE_FORCED) == 0 || (flags & 0x80) != 0)) {
+            if (!joined) standingChanged(newRank);
+            rose = rose || newRank > oldRank;
         }
         if (flagsAt && *flagsAt != flags) {
             const bool warChanged = ((*flagsAt ^ flags) & GameHandler::FACTION_FLAG_AT_WAR) != 0;
@@ -6830,7 +6829,9 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
             if (warChanged) owner_.refreshUnitHostility();
         }
     }
-    // 0x005d20a0: reputation's tutorial, past level 9.
+    // 0x005d20a0: "HARDCODED Reputation" on the player for a rank risen, where
+    // the server says so; reputation's tutorial, past level 9.
+    if (rose && showVisual) owner_.playUnitEffect(owner_.getPlayerGuid(), GameHandler::UnitEffect::Reputation);
     if (owner_.getPlayerLevel() > 9) owner_.triggerTutorial(0xf);
 }
 

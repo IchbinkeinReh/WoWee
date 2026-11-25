@@ -7,6 +7,7 @@
 // or aims at the wrong bone shows up here rather than in a raid.
 #include <catch_amalgamated.hpp>
 
+#include "rendering/item_missile.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/spell_missile.hpp"
 
@@ -272,4 +273,34 @@ TEST_CASE("A missile's first launch makes up the time since the cast", "[spell_m
     CHECK(retimedLaunchSpeed(20.0f, 40.0f, 3.0f) == Catch::Approx(40.0f));   // no time left
     CHECK(retimedLaunchSpeed(20.0f, 0.0f, 0.0f) == Catch::Approx(40.0f));    // nowhere to go
     CHECK(retimedLaunchSpeed(0.0f, 40.0f, 1.0f) == Catch::Approx(0.0f));     // no speed: untouched
+}
+
+// The player's shots flew an arrow or a bullet of our own, straight and at a speed of
+// our own; a creature's and every other shot flew nothing.
+TEST_CASE("a visual without a missile of its own flies the caster's item (0x00732ff0)", "[spell_missile]") {
+    namespace im = wowee::rendering::item_missile;
+    CHECK(im::source(0, false, 5996) == im::Source::PlainAmmo);
+    CHECK(im::source(0, true, 5996) == im::Source::PlainAmmo);
+    CHECK(im::source(0, true, 0) == im::Source::None);
+    CHECK(im::source(0, false, 0) == im::Source::None);
+    CHECK(im::source(-1, true, 0) == im::Source::MainHand);
+    CHECK(im::source(-2, true, 0) == im::Source::OffHand);
+    CHECK(im::source(-3, true, 0) == im::Source::Ranged);
+    CHECK(im::source(-1, false, 0) == im::Source::None);
+    CHECK(im::source(-4, true, 5996) == im::Source::Ammo);
+    CHECK(im::source(-5, true, 0) == im::Source::None);
+    CHECK(im::source(188, true, 0) == im::Source::None);
+
+    const im::Display arrow{"", "ArrowFlight_01.mdx", "", "ArrowFlight_Fire"};
+    CHECK(im::model(im::Source::PlainAmmo, arrow, 24) ==
+          "Item\\ObjectComponents\\Ammo\\ArrowFlight_01.m2|Item\\ObjectComponents\\Ammo\\ArrowFlight_Fire.blp");
+    CHECK(im::model(im::Source::PlainAmmo, arrow, 13).empty());
+    CHECK(im::model(im::Source::PlainAmmo, {"", "ArrowFlight_01.mdx", "", ""}, 24).empty());
+    const im::Display axe{"Axe_1H_A_01.mdx", "", "Axe_1H_A_01Brown", ""};
+    CHECK(im::model(im::Source::MainHand, axe, 21) ==
+          "Item\\ObjectComponents\\Weapon\\Axe_1H_A_01.m2|Item\\ObjectComponents\\Weapon\\Axe_1H_A_01Brown.blp");
+    CHECK(im::model(im::Source::PlainAmmo, axe, 25).empty());
+    const im::Display shield{"Shield_A_01.mdx", "", "", ""};
+    CHECK(im::model(im::Source::OffHand, shield, 14) == "Item\\ObjectComponents\\Shield\\Shield_A_01.m2");
+    CHECK(im::model(im::Source::MainHand, axe, 1).empty());
 }

@@ -56,6 +56,14 @@ struct GameHandlerTestAccess {
     static void setSocket(GameHandler& gh, std::unique_ptr<network::WorldSocket> socket) {
         gh.socket = std::move(socket);
     }
+    static void setCharacter(GameHandler& gh, const std::string& account, const std::string& name, uint64_t guid) {
+        gh.accountName = account;
+        Character character{};
+        character.guid = guid;
+        character.name = name;
+        gh.characters = {character};
+        gh.activeCharacterGuid_ = guid;
+    }
     static void setExpansions(core::Application& app, std::unique_ptr<ExpansionRegistry> registry) {
         app.expansionRegistry_ = std::move(registry);
     }

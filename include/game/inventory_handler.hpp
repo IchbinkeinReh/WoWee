@@ -846,6 +846,9 @@ public:
 
     // ---- Inventory field / rebuild methods (moved from GameHandler) ----
     void queryItemInfo(uint32_t entry, uint64_t guid);
+    /// The items still without an answer, once more.
+    void askItemsAgain();
+    void sendItemQuery(uint32_t entry, uint64_t guid);
     uint64_t resolveOnlineItemGuid(uint32_t itemId) const;
     void detectInventorySlotBases(const FlatFieldMap& fields);
     /// Read the inventory fields off an update block.
@@ -958,7 +961,7 @@ private:
     void queryNextMailTime();
     /// The time to the next letter changed: UPDATE_PENDING_MAIL, and the
     /// letter sound when it has just reached zero.
-    void nextMailTimeChanged(bool wasNew);
+    void nextMailTimeChanged();
     /// Senders whose letters are all read leave the list (0x0056de00).
     void dropReadPendingSenders();
     void handleEquipmentSetList(network::Packet& packet);

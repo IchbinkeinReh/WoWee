@@ -18,6 +18,10 @@
 #include "rendering/renderer.hpp"
 #include "rendering/unit_model_events.hpp"
 #include "rendering/unit_splash.hpp"
+#include "rendering/unit_breath.hpp"
+#include "rendering/spell_visual_system.hpp"
+#include "game/unit_level_display.hpp"
+#include "game/zone_manager.hpp"
 #include "rendering/melee_sound.hpp"
 #include "rendering/terrain_manager.hpp"
 #include "rendering/water_renderer.hpp"
@@ -646,6 +650,10 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             }
             break;
         }
+        case ue::Kind::Breath: {
+            unitBreathes(unit, unitPosition);
+            break;
+        }
         case ue::Kind::DeathThud: {
             // The unit's size class: its display's, else its model's.
             const int32_t drow = displays->findRecordById(unit.getDisplayId());
@@ -927,6 +935,65 @@ std::pair<float, float> EntitySpawner::unitRippleSize(const game::Unit& unit) {
     }
     rippleHeights_[key] = height;
     return {scale, height};
+}
+
+void EntitySpawner::unitBreathes(const game::Unit& unit, const glm::vec3& at) {
+    namespace ub = rendering::unit_breath;
+    namespace us = rendering::unit_splash;
+    const uint16_t scaleField = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
+    auto* cr = renderer_->getCharacterRenderer();
+    auto* effects = renderer_->getSpellVisualSystem();
+    const uint64_t guid = unit.getGuid();
+    uint32_t drawn = gameHandler_->resolveUnitRenderInstance(guid);
+    if (drawn == 0 && guid == gameHandler_->getPlayerGuid()) drawn = renderer_->getCharacterInstanceId();
+    if (!cr || !effects || drawn == 0) return;
+    // 0x00732650: a unit with a CreatureModelData row, by its flags.
+    auto displays = assetManager_ ? assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc") : nullptr;
+    auto models = assetManager_ ? assetManager_->loadDBCOptional("CreatureModelData.dbc") : nullptr;
+    const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
+    const int32_t model = display >= 0 && models
+        ? models->findRecordById(displays->getUInt32(static_cast<uint32_t>(display), kDisplayModelColumn)) : -1;
+    if (model < 0) return;
+    ub::Ask ask;
+    ask.modelFlags = models->getUInt32(static_cast<uint32_t>(model), 1);
+    ask.player = unit.getType() == game::ObjectType::PLAYER;
+    if (ask.player) {
+        const auto field = [&](game::UF f) {
+            const uint16_t i = game::fieldIndex(f);
+            return i != 0xFFFF ? unit.getField(i) : 0u;
+        };
+        ask.drunk = game::playerDrunkShare(static_cast<int>(field(game::UF::PLAYER_BYTES_3) >> 8 & 0xff),
+                                           static_cast<int>(field(game::UF::PLAYER_FAKE_INEBRIATION)));
+    }
+    const auto now = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now().time_since_epoch()).count());
+    if (unitAir_.size() > 1024) unitAir_.clear();
+    const auto [it, isNew] = unitAir_.try_emplace(guid);
+    UnitAir& air = it->second;
+    if (isNew || now - air.askedMs >= ub::kAirKeptMs) {
+        air = {.askedMs = now};
+        float height = 0.0f;
+        if (const auto* data = cr->getModelData(cr->getInstanceModelId(drawn))) {
+            const float shape = displays->getFloat(static_cast<uint32_t>(display), us::kDisplayScaleColumn) *
+                                models->getFloat(static_cast<uint32_t>(model), us::kModelScaleColumn);
+            height = (data->boundMax.z - data->boundMin.z) * (shape > 0.0f ? shape : 1.0f) *
+                     (scaleField != 0xFFFF ? std::bit_cast<float>(unit.getField(scaleField)) : 1.0f);
+        }
+        std::optional<float> surface;
+        if (const auto in = rendering::liquid_query::atUnit(renderer_->liquidWorld(), at)) surface = in->level;
+        air.underwater = ub::underwater(surface, at.z, height);
+        if (!air.underwater) {
+            const uint32_t area = renderer_->areaOfUnitAt(at);
+            std::optional<uint32_t> zoneFlags;
+            if (auto* zones = renderer_->getZoneManager())
+                if (const auto zone = zones->areaParent(area); zone && *zone != 0)
+                    zoneFlags = gameHandler_->getAreaFlags(*zone);
+            air.cold = area != 0 && ub::coldAir(gameHandler_->getAreaFlags(area), zoneFlags);
+        }
+    }
+    ask.underwater = air.underwater;
+    ask.cold = air.cold;
+    if (const char* name = ub::effectName(ub::breathOf(ask))) effects->playNamedEffectOnUnit(name, drawn, ub::kAttachment);
 }
 
 float EntitySpawner::modelCollisionHeight(const game::Unit& unit) const {

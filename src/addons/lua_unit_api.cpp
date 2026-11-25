@@ -505,128 +505,49 @@ static int lua_IsReferAFriendLinked(lua_State* L) {
     return 1;
 }
 
-namespace {
-
-/// A unit's standing on a mob's threat list: the status WoW reports, its raw
-/// threat, and the leader's.
-///
-/// One place, because UnitThreatSituation and UnitDetailedThreatSituation must
-/// agree - the indicator's colour comes from the first and its number from the
-/// second, and two copies of the rule would eventually disagree about which
-/// unit is tanking while the number beside it said otherwise.
-///
-/// Answers false when no list has arrived for this mob, which is not the same
-/// as being absent from one: the caller falls back to guessing from whom the
-/// mob is attacking, and only a list that exists can say "not on it".
-struct ThreatStanding {
-    int status = 0;          ///< 0 none, 1 threat, 2 insecurely, 3 securely tanking
-    uint32_t threat = 0;
-    uint32_t topThreat = 0;
-    bool onList = false;
-};
-
-bool threatStandingFor(game::GameHandler* gh, uint64_t unitGuid, uint64_t mobGuid,
-                       ThreatStanding& out) {
-    if (!gh || unitGuid == 0 || mobGuid == 0) return false;
-    const auto* list = gh->getThreatList(mobGuid);
-    if (!list || list->empty()) return false;
-    out.topThreat = (*list)[0].threat;
-    for (size_t i = 0; i < list->size(); ++i) {
-        if ((*list)[i].victimGuid != unitGuid) continue;
-        out.onList = true;
-        out.threat = (*list)[i].threat;
-        if (i != 0) { out.status = 1; return true; }
-        // Securely tanking only when the lead is clear. WoW's own rule is a
-        // percentage margin over the runner-up; at the head with someone close
-        // behind it is "insecurely", which is what turns the indicator amber
-        // before it turns red.
-        const uint32_t next = (list->size() > 1) ? (*list)[1].threat : 0;
-        out.status = (list->size() > 1 && next * 11 >= out.topThreat * 10) ? 2 : 3;
-        return true;
-    }
-    return true;  // the list exists and this unit is not on it
-}
-
-}  // namespace
-
-// UnitThreatSituation(unit, mobUnit) → 0=not tanking, 1=not tanking but threat, 2=insecurely tanking, 3=securely tanking
+// UnitThreatSituation("unit" [, "mob"]) (0x00613a60): the unit's status on the
+// mob's threat list, over every list it is on without a mob, less one; nothing
+// off the lists. A unit the token reader cannot read is the usage line.
 static int lua_UnitThreatSituation(lua_State* L) {
-    // 0x00613a60: a unit the token reader cannot read is the usage line - no
-    // argument and an empty text among them, and an empty text for the mob.
     if (!lua_isstring(L, 1) || !*lua_tostring(L, 1) || (lua_isstring(L, 2) && !*lua_tostring(L, 2)))
         return luaL_error(L, "Usage: UnitThreatSituation(\"unit\" [, \"mob\"])");
     auto* gh = getGameHandler(L);
-    if (!gh) { return 0; }
-    const char* uid = luaL_optstring(L, 1, "player");
-    const char* mobUid = luaL_optstring(L, 2, nullptr);
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    uint64_t playerUnitGuid = resolveUnitGuid(gh, uidStr);
-    if (playerUnitGuid == 0) { return 0; }
-    // If no mob specified, check general combat threat against current target
-    uint64_t mobGuid = 0;
-    if (mobUid && *mobUid) {
-        std::string mStr(mobUid);
-        toLowerInPlace(mStr);
-        mobGuid = resolveUnitGuid(gh, mStr);
-    }
-    // The mob's own threat list first, which is what the server actually sent.
-    // This used to go straight to the guess below because the list was built
-    // from a misread packet and was never worth consulting - SMSG_THREAT_UPDATE
-    // was read as though it carried the second guid that only
-    // SMSG_HIGHEST_THREAT_UPDATE has.
-    ThreatStanding standing;
-    if (threatStandingFor(gh, playerUnitGuid, mobGuid, standing)) {
-        lua_pushnumber(L, standing.status);
-        return 1;
-    }
-    // Not on any threat list: nothing (0x00613a60).
-    return 0;
+    if (!gh) return 0;
+    const auto guidOf = [&](int arg) {
+        std::string unit = lua_tostring(L, arg);
+        toLowerInPlace(unit);
+        return resolveUnitGuid(gh, unit);
+    };
+    const uint64_t unit = guidOf(1);
+    if (unit == 0) return 0;
+    const uint8_t status = lua_isstring(L, 2) ? gh->threatSituation(unit, guidOf(2)).standing.status
+                                              : gh->threatStatus(unit);
+    if (status == 0) return 0;
+    lua_pushnumber(L, status - 1);
+    return 1;
 }
 
-// UnitDetailedThreatSituation(unit, mobUnit) → isTanking, status, threatPct, rawThreatPct, threatValue
+// UnitDetailedThreatSituation("unit", "mob") (0x00613b40): whether the mob's
+// victim is the unit, its status, the percentage towards being it, that of the
+// victim's threat, and the threat itself; nothing off the list.
 static int lua_UnitDetailedThreatSituation(lua_State* L) {
-    // 0x00613b40: both units are read by the token reader, which refuses no
-    // argument and an empty text; the mob is not optional here.
     if (!lua_isstring(L, 1) || !*lua_tostring(L, 1) || !lua_isstring(L, 2) || !*lua_tostring(L, 2))
         return luaL_error(L, "Usage: UnitDetailedThreatSituation(\"unit\" [, \"mob\"])");
-    // Use UnitThreatSituation logic for the basics
     auto* gh = getGameHandler(L);
-    if (!gh) {
-        return 0;   // no such unit or mob: nothing (0x00613b40)
-    }
-    const char* uid = luaL_optstring(L, 1, "player");
-    const char* mobUid = luaL_optstring(L, 2, nullptr);
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    uint64_t unitGuid = resolveUnitGuid(gh, uidStr);
-    uint64_t mobGuid = 0;
-    if (mobUid && *mobUid) {
-        std::string mStr(mobUid);
-        toLowerInPlace(mStr);
-        mobGuid = resolveUnitGuid(gh, mStr);
-    }
-
-    ThreatStanding standing;
-    if (threatStandingFor(gh, unitGuid, mobGuid, standing)) {
-        const bool isTanking = (standing.status >= 2);
-        double rawPct = 0.0;
-        if (standing.topThreat > 0)
-            rawPct = 100.0 * standing.threat / standing.topThreat;
-        // Against the point where aggro changes hands rather than against the
-        // leader: WoW pulls at a tenth clear of the current tank, so a hundred
-        // here means "about to take it" and is what the numeric indicator
-        // colours on. Whoever holds it is already at a hundred by definition.
-        const double pullPct = isTanking ? 100.0 : std::min(100.0, rawPct / 1.1);
-        luaPushOneOrNil(L, isTanking);
-        lua_pushnumber(L, standing.status);
-        lua_pushnumber(L, pullPct);
-        lua_pushnumber(L, rawPct);
-        lua_pushnumber(L, standing.threat);
-        return 5;
-    }
-    // Not on its threat list: nothing.
-    return 0;
+    if (!gh) return 0;
+    const auto guidOf = [&](int arg) {
+        std::string unit = lua_tostring(L, arg);
+        toLowerInPlace(unit);
+        return resolveUnitGuid(gh, unit);
+    };
+    const auto s = gh->threatSituation(guidOf(1), guidOf(2));
+    if (s.standing.status == 0) return 0;
+    luaPushOneOrNil(L, s.standing.victim);
+    lua_pushnumber(L, s.standing.status - 1);
+    lua_pushnumber(L, s.scaledPercent);
+    lua_pushnumber(L, s.standing.percent);
+    lua_pushnumber(L, s.standing.threat);
+    return 5;
 }
 
 // CheckInteractDistance(unit, distIndex) → boolean
@@ -1877,12 +1798,8 @@ static int lua_UnitCharacterPoints(lua_State* L) {
 }
 
 static int lua_PetHasActionBar(lua_State* L) {
-    // 0x005d3720 -> 0x005d35b0: a living pet in view, and not while the
-    // vehicle bar has the bars (DAT_00c1e5a0 bit 0).
     auto* gh = getGameHandler(L);
-    const auto pet = gh && gh->hasPet() ? gh->getEntityManager().getEntity(gh->getPetGuid()) : nullptr;
-    const auto* unit = pet && pet->isUnit() ? static_cast<const game::Unit*>(pet.get()) : nullptr;
-    luaPushOneOrNil(L, unit && unit->getHealth() > 0 && !gh->isInVehicle());
+    luaPushOneOrNil(L, gh && gh->petHasActionBar());
     return 1;
 }
 static int lua_PetCanBeDismissed(lua_State* L) {
@@ -3098,27 +3015,11 @@ static int lua_GetRestState(lua_State* L) {
 
 static int lua_UnitAffectingCombat(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitAffectingCombat(\"unit\")");   // 0x0060f860
-    const char* uid = luaL_optstring(L, 1, "player");
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    if (uidStr == "player") {
-        luaPushOneOrNil(L, gh->isInCombat());
-    } else {
-        // Check UNIT_FLAG_IN_COMBAT (0x00080000) in UNIT_FIELD_FLAGS
-        uint64_t guid = resolveUnitGuid(gh, uidStr);
-        bool inCombat = false;
-        if (guid != 0) {
-            auto entity = gh->getEntityManager().getEntity(guid);
-            if (entity) {
-                uint32_t flags = entity->getField(
-                    game::fieldIndex(game::UF::UNIT_FIELD_FLAGS));
-                inCombat = (flags & 0x00080000) != 0; // UNIT_FLAG_IN_COMBAT
-            }
-        }
-        luaPushOneOrNil(L, inCombat);
-    }
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
+    const auto entity = gh && guid ? gh->getEntityManager().getEntity(guid) : nullptr;
+    const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+    luaPushOneOrNil(L, entity && flags != 0xFFFF && (entity->getField(flags) & 0x80000u) != 0);
     return 1;
 }
 
@@ -3340,16 +3241,11 @@ static int lua_GetRaidRosterInfo(lua_State* L) {
     return 14;
 }
 
-// GetThreatStatusColor(statusIndex) → r, g, b
+// GetThreatStatusColor(status) (0x00511fe0).
 static int lua_GetThreatStatusColor(lua_State* L) {
-    int status = static_cast<int>(luaL_optnumber(L, 1, 0));
-    switch (status) {
-        case 0: lua_pushnumber(L, 0.69f); lua_pushnumber(L, 0.69f); lua_pushnumber(L, 0.69f); break; // gray (no threat)
-        case 1: lua_pushnumber(L, 1.0f);  lua_pushnumber(L, 1.0f);  lua_pushnumber(L, 0.47f); break; // yellow (threat)
-        case 2: lua_pushnumber(L, 1.0f);  lua_pushnumber(L, 0.6f);  lua_pushnumber(L, 0.0f);  break; // orange (high threat)
-        case 3: lua_pushnumber(L, 1.0f);  lua_pushnumber(L, 0.0f);  lua_pushnumber(L, 0.0f);  break; // red (tanking)
-        default: lua_pushnumber(L, 1.0f); lua_pushnumber(L, 1.0f);  lua_pushnumber(L, 1.0f);  break;
-    }
+    const auto status = static_cast<int64_t>(std::nearbyint(lua_tonumber(L, 1) + 1.0));
+    const uint32_t c = game::threatStatusColor(static_cast<uint32_t>(status));
+    for (const int shift : {16, 8, 0}) lua_pushnumber(L, static_cast<float>(c >> shift & 0xff) * 0.00392156f);
     return 3;
 }
 

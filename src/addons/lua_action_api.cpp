@@ -1,5 +1,6 @@
 // lua_action_api.cpp - Action bar, cursor/pickup, keyboard input, key bindings, and pet actions Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "game/grey_triviality.hpp"
 #include "game/item_text.hpp"
 #include "game/equip_slot_fit.hpp"
 // For the cursor's own sounds: the coordinator reaches the manager that asks a
@@ -21,6 +22,7 @@
 #include "game/inventory_slots.hpp"
 // For the row complaint ClickSendMailItemButton ends with.
 #include "game/server_notices.hpp"
+#include "ui/binding_chords.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/keybinding_manager.hpp"
 #include "ui/gamepad_controls.hpp"
@@ -387,6 +389,10 @@ static std::optional<PetActionRef> petActionRef(game::GameHandler* gh, int slot)
     if (i < 0 || i >= game::GameHandler::PET_ACTION_BAR_SLOTS) return std::nullopt;
     return PetActionRef{static_cast<uint32_t>(i), gh->getPetActionSlot(i)};
 }
+std::optional<uint32_t> petActionAt(game::GameHandler* gh, int slot) {
+    if (const auto ref = petActionRef(gh, slot)) return ref->packed;
+    return std::nullopt;
+}
 using game::pet::petSlotSpell;
 /// Whether this pet belongs to a hunter (0x0071b630).
 ///
@@ -405,24 +411,7 @@ using game::pet::petSlotSpell;
 /// addons/lua_api_helpers.hpp, which is where the other cross-file pet answers
 /// live; the definition stays here, beside the pet bindings that started it.
 bool hunterPetOf(game::GameHandler* gh, const game::Unit* pet) {
-    if (!gh || !pet) return false;
-    const uint16_t number = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
-    if (number == 0xFFFF || pet->getField(number) == 0) return false;
-    // The creator guid's high half lives one index above the low half.
-    const uint16_t by = game::fieldIndex(game::UF::UNIT_FIELD_CREATEDBY);
-    if (by == 0xFFFF) return false;
-    const uint64_t creator =
-        pet->getField(by)
-        | (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(by + 1))) << 32);
-    uint8_t classId = 0;
-    if (auto owner = gh->getEntityManager().getEntity(creator)) {
-        const uint32_t bytes0 =
-            owner->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
-        classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
-    }
-    if (classId == 0 && creator == gh->getPlayerGuid()) classId = gh->getPlayerClass();
-    if (classId == 0) classId = gh->lookupPlayerClass(creator);
-    return classId == 3;   // hunter
+    return gh && pet && gh->isHuntersPet(*pet);
 }
 /// The global naming a pet command's or stance's icon (0x005a97f0:
 /// "PET_%s_TEXTURE"), nothing for anything else.
@@ -454,11 +443,7 @@ static const char* petTokenTexture(uint32_t packed) {
 /// answers false for a token that names nobody, and then nothing is sent and
 /// nothing is heard. No argument at all is not such a token.
 static bool petUnitArgResolves(lua_State* L, game::GameHandler* gh, int unitArg) {
-    const char* uid = unitArg > 0 ? luaL_optstring(L, unitArg, nullptr) : nullptr;
-    if (!uid || !gh) return true;
-    std::string u(uid);
-    toLowerInPlace(u);
-    return resolveUnitGuid(gh, u) != 0;
+    return !gh || unitAskedOrTarget(L, gh, unitArg).has_value();
 }
 
 static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, int unitArg) {
@@ -469,14 +454,7 @@ static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, in
     // CGPetInfo::SendPetAction asks the taint check first (0x005d4210, kind
     // 2): a pet's action is refused outright to insecure code.
     if (!taint::allowed(L, 2)) return;
-    uint64_t target = 0;
-    if (const char* uid = unitArg > 0 ? luaL_optstring(L, unitArg, nullptr) : nullptr) {
-        std::string u(uid);
-        toLowerInPlace(u);
-        target = resolveUnitGuid(gh, u);
-    }
-    if (target == 0 && gh->hasTarget()) target = gh->getTargetGuid();
-    gh->usePetSlot(packed, target);
+    if (const auto target = unitAskedOrTarget(L, gh, unitArg)) gh->usePetSlot(packed, *target);
 }
 
 static int lua_HasAction(lua_State* L) {
@@ -1288,11 +1266,25 @@ static int lua_IsActionInRange(lua_State* L) {
     return pushSpellRangeAnswer(L, gh, spellId, gh->getTargetGuid());
 }
 
-// GetActionInfo(slot) → actionType, id, subType
+/// A spell by its place, as GetCursorInfo and GetActionInfo say it. `pet`: the
+/// pet's book counts too.
+static game::cursor_info::Spell spellInfo(game::GameHandler* gh, uint32_t spell, bool pet) {
+    std::vector<uint32_t> critters, mounts, book;
+    for (const auto& c : gh->getCompanions(false)) critters.push_back(c.spellId);
+    for (const auto& c : gh->getCompanions(true)) mounts.push_back(c.spellId);
+    for (const auto& tab : gh->getSpellBookTabs()) book.insert(book.end(), tab.spellIds.begin(), tab.spellIds.end());
+    return game::cursor_info::spell(spell, critters, mounts, book,
+                                    pet ? gh->getPetBookSpells() : std::vector<uint32_t>{});
+}
+
+// GetActionInfo(slot) (0x005a8f10) → "spell", place in the book, "spell" or
+// "pet", spell; "companion", place, "CRITTER" or "MOUNT", spell; "item", item;
+// "macro", index; "equipmentset", name
 static int lua_GetActionInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return 0; }
-    int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetActionInfo(slot)");
+    int slot = static_cast<int>(lua_tonumber(L, 1)) - 1;
     if (const auto ref = petActionRef(gh, slot)) {
         // 0x005a8f10: "spell", its place in the pet's spellbook, "pet", the
         // spell - for any of the ten, whatever it holds.
@@ -1312,22 +1304,20 @@ static int lua_GetActionInfo(lua_State* L) {
     }
     const auto& action = bar[slot];
     switch (action.type) {
-        case game::ActionBarSlot::SPELL:
-            lua_pushstring(L, "spell");
-            lua_pushnumber(L, action.id);
-            lua_pushstring(L, "spell");
-            // The fourth value, which for a spell action is the same id.
-            // vehiclemenubar reads it to build a link on a modified click -
-            // HandleModifiedItemClick(GetSpellLink(spellID)) - so without it
-            // shift-clicking a vehicle button linked nothing. Only spells have
-            // one; an item or a macro answers nil, as the real client does.
+        case game::ActionBarSlot::SPELL: {
+            // Its place in the player's book or a companion's among its kind,
+            // and the spell (0x005a8f10).
+            const auto said = spellInfo(gh, action.id, /*pet=*/false);
+            lua_pushstring(L, said.kind);
+            lua_pushnumber(L, said.place);
+            lua_pushstring(L, said.list);
             lua_pushnumber(L, action.id);
             return 4;
+        }
         case game::ActionBarSlot::ITEM:
             lua_pushstring(L, "item");
             lua_pushnumber(L, action.id);
-            lua_pushstring(L, "item");
-            return 3;
+            return 2;
         case game::ActionBarSlot::MACRO:
             lua_pushstring(L, "macro");
             lua_pushnumber(L, macroIndex(L, action.id));   // 0x00564ab0
@@ -1450,17 +1440,10 @@ static int lua_UseAction(lua_State* L) {
     // this was a warning on every one of them.
     LOG_DEBUG("UseAction: slot ", slot + 1, " type=", static_cast<int>(action.type), " id=", action.id);
     if (action.type == game::ActionBarSlot::SPELL) {
-        // A unit that resolves wins; anything else falls back to the target,
-        // which is what an ordinary click has always done. An unresolvable
-        // unit is not treated as "cast on nobody" - a raid frame naming a
-        // member who has gone out of range should still cast at the target
-        // rather than silently at nothing.
-        uint64_t target = gh->hasTarget() ? gh->getTargetGuid() : 0;
-        if (const char* unit = lua_tostring(L, 2); unit && *unit) {
-            std::string uid(unit);
-            toLowerInPlace(uid);
-            if (const uint64_t named = resolveUnitGuid(gh, uid)) target = named;
-        }
+        // None is the target, and never another unit's stand-in (0x0060abf0):
+        // a unit named that is not there is refused, what is no unit at all
+        // does nothing.
+        const auto target = unitAskedOrTarget(L, gh, 2);
         // A spell that belongs to an item - a Hearthstone is spell 8690 - has
         // to go as CMSG_USE_ITEM rather than a cast, or the server drops it.
         // This client's own action bar did that and was the only place that
@@ -1468,15 +1451,16 @@ static int lua_UseAction(lua_State* L) {
         //
         // Either way through 0x0080cce0, and its taint check (0x005abbc0 ->
         // 0x0053bc40, or UseItem -> 0x0080da40).
-        if (!spellCastAllowed(L, gh, action.id)) {
+        if (!target || !spellCastAllowed(L, gh, action.id)) {
             // Refused, and the interface told (ADDON_ACTION_FORBIDDEN).
         } else if (const uint32_t itemForSpell = gh->getItemIdForSpell(action.id)) {
-            gh->useItemById(itemForSpell, target);
+            gh->useItemById(itemForSpell, *target);
         } else {
-            gh->useSpell(action.id, target);  // 0x005abbc0 -> 0x0080da80
+            gh->useSpell(action.id, *target);  // 0x005abbc0 -> 0x0080da80
         }
     } else if (action.type == game::ActionBarSlot::ITEM && action.id != 0) {
-        if (itemUseAllowed(L, gh, action.id, false)) gh->useItemById(action.id);
+        const auto unit = unitUsedOn(L, gh, 2);
+        if (unit && itemUseAllowed(L, gh, action.id, false)) gh->useItemById(action.id, *unit);
     } else if (action.type == game::ActionBarSlot::EQUIPMENT_SET) {
         // WEAR_EQUIPMENT_SET with the set's name, for the interface to equip
         // it (0x005abbc0 -> 0x005ae660).
@@ -1601,12 +1585,7 @@ static int lua_GetCursorInfo(lua_State* L) {
     switch (s_cursorType) {
         case CursorType::SPELL: {
             if (!gh) return 0;
-            std::vector<uint32_t> critters, mounts, book;
-            for (const auto& c : gh->getCompanions(false)) critters.push_back(c.spellId);
-            for (const auto& c : gh->getCompanions(true)) mounts.push_back(c.spellId);
-            for (const auto& tab : gh->getSpellBookTabs())
-                book.insert(book.end(), tab.spellIds.begin(), tab.spellIds.end());
-            const auto held = game::cursor_info::spell(s_cursorId, critters, mounts, book, gh->getPetBookSpells());
+            const auto held = spellInfo(gh, s_cursorId, /*pet=*/true);
             lua_pushstring(L, held.kind);
             lua_pushnumber(L, held.place);
             lua_pushstring(L, held.list);
@@ -3794,6 +3773,30 @@ static int lua_GetBindingAction(lua_State* L) {
     return 1;
 }
 
+// GetBindingByKey(key[, mode]) (0x005625f0): the command a key runs, its own
+// or the one it has with fewer of its modifiers. StaticPopup_OnKeyDown asks it
+// of every key pressed while a popup is up (GetBindingFromClick). This client
+// has one set of bindings and the overrides over it, which the mode would pick
+// from.
+static int lua_GetBindingByKey(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetBindingByKey(\"action\"[, mode])");
+    seedBindingDefaults();
+    std::string key = lua_tostring(L, 1);
+    for (char& c : key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (const std::string& chord : ui::bindingChords(key)) {
+        std::string command;
+        if (const auto over = overrideBindings().lookup(chord)) command = *over;
+        for (const auto& [name, keys] : bindingKeys()) {
+            if (!command.empty()) break;
+            if (keys[0] == chord || keys[1] == chord) command = name;
+        }
+        if (command.empty() || (!ui::bindsDirectly(command) && bindingKeys().count(command) == 0)) continue;
+        lua_pushstring(L, command.c_str());
+        return 1;
+    }
+    return 0;
+}
+
 // GetNumBindings() → how many rows the list has, headers included
 static int lua_GetNumBindings(lua_State* L) {
     lua_pushinteger(L, bindingCount(L));
@@ -4274,9 +4277,9 @@ void registerActionLuaAPI(lua_State* L) {
                 // missing, so GetNumMacros answered zero and the panel opened
                 // empty over a full set.
                 //
-                // WoW splits the ids: 1-36 are account-wide, 37 and up belong
-                // to the character. That split is what GetNumMacros reports and
-                // what CreateMacro's perCharacter flag chooses between.
+                // The account's and the character's (macro_list), which is what
+                // GetNumMacros reports and what CreateMacro's perCharacter flag
+                // chooses between.
                 {"GetNumMacros",        [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             int global = 0, perChar = 0;
@@ -4413,7 +4416,7 @@ void registerActionLuaAPI(lua_State* L) {
             if (!gh) return 0;
             const std::string name = lua_tostring(L, 1);
             if (name.empty()) return luaL_error(L, "CreateMacro() failed, no name specified");
-            const uint32_t id = game::macro_list::freeId(gh->macroList(), lua_toboolean(L, 4) != 0);
+            const uint32_t id = game::macro_list::newId(gh->macroList(), lua_toboolean(L, 4) != 0);
             if (id == 0) return luaL_error(L, "CreateMacro() failed, already have %d macros", 36);
             gh->setMacroText(id, lua_isstring(L, 3) ? lua_tostring(L, 3) : "");
             gh->setMacroMeta(id, name, macroIconArg(L, 2).value_or(std::string()));
@@ -4505,53 +4508,12 @@ void registerActionLuaAPI(lua_State* L) {
                 {"SetBindingItem",      lua_SetBindingItem},
                 {"SetBindingMacro",     lua_SetBindingMacro},
                 {"SetBindingClick",     lua_SetBindingClick},
-                // GetBindingByKey(key) - the binding a key runs, or nil.
-                //
-                // Reached from GetBindingFromClick, which StaticPopup_OnKeyDown
-                // calls on *every* keypress while a popup is up - so with
-                // dialogs handed over, pressing any key with one on screen hit
-                // an unbound global and raised. Escape is how a popup is
-                // dismissed, so it was the keypress most likely to hit it.
-                //
-                // Two names are all FrameXML compares against here, and both
-                // are fixed in this client: escape opens the game menu and
-                // print screen takes a screenshot, neither rebindable. Anything
-                // else answers nil, which is what WoW answers for an unbound
-                // key and which lets the dialog's own key handling run.
-                {"GetBindingByKey", [](lua_State* L) -> int {
-            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetBindingByKey(\"action\"[, mode])");   // 0x005625f0
-            std::string key(luaL_optstring(L, 1, ""));
-            for (char& c : key) c = static_cast<char>(std::toupper(
-                static_cast<unsigned char>(c)));
-            if (key == "ESCAPE")           lua_pushstring(L, "TOGGLEGAMEMENU");
-            else if (key == "PRINTSCREEN") lua_pushstring(L, "SCREENSHOT");
-            else                           lua_pushnil(L);
-            return 1;
-        }},
-                // GetQuestGreenRange() - how many levels below the player a
-                // thing can be before it turns grey.
-                //
-                // This was left unbound on the grounds that a guessed constant
-                // would mis-colour every quest and that nothing live called it.
-                // The second half was wrong: TargetFrame_CheckLevel reaches it
-                // through GetQuestDifficultyColor for any target the player can
-                // attack, so it raised before levelText:Show() and an enemy's
-                // level never appeared. A friendly target took the other branch
-                // and showed its level, which is why it looked like enemies
-                // specifically.
-                //
-                // No guess needed either. AzerothCore's Formulas.h gives the
-                // grey level exactly, and the green range is the distance from
-                // the player's level down to it.
+                {"GetBindingByKey",     lua_GetBindingByKey},
+                // GetQuestGreenRange() (0x005e51a0): how many levels below the
+                // player a thing can be before it turns grey.
                 {"GetQuestGreenRange", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int lvl = gh ? static_cast<int>(gh->getPlayerLevel()) : 1;
-            int gray;
-            if (lvl <= 5)       gray = 0;
-            else if (lvl <= 39) gray = lvl - 5 - lvl / 10;
-            else if (lvl <= 59) gray = lvl - 1 - lvl / 5;
-            else                gray = lvl - 9;
-            lua_pushnumber(L, lvl - gray);
+            lua_pushnumber(L, gh ? game::triviality::greyGap(gh->getPlayerLevel()) : 0);
             return 1;
         }},
                 // SetUIVisibility(shown) (0x00517c20): what the world draws

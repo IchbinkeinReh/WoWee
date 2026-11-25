@@ -236,6 +236,14 @@ bool frameXmlAddOnLoaded(std::string_view addOnName) {
     return gLoadedAddOns.count(lower) != 0;
 }
 
+void frameXmlInterfaceUnloaded() {
+    {
+        std::lock_guard<std::mutex> guard(gLoadedAddOnsLock);
+        gLoadedAddOns.clear();
+    }
+    gReleased.store(0, std::memory_order_relaxed);
+}
+
 void frameXmlNoteAddOnLoaded(const std::string& addOnName) {
     // Matched without regard to case, because the interface asks for
     // "Blizzard_CombatText" and the directory is blizzard_combattext.

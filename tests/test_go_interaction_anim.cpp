@@ -2,11 +2,14 @@
 // 0x0070bac0 and the type handlers' slots 0x98 and 0x9c).
 #include <catch_amalgamated.hpp>
 
+#include "core/go_state_player.hpp"
 #include "game/go_interaction_anim.hpp"
 #include "network/packet.hpp"
+#include "rendering/animation/animation_data.hpp"
 #include "rendering/animation/animation_ids.hpp"
 
 #include <array>
+#include <algorithm>
 #include <iterator>
 #include <vector>
 
@@ -251,6 +254,11 @@ TEST_CASE("A trade request with a partner set, or within a second", "[go_interac
 
 TEST_CASE("A door collides only in Closed", "[go_interaction]") {
     // 0x0070d8d0, type 0's state entry: +0x20c = (state == Closed).
+    // A ghost walks through a door and nothing else (playtest T73).
+    CHECK(inTheWay(0, false));
+    CHECK_FALSE(inTheWay(0, true));
+    CHECK(inTheWay(1, true));
+    CHECK(inTheWay(0xFF, true));
     CHECK(collidesAfterEntering(0, 1) == std::optional<bool>(true));
     for (uint8_t s : {0, 2, 3, 4, 5, 6, 7}) CHECK(collidesAfterEntering(0, s) == std::optional<bool>(false));
     for (uint8_t s = kStateCustom0; s <= kStateDespawn; ++s)
@@ -354,4 +362,100 @@ TEST_CASE("A unit that stops being what opened its window closes it", "[go_inter
         with[static_cast<size_t>(Window::Gossip)] = 0;
         CHECK(npcFlagWindowsLost(NPC_FLAG_GOSSIP, 0, 0, with).empty());
     }
+}
+
+namespace {
+
+namespace anim = wowee::rendering::anim;
+
+// M2Renderer's part of it: the sequence shown for what is asked for (0x00826350).
+struct FakeModel {
+    std::vector<uint32_t> ids;
+    anim::ModelAnimation shown;
+    bool round = false, still = false;
+
+    [[nodiscard]] bool has(uint32_t id) const { return std::find(ids.begin(), ids.end(), id) != ids.end(); }
+    [[nodiscard]] bool hasAnimation(uint32_t, uint32_t id) const { return has(id); }
+    void ask(uint32_t id, bool goesRound) {
+        static const anim::AnimationDataTable table = [] {
+            // AnimationData's rows for Stand and Spawn to Rebuild.
+            std::vector<anim::AnimationDataRecord> rows;
+            for (uint32_t i = 0; i < 160; ++i) rows.push_back({.id = i, .behavior = i});
+            const auto set = [&](uint32_t i, uint32_t flags, uint32_t fallback) {
+                rows[i].flags = flags;
+                rows[i].fallback = fallback;
+            };
+            set(0, 3, 147);
+            set(146, 16, 148);
+            set(147, 32, 146);
+            set(148, 19, 146);
+            set(149, 35, 148);
+            set(150, 0, 148);
+            set(151, 32, 150);
+            set(152, 16, 150);
+            return anim::AnimationDataTable(std::move(rows));
+        }();
+        shown = anim::modelAnimation(table, id, [this](uint32_t i) { return has(i); }, ids.front());
+        still = shown.mode == anim::PlayMode::HoldStart || shown.mode == anim::PlayMode::HoldEnd;
+        round = goesRound;
+    }
+    void setInstanceAnimation(uint32_t, uint32_t id, bool loop) { ask(id, loop); }
+    void setInstanceAnimationHeld(uint32_t, uint32_t id, bool) { ask(id, false); }
+    void setInstanceAnimationFrozen(uint32_t, bool frozen) { still = frozen; }
+    void enter(uint8_t state) { wowee::core::playGameObjectState(*this, 1, state); }
+    [[nodiscard]] bool goesOnMoving() const { return round && !still; }
+};
+
+}  // namespace
+
+// ChestActive01.m2: Close, whose end is its lid shut, ran round and round.
+TEST_CASE("A chest without a Closed sequence stands shut", "[go_interaction]") {
+    FakeModel chest{.ids = {0, 148, 146, 154, 153, 150, 152}};
+    chest.enter(kStateClosed);
+    CHECK(chest.shown.id == 146);
+    CHECK(chest.shown.mode == anim::PlayMode::HoldEnd);
+    CHECK_FALSE(chest.goesOnMoving());
+    chest.enter(kStateOpen);
+    CHECK(chest.shown.id == 148);
+    CHECK(chest.shown.mode == anim::PlayMode::Forward);
+    CHECK_FALSE(chest.goesOnMoving());
+    chest.enter(kStateOpened);
+    CHECK(chest.shown.id == 148);
+    CHECK(chest.shown.mode == anim::PlayMode::HoldEnd);
+    CHECK_FALSE(chest.goesOnMoving());
+    chest.enter(kStateClose);
+    CHECK(chest.shown.id == 146);
+    CHECK_FALSE(chest.goesOnMoving());
+}
+
+TEST_CASE("A door with Open alone closes backwards and stands on its first frame", "[go_interaction]") {
+    FakeModel door{.ids = {148}};
+    door.enter(kStateClosed);
+    CHECK(door.shown.id == 148);
+    CHECK(door.still);
+    door.enter(kStateClose);
+    CHECK(door.shown.id == 148);
+    CHECK(door.shown.mode == anim::PlayMode::Reversed);
+    CHECK_FALSE(door.round);
+}
+
+TEST_CASE("A pose of the model's own goes round", "[go_interaction]") {
+    FakeModel portal{.ids = {147, 148, 0, 149, 146}};
+    for (uint8_t state : {kStateClosed, kStateOpened}) {
+        portal.enter(state);
+        CHECK(portal.goesOnMoving());
+    }
+    CHECK(portal.shown.id == 149);
+}
+
+TEST_CASE("A transition's end leads to its pose", "[go_interaction]") {
+    CHECK(stateAfter(kStateOpen) == kStateOpened);
+    CHECK(stateAfter(kStateClose) == kStateClosed);
+    CHECK(stateAfter(kStateRebuild) == kStateClosed);
+    CHECK(stateAfter(kStateDestroy) == kStateDestroyed);
+    for (uint8_t state : {uint8_t{0}, kStateClosed, kStateOpened, kStateDestroyed, kStateCustom0, kStateDespawn})
+        CHECK_FALSE(stateAfter(state));
+    CHECK(wowee::core::sequenceLeftMs(200.0f, 666.0f, 1.0f) == 466.0f);
+    CHECK(wowee::core::sequenceLeftMs(200.0f, 666.0f, -1.0f) == 200.0f);
+    CHECK(wowee::core::sequenceLeftMs(200.0f, 666.0f, 0.0f) == 0.0f);
 }

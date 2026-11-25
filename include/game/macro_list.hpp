@@ -18,13 +18,34 @@ inline constexpr uint32_t kAccountMacros = 36;
 inline constexpr uint32_t kCharacterMacros = 18;
 inline constexpr uint32_t kHalf = 36;
 inline constexpr uint32_t kIndexes = 72;   ///< 0x48
+/// Where the ids of the character's begin (0x00a0f834), the account's at 0. An
+/// action slot's byte over its 24 bits is 0x41 for one of them and 0x40 for
+/// the account's.
+inline constexpr uint32_t kCharacterBase = 0x1000000;
 
 struct Entry {
-    uint32_t id = 0;   ///< 1..36 the account's, 37..54 the character's
+    uint32_t id = 0;   ///< from 1 the account's, over kCharacterBase the character's
     std::string name;
 };
 
-[[nodiscard]] constexpr bool perCharacter(uint32_t id) { return id > kAccountMacros; }
+[[nodiscard]] constexpr bool perCharacter(uint32_t id) { return id >= kCharacterBase; }
+
+/// An id as a file has it (0x00567c10): one too low for the character's file is
+/// put over the base; one too high for the account's is none of it, 0.
+[[nodiscard]] constexpr uint32_t fileId(uint32_t id, bool character) {
+    if (!character) return id < kCharacterBase ? id : 0;
+    return id < kCharacterBase ? id + kCharacterBase : id;
+}
+
+/// The macro an action slot holds: what it says, but for one of 37 to 54 that
+/// is none of the account's and would be the character's over the base - as
+/// this client once numbered the character's, and put them on the slots.
+template <typename Exists>
+[[nodiscard]] uint32_t slotId(uint32_t id, const Exists& exists) {
+    if (id > kAccountMacros && id <= kAccountMacros + kCharacterMacros && !exists(id) && exists(id + kCharacterBase))
+        return id + kCharacterBase;
+    return id;
+}
 
 /// As 0x0076e780 compares them: without the case of the ASCII letters.
 [[nodiscard]] inline int compareNames(const std::string& a, const std::string& b) {
@@ -78,14 +99,28 @@ struct Entry {
     return 0;
 }
 
-/// An id for a new macro, 0 where the half is full (0x00568020).
-[[nodiscard]] inline uint32_t freeId(const std::vector<Entry>& macros, bool character) {
-    const uint32_t first = character ? kAccountMacros + 1 : 1;
-    const uint32_t last = character ? kAccountMacros + kCharacterMacros : kAccountMacros;
-    for (uint32_t id = first; id <= last; ++id) {
-        if (std::none_of(macros.begin(), macros.end(), [id](const Entry& m) { return m.id == id; })) return id;
+/// An id for a new macro, one over the highest there is (0x00568020); 0 where
+/// the half is full.
+[[nodiscard]] inline uint32_t newId(const std::vector<Entry>& macros, bool character) {
+    uint32_t count = 0, highest = character ? kCharacterBase : 0;
+    for (const Entry& m : macros) {
+        if (perCharacter(m.id) != character) continue;
+        ++count;
+        highest = std::max(highest, m.id);
     }
-    return 0;
+    return count < (character ? kCharacterMacros : kAccountMacros) ? highest + 1 : 0;
+}
+
+/// Where a macro of an older copy of a half goes: nowhere (0) where one of its
+/// name is there, its own id where that is free, else a new one's.
+[[nodiscard]] inline uint32_t mergedId(const std::vector<Entry>& macros, const Entry& old) {
+    for (const Entry& m : macros)
+        if (perCharacter(m.id) == perCharacter(old.id) && compareNames(m.name, old.name) == 0) return 0;
+    const uint32_t fresh = newId(macros, perCharacter(old.id));
+    if (fresh == 0) return 0;
+    for (const Entry& m : macros)
+        if (m.id == old.id) return fresh;
+    return old.id;
 }
 
 }  // namespace wowee::game::macro_list

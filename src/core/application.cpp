@@ -121,6 +121,7 @@
 #include "ui/ui_services.hpp"
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
+#include "game/idle_steps.hpp"
 #include "game/spell_handler.hpp"
 #include "game/chat_handler.hpp"
 #include "game/faction_hostility.hpp"
@@ -370,7 +371,11 @@ rendering::upper_body::Unit unitAnimationState(game::GameHandler& gh, EntitySpaw
     unitSplineState(u, gh, guid, unit.getReportedMoveFlags());
     u.meleeReady = spawner.unitMeleeReady(guid);
     u.rangedSubClass = spawner.unitRangedSubClass(guid);
-    if (const uint32_t emote = unit.getNpcEmoteState(); emote != 0) {
+    // Not a state with Emotes Flags 0x2000 - working, mining, dancing - while it is
+    // spoken to (0x007171c0: the interaction object, 0x00bd07a8).
+    if (const uint32_t emote = unit.getNpcEmoteState(); emote != 0 &&
+        (gh.getInteractionObject() != guid ||
+         (rendering::AnimationController::getEmoteFlagsByEmotesId(emote) & 0x2000u) == 0)) {
         if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
             u.emoteStateAnim = anim;
     }
@@ -2588,6 +2593,10 @@ void Application::run() {
 #ifndef WOWEE_MOBILE
             if (mcp_ && mcp_->filterEvent(event)) continue;
 #endif
+            if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_MOUSE_WHEEL ||
+                event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || event.type == SDL_EVENT_FINGER_DOWN ||
+                event.type == SDL_EVENT_FINGER_MOTION)
+                Input::getInstance().noteHardwareEvent();
             // Sound in Background. Off in the real client and off here: losing
             // focus silences the client rather than playing on behind whatever
             // the player switched to. Read at the moment focus changes, so
@@ -3671,6 +3680,8 @@ void Application::setState(AppState newState) {
 
     LOG_INFO("State transition: ", static_cast<int>(state), " -> ", static_cast<int>(newState));
     state = newState;
+    // The idle minutes of a character count from its entering the world.
+    Input::getInstance().noteHardwareEvent();
 
     // Handle state transitions
     switch (newState) {
@@ -3851,7 +3862,7 @@ void Application::connectClickToMoveHooks() {
             std::vector<rendering::collision::Facet> facets;
             if (auto* terrain = renderer->getTerrainManager()) terrain->gatherCollisionFacets(at, at, facets);
             if (auto* wmo = renderer->getWMORenderer()) wmo->gatherCollisionFacets(at, at, facets);
-            if (auto* m2 = renderer->getM2Renderer()) m2->gatherCollisionFacets(at, at, facets);
+            if (auto* m2 = renderer->getM2Renderer()) m2->gatherCollisionFacets(at, at, facets, false);
             return rendering::collision::firstFacetHeight(facets, at.x, at.y);
         });
     }
@@ -3900,13 +3911,19 @@ void Application::connectSpellVisualHooks() {
         svs->setKitAnimationSink([this](const rendering::SpellVisualSystem::KitAnimationPlay& play) {
             auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
             if (!cr) return;
-            cr->playKitAnimation(play.renderInstanceId,
-                                 {.type = play.type,
-                                  .startAnim = play.startAnim,
-                                  .anim = play.anim,
-                                  .kitFlags = play.kitFlags,
-                                  .castTime = play.castTime,
-                                  .castKitAnim = play.castKitAnim});
+            rendering::kit_animation::KitPlay kit{.type = play.type,
+                                                  .startAnim = play.startAnim,
+                                                  .anim = play.anim,
+                                                  .kitFlags = play.kitFlags,
+                                                  .castTime = play.castTime,
+                                                  .castKitAnim = play.castKitAnim};
+            const uint32_t asked = rendering::kit_animation::askFlags(kit.kitFlags);
+            for (int32_t* anim : {&kit.startAnim, &kit.anim}) {
+                if (*anim >= 0 && entitySpawner_)
+                    *anim = static_cast<int32_t>(
+                        entitySpawner_->heldSpecialAttack(play.renderInstanceId, static_cast<uint32_t>(*anim), asked));
+            }
+            cr->playKitAnimation(play.renderInstanceId, kit);
         });
         svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
             return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
@@ -4317,18 +4334,6 @@ void Application::connectWorldHooks() {
         // it moves (0x00741xxx -> 0x0073ed10).
         gameHandler->setMoverEventCallback([this](game::Opcode op, uint32_t flagsBefore, bool launchedBefore) {
             animatePlayerMovement(op, flagsBefore, launchedBefore);
-        });
-        gameHandler->setMeleeSwingCallback([this](uint32_t spellId) {
-            if (renderer) {
-                // Ranged auto-attack spells: Auto Shot (75), Shoot (5019), Throw (2764)
-                if (game::spellclass::isRangedWeaponAutoAttack(spellId)) {
-                    if (auto* ac = renderer->getAnimationController()) ac->triggerRangedShot();
-                } else if (spellId != 0) {
-                    if (auto* ac = renderer->getAnimationController()) ac->triggerSpecialAttack(spellId);
-                } else {
-                    if (auto* ac = renderer->getAnimationController()) ac->triggerMeleeSwing();
-                }
-            }
         });
         // The player's casts set its sheath state (0x007fa2e0): a
         // ranged spell such as Auto Shot draws the ranged weapon.
@@ -4904,6 +4909,8 @@ void Application::applyServerMovementState(float deltaTime) {
         renderer->getCameraController()->setGravityDisabled(gameHandler->isGravityDisabled());
         renderer->getCameraController()->setFeatherFallActive(gameHandler->isFeatherFalling());
         renderer->getCameraController()->setWaterWalkActive(gameHandler->isWaterWalking());
+        renderer->getCameraController()->setMoverGhost(gameHandler->isPlayerGhost() &&
+                                                       gameHandler->activeMover() == gameHandler->getPlayerGuid());
         // Flight physics engage on the CAN_FLY ability (flying mount
         // or .gm fly), not isPlayerFlying() which also needs the
         // FLYING flag the client only sets once already airborne.
@@ -5302,6 +5309,19 @@ void Application::applyServerMovementState(float deltaTime) {
         if (auto* cam = renderer->getCameraController()) {
             cam->setBarberShopView(gameHandler && gameHandler->isBarberShopOpen() &&
                                    cam->isSeatedInChair());
+            if (gameHandler && gameHandler->isInWorld()) {
+                const auto idle = game::idleSteps({.idleMs = Input::getInstance().idleMs(),
+                                                   .standing = gameHandler->getStandState() == 0,
+                                                   .fighting = gameHandler->playerFights(),
+                                                   .mounted = gameHandler->isMounted(),
+                                                   .walking = gameHandler->clickToMoveUnderWay(),
+                                                   .onTaxi = onTaxi,
+                                                   .away = gameHandler->isAfk(),
+                                                   .loggingOut = gameHandler->isLoggingOut()});
+                if (idle.sit) cam->sitDown();
+                if (idle.away) gameHandler->toggleAfk();
+                if (idle.logout) gameHandler->logoutIdle();
+            }
         }
     }
     if (renderer && renderer->getTerrainManager()) {
@@ -5814,10 +5834,8 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         u.inCombat = (self.getField(f) & 0x800u) != 0;
     u.inCombat = u.inCombat || u.autoAttacking;
     u.autoRepeat = gameHandler->isAutoRepeating();
-    // Its emote state (0x007171c0) - not one whose Emotes row has Flags
-    // 0x2000, for the active player.
-    if (const uint32_t emote = self.getNpcEmoteState(); emote != 0 &&
-        (rendering::AnimationController::getEmoteFlagsByEmotesId(emote) & 0x2000u) == 0) {
+    // Its emote state (0x007171c0).
+    if (const uint32_t emote = self.getNpcEmoteState(); emote != 0) {
         if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
             u.emoteStateAnim = anim;
     }
@@ -5985,9 +6003,10 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
     const rendering::PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
     // A new instance starts on Stand. Made after the swim began, at a teleport
     // into water across maps, no movement event comes to ask again, and the
-    // character stood in the water until the next one.
+    // character stood in the water until the next one. Nor for one built anew in
+    // a chair, at the barber's: it stood on it.
     if (before.instanceId != instanceId) {
-        if (now.swimming) cr->playBaseAnimation(instanceId);
+        if (now.swimming || u.standState != 0) cr->playBaseAnimation(instanceId);
         return;
     }
     if (rendering::asksBaseAgain(before, now)) cr->playBaseAnimation(instanceId);
@@ -6274,6 +6293,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // A jump keeps its animations until it is down and landed.
                 bool jumpRefresh = false;
                 const bool locomotionAsked = entity->takeLocomotionRequest();
+                const bool baseAsked = entity->takeBaseAnimationRequest();
                 const bool jumpHolds = !deadOrCorpse &&
                     jumpHoldsAnimation(*charRenderer, creatureMount ? creatureMount->instanceId : instanceId,
                                        *entity, isFlyingNow, locomotionAsked, jumpRefresh);
@@ -6281,7 +6301,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // asks it (0x0073ed10), so one swimming on to the side turns
                 // to it.
                 const bool stateChanged = !jumpHolds &&
-                                          (jumpRefresh ||
+                                          (jumpRefresh || baseAsked ||
                                            (isMovingNow  != prevMoving)   ||
                                            (isSwimmingNow != prevSwimming) ||
                                            (isFlyingNow   != prevFlying)   ||
@@ -8476,7 +8496,7 @@ void Application::setupUICallbacks() {
 
     // ── NPC interaction: greeting, farewell, vendor, aggro voice ──
     npcInteractionCallbacks_ = std::make_unique<NPCInteractionCallbackHandler>(
-        *entitySpawner_, renderer.get(), *gameHandler, audioCoordinator_.get());
+        *gameHandler, audioCoordinator_.get());
     npcInteractionCallbacks_->setupCallbacks();
 
     // ── Audio: music, sound effects, level-up, achievement, LFG ──
@@ -8733,6 +8753,16 @@ void Application::refreshPlayerCharacterModel() {
     spawnPlayerCharacter();
 
     if (renderer) renderer->getCharacterPosition() = savedPos;
+
+    // As it sat: the client changes the seated model, the new one stood up on
+    // the chair.
+    if (gameHandler && renderer) {
+        const uint8_t stand = gameHandler->getStandState();
+        if (auto* cc = renderer->getCameraController()) cc->applyServerStandState(stand);
+        auto* cr = renderer->getCharacterRenderer();
+        if (cr && renderer->getCharacterInstanceId() != 0)
+            cr->standStateChanged(renderer->getCharacterInstanceId(), stand);
+    }
 
     // Force equipment geosets/textures to be re-composited onto the fresh model
     // next frame - the respawn only builds the base body, and equipment isn't

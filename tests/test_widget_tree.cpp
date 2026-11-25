@@ -1,12 +1,12 @@
 #include <catch_amalgamated.hpp>
 
 #include "ui/keyboard_frame.hpp"
-#include "ui/visibility_scripts.hpp"
 #include "ui/widget_tree.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <functional>
 #include <vector>
 
 using namespace wowee::ui;
@@ -3505,9 +3505,8 @@ TEST_CASE("A key goes to the topmost frame that has a script for it", "[widget][
 // VideoOptionsResolutionPanelSubText: <Size x="0" y="32"/>, TOPLEFT under the
 // title and RIGHT of the panel.
 TEST_CASE("a string between two edges has their width to wrap in", "[widgets][fontstring]") {
-    using wowee::ui::FontStringSizing;
-    using wowee::ui::fontStringSizing;
-    using wowee::ui::fontStringWrapWidth;
+    using wowee::ui::textBoxGiven;
+    using wowee::ui::textWrapWidth;
     Widget w;
     w.kind = WidgetKind::FontString;
     w.text = "Diese Optionen beeinflussen, in welcher Groesse die Grafik dargestellt wird.";
@@ -3516,32 +3515,33 @@ TEST_CASE("a string between two edges has their width to wrap in", "[widgets][fo
     right.point = "RIGHT";
     w.anchors = {left, right};
     w.height = 32.0f;
-    CHECK(fontStringSizing(w) == FontStringSizing::Given);
+    // Before its sides are solved as well: its height is not its text's.
+    CHECK(textBoxGiven(w));
+    CHECK(textWrapWidth(w) == 0.0f);
     w.rectW = 762.0f;
     w.effScale = 2.0f;
-    CHECK(fontStringWrapWidth(w) == Catch::Approx(381.0f));
+    CHECK(textBoxGiven(w));
+    CHECK(textWrapWidth(w) == Catch::Approx(381.0f));
 
     // One edge alone gives no width, and a string with neither is its text's.
     w.anchors = {left};
-    CHECK(fontStringSizing(w) == FontStringSizing::Measured);
-    CHECK(fontStringWrapWidth(w) == 0.0f);
+    CHECK_FALSE(textBoxGiven(w));
+    CHECK(textWrapWidth(w) == 0.0f);
 
     // A declared width, with a height and without.
     w.width = 285.0f;
-    CHECK(fontStringSizing(w) == FontStringSizing::Given);
-    CHECK(fontStringWrapWidth(w) == 285.0f);
+    CHECK(textBoxGiven(w));
+    CHECK(textWrapWidth(w) == 285.0f);
     w.height = 0.0f;
-    CHECK(fontStringSizing(w) == FontStringSizing::Paragraph);
+    CHECK_FALSE(textBoxGiven(w));
+    CHECK(textWrapWidth(w) == 285.0f);
 
-    // What its text once decided stays its text's.
-    Widget sized;
-    sized.kind = WidgetKind::FontString;
-    sized.width = 60.0f;
-    sized.height = 14.0f;
-    sized.autoSized = true;
-    sized.anchors = {left, right};
-    CHECK(fontStringSizing(sized) == FontStringSizing::Measured);
-    CHECK(fontStringWrapWidth(sized) == 0.0f);
+    // A height its lines made it is no box's.
+    w.anchors = {left, right};
+    w.width = 0.0f;
+    w.height = 28.0f;
+    w.wrapsBetweenAnchors = true;
+    CHECK_FALSE(textBoxGiven(w));
 }
 
 TEST_CASE("a string without a width reaches as far as its text", "[widgets][fontstring]") {
@@ -3673,60 +3673,206 @@ TEST_CASE("The shade uncovers clockwise from the top", "[cooldown]") {
     REQUIRE(flash(1000).angle == Catch::Approx(-0.7853982f));
 }
 
-TEST_CASE("A tooltip's OnHide is run in Hide and not owed again", "[widget][visibility]") {
-    Widget tip;
-    tip.objectType = "GameTooltip";
-    // Up, and said to be.
-    tip.shown = tip.visible = tip.visibleChain = tip.reportedVisible = true;
-    // Hidden by the frame the pointer leaves (0x00491830 runs OnHide there).
-    REQUIRE(hideRunsOnHide(tip, true));
-    tip.shown = false;
-    ++tip.shownToggles;
-    noteHideSaid(tip);
-    // Filled and shown by the one it enters, in the same frame: Show counts as
-    // a toggle and runs OnShow, being the only one.
-    ++tip.shownToggles;
-    REQUIRE(tip.shownToggles == 1);
-    tip.shown = true;
-    tip.onShowFired = true;
-    // The pass has nothing to add - not the OnHide that took the money down.
-    const VisibilityOwed owed = takeVisibilityOwed(tip);
-    CHECK_FALSE(owed.hide);
-    CHECK_FALSE(owed.show);
-    CHECK(tip.reportedVisible);
-    // Hidden for good, it is said once, in Hide.
-    REQUIRE(hideRunsOnHide(tip, true));
-    tip.shown = false;
-    noteHideSaid(tip);
-    tip.visible = tip.visibleChain = false;
-    CHECK_FALSE(takeVisibilityOwed(tip).hide);
-    // Not where it was not on screen.
-    CHECK_FALSE(hideRunsOnHide(tip, true));
-    tip.shown = true;
-    CHECK_FALSE(hideRunsOnHide(tip, false));
+namespace {
+
+// Show() and Hide() as the interface calls them, with what is told noted.
+struct Told {
+    WidgetTree& tree;
+    std::vector<std::string> log;
+    std::function<void(uint32_t, bool)> handler;
+
+    void tell(uint32_t id, bool up) {
+        log.push_back((up ? "+" : "-") + tree.get(id)->name);
+        if (handler) handler(id, up);
+    }
+    void show(uint32_t id) {
+        if (tree.get(id)->shown) return;
+        tree.get(id)->shown = true;
+        tree.showNow(id, [this](uint32_t f) { tell(f, true); });
+    }
+    void hide(uint32_t id) {
+        if (!tree.get(id)->shown) return;
+        tree.get(id)->shown = false;
+        tree.hideNow(id, [this](uint32_t f) { tell(f, false); });
+    }
+    std::string take() {
+        std::string out;
+        for (const auto& l : log) out += (out.empty() ? "" : " ") + l;
+        log.clear();
+        return out;
+    }
+};
+
+}  // namespace
+
+// 0x004918f0 and 0x00491830: everything that comes up or goes with a frame,
+// inside Show() and Hide(), those in a frame before it.
+TEST_CASE("A frame shown or hidden is told at once, after the frames in it", "[widget][visibility]") {
+    WidgetTree tree;
+    Told told{tree, {}, {}};
+    const uint32_t panel = tree.create(WidgetKind::Frame, tree.uiParentId(), "Panel");
+    const uint32_t first = tree.create(WidgetKind::Frame, panel, "First");
+    const uint32_t inner = tree.create(WidgetKind::Frame, first, "Inner");
+    const uint32_t second = tree.create(WidgetKind::Frame, panel, "Second");
+    const uint32_t art = tree.create(WidgetKind::Texture, panel, "Art");
+    tree.get(panel)->shown = false;
+    tree.get(second)->shown = false;
+
+    // In a hidden one, nothing: what is in it is told once it comes up.
+    told.show(second);
+    CHECK(told.take().empty());
+    told.show(panel);
+    CHECK(told.take() == "+Inner +First +Second +Panel");
+    told.show(panel);
+    CHECK(told.take().empty());
+
+    // Regions have no handlers.
+    told.hide(art);
+    told.show(art);
+    CHECK(told.take().empty());
+
+    told.hide(first);
+    CHECK(told.take() == "-Inner -First");
+    told.hide(panel);
+    CHECK(told.take() == "-Second -Panel");
+    told.show(first);
+    CHECK(told.take().empty());
+
+    // "Rebuild yourself": both, in the order they happened.
+    told.show(panel);
+    told.take();
+    told.hide(panel);
+    told.show(panel);
+    CHECK(told.take() == "-Inner -First -Second -Panel +Inner +First +Second +Panel");
+
+    // The screen's pass has none of it left to tell.
+    tree.layout(kScreenW, kScreenH);
+    for (const uint32_t id : {panel, first, inner, second}) CHECK(tree.get(id)->toldShown);
 }
 
-TEST_CASE("Any other frame's Hide and Show are said by the pass, in order", "[widget][visibility]") {
-    Widget panel;
-    panel.objectType = "Frame";
-    panel.shown = panel.visible = panel.visibleChain = panel.reportedVisible = true;
-    CHECK_FALSE(hideRunsOnHide(panel, true));
-    panel.shownToggles = 2;
-    VisibilityOwed owed = takeVisibilityOwed(panel);
-    CHECK_FALSE(owed.changed);
-    CHECK(owed.hide);
-    CHECK(owed.show);
-    owed = takeVisibilityOwed(panel);
-    CHECK_FALSE(owed.hide);
-    panel.visible = panel.visibleChain = false;
-    owed = takeVisibilityOwed(panel);
-    CHECK(owed.changed);
-    CHECK(owed.hide);
-    CHECK_FALSE(owed.show);
-    panel.visible = true;
-    panel.onShowFired = true;
-    owed = takeVisibilityOwed(panel);
-    CHECK(owed.changed);
-    CHECK_FALSE(owed.show);
-    CHECK_FALSE(panel.onShowFired);
+TEST_CASE("A handler that hides what it is in stops the rest coming up", "[widget][visibility]") {
+    WidgetTree tree;
+    Told told{tree, {}, {}};
+    const uint32_t panel = tree.create(WidgetKind::Frame, tree.uiParentId(), "Panel");
+    const uint32_t first = tree.create(WidgetKind::Frame, panel, "First");
+    const uint32_t second = tree.create(WidgetKind::Frame, panel, "Second");
+    tree.get(panel)->shown = false;
+    told.handler = [&](uint32_t id, bool up) {
+        if (id == first && up) told.hide(panel);
+    };
+    told.show(panel);
+    // The panel's own is run still, as the client runs it.
+    CHECK(told.take() == "+First -First -Panel +Panel");
+    CHECK_FALSE(tree.get(panel)->shown);
+    CHECK_FALSE(tree.get(panel)->toldShown);
+    CHECK_FALSE(tree.get(second)->toldShown);
+}
+
+// Hidden by what the pointer leaves and filled and shown by what it enters, in
+// one frame: GameTooltip_OnHide, run after that, took the flight map's price.
+TEST_CASE("A tooltip's OnHide is run in Hide and not owed again", "[widget][visibility]") {
+    WidgetTree tree;
+    Told told{tree, {}, {}};
+    const uint32_t tip = tree.create(WidgetKind::Frame, tree.uiParentId(), "Tip");
+    tree.get(tip)->objectType = "GameTooltip";
+    tree.get(tip)->shown = false;
+    told.show(tip);
+    CHECK(told.take() == "+Tip");
+    told.hide(tip);
+    CHECK(told.take() == "-Tip");
+    told.show(tip);
+    CHECK(told.take() == "+Tip");
+    CHECK(tree.get(tip)->toldShown);
+    // Hidden for good, it is said once, in Hide - and not where it was not up.
+    told.hide(tip);
+    CHECK(told.take() == "-Tip");
+    CHECK_FALSE(tree.get(tip)->toldShown);
+    tree.get(tip)->shown = true;
+    told.hide(tip);
+    CHECK(told.take().empty());
+}
+
+TEST_CASE("A frame goes with one that was never told it is up", "[widget][visibility]") {
+    WidgetTree tree;
+    Told told{tree, {}, {}};
+    const uint32_t driver = tree.create(WidgetKind::Frame, tree.uiParentId(), "Driver");
+    const uint32_t panel = tree.create(WidgetKind::Frame, driver, "Panel");
+    tree.get(panel)->toldShown = true;
+    told.hide(driver);
+    CHECK(told.take() == "-Panel");
+}
+
+TEST_CASE("a region's points are counted by their names", "[widgets]") {
+    WidgetTree tree;
+    const uint32_t f = tree.create(WidgetKind::Frame, tree.rootId(), "F");
+    const uint32_t g = tree.create(WidgetKind::Frame, tree.rootId(), "G");
+    CHECK(tree.pointAt(f, 0) == nullptr);
+    tree.addPoint(f, {"BOTTOMRIGHT", g, "TOPLEFT", 1.0f, 2.0f});
+    tree.addPoint(f, {"LEFT", 0, "LEFT", 3.0f, 4.0f});
+    tree.addPoint(f, {"TOPLEFT", g, "TOPLEFT", 5.0f, 6.0f});
+    REQUIRE(tree.pointAt(f, 0) != nullptr);
+    CHECK(tree.pointAt(f, 0)->point == "TOPLEFT");
+    CHECK(tree.pointAt(f, -3)->point == "TOPLEFT");
+    CHECK(tree.pointAt(f, 1)->point == "LEFT");
+    CHECK(tree.pointAt(f, 2)->point == "BOTTOMRIGHT");
+    CHECK(tree.pointAt(f, 2)->relativeTo == g);
+    CHECK(tree.pointAt(f, 3) == nullptr);
+    CHECK(tree.pointAt(9999, 0) == nullptr);
+}
+
+TEST_CASE("a new parent leaves the points where they are", "[widgets]") {
+    WidgetTree tree;
+    const uint32_t a = tree.create(WidgetKind::Frame, tree.rootId(), "A");
+    const uint32_t b = tree.create(WidgetKind::Frame, tree.rootId(), "B");
+    const uint32_t f = tree.create(WidgetKind::Frame, a, "F");
+    tree.addPoint(f, {"CENTER", 0, "CENTER", 0.0f, 0.0f});
+    tree.addPoint(f, {"LEFT", b, "LEFT", 0.0f, 0.0f});
+    tree.pinPoints(f);
+    tree.setParent(f, b);
+    CHECK(tree.get(f)->parent == b);
+    CHECK(tree.pointAt(f, 1)->relativeTo == a);   // CENTER, set by the parent it had
+    CHECK(tree.pointAt(f, 0)->relativeTo == b);
+}
+
+TEST_CASE("a label between two sides breaks its lines there", "[widgets]") {
+    WidgetTree tree;
+    const uint32_t frame = tree.create(WidgetKind::Frame, tree.rootId(), "Frame");
+    tree.setWidth(frame, 200.0f);
+    tree.setHeight(frame, 100.0f);
+    tree.addPoint(frame, {"CENTER", 0, "CENTER", 0.0f, 0.0f});
+    const uint32_t label = tree.create(WidgetKind::FontString, frame, "Label");
+    tree.get(label)->text = "some words";
+    tree.addPoint(label, {"TOPLEFT", 0, "TOPLEFT", 10.0f, 0.0f});
+    CHECK(textWrapWidth(*tree.get(label)) == 0.0f);   // as wide as its text
+    tree.addPoint(label, {"RIGHT", 0, "RIGHT", -30.0f, 0.0f});
+    (void)tree.takeWrapChanged();
+    for (uint32_t id = tree.takeMeasureDirty(1); id != 0; id = tree.takeMeasureDirty(id + 1)) {}
+    tree.layout(1024.0f, 768.0f);
+    CHECK(textWrapWidth(*tree.get(label)) == Catch::Approx(160.0f));
+    CHECK(tree.takeWrapChanged());
+    CHECK_FALSE(tree.takeWrapChanged());
+    // Marked to be measured, until it has been at that width.
+    CHECK(tree.takeMeasureDirty(label) == label);
+    tree.get(label)->measuredWidth = textWrapWidth(*tree.get(label));
+    tree.setHeight(frame, 120.0f);
+    tree.layout(1024.0f, 768.0f);
+    CHECK_FALSE(tree.takeWrapChanged());
+    tree.setWidth(frame, 240.0f);
+    tree.layout(1024.0f, 768.0f);
+    CHECK(tree.takeWrapChanged());
+    CHECK(textWrapWidth(*tree.get(label)) == Catch::Approx(200.0f));
+    // In its own units, whatever its scale.
+    tree.get(label)->effScale = 2.0f;
+    CHECK(textWrapWidth(*tree.get(label)) == Catch::Approx(100.0f));
+    // A height given is its own; the anchors' width is not its declared one.
+    tree.get(label)->wrapsBetweenAnchors = true;
+    tree.setHeight(label, 32.0f);
+    CHECK_FALSE(tree.get(label)->wrapsBetweenAnchors);
+    tree.clearPoints(label);
+    tree.get(label)->autoSized = false;
+    tree.get(label)->wrapsToWidth = false;
+    tree.setWidth(label, 70.0f);
+    CHECK(textWrapWidth(*tree.get(label)) == 70.0f);
+    tree.get(label)->autoSized = true;
+    CHECK(textWrapWidth(*tree.get(label)) == 0.0f);
 }

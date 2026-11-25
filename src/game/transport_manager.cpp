@@ -1,4 +1,5 @@
 #include "game/transport_manager.hpp"
+#include "game/transport_machinery.hpp"
 #include "game/transport_path_time.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "game/game_object_rotation.hpp"
@@ -718,29 +719,26 @@ void TransportManager::applyDoodadMotionState(ActiveTransport& transport, bool m
     constexpr uint32_t kShipStop = 164u;
     const uint32_t state = moving ? kShipMoving : kShipStop;
 
-    const bool sameState = (transport.appliedDoodadAnim == static_cast<int>(state));
-    if (sameState && transport.appliedDoodadCount != 0) return;
-
-    // First seen: already under way or already docked, so the sequence it
-    // is in, not the change into it.
-    const bool firstSeen = transport.appliedDoodadAnim < 0 || transport.appliedDoodadCount == 0;
-    size_t touched = 0;
-    if (firstSeen) {
-        touched = wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop,
-                                                               moving ? kShipMoving : kStand, -1);
+    const size_t count = wmoRenderer_->instanceDoodadCount(transport.wmoInstanceId);
+    const auto step = transport_machinery::step(transport.appliedDoodadAnim, transport.appliedDoodadCount,
+                                                static_cast<int>(state), count);
+    if (!step.tell) return;
+    if (step.steady) {
+        wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop,
+                                                     moving ? kShipMoving : kStand, -1, step.from);
     } else if (moving) {
-        touched = wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop, kShipStart,
-                                                               static_cast<int>(kShipMoving));
+        wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop, kShipStart,
+                                                     static_cast<int>(kShipMoving));
     } else {
-        touched = wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop, kShipStop,
-                                                               static_cast<int>(kStand));
+        wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop, kShipStop,
+                                                     static_cast<int>(kStand));
     }
     LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec, " entry=", transport.entry, " machinery ",
-             firstSeen ? (moving ? "under way: ShipMoving" : "docked: Stand")
-                       : (moving ? "sets off: ShipStart then ShipMoving" : "arrives: ShipStop then Stand"),
-             " (", touched, " doodads)");
+             step.steady ? (moving ? "under way: ShipMoving" : "docked: Stand")
+                         : (moving ? "sets off: ShipStart then ShipMoving" : "arrives: ShipStop then Stand"),
+             " (", count - step.from, " doodads)");
     transport.appliedDoodadAnim = static_cast<int>(state);
-    transport.appliedDoodadCount = touched;
+    transport.appliedDoodadCount = count;
 }
 
 bool TransportManager::isTransportCollisionReady(uint64_t transportGuid) const {

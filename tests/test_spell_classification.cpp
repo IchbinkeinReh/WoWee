@@ -103,43 +103,6 @@ TEST_CASE("Fishing ranks use targetless server-placed casts", "[spell][fishing]"
     REQUIRE_FALSE(isFishingCast(2575));  // Mining
 }
 
-TEST_CASE("Only restoration food and drink spells use the seated consumption loop",
-          "[spell][consumable]") {
-    REQUIRE(classifyRestChannel("Food") == RestChannelKind::FOOD);
-    REQUIRE(classifyRestChannel("Drink") == RestChannelKind::DRINK);
-
-    // Potions use the same drinking motion, but unrelated quest-item actions do not.
-    REQUIRE(classifyRestChannel("Drink Potion") == RestChannelKind::POTION);
-    REQUIRE(classifyRestChannel("Drink Minor Potion") == RestChannelKind::POTION);
-    REQUIRE(classifyRestChannel("Drink Eye Potion") == RestChannelKind::POTION);
-    REQUIRE(classifyRestChannel("Healing Potion") == RestChannelKind::POTION);
-    REQUIRE(classifyRestChannel("Minor Mana Potion") == RestChannelKind::POTION);
-    REQUIRE(classifyRestChannel("Swiftness Potion") == RestChannelKind::POTION);
-    REQUIRE(classifyRestChannel("Create Fervor Potion") == RestChannelKind::NONE);
-    REQUIRE(classifyRestChannel("Potion Toss") == RestChannelKind::NONE);
-    REQUIRE(classifyRestChannel("Drink Disease Bottle") == RestChannelKind::NONE);
-    REQUIRE(classifyRestChannel("Food (TEST)") == RestChannelKind::NONE);
-    REQUIRE(classifyRestChannel("") == RestChannelKind::NONE);
-
-    // The undead racial is the same kind of thing and neither of the two
-    // shapes above: it stays standing, so the seated food path is wrong for
-    // it, and it channels, so the single swig a potion gets is wrong too. It
-    // has its own kind so the call site can tell all three apart.
-    REQUIRE(classifyRestChannel("Cannibalize") == RestChannelKind::CANNIBALIZE);
-    // And nothing else drifts into it on a prefix.
-    REQUIRE(classifyRestChannel("Cannibalize Corpse") == RestChannelKind::NONE);
-    REQUIRE(classifyRestChannel("Cannibal") == RestChannelKind::NONE);
-
-    const uint32_t alcoholEffects[3] = {0, 100, 0};
-    const uint32_t ordinaryEffects[3] = {6, 10, 0};
-    REQUIRE(hasInebriateEffect(alcoholEffects, 3));
-    REQUIRE_FALSE(hasInebriateEffect(ordinaryEffects, 3));
-}
-
-// ---------------------------------------------------------------------------
-// Rank strings
-// ---------------------------------------------------------------------------
-
 TEST_CASE("Rank display strings parse to their number", "[spell][rank]") {
     REQUIRE(rankValue("Rank 1") == 1);
     REQUIRE(rankValue("Rank 9") == 9);

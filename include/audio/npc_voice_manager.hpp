@@ -7,8 +7,9 @@
 #include <unordered_map>
 #include <cstdint>
 #include <random>
-#include <chrono>
 #include <glm/glm.hpp>
+
+#include "audio/npc_line_counter.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -39,33 +40,6 @@ struct VoiceSample {
     float volume = 1.0f;
 };
 
-// NPC voice types (based on creature model/gender)
-enum class VoiceType {
-    HUMAN_MALE,
-    HUMAN_FEMALE,
-    DWARF_MALE,
-    DWARF_FEMALE,
-    NIGHTELF_MALE,
-    NIGHTELF_FEMALE,
-    ORC_MALE,
-    ORC_FEMALE,
-    TAUREN_MALE,
-    TAUREN_FEMALE,
-    TROLL_MALE,
-    TROLL_FEMALE,
-    UNDEAD_MALE,
-    UNDEAD_FEMALE,
-    GNOME_MALE,
-    GNOME_FEMALE,
-    GOBLIN_MALE,
-    GOBLIN_FEMALE,
-    BLOODELF_MALE,
-    BLOODELF_FEMALE,
-    DRAENEI_MALE,
-    DRAENEI_FEMALE,
-    GENERIC,  // Fallback
-};
-
 class NpcVoiceManager {
 public:
     NpcVoiceManager();
@@ -74,28 +48,18 @@ public:
     bool initialize(pipeline::AssetManager* assets);
     void shutdown();
 
-    // Play NPC interaction sounds. The display id is the unit's own: its
-    // CreatureDisplayInfo row can name an NPCSounds kit to take the line from,
-    // which is where the client takes it. The voice type is what the race library
-    // falls back to when the display names no kit (or for a vendor line, whose
-    // source is not this table - see playSound).
-    void playGreeting(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position);
-    void playFarewell(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position);
-    void playVendor(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position);
+    // The display id is the unit's own: its CreatureDisplayInfo row names the NPCSounds
+    // kit the line is taken from, or none.
+    /// The line of a click at a unit (0x0072a680).
+    void playClick(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position);
+    /// The hello as a window opens with it, and the farewell (0x00720860).
+    void playHello(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position);
+    void playFarewell(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position);
 
     void setVolumeScale(float scale) { volumeScale_ = scale; }
     [[nodiscard]] float getVolumeScale() const { return volumeScale_; }
 
 private:
-    enum class SoundCategory {
-        GREETING,
-        FAREWELL,
-        VENDOR,
-        PISSED,
-        FLEE
-    };
-
-    void loadVoiceSounds();
     /// Which kit each display names, and the rows behind it: see the comment on
     /// the definition for what the columns are and how they were established.
     void indexVoiceKits();
@@ -112,24 +76,15 @@ private:
     bool loadSound(const std::string& path, VoiceSample& sample);
     /// Whether a line this manager started for that unit is still going.
     [[nodiscard]] bool linePlaying(uint64_t npcGuid) const;
-    /// Ask one category's line and play it at the unit. `variant` is the client's
+    /// A kit's line of a slot played at the unit. `variant` is the client's
     /// variant index: a kit alternate picked by position rather than by weight,
     /// which is how its third slot is walked once each; -1 leaves the choice to the
-    /// kit's weights. False when nothing started, which is also the client's own
-    /// answer for a display that names no kit - 0x00746900 returns -1 there and no
-    /// line is asked at all.
-    bool playSound(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, SoundCategory category,
-                   int32_t variant, const glm::vec3& position);
+    /// kit's weights. False when nothing started, as for a display that names no
+    /// kit (0x00746900's -1).
+    bool playSound(uint64_t npcGuid, uint32_t displayId, size_t slot, int32_t variant, const glm::vec3& position);
 
     pipeline::AssetManager* assetManager_ = nullptr;
     float volumeScale_ = 1.0f;
-
-    // Voice samples grouped by type and category
-    std::unordered_map<VoiceType, std::vector<VoiceSample>> greetingLibrary_;
-    std::unordered_map<VoiceType, std::vector<VoiceSample>> farewellLibrary_;
-    std::unordered_map<VoiceType, std::vector<VoiceSample>> vendorLibrary_;
-    std::unordered_map<VoiceType, std::vector<VoiceSample>> pissedLibrary_;
-    std::unordered_map<VoiceType, std::vector<VoiceSample>> fleeLibrary_;
 
     // What a clip's own SoundEntries row asks of the play, by the lower-case
     // file name it names the clip by.
@@ -154,18 +109,10 @@ private:
     // because a kit's slot is what is picked from.
     std::unordered_map<uint32_t, std::array<int32_t, 3>> kitLastFile_;
 
-    // One line per unit at a time, and how many asks that unit has had. The
-    // client keeps no timer and no click count: it refuses an ask outright while
-    // the unit's own sound slot is still busy (0x004c5be0 asked at
-    // 00720000.c:8066, and the same test at :382 on the farewell path), and it
-    // counts asks per unit in a counter that moves only when a line actually
-    // started (DAT_00ca1190, with the unit it belongs to in DAT_00ca1198/119c) -
-    // which is what the lastPlayTime_ wall-clock here stood in for.
+    // One line per unit at a time: the client asks the unit's own sound slot
+    // (unit + 0x8f4, 0x004c5be0) before any line and keeps no timer.
     std::unordered_map<uint64_t, uint32_t> lineHandle_;
-    std::unordered_map<uint64_t, int> askCount_;
-    /// How many times a unit's kit gives its first slot before the third is
-    /// walked at all (0x00746900; the 5 is hardcoded, with no cvar behind it).
-    static constexpr int kAsksFromFirstSlot = 5;
+    NpcLineCounter counter_;
 
     std::mt19937 rng_;
 };

@@ -1,4 +1,5 @@
 #include "core/entity_spawner.hpp"
+#include "rendering/unit_alpha.hpp"
 #include "core/asset_prefetch.hpp"
 #include "core/character_component.hpp"
 #include "core/item_attachments.hpp"
@@ -120,7 +121,6 @@ void EntitySpawner::update() {
     processPendingMount();
     processPendingRemotePlayerMounts();
     syncRiderMountWaits();
-    syncCreatureStealthVisuals();
     refreshCreatureScales();
     syncCreatureParticleTwins();
     syncAttachmentParticleTwins();
@@ -195,42 +195,6 @@ void EntitySpawner::syncGroundTargetModel() {
     m2->setInstanceTransform(it->second.instanceId, transform);
 }
 
-void EntitySpawner::syncCreatureStealthVisuals() {
-    if (!renderer_ || !gameHandler_) return;
-    auto* characterRenderer = renderer_->getCharacterRenderer();
-    if (!characterRenderer) return;
-
-    // Stealth flags flip rarely, but this scan visits every spawned creature.
-    // Doing that each frame with the mutex-locked getEntity() plus a
-    // dynamic_pointer_cast per creature was a measurable main-thread cost in
-    // crowded areas - a few sweeps per second is visually indistinguishable.
-    if (++stealthSyncFrameCounter_ % 15 != 0) return;
-
-    // EntitySpawner::update() runs on the main thread, so the unlocked
-    // getEntities() reference is safe and avoids a mutex acquire per creature.
-    const auto& entities = gameHandler_->getEntityManager().getEntities();
-
-    // Undetected stealth is culled by the server. Units that are sent with the
-    // CREEP visibility flag use the translucent detected-stealth presentation.
-    constexpr float kDetectedStealthOpacity = 0.35f;
-    for (const auto& [guid, instanceId] : creatureInstances_) {
-        auto entIt = entities.find(guid);
-        if (entIt == entities.end() || !entIt->second) continue;
-        const game::Entity* entity = entIt->second.get();
-        if (entity->getType() != game::ObjectType::UNIT &&
-            entity->getType() != game::ObjectType::PLAYER) continue;
-        const auto* unit = static_cast<const game::Unit*>(entity);
-
-        const bool stealthed = unit->hasCreepVisibility();
-        auto [it, inserted] = creatureWasStealthed_.try_emplace(guid, stealthed);
-        if (!inserted && it->second == stealthed) continue;
-
-        it->second = stealthed;
-        characterRenderer->setInstanceOpacity(
-            instanceId, stealthed ? kDetectedStealthOpacity : 1.0f);
-    }
-}
-
 void EntitySpawner::shutdown() {
     clearAllQueues();
     // Clear all instances
@@ -252,7 +216,6 @@ void EntitySpawner::shutdown() {
     creatureWalkingState_.clear();
     creatureFlyingState_.clear();
     creatureActiveEmotes_.clear();
-    creatureWasStealthed_.clear();
     unitWeaponsShown_.clear();
     unitSheath_.clear();
     corpseGuids_.clear();
@@ -318,7 +281,6 @@ void EntitySpawner::resetAllState() {
     // Carried over, a stale entry matching the creature's current stealth state
     // suppresses the opacity call that would apply it, so a stealthed NPC came
     // back fully opaque after a relog. shutdown() already cleared this.
-    creatureWasStealthed_.clear();
     unitWeaponsShown_.clear();
     unitSheath_.clear();
     corpseGuids_.clear();
@@ -1460,6 +1422,9 @@ void EntitySpawner::buildCreatureDisplayLookups() {
                 const float displayScale = cdi->getFloat(i, scaleField);
                 if (displayScale > 0.0f) data.displayScale = displayScale;
             }
+            // Column 5 in every version of the file.
+            constexpr uint32_t kAlphaField = 5;
+            if (kAlphaField < cdi->getFieldCount()) data.modelAlpha = cdi->getUInt32(i, kAlphaField);
             const uint32_t pcField = cdiL ? (*cdiL)["ParticleColorID"] : 0xFFFFFFFFu;
             if (pcField != 0xFFFFFFFFu && pcField < cdi->getFieldCount()) {
                 data.particleColorId = cdi->getUInt32(i, pcField);
@@ -1738,49 +1703,6 @@ std::string EntitySpawner::getModelPathForDisplayId(uint32_t displayId) const {
     }
 
     return itPath->second;
-}
-
-audio::VoiceType EntitySpawner::detectVoiceTypeFromDisplayId(uint32_t displayId) const {
-    // Look up display data
-    auto itDisplay = displayDataMap_.find(displayId);
-    if (itDisplay == displayDataMap_.end() || itDisplay->second.extraDisplayId == 0) {
-        LOG_INFO("Voice detection: displayId ", displayId, " -> GENERIC (no display data)");
-        return audio::VoiceType::GENERIC;  // Not a humanoid or no extra data
-    }
-
-    // Look up humanoid extra data (race/sex info)
-    auto itExtra = humanoidExtraMap_.find(itDisplay->second.extraDisplayId);
-    if (itExtra == humanoidExtraMap_.end()) {
-        LOG_INFO("Voice detection: displayId ", displayId, " -> GENERIC (no humanoid extra data)");
-        return audio::VoiceType::GENERIC;
-    }
-
-    uint8_t raceId = itExtra->second.raceId;
-    uint8_t sexId = itExtra->second.sexId;
-
-    const char* raceName = "Unknown";
-    const char* sexName = (sexId == 0) ? "Male" : "Female";
-
-    // Map (raceId, sexId) to VoiceType
-    // Race IDs: 1=Human, 2=Orc, 3=Dwarf, 4=NightElf, 5=Undead, 6=Tauren, 7=Gnome, 8=Troll
-    // Sex IDs: 0=Male, 1=Female
-    audio::VoiceType result;
-    switch (raceId) {
-        case 1: raceName = "Human"; result = (sexId == 0) ? audio::VoiceType::HUMAN_MALE : audio::VoiceType::HUMAN_FEMALE; break;
-        case 2: raceName = "Orc"; result = (sexId == 0) ? audio::VoiceType::ORC_MALE : audio::VoiceType::ORC_FEMALE; break;
-        case 3: raceName = "Dwarf"; result = (sexId == 0) ? audio::VoiceType::DWARF_MALE : audio::VoiceType::DWARF_FEMALE; break;
-        case 4: raceName = "NightElf"; result = (sexId == 0) ? audio::VoiceType::NIGHTELF_MALE : audio::VoiceType::NIGHTELF_FEMALE; break;
-        case 5: raceName = "Undead"; result = (sexId == 0) ? audio::VoiceType::UNDEAD_MALE : audio::VoiceType::UNDEAD_FEMALE; break;
-        case 6: raceName = "Tauren"; result = (sexId == 0) ? audio::VoiceType::TAUREN_MALE : audio::VoiceType::TAUREN_FEMALE; break;
-        case 7: raceName = "Gnome"; result = (sexId == 0) ? audio::VoiceType::GNOME_MALE : audio::VoiceType::GNOME_FEMALE; break;
-        case 8: raceName = "Troll"; result = (sexId == 0) ? audio::VoiceType::TROLL_MALE : audio::VoiceType::TROLL_FEMALE; break;
-        case 10: raceName = "BloodElf"; result = (sexId == 0) ? audio::VoiceType::BLOODELF_MALE : audio::VoiceType::BLOODELF_FEMALE; break;
-        case 11: raceName = "Draenei"; result = (sexId == 0) ? audio::VoiceType::DRAENEI_MALE : audio::VoiceType::DRAENEI_FEMALE; break;
-        default: result = audio::VoiceType::GENERIC; break;
-    }
-
-    LOG_INFO("Voice detection: displayId ", displayId, " -> ", raceName, " ", sexName, " (race=", static_cast<int>(raceId), ", sex=", static_cast<int>(sexId), ")");
-    return result;
 }
 
 void EntitySpawner::setMirrorLook(const game::MirrorImageLook& look) {
@@ -2872,6 +2794,11 @@ float EntitySpawner::creatureModelScale(uint32_t displayId) const {
     return it != modelIdToScale_.end() ? it->second : 1.0f;
 }
 
+float EntitySpawner::displayAlpha(uint32_t displayId) const {
+    auto it = displayDataMap_.find(displayId);
+    return it != displayDataMap_.end() ? rendering::unit_alpha::ofDisplay(it->second.modelAlpha) : 1.0f;
+}
+
 float EntitySpawner::creatureDisplayScale(uint32_t displayId) const {
     auto it = displayDataMap_.find(displayId);
     return it != displayDataMap_.end() ? it->second.displayScale : 1.0f;
@@ -3302,6 +3229,7 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
 
     // Track instance
     creatureInstances_[guid] = instanceId;
+    charRenderer->setInstanceDisplayAlpha(instanceId, displayAlpha(displayId));
     // 0x00730100: a unit whose model has come in is announced to the
     // interface - UNIT_PORTRAIT_UPDATE then UNIT_MODEL_CHANGED (0x00512b50 ->
     // 0x00618110 with 3), for each token naming it - so a portrait asked for

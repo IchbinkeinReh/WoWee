@@ -59,33 +59,6 @@ namespace ui {
 
 
 // ============================================================
-// Raid Warning / Boss Emote Center-Screen Overlay
-// ============================================================
-
-// ============================================================================
-// The sound a whisper makes
-// ============================================================================
-//
-// What is left of the raid warning overlay. RaidWarningFrame is FrameXML's and
-// answers CHAT_MSG_RAID_WARNING itself, so the banner went; the walk through
-// new chat lines stayed, because the whisper sound was being played from
-// inside it and belongs to no element - FrameXML plays none for a whisper.
-void CombatUI::playSoundsForNewChat(game::GameHandler& gameHandler) {
-    const auto& chatHistory = gameHandler.getChatHistory();
-    const size_t newCount = chatHistory.size();
-    if (newCount <= raidWarnChatSeenCount_) return;
-
-    for (size_t i = raidWarnChatSeenCount_; i < newCount; ++i) {
-        if (chatHistory[i].type != game::ChatType::WHISPER) continue;
-        if (auto* ac = services_.audioCoordinator) {
-            if (auto* ui = ac->getUiSoundManager()) ui->playWhisperReceived();
-        }
-    }
-    raidWarnChatSeenCount_ = newCount;
-}
-
-
-// ============================================================
 // Floating Combat Text
 // ============================================================
 
@@ -620,7 +593,14 @@ void CombatUI::renderCombatLog(game::GameHandler& gameHandler,
 void CombatUI::renderThreatWindow(game::GameHandler& gameHandler) {
     if (!showThreatWindow_) return;
 
-    const auto* list = gameHandler.getTargetThreatList();
+    // Highest first, as the window lists them.
+    struct Row { uint64_t victimGuid; uint32_t threat; };
+    std::vector<Row> rows;
+    if (const auto* table = gameHandler.getThreatTable(gameHandler.getTargetGuid()))
+        for (const auto& e : table->entries())
+            rows.push_back({e.victim, static_cast<uint32_t>(std::max(e.threat, 0))});
+    std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.threat > b.threat; });
+    const auto* list = &rows;
 
     ImGui::SetNextWindowSize(ImVec2(280, 220), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(10, 300), ImGuiCond_FirstUseEver);
@@ -632,7 +612,7 @@ void CombatUI::renderThreatWindow(game::GameHandler& gameHandler) {
         return;
     }
 
-    if (!list || list->empty()) {
+    if (list->empty()) {
         ImGui::TextDisabled("No threat data for current target.");
         ImGui::End();
         return;

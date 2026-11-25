@@ -1,13 +1,18 @@
 #include "addons/lua_engine.hpp"
+#include "addons/frame_handle.hpp"
+#include "addons/lua_arg_guard.hpp"
+#include "addons/lua_std_libs.hpp"
+#include "addons/missing_api_rule.hpp"
 #include "addons/binding_lookup.hpp"
 #include "addons/modifier_keys.hpp"
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
-#include "ui/visibility_scripts.hpp"
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
+#include "game/game_utils.hpp"
+#include "game/glyph_tooltip.hpp"
 #include "game/expansion_profile.hpp"
 #include "ui/keyboard_frame.hpp"
 #include "ui/widget_tree.hpp"
@@ -682,8 +687,15 @@ uint32_t widgetIdOf(lua_State* L, int index) {
     // own secure OnClick insecure from its first self:GetAttribute.
     taint::Quiet quiet;
     lua_getfield(L, index, "__wid");
-    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
+    uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
     lua_pop(L, 1);
+    if (id == 0) {
+        // A table with the handle of one (a region's method called on it, or a
+        // frame given as an argument).
+        lua_rawgeti(L, index, 0);
+        if (lua_islightuserdata(L, -1)) id = widgetOfHandle(lua_touserdata(L, -1));
+        lua_pop(L, 1);
+    }
     return id;
 }
 
@@ -1863,17 +1875,17 @@ int lua_Region_GetFieldSize(lua_State* L) {
 /// so a two-line objective was given a one-line row and the rows below it were
 /// drawn over its second line.
 ///
-/// The width it wraps inside is the renderer's own rule: a declared width with
-/// no height is a paragraph, and so is anything the interface has marked as
-/// wrapping. A label sized by its own text wraps at nothing and is one line
-/// unless it carries a |n.
+/// The width it wraps inside is the renderer's own rule (textWrapWidth): a
+/// declared width with no height is a paragraph, and so is anything the
+/// interface has marked as wrapping or held by its two sides. A label sized by
+/// its own text wraps at nothing and is one line unless it carries a |n.
 double fontStringTextHeight(const wowee::ui::Widget& w) {
     // The size it is actually drawn at, which is what interfaceFontSize
     // answers. Three places asked this question with three different
     // fallbacks - twelve here, twelve below, fourteen in the edit box - and a
     // label with no declared height is drawn at none of them.
     const float line = wowee::ui::interfaceFontSize(w.fontHeight);
-    const float wrapWidth = wowee::ui::fontStringWrapWidth(w);
+    const float wrapWidth = w.wordWrap ? wowee::ui::textWrapWidth(w) : 0.0f;
     const int lines = std::max(1, wowee::ui::interfaceTextLines(
                                       w.text, w.fontFace, w.fontHeight,
                                       wrapWidth, w.nonSpaceWrap));
@@ -1883,6 +1895,7 @@ double fontStringTextHeight(const wowee::ui::Widget& w) {
 int lua_Region_GetTextHeight(lua_State* L) {
     const auto* w = textWidgetOf(L, 1);
     if (!w) { lua_pushnumber(L, 0.0); return 1; }
+    if (auto* tree = wowee::addons::getWidgetTree(L)) tree->resolveWidget(w->id);
     lua_pushnumber(L, fontStringTextHeight(*w));
     return 1;
 }
@@ -1947,8 +1960,10 @@ int lua_Region_GetHeight(lua_State* L) {
     // one line, and the spirit healer's seven-line warning ran out of its
     // box with the Accept and Cancel buttons drawn over the middle of it.
     const bool staleParagraph =
-        w && w->kind == wowee::ui::WidgetKind::FontString && w->wrapsToWidth &&
-        !w->text.empty() && w->text != w->measuredText;
+        w && w->kind == wowee::ui::WidgetKind::FontString && !w->text.empty() &&
+        ((w->wrapsToWidth && w->text != w->measuredText) ||
+         (w->wrapsBetweenAnchors &&
+          (w->text != w->measuredText || wowee::ui::textWrapWidth(*w) != w->measuredWidth)));
     if (w && !w->text.empty() && w->kind == wowee::ui::WidgetKind::FontString &&
         (staleAutoSize || staleParagraph || (w->rectH <= 0.0f && w->height <= 0.0f))) {
         // A font string that was never given a height is as tall as its text,
@@ -2072,7 +2087,19 @@ static int lua_Region_SetParent(lua_State* L) {
     if (tree) {
         const uint32_t id = widgetIdOf(L, 1);
         const uint32_t np = lua_istable(L, 2) ? widgetIdOf(L, 2) : 0;
-        if (id != 0) tree->setParent(id, np);
+        if (id != 0) {
+            // Hidden where it was and shown where it comes to (0x004911b0).
+            const auto* w = tree->get(id);
+            auto* engine = engineFrom(L);
+            const uint32_t to = np != 0 ? np : tree->rootId();
+            const bool moves = w && engine && w->kind == wowee::ui::WidgetKind::Frame && w->parent != to;
+            const bool wasUp = moves && tree->shownNow(id), wasTold = moves && w->toldShown;
+            if (wasTold) engine->frameHidden(id);
+            tree->pinPoints(id);
+            tree->setParent(id, np);
+            w = tree->get(id);
+            if (moves && w && w->shown && (wasTold || !wasUp)) engine->frameShown(id);
+        }
     }
     return 0;
 }
@@ -2176,26 +2203,19 @@ int lua_Frame_GetFrameLevel(lua_State* L) {
 /// relativeTo comes back as the frame itself, not its name, because that is
 /// what SetPoint is handed straight back in.
 int lua_Region_GetPoint(lua_State* L) {
+    // 0x0049d950: the first without a number, and what the point is placed by
+    // whatever that is - a texture, a font string, the parent - nil for the
+    // screen.
+    auto* tree = wowee::addons::getWidgetTree(L);
     const auto* w = widgetOf(L, 1);
-    if (!w || w->anchors.empty()) return 0;
-    // One-based, and no argument means the first - which is what FrameXML
-    // relies on where a frame has only one.
-    size_t index = static_cast<size_t>(luaL_optnumber(L, 2, 1));
-    if (index < 1) index = 1;
-    if (index > w->anchors.size()) return 0;
-    const wowee::ui::Anchor& a = w->anchors[index - 1];
-
-    lua_pushstring(L, a.point.c_str());
-    // Zero means "my parent", which SetPoint also treats as the default, so it
-    // comes back as nil rather than as a frame that was never named.
-    if (a.relativeTo == 0) {
-        lua_pushnil(L);
-    } else {
-        pushFrameByWid(L, a.relativeTo);
-    }
-    lua_pushstring(L, a.relativePoint.c_str());
-    lua_pushnumber(L, a.x);
-    lua_pushnumber(L, a.y);
+    const wowee::ui::Anchor* a =
+        tree && w ? tree->pointAt(w->id, lua_isnumber(L, 2) ? luaToClientInt(L, 2) - 1 : 0) : nullptr;
+    if (!a) return 0;
+    lua_pushstring(L, a->point.c_str());
+    pushFrameByHandle(L, a->relativeTo != 0 ? a->relativeTo : w->parent);
+    lua_pushstring(L, a->relativePoint.c_str());
+    lua_pushnumber(L, a->x);
+    lua_pushnumber(L, a->y);
     return 5;
 }
 
@@ -2333,6 +2353,7 @@ std::vector<lua_CFunction>& tooltipMethodTargets() {
 }
 
 int tooltipMethodTrampoline(lua_State* L) {
+    takeSelfByHandle(L);
     const auto at = static_cast<std::size_t>(lua_tointeger(L, lua_upvalueindex(1)));
     const auto& targets = tooltipMethodTargets();
     if (at >= targets.size()) return 0;
@@ -3741,8 +3762,8 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
             }
         } else {
             // The name in white and its rank to the right in grey - only in
-            // a brief tooltip or where the caller asks for it; SetSpell,
-            // SetHyperlink and a full SetAction leave the rank off.
+            // a brief tooltip or where the caller asks for it, as SetAction
+            // does; SetSpell and SetHyperlink leave the rank off.
             line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
             auto& title = w->tooltipLines.back();
             title.rc[0] = title.rc[1] = title.rc[2] = 128.0f / 255.0f;  // 0xad2d38: ff808080
@@ -4156,6 +4177,31 @@ int lua_Tooltip_SetAction(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0)) - 1;
     if (!w || !gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
+    const auto text = [&](const std::string& said, const float* color) {
+        w->isTooltip = true;
+        clearTooltipLines(L, w);
+        wowee::ui::Widget::TooltipLine line;
+        line.left = said;
+        for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = i < 3 ? color[i] : 1.0f;
+        w->tooltipLines.push_back(std::move(line));
+        w->shown = true;
+        luaPushOneOrNil(L, 0);
+        return 1;
+    };
+    static constexpr float kWhite[3] = {1.0f, 1.0f, 1.0f};
+    // The pet's or the vehicle's bar (0x00631000 -> 0x005a79a0): its spell as
+    // SetPetAction has it, a stance's or an order's word.
+    if (const auto packed = wowee::addons::petActionAt(gh, slot)) {
+        if (const uint32_t spell = game::pet::petSlotSpell(*packed)) {
+            luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, spell, false, true, nullptr, true) ? 1 : 0);
+            return 1;
+        }
+        const auto token = game::pet::petTokenInfo(*packed, gh->getPetReact(), gh->getPetCommand(),
+                                                   gh->isPetAttacking());
+        if (!token.word) { luaPushOneOrNil(L, 0); return 1; }
+        const std::string key = std::string(token.mode ? "PET_MODE_" : "PET_ACTION_") + token.word;
+        return text(globalOr(L, key.c_str(), token.word), kTalentGold);
+    }
     const auto& bar = gh->getActionBar();
     if (slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         luaPushOneOrNil(L, 0);
@@ -4171,7 +4217,14 @@ int lua_Tooltip_SetAction(lua_State* L) {
         return 1;
     }
     if (action.type == game::ActionBarSlot::SPELL) {
-        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id, !uberTooltips(L)) ? 1 : 0);
+        // The spell one attacks with (effect 78) is the word alone (0x005a96d0).
+        gh->loadSpellNameCache();
+        const auto& spells = gh->spellNameCacheRef();
+        constexpr uint32_t kEffectAttack = 78;
+        if (const auto it = spells.find(action.id); it != spells.end() && it->second.effectIds[0] == kEffectAttack)
+            return text(globalOr(L, "ATTACK", "Attack"), kWhite);
+        // With its rank, brief or not (0x006238a0's sixth argument is 1).
+        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id, !uberTooltips(L), true) ? 1 : 0);
         return 1;
     }
     if (action.type == game::ActionBarSlot::MACRO) {
@@ -4209,7 +4262,7 @@ int lua_Tooltip_SetAction(lua_State* L) {
             // flag (+0x56c) goes to the cooldown only: the builder is asked
             // as for the player's own spell, as a spell on the bar is.
             const bool built = shown.spell > 0 &&
-                fillSpellTooltip(L, w, gh, static_cast<uint32_t>(shown.spell), !uberTooltips(L));
+                fillSpellTooltip(L, w, gh, static_cast<uint32_t>(shown.spell), !uberTooltips(L), true);
             if (!built) {
                 clearTooltipLines(L, w);
                 w->shown = false;
@@ -4326,28 +4379,51 @@ static void appendEnchantLineById(wowee::ui::Widget* w, game::GameHandler* gh,
     w->tooltipLines.push_back(std::move(line));
 }
 
-/// A glyph named by a link, filled the way the reference client fills one.
-///
-/// Its glyph branch - the last of SetHyperlink's ten prefixes - parses both of
-/// the link's numbers and calls the very builder the glyph panel's own
-/// GameTooltip:SetGlyph calls (0x00625d00 → 0x00622ba0); only the arguments
-/// differ, and the link carries both numbers because GetGlyphLink wrote them
-/// (see there): the socket's GlyphSlot id first, then the glyph's
-/// GlyphProperties id. That builder answers, in order, the glyph's spell name
-/// in the header colour, then "MAJOR_GLYPH" or "MINOR_GLYPH" off the GlyphSlot
-/// row's Type (+0x04: anything nonzero is a minor glyph, and a socket whose row
-/// is missing counts as major), then the spell's description - all of it off
-/// the two numbers, with no player and no socket consulted, which is the point
-/// of a link: the glyph describes itself to whoever hovers it, in someone
-/// else's chat. The "right click to remove it" hint the builder also knows is
-/// gated on an argument the panel passes as zero and the link path as one, so
-/// it belongs to the panel; and its GLYPH_LOCKED, GLYPH_INACTIVE and
-/// GLYPH_EMPTY_DESC lines are what a socket with nothing in it answers, which a
-/// link never is.
-///
-/// The name and description here are the whole spell tooltip, because that is
-/// what SetGlyph already settles for (lua_Tooltip_SetGlyph): one builder for
-/// both paths rather than a second that can drift away from the first.
+/// A glyph's tooltip, its socket's or a link's (0x00622ba0), which announces no
+/// spell: the glyph's GlyphProperties row and the socket's GlyphSlot row.
+static bool fillGlyphTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh, uint32_t slotId,
+                             uint32_t propertiesId, bool enabled, bool link) {
+    namespace gt = game::glyph_tooltip;
+    gt::Socket socket;
+    gh->ensureGlyphPropertiesLoaded();
+    if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+        if (auto rows = am->loadDBC("GlyphSlot.dbc"); rows && rows->isLoaded() && rows->getFieldCount() >= 3) {
+            if (const int32_t row = rows->findRecordById(slotId); row >= 0) {
+                socket.slotKnown = true;
+                socket.slotType = rows->getUInt32(static_cast<uint32_t>(row), 1);
+                socket.slotTooltip = rows->getUInt32(static_cast<uint32_t>(row), 2);
+            }
+        }
+    }
+    socket.enabled = enabled;
+    socket.link = link;
+    if (const uint32_t spell = propertiesId != 0 ? gh->getGlyphSpellId(propertiesId) : 0; spell != 0) {
+        socket.filled = true;
+        if (const std::string& name = gh->getSpellName(spell); !name.empty()) socket.spellName = name;
+        socket.description = gh->formatSpellDescription(spell, gh->getSpellDescription(spell));
+    }
+    static constexpr float kColors[5][3] = {{1.0f, 0.0f, 0.0f},
+                                            {128.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f},
+                                            {1.0f, 1.0f, 1.0f},
+                                            {0x66 / 255.0f, 0xbb / 255.0f, 1.0f},
+                                            {1.0f, 0xd2 / 255.0f, 0.0f}};
+    w->isTooltip = true;
+    clearTooltipLines(L, w);
+    for (const auto& said : gt::lines(socket, [L](const std::string& key) { return globalOr(L, key.c_str(), ""); })) {
+        wowee::ui::Widget::TooltipLine line;
+        line.left = said.text;
+        line.wrap = said.wraps;
+        const float* color = kColors[static_cast<size_t>(said.color)];
+        for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = i < 3 ? color[i] : 1.0f;
+        w->tooltipLines.push_back(std::move(line));
+    }
+    w->shown = true;
+    return !w->tooltipLines.empty();
+}
+
+/// A glyph named by a link: both of its numbers, the socket's GlyphSlot id and
+/// the glyph's GlyphProperties id, which GetGlyphLink wrote - no player and no
+/// socket are asked, so it describes itself in anybody's chat.
 static bool fillGlyphLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                                  const std::string& link, size_t colon) {
     auto number = [&link](size_t& at) {
@@ -4360,24 +4436,10 @@ static bool fillGlyphLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameH
     const uint32_t slotId = number(at);
     uint32_t propertiesId = 0;
     if (at < link.size() && link[at] == ':') propertiesId = number(++at);
-    // The second number is the one that names the tooltip: the properties row
-    // holds the spell, and the slot row only ever adds the major/minor line.
     if (propertiesId == 0) return false;
     gh->ensureGlyphPropertiesLoaded();
-    const uint32_t spellId = gh->getGlyphSpellId(propertiesId);
-    if (spellId == 0 || !fillSpellTooltip(L, w, gh, spellId, false, false, nullptr, false, false)) return false;
-    uint32_t type = 0;
-    const bool minor = gh->getGlyphSlotType(slotId, type) && type != 0;
-    wowee::ui::Widget::TooltipLine line;
-    line.left = globalOr(L, minor ? "MINOR_GLYPH" : "MAJOR_GLYPH",
-                         minor ? "Minor Glyph" : "Major Glyph");
-    // The client's own colour for the line, 0xffbb66ff. The client puts this
-    // line between the name and the description; here the spell tooltip is
-    // filled whole first, so it lands after both.
-    line.lc[0] = 1.0f; line.lc[1] = 0.733f; line.lc[2] = 0.4f; line.lc[3] = 1.0f;
-    line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
-    w->tooltipLines.push_back(std::move(line));
-    return true;
+    if (gh->getGlyphSpellId(propertiesId) == 0) return false;
+    return fillGlyphTooltip(L, w, gh, slotId, propertiesId, true, /*link=*/true);
 }
 
 /// One of the interface's global strings, filled through Lua's own
@@ -4915,29 +4977,25 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
     return 0;
 }
 
-/// A glyph in its socket, hovered on the glyph panel.
-///
-/// SetGlyph(socketID, talentGroup) - the same one-based socket and spec
-/// GetGlyphSocketInfo takes. A glyph *is* a spell once its properties id is
-/// resolved, so this is the spell tooltip; the resolution is the one that
-/// binding now does, off GlyphProperties.dbc.
+/// SetGlyph(glyphSlot [, groupIndex]) (0x00625d00): the socket hovered on the
+/// glyph panel, with what the talent group holds there - or that it holds
+/// nothing, or is not open yet. Answers nothing.
 int lua_Tooltip_SetGlyph(lua_State* L) {
+    if (!lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: %s:SetGlyph(glyphSlot[, groupIndex])", usageName(L, 1));
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    const int socket = static_cast<int>(luaL_optnumber(L, 2, 0));
+    const int socket = static_cast<int>(std::lround(lua_tonumber(L, 2)));
     const int spec = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || socket < 1 || socket > game::GameHandler::MAX_GLYPH_SLOTS) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
+    if (!w || !gh || socket < 1 || socket > game::GameHandler::MAX_GLYPH_SLOTS) return 0;
+    std::array<uint32_t, 6> slotIds{}, inFields{};
+    uint32_t enabled = 0;
+    if (!gh->getGlyphSocketFields(slotIds, inFields, enabled)) return 0;
     const auto& glyphs = (spec >= 1 && spec <= 2)
         ? gh->getGlyphs(static_cast<uint8_t>(spec - 1)) : gh->getGlyphs();
-    const uint16_t glyphId = glyphs[static_cast<size_t>(socket) - 1];
-    if (glyphId == 0) { lua_pushboolean(L, 0); return 1; }
-    gh->ensureGlyphPropertiesLoaded();
-    const uint32_t spellId = gh->getGlyphSpellId(glyphId);
-    lua_pushboolean(L, spellId && fillSpellTooltip(L, w, gh, spellId, false, false, nullptr, false, false) ? 1 : 0);
-    return 1;
+    const size_t i = static_cast<size_t>(socket) - 1;
+    (void)fillGlyphTooltip(L, w, gh, slotIds[i], glyphs[i], (enabled & (1u << i)) != 0, /*link=*/false);
+    return 0;
 }
 
 /// One item from a finished dungeon's reward list, hovered on the alert.
@@ -5718,45 +5776,23 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     // 0x00519df0): THREAT_TOOLTIP with the percentage less a half, rounded
     // (0x007374c0). SetUnit answers 1 only when it wrote this line.
     bool threatShown = false;
-    if (entity && !isPlayer && gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+    if (entity && player) {
         int mode = 3;
         try { mode = std::stoi(wowee::addons::storedCVarValue("threatWarning", "3")); } catch (...) {}
         const bool wanted = mode == 3 || (mode == 1 && gh->isInInstance()) ||
                             (mode == 2 && !gh->getPartyData().members.empty());
-        if (wanted) {
-            lua_getglobal(L, "UnitDetailedThreatSituation");
-            if (lua_isfunction(L, -1)) {
-                lua_pushstring(L, "player");
-                lua_pushstring(L, uidStr.c_str());
-                if (lua_pcall(L, 2, 5, 0) == 0) {
-                    // On the unit's threat list: a threat value, which
-                    // the binding's guess without one leaves at zero.
-                    const double pct = lua_tonumber(L, -3);
-                    if (lua_tonumber(L, -1) > 0.0) {
-                        addLine(formatGlobal(L, globalOr(L, "THREAT_TOOLTIP", "%d%% Threat"),
-                                             {std::to_string(std::lround(pct - 0.5))}),
-                                1.0f, 1.0f, 1.0f);
-                        // In front of it the threat icon, tinted by the
-                        // status (0xad2d70: grey, yellow, orange, red for
-                        // 0 to 3).
-                        static constexpr float kThreatTint[4][3] = {
-                            {0.69f, 0.69f, 0.69f}, {1.0f, 1.0f, 0.467f}, {1.0f, 0.6f, 0.0f}, {1.0f, 0.0f, 0.0f}};
-                        const int status = std::clamp(static_cast<int>(lua_tonumber(L, -4)), 0, 3);
-                        auto& tl = w->tooltipLines.back();
-                        tl.icon = "Interface\\RaidFrame\\UI-RaidFrame-Threat";
-                        tl.iconTint[0] = kThreatTint[status][0];
-                        tl.iconTint[1] = kThreatTint[status][1];
-                        tl.iconTint[2] = kThreatTint[status][2];
-                        tl.iconTint[3] = 1.0f;
-                        threatShown = true;
-                    }
-                    lua_pop(L, 5);
-                } else {
-                    lua_pop(L, 1);
-                }
-            } else {
-                lua_pop(L, 1);
-            }
+        const auto threat = gh->threatSituation(gh->getPlayerGuid(), guid);
+        if (wanted && threat.standing.known) {
+            addLine(formatGlobal(L, globalOr(L, "THREAT_TOOLTIP", "%d%% Threat"),
+                                 {std::to_string(std::lround(threat.scaledPercent - 0.5f))}),
+                    1.0f, 1.0f, 1.0f);
+            // In front of it the threat icon, tinted by the status.
+            const uint32_t tint = game::threatStatusColor(threat.standing.status);
+            auto& tl = w->tooltipLines.back();
+            tl.icon = "Interface\\RaidFrame\\UI-RaidFrame-Threat";
+            for (int i = 0; i < 3; ++i) tl.iconTint[i] = static_cast<float>(tint >> (16 - 8 * i) & 0xff) / 255.0f;
+            tl.iconTint[3] = 1.0f;
+            threatShown = true;
         }
     }
 
@@ -7372,88 +7408,13 @@ static void queueAnimFinished(lua_State* L, int frameIndex) {
     lua_pop(L, 1);
 }
 
-/// Whether every ancestor is shown, read off the flags rather than the layout.
-///
-/// Show and Hide both ask this, and they have to ask it the same way: a frame
-/// whose parent is hidden is not on screen either way round, and answering the
-/// two differently would fire one handler of a pair and not the other.
-static bool ancestorsShown(lua_State* L, const wowee::ui::Widget* w) {
-    auto* tree = wowee::addons::getWidgetTree(L);
-    if (!tree) return true;
-    for (uint32_t at = w->parent; at != 0;) {
-        const auto* p = tree->get(at);
-        if (!p) break;
-        if (!p->shown) return false;
-        at = p->parent;
-    }
-    return true;
-}
-
-/// Whether a script of this name is hooked to the frame at `frameIndex`.
-///
-/// The frame table is to hand here, so this reads it directly rather than
-/// going round by widget id the way LuaEngine::frameHasScript has to.
-static bool frameScriptSet(lua_State* L, int frameIndex, const char* name) {
-    const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
-    taint::Quiet quiet;   // see callScriptOnTable
-    lua_getfield(L, abs, "__scripts");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    lua_getfield(L, -1, name);
-    const bool has = lua_isfunction(L, -1);
-    lua_pop(L, 2);
-    return has;
-}
-
-/// Runs a frame's script now, inside the call that brought it about; false
-/// where it has none. Errors are reported the same way every other script call
-/// reports them rather than unwinding through that call.
-static bool runFrameScriptNow(lua_State* L, int frameIndex, const char* script) {
-    const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
-    taint::Quiet quiet;   // see callScriptOnTable
-    lua_getfield(L, abs, "__scripts");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    lua_getfield(L, -1, script);
-    if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return false; }
-    lua_pushvalue(L, abs);                       // self
-    if (pcallScript(L, script, 1, 0) != 0) {
-        LOG_WARNING("[Lua] ", script, " error: ", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);                               // __scripts
-    return true;
-}
-
-/// Run a frame's OnShow now, from inside Show().
-///
-/// The visibility pass that normally fires it runs once a frame, and that is
-/// too late for anything whose next step depends on what the handler did.
-/// ContainerFrame_GenerateFrame is the case that showed it: it writes
-/// `bags[bagsShown + 1] = frame:GetName()`, anchors the list, and only then
-/// calls Show - and `bagsShown` is incremented by ContainerFrame_OnShow. With
-/// the handler deferred, every bag opened in the same breath wrote itself to
-/// index 1 over the last one, so the list never held more than one name and
-/// only that one was ever anchored. Opening the bags at a vendor put all of
-/// them in the same place, one on top of another.
-///
-/// The real client runs OnShow as part of Show, so this is the faithful
-/// order rather than a workaround for that one function.
-static void fireOnShowNow(lua_State* L, int frameIndex, wowee::ui::Widget* w) {
-    if (runFrameScriptNow(L, frameIndex, "OnShow")) w->onShowFired = true;
-}
-
 int lua_Region_Show(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
-    bool becameShown = false;
+    const bool becameShown = w && !w->shown;
     if (w) {
-        // Counted, not just set. A hide and a show in the same breath leave the
-        // flag where it started, and the pass that fires OnShow works by
-        // comparing against the last state it reported - so the rebuild the
-        // interface asked for is invisible to it. See Widget::shownToggles.
-        if (!w->shown && w->shownToggles < 200) ++w->shownToggles;
         // Owed a look from updateVisibility, which reads only marked frames.
         if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markVisibilityPending(w->id);
-        becameShown = !w->shown;
         w->shown = true;
         tooltipLineStringWritten(L, w);
     }
@@ -7472,58 +7433,18 @@ int lua_Region_Show(lua_State* L) {
     // the interface does not expect.
     queueAnimFinished(L, 1);
 
-    // Only when this call is what made it shown, and only when every ancestor
-    // is shown too - the same condition the deferred pass uses, read off the
-    // flags Show and Hide set rather than off the layout, which has not run.
-    // A clean show only. `panel:Hide(); panel:Show()` is the interface asking
-    // for a rebuild, and the deferred pass answers that pair together, in
-    // order, on purpose - Hide fires no handler of its own, so running OnShow
-    // here would put it before the OnHide that is owed. One toggle means this
-    // Show is the only thing that happened since the last pass.
-    if (w && becameShown && w->shownToggles <= 1 && ancestorsShown(L, w)) {
-        fireOnShowNow(L, 1, w);
-    }
+    // The OnShow of everything that comes up with it, now: the next line of
+    // the caller reads what they did (ContainerFrame_GenerateFrame's bagsShown).
+    if (becameShown)
+        if (auto* engine = engineFrom(L)) engine->frameShown(w->id);
     return 0;
 }
 int lua_Region_Hide(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
-    // No OnHide from here, and it is not the asymmetry with Show it looks
-    // like. Running it here is what the real client does and it fixes a real
-    // fault - ContainerFrame_GenerateFrame indexes its bag list by a counter
-    // ContainerFrame_OnHide maintains, so OpenAllBags, which hides every open
-    // bag and reopens it in one breath, rebuilds that list from a stale count
-    // and the bags come back stacked.
-    //
-    // It also stops ShowUIPanel from leaving QuestFrame shown, and the four
-    // NPC dialogs then fill themselves in from nothing. Measured, not
-    // guessed: with OnHide deferred ShowUIPanel(QuestFrame) returns with the
-    // frame shown, and with it immediate the same call returns with the frame
-    // hidden, so something in UIParent's panel management is ordering-
-    // sensitive in a way this client does not reproduce. check_npc_dialogs_fill
-    // catches it.
-    //
-    // The vendor and guild bank no longer take the reopen path - see
-    // openBagsForTrading - so what is left exposed is the bag keybind.
-    //
-    // A tooltip is the exception (ui/visibility_scripts.hpp): its OnHide runs
-    // here, at the end.
-    bool runOnHide = false;
-    if (auto* w = widgetOf(L, 1)) {
-        runOnHide = ui::hideRunsOnHide(*w, ancestorsShown(L, w));
-        // Counted only where a handler is owed. A frame hidden before anything
-        // was hooked to it owes nothing, and the real client runs nothing
-        // there either. Turtle's transmog timer is CreateFrame, Hide, and only
-        // then SetScript for OnShow, OnHide and OnUpdate: counting that Hide
-        // made the Show which follows the second toggle, Show defers OnShow to
-        // updateVisibility on a second toggle, and updateVisibility fires none
-        // for a frame with no anchors. So the timer ran its OnUpdate against
-        // the startTime its OnShow was going to set. Reported in #132.
-        if (w->shown && frameScriptSet(L, 1, "OnHide") && w->shownToggles < 200) {
-            ++w->shownToggles;
-            if (auto* tree = wowee::addons::getWidgetTree(L)) {
-                tree->markVisibilityPending(w->id);
-            }
-        }
+    auto* w = widgetOf(L, 1);
+    const bool wasShown = w && w->shown;
+    if (w) {
+        if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markVisibilityPending(w->id);
         // A hidden tooltip belongs to nobody.
         //
         // The owner is what FrameXML tests to decide whether a tooltip on
@@ -7555,10 +7476,8 @@ int lua_Region_Hide(lua_State* L) {
         tooltipLineStringWritten(L, w);
     }
     lua_pushboolean(L, 0); lua_setfield(L, 1, "__visible");
-    if (runOnHide) {
-        if (auto* w = widgetOf(L, 1)) ui::noteHideSaid(*w);
-        runFrameScriptNow(L, 1, "OnHide");
-    }
+    if (wasShown)
+        if (auto* engine = engineFrom(L)) engine->frameHidden(w->id);
     return 0;
 }
 int lua_Region_IsShown(lua_State* L) {
@@ -8478,9 +8397,21 @@ int lua_FontString_CanNonSpaceWrap(lua_State* L) {
     return 1;
 }
 
+/// The methods of a texture, a font string or a title region: one table for
+/// each kind, as the client's types have theirs, and what getmetatable(region)
+/// .__index is - addons hook a kind's methods there, and put their own in.
 void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
+    taint::Quiet quiet;   // the client's, whoever is the first to make one
+    const char* kind = isTexture ? "wowee_texture_mt" : isFontString ? "wowee_fontstring_mt" : "wowee_region_mt";
+    lua_getfield(L, LUA_REGISTRYINDEX, kind);
+    if (lua_istable(L, -1)) {
+        lua_setmetatable(L, -2);
+        return;
+    }
+    lua_pop(L, 1);
+    lua_newtable(L);
     auto set = [&](const char* name, lua_CFunction fn) {
-        lua_pushcfunction(L, fn);
+        pushMethodByHandle(L, fn);
         lua_setfield(L, -2, name);
     };
     set("GetName", lua_Region_GetName);
@@ -8526,14 +8457,16 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     set("GetNumPoints", lua_Region_GetNumPoints);
     // A region may animate itself - the achievement banner's glow and shine
     // are textures with an animIn of their own. These live on the frame
-    // metatable as Lua functions; a region keeps its methods on itself, so
-    // they are copied off the globals the animation bootstrap published. Absent
-    // before the bootstrap has run, which is only true of regions built during
-    // engine start-up, and those declare no animations.
+    // metatable as Lua functions, and are copied off the globals the animation
+    // bootstrap published.
     for (const char* name : {"CreateAnimationGroup", "StopAnimating", "GetAnimationGroups"}) {
         lua_getglobal(L, (std::string("__Wowee") + name).c_str());
-        if (lua_isfunction(L, -1)) lua_setfield(L, -2, name);
-        else                       lua_pop(L, 1);
+        if (lua_isfunction(L, -1)) {
+            makeMethodByHandle(L);
+            lua_setfield(L, -2, name);
+        } else {
+            lua_pop(L, 1);
+        }
     }
     set("GetScale", lua_Region_GetScale);
     set("SetScale", lua_Region_SetScale);
@@ -8608,20 +8541,17 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     // The same enumerated set the frame metatable uses, and for the same
     // reason: a region carries data fields beside its methods, and answering
     // both with a no-op makes a field that was never set look present.
-    // Built once and shared. This used to compile a fresh chunk for every
-    // region created, which over a FrameXML load is thousands of compiles of
-    // the same three lines.
-    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_region_mt");
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        luaL_dostring(L,
-            "local known = __WoweeWidgetMethods or {} "
-            "return { __index = function(_, k) "
-            "  if type(k)=='string' and known[k] then return function() end end "
-            "end }");
-        lua_pushvalue(L, -1);
-        lua_setfield(L, LUA_REGISTRYINDEX, "wowee_region_mt");
-    }
+    luaL_dostring(L,
+        "local known = __WoweeWidgetMethods or {} "
+        "return { __index = function(_, k) "
+        "  if type(k)=='string' and known[k] then return function() end end "
+        "end }");
+    lua_setmetatable(L, -2);
+    lua_newtable(L);
+    lua_insert(L, -2);
+    lua_setfield(L, -2, "__index");
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, kind);
     lua_setmetatable(L, -2);
 }
 
@@ -10599,6 +10529,7 @@ static int lua_Frame_CreateTitleRegion(lua_State* L) {
     if (auto* f = tree->get(parent)) f->titleRegion = id;
     lua_pushinteger(L, static_cast<lua_Integer>(id));
     lua_setfield(L, -2, "__wid");
+    setFrameHandle(L, id);
     lua_pushvalue(L, 1);
     lua_setfield(L, -2, "__parent");
     installRegionMethods(L, /*isTexture=*/false, /*isFontString=*/false);
@@ -10715,6 +10646,7 @@ static int lua_Frame_CreateTexture(lua_State* L) {
         }
         lua_pushinteger(L, static_cast<lua_Integer>(id));
         lua_setfield(L, -2, "__wid");
+        setFrameHandle(L, id);
     }
     // A region's parent, which is the frame it was created on.
     //
@@ -10751,6 +10683,7 @@ static int lua_Frame_CreateFontString(lua_State* L) {
         }
         lua_pushinteger(L, static_cast<lua_Integer>(id));
         lua_setfield(L, -2, "__wid");
+        setFrameHandle(L, id);
     }
     // A region's parent, which is the frame it was created on.
     //
@@ -11022,6 +10955,7 @@ static int lua_CreateFrame(lua_State* L) {
         }
         lua_pushinteger(L, static_cast<lua_Integer>(id));
         lua_setfield(L, -2, "__wid");
+        setFrameHandle(L, id);
 
         // Remember the table against its widget id so input dispatch can get
         // back from a hit to the frame whose scripts must run.
@@ -11274,26 +11208,7 @@ bool LuaEngine::initialize() {
         fireEvent(event, eventArgs);
     });
 
-    // Open safe standard libraries (no io, os, debug, package)
-    luaopen_base(L_);
-    luaopen_table(L_);
-    luaopen_string(L_);
-    luaopen_math(L_);
-
-    // Remove unsafe globals from base library.
-    //
-    // newproxy is not among them, despite the name. It returns a userdata with
-    // a fresh metatable and reaches nothing else; what it buys is __index and
-    // __newindex on a value that cannot be tampered with, which is exactly how
-    // Blizzard's own RestrictedFrames builds secure frame handles. Removing it
-    // cost us SecureHandlerTemplates and everything inheriting from it.
-    const char* unsafeGlobals[] = {
-        "dofile", "loadfile", "load", "collectgarbage", nullptr
-    };
-    for (const char** g = unsafeGlobals; *g; ++g) {
-        lua_pushnil(L_);
-        lua_setglobal(L_, *g);
-    }
+    openInterfaceLibs(L_);
 
     // Publish the widget tree before any API is registered, so a script that
     // runs during registration still finds it.
@@ -11308,6 +11223,17 @@ bool LuaEngine::initialize() {
 
     registerCoreAPI();
     registerEventAPI();
+
+    if (!game::isPreWotlk()) {
+        dropForeignGlobals(L_);
+        guardArguments(L_, argGuards());
+    }
+
+    // The frames' methods written in Lua, called on a table with a frame's
+    // handle as the others are.
+    lua_getglobal(L_, "__WoweeFrameMT");
+    makeMethodsByHandle(L_);
+    lua_pop(L_, 1);
 
     // Last, so every bootstrap block above reads a _G that answers honestly.
     installMissingApiFallback();
@@ -11426,6 +11352,7 @@ static bool isSimpleHtmlFontGetter(lua_CFunction fn) {
     return std::find(std::begin(kGetters), std::end(kGetters), fn) != std::end(kGetters);
 }
 static int simpleHtmlFontMethodTrampoline(lua_State* L) {
+    takeSelfByHandle(L);
     const lua_CFunction fn = lua_tocfunction(L, lua_upvalueindex(1));
     const auto* w = widgetOf(L, 1);
     if (!w || !w->isSimpleHtml || lua_type(L, 2) != LUA_TSTRING) return fn(L);
@@ -12372,6 +12299,8 @@ void LuaEngine::registerCoreAPI() {
         {"SetShadowColor",        lua_FontString_SetShadowColor},
         {"SetJustifyH",           lua_FontString_SetJustifyH},
         {"SetJustifyV",           lua_FontString_SetJustifyV},
+        {"GetJustifyH",           lua_FontString_GetJustifyH},
+        {"GetJustifyV",           lua_FontString_GetJustifyV},
         {"SetTextFontObject",     lua_Frame_SetNormalFontObject},
         {"SetHighlightFontObject", lua_Frame_SetHighlightFontObject},
         {"SetDisabledFontObject",  lua_Frame_SetDisabledFontObject},
@@ -12551,7 +12480,7 @@ void LuaEngine::registerCoreAPI() {
             lua_pushcfunction(L_, fn);
             lua_pushcclosure(L_, simpleHtmlFontMethodTrampoline, 1);
         } else {
-            lua_pushcfunction(L_, fn);
+            pushMethodByHandle(L_, fn);
         }
     };
     auto applyFrameMethods = [&]() {
@@ -12616,10 +12545,10 @@ void LuaEngine::registerCoreAPI() {
         "function mt:AddFontStrings(l, r)\n"
         "    local function ok(fs) return type(fs) == 'table' and fs.GetObjectType and fs:GetObjectType() == 'FontString' end\n"
         "    if type(l) ~= 'table' or type(r) ~= 'table' then\n"
-        "        error(('Usage: %s:AddFontStrings(leftstring, rightstring)'):format(self:GetName() or '<unnamed>'), 2)\n"
+        "        error(('Usage: %s:AddFontStrings(leftstring, rightstring)'):format(self:GetName() or '<unnamed>'), 3)\n"
         "    end\n"
         "    if not ok(l) or not ok(r) then\n"
-        "        error(('%s:AddFontStrings(): Wrong object type, expected fontstring'):format(self:GetName() or '<unnamed>'), 2)\n"
+        "        error(('%s:AddFontStrings(): Wrong object type, expected fontstring'):format(self:GetName() or '<unnamed>'), 3)\n"
         "    end\n"
         "    local lr, lg, lb = l:GetTextColor()\n"
         "    local rr, rg, rb = r:GetTextColor()\n"
@@ -13316,7 +13245,7 @@ void LuaEngine::registerCoreAPI() {
         "    local who = tostring(self.GetName and self:GetName() or '<unnamed>')\n"
         "    if type(inherits) == 'string' and inherits ~= '' then\n"
         "        if not (__WoweeAnimGroupTemplates and __WoweeAnimGroupTemplates[inherits]) then\n"
-        "            error(('%s:CreateAnimationGroup(): Couldn\\'t find inherited node \"%s\"'):format(who, inherits), 2)\n"
+        "            error(('%s:CreateAnimationGroup(): Couldn\\'t find inherited node \"%s\"'):format(who, inherits), 3)\n"
         "        end\n"
         "    end\n"
         "    local g = setmetatable({parent = self, name = name, animations = {}}, groupMeta)\n"
@@ -15447,10 +15376,11 @@ void LuaEngine::registerCoreAPI() {
         // pet's own spells and GetSpellBookItemInfo walks the player's tabs, so
         // answering from it would name the wrong spell; false sends the caller
         // down the branch it takes when there is nothing to show.
+        "local bookItem = GetSpellBookItemInfo\n"
         "function __WoweeFrameMT:SetSpell(slot, bookType)\n"
         "    self:ClearLines()\n"
         "    if bookType == BOOKTYPE_PET then return false end\n"
-        "    local _, spellId = GetSpellBookItemInfo(slot)\n"
+        "    local _, spellId = bookItem(slot)\n"
         "    if not spellId or spellId == 0 then return false end\n"
         "    self:SetSpellByID(spellId)\n"
         "    return true\n"
@@ -15495,9 +15425,8 @@ void LuaEngine::registerCoreAPI() {
         "    self:ClearLines()\n"
         "    if not slot then return false end\n"
         "    local actionType, id = GetActionInfo(slot)\n"
-        "    if actionType == 'spell' and id and id > 0 then\n"
-        "        self:SetSpellByID(id, nil, nil, GetCVar('UberTooltips') == '0')\n"
-        "        return self:NumLines() > 0\n"
+        "    if actionType == 'spell' or actionType == 'companion' then\n"
+        "        return __WoweeTooltipSetAction(self, slot)\n"
         "    elseif actionType == 'item' and id and id > 0 then\n"
         "        __WoweeTooltipItemBuilt(self, _WoweePopulateItemTooltip(self, id), id)\n"
         "        return self:NumLines() > 0\n"
@@ -15570,8 +15499,6 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         // FadeOut (0x0061d940), a tooltip's; nothing on any other frame.
         "function __WoweeFrameMT:FadeOut() __WoweeTooltipFadeOut(self) end\n"
-        // Iterating a table the secure way, which for our purposes is next.
-        "SecureNext = next\n"
         // GetCVarBool wraps C-side GetCVar (registered in table) for boolean queries
         // Misc compatibility stubs
         // GetScreenWidth, GetScreenHeight, GetNumLootItems are now C functions
@@ -15992,8 +15919,7 @@ void LuaEngine::registerCoreAPI() {
         "gsub = string.gsub\n"
         "gmatch = string.gmatch\n"
     );
-    // Bit operations (WoW provides these; Lua 5.1 doesn't): kBitLibLua.
-    executeString(kBitLibLua);
+    setInterfaceLibAliases(L_);
 }
 
 // ---- Event System ----
@@ -16728,33 +16654,18 @@ void LuaEngine::callFrameScriptColor(uint32_t wid, const char* script,
 }
 
 void LuaEngine::installMissingApiFallback() {
-    // Off unless asked for. With it on, every unknown global answers, so code
+    // Off unless asked for, and but for the interfaces of the older expansions
+    // (missing_api_rule.hpp). With it on, every unknown global answers, so code
     // that checks whether a function exists before using it - which addons do
     // constantly - sees everything as present and takes branches meant for a
-    // newer client. That is the right trade for bringing FrameXML up, where the
-    // point is to get past a missing name and find out what actually matters,
-    // and the wrong one for everyday addon loading.
-    auto isSet = [](const char* name) {
+    // newer client. That is the right trade for bringing an interface up, where
+    // the point is to get past a missing name and find out what actually
+    // matters, and the wrong one for everything after.
+    const auto setting = [](const char* name) -> std::string_view {
         const char* v = std::getenv(name);
-        return v && *v && std::string(v) != "0";
+        return v ? v : "";
     };
-    // Loading FrameXML implies it. FrameXML cannot get through its own load
-    // without the fallback, so two separate switches where one is useless
-    // without the other is only a way to be handed a wall of failures for
-    // setting the obvious one.
-    //
-    // Said explicitly, though, the setting wins either way. The fallback is not
-    // free - it makes every feature check read as present - and now that the
-    // real gaps are closing it is worth being able to ask what it is still
-    // buying, which needs a way to turn it off with FrameXML on.
-    const char* explicitSetting = std::getenv("WOWEE_LUA_API_FALLBACK");
-    const char* loadSetting = std::getenv("WOWEE_LOAD_FRAMEXML");
-    const bool frameXmlOn = loadSetting ? (std::string(loadSetting) != "0") : true;
-    const bool enabled = (explicitSetting && *explicitSetting)
-                             ? std::string(explicitSetting) != "0"
-                             : frameXmlOn;
-    (void)isSet;
-    if (!enabled) return;
+    if (!missingApiStandsIn(setting("WOWEE_LUA_API_FALLBACK"), setting("WOWEE_LOAD_FRAMEXML"), game::isPreWotlk())) return;
 
     lua_pushcfunction(L_, lua_RecordMissingApi);
     lua_setglobal(L_, "__WoweeRecordMissingApi");
@@ -18147,97 +18058,54 @@ void LuaEngine::updateSizeChanges() {
     }
 }
 
+void LuaEngine::frameShown(uint32_t id) {
+    if (!L_) return;
+    taint::Quiet quiet;   // as dispatchText
+    widgets_.showNow(id, [this](uint32_t up) { tellVisibility(up, true); });
+}
+
+void LuaEngine::frameHidden(uint32_t id) {
+    if (!L_) return;
+    taint::Quiet quiet;   // as dispatchText
+    widgets_.hideNow(id, [this](uint32_t gone) { tellVisibility(gone, false); });
+}
+
+void LuaEngine::tellVisibility(uint32_t id, bool up) {
+    callFrameScript(id, up ? "OnShow" : "OnHide");
+    const auto* w = widgets_.get(id);
+    if (!w || !w->isEditBox) return;
+    // A box that asks for the keyboard takes it as it appears, where none has
+    // it (0x009655c0); every box gives it up as it goes (0x009655f0).
+    if (up) {
+        if (w->editAutoFocus && focusedWid_ == 0 && widgets_.shownNow(id)) setEditFocus(id);
+    } else if (focusedWid_ == id) {
+        setEditFocus(0);
+    }
+}
+
+// What was shown or hidden otherwise than by Show() and Hide(): the interface
+// as it was loaded, and what the client shows and hides itself. The frames in
+// a frame that is hidden go with it, and come up with it.
+//
+// `visible` - placed somewhere - as well as shown, where nothing has been told
+// yet. The client tells every frame that is shown, placed or not, as it loads
+// (0x00490410), and a frame that has no place is none of what is drawn here:
+// waking those has not been looked at. What Show() has told stays told.
 void LuaEngine::updateVisibility() {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
-    // By index and re-fetched each time: a handler is free to create frames,
-    // and OnShow very often does.
-    // `visible` here and `visibleChain` in the OnUpdate pump, which is a
-    // deliberate difference rather than an oversight.
-    //
-    // WoW fires OnShow on becoming shown-with-ancestors-shown, with no regard
-    // for anchors, so visibleChain is the faithful answer. Using it would mean
-    // frames that are never drawn start running their OnShow and OnHide, and
-    // those handlers do real work - LootFrame_OnHide calls CloseLoot, which
-    // releases the loot on the server, and UIParent's OnShow calls
-    // CloseAllWindows.
-    //
-    // What that faithfulness would buy was measured rather than guessed: six
-    // frames in the whole interface declare an OnShow with no anchors and no
-    // setAllPoints - KnowledgeBaseFrameCancel, ChannelListDropDown,
-    // HelpFrameOpenTicketEditBox, the two calendar context menus and
-    // GMSurveyFrameComment - and not one of them is anchored from Lua either,
-    // anywhere. None can ever be drawn or used, so none of their OnShow
-    // handlers is worth the risk of waking the rest.
-    //
-    // (UIParent looks like a seventh and is not: it carries setAllPoints.)
-    //
-    // Only the frames marked as owing a look - `visible` changed, or Lua
-    // toggled `shown` (WidgetTree::markVisibilityPending). Any other frame
-    // has nothing to report and no toggles to clear, which is the first
-    // `continue` below; walking all 28,000 to arrive there was the cost of
-    // this pass. Ascending, and re-reading the set as it goes, so scripts run
-    // in the order the full walk ran them and a frame a handler changes
-    // further on is still reached this pass.
+    // Only the frames marked as owing a look (WidgetTree::markVisibilityPending):
+    // walking all 28,000 was the cost of this pass. By index, ascending, and
+    // re-read as it goes: a handler is free to create frames, and one it
+    // changes further on is still reached this pass.
     for (uint32_t id = widgets_.takeVisibilityPending(1); id != 0;
          id = widgets_.takeVisibilityPending(id + 1)) {
         auto* w = widgets_.get(id);
         if (!w || w->id == 0) continue;
-        const ui::VisibilityOwed owed = ui::takeVisibilityOwed(*w);
-        if (!owed.changed) {
-            // Nothing changed overall - but if Lua hid this and showed it again
-            // before anything looked, something *did* happen and both handlers
-            // are owed. `panel:Hide(); panel:Show()` is the interface asking a
-            // panel to rebuild itself, and it is the entirety of QuestFrame's
-            // handler for QUEST_DETAIL, QUEST_PROGRESS, QUEST_COMPLETE and
-            // QUEST_GREETING - the four NPC dialogs, and the reason the vendor
-            // was the only one that still filled in. Everything those panels
-            // show is positioned by QuestInfo_Display, which runs from OnShow
-            // and from nowhere else, so with no OnShow the text kept the place
-            // its XML gave it: outside the scroll frame that clips it, drawn
-            // and clipped away. A blank parchment with working buttons.
-            //
-            // Only for a frame that is running at the end of it - the chain,
-            // and not `visible` as the rest of this pass reads. `visible`
-            // additionally wants somewhere to be drawn, and a driver frame has
-            // nowhere: no anchors, nothing on screen, an OnUpdate and a pair of
-            // handlers to arm it. The OnUpdate pump runs those off the chain
-            // already, so reading their OnShow off `visible` left the two
-            // passes disagreeing about whether the same frame was running, and
-            // the handler that sets up what the OnUpdate reads never fired.
-            //
-            // The risk this guard was written for is unaffected: a frame Lua
-            // never touched cannot reach two toggles, so nothing wakes here
-            // that the interface did not explicitly hide and show again.
-            if (!owed.hide) continue;
-            callFrameScript(id, "OnHide");
-            callFrameScript(id, "OnShow");
-            // Deliberately both, and in the order they happened. OnHide is
-            // where a panel drops what it was holding, and skipping it would
-            // leave the second OnShow building on top of the first one's state.
-            continue;
-        }
-        if (owed.show || owed.hide) callFrameScript(id, owed.show ? "OnShow" : "OnHide");
-        // A box that asked for the keyboard takes it as it appears, and gives
-        // it up when it goes. Only the two that ask: the rest say autoFocus
-        // ="false" precisely so that opening a panel does not swallow the
-        // player's next keystroke.
-        //
-        // Taking it is the autoFocus box's privilege; giving it up on the way
-        // out is every box's duty. Only the two that ask took it and only the
-        // two that ask released it, so a box focused by name - which is how
-        // the chat box and every dialog's box get it - kept the keyboard after
-        // it was hidden. Nothing on screen had focus and focusedWid_ was not
-        // zero, and that flag is what the client asks before it looks at a key
-        // at all: escape stopped opening the menu and every character typed
-        // went into a box that was not there.
-        if (w->isEditBox) {
-            if (w->visible) {
-                if (w->editAutoFocus) setEditFocus(id);
-            } else if (focusedWid_ == id) {
-                setEditFocus(0);
-            }
-        }
+        const bool up = (w->visible || w->toldShown) && widgets_.shownNow(id);
+        if (up == w->toldShown) continue;
+        w->toldShown = up;
+        tellVisibility(id, up);
     }
 }
 

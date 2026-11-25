@@ -18,6 +18,7 @@
 #include "rendering/depth_convention.hpp"
 #include "core/frame_profiler.hpp"
 #include "rendering/character_renderer.hpp"
+#include "rendering/unit_alpha.hpp"
 #include "rendering/m2_billboard.hpp"
 #include "rendering/rt_glow_pulse.hpp"
 #include "rendering/model_memory.hpp"
@@ -5879,16 +5880,15 @@ bool CharacterRenderer::setInstanceAnimationFrozen(uint32_t instanceId, bool fro
 void CharacterRenderer::setInstanceKitAlpha(uint32_t instanceId, float alpha, float seconds) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
+    const float to = unit_alpha::target(it->second.displayAlpha, alpha);
     auto fadeTo = [&](CharacterInstance& inst) {
-        // 0x00744030: as bytes; already there, or no time, is at once.
-        const long now = std::lround(inst.kitAlpha * 255.0f);
-        if (std::lround(alpha * 255.0f) == now || !(seconds > 0.0f)) {
-            inst.kitAlpha = inst.kitAlphaTo = alpha;
+        if (unit_alpha::atOnce(inst.kitAlpha, to, seconds)) {
+            inst.kitAlpha = inst.kitAlphaTo = to;
             inst.kitAlphaSeconds = 0.0f;
             return;
         }
         inst.kitAlphaFrom = inst.kitAlpha;
-        inst.kitAlphaTo = alpha;
+        inst.kitAlphaTo = to;
         inst.kitAlphaElapsed = 0.0f;
         inst.kitAlphaSeconds = seconds;
     };
@@ -5900,6 +5900,16 @@ void CharacterRenderer::setInstanceKitAlpha(uint32_t instanceId, float alpha, fl
             if (auto fxIt = instances.find(fx.effectInstanceId); fxIt != instances.end()) fadeTo(fxIt->second);
         }
     }
+}
+
+void CharacterRenderer::setInstanceDisplayAlpha(uint32_t instanceId, float alpha) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || it->second.displayAlpha == alpha) return;
+    // What a kit leaves of it stays (a display of 0 is seen by nobody).
+    const float was = it->second.displayAlpha;
+    const float kit = was > 0.0f ? it->second.kitAlphaTo / was : 1.0f;
+    it->second.displayAlpha = alpha;
+    setInstanceKitAlpha(instanceId, kit, 0.0f);
 }
 
 void CharacterRenderer::setInstanceCameraAlpha(uint32_t instanceId, float alpha) {

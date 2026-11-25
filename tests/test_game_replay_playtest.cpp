@@ -4,11 +4,14 @@
 
 #include "game_replay.hpp"
 #include "game/combat_handler.hpp"
+#include "game/idle_steps.hpp"
 #include "game/movement_handler.hpp"
 #include "game/quest_handler.hpp"
 #include "game/spell_handler.hpp"
 
+#include <array>
 #include <utility>
+#include <vector>
 
 using replay::Session;
 using replay::UpdateObject;
@@ -480,7 +483,16 @@ TEST_CASE("a teleport is answered with its acknowledgement alone", "[replay][pla
     p.writeFloat(10.0f);
     p.writeFloat(1.0f);
     p.writeUInt32(0);   // fall time
+    // And it is an event of the mover's, which asks for the base animation: teleported out of
+    // a fall onto the ground, the character went on falling on the spot (playtest T50).
+    std::vector<Opcode> events;
+    s.handler().setMoverEventCallback([&](Opcode op, uint32_t flags, bool) {
+        if (op == Opcode::MSG_MOVE_TELEPORT_ACK) CHECK((flags & static_cast<uint32_t>(MovementFlags::FORWARD)) == 0);
+        events.push_back(op);
+    });
     s.receive(p);
+    CHECK(events == std::vector<Opcode>{Opcode::MSG_MOVE_TELEPORT_ACK});
+    s.handler().setMoverEventCallback({});
     CHECK(count(Opcode::MSG_MOVE_TELEPORT_ACK) == 1);
     CHECK(count(Opcode::MSG_MOVE_STOP) == stops);
     CHECK(count(Opcode::MSG_MOVE_HEARTBEAT) == beats);
@@ -1112,4 +1124,306 @@ TEST_CASE("showing or hiding the helm or the cloak dresses the model anew", "[re
     }
     CHECK(s.sent().of(Opcode::CMSG_SHOWING_CLOAK).size() == 2);
     CHECK(s.sent().of(Opcode::CMSG_SHOWING_HELM).size() == 2);
+}
+
+// The vendors on the player's own mount stayed, for the game, where they got on.
+TEST_CASE("a vehicle's passenger goes where it goes", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kVendor = 0xF130007FF4001520ull;
+    s.receive(UpdateObject().create(kVendor, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    // SMSG_MONSTER_MOVE_TRANSPORT, a stop in seat 1: two yards behind, three up.
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_MONSTER_MOVE_TRANSPORT));
+    p.writePackedGuid(kVendor);
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt8(1);
+    p.writeUInt8(0);
+    p.writeFloat(-2.0f);
+    p.writeFloat(0.0f);
+    p.writeFloat(3.0f);
+    p.writeUInt32(1);
+    p.writeUInt8(1);
+    s.receive(p);
+    auto* mh = s.handler().getMovementHandler();
+    const auto vendor = s.handler().getEntityManager().getEntity(kVendor);
+    REQUIRE(vendor);
+    // Facing north (server +x, canonical +y), then west.
+    auto& move = s.handler().movementInfoRef();
+    move.orientation = wowee::core::coords::serverToCanonicalYaw(0.0f);
+    mh->updateAttachedTransportChildren(0.016f);
+    CHECK(vendor->getX() == Catch::Approx(move.x).margin(0.01f));
+    CHECK(vendor->getY() == Catch::Approx(move.y - 2.0f).margin(0.01f));
+    CHECK(vendor->getZ() == Catch::Approx(move.z + 3.0f).margin(0.01f));
+    move.x += 60.0f;
+    move.y -= 70.0f;
+    move.orientation = wowee::core::coords::serverToCanonicalYaw(1.57079633f);
+    mh->updateAttachedTransportChildren(0.016f);
+    CHECK(vendor->getX() == Catch::Approx(move.x - 2.0f).margin(0.01f));
+    CHECK(vendor->getY() == Catch::Approx(move.y).margin(0.01f));
+}
+
+// The server drops what comes while it moves the player from map to map, and what had been
+// asked for then was never asked for again: an entry of the combat log waited for its name,
+// and everything after it behind that.
+TEST_CASE("what a worldport lost is asked for again", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kStranger = 0x777;
+    s.receive(UpdateObject().create(kStranger, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    auto& gh = s.handler();
+    const auto names = [&] {
+        size_t n = 0;
+        for (wowee::network::Packet p : s.sent().of(Opcode::CMSG_NAME_QUERY)) n += p.readUInt64() == kStranger;
+        return n;
+    };
+    const auto sent = [&](Opcode op) { return s.sent().of(op).size(); };
+    gh.queryPlayerName(kStranger);
+    REQUIRE(names() == 1);
+    gh.queryCreatureInfo(1725, kGiver);
+    gh.queryGameObjectInfo(31, 0xF11000001F000001ull);
+    gh.queryItemInfo(25, 0);
+    gh.getSpellHandler()->requestPetName(0xF140000001000005ull);
+    const std::array asked = {Opcode::CMSG_CREATURE_QUERY, Opcode::CMSG_GAMEOBJECT_QUERY,
+                              Opcode::CMSG_ITEM_QUERY_SINGLE, Opcode::CMSG_PET_NAME_QUERY};
+    std::array<size_t, 4> before{};
+    for (size_t i = 0; i < asked.size(); ++i) before[i] = sent(asked[i]);
+    // Asked for once, whoever else wants it.
+    gh.queryPlayerName(kStranger);
+    gh.getSpellHandler()->requestPetName(0xF140000001000005ull);
+    CHECK(names() == 1);
+    CHECK(sent(Opcode::CMSG_PET_NAME_QUERY) == before[3]);
+
+    gh.setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    for (float v : {-2328.0f, -358.0f, -8.7f, 0.4f}) world.writeFloat(v);
+    s.receive(world);
+    REQUIRE(sent(Opcode::MSG_MOVE_WORLDPORT_ACK) == 1);
+    CHECK(names() == 2);
+    for (size_t i = 0; i < asked.size(); ++i) CHECK(sent(asked[i]) > before[i]);
+
+    // What is answered is not.
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_NAME_QUERY_RESPONSE));
+    answer.writePackedGuid(kStranger);
+    answer.writeUInt8(0);
+    answer.writeString("Midai");
+    answer.writeString("");
+    for (int i = 0; i < 3; ++i) answer.writeUInt8(1);
+    answer.writeUInt8(0);
+    s.receive(answer);
+    s.receive(world);
+    CHECK(names() == 2);
+    CHECK(gh.getCachedPlayerName(kStranger) == "Midai");
+    gh.setWorldEntryCallback({});
+}
+
+// 0x0052af40: nothing of it was there.
+TEST_CASE("five idle minutes sit down and go away, thirty log out", "[replay][playtest]") {
+    using wowee::game::IdlePlayer;
+    using wowee::game::idleSteps;
+    IdlePlayer p{.idleMs = 299999, .standing = true};
+    CHECK_FALSE(idleSteps(p).sit);
+    CHECK_FALSE(idleSteps(p).away);
+    p.idleMs = 300000;
+    CHECK(idleSteps(p).sit);
+    CHECK(idleSteps(p).away);
+    CHECK_FALSE(idleSteps(p).logout);
+    for (bool IdlePlayer::*no : {&IdlePlayer::fighting, &IdlePlayer::mounted, &IdlePlayer::walking}) {
+        IdlePlayer q = p;
+        q.*no = true;
+        CHECK_FALSE(idleSteps(q).sit);
+        CHECK(idleSteps(q).away);
+    }
+    IdlePlayer seated = p;
+    seated.standing = false;
+    CHECK_FALSE(idleSteps(seated).sit);
+    for (bool IdlePlayer::*no : {&IdlePlayer::onTaxi, &IdlePlayer::away}) {
+        IdlePlayer q = p;
+        q.*no = true;
+        CHECK(idleSteps(q).sit);
+        CHECK_FALSE(idleSteps(q).away);
+    }
+    p.idleMs = 1800000;
+    CHECK(idleSteps(p).logout);
+    CHECK_FALSE(idleSteps(p).sit);
+    p.loggingOut = true;
+    CHECK_FALSE(idleSteps(p).logout);
+}
+
+TEST_CASE("away ends with a step, and is the server's", "[replay][playtest]") {
+    Session s;
+    s.spawnPlayer({{UF::PLAYER_FLAGS, 0}});
+    auto& gh = s.handler();
+    const auto said = [&] { return s.sent().of(Opcode::CMSG_MESSAGECHAT).size(); };
+    gh.toggleAfk();
+    REQUIRE(gh.isAfk());
+    const size_t before = said();
+    s.handler().sendMovement(Opcode::MSG_MOVE_JUMP);
+    CHECK(gh.isAfk());
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_FORWARD);
+    CHECK_FALSE(gh.isAfk());
+    CHECK(said() == before + 1);
+    s.handler().sendMovement(Opcode::MSG_MOVE_START_STRAFE_LEFT);
+    CHECK(said() == before + 1);
+
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0x2}}));
+    CHECK(gh.isAfk());
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0x4}}));
+    CHECK_FALSE(gh.isAfk());
+    CHECK(gh.isDnd());
+
+    gh.logoutIdle();
+    gh.logoutIdle();
+    CHECK(s.sent().of(Opcode::CMSG_LOGOUT_REQUEST).size() == 1);
+}
+
+// A line came with a gossip alone, a race library's with a vendor, and none with the rest.
+TEST_CASE("a unit says hello as a window opens with it, and farewell", "[replay][playtest]") {
+    using NpcLine = wowee::game::GameHandler::NpcLine;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    s.receive(UpdateObject().create(kGiver, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 10}}));
+    const auto giver = gh.getEntityManager().getEntity(kGiver);
+    REQUIRE(giver);
+    (void)giver->takeBaseAnimationRequest();
+    std::vector<NpcLine> said;
+    gh.setNpcLineCallback([&](uint64_t guid, NpcLine line, const glm::vec3&) {
+        CHECK(guid == kGiver);
+        said.push_back(line);
+    });
+    gh.setInteractionObject(kGiver);
+    CHECK(said == std::vector<NpcLine>{NpcLine::Hello});
+    CHECK(giver->takeBaseAnimationRequest());
+    // The next window with the same one is not another hello.
+    gh.setInteractionObject(kGiver);
+    CHECK(said.size() == 1);
+    gh.setInteractionObject(0);
+    CHECK(said == std::vector<NpcLine>{NpcLine::Hello, NpcLine::Farewell});
+    CHECK(giver->takeBaseAnimationRequest());
+    // The dead say nothing.
+    s.receive(UpdateObject().values(kGiver, {{UF::UNIT_FIELD_HEALTH, 0}}));
+    gh.setInteractionObject(kGiver);
+    CHECK(said.size() == 2);
+    gh.setNpcLineCallback({});
+}
+
+// Revived by the server between two maps, the player stayed dead for all that asked: no update
+// of the old object ever said so (playtest T59).
+TEST_CASE("a death is over where the player's new object lives", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 0}}));
+    REQUIRE(gh.isPlayerDead());
+    const auto born = [&](uint32_t health, uint32_t flags) {
+        s.receive(UpdateObject().create(Session::kPlayerGuid, wowee::game::ObjectType::PLAYER,
+                                        {{UF::UNIT_FIELD_HEALTH, health},
+                                         {UF::UNIT_FIELD_MAXHEALTH, 100},
+                                         {UF::PLAYER_FLAGS, flags}}));
+    };
+    SECTION("alive") {
+        born(50, 0);
+        CHECK_FALSE(gh.isPlayerDead());
+        CHECK_FALSE(gh.isPlayerGhost());
+    }
+    SECTION("a ghost") {
+        born(1, 0x10);
+        CHECK(gh.isPlayerDead());
+        CHECK(gh.isPlayerGhost());
+        born(50, 0);
+        CHECK_FALSE(gh.isPlayerGhost());
+    }
+    SECTION("still dead") {
+        born(0, 0);
+        CHECK(gh.isPlayerDead());
+    }
+}
+
+// Each was raised at once for the first token alone, and with an empty unit for one without any
+// (playtest T60); the list was sorted and its first taken for the victim.
+TEST_CASE("threat events come once a frame, for every token a unit has", "[replay][playtest]") {
+    constexpr uint64_t kMob = 0xF130000001000009ull, kStranger = 0xF130000001000010ull;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    for (const uint64_t guid : {kMob, kStranger})
+        s.receive(UpdateObject().create(guid, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 10}}));
+    gh.setTarget(kMob);
+    gh.setFocus(kMob);
+    std::vector<std::pair<std::string, std::string>> raised;
+    gh.setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event.starts_with("UNIT_THREAT")) raised.emplace_back(event, args.empty() ? "-" : args[0]);
+    });
+    const auto threat = [&](uint64_t mob, uint64_t victim, std::vector<std::pair<uint64_t, uint32_t>> list) {
+        wowee::network::Packet p(wowee::game::wireOpcode(victim ? Opcode::SMSG_HIGHEST_THREAT_UPDATE
+                                                                : Opcode::SMSG_THREAT_UPDATE));
+        p.writePackedGuid(mob);
+        if (victim) p.writePackedGuid(victim);
+        p.writeUInt32(static_cast<uint32_t>(list.size()));
+        for (const auto& [guid, value] : list) {
+            p.writePackedGuid(guid);
+            p.writeUInt32(value);
+        }
+        s.receive(p);
+    };
+    // Another is the victim, the player has more threat than it: high, not tanking.
+    threat(kMob, kGiver, {{kGiver, 100}, {Session::kPlayerGuid, 105}});
+    threat(kMob, 0, {{Session::kPlayerGuid, 106}});
+    threat(kStranger, kGiver, {{kGiver, 100}});
+    CHECK(raised.empty());
+    gh.updateCombatText(0.0f);
+    const auto times = [&](const char* event, const char* unit) {
+        return std::count(raised.begin(), raised.end(), std::pair<std::string, std::string>(event, unit));
+    };
+    CHECK(times("UNIT_THREAT_LIST_UPDATE", "target") == 1);
+    CHECK(times("UNIT_THREAT_LIST_UPDATE", "focus") == 1);
+    CHECK(times("UNIT_THREAT_SITUATION_UPDATE", "player") == 1);
+    CHECK(times("UNIT_THREAT_LIST_UPDATE", "") == 0);
+    CHECK(raised.size() == 3);
+    const auto mine = gh.threatSituation(Session::kPlayerGuid, kMob);
+    CHECK(mine.standing.status == 2);
+    CHECK_FALSE(mine.standing.victim);
+    CHECK(gh.threatSituation(kGiver, kMob).standing.status == 3);
+    CHECK(gh.threatStatus(Session::kPlayerGuid) == 2);
+
+    // Out of sight the list goes, and the player is told.
+    raised.clear();
+    wowee::network::Packet gone(wowee::game::wireOpcode(Opcode::SMSG_DESTROY_OBJECT));
+    gone.writeUInt64(kMob);
+    gone.writeUInt8(0);
+    s.receive(gone);
+    gh.updateCombatText(0.0f);
+    CHECK(times("UNIT_THREAT_SITUATION_UPDATE", "player") == 1);
+    CHECK(gh.threatStatus(Session::kPlayerGuid) == 0);
+    gh.setAddonEventCallback({});
+}
+
+// 0x00740450: none was shown.
+TEST_CASE("getting onto a mount puffs, as one in sight already does not", "[replay][playtest]") {
+    using Effect = wowee::game::GameHandler::UnitEffect;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    std::vector<uint64_t> puffed;
+    gh.setUnitEffectCallback([&](uint64_t guid, Effect effect) {
+        if (effect == Effect::MountPoof) puffed.push_back(guid);
+    });
+    s.receive(UpdateObject().create(kGiver, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MOUNTDISPLAYID, 229}}));
+    CHECK(puffed.empty());
+    const auto rides = [&](uint64_t guid, uint32_t display) {
+        s.receive(UpdateObject().values(guid, {{UF::UNIT_FIELD_MOUNTDISPLAYID, display}}));
+    };
+    rides(kGiver, 229);
+    CHECK(puffed.empty());
+    rides(kGiver, 0);
+    CHECK(puffed.empty());
+    rides(kGiver, 230);
+    rides(kGiver, 231);
+    rides(Session::kPlayerGuid, 229);
+    CHECK(puffed == std::vector<uint64_t>{kGiver, kGiver, Session::kPlayerGuid});
+    gh.setUnitEffectCallback({});
 }

@@ -1,10 +1,12 @@
 #include <cstdlib>
 #include "rendering/m2_renderer.hpp"
+#include "game/go_interaction_anim.hpp"
 #include "rendering/collision_facets.hpp"
 #include "core/frame_profiler.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/animation/animation_data.hpp"
+#include "rendering/m2_shown_sequence.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/movement_limits.hpp"
 #include "rendering/vk_context.hpp"
@@ -360,28 +362,8 @@ bool M2Renderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachment
 }
 
 namespace {
-// 0x00832ab0 -> 0x00826350: the sequence a model plays for an animation -
-// the first with its id, else the first of the one along AnimationData's
-// Fallbacks that stands in for it - and how that plays: forward, backwards
-// from its end, or held on its first or last frame. Without AnimationData
-// (the editor) only the model's own.
-struct ShownSequence {
-    int index = -1;
-    rendering::anim::PlayMode mode = rendering::anim::PlayMode::Forward;
-};
-ShownSequence shownSequence(const std::vector<pipeline::M2Sequence>& seqs, uint32_t animationId) {
-    namespace anim = rendering::anim;
-    const auto has = [&seqs](uint32_t id) {
-        return std::any_of(seqs.begin(), seqs.end(), [id](const pipeline::M2Sequence& s) { return s.id == id; });
-    };
-    const auto& data = anim::animationData();
-    const anim::ModelAnimation shown =
-        data.empty() ? anim::ModelAnimation{animationId, anim::PlayMode::Forward}
-                     : anim::modelAnimation(data, animationId, has, seqs.empty() ? 0u : seqs[0].id);
-    for (int i = 0; i < static_cast<int>(seqs.size()); ++i) {
-        if (seqs[i].id == shown.id) return {i, shown.mode};
-    }
-    return {};
+m2_sequence::Shown shownSequence(const std::vector<pipeline::M2Sequence>& seqs, uint32_t animationId) {
+    return m2_sequence::shown(rendering::anim::animationData(), seqs, animationId);
 }
 }  // namespace
 
@@ -392,7 +374,7 @@ void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animatio
     auto& inst = instances[idxIt->second];
     if (!inst.cachedModel) return;
     const auto& seqs = inst.cachedModel->sequences;
-    const ShownSequence shown = shownSequence(seqs, animationId);
+    const m2_sequence::Shown shown = shownSequence(seqs, animationId);
     const int i = shown.index;
     if (i < 0) return;
     // A door jumped straight to its end state has no old pose to leave.
@@ -400,6 +382,7 @@ void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animatio
     inst.currentSequenceIndex = i;
     inst.animDuration = static_cast<float>(seqs[i].duration);
     inst.playingVariation = false;   // not a variation: it does not go back
+    inst.idlesAlone = false;
     inst.afterOneShotIndex = -1;
     inst.holdAtEnd = true;
     // Its end is its first frame where it stands in reversed; one held
@@ -422,7 +405,7 @@ void M2Renderer::setInstanceAnimation(uint32_t instanceId, uint32_t animationId,
     auto& inst = instances[idxIt->second];
     if (!inst.cachedModel) return;
     const auto& seqs = inst.cachedModel->sequences;
-    const ShownSequence shown = shownSequence(seqs, animationId);
+    const m2_sequence::Shown shown = shownSequence(seqs, animationId);
     const int i = shown.index;
     if (i < 0) return;
     blendIntoSequence(*inst.cachedModel, inst, i);
@@ -430,6 +413,7 @@ void M2Renderer::setInstanceAnimation(uint32_t instanceId, uint32_t animationId,
     inst.animDuration = static_cast<float>(seqs[i].duration);
     // Use playingVariation=true for one-shot (returns to idle when done)
     inst.playingVariation = !loop;
+    inst.idlesAlone = false;
     inst.afterOneShotIndex = -1;
     inst.holdAtEnd = false;
     switch (shown.mode) {
@@ -463,7 +447,7 @@ void M2Renderer::setInstanceAnimationThen(uint32_t instanceId, uint32_t animatio
     if (idxIt == instanceIndexById.end()) return;
     auto& inst = instances[idxIt->second];
     if (!inst.cachedModel || !inst.playingVariation) return;
-    const ShownSequence then = shownSequence(inst.cachedModel->sequences, thenAnimationId);
+    const m2_sequence::Shown then = shownSequence(inst.cachedModel->sequences, thenAnimationId);
     inst.afterOneShotIndex = then.index;
 }
 
@@ -613,6 +597,7 @@ void M2Renderer::setInstanceExternalPose(uint32_t instanceId, const glm::mat4& m
     inst.scale = glm::length(glm::vec3(model[0]));
     inst.boneMatrices = bones;
     refreshShadowCullEntry(idxIt->second);
+    inst.idlesAlone = false;
     inst.currentSequenceIndex = sequenceIndex;
     inst.animTime = animTimeMs;
     inst.globalSequenceTime = globalTimeMs;
@@ -776,12 +761,13 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
     followSwapRemove(particleInstanceIndices_, idx, last);
 }
 
-void M2Renderer::setInstanceIsGameObject(uint32_t instanceId, bool isGameObject) {
+void M2Renderer::setInstanceIsGameObject(uint32_t instanceId, bool isGameObject, uint8_t type) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size()) return;
     auto& inst = instances[idxIt->second];
     if (isGameObject && !inst.isGameObject) gameObjectInstanceIds_.push_back(instanceId);
     inst.isGameObject = isGameObject;
+    inst.gameObjectType = type;
 }
 
 void M2Renderer::setInstanceNoDistanceCull(uint32_t instanceId, bool noDistanceCull) {
@@ -1608,7 +1594,7 @@ std::string M2Renderer::debugInstanceName(uint32_t instanceId) const {
 }
 
 void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
-                                       std::vector<collision::Facet>& out) const {
+                                       std::vector<collision::Facet>& out, bool ghost) const {
     std::vector<size_t> candidates;
     gatherCandidates(boxMin, boxMax, candidates);
     std::vector<uint32_t> tris, walls;
@@ -1618,6 +1604,7 @@ void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3&
         // out of collision (a closed door's open state, a corpse, the sky)
         // stands in for the client's +0x0C 0x100.
         if (!instance.cachedModel || instance.detailDoodad || instance.skipCollision) continue;
+        if (instance.isGameObject && !game::go_interaction::inTheWay(instance.gameObjectType, ghost)) continue;
         if (instance.scale <= 0.001f) continue;
         // The box test is closed (0x007a50c0).
         if (boxMax.x < instance.worldBoundsMin.x || boxMin.x > instance.worldBoundsMax.x ||

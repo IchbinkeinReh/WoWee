@@ -1489,10 +1489,7 @@ const game::GossipQuestItem* gossipQuestAt(lua_State* L, bool available, int ind
 /// player's level / 5 below it - 8 from level 100 - is grey. A row that is not
 /// there counts as level 0.
 static bool greetingQuestIsTrivial(game::GameHandler* gh, int questLevel) {
-    if (!gh || questLevel == -1) return false;
-    const int playerLevel = static_cast<int>(gh->getPlayerLevel());
-    return game::triviality::greyGap(static_cast<uint32_t>(playerLevel)) + questLevel <
-           playerLevel;
+    return gh && game::triviality::questIsGrey(static_cast<int>(gh->getPlayerLevel()), questLevel);
 }
 
 /// IsActiveQuestTrivial / IsAvailableQuestTrivial (0x0058d420, 0x0058d370):
@@ -4609,7 +4606,9 @@ void registerSocialLuaAPI(lua_State* L) {
             // A number reads as its own text, as FUN_0084e0e0's tostring-style
             // read of argument two does; nothing there rejects a type.
             const std::string reason = lua_isstring(L, 2) ? lua_tostring(L, 2) : std::string();
-            gh->uninvitePlayer(unitOrNameArg(L, gh, luaL_checkstring(L, 1)), reason);
+            // No unit is the target (0x0060abf0 with its third argument 1).
+            const char* who = lua_tostring(L, 1);
+            gh->uninvitePlayer(unitOrNameArg(L, gh, who && *who ? who : "target"), reason);
             return 0;
         }},
                 {"LeaveParty", [](lua_State* L) -> int {
@@ -4718,11 +4717,22 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"UnitIsInMyGuild", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsInMyGuild(\"name\")");   // 0x0060c550
             auto* gh = getGameHandler(L);
-            const char* name = luaL_optstring(L, 1, "");
-            if (!gh || !name || !*name) { luaPushOneOrNil(L, 0); return 1; }
+            if (!gh) return luaReturnNil(L);
+            // A player in sight by its guild; else the name of the unit - the
+            // target for "" - or the text itself, in the roster.
+            std::string name = lua_tostring(L, 1);
+            const auto unit = unitAskedOrTarget(L, gh, 1);
+            if (unit && !game::unit_target::askedNoUnit(*unit)) {
+                const uint32_t mine = gh->getEntityGuildId(gh->getPlayerGuid());
+                if (mine != 0 && gh->getEntityGuildId(*unit) == mine) { luaPushOneOrNil(L, 1); return 1; }
+                if (const std::string n = gh->lookupName(*unit); !n.empty()) name = n;
+            }
+            const std::string wanted = [&name] { std::string n = name; toLowerInPlace(n); return n; }();
             bool found = false;
             for (const auto& m : gh->getGuildRoster().members) {
-                if (m.name == name) { found = true; break; }
+                std::string n = m.name;
+                toLowerInPlace(n);
+                if (n == wanted) { found = true; break; }
             }
             luaPushOneOrNil(L, found);
             return 1;

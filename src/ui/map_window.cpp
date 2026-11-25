@@ -3,6 +3,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "core/application.hpp"
 #include "core/config_paths.hpp"
+#include "game/grey_triviality.hpp"
 #include "game/game_handler.hpp"
 #include "game/quest_handler.hpp"
 #include "game/quest_objectives.hpp"
@@ -361,15 +362,14 @@ namespace {
 
 /// The colour the game gives a quest's title for a player of this level: red
 /// well above them, orange above, yellow near, green below, grey once it
-/// gives nothing. GetQuestDifficultyColor's bands, and the server's own grey
-/// line (questIsTrivial).
+/// gives nothing. GetQuestDifficultyColor's bands.
 ImVec4 questDifficultyColour(int questLevel, int playerLevel) {
     if (questLevel <= 0 || playerLevel <= 0) return ImVec4(1.0f, 0.82f, 0.0f, 1.0f);
     const int diff = questLevel - playerLevel;
     if (diff >= 5) return ImVec4(1.0f, 0.1f, 0.1f, 1.0f);
     if (diff >= 3) return ImVec4(1.0f, 0.5f, 0.25f, 1.0f);
     if (diff >= -2) return ImVec4(1.0f, 0.82f, 0.0f, 1.0f);
-    if (addons::questIsTrivial(playerLevel, questLevel)) return ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+    if (game::triviality::questIsGrey(playerLevel, questLevel)) return ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
     return ImVec4(0.25f, 0.75f, 0.25f, 1.0f);
 }
 

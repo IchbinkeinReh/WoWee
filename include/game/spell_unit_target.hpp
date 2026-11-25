@@ -322,19 +322,30 @@ inline constexpr uint8_t kFailedTooClose = 0x80;
     return 0;
 }
 
+/// The unit a cast is asked at, besides a unit and 0 for none given
+/// (0x0060abf0): a token that names nobody now, at which nothing goes that
+/// needs a unit - refused (0xb) - and "none", for which the cursor holds the
+/// spell whatever is selected (0x0080c790, 0x0080cce0).
+inline constexpr uint64_t kAskedNobody = 0xFFFFFFFFFFFFFFFEull;
+inline constexpr uint64_t kAskedNone = 0xFFFFFFFFFFFFFFFFull;
+[[nodiscard]] constexpr bool askedNoUnit(uint64_t asked) { return asked == kAskedNobody || asked == kAskedNone; }
+
 /// 0x0080cce0 when no unit filled the spell (0x0080c790 answering none):
 /// Attributes 0x200's main hand, for a caster other than the player or one
 /// with nothing there, SPELL_FAILED_MAINHAND_EMPTY (0x32);
 /// else the cursor holds the spell for a unit to be clicked - unless an enemy
 /// is wanted and AttributesEx5 0x800 does not let an ally or party member
 /// stand for it: SPELL_FAILED_BAD_TARGETS (0xc) with a target, else
-/// SPELL_FAILED_BAD_IMPLICIT_TARGETS (0xb). 0 for the cursor.
+/// SPELL_FAILED_BAD_IMPLICIT_TARGETS (0xb). 0 for the cursor. Asked at a token
+/// that names nobody 0xb, and the cursor for "none" (see askedNoUnit).
 inline constexpr uint8_t kFailedMainhand = 0x32;
 inline constexpr uint8_t kFailedBadTargets = 0xc;
 inline constexpr uint8_t kFailedNoTarget = 0xb;
 [[nodiscard]] constexpr uint8_t noUnitFailure(uint32_t attr, uint32_t attrEx5, uint32_t required, bool casterIsPlayer,
-                                              bool playerHasMainhand, bool playerHasTarget) {
+                                              bool playerHasMainhand, bool playerHasTarget, uint64_t asked = 0) {
+    if (asked == kAskedNobody) return kFailedNoTarget;
     if ((attr & 0x200u) != 0 && (!casterIsPlayer || !playerHasMainhand)) return kFailedMainhand;
+    if (asked == kAskedNone) return 0;
     if ((required & kUnitEnemy) == 0 || ((attrEx5 & 0x800u) != 0 && (required & 0x10cu) != 0)) return 0;
     return playerHasTarget ? kFailedBadTargets : kFailedNoTarget;
 }
@@ -391,7 +402,7 @@ template <typename Take>
                                           bool autoSelfCast, bool helpless, uint64_t player, uint64_t caster,
                                           Take&& take) {
     if (required == 0) return {Choice::AtNone, 0};
-    if (takesNoUnit) return {};
+    if (takesNoUnit || askedNoUnit(asked)) return {};
     if (asked != 0 && askedFar) return {Choice::AtUnit, asked};
     Chosen out{};
     const auto tried = [&](uint64_t guid) {

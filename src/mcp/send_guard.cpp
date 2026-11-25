@@ -194,7 +194,7 @@ struct One {
     std::string_view what;
 };
 
-constexpr std::array<One, 42> kSingles = {{
+constexpr std::array<One, 41> kSingles = {{
     {"CMSG_EMOTE", Social::Emote, "an emote"},
     {"CMSG_TEXT_EMOTE", Social::Emote, "an emote"},
     {"CMSG_SEND_MAIL", Social::Mail, "mail"},
@@ -236,7 +236,6 @@ constexpr std::array<One, 42> kSingles = {{
     {"CMSG_VOICE_SESSION_ENABLE", Social::Chat, "voice chat"},
     {"CMSG_VOICE_SET_TALKER_MUTED_REQUEST", Social::Chat, "voice chat"},
     {"CMSG_SET_ACTIVE_VOICE_CHANNEL", Social::Chat, "voice chat"},
-    {"CMSG_DISMISS_CONTROLLED_VEHICLE", Social::Players, "a shared vehicle"},
 }};
 
 /// Of the families above what only asks, says no, or ends something: reading
@@ -272,6 +271,7 @@ std::vector<std::string_view> namedOpcodes() {
     for (const auto& s : kSingles) out.push_back(s.opcode);
     out.insert(out.end(), kHarmless.begin(), kHarmless.end());
     out.insert(out.end(), kNever.begin(), kNever.end());
+    out.emplace_back("CMSG_DISMISS_CONTROLLED_VEHICLE");
     return out;
 }
 
@@ -303,6 +303,16 @@ Verdict judgeSend(std::string_view opcode, std::span<const uint8_t> payload, con
             return never("abandoning a pet cannot be had back");
         }
         return judgeAim(guid, context);
+    }
+
+    if (opcode == "CMSG_DISMISS_CONTROLLED_VEHICLE") {
+        // Getting out of what the character drives itself: the mover is named
+        // first. A player's own mount, or somebody else's creature, is theirs.
+        Reader r(payload);
+        const uint64_t mover = r.packedGuid();
+        const bool own = r.ok() && mover != 0 && mover == context.vehicleGuid && !isPlayerGuid(mover) &&
+                         !(context.belongsToOtherPlayer && context.belongsToOtherPlayer(mover));
+        return own ? Verdict{} : social(Social::Players, "a shared vehicle", context);
     }
 
     for (const std::string_view name : kNever) {

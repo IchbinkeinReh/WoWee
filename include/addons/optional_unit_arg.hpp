@@ -14,15 +14,14 @@ namespace wowee::addons {
 
 /// A binding's unit argument where 0x0060abf0 is asked with its third argument
 /// 1: none, or "", is the target, whoever that is - also nobody (a guid of 0).
-/// Nothing where a token that is given names no unit.
+/// Else what the token is resolved to, which is nothing where it is no unit's.
 template <typename Resolve>
 [[nodiscard]] std::optional<uint64_t> optionalUnitArg(lua_State* L, int arg, uint64_t target, Resolve&& resolve) {
-    const char* unit = lua_isstring(L, arg) ? lua_tostring(L, arg) : nullptr;
+    const char* unit = arg > 0 && lua_isstring(L, arg) ? lua_tostring(L, arg) : nullptr;
     if (!unit || !*unit) return target;
     std::string token(unit);
     for (char& c : token) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (const uint64_t guid = resolve(token); guid != 0) return guid;
-    return std::nullopt;
+    return resolve(token);
 }
 
 }  // namespace wowee::addons

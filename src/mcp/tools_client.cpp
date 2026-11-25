@@ -68,12 +68,14 @@ json runLua(ToolContext& context, const json& args) {
     auto* engine = manager ? manager->getLuaEngine() : nullptr;
     if (!engine || !engine->isInitialized()) throw ToolError("the interface is not loaded");
     const std::string code = args["code"].get<std::string>();
+    const uint64_t refusals = context.refusals.last();
     if (args.value("as_macro", false)) {
         // As /run has it: insecure code, and errors to the interface.
         const uint64_t before = context.log.last();
         const bool ran = manager->runScript(code);
         json out = {{"ran", ran}};
         if (json errors = luaErrorsSince(context, before, 10); !errors.empty()) out["errors"] = std::move(errors);
+        if (json refused = refusedSince(context, refusals); !refused.empty()) out["refused"] = std::move(refused);
         return out;
     }
     json value;
@@ -86,7 +88,9 @@ json runLua(ToolContext& context, const json& args) {
         },
         error, true);
     if (!ok) throw ToolError(json{{"error", luaErrorJson(parseLuaError(error))}});
-    return {{"value", std::move(value)}};
+    json out = {{"value", std::move(value)}};
+    if (json refused = refusedSince(context, refusals); !refused.empty()) out["refused"] = std::move(refused);
+    return out;
 }
 
 }  // namespace

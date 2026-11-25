@@ -241,8 +241,8 @@ for _, bar in ipairs(bars) do
     local b = getglobal(bar[1] .. i)
     local action = b and b.action
     if action and HasAction(action) then
-      local kind, id = GetActionInfo(action)
-      local name = kind == "spell" and GetSpellInfo(id) or kind == "item" and GetItemInfo(id) or GetActionText(action)
+      local kind, id, _, spell = GetActionInfo(action)
+      local name = spell and GetSpellInfo(spell) or kind == "item" and GetItemInfo(id) or GetActionText(action)
       local match = (named and bar[1] .. i == named) or (slot and action == slot)
         or (wanted ~= "" and name and string.lower(name) == wanted)
       if match and (b:IsVisible() or not found) then

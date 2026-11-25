@@ -247,8 +247,8 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
     // 0x20: the ammo's display and inventory type; 0x80000: two u32s more.
     if (data.castFlags & 0x20u) {
         if (!packet.hasRemaining(8)) return true;
-        packet.readUInt32();
-        packet.readUInt32();
+        data.ammoDisplayId = packet.readUInt32();
+        data.ammoInventoryType = packet.readUInt32();
     }
     if (data.castFlags & 0x80000u) {
         if (!packet.hasRemaining(8)) return true;

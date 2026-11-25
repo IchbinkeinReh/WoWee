@@ -77,9 +77,11 @@ TEST_CASE("a stream's length is not asked of the decoder that plays it", "[audio
     ma_sound sound;
     REQUIRE(ma_sound_init_from_data_source(&engine, &source, MA_SOUND_FLAG_NO_PITCH | MA_SOUND_FLAG_NO_SPATIALIZATION,
                                            nullptr, &sound) == MA_SUCCESS);
+    REQUIRE(ma_sound_start(&sound) == MA_SUCCESS);
+    std::vector<float> mixed(2000);
+    REQUIRE(ma_engine_read_pcm_frames(&engine, mixed.data(), mixed.size(), nullptr) == MA_SUCCESS);
     source.lengthAsked = 0;
     source.sought = 0;
-    source.cursor = 2000;
 
     double seconds = 0.0, length = 0.0;
     const auto file = wav();
@@ -88,6 +90,15 @@ TEST_CASE("a stream's length is not asked of the decoder that plays it", "[audio
     CHECK(source.sought == 0);
     CHECK(seconds == Catch::Approx(0.25));
     CHECK(length == Catch::Approx(0.5));
+
+    // A looping one's time is the one in its round.
+    ma_sound_set_looping(&sound, MA_TRUE);
+    mixed.resize(3000);
+    REQUIRE(ma_engine_read_pcm_frames(&engine, mixed.data(), mixed.size(), nullptr) == MA_SUCCESS);
+    source.lengthAsked = 0;
+    wowee::audio::readSoundTimes(&sound, &file, seconds, length);
+    CHECK(source.lengthAsked == 0);
+    CHECK(seconds == Catch::Approx(0.125));
 
     // One held decoded has its length at hand.
     wowee::audio::readSoundTimes(&sound, nullptr, seconds, length);

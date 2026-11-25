@@ -1,4 +1,3 @@
-#include "rendering/animation/melee_anim_chains.hpp"
 #include "core/animation_callback_handler.hpp"
 #include "core/appearance_composer.hpp"
 #include "core/entity_spawner.hpp"
@@ -90,29 +89,6 @@ void AnimationCallbackHandler::setupCallbacks() {
                 cr->playAnimation(instanceId, rendering::anim::RISE, false);
             else
                 cr->playAnimation(instanceId, rendering::anim::STAND, true);
-        }
-    });
-
-    // NPC/player swing callback (online mode) - play attack animation
-    // Probes the model for the best available attack animation:
-    //   ATTACK_1H(17) → ATTACK_2H(18) → ATTACK_2H_LOOSE(19) → ATTACK_UNARMED(16)
-    gameHandler_.setNpcSwingCallback([this](uint64_t guid) {
-        if (!renderer_.getCharacterRenderer()) return;
-        uint32_t instanceId = entitySpawner_.getCreatureInstanceId(guid);
-        if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
-        if (instanceId != 0) {
-            auto* cr = renderer_.getCharacterRenderer();
-            const auto attackAnims =
-                rendering::anim::meleeAnimChain(rendering::anim::MeleeChain::Generic);
-            bool played = false;
-            for (uint32_t anim : attackAnims) {
-                if (cr->hasAnimation(instanceId, anim)) {
-                    cr->playAnimation(instanceId, anim, false);
-                    played = true;
-                    break;
-                }
-            }
-            if (!played) cr->playAnimation(instanceId, rendering::anim::ATTACK_UNARMED, false);
         }
     });
 
@@ -406,34 +382,11 @@ void AnimationCallbackHandler::setupCallbacks() {
                 spell = cast->spellId;
             }
             castSpells_[guid] = spell;
-            // A potion or a drink taken standing: one swig's sound.
-            if (isLocalPlayer && spell != 0) {
-                gameHandler_.loadSpellNameCache();
-                const auto it = gameHandler_.spellNameCacheRef().find(spell);
-                const auto rest = it != gameHandler_.spellNameCacheRef().end()
-                                      ? game::spellclass::classifyRestChannel(it->second.name)
-                                      : game::spellclass::RestChannelKind::NONE;
-                if (rest == game::spellclass::RestChannelKind::POTION ||
-                    rest == game::spellclass::RestChannelKind::ALCOHOL) {
-                    if (auto* audio = gameHandler_.services().audioCoordinator) {
-                        if (auto* ui = audio->getUiSoundManager()) ui->playDrinking();
-                    }
-                }
-            }
             return;
         }
         const uint32_t spell = castSpells_.count(guid) ? castSpells_[guid] : 0u;
         castSpells_.erase(guid);
         if (isChannel || (svs && svs->castAnimations(spell).animates())) cr->playBaseAnimation(instanceId);
-    });
-
-    // Ghost state callback - make player semi-transparent when in spirit form
-    gameHandler_.setGhostStateCallback([this](bool isGhost) {
-        auto* cr = renderer_.getCharacterRenderer();
-        if (!cr) return;
-        uint32_t charInstId = renderer_.getCharacterInstanceId();
-        if (charInstId == 0) return;
-        cr->setInstanceOpacity(charInstId, isGhost ? 0.5f : 1.0f);
     });
 
     // The player's stand state as the server has it (SMSG_STANDSTATE_UPDATE,

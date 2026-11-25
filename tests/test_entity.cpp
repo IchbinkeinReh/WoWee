@@ -975,3 +975,21 @@ TEST_CASE("A move flown out stays on its last point and starts when it began", "
     g.updateMovement(2.0f);
     CHECK(g.getX() == Catch::Approx(5.0f));
 }
+
+// It went on for as long again, at a speed smoothed over its last moves, and came back: what
+// asked where it was - range, targeting, the map - had it yards from where it was drawn.
+TEST_CASE("A unit whose spline is over stands at its end", "[entity][movement]") {
+    Entity e(7);
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveAlongPath({{0.0f, 0.0f, 0.0f}, {10.0f, 0.0f, 0.0f}, {20.0f, 0.0f, 0.0f}}, 0.0f, 2.0f, false, true);
+    for (int i = 0; i < 25; ++i) e.updateMovement(0.1f);
+    CHECK(e.getX() == Catch::Approx(20.0f));
+    CHECK_FALSE(e.isEntityMoving());
+    e.updateMovement(0.5f);
+    CHECK(e.getX() == Catch::Approx(20.0f));
+
+    e.startMoveTo(25.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    for (int i = 0; i < 15; ++i) e.updateMovement(0.1f);
+    CHECK(e.getX() == Catch::Approx(25.0f));
+    CHECK_FALSE(e.isEntityMoving());
+}

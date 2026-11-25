@@ -19,7 +19,7 @@ bool LevelUpEffect::loadModel(M2Renderer* m2Renderer,
     pipeline::M2Model model = pipeline::M2Loader::load(m2FileData);
     if (model.name.empty()) model.name = "Spells\\LevelUp.m2";
     // Spell effect M2s may have no geometry (particle-only), so don't require isValid()
-    if (model.vertices.empty() && model.particleEmitters.empty()) {
+    if (!model.hasContent()) {
         LOG_WARNING("LevelUpEffect: M2 has no vertices and no particle emitters");
         return false;
     }

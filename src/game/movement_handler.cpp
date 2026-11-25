@@ -1,4 +1,5 @@
 #include "game/movement_handler.hpp"
+#include "game/passenger_place.hpp"
 #include "game/mover_mode.hpp"
 #include "game/move_heartbeat.hpp"
 #include "game/transport_route_clock.hpp"
@@ -689,6 +690,15 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         return;
     }
 
+    // The keys that move and turn end being away (0x005fae70, 0x005fafb0, 0x005fb0b0,
+    // 0x005face0; a vehicle's, 0x0056b5c0).
+    if (!owner_.clickToMoveUnderWay() &&
+        (opcode == Opcode::MSG_MOVE_START_FORWARD || opcode == Opcode::MSG_MOVE_START_BACKWARD ||
+         opcode == Opcode::MSG_MOVE_START_STRAFE_LEFT || opcode == Opcode::MSG_MOVE_START_STRAFE_RIGHT ||
+         opcode == Opcode::MSG_MOVE_START_TURN_LEFT || opcode == Opcode::MSG_MOVE_START_TURN_RIGHT ||
+         opcode == Opcode::MSG_MOVE_START_ASCEND || opcode == Opcode::MSG_MOVE_START_DESCEND))
+        owner_.clearAfkMoving();
+
     // Into the air before rising in it: the take-off's CMSG_MOVE_SET_FLY, and
     // the controls looked at again after it (0x007413f0 -> 0x005fbbc0). Not
     // from the water: a swimmer swims up (0x009898e0 keeps SWIMMING).
@@ -812,8 +822,7 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             opcode == Opcode::MSG_MOVE_START_STRAFE_RIGHT ||
             opcode == Opcode::MSG_MOVE_JUMP;
         if (isPositionalMove) {
-            if (owner_.isRestoring()) owner_.cancelCast();
-            else owner_.getSpellHandler()->cancelCastsOnMove();  // 0x00806620
+            owner_.getSpellHandler()->cancelCastsOnMove();  // 0x00806620
         }
     }
     // A move key, autorun, both mouse buttons or a jump (0x005fbe10,
@@ -2510,6 +2519,24 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         if (auto vehicle = owner_.getEntityManager().getEntity(transportGuid)) {
             entity->setPosition(vehicle->getX(), vehicle->getY(), vehicle->getZ(), entity->getOrientation());
         }
+        // Where the move ends in it: the seat's offset.
+        SeatOffset& seat = seatOffsets_[moverGuid];
+        seat = {.vehicle = transportGuid, .offset = glm::vec3(localX, localY, localZ)};
+        if (packet.hasRemaining(5)) {
+            packet.readUInt32();  // the spline's id
+            const uint8_t facing = packet.readUInt8();
+            const size_t facingBytes = facing == 2 ? 12u : facing == 3 ? 8u : facing == 4 ? 4u : 0u;
+            if (facing != 1 && packet.hasRemaining(facingBytes + 4)) {
+                packet.setReadPos(packet.getReadPos() + facingBytes);
+                const uint32_t flags = packet.readUInt32();
+                SplineBlockData spline;
+                if (parseMonsterMoveSplineBody(packet, spline, flags, seat.offset, /*useTbcUncompressedMask=*/false,
+                                               isPreWotlk() ? SplineFlagSet::PreWotlk : SplineFlagSet::Wotlk) &&
+                    spline.hasDest) {
+                    seat.offset = glm::vec3(spline.destination.x, spline.destination.y, spline.destination.z);
+                }
+            }
+        }
         packet.skipAll();
         return;
     }
@@ -2888,6 +2915,7 @@ void MovementHandler::sendWorldportAck() {
     network::Packet ack(wireOpcode(Opcode::MSG_MOVE_WORLDPORT_ACK));
     owner_.getSocket()->send(ack);
     LOG_INFO("Sent MSG_MOVE_WORLDPORT_ACK");
+    owner_.askUnansweredAgain();
 }
 
 bool MovementHandler::releaseWorldportAck() {
@@ -2920,6 +2948,8 @@ void MovementHandler::sendTeleportAck(const TeleportAckGate::Ack& pending) {
     // (0x007413f0, 0xC7: 0x005f95e0, 0x005fbbc0): a stop and a heartbeat sent
     // here told of a mover that was running on.
     LOG_WARNING("Sent MSG_MOVE_TELEPORT_ACK counter=", pending.counter);
+    // The same event asks the base animation again (0x007413f0 -> 0x0073ed10, 0xC7).
+    moverEvent(Opcode::MSG_MOVE_TELEPORT_ACK, movementInfo.flags, false);
 }
 
 // SMSG_TRANSFER_PENDING: the client's handler is 0x00401480.
@@ -4358,7 +4388,46 @@ void MovementHandler::clearTransportAttachment(uint64_t childGuid) {
     owner_.transportAttachmentsRef().erase(childGuid);
 }
 
+void MovementHandler::carryVehiclePassengers() {
+    // A passenger is its place on its vehicle wherever that goes (0x004f4460):
+    // its distance, its click and its sounds were left where it got on.
+    const uint64_t player = owner_.getPlayerGuid();
+    for (const auto& [guid, passenger] : owner_.vehicleRoster().passengers()) {
+        if (guid == player || passenger.vehicleGuid == 0) continue;
+        const auto entity = owner_.getEntityManager().getEntity(guid);
+        const auto vehicle = owner_.getEntityManager().getEntity(passenger.vehicleGuid);
+        if (!entity || !vehicle || !vehicle->isUnit() || entity->isActivelyMoving()) continue;
+        glm::vec3 at(vehicle->getX(), vehicle->getY(), vehicle->getZ());
+        float yaw = vehicle->getOrientation();
+        if (passenger.vehicleGuid == player && owner_.activeMover() == player) {
+            at = glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
+            yaw = movementInfo.orientation;
+        }
+        glm::vec3 offset(0.0f);
+        if (const auto seat = seatOffsets_.find(guid); seat != seatOffsets_.end() &&
+                                                       seat->second.vehicle == passenger.vehicleGuid) {
+            offset = seat->second.offset;
+        } else if (const auto held = owner_.transportAttachmentsRef().find(guid);
+                   held != owner_.transportAttachmentsRef().end() &&
+                   held->second.transportGuid == passenger.vehicleGuid) {
+            // The create block's, as it came.
+            offset = held->second.offsetNeedsTransportResolution
+                         ? held->second.localOffset
+                         : transport_local::toWire(false, held->second.localOffset);
+        }
+        const glm::vec3 place = passengerPlace(at, yaw, offset);
+        const glm::vec3 was(entity->getX(), entity->getY(), entity->getZ());
+        if (glm::dot(place - was, place - was) > 0.0001f)
+            entity->setPosition(place.x, place.y, place.z, entity->getOrientation());
+    }
+    std::erase_if(seatOffsets_, [this](const auto& seat) {
+        const auto passenger = owner_.vehicleRoster().passenger(seat.first);
+        return !passenger || passenger->vehicleGuid != seat.second.vehicle;
+    });
+}
+
 void MovementHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
+    carryVehiclePassengers();
     if (!owner_.getTransportManager() || owner_.transportAttachmentsRef().empty()) {
         return;
     }
