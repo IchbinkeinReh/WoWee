@@ -2513,7 +2513,8 @@ TEST_CASE("the auction house's lists are asked for as they may have changed", "[
     CHECK(count(Opcode::CMSG_AUCTION_LIST_OWNER_ITEMS) == 2);
     result(7, 1, 0);    // one cancelled is in no list any more
     CHECK(inv->getAuctionOwnerResults().auctions.size() == 1);
-    CHECK(inv->getAuctionBrowseResults().auctions.size() == 1);
+    // The search's answer is the search's, whatever was asked for since.
+    REQUIRE(inv->getAuctionBrowseResults().auctions.size() == 1);
     CHECK(count(Opcode::CMSG_AUCTION_LIST_PENDING_SALES) == 3);
     gh.auctionBid(inv->getAuctionBrowseResults().auctions.front(), 250);
     result(9, 2, 25);   // a bid taken

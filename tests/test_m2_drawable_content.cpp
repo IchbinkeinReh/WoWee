@@ -121,7 +121,7 @@ TEST_CASE("nothing that draws a unit or its items asks for a vertex", "[m2]") {
     const size_t load = renderer.find("bool CharacterRenderer::loadModel(");
     REQUIRE(load != std::string::npos);
     const std::string head = renderer.substr(load, 400);
-    CHECK(head.find("hasDrawableContent()") != std::string::npos);
+    CHECK(head.find("hasUnitContent()") != std::string::npos);
     CHECK(head.find("model.isValid()") == std::string::npos);
 
     const std::string spawner = source("src/core/entity_spawner_processing.cpp");

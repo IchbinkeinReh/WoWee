@@ -1306,7 +1306,7 @@ private:
     AuctionSearchParams lastAuctionSearch_;
     bool hasAuctionSearch_ = false;  // true after any search (including empty-name browse-all)
     enum class AuctionResultTarget { BROWSE, OWNER, BIDDER };
-    AuctionResultTarget pendingAuctionTarget_ = AuctionResultTarget::BROWSE;
+    void takeAuctionList(network::Packet& packet, AuctionResultTarget target);
     /// How many owner list answers are still to come (0xc0e73c): two for
     /// each request, the auctions and the pending sales (0x0059cc50).
     int ownerListAnswersDue_ = 0;

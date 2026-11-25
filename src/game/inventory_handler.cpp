@@ -5255,7 +5255,6 @@ void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, 
     lastAuctionSearch_ = {.name = name, .levelMin = levelMin, .levelMax = levelMax, .quality = quality, .itemClass = itemClass, .itemSubClass = itemSubClass,
                           .invTypeMask = invTypeMask, .usableOnly = usableOnly, .offset = offset, .sort = sort};
     hasAuctionSearch_ = true;
-    pendingAuctionTarget_ = AuctionResultTarget::BROWSE;
     LOG_INFO("CMSG_AUCTION_LIST_ITEMS: offset=", offset, " class=", static_cast<int32_t>(itemClass),
              " subclass=", static_cast<int32_t>(itemSubClass), " invType=",
              static_cast<int32_t>(invTypeMask), " quality=", static_cast<int32_t>(quality),
@@ -5408,7 +5407,6 @@ void InventoryHandler::auctionCancelItem(uint32_t auctionId) {
 
 void InventoryHandler::auctionListOwnerItems(uint32_t offset) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
-    pendingAuctionTarget_ = AuctionResultTarget::OWNER;
     auto packet = AuctionListOwnerItemsPacket::build(auctioneerGuid_, offset);
     owner_.getSocket()->send(packet);
     ownerListWanted_ = false;
@@ -5510,7 +5508,6 @@ void InventoryHandler::handleAuctionPendingSales(network::Packet& packet) {
 
 void InventoryHandler::auctionListBidderItems(uint32_t offset) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
-    pendingAuctionTarget_ = AuctionResultTarget::BIDDER;
     // With those outbid on (0x0059ce50).
     std::vector<uint32_t> outbid;
     for (const auto& [house, id] : auctionsOutbid_)
@@ -5554,6 +5551,13 @@ void InventoryHandler::handleAuctionHello(network::Packet& packet) {
 }
 
 void InventoryHandler::handleAuctionListResult(network::Packet& packet) {
+    takeAuctionList(packet, AuctionResultTarget::BROWSE);
+}
+
+// Which list it is, its opcode says (0x0059e160, 0x0059e480,
+// 0x0059ecd0), not what was asked for last: a
+// bid's own asking took a search's answer that came after it.
+void InventoryHandler::takeAuctionList(network::Packet& packet, AuctionResultTarget target) {
     AuctionListResult result;
     // Vanilla sends a single enchantId; TBC inspects 6 enchant slots per item,
     // WotLK 7 (PRISMATIC_ENCHANTMENT_SLOT joined the inspected range in 3.x).
@@ -5576,11 +5580,11 @@ void InventoryHandler::handleAuctionListResult(network::Packet& packet) {
         auctionListDelayMs_ = result.searchDelay;
     }
 
-    if (pendingAuctionTarget_ == AuctionResultTarget::OWNER) {
+    if (target == AuctionResultTarget::OWNER) {
         auctionOwnerResults_.totalCount = result.totalCount;
         auctionOwnerResults_.searchDelay = result.searchDelay;
         replaceOwnerRows(std::move(result.auctions), /*pending=*/false);
-    } else if (pendingAuctionTarget_ == AuctionResultTarget::BIDDER) {
+    } else if (target == AuctionResultTarget::BIDDER) {
         bidderListAnswersDue_ = std::max(bidderListAnswersDue_ - 1, 0);
         // More of them than sent: another page may be asked for (0x0059ecd0).
         if (result.auctions.size() != result.totalCount) bidderListWanted_ = true;
@@ -5598,19 +5602,17 @@ void InventoryHandler::handleAuctionListResult(network::Packet& packet) {
             if (e.ownerGuid != 0) owner_.queryPlayerName(e.ownerGuid);
         }
     };
-    if (pendingAuctionTarget_ == AuctionResultTarget::OWNER) ensureEntries(auctionOwnerResults_);
-    else if (pendingAuctionTarget_ == AuctionResultTarget::BIDDER) ensureEntries(auctionBidderResults_);
+    if (target == AuctionResultTarget::OWNER) ensureEntries(auctionOwnerResults_);
+    else if (target == AuctionResultTarget::BIDDER) ensureEntries(auctionBidderResults_);
     else ensureEntries(auctionBrowseResults_);
 }
 
 void InventoryHandler::handleAuctionOwnerListResult(network::Packet& packet) {
-    pendingAuctionTarget_ = AuctionResultTarget::OWNER;
-    handleAuctionListResult(packet);
+    takeAuctionList(packet, AuctionResultTarget::OWNER);
 }
 
 void InventoryHandler::handleAuctionBidderListResult(network::Packet& packet) {
-    pendingAuctionTarget_ = AuctionResultTarget::BIDDER;
-    handleAuctionListResult(packet);
+    takeAuctionList(packet, AuctionResultTarget::BIDDER);
 }
 
 void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {

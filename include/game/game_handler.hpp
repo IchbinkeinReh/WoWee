@@ -7612,7 +7612,6 @@ private:
         uint32_t offset = 0;
     };
     // Routing: which result vector to populate from next SMSG_AUCTION_LIST_RESULT
-    enum class AuctionResultTarget { BROWSE, OWNER, BIDDER };
 
     // Vendor
     bool vendorWindowOpen = false;
