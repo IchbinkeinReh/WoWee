@@ -61,6 +61,11 @@ inline bool sameStyle(const WrapRun& a, const WrapRun& b) {
     return std::equal(std::begin(a.rgba), std::end(a.rgba), std::begin(b.rgba));
 }
 
+/// What is as wide as it was measured fits: the client measures and breaks with
+/// one function over whole pixels (0x006bd900, 0x006bd390 -> 0x006c21a0), the
+/// pieces of a line here add up to a fraction more or less than the whole of it.
+inline constexpr float kMeasureSlack = 0.5f;
+
 /// Break runs into lines no wider than wrapWidth.
 ///
 /// `measure` answers the width of a string. A wrapWidth of zero means no soft
@@ -87,7 +92,7 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
     std::vector<std::vector<WrapRun>> lines;
     lines.emplace_back();
     float x = 0.0f;
-    const float firstWidth = wrapWidth;
+    const float firstWidth = wrapWidth > 0.0f ? wrapWidth + kMeasureSlack : wrapWidth;
     // The width the current line may use: the whole of it on the first line,
     // less the indent on every line after.
     auto widthNow = [&] {

@@ -141,7 +141,7 @@ std::string interfaceFittedText(const std::string& text, ImFont* font, float siz
                                                  : size;
             }
         }
-        return wide <= width + 0.5f;
+        return wide <= width + kMeasureSlack;
     }, lines > 0 ? "..." : "");
 }
 

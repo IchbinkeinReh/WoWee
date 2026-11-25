@@ -345,3 +345,15 @@ TEST_CASE("a text that is not shortened ends without dots", "[text_wrap]") {
     CHECK(fitText("Anglerwettbewerb", upTo(6)) == "Ang...");
     CHECK(fitText("Angler", upTo(6), "") == "Angler");
 }
+
+TEST_CASE("a box as wide as its text shows it", "[text_wrap]") {
+    // The pieces of a line add up to a fraction more than the whole of it.
+    const auto pieces = [](const std::string& t) { return t.empty() ? 0.0f : static_cast<float>(t.size()) + 0.1f; };
+    const std::string text = "Toreks Angriff heute";
+    const float whole = pieces(text);
+    CHECK(wrapText(plain(text), whole, false, pieces).size() == 1);
+    CHECK(wrapText(plain(text), whole - 1.0f, false, pieces).size() == 2);
+    bool stopped = false;
+    wrapText(plain("Anglerwettbewerb"), pieces("Anglerwettbewerb") - 0.1f, false, pieces, 0.0f, &stopped);
+    CHECK_FALSE(stopped);
+}
