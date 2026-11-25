@@ -3033,6 +3033,30 @@ static bool talentPrereqsMet(game::GameHandler* gh,
     return true;
 }
 
+TalentTooltipFacts talentLinkFacts(game::GameHandler* gh, uint32_t talentId, int rank) {
+    TalentTooltipFacts f;
+    const auto* t = gh ? gh->getTalentEntry(talentId) : nullptr;
+    if (!t) return f;
+    f.talent = t;
+    f.maxIdx = static_cast<int>(t->maxRank) - 1;
+    f.shownIdx = f.learnedIdx = rank >= 0 && rank <= f.maxIdx ? rank : -1;
+    // 0x006224f0 without a record: what it asks for, none of it there.
+    for (int p = 0; p < 3; ++p) {
+        const uint32_t pre = t->prereqTalent[p];
+        const auto* row = pre ? gh->getTalentEntry(pre) : nullptr;
+        uint32_t named = 0;
+        for (int r = t->prereqRank[p]; row && r < 5 && named == 0; ++r) named = row->rankSpells[r];
+        if (named == 0) continue;
+        f.prereqs.emplace_back(t->prereqRank[p] + 1, named);
+        f.learnable = false;
+    }
+    if (t->requiredSpell != 0 && !gh->getKnownSpells().count(t->requiredSpell)) {
+        f.requiredSpell = t->requiredSpell;
+        f.learnable = false;
+    }
+    return f;
+}
+
 TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int talentIndex, bool inspect,
                                       bool pet, int group, bool preview) {
     TalentTooltipFacts f;
@@ -4537,8 +4561,9 @@ static int lua_GetTalentLink(lua_State* L) {
     }
     std::string name = gh->getSpellName(talent->rankSpells[0]);
     if (name.empty()) name = "Talent";
+    // The index of the rank's spell (the record's +0x1c), -1 without points.
     const std::string link = "|cff4e96f7|Htalent:" + std::to_string(id) + ":" +
-                             std::to_string(rank) + "|h[" + name + "]|h|r";
+                             std::to_string(rank - 1) + "|h[" + name + "]|h|r";
     lua_pushstring(L, link.c_str());
     return 1;
 }

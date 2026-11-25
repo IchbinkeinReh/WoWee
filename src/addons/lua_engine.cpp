@@ -2489,6 +2489,8 @@ static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
     lua_setfield(L, tip, "__itemId");
     lua_pushnil(L);
     lua_setfield(L, tip, "__spellId");
+    lua_pushnil(L);
+    lua_setfield(L, tip, "__achievementId");
     // +0x368, the quest a quest link waits to be drawn again for.
     lua_pushnil(L);
     lua_setfield(L, tip, "__pendingQuestId");
@@ -3455,6 +3457,8 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
                                 uint32_t itemId, const game::ItemDef* instance = nullptr,
                                 const std::array<uint32_t, 3>* linkGems = nullptr);
 static void awaitSetPieces(lua_State* L, game::GameHandler* gh, uint32_t itemId);
+static bool fillTalentTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                              const wowee::addons::TalentTooltipFacts& f);
 static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
                                const game::ItemDef& item);
 static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item);
@@ -4640,7 +4644,10 @@ static bool fillAchievementLinkTooltip(lua_State* L, wowee::ui::Widget* w, game:
     return true;
 }
 
-int lua_Tooltip_SetHyperlink(lua_State* L) {
+/// SetHyperlink(link) (0x0062dae0). One the tooltip shows already closes it - an item,
+/// a spell, a quest or an achievement; `again` is the refill of a tooltip whose link
+/// has come to be known.
+static int setHyperlink(lua_State* L, bool again) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     std::string link = luaL_optstring(L, 2, "");
@@ -4668,6 +4675,25 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     // its second field (0x00622ba0 finds the row by that one, and treats a
     // missing or zero slot row as a case of its own rather than as a failure).
     if (id == 0 && kind != "glyph") { lua_pushboolean(L, 0); return 1; }
+
+    if (!again && w->shown && w->objectType == "GameTooltip") {
+        const char* field = kind == "item"                         ? "__itemId"
+                            : kind == "spell" || kind == "enchant" ? "__spellId"
+                            : kind == "quest"                      ? "__pendingQuestId"
+                            : kind == "achievement"                ? "__achievementId"
+                                                                   : nullptr;
+        if (field) {
+            lua_getfield(L, 1, field);
+            const bool shown = lua_isnumber(L, -1) && static_cast<uint32_t>(lua_tonumber(L, -1)) == id;
+            lua_pop(L, 1);
+            if (shown) {
+                lua_getfield(L, 1, "Hide");
+                lua_pushvalue(L, 1);
+                lua_call(L, 1, 0);
+                return 0;
+            }
+        }
+    }
 
     // The enchant, which an item link carries as its second field and this
     // walked past. A linked weapon read as a plain one wherever a link is
@@ -4703,8 +4729,14 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     }
 
     bool filled = false;
-    if (kind == "spell" || kind == "enchant" || kind == "talent")
+    if (kind == "spell" || kind == "enchant")
         filled = fillSpellTooltip(L, w, gh, id);
+    else if (kind == "talent") {
+        // Its rank, the index of the rank's spell; none is -1.
+        const size_t second = link.find(':', colon + 1);
+        const int rank = second == std::string::npos ? -1 : std::atoi(link.c_str() + second + 1);
+        filled = fillTalentTooltip(L, w, gh, wowee::addons::talentLinkFacts(gh, id, rank));
+    }
     else if (kind == "item") {
         // Whether the link names a rolled suffix, which the builder asks
         // before saying ITEM_RANDOM_ENCHANT for the template.
@@ -4725,7 +4757,11 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
         filled = fillGlyphLinkTooltip(L, w, gh, link, colon);
     else if (kind == "achievement") {
         filled = fillAchievementLinkTooltip(L, w, gh, link, colon);
-        if (filled) fireTooltipScript(L, w, "OnTooltipSetAchievement");
+        if (filled) {
+            lua_pushnumber(L, static_cast<lua_Number>(id));   // +0x36c
+            lua_setfield(L, 1, "__achievementId");
+            fireTooltipScript(L, w, "OnTooltipSetAchievement");
+        }
     }
 
     // A tooltip whose item was not known yet waits for it, as the client's
@@ -4770,6 +4806,10 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     lua_pushboolean(L, filled ? 1 : 0);
     return 1;
 }
+
+int lua_Tooltip_SetHyperlink(lua_State* L) { return setHyperlink(L, false); }
+/// __WoweeRefillHyperlink(link): as SetHyperlink, for a tooltip that has the link.
+int lua_Tooltip_RefillHyperlink(lua_State* L) { return setHyperlink(L, true); }
 
 // SetPetAction(slot) (0x00625470): the spell on the pet's bar, the pet's
 // own, with its rank. 1 when filled; a command (Attack, Follow ...) is no
@@ -5176,8 +5216,14 @@ int lua_Tooltip_SetTalent(lua_State* L) {
     const int group = lua_isnumber(L, 6) ? static_cast<int>(lua_tonumber(L, 6)) - 1
                                          : static_cast<int>(gh->getActiveTalentSpec());
     const bool preview = lua_toboolean(L, 7) != 0;
-    const auto f = wowee::addons::talentTooltipFacts(gh, tabIndex, talentIndex, inspect, pet, group, preview);
-    if (!f.talent) return 0;
+    (void)fillTalentTooltip(L, w, gh, wowee::addons::talentTooltipFacts(gh, tabIndex, talentIndex, inspect, pet, group, preview));
+    return 0;
+}
+
+/// A talent's tooltip (0x00626e20): whether it has any line.
+static bool fillTalentTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                              const wowee::addons::TalentTooltipFacts& f) {
+    if (!f.talent) return false;
     const auto& t = *f.talent;
     const uint32_t shown = f.shownIdx >= 0 && f.shownIdx < 5 ? t.rankSpells[f.shownIdx] : 0;
     const uint32_t next = f.shownIdx < f.maxIdx && f.shownIdx + 1 < 5 ? t.rankSpells[f.shownIdx + 1] : 0;
@@ -5190,14 +5236,14 @@ int lua_Tooltip_SetTalent(lua_State* L) {
             const TalentTooltipPart second{&f, true, true};
             fillSpellTooltip(L, w, gh, next, false, false, &second);
         }
-        return 0;
+        return true;
     }
 
     const std::string& shownName = shown ? gh->getSpellName(shown) : std::string();
     const std::string& nextName = next ? gh->getSpellName(next) : std::string();
     w->isTooltip = true;
     clearTooltipLines(L, w);
-    if (shownName.empty() && nextName.empty()) return 0;
+    if (shownName.empty() && nextName.empty()) return false;
     const auto add = [&w](std::string text, const float* rgb, bool wrap) {
         wowee::ui::Widget::TooltipLine l;
         l.left = std::move(text);
@@ -5229,7 +5275,7 @@ int lua_Tooltip_SetTalent(lua_State* L) {
     // The talent builder ends as the spell builder does (0x00626e20), naming
     // the rank shown - none where no rank is learnt.
     fireTooltipSetSpell(L, w, shown);
-    return 0;
+    return true;
 }
 
 /// SetTradeSkillItem(index [, reagent]) (0x0062eae0) - a recipe of the open
@@ -12276,6 +12322,7 @@ void LuaEngine::registerCoreAPI() {
         {"SetEquipmentSet",        lua_Tooltip_SetEquipmentSet},
         {"SetLFGCompletionReward", lua_Tooltip_SetLFGCompletionReward},
         {"SetGlyph",               lua_Tooltip_SetGlyph},
+        {"__WoweeRefillHyperlink", lua_Tooltip_RefillHyperlink},
         {"SetHyperlink",    lua_Tooltip_SetHyperlink},
         // On frames as well as on font strings, where these were already
         // registered. A chat frame is asked for its own font - not a label's -
@@ -12566,7 +12613,7 @@ void LuaEngine::registerCoreAPI() {
         lua_Tooltip_SetExistingSocketGem, lua_Tooltip_SetSocketedItem, lua_Tooltip_SetCurrencyToken,
         lua_Tooltip_SetBackpackToken, lua_Tooltip_SetGuildBankItem, lua_Tooltip_SetSpellByID,
         lua_Tooltip_SetQuestLogRewardSpell, lua_Tooltip_SetEquipmentSet,
-        lua_Tooltip_SetLFGCompletionReward, lua_Tooltip_SetGlyph, lua_Tooltip_SetHyperlink,
+        lua_Tooltip_SetLFGCompletionReward, lua_Tooltip_SetGlyph, lua_Tooltip_SetHyperlink, lua_Tooltip_RefillHyperlink,
         lua_Tooltip_SetTalent, lua_Tooltip_SetAuctionItem, lua_Tooltip_AppendItemEnchants,
         lua_Tooltip_AppendEquippedEnchants, lua_Tooltip_SetTradeSkillItem, lua_Tooltip_SetUnit,
         lua_Tooltip_SetFrameStack, lua_Tooltip_SetUnitAura, lua_Tooltip_SetSendMailItem,
@@ -14846,7 +14893,7 @@ void LuaEngine::registerCoreAPI() {
         // would drop the enchant and the suffix it was linked with.
         "function __WoweeRefreshHyperlinkTooltip(self)\n"
         "    local link = self and rawget(self, '__hyperlink')\n"
-        "    if link then self:SetHyperlink(link) end\n"
+        "    if link then self:__WoweeRefillHyperlink(link) end\n"
         "end\n"
         // Shared item tooltip builder using GetItemInfo return values
         // The shared item tooltip, in the client's order and words (0x006277f0):

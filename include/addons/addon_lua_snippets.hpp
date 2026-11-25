@@ -2325,7 +2325,7 @@ watcher:SetScript("OnEvent", function(self, event, a1)
         for _, tip in ipairs(due) do
             waiting[tip] = nil
             local link = rawget(tip, "__hyperlink")
-            if link and tip.IsShown and tip:IsShown() then tip:SetHyperlink(link) end
+            if link and tip.IsShown and tip:IsShown() then tip:__WoweeRefillHyperlink(link) end
         end
     end
     -- One that names a set of which this is a piece (see awaitSetPieces).
@@ -2339,7 +2339,7 @@ watcher:SetScript("OnEvent", function(self, event, a1)
         end
         for _, tip in ipairs(due) do
             local link = rawget(tip, "__hyperlink")
-            if link and tip.IsShown and tip:IsShown() then tip:SetHyperlink(link) end
+            if link and tip.IsShown and tip:IsShown() then tip:__WoweeRefillHyperlink(link) end
         end
     end
     if not GameTooltip or not GameTooltip.IsShown or not GameTooltip:IsShown() then

@@ -1517,6 +1517,9 @@ struct TalentTooltipFacts {
 /// SetTalent's arguments (0x0062f740), group zero-based.
 TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int talentIndex, bool inspect,
                                       bool pet, int group, bool preview);
+/// A talent link's (0x0062dae0 -> 0x00626e20): of no record, at the rank it names - the
+/// index of the rank's spell, -1 for none.
+TalentTooltipFacts talentLinkFacts(game::GameHandler* gh, uint32_t talentId, int rank);
 
 /// The item id the cursor is carrying, or zero for anything else.
 ///
