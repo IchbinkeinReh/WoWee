@@ -40,3 +40,33 @@ TEST_CASE("a numeric box takes digits alone", "[edit_typing]") {
     CHECK(numericRefuses("1a"));
     CHECK(numericRefuses("    "));
 }
+
+// 0x00965ed0: several lines into a box of several.
+TEST_CASE("lines pasted stay lines in a multi-line box", "[edit_typing]") {
+    std::string in;
+    for (const auto& p : wowee::ui::typedPieces("/cast A\r\n/cast B\n\tC", true)) in += p;
+    CHECK(in == "/cast A\n/cast B\n    C");
+    in.clear();
+    for (const auto& p : wowee::ui::typedPieces("eins\r\nzwei", false)) in += p;
+    CHECK(in == "einszwei");
+}
+
+// 0x009632d0 -> 0x006bdc50 with 0x1500
+TEST_CASE("what is copied is what is seen", "[edit_typing]") {
+    using wowee::ui::copiedText;
+    CHECK(copiedText("plain \xc3\xb6") == "plain \xc3\xb6");
+    CHECK(copiedText("a||b") == "a|b");
+    CHECK(copiedText("|cffff0000red|r end") == "red end");
+    CHECK(copiedText("|cffa335ee|Hitem:19019:0|h[Thunderfury]|h|r") == "[Thunderfury]");
+    CHECK(copiedText("x|TInterface\\Icons\\A:16|ty") == "xy");
+    CHECK(copiedText("a|nb\r\nc\rd\ne") == "a\nb\nc\nd\ne");
+    // No escapes: as they stand.
+    CHECK(copiedText("|cffzz0000x") == "|cffzz0000x");
+    CHECK(copiedText("|cff") == "|cff");
+    CHECK(copiedText("|Hitem:1") == "|Hitem:1");
+    CHECK(copiedText("|H|hx") == "|H" "x");
+    CHECK(copiedText("|Tx") == "|Tx");
+    CHECK(copiedText("end|") == "end|");
+    CHECK(copiedText("|q") == "|q");
+    CHECK(copiedText("").empty());
+}

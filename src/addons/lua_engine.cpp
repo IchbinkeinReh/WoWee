@@ -18230,15 +18230,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
     auto* w = widgets_.get(focusedWid_);
     if (!w || !w->isEditBox) return;
 
-    // Ctrl+V and Ctrl+C, which every box in every other program answers and
-    // this one ignored - the modifier was taken and thrown away one line below
-    // here. Pasting a web address into chat had to be typed out by hand.
-    //
-    // The clipboard comes in as one piece of text and a chat line is one line,
-    // so the newlines a copied block brings are turned into spaces rather than
-    // dropped: two lines pasted together should not become one word.
-    //
-    // Shift+Insert pastes as Ctrl+V does, Ctrl+Insert copies and Shift+Delete
+    // Ctrl+V and Ctrl+C (0x00965ed0, 0x009632d0). Shift+Insert pastes as Ctrl+V does, Ctrl+Insert copies and Shift+Delete
     // cuts as Ctrl+C and Ctrl+X do (0x00967760's 0x208 and 0x209).
     constexpr int kInsertKey = ui::edit_key::kInsert;
     constexpr int kDeleteKey = ui::edit_key::kDelete;
@@ -18248,9 +18240,6 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         if (clip) {
             std::string text(clip);
             SDL_free(clip);
-            for (char& c : text) {
-                if (c == '\n' || c == '\r' || c == '\t') c = ' ';
-            }
             // Through the same path typing goes through, so the letter limit,
             // the numeric-only boxes, the selection it replaces and the
             // handlers that follow all behave as they do for typed text.
@@ -18266,7 +18255,8 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         // the clipboard "").
         if (w->hasSelection && w->selEnd > w->selStart && w->selEnd <= w->editText.size()) {
             const std::string text =
-                w->editPassword ? std::string() : w->editText.substr(w->selStart, w->selEnd - w->selStart);
+                w->editPassword ? std::string()
+                                : ui::copiedText(w->editText.substr(w->selStart, w->selEnd - w->selStart));
             SDL_SetClipboardText(text.c_str());
             if (cuts) {
                 w->cursorPos = ui::replaceSelection(w->editText, w->cursorPos, {true, w->selStart, w->selEnd});
