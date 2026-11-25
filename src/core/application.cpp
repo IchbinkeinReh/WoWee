@@ -167,6 +167,9 @@
 #include <pthread.h>
 #endif
 
+// The backend's, which its header leaves out.
+ImGuiKey ImGui_ImplSDL3_KeyEventToImGuiKey(SDL_Keycode keycode, SDL_Scancode scancode);
+
 namespace wowee {
 namespace core {
 
@@ -2860,6 +2863,7 @@ void Application::run() {
             // CLICK binding, which acts as the key comes up (0x00563150). The
             // press is what recorded it, so a release nothing pressed is
             // passed by.
+            if (event.type == SDL_EVENT_KEY_UP) Input::getInstance().setKeySpent(event.key.scancode, false);
             if (event.type == SDL_EVENT_KEY_UP && addonManager_ && addonsLoaded_) {
                 if (auto* engine = addonManager_->getLuaEngine()) {
                     // A frame listening for keys has the release too, as it
@@ -2930,17 +2934,14 @@ void Application::run() {
                     // keys and every binding carry on exactly as before.
                     if (auto* engine = addonManager_->getLuaEngine()) {
                         if (engine->dispatchFrameKey(event.key.key, true)) {
-                            // Taken, so not also acted on by the ImGui side
-                            // of the chain (GameScreen reads the same press):
-                            // the movie frame's Escape went on to toggle the
-                            // game menu, which shows UIParent again under it.
-                            switch (event.key.key) {
-                                case SDLK_ESCAPE: ui::noteInterfaceConsumedKey(ImGuiKey_Escape); break;
-                                case SDLK_RETURN:
-                                case SDLK_KP_ENTER: ui::noteInterfaceConsumedKey(ImGuiKey_Enter); break;
-                                case SDLK_TAB: ui::noteInterfaceConsumedKey(ImGuiKey_Tab); break;
-                                default: break;
-                            }
+                            // Taken (0x0048fb80), so not also acted on by what
+                            // reads the same press otherwise: the movie frame's
+                            // Escape went on to toggle the game menu, C opened the
+                            // character window and W walked.
+                            ui::noteInterfaceConsumedKey(
+                                ImGui_ImplSDL3_KeyEventToImGuiKey(event.key.key, event.key.scancode));
+                            if (event.key.key == SDLK_KP_ENTER) ui::noteInterfaceConsumedKey(ImGuiKey_Enter);
+                            if (!event.key.repeat) Input::getInstance().setKeySpent(event.key.scancode, true);
                             // Escape says so, because "Escape does nothing"
                             // is a live report and this is one of the three
                             // ways the press can end before the chain that

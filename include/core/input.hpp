@@ -16,6 +16,9 @@ public:
 
     // Keyboard
     [[nodiscard]] bool isKeyPressed(SDL_Scancode key) const;
+    /// A key that a frame of the interface has taken is not held to anyone else, until
+    /// it is let go.
+    void setKeySpent(SDL_Scancode key, bool spent);
 
     /// Holds a key down from somewhere that is not a keyboard.
     ///
@@ -77,6 +80,7 @@ private:
     static constexpr int NUM_MOUSE_BUTTONS = 8;
 
     std::array<bool, NUM_KEYS> currentKeyState = {};
+    std::array<bool, NUM_KEYS> spentKeyState = {};
     std::array<bool, NUM_KEYS> virtualKeyState = {};
     std::array<bool, NUM_KEYS> previousKeyState = {};
 

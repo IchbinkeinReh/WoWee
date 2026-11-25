@@ -20,7 +20,7 @@ void Input::update() {
     // bool per key in SDL3, where SDL2 gave a byte.
     const bool* keyState = SDL_GetKeyboardState(nullptr);
     for (int i = 0; i < NUM_KEYS; ++i) {
-        currentKeyState[i] = keyState[i] || virtualKeyState[i];
+        currentKeyState[i] = (keyState[i] || virtualKeyState[i]) && !spentKeyState[i];
     }
 
     // Get current mouse state
@@ -51,6 +51,10 @@ void Input::noteHardwareEvent() { lastHardwareEvent_ = appTimeSeconds(); }
 
 uint32_t Input::idleMs() const {
     return static_cast<uint32_t>((appTimeSeconds() - lastHardwareEvent_) * 1000.0);
+}
+
+void Input::setKeySpent(SDL_Scancode key, bool spent) {
+    if (key >= 0 && key < NUM_KEYS) spentKeyState[key] = spent;
 }
 
 void Input::setVirtualKey(SDL_Scancode key, bool held) {
