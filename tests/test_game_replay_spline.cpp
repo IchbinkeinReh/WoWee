@@ -477,3 +477,53 @@ TEST_CASE("a unit on a long path is found where it is", "[replay][blockspline]")
     s.handler().getEntityManager().getEntitiesNear(c.x, c.y, 30.0f, found);
     CHECK(found.size() == 1);
 }
+
+// P62: 0x00987d20's other half. A flyer that dies falls, and was let down at one pace.
+TEST_CASE("a falling monster move falls", "[replay][blockspline]") {
+    Session s;
+    s.spawnPlayer(kFields);
+    s.receive(UpdateObject().create(kWalker, ObjectType::UNIT, kFields));
+    const auto e = s.handler().getEntityManager().getEntity(kWalker);
+    REQUIRE(e);
+    const glm::vec3 top = kAt + glm::vec3(0.0f, 0.0f, 40.0f);
+    const glm::vec3 c = wowee::core::coords::serverToCanonical(top);
+    e->setPosition(c.x, c.y, c.z, 0.0f);
+    const auto fallenAt = [](float t) { return 9.645553f * t * t; };
+    const float whole = std::sqrt(40.0f / 9.645553f);  // 2.0364 s
+    // The server's own time for it, which the client's cap (28 yd/s) does not shorten.
+    s.receive(monsterMove(kWalker, 5, top, kAt, static_cast<uint32_t>(whole * 1000.0f), 0x200));
+    float t = 0.0f;
+    for (int i = 0; i < 8; ++i) {
+        e->updateMovement(0.2f);
+        t += 0.2f;
+        CHECK(placeOf(*e).z == Catch::Approx(top.z - fallenAt(t)).margin(0.1f));
+    }
+    // Down it lies at the end, and no longer on its way.
+    e->updateMovement(whole - t + 0.05f);
+    CHECK(closeTo(placeOf(*e), kAt));
+    CHECK_FALSE(e->isActivelyMoving());
+
+    // Faster than the cap lets a spline go, its end is the floor and the fall is over
+    // there: 40 yards at 28 a second would be 1.43 s, a fall takes 2.04.
+    e->setPosition(c.x, c.y, c.z, 0.0f);
+    s.receive(monsterMove(kWalker, 6, top, kAt, 5000, 0x200));
+    e->updateMovement(1.0f);
+    CHECK(placeOf(*e).z == Catch::Approx(top.z - fallenAt(1.0f)).margin(0.1f));
+    e->updateMovement(1.1f);
+    CHECK(closeTo(placeOf(*e), kAt));
+    CHECK_FALSE(e->isActivelyMoving());
+
+    // With 0x800 beside it, it arcs and does not fall (0x0098ca00 asks that first).
+    e->setPosition(c.x, c.y, c.z, 0.0f);
+    s.receive(monsterMove(kWalker, 7, top, kAt, 4000, 0xa00, 0.0f));
+    e->updateMovement(1.0f);
+    CHECK(placeOf(*e).z == Catch::Approx(top.z - 10.0f).margin(0.2f));
+    // And none without: at its pace along the path.
+    e->setPosition(c.x, c.y, c.z, 0.0f);
+    s.receive(monsterMove(kWalker, 8, top, kAt, 4000));
+    e->updateMovement(1.0f);
+    CHECK(placeOf(*e).z == Catch::Approx(top.z - 10.0f).margin(0.2f));
+    // Backwards the same, terminal speed and all (0x00988220).
+    for (const float d : {0.5f, 40.0f, 93.0f, 150.0f})
+        CHECK(wowee::game::fallDistance(wowee::game::fallTime(d), 0.0f, false) == Catch::Approx(d).margin(0.01f));
+}

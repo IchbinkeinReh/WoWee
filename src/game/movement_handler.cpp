@@ -2350,6 +2350,7 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
                 path.push_back({wpCanonical.x, wpCanonical.y, wpCanonical.z});
             }
             path.push_back({destCanonical.x, destCanonical.y, destCanonical.z});
+            const std::optional<float> fallTop = entity->reportedFallTop();
             entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth,
                                        /*clientCurve=*/wotlkSplineFlags,
                                        (moveSplineFlags & SplineFlagWotlk::CYCLIC) != 0,
@@ -2358,6 +2359,8 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             if ((moveSplineFlags & SplineFlagWotlk::PARABOLIC) != 0) {
                 if (const auto ms = entity->pathDurationMs())
                     entity->setSplineArc(data.verticalAcceleration, data.parabolicStartTime, *ms);
+            } else if ((moveSplineFlags & SplineFlagWotlk::FALLING) != 0) {
+                entity->setSplineFall(fallTop);
             }
         } else {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,

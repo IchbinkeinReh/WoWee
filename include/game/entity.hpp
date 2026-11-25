@@ -156,6 +156,17 @@ enum class MoveOpcodeKind : uint8_t {
     return (0.5f * kGravity * toTerminal + v0) * toTerminal + (t - toTerminal) * terminal;
 }
 
+/// How long a fall from rest takes over a distance (0x00988220), the other
+/// way round from fallDistance.
+[[nodiscard]] inline float fallTime(float distance) noexcept {
+    constexpr float kGravity = 19.291105f;
+    constexpr float kTerminal = 60.148003f;
+    if (distance <= 0.0f) return 0.0f;
+    const float toTerminal = kTerminal * kTerminal / kGravity * 0.5f;
+    if (distance >= toTerminal) return kTerminal / kGravity + (distance - toTerminal) / kTerminal;
+    return std::sqrt(2.0f * distance / kGravity);
+}
+
 /// The jump or fall a movement packet with FALLING (0x1000) carries - its
 /// fall time and jump block - as Entity::startMoveByFlags takes it, in
 /// canonical axes.
@@ -420,6 +431,7 @@ public:
         moveDuration_ = static_cast<float>(splineDurationMs_) / 1000.0f;
         moveElapsed_ = static_cast<float>(s.passedMs) / 1000.0f;
         if (s.over || n < 3) moveElapsed_ = std::max(moveElapsed_, moveDuration_);
+        endAtFloor();
         // 0x00987570: its length over its duration.
         moveSpeed_ = s.durationMs > 0 ? length / (static_cast<float>(s.durationMs) / 1000.0f) : 0.0f;
         isMoving_ = true;
@@ -453,6 +465,22 @@ public:
         arcAcceleration_ = acceleration;
         arcStartMs_ = startMs;
         arcDurationMs_ = durationMs;
+    }
+
+    /// A falling spline (0x200, and not 0x800 with it): the unit is along the
+    /// path as its time says and under `top` by what a fall from rest takes
+    /// (0x00987d20 -> 0x00986f00), no lower than the path's end - and there
+    /// it is over, whatever of its time is left (0x0098ca00). `top` is where
+    /// its fall began (+0x84): told with the FALLING of a packet before, else
+    /// where it stands. Call after the move is started.
+    [[nodiscard]] std::optional<float> reportedFallTop() const {
+        return isMoving_ && movingByFlags_ && falling_ ? std::optional<float>(fallTopZ_) : std::nullopt;
+    }
+    void setSplineFall(std::optional<float> top) {
+        if (!isMoving_ || movingByFlags_ || !usePathMode_ || splineCyclic_) return;
+        fallTop_ = top.value_or(z);
+        pathEnd_ = {moveEndX_, moveEndY_, moveEndZ_};
+        endAtFloor();
     }
 
     /// Whom the move ends facing, asked where it ends and not before
@@ -792,6 +820,7 @@ public:
     /// duration); none where no path runs.
     [[nodiscard]] std::optional<uint32_t> pathDurationMs() const {
         if (!isMoving_ || !usePathMode_ || !activeSpline_) return std::nullopt;
+        if (fallTop_) return std::min(splineDurationMs_, static_cast<uint32_t>(std::lround(moveDuration_ * 1000.0f)));
         return splineDurationMs_;
     }
 
@@ -997,6 +1026,11 @@ private:
         fallTop_.reset();
     }
 
+    /// 0x0098ca00: a fall that has come down to the path's end is over.
+    void endAtFloor() {
+        if (fallTop_) moveDuration_ = std::min(moveDuration_, fallTime(*fallTop_ - pathEnd_.z));
+    }
+
     /// curveLengths_ for curvePoints_: each segment's - straight from point to
     /// point, or its curve's over 20 steps (0x004c40b0, 0x004c3b10).
     float measureCurve(bool curved) {
@@ -1082,7 +1116,7 @@ private:
             const float whole = static_cast<float>(arcDurationMs_ - arcStartMs_) * 0.001f;
             r.position.z += 0.5f * arcAcceleration_ * (whole - t) * t;
         }
-        if (fallTop_)
+        if (fallTop_ && ms > 0)
             r.position.z = std::max(pathEnd_.z, *fallTop_ - fallDistance(static_cast<float>(ms) * 0.001f, 0.0f, false));
         if (moveFrame_) {
             r.position = glm::vec3(*moveFrame_ * glm::vec4(r.position, 1.0f));
