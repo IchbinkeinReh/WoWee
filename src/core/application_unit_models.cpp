@@ -225,6 +225,8 @@ void Application::drawUnitModels(ui::WidgetTree& widgets, float screenW, float s
             figure.view->setTurning(frame->modelTurn, frame->modelTurnSerial);
             figure.view->setSequence(frame->modelSequence, frame->modelSequenceSerial);
             frame->externalTexture = drawn ? figure.view->textureId() : 0;
+            // Its colours have their alpha in them, and what it adds has none.
+            frame->externalPremultiplied = drawn;
             if (drawn) updated.push_back(id);
         }
     }

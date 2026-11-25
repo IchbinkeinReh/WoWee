@@ -424,7 +424,11 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
             .setRasterization(VK_POLYGON_MODE_FILL, cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
             .setDepthTest(depthTest, depthWrite, compare)
             .setDepthBias(0.0f, 0.0f)
-            .setColorBlendAttachment(blendState)
+            // Into a picture of its own what is added covers nothing: over the backdrop it
+            // was a dark disc, where the client adds it to that.
+            .setColorBlendAttachment(renderPassOverride_ != VK_NULL_HANDLE && blendState.blendEnable == VK_TRUE
+                                         ? PipelineBuilder::overNothing(blendState)
+                                         : blendState)
             .setMultisample(samples);
         if (alphaToCoverage)
             builder.setAlphaToCoverage(true);
