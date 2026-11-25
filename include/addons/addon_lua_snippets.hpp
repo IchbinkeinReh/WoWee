@@ -1154,6 +1154,14 @@ if not GameMenuFrame or rawget(_G, "GameMenuButtonWoweeAbout") then return end
 local kURL = "https://github.com/IchbinkeinReh/WoWee"
 local kAuthor = "Kelsi Davis"
 
+-- In the client's language, as the options panels are.
+local german = GetLocale and GetLocale() == "deDE"
+local kBlurb = german and "Ein Client für World of Warcraft, von Grund auf neu geschrieben."
+    or "A World of Warcraft client, written from scratch."
+local kBy = german and "von " or "by "
+local kOpen = german and "Im Browser öffnen" or "Open in Browser"
+local kAbout = german and "Über WoWee" or "About WoWee"
+
 local function showAbout()
     local frame = rawget(_G, "WoweeAboutFrame")
     if not frame then
@@ -1175,11 +1183,11 @@ local function showAbout()
 
         local blurb = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
         blurb:SetPoint("TOP", version, "BOTTOM", 0, -14)
-        blurb:SetText("A World of Warcraft client, written from scratch.")
+        blurb:SetText(kBlurb)
 
         local author = frame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
         author:SetPoint("TOP", blurb, "BOTTOM", 0, -14)
-        author:SetText("by " .. kAuthor)
+        author:SetText(kBy .. kAuthor)
 
         local link = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
         link:SetPoint("TOP", author, "BOTTOM", 0, -12)
@@ -1191,7 +1199,7 @@ local function showAbout()
         open:SetWidth(150)
         open:SetHeight(22)
         open:SetPoint("TOP", link, "BOTTOM", 0, -12)
-        open:SetText("Open in Browser")
+        open:SetText(kOpen)
         open:SetScript("OnClick", function()
             -- Refused rather than silently dropped: a browser that will not
             -- start is worth a line, since the address is on screen to copy.
@@ -1211,7 +1219,7 @@ end
 
 local about = CreateFrame("Button", "GameMenuButtonWoweeAbout", GameMenuFrame,
                           "GameMenuButtonTemplate")
-about:SetText("About WoWee")
+about:SetText(kAbout)
 about:SetPoint("TOP", GameMenuButtonQuit, "BOTTOM", 0, -1)
 about:SetScript("OnClick", function()
     HideUIPanel(GameMenuFrame)
@@ -1802,10 +1810,20 @@ local kRevertSeconds = 15
 -- it with it. Everything else here already guards; this did not.
 StaticPopupDialogs = StaticPopupDialogs or {}
 
+-- This client's own question (3.3.5 asks none), in the client's language.
+-- What GlobalStrings has is its own: the buttons and the seconds.
+local german = GetLocale and GetLocale() == "deDE"
+local seconds = D_SECONDS or "%d |4second:seconds;"
+-- What the scale goes back to while the question stands.
+local pending
+local question = german
+    and "Möchtet Ihr diese UI-Skalierung behalten?\n\nSie wird in " .. seconds .. " zurückgesetzt."
+    or "Keep this interface scale?\n\nReverting in " .. seconds .. "."
+
 StaticPopupDialogs["WOWEE_CONFIRM_UI_SCALE"] = {
-    text = "Keep this interface scale?",
-    button1 = KEEP_THIS_CHANGE or "Keep",
-    button2 = CANCEL or "Cancel",
+    text = question,
+    button1 = YES or "Yes",
+    button2 = NO or "No",
     timeout = kRevertSeconds,
     whileDead = 1,
     -- Escape would dismiss the dialog and leave the untried scale applied,
@@ -1813,8 +1831,10 @@ StaticPopupDialogs["WOWEE_CONFIRM_UI_SCALE"] = {
     hideOnEscape = 0,
     OnAccept = function(self, data)
         if data then data.baseline = nil end
+        pending = nil
     end,
     OnCancel = function(self, data, reason)
+        pending = nil
         if data and data.baseline then
             SetCVar("uiscale", data.baseline)
             local slider = VideoOptionsResolutionPanelUIScaleSlider
@@ -1826,11 +1846,23 @@ StaticPopupDialogs["WOWEE_CONFIRM_UI_SCALE"] = {
     OnUpdate = function(self, elapsed)
         local text = _G[self:GetName() .. "Text"]
         if text and self.timeleft then
-            text:SetFormattedText("Keep this interface scale?\n\nReverting in %d seconds.",
-                                  math.ceil(self.timeleft))
+            text:SetFormattedText(question, math.ceil(self.timeleft))
         end
     end,
 }
+
+-- The question goes with the interface it was asked in: unanswered when that
+-- is taken down - a /reload, a logout - is no, as an answer that never comes is.
+local watcher = CreateFrame and CreateFrame("Frame")
+if watcher then
+    watcher:RegisterEvent("PLAYER_LOGOUT")
+    watcher:SetScript("OnEvent", function()
+        if pending then
+            SetCVar("uiscale", pending)
+            pending = nil
+        end
+    end)
+end
 
 -- The baseline is read when the panel is shown rather than when the slider
 -- moves: a drag is many changes and only the first of them knows what the
@@ -1849,8 +1881,9 @@ if okay and okay.HookScript then
         local baseline = p and p.woweeUiScaleBaseline
         local current = GetCVar("uiscale")
         if baseline and current and baseline ~= current then
-            StaticPopup_Show("WOWEE_CONFIRM_UI_SCALE", nil, nil,
+            StaticPopup_Show("WOWEE_CONFIRM_UI_SCALE", kRevertSeconds, nil,
                              { baseline = baseline })
+            pending = baseline
             if p then p.woweeUiScaleBaseline = current end
         end
     end)

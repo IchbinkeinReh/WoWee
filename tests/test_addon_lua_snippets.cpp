@@ -320,3 +320,100 @@ TEST_CASE("the options' headings name no page that was removed", "[lua][options]
         CHECK(panel.find(named) == std::string::npos);
     }
 }
+
+// The question after a changed interface scale, in the client's words, and the
+// scale taken back where the interface goes before it is answered.
+TEST_CASE("the interface scale question is asked in the client's language", "[addonlua]") {
+    const char* stubs = R"LUA(
+        math = { ceil = function(n) return n end }
+        scale = '0.64'
+        function GetCVar() return scale end
+        function SetCVar(_, v) scale = v end
+        local function frame()
+            return { _hooks = {}, RegisterEvent = function(self, e) self._event = e end,
+                     SetScript = function(self, s, fn) self._hooks[s] = fn end,
+                     HookScript = function(self, s, fn) self._hooks[s] = fn end }
+        end
+        function CreateFrame() watcher = frame() return watcher end
+        VideoOptionsResolutionPanel = frame()
+        VideoOptionsFrameOkay = frame()
+        function StaticPopup_Show(which, arg1, arg2, data) asked = { which = which, arg1 = arg1, data = data } end
+    )LUA";
+    const char* german = R"LUA(
+        function GetLocale() return 'deDE' end
+        YES, NO, CANCEL, D_SECONDS = 'Ja', 'Nein', 'Abbrechen', '%d |4Sekunde:Sekunden;'
+    )LUA";
+    const char* change = R"LUA(
+        VideoOptionsResolutionPanel._hooks.OnShow(VideoOptionsResolutionPanel)
+        scale = '1'
+        VideoOptionsFrameOkay._hooks.OnClick(VideoOptionsFrameOkay)
+    )LUA";
+    SECTION("the words") {
+        const std::string got = runChunks({
+            {stubs, "Stubs"},
+            {german, "GlobalStrings"},
+            {wowee::addons::kUiScaleConfirmLua, "UiScaleConfirm"},
+            {change, "Change"},
+            {R"LUA(
+                local d = StaticPopupDialogs[asked.which]
+                local said
+                FooText = { SetFormattedText = function(self, f, n) said = f .. '/' .. n end }
+                d.OnUpdate({ timeleft = 14, GetName = function() return 'Foo' end }, 0)
+                return d.button1 .. ' ' .. d.button2 .. ' ' .. asked.arg1 .. ' ' .. said ..
+                       (said == d.text .. '/14' and '' or ' but shown: ' .. d.text)
+            )LUA",
+             "Read"},
+        });
+        CHECK(got ==
+              "Ja Nein 15 Möchtet Ihr diese UI-Skalierung behalten?\n\nSie wird in %d |4Sekunde:Sekunden; "
+              "zurückgesetzt./14");
+    }
+    SECTION("unanswered when the interface goes") {
+        const std::string got = runChunks({
+            {stubs, "Stubs"},
+            {german, "GlobalStrings"},
+            {wowee::addons::kUiScaleConfirmLua, "UiScaleConfirm"},
+            {change, "Change"},
+            {"watcher._hooks.OnEvent(watcher, watcher._event) return watcher._event .. ' ' .. scale", "Logout"},
+        });
+        CHECK(got == "PLAYER_LOGOUT 0.64");
+    }
+    SECTION("kept when it was answered") {
+        const std::string got = runChunks({
+            {stubs, "Stubs"},
+            {german, "GlobalStrings"},
+            {wowee::addons::kUiScaleConfirmLua, "UiScaleConfirm"},
+            {change, "Change"},
+            {"StaticPopupDialogs[asked.which].OnAccept({}, asked.data)", "Yes"},
+            {"watcher._hooks.OnEvent(watcher, watcher._event) return scale", "Logout"},
+        });
+        CHECK(got == "1");
+    }
+}
+
+TEST_CASE("the About entry is in the client's language", "[addonlua]") {
+    const char* stubs = R"LUA(
+        function GetLocale() return 'deDE' end
+        said = {}
+        local function frame()
+            local f = { _scripts = {}, SetText = function(self, t) table.insert(said, t) end,
+                        SetScript = function(self, s, fn) self._scripts[s] = fn end }
+            setmetatable(f, { __index = function(_, k)
+                if k == 'CreateFontString' then return frame end
+                if k == 'GetHeight' then return function() return 0 end end
+                return function() end
+            end })
+            return f
+        end
+        function CreateFrame() last = frame() return last end
+        GameMenuFrame, GameMenuButtonQuit, GameMenuButtonContinue, UIParent = frame(), frame(), frame(), frame()
+        function HideUIPanel() end
+    )LUA";
+    const std::string got = runChunks({
+        {stubs, "Stubs"},
+        {wowee::addons::kAboutMenuLua, "About"},
+        {"last._scripts.OnClick(last) return table.concat(said, '|')", "Click"},
+    });
+    CHECK(got == "Über WoWee|WoWee||Ein Client für World of Warcraft, von Grund auf neu geschrieben.|von Kelsi Davis|"
+                 "https://github.com/IchbinkeinReh/WoWee|Im Browser öffnen");
+}
