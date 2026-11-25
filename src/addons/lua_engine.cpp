@@ -2184,8 +2184,7 @@ int lua_Region_GetRect(lua_State* L) {
 int lua_Region_GetScale(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     const auto* tree = wowee::addons::getWidgetTree(L);
-    if (w && tree && w->id == tree->uiParentId()) lua_pushnumber(L, tree->userScale());
-    else lua_pushnumber(L, w ? w->scale : 1.0);
+    lua_pushnumber(L, w ? (tree ? tree->ownScale(*w) : w->scale) : 1.0);
     return 1;
 }
 // SetScale(scale) (0x0049f820): a number, or the usage error; one not above
@@ -2198,7 +2197,7 @@ int lua_Region_SetScale(lua_State* L) {
         const auto v = static_cast<float>(lua_tonumber(L, 2));
         if (!(v > 0.0f)) return luaL_error(L, "%s:SetScale(): Scale must be > 0", who);
         auto* tree = wowee::addons::getWidgetTree(L);
-        if (tree && w->id == tree->uiParentId()) {
+        if (tree && (w->ofPlayersScale || w->id == tree->uiParentId())) {
             tree->setParentScale(v);
             return 0;
         }
@@ -11273,6 +11272,7 @@ static int lua_CreateFrame(lua_State* L) {
             // Kept as it was asked for, so GetObjectType and IsObjectType
             // can answer with it rather than with "Frame" for everything.
             w->objectType = ft;
+            w->ofPlayersScale = parent == 0 && w->name == "UIParent";
             w->takePlayerModelLight();
             w->mouseEnabled = (ft == "Button" || ft == "CheckButton");
             w->isStatusBar = (ft == "StatusBar");
@@ -18633,8 +18633,10 @@ void LuaEngine::updateScrollRanges() {
             widgets_.scrollContentExtent(w->scrollChild, contentW, contentH);
             rangeX = contentW - w->rectW;
             rangeY = contentH - w->rectH;
-            if (rangeX < 0.0f) rangeX = 0.0f;
-            if (rangeY < 0.0f) rangeY = 0.0f;
+            // In the frame's own units (0x0096b4c0).
+            const float own = w->effScale > 0.0f ? 1.0f / w->effScale : 1.0f;
+            rangeX = std::max(rangeX, 0.0f) * own;
+            rangeY = std::max(rangeY, 0.0f) * own;
         }
         if (rangeX == w->reportedRangeX && rangeY == w->reportedRangeY) continue;
         w->reportedRangeX = rangeX;

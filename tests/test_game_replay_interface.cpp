@@ -878,6 +878,44 @@ TEST_CASE("a frame to be clicked is found by its name", "[replay][interface]") {
     CHECK(ui.is("not pcall(GetClickFrame)"));
 }
 
+// T273: the player's scale is the UIParent's of the interface (0x00513240 -> 0x0048f580), which
+// is none the tree has of its own; and scroll frames of a scale (0x0096b4c0, 0x0096b1c0).
+TEST_CASE("UIParent has the player's scale", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    auto& tree = ui.engine.widgets();
+    tree.setUserScale(0.8f);
+    ui.layout();
+    ui.run("function near(a, b) return math.abs(a - b) < .01 end "
+           "function parentIs(o) return near(o:GetScale(), .8) and near(o:GetEffectiveScale(), .8) "
+           "  and near(o:GetWidth(), 1280) and near(o:GetHeight(), 960) end");
+    CHECK(ui.is("parentIs(UIParent)"));
+    // The XML's, which takes its place.
+    ui.run("CreateFrame('Frame', 'UIParent') UIParent:SetAllPoints() kid = CreateFrame('Frame', nil, UIParent) "
+           "kid:SetWidth(100) kid:SetHeight(100) kid:SetPoint('TOPLEFT') own = CreateFrame('Frame') own:SetAllPoints()");
+    ui.layout();
+    CHECK(ui.is("parentIs(UIParent) and near(kid:GetEffectiveScale(), .8) and near(kid:GetRight(), 100)"));
+    CHECK(ui.is("near(own:GetEffectiveScale(), 1) and near(own:GetHeight(), 768)"));
+    CHECK(ui.is("near(GetScreenHeight(), 960)"));
+    ui.run("UIParent:SetScale(.5)");
+    CHECK(ui.is("near(UIParent:GetScale(), .5) and near(UIParent:GetHeight(), 1536) and near(kid:GetEffectiveScale(), .5)"));
+    tree.setUserScale(0.8f);
+    CHECK(ui.is("parentIs(UIParent)"));
+
+    for (const char* parent : {"UIParent", "kid", "nil"}) {
+        INFO(parent);
+        ui.run(std::string("kid:SetScale(.7) f = CreateFrame('ScrollFrame', nil, ") + parent + ") f:SetWidth(100) f:SetHeight(100) "
+               "f:SetPoint('TOPLEFT', UIParent, 'TOPLEFT', 10, -10) c = CreateFrame('Frame', nil, f) c:SetWidth(150) c:SetHeight(240) "
+               "f:SetScrollChild(c)");
+        ui.layout();
+        ui.engine.updateScrollRanges();
+        CHECK(ui.is("near(f:GetVerticalScrollRange(), 140) and near(f:GetHorizontalScrollRange(), 50)"));
+        ui.run("f:SetVerticalScroll(50) f:SetHorizontalScroll(20)");
+        ui.layout();
+        CHECK(ui.is("near(c:GetTop() - f:GetTop(), 50) and near(c:GetLeft() - f:GetLeft(), -20)"));
+    }
+}
+
 // T269: 0x0048c3e0, 0x0048d030, 0x0048c1c0, 0x0048cf30, 0x0048d970, 0x0048c4c0 and 0x00487ab0.
 TEST_CASE("a texture's and a string's alpha is its colour's", "[replay][interface]") {
     Session s;

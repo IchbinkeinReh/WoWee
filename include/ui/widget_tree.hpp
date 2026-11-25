@@ -340,6 +340,8 @@ struct Widget {
     bool isBarFill = false;   ///< a status bar's texture as an object: the bar draws it
 
     float scale = 1.0f;
+    /// UIParent, the one of the XML and the one before it: the player's scale is its own.
+    bool ofPlayersScale = false;
     float effScale = 1.0f;
     bool dragLeft = false;
     bool dragRight = false;
@@ -1549,6 +1551,10 @@ public:
     /// smaller. This is a widget's effective scale as the client counts it, in which a frame
     /// without a parent has its own and the screen is 768 high.
     [[nodiscard]] float trueScale(const Widget& w) const { return w.effScale * userScale_; }
+    /// A frame's own scale (0x0048f580's +0x78): UIParent's is the player's.
+    [[nodiscard]] float ownScale(const Widget& w) const {
+        return w.ofPlayersScale || w.id == uiParentId_ ? userScale_ : w.scale;
+    }
     /// UIParent:SetScale: until the player's scale or the screen sets it again.
     void setParentScale(float scale) {
         if (!(scale > 0.0f)) return;

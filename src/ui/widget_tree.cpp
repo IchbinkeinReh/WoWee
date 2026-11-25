@@ -1291,7 +1291,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     w->effStrata = w->strataExplicit ? w->strata : (parent ? parent->effStrata : FrameStrata::Medium);
     w->effLevel  = w->levelExplicit  ? w->level  : (parent ? levelIn(*parent) : 0);
     // Multiplied down the chain, so scaling a window scales everything in it.
-    w->effScale  = (parent ? parent->effScale : userScale_ > 0.0f ? 1.0f / userScale_ : 1.0f) * w->scale;
+    w->effScale  = (parent ? parent->effScale : userScale_ > 0.0f ? 1.0f / userScale_ : 1.0f) * ownScale(*w);
     const float es = w->effScale;
 
     // Solve each axis from the anchors. An anchor says "this fraction of my rect
@@ -1472,10 +1472,11 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
 
     // The scroll offset, applied to the child a scroll frame holds. Scrolling
     // down means seeing content further down a taller child, which is the
-    // child moving up - and up is a larger bottom in these coordinates.
+    // child moving up - and up is a larger bottom in these coordinates. It is
+    // the offset of the child's own point (0x0096b1c0), so in its scale.
     if (parent && parent->isScrollFrame && parent->scrollChild == id) {
-        w->left   -= parent->scrollX;
-        w->bottom += parent->scrollY;
+        w->left   -= parent->scrollX * w->effScale;
+        w->bottom += parent->scrollY * w->effScale;
     }
 
     // A slider's grip goes where its value says. <ThumbTexture> declares a size
