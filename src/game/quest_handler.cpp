@@ -1336,6 +1336,7 @@ void QuestHandler::acceptQuest() {
 
 void QuestHandler::dismissQuestDetails(bool announce) {
     questDetailsOpen_ = false;
+    questPageLeft_ = false;
     questDetailsOpenTime_ = std::chrono::steady_clock::time_point{};
     currentQuestDetails_ = QuestDetailsData{};
     // The interface's quest frame opens on QUEST_DETAIL and closes on this and
@@ -1357,6 +1358,46 @@ void QuestHandler::declineQuest(bool announce) {
     // Declining and dismissing leave the client in the same state and always
     // did, character for character.
     dismissQuestDetails(announce);
+}
+
+void QuestHandler::leaveQuestPage() {
+    const bool details = questDetailsOpen_;
+    if (!details && !questRequestItemsOpen_ && !questOfferRewardOpen_) return;
+    if (questPageLeft_ || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const uint64_t giver = details                 ? currentQuestDetails_.npcGuid
+                           : questRequestItemsOpen_ ? currentQuestRequestItems_.npcGuid
+                                                    : currentQuestOfferReward_.npcGuid;
+    const auto close = [&] {
+        if (questDetailsOpen_) dismissQuestDetails(true);
+        else if (questRequestItemsOpen_) closeQuestRequestItems(true);
+        else closeQuestOfferReward(true);
+    };
+    const auto object = owner_.getEntityManager().getEntity(giver);
+    const bool unit = object && object->getType() == ObjectType::UNIT;
+    const bool gossips = unit && (static_cast<const Unit&>(*object).getNpcFlags() & 0x1u) != 0;
+    // An item or a player, a quest another player shares, or nothing that
+    // could be asked.
+    if (!gossips && (!object || object->getType() == ObjectType::PLAYER ||
+                     (details && currentQuestDetails_.informUnit != 0))) {
+        close();
+        return;
+    }
+    if (unit) {
+        owner_.getSocket()->send(gossips ? GossipHelloPacket::build(giver) : QuestgiverHelloPacket::build(giver));
+    } else if (object->getType() == ObjectType::GAMEOBJECT) {
+        owner_.interactWithGameObject(giver);
+    } else {
+        close();
+        return;
+    }
+    questPageLeft_ = true;
+}
+
+void QuestHandler::closeLeftQuestPage() {
+    if (!std::exchange(questPageLeft_, false)) return;
+    if (questDetailsOpen_) dismissQuestDetails(true);
+    if (questRequestItemsOpen_) closeQuestRequestItems(true);
+    if (questOfferRewardOpen_) closeQuestOfferReward(true);
 }
 
 const GossipPoi* QuestHandler::gossipPoint() const {
@@ -2134,6 +2175,7 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
     bool ok = owner_.getPacketParsers() ? owner_.getPacketParsers()->parseGossipMessage(packet, currentGossip_)
                                     : GossipMessageParser::parse(packet, currentGossip_);
     if (!ok) return;
+    closeLeftQuestPage();   // 0x0051fce0 -> 0x00512e60: what it was left for
     if (questDetailsOpen_) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen_ = true;
     gossipHeld_ = true;
@@ -2235,6 +2277,7 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
         }
     }
 
+    closeLeftQuestPage();
     currentGossip_ = std::move(data);
     gossipWindowOpen_ = true;
     gossipIsQuestGreeting_ = true;
@@ -2626,6 +2669,7 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     // milliseconds so the queries above could answer, and "open" was what the
     // interface's bindings read as well. See isQuestDetailsOpen.
     questDetailsOpen_ = true;
+    questPageLeft_ = false;
     questDetailsOpenTime_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     gossipWindowOpen_ = false;
     owner_.setQuestInteractionObject(currentQuestDetails_.npcGuid);
@@ -2645,6 +2689,7 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     currentQuestRequestItems_ = data;
     questFrameFlags_ = data.questFlags;
     questRequestItemsOpen_ = true;
+    questPageLeft_ = false;
     gossipWindowOpen_ = false;
     questDetailsOpen_ = false;
     questDetailsOpenTime_ = std::chrono::steady_clock::time_point{};
@@ -2708,6 +2753,7 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     currentQuestOfferReward_ = data;
     questFrameFlags_ = data.questFlags;
     questOfferRewardOpen_ = true;
+    questPageLeft_ = false;
     questRequestItemsOpen_ = false;
     gossipWindowOpen_ = false;
     questDetailsOpen_ = false;

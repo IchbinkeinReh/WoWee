@@ -4850,6 +4850,10 @@ void GameHandler::acceptQuest() {
     if (questHandler_) questHandler_->acceptQuest();
 }
 
+void GameHandler::leaveQuestPage() {
+    if (questHandler_) questHandler_->leaveQuestPage();
+}
+
 void GameHandler::declineQuest(bool announce) {
     if (questHandler_) questHandler_->declineQuest(announce);
 }

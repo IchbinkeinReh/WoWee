@@ -722,6 +722,59 @@ TEST_CASE("a world state's time left is drawn again every second", "[replay][pla
     gh.setAddonEventCallback({});
 }
 
+// T300: 0x0058ce00: declining goes back to the giver's list.
+TEST_CASE("a quest declined goes back to its giver", "[replay][playtest]") {
+    constexpr uint64_t kGiver = 0xF130000C43000080ull;
+    const uint32_t npcFlags = GENERATE(0x3u, 0x2u);
+    const bool gone = GENERATE(false, true);
+    Session s;
+    s.setConnected(true);
+    spawnPlayer(s);
+    s.receive(replay::UpdateObject().create(kGiver, wowee::game::ObjectType::UNIT,
+                                            {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_NPC_FLAGS, npcFlags}}));
+    auto& gh = s.handler();
+    int finished = 0;
+    gh.setAddonEventCallback([&](const std::string& e, const auto&) { finished += e == "QUEST_FINISHED"; });
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_DETAILS));
+    p.writeUInt64(kGiver);
+    p.writeUInt64(0);
+    p.writeUInt32(788);
+    for (const char* t : {"Cutting Teeth", "Details", "Objectives"}) p.writeString(t);
+    p.writeUInt8(0);
+    for (int i = 0; i < 80; ++i) p.writeUInt32(0);
+    s.receive(p);
+    REQUIRE(gh.isQuestDetailsOpen());
+    if (gone) {
+        wowee::network::Packet away(wowee::game::wireOpcode(Opcode::SMSG_DESTROY_OBJECT));
+        away.writeUInt64(kGiver);
+        away.writeUInt8(0);
+        s.receive(away);
+    }
+    const auto asked = [&](Opcode o) { return s.sent().of(o).size(); };
+    const size_t gossips = asked(Opcode::CMSG_GOSSIP_HELLO), lists = asked(Opcode::CMSG_QUESTGIVER_HELLO);
+    gh.leaveQuestPage();
+    gh.leaveQuestPage();
+    if (gone) {
+        CHECK(finished == 1);
+        CHECK_FALSE(gh.isQuestDetailsOpen());
+        gh.setAddonEventCallback({});
+        return;
+    }
+    // Asked once; the page stays until it is answered.
+    CHECK(asked(Opcode::CMSG_GOSSIP_HELLO) - gossips == (npcFlags & 1u));
+    CHECK(asked(Opcode::CMSG_QUESTGIVER_HELLO) - lists == 1u - (npcFlags & 1u));
+    CHECK(finished == 0);
+    CHECK(gh.isQuestDetailsOpen());
+    wowee::network::Packet gossip(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_MESSAGE));
+    gossip.writeUInt64(kGiver);
+    for (uint32_t v : {0u, 1u, 0u, 0u}) gossip.writeUInt32(v);
+    s.receive(gossip);
+    CHECK(finished == 1);
+    CHECK_FALSE(gh.isQuestDetailsOpen());
+    CHECK(gh.isGossipWindowOpen());
+    gh.setAddonEventCallback({});
+}
+
 // What is read of a packet is counted: too little or too much of it.
 TEST_CASE("packets read short or past their end are counted", "[replay][playtest]") {
     Session s;

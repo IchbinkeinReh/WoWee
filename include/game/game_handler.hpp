@@ -3513,6 +3513,7 @@ public:
     void selectGossipQuest(uint32_t questId);
     void acceptQuest();
     void declineQuest(bool announce = true);
+    void leaveQuestPage();
     void closeGossip();
     // Quest-starting items: right-click triggers quest offer dialog via questgiver protocol
     void offerQuestFromItem(uint64_t itemGuid, uint32_t questId);

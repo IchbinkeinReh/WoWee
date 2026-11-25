@@ -5233,9 +5233,9 @@ void registerQuestLuaAPI(lua_State* L) {
         }},
                 {"DeclineQuest", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // Announcing: the button was pressed, and the frame has not hidden
-            // itself yet. QUEST_FINISHED is what hides it.
-            if (gh) gh->declineQuest(true);
+            // Back to the giver's list (0x0058ce00): QUEST_FINISHED, which hides
+            // the frame, comes with that, or at once where there is none.
+            if (gh) gh->leaveQuestPage();
             return 0;
         }},
                 // The other party member's quest, not the one on the table.

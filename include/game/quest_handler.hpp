@@ -44,6 +44,9 @@ public:
     /// `announce` fires QUEST_FINISHED, which is what closes FrameXML's
     /// quest frame. False when the interface is the one closing it.
     void declineQuest(bool announce = true);
+    /// DeclineQuest (0x0058d5c0 -> 0x0058ce00), from a quest's page, its progress or its reward: back
+    /// to the giver's list, where it has one - the page stays until that comes -, else closed.
+    void leaveQuestPage();
     /// Clear the open detail page and tell the interface it is done, so the
     /// quest frame closes. Accepting a quest dismisses the page the same as
     /// declining it does - the interface only closes on QUEST_FINISHED, and
@@ -426,6 +429,9 @@ private:
 
     // Quest details
     bool questDetailsOpen_ = false;
+    bool questPageLeft_ = false;   ///< 0x00c0d6ac: the giver has been asked for its list again
+    /// The page left closes for what the giver shows instead.
+    void closeLeftQuestPage();
     std::chrono::steady_clock::time_point questDetailsOpenTime_{};
     QuestDetailsData currentQuestDetails_;
     uint32_t questFrameFlags_ = 0;
