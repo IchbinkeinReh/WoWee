@@ -8,6 +8,7 @@
 // first frame, because the glyph atlas is built then and cannot take another
 // afterwards without being torn down.
 
+#include <functional>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -24,6 +25,13 @@ void registerInterfaceFace(const std::string& pathOrName, ImFont* font);
 /// Changes whenever a face is registered. Anything measured against the faces
 /// - every label that sizes itself from its text - is stale once it moves.
 uint64_t interfaceFaceGeneration();
+
+/// Reads a face from its file's bytes; set by whoever has the atlas.
+using InterfaceFaceLoader = std::function<ImFont*(const std::vector<uint8_t>& file)>;
+void setInterfaceFaceLoader(InterfaceFaceLoader loader);
+/// An addon's own face, kept by its whole path: whether it can be had. True
+/// where there is nobody to read it.
+bool loadInterfaceFace(const std::string& path, const std::vector<uint8_t>& file);
 
 /// The face for a path a font object named, or null if it was never loaded -
 /// in which case the caller should draw with whatever it was already using.

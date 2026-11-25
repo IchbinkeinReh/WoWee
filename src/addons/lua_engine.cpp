@@ -7495,6 +7495,8 @@ static bool interfaceFileThere(lua_State* L, const std::string& file) {
     auto* gh = wowee::addons::getGameHandler(L);
     auto* assets = gh ? gh->services().assetManager : nullptr;
     if (!assets || !assets->isInitialized()) return true;
+    // An addon's may come and go.
+    if (file.rfind("interface\\addons\\", 0) == 0) return assets->fileExists(file);
     static std::unordered_map<std::string, bool> known;
     const auto [it, first] = known.try_emplace(file, true);
     if (first) it->second = assets->fileExists(file);
@@ -7502,9 +7504,12 @@ static bool interfaceFileThere(lua_State* L, const std::string& file) {
 }
 /// A texture's file, or the folder the older clients have it in.
 static bool textureFileThere(lua_State* L, const std::string& name) {
-    std::string file = wowee::ui::textureFileOf(name);
-    for (char& c : file) c = c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (interfaceFileThere(L, file)) return true;
+    const auto lowered = [](std::string file) {
+        for (char& c : file) c = c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return file;
+    };
+    std::string file = lowered(wowee::ui::textureFileOf(name));
+    if (interfaceFileThere(L, file) || interfaceFileThere(L, lowered(wowee::ui::textureTgaOf(name)))) return true;
     const size_t at = file.find("gossipframe\\");
     return at != std::string::npos && interfaceFileThere(L, file.replace(at, 12, "gossip\\"));
 }
@@ -8052,11 +8057,17 @@ int lua_FontString_SetFont(lua_State* L) {
                           static_cast<double>(height));
     if (lua_tostring(L, 2)[0] == '\0') return 0;
     // 0x0048d5b0 -> 0x00483750: nil for a face that cannot be had, and the font
-    // is as it was. An addon's own is taken at its word.
+    // is as it was. An addon's own is read as it is asked for.
     {
         std::string face = lua_tostring(L, 2);
         for (char& c : face) c = c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (face.rfind("interface\\addons\\", 0) != 0 && !interfaceFileThere(L, face)) {
+        bool there = interfaceFileThere(L, face);
+        if (there && face.rfind("interface\\addons\\", 0) == 0 && !wowee::ui::interfaceFace(face)) {
+            auto* gh = wowee::addons::getGameHandler(L);
+            auto* assets = gh ? gh->services().assetManager : nullptr;
+            if (assets && assets->isInitialized()) there = wowee::ui::loadInterfaceFace(face, assets->readFile(face));
+        }
+        if (!there) {
             lua_pushnil(L);
             return 1;
         }

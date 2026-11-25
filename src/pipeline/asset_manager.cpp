@@ -1,3 +1,4 @@
+#include "pipeline/addon_files.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "core/platform.hpp"
 #include "pipeline/base_fallback.hpp"
@@ -197,7 +198,15 @@ void AssetManager::shutdown() {
     initialized = false;
 }
 
+void AssetManager::setAddonRoots(std::vector<std::string> roots) {
+    addonRoots_.store(std::make_shared<const std::vector<std::string>>(std::move(roots)));
+}
+
 std::string AssetManager::resolveFile(const std::string& normalizedPath) const {
+    if (!addonRelativePath(normalizedPath).empty() && (!mpq_ || !mpq_->contains(normalizedPath))) {
+        if (const auto roots = addonRoots_.load())
+            if (std::string file = addonFile(*roots, normalizedPath); !file.empty()) return file;
+    }
     // Check override directory first (for HD upgrades, custom textures)
     if (!overridePath_.empty()) {
         const auto* entry = manifest_.lookup(normalizedPath);
@@ -767,6 +776,8 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
             LOG_WARNING("Manifest entry exists but file unreadable: ", fsPath);
             return data;
         }
+        // An addon's may be another one with the next ReloadUI.
+        if (!addonRelativePath(normalized).empty()) return data;
     }
 
     // Into the cache, the least recently read making room. This was a scan

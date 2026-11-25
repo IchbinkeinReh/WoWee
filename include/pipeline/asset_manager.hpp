@@ -136,6 +136,10 @@ public:
     std::shared_ptr<DBCFile> loadDBCOptional(const std::string& name);
 
 
+    /// The folders addons are in: a path under Interface\\AddOns that no archive
+    /// has is a file of theirs.
+    void setAddonRoots(std::vector<std::string> roots);
+
     /**
      * Check if a file exists
      * @param path Virtual file path
@@ -213,6 +217,7 @@ private:
     AssetManifest manifest_;
 
     // The client's archives, when they are the source instead of a manifest.
+    std::atomic<std::shared_ptr<const std::vector<std::string>>> addonRoots_;
     std::unique_ptr<MpqArchiveSet> mpq_;
 
     // Optional base-path fallback: used when manifest_ doesn't contain a file.

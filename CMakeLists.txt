@@ -935,6 +935,7 @@ set(WOWEE_SOURCES
 
     # Pipeline (asset loaders)
     src/pipeline/blp_loader.cpp
+    src/pipeline/tga_image.cpp
     src/pipeline/bc_encode.cpp
     src/pipeline/dds_loader.cpp
     src/pipeline/dbc_loader.cpp

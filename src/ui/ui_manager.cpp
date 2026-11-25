@@ -551,6 +551,26 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
         io.FontDefault = io.Fonts->Fonts[firstNewFont];
     }
     if (loaded > 0) interfaceFontsLoaded_ = true;
+
+    // An addon's own face, as it is asked for, with the same others under it.
+    setInterfaceFaceLoader([this, interfaceFontConfig, kAtlasSize](const std::vector<uint8_t>& file) -> ImFont* {
+        ImFontAtlas* atlas = ImGui::GetCurrentContext() ? ImGui::GetIO().Fonts : nullptr;
+        if (!atlas) return nullptr;
+        void* owned = IM_ALLOC(file.size());
+        std::memcpy(owned, file.data(), file.size());
+        ImFontConfig cfg = interfaceFontConfig(fontEmSizeScale(file.data(), file.size()));
+        cfg.FontDataOwnedByAtlas = true;
+        ImFont* font = atlas->AddFontFromMemoryTTF(owned, static_cast<int>(file.size()), kAtlasSize, &cfg);
+        for (std::vector<uint8_t>* under : {&cjkFontData_, &hangulFontData_}) {
+            if (!font || under->empty()) continue;
+            ImFontConfig merged = interfaceFontConfig(fontEmSizeScale(under->data(), under->size()));
+            merged.MergeMode = true;
+            merged.DstFont = font;
+            merged.FontDataOwnedByAtlas = false;
+            atlas->AddFontFromMemoryTTF(under->data(), static_cast<int>(under->size()), font->LegacySize, &merged);
+        }
+        return font;
+    });
 }
 
 void UIManager::shutdown() {

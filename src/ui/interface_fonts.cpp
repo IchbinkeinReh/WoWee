@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <cfloat>
 
+#include "pipeline/addon_files.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/text_wrap.hpp"
 
@@ -22,7 +23,14 @@ namespace {
 /// The lower-case stem of a path, with any directory and extension removed.
 /// "Fonts\\MORPHEUS.ttf" and "morpheus.ttf" both come out as "morpheus", which
 /// is what lets a font object written one way find a file named the other.
+///
+/// An addon's keep their whole path: a "font.ttf" of one is not another's.
 std::string faceKey(const std::string& pathOrName) {
+    if (const std::string own = pipeline::addonRelativePath(pathOrName); !own.empty()) {
+        std::string key = "addons/" + own;
+        for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return key;
+    }
     const size_t slash = pathOrName.find_last_of("\\/");
     std::string stem = (slash == std::string::npos) ? pathOrName
                                                     : pathOrName.substr(slash + 1);
@@ -61,6 +69,27 @@ void registerInterfaceFace(const std::string& pathOrName, ImFont* font) {
     if (!font) return;
     faces()[faceKey(pathOrName)] = font;
     ++faceGeneration();
+}
+
+namespace {
+InterfaceFaceLoader& faceLoader() {
+    static InterfaceFaceLoader loader;
+    return loader;
+}
+}  // namespace
+
+void setInterfaceFaceLoader(InterfaceFaceLoader loader) { faceLoader() = std::move(loader); }
+
+bool loadInterfaceFace(const std::string& path, const std::vector<uint8_t>& file) {
+    if (!faceLoader()) return !file.empty();
+    // What the atlas takes for one: TrueType, OpenType, or a collection.
+    if (file.size() < 12) return false;
+    const uint32_t tag = static_cast<uint32_t>(file[0] << 24 | file[1] << 16 | file[2] << 8 | file[3]);
+    if (tag != 0x00010000u && tag != 0x4F54544Fu && tag != 0x74727565u && tag != 0x74746366u) return false;
+    ImFont* font = faceLoader()(file);
+    if (!font) return false;
+    registerInterfaceFace(path, font);
+    return true;
 }
 
 uint64_t interfaceFaceGeneration() {

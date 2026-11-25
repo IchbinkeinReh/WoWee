@@ -1,4 +1,5 @@
 #include "addons/addon_load.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "game/expansion_profile.hpp"
 #include "addons/addon_manager.hpp"
 #include "addons/addon_trust.hpp"
@@ -181,6 +182,12 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
         }
     }
 
+    // Their pictures, fonts and sounds are files of these, too.
+    if (auto* assets = gameHandler_ ? gameHandler_->services().assetManager : nullptr) {
+        std::vector<std::string> folders;
+        for (const auto& root : roots) folders.push_back(root.string());
+        assets->setAddonRoots(std::move(folders));
+    }
     int scannedDirs = 0, loadOnDemand = 0, noToc = 0;
     std::vector<fs::path> dirs;
     for (const auto& root : roots) {

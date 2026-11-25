@@ -4331,6 +4331,13 @@ wowee_add_test(test_addon_load
 wowee_add_test(test_container_place
     SOURCES test_container_place.cpp)
 
+# ── test_addon_files ─────────────────────────────────────────
+wowee_add_test(test_addon_files
+    SOURCES test_addon_files.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/tga_image.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/blp_loader.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

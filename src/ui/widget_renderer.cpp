@@ -1,4 +1,5 @@
 #include <cstring>
+#include "pipeline/tga_image.hpp"
 #include "ui/tooltip_layout.hpp"
 #include "ui/texture_variant.hpp"
 #include "ui/interface_file.hpp"
@@ -151,6 +152,10 @@ std::vector<uint8_t> WidgetRenderer::readTextureFile(const std::string& path,
             if (!data.empty()) { resolved = alt; break; }
         }
     }
+    if (data.empty()) {
+        resolved = textureTgaOf(path);
+        data = assets_->readFile(resolved);
+    }
     resolvedOut = resolved;
     return data;
 }
@@ -168,7 +173,7 @@ VkDescriptorSet WidgetRenderer::texture(const std::string& path, uint8_t variant
         textures_[key] = kMissing;
         return kMissing;
     }
-    auto image = pipeline::BLPLoader::load(data);
+    auto image = pipeline::loadInterfaceImage(data);
     if (!image.isValid()) {
         LOG_WARNING("Widget texture unreadable: ", resolved);
         textures_[key] = kMissing;
@@ -210,7 +215,7 @@ bool WidgetRenderer::textureSize(const std::string& path, float& w, float& h) {
     std::string resolved;
     auto data = readTextureFile(path, resolved);
     if (data.empty()) { textureSizes_[path] = {0.0f, 0.0f}; return false; }
-    const auto image = pipeline::BLPLoader::load(data);
+    const auto image = pipeline::loadInterfaceImage(data);
     if (!image.isValid() || image.width == 0 || image.height == 0) {
         textureSizes_[path] = {0.0f, 0.0f};
         return false;
