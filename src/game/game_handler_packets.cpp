@@ -4025,6 +4025,7 @@ void GameHandler::registerRemainingOpcodes() {
             info.playedSincePurchase = packet.readUInt32();
         }
         packet.skipAll();
+        info.playedAtAnswer = playedTimeNow();
         itemRefundInfo_[itemGuid] = info;
         fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
     };

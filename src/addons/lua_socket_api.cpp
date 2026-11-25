@@ -352,7 +352,7 @@ int lua_GetSocketItemRefundable(lua_State* L) {
         const auto sockets = gh->getItemSocketEnchantIds(guid);
         const bool modified = gh->getItemEnchantIds(guid).first != 0 ||
                               sockets[0] != 0 || sockets[1] != 0 || sockets[2] != 0;
-        refundable = !modified && refund->playedSincePurchase < 2 * 60 * 60;
+        refundable = !modified && gh->itemRefundLeft(guid) > 0;
     }
     if (refundable) lua_pushnumber(L, 1.0);
     else lua_pushnil(L);

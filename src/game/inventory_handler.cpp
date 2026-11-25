@@ -2943,7 +2943,7 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
             // The window is two hours of played time (0x1c20 s), as
             // noteMailAttachRefundable counts it.
             const auto* refund = owner_.getItemRefundInfo(targetItemGuid);
-            if (!temporary && refund && refund->playedSincePurchase < 2 * 60 * 60) {
+            if (!temporary && refund && owner_.itemRefundLeft(targetItemGuid) > 0) {
                 pendingItemTarget_.reset();
                 pendingEnchant_ = PendingEnchant{.active = true, .targetItemGuid = targetItemGuid, .request = pending};
                 if (owner_.addonEventCallbackRef())
@@ -4252,8 +4252,7 @@ void InventoryHandler::noteMailAttachRefundable(int attachIndex) {
         owner_.requestItemRefundInfo(att.itemGuid);
         return;
     }
-    constexpr uint32_t kRefundWindow = 2 * 60 * 60;
-    if (refund->playedSincePurchase >= kRefundWindow) return;   // window is over
+    if (owner_.itemRefundLeft(att.itemGuid) == 0) return;   // window is over
     if (!owner_.addonEventCallbackRef()) return;
     const auto* info = owner_.getItemInfo(att.item.itemId);
     // The attachment is an item this client has fields for, so its link is the

@@ -6547,6 +6547,16 @@ void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::I
             }
         }
     }
+    // Bought with honour or tokens: how long it can be handed back.
+    if (const uint32_t left = gh->itemRefundLeft(instance.guid); left > 0) {
+        lua_pushnumber(L, left);
+        lua_setfield(L, -2, "refundLeft");
+    }
+    // A cooldown that begins as the fight ends (0x008090c0).
+    if (const auto cooldown = gh->itemCooldown(itemId); cooldown.duration != 0 && !cooldown.enabled) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "cooldownHeld");
+    }
     // How long it has left, for an item that lasts a while
     // (ITEM_FIELD_DURATION, seconds; 0x007070b0).
     lua_pushnumber(L, gh->getItemDurationByGuid(instance.guid));
@@ -15764,6 +15774,23 @@ void LuaEngine::registerCoreAPI() {
         "                else self:AddLine(format(ITEM_SET_BONUS_GRAY or '(%d) Set: %s', bonus.threshold, bonus.text), 0.5, 0.5, 0.5, 1) end\n"
         "            end\n"
         "        end\n"
+        // What is left of its cooldown, in two units (0x0061abf0), or that it
+        // waits for the fight's end.
+        "        if inst and inst.cooldownLeft then\n"
+        "            local ms, out, n = inst.cooldownLeft, '', 0\n"
+        "            local function unit(key, each)\n"
+        "                out = out..(out ~= '' and (TIME_UNIT_DELIMITER or ' ') or '')..format(_G[key] or '%d', math.floor(ms / each))\n"
+        "                ms = ms % each\n"
+        "                n = n + 1\n"
+        "            end\n"
+        "            if ms >= 86400000 then unit('DAYS_ABBR', 86400000) end\n"
+        "            if ms >= 3600000 then unit('HOURS_ABBR', 3600000) end\n"
+        "            if n < 2 and ms >= 60000 then unit('MINUTES_ABBR', 60000) end\n"
+        "            if n < 2 and ms > 0 then unit('SECONDS_ABBR', 1000) end\n"
+        "            self:AddLine(format(ITEM_COOLDOWN_TIME or 'Cooldown remaining: %s', out), 1, 1, 1)\n"
+        "        elseif inst and inst.cooldownHeld and COOLDOWN_ON_LEAVE_COMBAT then\n"
+        "            self:AddLine(COOLDOWN_ON_LEAVE_COMBAT, 1, 1, 1)\n"
+        "        end\n"
         "        if data.description and not usedDescription then self:AddLine('\"'..data.description..'\"', 1, 0.82, 0, 1) end\n"
         // Who made it, under the flavour text (0x006277f0): ITEM_CREATED_BY,
         // or ITEM_WRITTEN_BY for something written, in white.
@@ -15791,19 +15818,22 @@ void LuaEngine::registerCoreAPI() {
         "            and not GetCVarBool('dontShowEquipmentSetsOnItems') then\n"
         "            self:AddLine(format(EQUIPMENT_SETS, table.concat(inst.equipmentSets, PLAYER_LIST_DELIMITER or ', ')), 1, 0.82, 0, 1)\n"
         "        end\n"
-        // Still tradeable for a while (0x006277f0): a spacer, then
-        // BIND_TRADE_TIME_REMAINING in light blue - an hour and the minutes
-        // past it when over an hour is left, else one unit of
-        // INT_SPELL_DURATION.
-        "        if inst and inst.tradeLeft then\n"
-        "            local left, t = inst.tradeLeft\n"
-        "            if left > 3660 then\n"
-        "                t = format(INT_SPELL_DURATION_HOURS or '%d hr', 1)..(TIME_UNIT_DELIMITER or ' ')..format(INT_SPELL_DURATION_MIN or '%d min', math.floor((left - 3600) / 60))\n"
-        "            elseif left >= 3600 then t = format(INT_SPELL_DURATION_HOURS or '%d hr', math.floor(left / 3600))\n"
-        "            elseif left >= 60 then t = format(INT_SPELL_DURATION_MIN or '%d min', math.floor(left / 60))\n"
-        "            else t = format(INT_SPELL_DURATION_SEC or '%d sec', left) end\n"
-        "            self:AddLine(' ', 1, 0.82, 0)\n"
-        "            self:AddLine(format(BIND_TRADE_TIME_REMAINING or 'You may trade this item with players that were also eligible to loot this item for the next %s.', t), 0, 0.8, 1, 1)\n"
+        // Still to be handed back, or tradeable, for a while (0x006277f0): a
+        // spacer, then the line in light blue - an hour and the minutes past
+        // it when over an hour is left, else one unit of INT_SPELL_DURATION.
+        "        for _, kind in ipairs({'refundLeft', 'tradeLeft'}) do\n"
+        "            local left, t = inst and inst[kind]\n"
+        "            if left then\n"
+        "                if left > 3660 then\n"
+        "                    t = format(INT_SPELL_DURATION_HOURS or '%d hr', 1)..(TIME_UNIT_DELIMITER or ' ')..format(INT_SPELL_DURATION_MIN or '%d min', math.floor((left - 3600) / 60))\n"
+        "                elseif left >= 3600 then t = format(INT_SPELL_DURATION_HOURS or '%d hr', math.floor(left / 3600))\n"
+        "                elseif left >= 60 then t = format(INT_SPELL_DURATION_MIN or '%d min', math.floor(left / 60))\n"
+        "                else t = format(INT_SPELL_DURATION_SEC or '%d sec', left) end\n"
+        "                self:AddLine(' ', 1, 0.82, 0)\n"
+        "                local said = kind == 'refundLeft' and (REFUND_TIME_REMAINING or 'You may sell this item to a vendor within %s for a full refund.')\n"
+        "                    or BIND_TRADE_TIME_REMAINING or 'You may trade this item with players that were also eligible to loot this item for the next %s.'\n"
+        "                self:AddLine(format(said, t), 0, 0.8, 1, 1)\n"
+        "            end\n"
         "        end\n"
         "    end\n"
         // The price (0x006277f0's end): none for a merchant's own item or

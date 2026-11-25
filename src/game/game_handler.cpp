@@ -5579,6 +5579,17 @@ void GameHandler::itemTemplateArrivedForRefund(uint32_t entry) {
     }
 }
 
+uint32_t GameHandler::itemRefundLeft(uint64_t itemGuid) const {
+    const ItemRefundInfo* info = getItemRefundInfo(itemGuid);
+    if (!info) return 0;
+    int64_t since = info->playedSincePurchase;
+    // It runs on (0x006cf440).
+    if (const int64_t now = playedTimeNow(); info->playedAtAnswer >= 0 && now > info->playedAtAnswer)
+        since += now - info->playedAtAnswer;
+    constexpr int64_t kWindow = 0x1c20;
+    return since >= kWindow ? 0u : static_cast<uint32_t>(kWindow - since);
+}
+
 void GameHandler::refundItem(uint64_t itemGuid) {
     if (itemGuid == 0) return;
     if (getState() != WorldState::IN_WORLD || !getSocket()) return;

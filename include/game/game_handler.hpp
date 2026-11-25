@@ -5349,7 +5349,11 @@ public:
         /// which is why this is played time and not wall-clock: logging out
         /// does not run it down.
         uint32_t playedSincePurchase = 0;
+        /// The player's played time as the record came; -1 unknown.
+        int64_t playedAtAnswer = -1;
     };
+    /// The seconds left to hand an item back; 0 past the two hours (0x1c20) or without a record.
+    [[nodiscard]] uint32_t itemRefundLeft(uint64_t itemGuid) const;
     /// Ask the server what an item cost. The answer arrives asynchronously and
     /// lands in the map below.
     void requestItemRefundInfo(uint64_t itemGuid);

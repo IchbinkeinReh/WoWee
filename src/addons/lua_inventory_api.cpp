@@ -1301,10 +1301,6 @@ static int lua_PickupTradeMoney(lua_State* L) {
     return 0;
 }
 
-// Two hours, counted in played seconds - which is why it is played time and
-// not wall-clock: logging out does not run it down. Both of the two readers
-// below read the same test, `0 < (record+0x38 - playedNow) + 0x1c20`.
-static constexpr uint32_t kRefundWindow = 2 * 60 * 60;
 
 /// Which item the three refund verbs mean, in either of the two spellings they
 /// accept for one argument pair.
@@ -1377,7 +1373,8 @@ static int lua_GetContainerItemPurchaseInfo(lua_State* L) {
 
     // Two hours of played time, which is what the server counts down. Past it
     // there is no window left, and the answer is nothing.
-    if (info->playedSincePurchase >= kRefundWindow) return 0;
+    const uint32_t left = gh->itemRefundLeft(guid);
+    if (left == 0) return 0;
 
     // Not a sum of the quantities. The client walks the five cost slots at
     // record+0x20 and counts the ones holding anything - `0 < piVar1[8]`
@@ -1394,7 +1391,7 @@ static int lua_GetContainerItemPurchaseInfo(lua_State* L) {
     lua_pushnumber(L, info->honor);
     lua_pushnumber(L, info->arena);
     lua_pushnumber(L, itemCount);
-    lua_pushnumber(L, kRefundWindow - info->playedSincePurchase);
+    lua_pushnumber(L, left);
     return 5;
 }
 
@@ -1430,7 +1427,7 @@ static int lua_GetContainerItemPurchaseItem(lua_State* L) {
     if (!info) return 0;
     // The same window test as the call above, and the same answer once it has
     // run out: nothing at all.
-    if (info->playedSincePurchase >= kRefundWindow) return 0;
+    if (gh->itemRefundLeft(guid) == 0) return 0;
     const int wanted = static_cast<int>(lua_tonumber(L, 3)) - 1;
     for (size_t entry = 0, seen = 0; entry < info->items.size(); ++entry) {
         if (info->items[entry].first == 0) continue;
@@ -3725,6 +3722,17 @@ static int lua_WoweeContainerItemInstance(lua_State* L) {
     const game::ItemSlot* s = gh ? containerItemSlot(gh->getInventory(), bag, slot) : nullptr;
     if (!s || s->empty()) { lua_pushnil(L); return 1; }
     pushTooltipItemInstance(L, gh, s->item, s->item.itemId);
+    // What is left of its cooldown, which the tooltip of a container's item
+    // says alone (0x0062f420 -> +0x47c).
+    const auto cooldown = gh->itemCooldown(s->item.itemId);
+    if (cooldown.enabled && cooldown.start != 0 && cooldown.duration != 0) {
+        const int64_t left = static_cast<int64_t>(cooldown.start) + static_cast<int64_t>(cooldown.duration) -
+                             static_cast<int64_t>(std::llround(luaGetTimeNow() * 1000.0));
+        if (left > 0) {
+            lua_pushnumber(L, static_cast<lua_Number>(left));
+            lua_setfield(L, -2, "cooldownLeft");
+        }
+    }
     return 1;
 }
 

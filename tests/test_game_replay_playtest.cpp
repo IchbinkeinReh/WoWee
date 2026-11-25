@@ -492,6 +492,26 @@ TEST_CASE("a channel is ended by its update", "[replay][playtest]") {
     CHECK_FALSE(s.handler().isChanneling());
 }
 
+// T161: the two hours (0x1c20) to hand a thing back run on.
+TEST_CASE("how long a thing can be handed back", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kItem = 0x4000000000000123ull;
+    CHECK(s.handler().itemRefundLeft(kItem) == 0);
+    const auto answer = [&](uint32_t since) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ITEM_REFUND_INFO_RESPONSE));
+        p.writeUInt64(kItem);
+        for (int i = 0; i < 3 + 10; ++i) p.writeUInt32(0);
+        p.writeUInt32(0);
+        p.writeUInt32(since);
+        s.receive(p);
+    };
+    answer(100);
+    CHECK(s.handler().itemRefundLeft(kItem) == 7100);
+    answer(7200);
+    CHECK(s.handler().itemRefundLeft(kItem) == 0);
+}
+
 // T279: 0x00741b60 -> 0x00740d30, case 0xc5: no counter before the movement.
 TEST_CASE("another unit is where it is teleported to", "[replay][playtest]") {
     Session s;
