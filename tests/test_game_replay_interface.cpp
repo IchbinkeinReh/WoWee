@@ -1514,6 +1514,8 @@ TEST_CASE("who is in the player's party and in its raid", "[replay][interface]")
         for (int i = 0; i < 12; ++i) p.writeUInt8(0);
         s.receive(p);
     };
+    group(0);   // no raid's roster in a party
+    CHECK(ui.is("GetNumRaidMembers() == 0 and not UnitExists('raid1') and UnitExists('party1')"));
     group(2);
     s.receive(UpdateObject()
                   .create(kNear, wowee::game::ObjectType::PLAYER,
@@ -1545,6 +1547,13 @@ TEST_CASE("who is in the player's party and in its raid", "[replay][interface]")
     all(kOther, "nil", "nil", "nil", "nil", "1");
     CHECK(ui.is("UnitInParty('player') == 1 and UnitPlayerOrPetInParty('player') == nil"));
     CHECK(ui.is("UnitPlayerOrPetInRaid('player') == 1"));
+    // The raid's roster has the player last (0x006d8870).
+    CHECK(ui.is("GetNumRaidMembers() == 3 and UnitInRaid('player') == 2"));
+    CHECK(ui.is("UnitIsUnit('raid3', 'player') and not UnitExists('raid4')"));
+    CHECK(ui.is("select(3, GetRaidRosterInfo(3)) == 1 and GetRaidRosterInfo(4) == nil"));
+    CHECK(gh.unitTokensForGuid(Session::kPlayerGuid).back() == "raid3");
+    ui.run("SetRaidRosterSelection(3)");
+    CHECK(ui.is("GetRaidRosterSelection() == 3"));
 
     // 0x00718a00: a pet is of no rank, whatever its kind's.
     wowee::network::Packet creature(wowee::game::wireOpcode(Opcode::SMSG_CREATURE_QUERY_RESPONSE));

@@ -3344,12 +3344,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 // longer than Lua's default stack: the client asks for room
                 // before each push (0x0084dab0 inside the loop), which is what
                 // lets a 25-man roster answer all of its holders at all.
-                if (!lua_checkstack(L, static_cast<int>(pd.members.size()))) return 0;
+                if (!lua_checkstack(L, static_cast<int>(pd.members.size()) + 1)) return 0;
                 int held = 0;
                 if (raid) {
-                    for (size_t i = 0; i < pd.members.size(); ++i)
-                        if (pd.members[i].flags & bit)
-                            { lua_pushnumber(L, static_cast<lua_Number>(i + 1)); ++held; }
+                    for (int i = 1, size = gh->raidRosterSize(); i <= size; ++i)
+                        if (const auto member = gh->raidRosterMember(i); member && (member->flags & bit))
+                            { lua_pushnumber(L, i); ++held; }
                 } else {
                     int slot = 0;
                     for (const auto& mem : pd.members) {
@@ -3369,6 +3369,7 @@ void registerSocialLuaAPI(lua_State* L) {
             for (const auto& mem : pd.members) {
                 if (mem.guid == guid) { lua_pushboolean(L, (mem.flags & bit) ? 1 : 0); return 1; }
             }
+            if (raid && guid == gh->getPlayerGuid()) { lua_pushboolean(L, (pd.flags & bit) ? 1 : 0); return 1; }
             // A token that named somebody outside the roster: the reference reads
             // the flags of the unit it resolved, finds none, and answers no.
             lua_pushboolean(L, 0);
@@ -3481,10 +3482,8 @@ void registerSocialLuaAPI(lua_State* L) {
             // insecure code in combat lockdown).
             if (!taint::allowed(L, 0xb)) return 0;
             if (!gh || idx < 1) return 0;
-            const auto& members = gh->getPartyData().members;
-            if (idx > static_cast<int>(members.size())) return 0;
-            gh->setRaidSubgroup(members[static_cast<size_t>(idx) - 1].name,
-                                static_cast<uint8_t>(group));
+            if (const auto member = gh->raidRosterMember(idx))
+                gh->setRaidSubgroup(member->name, static_cast<uint8_t>(group));
             return 0;
         }},
                 {"SwapRaidSubgroup", [](lua_State* L) -> int {
@@ -3493,11 +3492,8 @@ void registerSocialLuaAPI(lua_State* L) {
             const int b = static_cast<int>(luaL_optnumber(L, 2, 0));
             if (!taint::allowed(L, 0xb)) return 0;   // see SetRaidSubgroup
             if (!gh || a < 1 || b < 1) return 0;
-            const auto& members = gh->getPartyData().members;
-            const int n = static_cast<int>(members.size());
-            if (a > n || b > n) return 0;
-            gh->swapRaidSubgroup(members[static_cast<size_t>(a) - 1].name,
-                                 members[static_cast<size_t>(b) - 1].name);
+            const auto first = gh->raidRosterMember(a), second = gh->raidRosterMember(b);
+            if (first && second) gh->swapRaidSubgroup(first->name, second->name);
             return 0;
         }},
                 // Which raid member the roster has highlighted, kept by guid
@@ -3513,22 +3509,13 @@ void registerSocialLuaAPI(lua_State* L) {
             // Which group is a raid is what game::groupIsRaid exists to answer;
             // `== 1` is the old convention and reads a WotLK raid (type 2) as no
             // raid at all, which is why the roster had nothing to select.
-            const auto* raid = (gh && game::groupIsRaid(gh->getPartyData().groupType))
-                                   ? &gh->getPartyData().members : nullptr;
-            raidRosterSelection() = (raid && index >= 0 && index < static_cast<int64_t>(raid->size()))
-                                        ? (*raid)[static_cast<size_t>(index)].guid : 0;
+            raidRosterSelection() = gh && index >= 0 && index < 40
+                                        ? gh->raidRosterGuid(static_cast<int>(index) + 1) : 0;
             return 0;
         }},
                 {"GetRaidRosterSelection", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            int index = 0;
-            if (gh && raidRosterSelection() != 0 && game::groupIsRaid(gh->getPartyData().groupType)) {
-                const auto& raid = gh->getPartyData().members;
-                for (size_t i = 0; i < raid.size(); ++i) {
-                    if (raid[i].guid == raidRosterSelection()) { index = static_cast<int>(i) + 1; break; }
-                }
-            }
-            lua_pushnumber(L, index);
+            lua_pushnumber(L, gh ? gh->raidRosterIndex(raidRosterSelection()) : 0);
             return 1;
         }},
                 // IsMuted(name) - 0x006b6cf0: the name is turned into a player

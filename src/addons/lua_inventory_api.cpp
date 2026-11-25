@@ -6231,10 +6231,7 @@ static int lua_GetLootMethod(lua_State* L) {
             for (int slot = 1; slot <= 4; ++slot)
                 if (game::partySlotGuid(pd, gh->getPlayerGuid(), slot) == pd.looterGuid) { partyIndex = slot; break; }
         }
-        if (game::groupIsRaid(pd.groupType)) {
-            for (size_t i = 0; i < pd.members.size(); ++i)
-                if (pd.members[i].guid == pd.looterGuid) { raidIndex = static_cast<int>(i) + 1; break; }
-        }
+        if (const int n = gh->raidRosterIndex(pd.looterGuid)) raidIndex = n;
     }
     if (partyIndex >= 0) lua_pushnumber(L, partyIndex); else lua_pushnil(L);
     if (raidIndex >= 0) lua_pushnumber(L, raidIndex); else lua_pushnil(L);

@@ -4709,13 +4709,13 @@ std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
             }
         }
         if (groupIsRaid(group.groupType)) {
-            for (size_t i = 0; i < group.members.size() && i < 40; ++i) {
-                if (group.members[i].guid == guid) {
-                    out.push_back("raid" + std::to_string(i + 1));
+            for (int i = 1, size = raidRosterSize(); i <= size; ++i) {
+                if (raidRosterGuid(i) == guid) {
+                    out.push_back("raid" + std::to_string(i));
                     break;
                 }
-                if (raidPetGuid(static_cast<int>(i + 1)) == guid) {
-                    out.push_back("raidpet" + std::to_string(i + 1));
+                if (raidPetGuid(i) == guid) {
+                    out.push_back("raidpet" + std::to_string(i));
                     break;
                 }
             }
@@ -4758,12 +4758,47 @@ uint64_t GameHandler::partyPetGuid(int slot) const {
 }
 
 uint64_t GameHandler::raidPetGuid(int index) const {
-    if (!isInGroup()) return 0;
+    const auto member = raidRosterMember(index);
+    return member ? memberPetGuid(getEntityManager(), *member, true) : 0;
+}
+
+int GameHandler::raidRosterSize() const {
+    if (!isInGroup() || !groupIsRaid(getPartyData().groupType)) return 0;
+    return std::min(static_cast<int>(getPartyData().members.size()) + 1, 40);
+}
+
+uint64_t GameHandler::raidRosterGuid(int index) const {
+    const int size = raidRosterSize();
+    if (index < 1 || index > size) return 0;
+    const auto& members = getPartyData().members;
+    return index <= static_cast<int>(members.size()) ? members[static_cast<size_t>(index - 1)].guid : playerGuid;
+}
+
+int GameHandler::raidRosterIndex(uint64_t guid) const {
+    for (int i = 1, size = guid != 0 ? raidRosterSize() : 0; i <= size; ++i)
+        if (raidRosterGuid(i) == guid) return i;
+    return 0;
+}
+
+std::optional<GroupMember> GameHandler::raidRosterMember(int index) const {
+    const int size = raidRosterSize();
+    if (index < 1 || index > size) return std::nullopt;
     const auto& group = getPartyData();
-    if (!groupIsRaid(group.groupType) || index < 1 || index > 40 ||
-        index > static_cast<int>(group.members.size()))
-        return 0;
-    return memberPetGuid(getEntityManager(), group.members[static_cast<size_t>(index - 1)], true);
+    if (index <= static_cast<int>(group.members.size())) return group.members[static_cast<size_t>(index - 1)];
+    GroupMember self;
+    self.guid = playerGuid;
+    self.name = lookupName(playerGuid);
+    if (self.name.empty()) {
+        if (const Character* c = getActiveCharacter()) self.name = c->name;
+    }
+    self.isOnline = 1;
+    self.subGroup = group.subGroup;
+    self.flags = group.flags;
+    self.roles = group.roles;
+    self.level = static_cast<uint16_t>(getPlayerLevel());
+    self.zoneId = static_cast<uint16_t>(getWorldStateZoneId());
+    self.onlineStatus = static_cast<uint16_t>(0x0001u | (isPlayerDead() ? 0x0004u : 0u));
+    return self;
 }
 
 // UNIT_COMBAT, once per token naming the unit (0x005132c0): "%s%s%s%d%d" -

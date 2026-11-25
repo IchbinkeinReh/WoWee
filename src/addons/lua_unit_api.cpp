@@ -1403,12 +1403,7 @@ static bool inPlayersParty(const game::GameHandler* gh, uint64_t guid) {
 }
 
 /// 0x005726f0.
-static bool inPlayersRaid(const game::GameHandler* gh, uint64_t guid) {
-    const auto& group = gh->getPartyData();
-    if (guid == 0 || !game::groupIsRaid(group.groupType)) return false;
-    return std::any_of(group.members.begin(), group.members.end(),
-                       [&](const game::GroupMember& m) { return m.guid == guid; });
-}
+static bool inPlayersRaid(const game::GameHandler* gh, uint64_t guid) { return gh->raidRosterIndex(guid) != 0; }
 
 // UnitIsPlayer(unit) (0x0060c4b0): a player in view, or one of the party or
 // the raid wherever it is (0x00512a00).
@@ -3153,10 +3148,7 @@ static int lua_StopAttack(lua_State* L) {
 /// drawn as a party for ever.
 static int lua_GetNumRaidMembers(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isInGroup()) { return luaReturnZero(L); }
-    const auto& pd = gh->getPartyData();
-    if (!game::groupIsRaid(pd.groupType)) { return luaReturnZero(L); }
-    lua_pushnumber(L, static_cast<int>(pd.members.size()) + 1);
+    lua_pushnumber(L, gh ? gh->raidRosterSize() : 0);
     return 1;
 }
 
@@ -3202,13 +3194,9 @@ static int lua_UnitInRaid(lua_State* L) {
     if (!gh || !uid) { return luaReturnNil(L); }
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
-    const uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid == 0 || !game::groupIsRaid(gh->getPartyData().groupType)) { return luaReturnNil(L); }
-    for (int n = 1; n <= 40; ++n) {
-        if (resolveUnitGuid(gh, "raid" + std::to_string(n)) == guid) {
-            lua_pushnumber(L, n - 1);
-            return 1;
-        }
+    if (const int n = gh->raidRosterIndex(resolveUnitGuid(gh, uidStr))) {
+        lua_pushnumber(L, n - 1);
+        return 1;
     }
     return luaReturnNil(L);
 }
@@ -3220,8 +3208,9 @@ static int lua_GetRaidRosterInfo(lua_State* L) {
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { return luaReturnNil(L); }
     const auto& pd = gh->getPartyData();
-    if (index > static_cast<int>(pd.members.size())) { return luaReturnNil(L); }
-    const auto& m = pd.members[index - 1];
+    const auto member = gh->raidRosterMember(index);
+    if (!member) { return luaReturnNil(L); }
+    const game::GroupMember& m = *member;
     lua_pushstring(L, m.name.c_str());       // name
     lua_pushnumber(L, m.guid == pd.leaderGuid ? 2 : (m.flags & 0x01 ? 1 : 0)); // rank (0=member, 1=assist, 2=leader)
     lua_pushnumber(L, m.subGroup + 1);       // subgroup (1-indexed)

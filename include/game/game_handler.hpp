@@ -6222,6 +6222,14 @@ public:
     uint64_t partyPetGuid(int slot) const;
     /// raidpetN (0x00518ce0), index 1-40; zero when empty.
     uint64_t raidPetGuid(int index) const;
+    /// The raid's roster as the client keeps it: the group list's members and,
+    /// past them, the player itself (0x006d8870 -> 0x00574f10). How many, 0
+    /// outside a raid, and the `index`-th from 1, none past the end.
+    [[nodiscard]] int raidRosterSize() const;
+    [[nodiscard]] std::optional<GroupMember> raidRosterMember(int index) const;
+    [[nodiscard]] uint64_t raidRosterGuid(int index) const;
+    /// Where in it someone is, from 1; 0 nowhere.
+    [[nodiscard]] int raidRosterIndex(uint64_t guid) const;
     /// UNIT_COMBAT for every token of the unit (0x005132c0).
     void fireUnitCombat(uint64_t guid, const char* action, int32_t amount, int32_t school, uint32_t hitInfo);
     /// A spell missile has landed for a unit its cast missed (0x00702fc0,

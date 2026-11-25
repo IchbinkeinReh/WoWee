@@ -761,10 +761,7 @@ struct UnitWorld {
     uint64_t party(int n) const {
         return gh->isInGroup() ? game::partySlotGuid(gh->getPartyData(), player(), n) : 0;
     }
-    uint64_t raid(int n) const {
-        const auto& members = gh->getPartyData().members;
-        return n >= 1 && n <= 40 && n <= static_cast<int>(members.size()) ? members[static_cast<size_t>(n - 1)].guid : 0;
-    }
+    uint64_t raid(int n) const { return gh->raidRosterGuid(n); }
     /// The encounter frames', filled by SMSG_UPDATE_INSTANCE_ENCOUNTER_UNIT.
     uint64_t boss(int n) const {
         if (n < 1 || n > static_cast<int>(game::GameHandler::kMaxEncounterSlots)) return 0;
