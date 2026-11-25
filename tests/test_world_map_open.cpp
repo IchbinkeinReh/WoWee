@@ -4,6 +4,7 @@
 // the full-screen scale.
 #include <catch_amalgamated.hpp>
 #include "rendering/world_map/data_repository.hpp"
+#include "rendering/world_map/map_opening.hpp"
 #include "rendering/world_map/map_resolver.hpp"
 #include "rendering/world_map/coordinate_projection.hpp"
 #include "rendering/world_map/world_map_types.hpp"
@@ -208,4 +209,34 @@ TEST_CASE("an instance opens where its entrance is shown", "[world_map][open]") 
     CHECK(DataRepository::entranceShown(transforms, entrance(530, -3640.0f, 4943.0f)).mapId == 530);
     CHECK(DataRepository::entranceShown(transforms, entrance(0, -11208.0f, 1672.0f)).x == Catch::Approx(-11208.0f));
     CHECK_FALSE(DataRepository::entranceShown(transforms, Entrance{}).valid);
+}
+
+// 0x00547170: SetMapToCurrentZone sets the map at once, and the last call counts.
+TEST_CASE("a map the interface has set stays where it is", "[world_map]") {
+    MapOpening m;
+    m.inInterface = true;
+    m.placed = true;
+    m.firstTime = true;
+    m.afterGap = true;
+    CHECK_FALSE(opensOnPlayer(m));
+    // Nobody has set it, it is asked for, or there is none.
+    m.placed = false;
+    CHECK(opensOnPlayer(m));
+    m.placed = true;
+    m.asked = true;
+    CHECK(opensOnPlayer(m));
+    m.asked = false;
+    m.nothingLoaded = true;
+    CHECK(opensOnPlayer(m));
+}
+
+TEST_CASE("the client's own map opens on the player", "[world_map]") {
+    MapOpening m;
+    m.placed = true;
+    CHECK_FALSE(opensOnPlayer(m));
+    m.afterGap = true;
+    CHECK(opensOnPlayer(m));
+    m.afterGap = false;
+    m.firstTime = true;
+    CHECK(opensOnPlayer(m));
 }

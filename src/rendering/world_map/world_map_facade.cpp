@@ -1,5 +1,6 @@
 // world_map_facade.cpp - Public API for the world map system.
 // Composes all extracted components and orchestrates the world map (Phase 10).
+#include "rendering/world_map/map_opening.hpp"
 #include "rendering/world_map/world_map_facade.hpp"
 #include "rendering/world_map/data_repository.hpp"
 #include "rendering/world_map/view_state_machine.hpp"
@@ -122,10 +123,10 @@ struct WorldMapFacade::Impl {
     std::string pendingMapName;   // stored by external setMapName while in world/cosmic view
     bool userMapOverride = false; // true when user manually navigated to world/cosmic view
     // Set the map back to where the player is standing, on the next render.
-    // The interface asks for this every time the map is shown, and the flow
-    // that works it out is the one the first open already runs - so this
-    // re-enters that rather than keeping a second copy of it here.
     bool recenterOnPlayer = false;
+    // What the interface has set it to since this map was loaded counts
+    // (map_opening.hpp).
+    bool placed = false;
     bool viewChanged = false;
     // The ImGui frame the map was last drawn in. A gap means it was closed in
     // between, and a map that is opened shows where the player is.
@@ -603,16 +604,9 @@ void WorldMapFacade::Impl::recenter(const glm::vec3& playerRenderPos) {
             if (parent >= 0) d.showIndex(parent, ViewLevel::ZONE);
         }
     }
-    // The view has only now become the player's zone, and the interface
-    // asked before it did.
-    //
-    // SetMapToCurrentZone runs on every open and fires WORLD_MAP_UPDATE on
-    // the spot, which is when both dropdowns rebuild themselves. All this
-    // call does here is raise the recenter flag - the move happens in this
-    // block, one frame later - so GetCurrentMapContinent answered 0 while
-    // the dropdowns were being built, and 0 is what makes watchframe's
-    // ClearAll branch run and GetMapZones(0) return an empty list. Both
-    // came up blank and stayed blank, because nothing asked again.
+    // Where the view has become the player's zone as the map is drawn, the
+    // interface asked before it did: both dropdowns are rebuilt on
+    // WORLD_MAP_UPDATE, and a GetCurrentMapContinent of 0 then empties them.
     d.viewChanged = true;
 }
 
@@ -652,24 +646,26 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
     }
 
     // Drawn again after a frame or more without being drawn: the map was
-    // closed and is being opened. The client opens it on where the player is
-    // every time, whatever was browsed to before it was closed. Asked here
-    // rather than of whoever opens it, because there are three of those - the
-    // interface's frame, this client's key and the flight master - and only
-    // the interface said so.
+    // closed and is being opened. It opens on where the player is every time,
+    // whatever was browsed to before it was closed. Asked here rather than of
+    // whoever opens it, because there are three of those - the interface's
+    // frame, this client's key and the flight master - and only the interface
+    // says so itself.
     const int frame = ImGui::GetFrameCount();
-    if (d.lastRenderedFrame >= 0 && frame - d.lastRenderedFrame > 1) {
-        d.userMapOverride = false;
-        d.recenterOnPlayer = true;
-    }
+    MapOpening opening;
+    opening.nothingLoaded = d.data.zones().empty();
+    opening.asked = d.recenterOnPlayer;
+    opening.firstTime = !d.open;
+    opening.afterGap = d.lastRenderedFrame >= 0 && frame - d.lastRenderedFrame > 1;
+    opening.inInterface = d.hasFrameRect && !d.taxiMode;
+    opening.placed = d.placed || d.userMapOverride;
     d.lastRenderedFrame = frame;
-
-    // First-time open, zones lost after a map change, or the interface asking
-    // to go back to the player's own zone
-    if (!d.open || d.data.zones().empty() || d.recenterOnPlayer) {
-        d.open = true;
+    d.open = true;
+    if (opensOnPlayer(opening)) {
+        if (opening.afterGap) d.userMapOverride = false;
         d.recenterOnPlayer = false;
         d.recenter(playerRenderPos);
+        d.placed = true;
         displayPlayerRenderPos = displayedPlayerPosition();
     }
 
@@ -810,6 +806,7 @@ void WorldMapFacade::setMapName(const std::string& name) {
     d.compositor.invalidateComposite();
     d.viewState.setLevel(ViewLevel::WORLD);
     d.open = false;
+    d.placed = false;
 }
 
 void WorldMapFacade::setServerExplorationMask(const std::vector<uint32_t>& masks, bool hasData) {
@@ -1239,6 +1236,7 @@ void WorldMapFacade::openTaxiMap(std::function<std::vector<uint32_t>(uint32_t)> 
     // Force the first-open flow on the next render so the view snaps to the
     // player's continent regardless of where the map was last left.
     d.open = false;
+    d.placed = false;
 }
 
 void WorldMapFacade::closeTaxiMap() {
@@ -1248,6 +1246,7 @@ void WorldMapFacade::closeTaxiMap() {
     d.taxiCloseHandler = nullptr;
     if (d.taxiNodeLayer) d.taxiNodeLayer->setTaxiMode(false);
     d.open = false;
+    d.placed = false;
 }
 
 bool WorldMapFacade::isTaxiMapOpen() const {
@@ -1970,13 +1969,10 @@ void WorldMapFacade::syncToPlayer(const glm::vec3& playerRenderPos) {
     if (!d.initialized || !d.assetManager || d.taxiMode) return;
     d.userMapOverride = false;
     d.recenterOnPlayer = false;
-    // Not opened by this: the map still opens on the player when it is
-    // shown, wherever they have gone by then.
-    const bool wasOpen = d.open;
-    d.open = true;
+    // Not opened by this: one of the client's own still opens on the player
+    // when it is shown, wherever they have gone by then.
     d.recenter(playerRenderPos);
-    d.open = wasOpen;
-    if (!wasOpen) d.recenterOnPlayer = true;
+    d.placed = true;
 }
 
 uint32_t WorldMapFacade::currentWorldMapAreaId() const {

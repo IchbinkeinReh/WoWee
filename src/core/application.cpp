@@ -1661,7 +1661,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         // At once, shown or not (0x00547170): an addon calls this and reads
         // GetPlayerMapPosition on the next line.
         luaSvc.showPlayerMapZone = [r = renderer.get()]() {
-            if (r) r->syncWorldMapToPlayer();
+            if (!r) return;
+            r->syncWorldMapToPlayer();
+            // SetMapToCurrentZone says so itself.
+            if (auto* wmap = r->getWorldMap()) (void)wmap->takeViewChanged();
         };
         luaSvc.getMapWorldAreaId = [r = renderer.get()]() -> uint32_t {
             auto* wmap = r ? r->getWorldMap() : nullptr;
@@ -7290,10 +7293,8 @@ void Application::render() {
                 // a picture. The detail frame, not the outer one: that is the
                 // map area inside the panel FrameXML drew.
                 if (auto* wmap = renderer->getWorldMap()) {
-                    // The map settles on the player's zone a frame after the
-                    // interface asked where it was, so it says when it has and
-                    // the dropdowns are rebuilt from the answer rather than
-                    // from the one before it.
+                    // Where the map has come to be on the player's zone as it
+                    // was drawn, it says so and the dropdowns are rebuilt.
                     if (wmap->takeViewChanged() && gameHandler) {
                         gameHandler->fireAddonEvent("WORLD_MAP_UPDATE", {});
                     }
