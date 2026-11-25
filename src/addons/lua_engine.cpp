@@ -2544,35 +2544,20 @@ int lua_ScrollFrame_SetScrollChild(lua_State* L) {
     return 0;
 }
 
-/// How far the child can move before its far edge reaches the frame's. Zero
-/// when the child fits, which is how a scroll bar knows to disable itself.
+/// How far the child can move before its far edge reaches the frame's, as the
+/// last pass had it (0x00972690, 0x009726f0 read +0x2a4 and +0x2a8, which
+/// 0x0096b5a0 works out in the frame's own update and then tells of with
+/// OnScrollRangeChanged).
+///
+/// Not worked out as it is asked for. A range known before it has been told of
+/// is one the scroll bar does not have yet: a long macro's text scrolled to its
+/// end (ScrollingEdit_OnUpdate, which waits for a range over nought) while the
+/// bar still went from 0 to 0 and took none of it, and the next, short macro
+/// was left scrolled out of the window.
 static float scrollRange(wowee::ui::WidgetTree& tree, uint32_t id, bool vertical) {
     const auto* w = tree.get(id);
     if (!w || w->scrollChild == 0) return 0.0f;
-    // Both rects resolved first, the same way the measuring getters do it.
-    //
-    // Only matters for a scroll child whose height comes out of the solver -
-    // one anchored TOP and BOTTOM to something rather than given a height.
-    // SetHeight writes the rect directly, so a stated size was always readable
-    // here; a solved one was not, and answered zero.
-    //
-    // Which was worse than a wrong number, because the two disagreed: the
-    // child answered its full height when asked directly and the range
-    // answered nothing, and a range of nothing is how a scroll bar decides it
-    // is not needed.
-    const uint32_t childId = w->scrollChild;
-    tree.resolveWidget(id);
-    tree.resolveWidget(childId);
-    w = tree.get(id);
-    const auto* child = tree.get(childId);
-    if (!w || !child) return 0.0f;
-    // What the child actually holds, not what it declares. Nothing in FrameXML
-    // sizes the talent tree's scroll child - the client does - so the declared
-    // 50 gave a range of zero on a tree eleven rows deep.
-    float contentW = child->rectW, contentH = child->rectH;
-    tree.scrollContentExtent(childId, contentW, contentH);
-    const float over = vertical ? (contentH - w->rectH) : (contentW - w->rectW);
-    return over > 0.0f ? over : 0.0f;
+    return std::max(vertical ? w->reportedRangeY : w->reportedRangeX, 0.0f);
 }
 
 /// A scroll offset from a script, with NaN read as no offset.
@@ -16615,6 +16600,26 @@ void LuaEngine::fireCursorChanged(uint32_t wid) {
                             -static_cast<double>(line) * lineH * ui::kEditLineSpacing, 0.0, lineH);
 }
 
+void LuaEngine::placeEditCaret(uint32_t wid, float x, float y) {
+    settleTextChanged(wid);   // 0x00967020
+    widgets_.resolveWidget(wid);
+    auto* w = widgets_.get(wid);
+    if (!w || !w->isEditBox || w->rectW <= 0.0f || w->rectH <= 0.0f) return;
+    const float es = w->effScale > 0.0f ? w->effScale : 1.0f;
+    const float fromTop = (w->bottom + w->rectH - y) / es - w->textInsetTop;
+    const float fromLeft = (x - w->left) / es - w->textInsetLeft;
+    const std::string masked = w->editPassword ? std::string(w->editText.size(), '*') : std::string();
+    const std::vector<size_t> lines = w->editMultiLine ? ui::editLinesOf(*w) : std::vector<size_t>{0};
+    const size_t line = w->editMultiLine
+        ? ui::editLineAt(lines, fromTop, ui::interfaceFontSize(w->fontHeight) * ui::kEditLineSpacing) : 0;
+    w->hasSelection = false;
+    w->cursorPos = ui::editPlaceAt(w->editPassword ? masked : w->editText, lines, line, fromLeft,
+                                   [&](const std::string& piece) {
+                                       return ui::interfaceTextWidth(piece, w->fontFace, w->fontHeight);
+                                   });
+    fireCursorChanged(wid);
+}
+
 /// A multi-line box is as tall as its lines and the insets over and under
 /// them (0x00966710), so what scrolls it has something to scroll.
 void LuaEngine::sizeMultiLineEdit(uint32_t wid) {
@@ -18810,7 +18815,13 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                 for (uint32_t id = hit; id != 0;) {
                     const auto* cand = widgets_.get(id);
                     if (!cand) break;
-                    if (cand->isEditBox && cand->visible) { setEditFocus(id); break; }
+                    // The caret goes where the press is, before the box gets
+                    // the keyboard (0x00967cd0).
+                    if (cand->isEditBox && cand->visible) {
+                        placeEditCaret(id, x, y);
+                        setEditFocus(id);
+                        break;
+                    }
                     id = cand->parent;
                 }
             }

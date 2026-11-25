@@ -514,3 +514,81 @@ TEST_CASE("a key a frame takes is nobody else's until it is let go of", "[replay
     input.clearVirtualKeys();
     input.update();
 }
+
+// P77: a scroll frame's range is the one it has told of (0x0096b4c0), so what scrolls by it and
+// its scroll bar go by the same one - the macro window, whose box grows with its text.
+TEST_CASE("a scroll frame answers the range it has told of", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("told = {} sf = CreateFrame('ScrollFrame', 'PlayScroll', UIParent) sf:SetWidth(200) sf:SetHeight(50) "
+           "sf:SetPoint('TOPLEFT') bar = CreateFrame('Slider', 'PlayScrollScrollBar', sf) "
+           "bar:SetMinMaxValues(0, 0) bar:SetValue(0) "
+           "bar:SetScript('OnValueChanged', function(self, v) sf:SetVerticalScroll(v) end) "
+           "sf:SetScript('OnVerticalScroll', function(self, v) bar:SetValue(v) end) "
+           "sf:SetScript('OnScrollRangeChanged', function(self, x, y) told[#told + 1] = y "
+           "  local v = bar:GetValue() if v > y then v = y end bar:SetMinMaxValues(0, y) bar:SetValue(v) end) "
+           "box = CreateFrame('EditBox', 'PlayScrollText', sf) box:SetMultiLine(true) box:SetWidth(200) "
+           "box:SetHeight(50) box:SetTextInsets(0, 0, 0, 0) sf:SetScrollChild(box)");
+    const auto pass = [&ui] {
+        ui.engine.dispatchOnUpdate(0.05f);
+        ui.layout();
+        ui.engine.updateVisibility();
+        ui.engine.updateScrollRanges();
+    };
+    pass();
+    CHECK(ui.is("sf:GetVerticalScrollRange() == 0"));
+    ui.run("box:SetText(('/line\\n'):rep(9))");
+    pass();
+    REQUIRE(ui.is("#told > 0 and told[#told] > 20"));
+    ui.run("n, range = #told, told[#told]");
+    CHECK(ui.is("sf:GetVerticalScrollRange() == range"));
+    // Scrolled to the end, the bar has it.
+    ui.run("sf:SetVerticalScroll(range)");
+    CHECK(ui.is("math.abs(bar:GetValue() - range) < 0.01"));
+    // The text grown: the range is the old one until it is told of, and so is the bar's.
+    ui.run("box:SetText(('/line\\n'):rep(20))");
+    ui.engine.dispatchOnUpdate(0.05f);
+    ui.layout();
+    CHECK(ui.is("#told == n and sf:GetVerticalScrollRange() == range"));
+    pass();
+    CHECK(ui.is("#told == n + 1 and told[#told] > range and sf:GetVerticalScrollRange() == told[#told]"));
+    // And shrunk, the window is back over what there is.
+    ui.run("sf:SetVerticalScroll(told[#told]) box:SetText('.die')");
+    pass();
+    pass();
+    CHECK(ui.is("sf:GetVerticalScrollRange() == 0"));
+    CHECK(ui.is("bar:GetValue() == 0 and sf:GetVerticalScroll() == 0"));
+}
+
+// 0x00967cd0: a press puts the caret where it is.
+TEST_CASE("a press in an edit box puts the caret there", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("box = CreateFrame('EditBox', 'PlayPressText', UIParent) box:SetMultiLine(true) box:SetWidth(300) "
+           "box:SetHeight(100) box:SetPoint('TOPLEFT') box:SetTextInsets(10, 0, 5, 0) "
+           "box:SetScript('OnCursorChanged', function(self, x, y, w, h) cx, cy, ch = x, y, h end) "
+           "box:SetText('aaaa\\nbbbb\\ncccc')");
+    ui.layout();
+    ui.engine.dispatchOnUpdate(0.05f);
+    ui.layout();
+    ui.run("box:HighlightText()");
+    auto& tree = ui.engine.widgets();
+    auto* box = tree.findByName("PlayPressText");
+    REQUIRE(box != nullptr);
+    const uint32_t id = box->id;
+    const float top = box->bottom + box->rectH, left = box->left;
+    const float line = (box->rectH - 5.0f) / 3.0f;
+    ui.engine.placeEditCaret(id, left + 10.5f, top - 5.0f - line * 1.5f);
+    CHECK(tree.get(id)->cursorPos == 5);
+    CHECK_FALSE(tree.get(id)->hasSelection);
+    CHECK(ui.is("cy < 0 and cx == 0"));
+    ui.engine.placeEditCaret(id, left + 290.0f, top - 5.0f - line * 1.5f);
+    CHECK(tree.get(id)->cursorPos == 9);
+    ui.engine.placeEditCaret(id, left + 290.0f, top - 5.0f - line * 9.0f);
+    CHECK(tree.get(id)->cursorPos == 14);
+    // Left of the text it is at the text's start, whatever the line.
+    ui.engine.placeEditCaret(id, left + 2.0f, top - 5.0f - line * 1.5f);
+    CHECK(tree.get(id)->cursorPos == 0);
+}

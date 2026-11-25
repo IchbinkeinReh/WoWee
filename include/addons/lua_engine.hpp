@@ -226,6 +226,9 @@ public:
     /// A key that is not text: backspace, the arrows, enter, escape.
     /// Shift extends the selection with the caret keys.
     void dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld = false);
+    /// The caret of an edit box to where a press at (x, y), in the tree's
+    /// units, is in its text, its selection gone (0x00967cd0, 0x00964790).
+    void placeEditCaret(uint32_t wid, float x, float y);
     /// A key for a frame rather than an edit box. Returns true when a frame
     /// took it, so the caller knows not to also treat it as a movement key or
     /// a binding - which is the whole reason a dialog can be typed into. A

@@ -465,6 +465,8 @@ struct Widget {
     /// The range last reported to the interface. A scroll bar sizes and
     /// enables itself from OnScrollRangeChanged, so the change has to be
     /// noticed and announced rather than merely being true.
+    /// The scroll range as last worked out (0x0096b4c0: +0x2a8, +0x2a4), which
+    /// is also what the getters answer.
     float reportedRangeX = -1.0f, reportedRangeY = -1.0f;
 
     bool  isEditBox = false;

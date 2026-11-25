@@ -73,6 +73,31 @@ inline std::string editLineText(const std::string& s, const std::vector<std::siz
     return s.substr(from, to - from);
 }
 
+/// Where in the text a press is that is `x` from where the line's text begins
+/// (0x00964790 -> 0x00482510): after as many whole characters of the line as
+/// fit into it, at the text's start for one to the left of it.
+template <typename Measure>
+std::size_t editPlaceAt(const std::string& s, const std::vector<std::size_t>& starts, std::size_t line, float x,
+                        Measure&& measure) {
+    if (x < 0.0f) return 0;
+    const std::size_t from = std::min(starts[line], s.size());
+    const std::size_t end = from + editLineText(s, starts, line).size();
+    std::size_t at = from;
+    while (at < end) {
+        const std::size_t next = std::max(caretStepRight(s, at), at + 1);
+        if (measure(editDrawnText(s.substr(from, next - from))) > x) break;
+        at = next;
+    }
+    return std::min(at, end);
+}
+
+/// The line a press `y` under the text's top is on (0x00964790).
+inline std::size_t editLineAt(const std::vector<std::size_t>& starts, float y, float lineHeight) {
+    std::size_t line = 0;
+    for (; lineHeight > 0.0f && y > lineHeight && line + 1 < starts.size(); ++line) y -= lineHeight;
+    return line;
+}
+
 /// The height the box takes of its text (0x00966710): its lines, one at
 /// least, between the insets.
 inline float editBoxHeight(std::size_t lines, float lineHeight, float insetTop, float insetBottom) {
