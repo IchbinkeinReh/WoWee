@@ -26,6 +26,7 @@
 #include "rendering/quest_giver_markers.hpp"
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/loading_screen.hpp"
+#include "rendering/vk_pipeline.hpp"
 #include "game/movement_handler.hpp"
 #include "game/world_packets.hpp"
 #include "addons/addon_manager.hpp"
@@ -267,6 +268,37 @@ void WorldLoader::LoadingUi::pump() const {
     window->swapBuffers();
 }
 
+namespace {
+/// The bar while the renderers are made (the first world entry): each pipeline a step, the
+/// bar nearing the end of its part, at most twenty frames a second.
+class RendererBar {
+public:
+    RendererBar(const std::function<void(const char*, float)>& show, rendering::LoadingScreen* screen,
+                float from, float to)
+        : screen_(screen) {
+        if (screen_) screen_->setMayRebuild(false);
+        rendering::setPipelineBuiltHook([&show, from, to, made = 0,
+                                         last = std::chrono::steady_clock::now()]() mutable {
+            ++made;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last < std::chrono::milliseconds(50)) return;
+            const float part = static_cast<float>(made) / static_cast<float>(made + 60);
+            show("Preparing renderers...", from + (to - from) * part);
+            last = std::chrono::steady_clock::now();
+        });
+    }
+    ~RendererBar() {
+        rendering::setPipelineBuiltHook(nullptr);
+        if (screen_) screen_->setMayRebuild(true);
+    }
+    RendererBar(const RendererBar&) = delete;
+    RendererBar& operator=(const RendererBar&) = delete;
+
+private:
+    rendering::LoadingScreen* screen_;
+};
+}  // namespace
+
 void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                                   const glm::vec3& spawnCanonical,
                                   const glm::vec3& spawnRender,
@@ -302,6 +334,7 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
         // Initialize renderers if they don't exist yet (first login to a WMO-only map).
         // On map change, renderers already exist from the previous map.
         if (!renderer_->getWMORenderer() || !renderer_->getTerrainManager()) {
+            RendererBar bar(showProgress, loadingScreen, 0.25f, 0.34f);
             renderer_->initializeRenderers(assetManager_, mapName);
         }
 
@@ -540,7 +573,10 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                  spawnCanonical.x, ", ", spawnCanonical.y, ", ", spawnCanonical.z, ")");
 
         // Load the initial terrain tile
-        terrainOk = renderer_->loadTestTerrain(assetManager_, adtPath);
+        {
+            RendererBar bar(showProgress, loadingScreen, 0.20f, 0.35f);
+            terrainOk = renderer_->loadTestTerrain(assetManager_, adtPath);
+        }
         if (!terrainOk) {
             LOG_WARNING("Could not load terrain for online world - atmospheric rendering only");
         } else {

@@ -32,6 +32,9 @@ public:
 
     // Render the loading screen: the picture and the bar (0x0040a270)
     void render();
+    /// Whether a frame may rebuild the swapchain. Not while a renderer makes its pipelines:
+    /// the pass it makes them for would go with it.
+    void setMayRebuild(bool may) { mayRebuild_ = may; }
     /// The same picture and bar over whatever this frame's interface draws
     /// (ImGui's foreground list), for the world's first frames: they run
     /// behind it, as everything before them did (Application::worldSettle).
@@ -68,6 +71,8 @@ public:
     void setSDLWindow(SDL_Window* win) { sdlWindow = win; }
 
 private:
+    bool mayRebuild_ = true;
+
     struct Texture {
         VkImage image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;

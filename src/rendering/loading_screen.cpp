@@ -501,7 +501,12 @@ void LoadingScreen::render() {
     // Not in the background, and not without a surface: the load goes on
     // behind the home screen and this frame is simply not drawn. syncSurface is
     // also what rebuilds the surface when the app comes back mid-load.
-    if (vkCtx && vkCtx->syncSurface()) {
+#ifdef __ANDROID__
+    const bool drawn = mayRebuild_;
+#else
+    const bool drawn = mayRebuild_ || (vkCtx && !vkCtx->isSwapchainDirty());
+#endif
+    if (vkCtx && drawn && vkCtx->syncSurface()) {
         // Handle window resize: recreate swapchain before acquiring an image
         if (vkCtx->isSwapchainDirty() && sdlWindow) {
             // The surface, in pixels. SDL_GetWindowSize answers points, and

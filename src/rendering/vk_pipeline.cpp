@@ -1,8 +1,16 @@
 #include "rendering/vk_pipeline.hpp"
 #include "core/logger.hpp"
+#include <utility>
 
 namespace wowee {
 namespace rendering {
+
+namespace {
+thread_local std::function<void()> pipelineBuiltHook;
+thread_local bool inPipelineBuiltHook = false;
+}  // namespace
+
+void setPipelineBuiltHook(std::function<void()> hook) { pipelineBuiltHook = std::move(hook); }
 
 PipelineBuilder::PipelineBuilder() {
     // Default: one blend attachment with blending disabled
@@ -286,6 +294,12 @@ VkPipeline PipelineBuilder::build(VkDevice device, VkPipelineCache cache) const 
     {
         LOG_ERROR("Failed to create graphics pipeline");
         return VK_NULL_HANDLE;
+    }
+    // Not for the pipelines of what it draws itself.
+    if (pipelineBuiltHook && !inPipelineBuiltHook) {
+        inPipelineBuiltHook = true;
+        pipelineBuiltHook();
+        inPipelineBuiltHook = false;
     }
 
     return pipeline;

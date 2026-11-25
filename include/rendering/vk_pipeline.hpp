@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 #include <array>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 #include <string>
@@ -10,6 +11,11 @@
 
 namespace wowee {
 namespace rendering {
+
+/// Called after each graphics pipeline made on the thread that sets it, while it is set: the
+/// first world entry makes some hundred of them, for many seconds, and the loading screen
+/// draws its bar between them.
+void setPipelineBuiltHook(std::function<void()> hook);
 
 // Builder pattern for VkGraphicsPipeline creation.
 // Usage:
