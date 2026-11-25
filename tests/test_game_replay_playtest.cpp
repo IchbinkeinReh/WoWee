@@ -4,6 +4,7 @@
 
 #include <optional>
 
+#include "core/coordinates.hpp"
 #include "game/game_object_type.hpp"
 #include "game_replay.hpp"
 #include "game/combat_handler.hpp"
@@ -489,6 +490,48 @@ TEST_CASE("a channel is ended by its update", "[replay][playtest]") {
     s.receive(end);
     CHECK(events.take() == Heard{"CHANNEL_STOP Rain 0"});
     CHECK_FALSE(s.handler().isChanneling());
+}
+
+// T279: 0x00741b60 -> 0x00740d30, case 0xc5: no counter before the movement.
+TEST_CASE("another unit is where it is teleported to", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kBoss = 0xF1300010B3000036ull;
+    s.receive(UpdateObject().create(kBoss, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    float movedTo[3] = {};
+    uint32_t took = 99;
+    s.handler().setCreatureMoveCallback([&](uint64_t guid, float x, float y, float z, uint32_t ms) {
+        if (guid != kBoss) return;
+        movedTo[0] = x;
+        movedTo[1] = y;
+        movedTo[2] = z;
+        took = ms;
+    });
+    for (const uint32_t flags : {0u, static_cast<uint32_t>(MovementFlags::FORWARD)}) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::MSG_MOVE_TELEPORT));
+        p.writePackedGuid(kBoss);
+        p.writeUInt32(flags);
+        p.writeUInt16(0);
+        p.writeUInt32(1000);
+        p.writeFloat(-76.75f);
+        p.writeFloat(2152.5f);
+        p.writeFloat(155.75f);
+        p.writeFloat(1.5f);
+        p.writeUInt32(0);   // fall time
+        s.receive(p);
+        const auto boss = s.handler().getEntityManager().getEntity(kBoss);
+        REQUIRE(boss != nullptr);
+        const glm::vec3 at = wowee::core::coords::serverToCanonical(glm::vec3(-76.75f, 2152.5f, 155.75f));
+        CHECK(boss->getX() == at.x);
+        CHECK(boss->getY() == at.y);
+        CHECK(boss->getZ() == at.z);
+        CHECK(movedTo[0] == at.x);
+        CHECK(movedTo[1] == at.y);
+        CHECK(took == 0);
+        // From somewhere else once more.
+        boss->setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    }
 }
 
 // A stop and a heartbeat went out after the acknowledgement, for a mover whose

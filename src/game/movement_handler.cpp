@@ -320,10 +320,9 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     };
     table[Opcode::SMSG_MOVE_KNOCK_BACK] = [this](network::Packet& packet) { handleMoveKnockBack(packet); };
 
-    // Teleport
-    for (auto op : { Opcode::MSG_MOVE_TELEPORT, Opcode::MSG_MOVE_TELEPORT_ACK }) {
-        table[op] = [this](network::Packet& packet) { handleTeleportAck(packet); };
-    }
+    // Teleport: the player's own, with a counter to be answered. Another unit's
+    // (0xc5) is a movement packet like the others below.
+    table[Opcode::MSG_MOVE_TELEPORT_ACK] = [this](network::Packet& packet) { handleTeleportAck(packet); };
     table[Opcode::SMSG_TRANSFER_PENDING] = [this](network::Packet& packet) { handleTransferPending(packet); };
     table[Opcode::SMSG_NEW_WORLD] = [this](network::Packet& packet) { handleNewWorld(packet); };
 
@@ -371,7 +370,10 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
                      Opcode::MSG_MOVE_KNOCK_BACK,
                      // 0x00740d30 sends these into the same cases as
                      // MSG_MOVE_START_SWIM and MSG_MOVE_STOP_SWIM.
-                     Opcode::MSG_MOVE_START_SWIM_CHEAT, Opcode::MSG_MOVE_STOP_SWIM_CHEAT }) {
+                     Opcode::MSG_MOVE_START_SWIM_CHEAT, Opcode::MSG_MOVE_STOP_SWIM_CHEAT,
+                     // Another unit put somewhere else (0x00741b60 -> 0x00740d30
+                     // case 0xc5 -> 0x007189a0): the movement info, no counter.
+                     Opcode::MSG_MOVE_TELEPORT }) {
         table[op] = [this](network::Packet& packet) {
             if (owner_.getState() == WorldState::IN_WORLD) handleOtherPlayerMovement(packet);
         };
@@ -1851,13 +1853,16 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         owner_.clearTransportAttachment(moverGuid);
     }
 
-    uint32_t durationMs = 120;
+    const uint16_t wireOp = packet.getOpcode();
+    // Put there, not moved.
+    const bool teleported = wireOp == wireOpcode(Opcode::MSG_MOVE_TELEPORT);
+    uint32_t durationMs = teleported ? 0 : 120;
     // The mover's own speed: the distance from its last reported position
     // over the time between the two packets' movement timestamps, which the
     // mover stamped and network jitter leaves alone. -1 when unknown.
     float measuredSpeed = -1.0f;
     auto itPrev = otherPlayerMoveTimeMs_.find(moverGuid);
-    if (itPrev != otherPlayerMoveTimeMs_.end()) {
+    if (itPrev != otherPlayerMoveTimeMs_.end() && !teleported) {
         uint32_t rawDt = info.time - itPrev->second;
         if (rawDt >= 20 && rawDt <= 2000) {
             const glm::vec3 lastReported(entity->getLatestX(), entity->getLatestY(),
@@ -1874,9 +1879,8 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     }
     otherPlayerMoveTimeMs_[moverGuid] = info.time;
 
-    const uint16_t wireOp = packet.getOpcode();
     const bool isStopOpcode =
-        (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP)) ||
+        teleported || (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP)) ||
         (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_STRAFE)) ||
         (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_TURN)) ||
         (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_SWIM)) ||
@@ -1884,6 +1888,7 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         (wireOp == wireOpcode(Opcode::MSG_MOVE_FALL_LAND));
 
     const float entityDuration = isStopOpcode ? 0.0f : (durationMs / 1000.0f);
+    if (teleported) entity->setPosition(canonical.x, canonical.y, canonical.z, canYaw);
     // Still under way or turning: the client moves another player on by the
     // flags of its last packet until the next one changes them - the start
     // packet included, which has no displacement to measure a speed from -
@@ -1926,7 +1931,7 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     entity->moveBeganAfter(owner_.sinceUnitsAdvanced());
 
     if (owner_.creatureMoveCallbackRef()) {
-        const uint32_t notifyDuration = isStopOpcode && !underWay ? 0u : durationMs;
+        const uint32_t notifyDuration = teleported || (isStopOpcode && !underWay) ? 0u : durationMs;
         owner_.creatureMoveCallbackRef()(moverGuid, canonical.x, canonical.y, canonical.z, notifyDuration);
     }
 
