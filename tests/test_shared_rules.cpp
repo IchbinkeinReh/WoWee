@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "rendering/m2_mesh_drawn.hpp"
 #include "core/character_paths.hpp"
 #include "game/inventory.hpp"
 #include "game/item_text.hpp"
@@ -28,6 +29,19 @@
 #include "ui/settings_schema.hpp"
 
 using namespace wowee;
+
+// T288: the twin made for a figure's particles was drawn over it, in white.
+TEST_CASE("a particle twin's triangles are in no view", "[m2]") {
+    using wowee::rendering::m2MeshDrawn;
+    CHECK_FALSE(m2MeshDrawn(true, true, true, true));
+    CHECK_FALSE(m2MeshDrawn(true, true, true, false));
+    CHECK(m2MeshDrawn(true, false, false, true));
+    CHECK(m2MeshDrawn(true, false, false, false));
+    // A trap: in the world not, in a view of its own.
+    CHECK_FALSE(m2MeshDrawn(true, true, false, false));
+    CHECK(m2MeshDrawn(true, true, false, true));
+    CHECK_FALSE(m2MeshDrawn(false, false, false, true));
+}
 
 TEST_CASE("a setting's value is written the way a CVar carries one", "[settings]") {
     // The fault this exists for: std::to_string gives six decimals for

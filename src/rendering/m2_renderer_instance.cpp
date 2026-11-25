@@ -575,6 +575,7 @@ void M2Renderer::setModelParticlesOnly(uint32_t modelId) {
     // Every path that would draw, shadow or collide with it already skips an
     // invisible trap, and the particle passes do not.
     it->second.isInvisibleTrap = true;
+    it->second.particlesOnly = true;
     it->second.disableAnimation = true;
     // The traced scene too: loadModel gave it a mesh to cast with before it
     // was known to be only particles, and each twin cast a second shadow of

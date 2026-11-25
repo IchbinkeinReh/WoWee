@@ -2,6 +2,7 @@
 #include <cstring>
 #include <limits>
 #include "rendering/shadow_params.hpp"
+#include "rendering/m2_mesh_drawn.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_shown_sequence.hpp"
@@ -1181,13 +1182,14 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
             // A doodad by its size class, the rest as instanceMaxDistSq says.
             const float instanceMaxDistSq = this->instanceMaxDistSq(instance);
 
+            if (!m2MeshDrawn(instance.cachedIsValid, instance.cachedIsInvisibleTrap,
+                             instance.cachedModel && instance.cachedModel->particlesOnly, forceNoCull_))
+                continue;
             if (forceNoCull_) {
-                if (!instance.cachedIsValid) continue;
                 glm::vec3 toCam = instance.cachedCullCenter - camPos;
                 distSq = glm::dot(toCam, toCam);
                 effectiveMaxDistSq = instanceMaxDistSq;
             } else {
-                if (!instance.cachedIsValid || instance.cachedIsInvisibleTrap) continue;
                 glm::vec3 toCam = instance.cachedCullCenter - camPos;
                 distSq = glm::dot(toCam, toCam);
                 if (distSq > maxPossibleDistSq) continue;
