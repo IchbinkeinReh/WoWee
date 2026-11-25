@@ -2477,6 +2477,8 @@ static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
     if (!w) return;
     const bool hadLines = !w->tooltipLines.empty();
     w->tooltipLines.clear();
+    // And SetMinimumWidth's width, unless it was forced (+0x3d8, +0x3dc).
+    if (!w->tooltipMinWidthForced) w->tooltipMinWidth = 0.0f;
     if (!pushFrameOfWidget(L, w->id)) return;
     const int tip = lua_gettop(L);
     lua_pushnil(L);
