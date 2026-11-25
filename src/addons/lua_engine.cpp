@@ -13434,7 +13434,9 @@ void LuaEngine::registerCoreAPI() {
         // order's animations playing again; a stopped one starts from its
         // first order. Each animation set playing gets its OnPlay, and the
         // group its own.
+        // One without animations does nothing at all.
         "function groupMeta:Play()\n"
+        "    if #self.animations == 0 then return end\n"
         "    if self.isPlaying then\n"
         "        if not self.paused then return end\n"
         "        self.paused = nil\n"
@@ -13485,15 +13487,20 @@ void LuaEngine::registerCoreAPI() {
         "    if self.isPlaying then self.pendingFinish = true end\n"
         "end\n"
         "function groupMeta:IsPendingFinish() return self.pendingFinish == true end\n"
-        "local function finishNow(g)\n"
+        // The end (0x0049b470): OnUpdate once more and OnFinished with whether Finish was
+        // asked for; its time is none again.
+        "local function finishNow(g, elapsed)\n"
+        "    local requested = g.pendingFinish and true or false\n"
         "    g.isPlaying = false\n"
         "    g.done = true\n"
         "    g.pendingFinish = nil\n"
         "    g.paused = nil\n"
+        "    g.elapsed = 0\n"
         "    for _, a in ipairs(g.animations) do a.state = 0 end\n"
         "    playing[g] = nil\n"
-        "    __WoweeRunScriptSlot(g, 'OnFinished')\n"
-        "    __WoweeAnimGiveBack(g)\n"
+        "    __WoweeRunScriptSlot(g, 'OnUpdate', elapsed)\n"
+        "    __WoweeRunScriptSlot(g, 'OnFinished', requested)\n"
+        "    if not g.isPlaying then __WoweeAnimGiveBack(g) end\n"
         "end\n"
         // GetLoopState (0x004a7240, the table at 0x00a440bc): which way the
         // group is playing, NONE when it is not.
@@ -13650,9 +13657,20 @@ void LuaEngine::registerCoreAPI() {
         "        for i = 1, #list do if list[i] > cur then return list[i] end end\n"
         "    end\n"
         "end\n"
+        // With the update of the frame it is on, which a hidden one does not get
+        // (0x00490770); one without a duration never goes on (0x00497920).
+        "local function advances(g)\n"
+        "    if g.paused or g:GetDuration() <= 0.0001 then return false end\n"
+        "    local f = g.parent\n"
+        "    if f and not f.CreateTexture and f.GetParent then f = f:GetParent() end\n"
+        "    return not f or not f.IsVisible or f:IsVisible()\n"
+        "end\n"
         "function __WoweeTickAnimations(elapsed)\n"
-        "    for g in pairs(playing) do\n"
-        "        if not g.paused then\n"
+        // Those that play now: a script may play another.
+        "    local now = {}\n"
+        "    for g in pairs(playing) do now[#now + 1] = g end\n"
+        "    for _, g in ipairs(now) do\n"
+        "        if playing[g] and advances(g) then\n"
         "            g.elapsed = (g.elapsed or 0) + elapsed\n"
         "            local orders = ordersOf(g)\n"
         "            if not g.curOrder then g.curOrder = g.reversed and orders[#orders] or orders[1] end\n"
@@ -13694,6 +13712,7 @@ void LuaEngine::registerCoreAPI() {
         "                        if g.reversed then pr = 1 - pr end\n"
         "                        a.progress = pr\n"
         "                    end\n"
+        "                    if not a.finished then __WoweeRunScriptSlot(a, 'OnUpdate', elapsed) end\n"
         "                    if done and not a.finished then\n"
         "                        a.finished = true\n"
         "                        a.state = 0\n"
@@ -13741,10 +13760,11 @@ void LuaEngine::registerCoreAPI() {
         // OnLoop(self, loopState) (0x00497800): the way it plays now.
         "                        __WoweeRunScriptSlot(g, 'OnLoop', g:GetLoopState())\n"
         "                    else\n"
-        "                        finishNow(g)\n"
+        "                        finishNow(g, elapsed)\n"
         "                    end\n"
         "                end\n"
         "            end\n"
+        "            if g.isPlaying then __WoweeRunScriptSlot(g, 'OnUpdate', elapsed) end\n"
         "        end\n"
         "    end\n"
         "end\n"
