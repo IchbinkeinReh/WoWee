@@ -4315,3 +4315,37 @@ TEST_CASE("A tooltip is sized for what it was filled with at once", "[widget][to
     CHECK(tree.get(tip)->rectW == Catch::Approx(65.0f));
     CHECK(tree.get(tip)->rectH == Catch::Approx(30.0f));
 }
+
+TEST_CASE("A scroll child's extent is that of what is in it now", "[widget][scroll]") {
+    WidgetTree tree;
+    const uint32_t frame = tree.create(WidgetKind::Frame, tree.rootId(), "Scroll");
+    tree.setWidth(frame, 150.0f);
+    tree.setHeight(frame, 100.0f);
+    Anchor p;
+    p.point = "CENTER";
+    p.relativePoint = "CENTER";
+    tree.addPoint(frame, p);
+    const uint32_t child = tree.create(WidgetKind::Frame, frame, "Child");
+    tree.setWidth(child, 150.0f);
+    tree.setHeight(child, 400.0f);
+    Anchor top;
+    top.point = "TOPLEFT";
+    top.relativePoint = "TOPLEFT";
+    top.relativeTo = frame;
+    tree.addPoint(child, top);
+    const uint32_t row = tree.create(WidgetKind::Texture, child, "Row");
+    tree.setAllPoints(row, child);
+    tree.layout(kScreenW, kScreenH);
+    const auto extent = [&] {
+        float w = 0.0f, h = 0.0f;
+        tree.scrollContentExtent(child, w, h);
+        return h;
+    };
+    CHECK(extent() == Catch::Approx(400.0f));
+    // Moved, and asked in the same breath.
+    tree.get(frame)->anchors[0].y = -200.0f;
+    tree.markLayoutDirty();
+    CHECK(extent() == Catch::Approx(400.0f));
+    tree.setHeight(child, 300.0f);
+    CHECK(extent() == Catch::Approx(300.0f));
+}

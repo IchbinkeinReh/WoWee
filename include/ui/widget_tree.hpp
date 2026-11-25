@@ -1299,7 +1299,7 @@ public:
     /// own height (a HybridScrollFrame sets it from its rows) keeps it.
     /// Hidden frames do not count: a pool of buttons parked out of the way is
     /// not content, and counting it scrolls into empty space.
-    void scrollContentExtent(uint32_t childId, float& outW, float& outH) const;
+    void scrollContentExtent(uint32_t childId, float& outW, float& outH);
 
     /// Something moved, resized or changed parent - every rect is stale.
     void markLayoutDirty() { ++layoutGeneration_; }

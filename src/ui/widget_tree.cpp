@@ -850,9 +850,10 @@ void WidgetTree::setAllPoints(uint32_t id, uint32_t relativeTo) {
     w->anchors.push_back(br);
 }
 
-void WidgetTree::scrollContentExtent(uint32_t childId, float& outW, float& outH) const {
+void WidgetTree::scrollContentExtent(uint32_t childId, float& outW, float& outH) {
     outW = 0.0f;
     outH = 0.0f;
+    resolveWidget(childId);
     const Widget* child = get(childId);
     if (!child) return;
 
@@ -869,6 +870,9 @@ void WidgetTree::scrollContentExtent(uint32_t childId, float& outW, float& outH)
     while (!stack.empty()) {
         const uint32_t id = stack.back();
         stack.pop_back();
+        // As it is placed now, not as the last frame had it: what asks may have
+        // moved or made it just before.
+        resolveWidget(id);
         const Widget* w = get(id);
         if (!w || !w->shown) continue;
         if (w->rectW > 0.0f || w->rectH > 0.0f) {
