@@ -582,6 +582,7 @@ TEST_CASE("a ghost takes the spirit guide it comes to", "[replay][playtest]") {
     s.receive(replay::UpdateObject().create(kGuide, wowee::game::ObjectType::UNIT,
                                             {{UF::UNIT_FIELD_HEALTH, 100},
                                              {UF::UNIT_NPC_FLAGS, 0x8001u},
+                                             {UF::UNIT_FIELD_FLAGS, 0x80000340u},
                                              {UF::UNIT_FIELD_FACTIONTEMPLATE, 35}}));
     auto& gh = s.handler();
     const auto guide = gh.getEntityManager().getEntity(kGuide);
@@ -594,7 +595,8 @@ TEST_CASE("a ghost takes the spirit guide it comes to", "[replay][playtest]") {
         gh.stepSpiritGuide();
     };
     REQUIRE(gh.isPlayerGhost());
-    REQUIRE(gh.unitMayAssist(Session::kPlayerGuid, kGuide));
+    REQUIRE(gh.unitMayAssist(kGuide, Session::kPlayerGuid));
+    REQUIRE_FALSE(gh.unitMayAssist(Session::kPlayerGuid, kGuide));
     at(21.0f);
     CHECK(asked() == 0);
     at(19.0f);

@@ -4514,7 +4514,9 @@ void GameHandler::stepSpiritGuide() {
     for (const auto& e : around) {
         if (!e->isUnit()) continue;
         const auto& unit = static_cast<const Unit&>(*e);
-        if ((unit.getNpcFlags() & 0x8000u) == 0 || !unitMayAssist(playerGuid, unit.getGuid())) continue;
+        // It may help the player (0x00523fc3: the guide asks); the other way
+        // round its own UNIT_FLAG 0x100 refuses.
+        if ((unit.getNpcFlags() & 0x8000u) == 0 || !unitMayAssist(unit.getGuid(), playerGuid)) continue;
         if (distSq(unit) <= 400.0f) takeSpiritGuide(unit.getGuid());
     }
 }
