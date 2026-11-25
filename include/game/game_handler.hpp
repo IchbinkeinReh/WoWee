@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/achievement_category.hpp"
 #include "game/item_book.hpp"
 #include "game/stat_tables.hpp"
 #include "game/macro_list.hpp"
@@ -4383,11 +4384,8 @@ public:
         auto it = achievementCategoryInfo_.find(categoryId);
         return it != achievementCategoryInfo_.end() ? &it->second : nullptr;
     }
-    const std::vector<uint32_t>& getCategoryAchievements(uint32_t categoryId) const {
-        auto it = categoryAchievements_.find(categoryId);
-        static const std::vector<uint32_t> kEmpty;
-        return it != categoryAchievements_.end() ? it->second : kEmpty;
-    }
+    /// Every achievement as Achievement.dbc has them, one after the other.
+    const std::vector<achievement_category::Row>& achievementRows() const { return achievementRows_; }
     uint32_t getAchievementCategory(uint32_t achievementId) const {
         auto it = achievementCategoryCache_.find(achievementId);
         return it != achievementCategoryCache_.end() ? it->second : 0u;
@@ -7560,7 +7558,7 @@ private:
     std::unordered_map<uint32_t, uint32_t>    achievementCategoryCache_;  // achievementId → Achievement_Category.dbc ID
     // Achievement ids per category, in the DBC's own order - the panel lists a
     // category by index, so the order has to be stable across calls.
-    std::unordered_map<uint32_t, std::vector<uint32_t>> categoryAchievements_;
+    std::vector<achievement_category::Row> achievementRows_;
     std::unordered_map<uint32_t, AchievementCategoryInfo> achievementCategoryInfo_;
     std::vector<uint32_t> achievementCategoryOrder_;
     std::vector<uint32_t> statisticCategoryOrder_;

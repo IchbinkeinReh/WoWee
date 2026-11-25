@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "core/local_time.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "game/achievement_category.hpp"
 #include "game/achievement_progress.hpp"
 #include "game/quest_log_rows.hpp"
 #include "game/spell_handler.hpp"
@@ -230,6 +231,17 @@ bool achievementOutsideStatistics(game::GameHandler* gh, uint32_t achievementId)
         info = gh->getAchievementCategoryInfo(static_cast<uint32_t>(c));
     }
     return true;
+}
+
+/// What the player has earned and when, and the side it is on, as the window's rows
+/// are picked by them (achievement_category.hpp).
+game::achievement_category::Earned earnedAchievementTimes(game::GameHandler* gh) {
+    game::achievement_category::Earned earned;
+    for (const uint32_t id : gh->getEarnedAchievements()) earned[id] = gh->getAchievementDate(id);
+    return earned;
+}
+int32_t achievementSide(game::GameHandler* gh) {
+    return gh->getPlayerRace() == 0 ? -1 : gh->isPlayerAlliance() ? 1 : 0;
 }
 
 /// An achievement's criteria and their progress, those of the achievement it shares
@@ -7410,38 +7422,38 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, 0);
             return 3;
         }},
-                // GetCategoryNumAchievements(id [, includeHidden]) → total, completed
-                //
-                // Two answers, not three: 0x005b38e0 pushes the total (its own
-                // counter plus a second one for rows it treats specially) and
-                // then the completed count, and returns 2. The interface has
-                // always unpacked two, so a third answer was simply discarded.
-                //
-                // What the optional second argument does in this client is not
-                // what its name in the installed FrameXML suggests. The hidden
-                // bit (row +0x24 bit 0) is consulted only for the two pseudo
-                // category ids -1 and -2, which ask for "everything not hidden"
-                // and "everything hidden" respectively; for an ordinary
-                // category id the bit is never read. What the argument really
-                // switches is the count: with it true every row of the category
-                // lands in the total, and without it the client folds rows that
-                // share the group key at row +0xc and counts one of them. The
-                // catalog here has no such key, and no progression bit either
-                // (rows with +0x24 bit 2 set are dropped outright), so the
-                // straight count is the closest answer available and the
-                // argument stays unread rather than guessed at.
+                // GetCategoryNumAchievements(id [, all]) → total, completed
+                // (0x005b38e0).
                 {"GetCategoryNumAchievements", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetCategoryNumAchievements(categoryID)");
             auto* gh = getGameHandler(L);
-            const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
-            gh->ensureAchievementCategoriesLoaded();
-            const auto& ids = gh->getCategoryAchievements(id);
-            const auto& earned = gh->getEarnedAchievements();
-            uint32_t done = 0;
-            for (uint32_t a : ids) if (earned.count(a)) ++done;
-            lua_pushnumber(L, static_cast<lua_Number>(ids.size()));
-            lua_pushnumber(L, done);
+            game::achievement_category::Count c;
+            if (gh) {
+                gh->ensureAchievementCategoriesLoaded();
+                c = game::achievement_category::count(gh->achievementRows(), earnedAchievementTimes(gh), luaToClientInt(L, 1),
+                                                      lua_isboolean(L, 2) && lua_toboolean(L, 2), achievementSide(gh));
+            }
+            lua_pushnumber(L, c.total);
+            lua_pushnumber(L, c.earned);
             return 2;
+        }},
+                // GetComparisonCategoryNumAchievements(id) → the compared player's.
+                {"GetComparisonCategoryNumAchievements", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetComparisonCategoryNumAchievements(categoryID)");
+            auto* gh = getGameHandler(L);
+            const auto* set = gh ? gh->getInspectedPlayerAchievements(gh->getAchievementComparisonGuid()) : nullptr;
+            uint32_t n = 0;
+            if (set) {
+                gh->ensureAchievementCategoriesLoaded();
+                const int side = comparisonFaction(gh);
+                n = game::achievement_category::comparedCount(gh->achievementRows(), earnedAchievementTimes(gh),
+                                                              {set->begin(), set->end()}, luaToClientInt(L, 1),
+                                                              side == 2 ? -1 : side == -1 ? -2 : side);
+            }
+            lua_pushnumber(L, n);
+            return 1;
         }},
                 {"GetAchievementCategory", [](lua_State* L) -> int {
             // 0x005b18e0
@@ -8018,7 +8030,7 @@ void registerQuestLuaAPI(lua_State* L) {
             // GetAchievementInfo(id) → id, name, points, completed, month, day,
             //   year, description, flags, icon, rewardText (0x005b3fc0).
             auto* gh = getGameHandler(L);
-            uint32_t id = static_cast<uint32_t>(luaL_checknumber(L, 1));
+            uint32_t id = static_cast<uint32_t>(luaToClientInt(L, 1));
             if (!gh) { return luaReturnNil(L); }
             // The other form the panel uses: GetAchievementInfo(category,
             // index) walks a category's achievements by position. Only the
@@ -8028,10 +8040,10 @@ void registerQuestLuaAPI(lua_State* L) {
             if (!lua_isnoneornil(L, 2)) {
                 const int idx = static_cast<int>(luaL_optnumber(L, 2, 0));
                 gh->ensureAchievementCategoriesLoaded();
-                const auto& ids = gh->getCategoryAchievements(id);
-                if (idx < 1 || idx > static_cast<int>(ids.size())) return luaReturnNil(L);
-                id = ids[static_cast<size_t>(idx) - 1];
+                id = game::achievement_category::at(gh->achievementRows(), earnedAchievementTimes(gh), luaToClientInt(L, 1),
+                                                    idx, achievementSide(gh));
             }
+            if (!game::achievement_category::shown(gh->getAchievementFlags(id), gh->getEarnedAchievements().count(id) > 0)) return 0;
             const std::string& name = gh->getAchievementName(id);
             if (name.empty()) { return luaReturnNil(L); }
             bool completed = gh->getEarnedAchievements().count(id) > 0;

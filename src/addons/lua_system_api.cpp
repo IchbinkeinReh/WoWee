@@ -9548,27 +9548,6 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, win ? win->getWidth() : 1920);
             return 1;
         }},
-                // How many of a category the compared player has earned - one
-                // value, which the summary puts straight into a bar and a
-                // "n/total" label beside the player's own. Zero for everyone
-                // drew their bar empty however much they had done.
-                {"GetComparisonCategoryNumAchievements", [](lua_State* L) -> int {
-            // 0x005b3b30
-            if (!lua_isnumber(L, 1))
-                return luaL_error(L, "Usage: GetComparisonCategoryNumAchievements(categoryID)");
-            auto* gh = getGameHandler(L);
-            const auto category = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh) { lua_pushnumber(L, 0); return 1; }
-            const auto* set = gh->getInspectedPlayerAchievements(
-                gh->getAchievementComparisonGuid());
-            if (!set) { lua_pushnumber(L, 0); return 1; }
-            gh->ensureAchievementCategoriesLoaded();
-            uint32_t done = 0;
-            for (uint32_t id : gh->getCategoryAchievements(category))
-                if (set->count(id)) ++done;
-            lua_pushnumber(L, done);
-            return 1;
-        }},
                 {"GetVoiceStatus",           luaReturnNil},
                 {"GetMuteStatus",            luaReturnNil},
                 {"GetActiveVoiceChannel",    lua_ReturnNil},

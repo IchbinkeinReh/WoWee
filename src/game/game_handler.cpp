@@ -2773,7 +2773,6 @@ void GameHandler::ensureAchievementCategoriesLoaded() {
         if (id == 0 || achievementNameCache_.find(id) == achievementNameCache_.end()) continue;
         const uint32_t category = dbc->getUInt32(i, 38);
         achievementCategoryCache_[id] = category;
-        categoryAchievements_[category].push_back(id);
         if (haveFlags && (getAchievementFlags(id) & 0x1u) != 0)
             statisticCategories.insert(category);
         // Field 3 is Supercedes: the achievement this one follows on from.
@@ -2786,6 +2785,12 @@ void GameHandler::ensureAchievementCategoriesLoaded() {
             achievementSupercedes_[id] = supercedes;
             achievementSupercededBy_[supercedes] = id;
         }
+        achievementRows_.push_back({.id = id,
+                                    .faction = getAchievementFaction(id),
+                                    .supercedes = supercedes,
+                                    .category = static_cast<int32_t>(category),
+                                    .flags = getAchievementFlags(id),
+                                    .order = getAchievementUiOrder(id)});
     }
 
     // Achievement_Category.dbc: id, parent, then the localised names. A parent
