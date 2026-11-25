@@ -428,6 +428,31 @@ TEST_CASE("MODR, the transition batch count and the MOHD flags are read", "[wmo]
     CHECK(model.groups[0].doodadRefs[1] == 9);
 }
 
+// T331: 0x007a9380 draws a group's batches; one without any (the Ruby Sanctum's
+// collision building) is not drawn, whatever its faces.
+TEST_CASE("a group without batches has nothing to draw", "[wmo]") {
+    std::vector<uint8_t> group;
+    put32(group, 0x4D564552);  // MVER
+    put32(group, 4);
+    put32(group, 17);
+    put32(group, 0x4D4F4750);  // MOGP
+    put32(group, 68 + (8 + 8) + (8 + 36));
+    for (int i = 0; i < 17; ++i) put32(group, 0);
+    put32(group, 0x4D4F5649);  // MOVI
+    put32(group, 8);
+    put32(group, 0x00010000);  // 0, 1
+    put32(group, 0x00000002);  // 2
+    put32(group, 0x4D4F5654);  // MOVT
+    put32(group, 36);
+    for (int i = 0; i < 9; ++i) putF(group, static_cast<float>(i * i % 5));
+    wowee::pipeline::WMOModel model;
+    model.groups.resize(1);
+    (void)wowee::pipeline::WMOLoader::loadGroup(group, model, 0);
+    CHECK(model.groups[0].vertices.size() == 3);
+    CHECK_FALSE(model.groups[0].indices.empty());
+    CHECK(model.groups[0].batches.empty());
+}
+
 TEST_CASE("MCSH's bits are read low bit first, edges fixed", "[adt][mcsh]") {
     std::vector<uint8_t> bits(512, 0);
     bits[0] = 0x05;        // texels 0 and 2 of row 0

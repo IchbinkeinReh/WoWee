@@ -818,14 +818,8 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
         offset = chunkEnd;
     }
 
-    // Create a default batch if none were loaded
-    if (group.batches.empty() && !group.indices.empty()) {
-        WMOBatch batch;
-        batch.startIndex = 0;
-        batch.indexCount = static_cast<uint16_t>(group.indices.size());
-        batch.materialId = 0;
-        group.batches.push_back(batch);
-    }
+    // A group draws its batches (0x007a9380), so one without any is there to
+    // be walked against alone.
 
     core::Logger::getInstance().debug("WMO group ", groupIndex, " loaded: ",
                                       group.vertices.size(), " vertices, ",

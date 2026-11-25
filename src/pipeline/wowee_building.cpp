@@ -3,6 +3,7 @@
 #include "pipeline/wowee_building.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "core/logger.hpp"
+#include <algorithm>
 #include <glm/gtc/quaternion.hpp>
 #include <fstream>
 #include <filesystem>
@@ -454,6 +455,16 @@ bool WoweeBuildingLoader::toWMOModel(const WoweeBuilding& building, WMOModel& ou
             }
         }
 
+        // A group draws its batches; this format has none of its own.
+        constexpr size_t kMost = 65535;   // whole triangles
+        for (size_t first = 0; first < wmoGroup.indices.size(); first += kMost) {
+            WMOBatch batch{};
+            batch.startIndex = static_cast<uint32_t>(first);
+            batch.indexCount = static_cast<uint16_t>(std::min(kMost, wmoGroup.indices.size() - first));
+            if (!grp.materials.empty())
+                batch.materialId = static_cast<uint8_t>(materialIndex[materialKey(grp.materials.front())]);
+            wmoGroup.batches.push_back(batch);
+        }
         outModel.groups.push_back(std::move(wmoGroup));
     }
 

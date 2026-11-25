@@ -2260,13 +2260,6 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
                                 bi < static_cast<size_t>(group.transBatchCount) + group.intBatchCount;
             resources.batches.push_back(resBatch);
         }
-    } else {
-        // No batches defined - render entire group as one batch
-        GroupResources::Batch batch;
-        batch.startIndex = 0;
-        batch.indexCount = resources.indexCount;
-        batch.materialId = 0;
-        resources.batches.push_back(batch);
     }
 
     return true;
