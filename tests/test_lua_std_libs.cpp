@@ -221,7 +221,15 @@ TEST_CASE("time() takes a date table", "[lua]") {
     CHECK(s.run("return time({month = 3, day = 4})").find("field 'year' missing in date table") != std::string::npos);
     CHECK(s.run("return time(5)").rfind("error: ", 0) == 0);
     CHECK(s.run("return time() > 1200000000, time(nil) > 1200000000") == "true true");
-    CHECK(s.run("return time({year = 1800, month = 1, day = 1})") == "nil");
+    // What a 32-bit time does not hold, whatever the platform's does.
+    for (const char* out : {"1800, month = 1", "1969, month = 1", "1968, month = 12", "2039, month = 1",
+                            "2040, month = 1", "2039, month = 13", "100000, month = 1", "-5000, month = 1"}) {
+        INFO(out);
+        CHECK(s.run(std::string("return time({year = ") + out + ", day = 1})") == "nil");
+    }
+    CHECK(s.run("return time({year = 2038, month = 1, day = 10})") == at(2038, 1, 10, 12, 0, 0));
+    CHECK(s.run("return time({year = 1969, month = 13, day = 3})") == at(1970, 1, 3, 12, 0, 0));
+    CHECK(s.run("return time({year = 1971, month = -10, day = 3})") == at(1970, 2, 3, 12, 0, 0));
 }
 
 TEST_CASE("the getters answer for what is not there as the client's", "[lua]") {

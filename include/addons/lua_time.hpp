@@ -11,6 +11,19 @@ extern "C" {
 
 namespace wowee::addons {
 
+/// mktime as the client's is (__mktime32, 0x0088e157): -1 for a year outside 1969 to 2039, its
+/// months carried into it, and for what does not fit 31 bits. The platforms' own are of 64 bits,
+/// and take what it does not.
+inline std::time_t clientMktime(std::tm tm) {
+    constexpr int kFirst = 69, kLast = 139;
+    if (tm.tm_year < kFirst || tm.tm_year > kLast) return -1;
+    int year = tm.tm_year + tm.tm_mon / 12;
+    if (tm.tm_mon % 12 < 0) --year;
+    if (year < kFirst || year > kLast) return -1;
+    const std::time_t t = std::mktime(&tm);
+    return t < 0 || t > static_cast<std::time_t>(0x7fffffff) ? static_cast<std::time_t>(-1) : t;
+}
+
 inline int luaTimeOf(lua_State* L) {
     std::time_t t = -1;
     if (lua_isnoneornil(L, 1)) {
@@ -36,7 +49,7 @@ inline int luaTimeOf(lua_State* L) {
         lua_getfield(L, 1, "isdst");
         tm.tm_isdst = lua_isnil(L, -1) ? -1 : lua_toboolean(L, -1);
         lua_pop(L, 1);
-        t = std::mktime(&tm);
+        t = clientMktime(tm);
     }
     if (t == static_cast<std::time_t>(-1)) lua_pushnil(L);
     else lua_pushnumber(L, static_cast<lua_Number>(t));
