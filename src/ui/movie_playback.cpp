@@ -99,12 +99,14 @@ fs::path findLooseFile(const std::string& rel) {
         std::error_code ec;
         if (!p.empty() && fs::is_directory(p, ec)) bases.push_back(p);
     };
-    if (const char* d = std::getenv("WOW_DATA_PATH"); d && *d) add(d);
-    if (const char* c = std::getenv("WOWEE_CLIENT_ROOT"); c && *c) {
-        add(childNoCase(c, "Data"));
-        add(c);
-    }
-    if (auto* am = core::Application::getInstance().getAssetManager()) add(am->getDataPath());
+    // Each may be the client's folder, whose files are in its Data folder, or that.
+    const auto addClient = [&](const fs::path& p) {
+        add(childNoCase(p, "Data"));
+        add(p);
+    };
+    if (const char* d = std::getenv("WOW_DATA_PATH"); d && *d) addClient(d);
+    if (const char* c = std::getenv("WOWEE_CLIENT_ROOT"); c && *c) addClient(c);
+    if (auto* am = core::Application::getInstance().getAssetManager()) addClient(am->getDataPath());
     std::vector<fs::path> roots;
     for (const auto& b : bases) {
         roots.push_back(b);
