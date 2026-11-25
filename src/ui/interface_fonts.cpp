@@ -112,7 +112,8 @@ ImFont* interfaceFaceOrDefault(const std::string& fontFace) {
 }
 
 float interfaceFontSize(float fontHeight) {
-    if (fontHeight > 0.0f) return fontHeight;
+    // No taller than any screen: a letter of it has to go into the atlas.
+    if (fontHeight > 0.0f) return std::min(fontHeight, kTallestFont);
     // What the renderer falls back to: the current size, not a flat twelve.
     return (ImGui::GetCurrentContext() != nullptr) ? ImGui::GetFontSize() : 12.0f;
 }

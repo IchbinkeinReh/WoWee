@@ -51,6 +51,10 @@ struct GridCellHash {
 /// Cell to the instance ids that touch it.
 using SpatialGrid = std::unordered_map<GridCell, std::vector<uint32_t>, GridCellHash>;
 
+/// The farthest cell there is, 262144 yards out: a position past it, or that is no number,
+/// is in the last one.
+inline constexpr int kFarthestCell = 4096;
+
 /// The cell a world position falls in.
 ///
 /// std::floor rather than a cast to int, and that is the whole trap: a cast
@@ -58,25 +62,38 @@ using SpatialGrid = std::unordered_map<GridCell, std::vector<uint32_t>, GridCell
 /// cell 0 alongside the positions just above it, and the cells eastward of the
 /// map origin would each be double width.
 inline GridCell toSpatialCell(const glm::vec3& p) {
-    return GridCell{
-        .x = static_cast<int>(std::floor(p.x / kSpatialCellSize)),
-        .y = static_cast<int>(std::floor(p.y / kSpatialCellSize)),
-        .z = static_cast<int>(std::floor(p.z / kSpatialCellSize))
+    const auto cell = [](float v) {
+        const float c = std::floor(v / kSpatialCellSize);
+        if (c > static_cast<float>(kFarthestCell)) return kFarthestCell;
+        return c >= static_cast<float>(-kFarthestCell) ? static_cast<int>(c) : -kFarthestCell;
     };
+    return GridCell{.x = cell(p.x), .y = cell(p.y), .z = cell(p.z)};
+}
+
+/// The most cells a box is filed under. What reaches more - a model an addon has made a
+/// million times as large - is in the one cell every query looks in.
+inline constexpr int64_t kMostCells = 65536;
+inline constexpr GridCell kEverywhere{.x = kFarthestCell + 1, .y = kFarthestCell + 1, .z = kFarthestCell + 1};
+
+/// The cells a box reaches into, one after the other.
+template <typename OnCell>
+inline void forCells(const glm::vec3& boundsMin, const glm::vec3& boundsMax, OnCell&& onCell) {
+    const GridCell minCell = toSpatialCell(boundsMin);
+    const GridCell maxCell = toSpatialCell(boundsMax);
+    const auto across = [](int from, int to) { return static_cast<int64_t>(std::max(to - from + 1, 0)); };
+    if (across(minCell.x, maxCell.x) * across(minCell.y, maxCell.y) * across(minCell.z, maxCell.z) > kMostCells) {
+        onCell(kEverywhere);
+        return;
+    }
+    for (int z = minCell.z; z <= maxCell.z; z++)
+        for (int y = minCell.y; y <= maxCell.y; y++)
+            for (int x = minCell.x; x <= maxCell.x; x++) onCell(GridCell{.x = x, .y = y, .z = z});
 }
 
 /// Files an instance under every cell its world bounds reach into.
 inline void insertBounds(SpatialGrid& grid, const glm::vec3& boundsMin,
                          const glm::vec3& boundsMax, uint32_t id) {
-    const GridCell minCell = toSpatialCell(boundsMin);
-    const GridCell maxCell = toSpatialCell(boundsMax);
-    for (int z = minCell.z; z <= maxCell.z; z++) {
-        for (int y = minCell.y; y <= maxCell.y; y++) {
-            for (int x = minCell.x; x <= maxCell.x; x++) {
-                grid[GridCell{.x = x, .y = y, .z = z}].push_back(id);
-            }
-        }
-    }
+    forCells(boundsMin, boundsMax, [&](const GridCell& cell) { grid[cell].push_back(id); });
 }
 
 /// Takes an instance back out of every cell its bounds reached.
@@ -90,18 +107,12 @@ inline void insertBounds(SpatialGrid& grid, const glm::vec3& boundsMin,
 /// instances constantly and the cell will be filled again.
 inline void eraseBounds(SpatialGrid& grid, const glm::vec3& boundsMin,
                         const glm::vec3& boundsMax, uint32_t id) {
-    const GridCell minCell = toSpatialCell(boundsMin);
-    const GridCell maxCell = toSpatialCell(boundsMax);
-    for (int z = minCell.z; z <= maxCell.z; z++) {
-        for (int y = minCell.y; y <= maxCell.y; y++) {
-            for (int x = minCell.x; x <= maxCell.x; x++) {
-                auto it = grid.find(GridCell{.x = x, .y = y, .z = z});
-                if (it == grid.end()) continue;
-                auto& ids = it->second;
-                ids.erase(std::remove(ids.begin(), ids.end(), id), ids.end());
-            }
-        }
-    }
+    forCells(boundsMin, boundsMax, [&](const GridCell& cell) {
+        auto it = grid.find(cell);
+        if (it == grid.end()) return;
+        auto& ids = it->second;
+        ids.erase(std::remove(ids.begin(), ids.end(), id), ids.end());
+    });
 }
 
 /// Moves an instance from the box it was filed under to its current one.
@@ -141,25 +152,28 @@ inline void gatherIds(const SpatialGrid& grid, const glm::vec3& queryMin,
                       OnId&& onId) {
     const GridCell minCell = toSpatialCell(queryMin);
     const GridCell maxCell = toSpatialCell(queryMax);
-    if (minCell == maxCell) {
+    const auto everywhere = grid.find(kEverywhere);
+    const bool some = everywhere != grid.end() && !everywhere->second.empty();
+    if (minCell == maxCell && !some) {
         auto it = grid.find(minCell);
         if (it == grid.end()) return;
         for (uint32_t id : it->second) onId(id);
         return;
     }
     seen.clear();
-    for (int z = minCell.z; z <= maxCell.z; z++) {
-        for (int y = minCell.y; y <= maxCell.y; y++) {
-            for (int x = minCell.x; x <= maxCell.x; x++) {
-                auto it = grid.find(GridCell{.x = x, .y = y, .z = z});
-                if (it == grid.end()) continue;
-                for (uint32_t id : it->second) {
-                    if (!seen.insert(id).second) continue;
-                    onId(id);
-                }
-            }
+    const auto offer = [&](const std::vector<uint32_t>& ids) {
+        for (uint32_t id : ids)
+            if (seen.insert(id).second) onId(id);
+    };
+    if (some) offer(everywhere->second);
+    forCells(queryMin, queryMax, [&](const GridCell& cell) {
+        if (cell == kEverywhere) {
+            // A query as large is of all there is.
+            for (const auto& [at, ids] : grid) offer(ids);
+        } else if (auto it = grid.find(cell); it != grid.end()) {
+            offer(it->second);
         }
-    }
+    });
 }
 
 

@@ -9,6 +9,8 @@
 // The values below are worked out by hand from the cell size, not recorded
 // from the implementation.
 #include <catch_amalgamated.hpp>
+#include <utility>
+#include <limits>
 
 #include <algorithm>
 #include <unordered_set>
@@ -274,4 +276,41 @@ TEST_CASE("a flat group does not divide by zero", "[spatialgrid]") {
                                          0.0f, 0.0f, 100.0f, 0.0f);
     REQUIRE(range.has_value());
     CHECK(range->minY == 0);
+}
+
+// An addon's model a million times as large, or of no size at all, hung the client in filing it.
+TEST_CASE("a box without end is filed once and found by every query", "[spatial]") {
+    using namespace wowee::rendering;
+    const float inf = std::numeric_limits<float>::infinity(), nan = std::numeric_limits<float>::quiet_NaN();
+    const std::vector<std::pair<glm::vec3, glm::vec3>> boxes = {
+        {glm::vec3(-1e9f), glm::vec3(1e9f)}, {glm::vec3(-inf), glm::vec3(inf)}, {glm::vec3(-1e6f), glm::vec3(1e6f)}};
+    for (const auto& [lo, hi] : boxes) {
+        SpatialGrid grid;
+        insertBounds(grid, glm::vec3(0.0f), glm::vec3(10.0f), 1);
+        insertBounds(grid, lo, hi, 2);
+        CHECK(grid.size() == 2);
+        std::unordered_set<uint32_t> seen;
+        std::vector<uint32_t> found;
+        const auto query = [&](const glm::vec3& a, const glm::vec3& b) {
+            found.clear();
+            gatherIds(grid, a, b, seen, [&](uint32_t id) { found.push_back(id); });
+            std::sort(found.begin(), found.end());
+            return found;
+        };
+        CHECK(query(glm::vec3(1.0f), glm::vec3(2.0f)) == std::vector<uint32_t>{1, 2});
+        CHECK(query(glm::vec3(500.0f), glm::vec3(501.0f)) == std::vector<uint32_t>{2});
+        CHECK(query(glm::vec3(-200.0f), glm::vec3(200.0f)) == std::vector<uint32_t>{1, 2});
+        CHECK(query(glm::vec3(-1e8f), glm::vec3(1e8f)) == std::vector<uint32_t>{1, 2});
+        refileBounds(grid, lo, hi, glm::vec3(500.0f), glm::vec3(501.0f), 2);
+        CHECK(query(glm::vec3(1.0f), glm::vec3(2.0f)) == std::vector<uint32_t>{1});
+        CHECK(query(glm::vec3(500.0f), glm::vec3(501.0f)) == std::vector<uint32_t>{2});
+        // What is no number, somewhere and out again.
+        refileBounds(grid, glm::vec3(500.0f), glm::vec3(501.0f), glm::vec3(nan), glm::vec3(nan), 2);
+        eraseBounds(grid, glm::vec3(nan), glm::vec3(nan), 2);
+        CHECK(query(glm::vec3(-1e8f), glm::vec3(1e8f)) == std::vector<uint32_t>{1});
+    }
+    // As large as anything in the world, in its cells.
+    SpatialGrid grid;
+    insertBounds(grid, glm::vec3(-1000.0f), glm::vec3(1000.0f), 3);
+    CHECK(grid.count(kEverywhere) == 0);
 }

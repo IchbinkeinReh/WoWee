@@ -87,6 +87,7 @@ ImFont* interfaceFaceOrDefault(const std::string& fontFace);
 
 /// The point size a widget draws at, given the height it asked for.
 float interfaceFontSize(float fontHeight);
+inline constexpr float kTallestFont = 512.0f;
 
 /// What ImGui's rasterizer scale has to be multiplied by so a face asked for at
 /// height N draws with its EM square N pixels tall.

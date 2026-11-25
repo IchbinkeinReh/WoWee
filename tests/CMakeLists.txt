@@ -626,6 +626,10 @@ target_link_libraries(test_addon_lua_snippets PRIVATE catch2_main lua51)
 add_test(NAME addon_lua_snippets COMMAND test_addon_lua_snippets)
 register_test_target(test_addon_lua_snippets)
 
+# ── test_cooldown_sweep ─────────────────────────────────────
+wowee_add_test(test_cooldown_sweep
+    SOURCES test_cooldown_sweep.cpp)
+
 # ── test_saved_variables ─────────────────────────────────────
 add_executable(test_saved_variables
     test_saved_variables.cpp

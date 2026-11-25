@@ -30,8 +30,12 @@ struct State {
 
 inline constexpr uint32_t kFlashMs = 1000;
 
-/// SetCooldown's numbers: seconds, rounded to milliseconds (0x005ece80).
-inline uint32_t msOf(double seconds) { return static_cast<uint32_t>(std::llround(seconds * 1000.0)); }
+/// SetCooldown's numbers: seconds, rounded to milliseconds (0x005ece80); what is no number, or
+/// too large for one, is 0, as the rounding there makes it.
+inline uint32_t msOf(double seconds) {
+    if (!(std::abs(seconds) < 9.0e15)) return 0;
+    return static_cast<uint32_t>(std::llround(seconds * 1000.0));
+}
 
 inline void set(State& s, double start, double duration) {
     s.startMs = msOf(start);
