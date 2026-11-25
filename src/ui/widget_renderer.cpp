@@ -2650,7 +2650,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // Whatever the client rendered for it, under its own regions -
             // a model frame is a window onto a scene and the art around it
             // belongs on top.
-            if (w->externalTexture != 0) {
+            // Over the frame's own backdrop.
+            const auto drawModel = [&] {
+                if (w->externalTexture == 0) return;
                 // NOLINTNEXTLINE(performance-no-int-to-ptr) - the widget holds
                 // the handle as an integer and ImTextureID is a pointer, so
                 // the cast is the API boundary rather than a choice.
@@ -2660,7 +2662,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                              ImVec2(x1 + w->modelPad * s, y1 + w->modelPad * s),
                              ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                              packColor(w->color, w->drawAlpha));
-            }
+            };
+            if (!w->hasBackdrop) drawModel();
             // A tooltip's rows, counted once: the box below is drawn to hold
             // them and the text further down is laid out by them.
             //
@@ -2742,7 +2745,10 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // With the frame's own scale in it: a backdrop's insets and edge
             // size are in the frame's units, the same as a font height, and a
             // scaled frame's border is drawn to the same ruler as its rect.
-            if (w->hasBackdrop) drawBackdrop(dl, *w, ws, x0, boxY0, x1, boxY1);
+            if (w->hasBackdrop) {
+                drawBackdrop(dl, *w, ws, x0, boxY0, x1, boxY1);
+                drawModel();
+            }
             if (w->isStatusBar) drawStatusBar(dl, *w, x0, y0, x1, y1);
             if (w->isSlider) drawSlider(dl, *w, x0, y0, x1, y1);
             if (w->isCooldown) drawCooldown(dl, *w, x0, y0, x1, y1);

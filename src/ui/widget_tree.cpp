@@ -1619,8 +1619,9 @@ void WidgetTree::collectDrawOrder() {
     // callback - models (0x00484b00). What a frame draws of its own here is put
     // where that stands there: a status bar's fill is a texture of its layer, an
     // edit box's and a message frame's text are strings in ARTWORK, a model the
-    // layer's callback. A backdrop is under all of the frame's own regions, which
-    // are a level above it in this tree (effLevel), and over all of its parent's.
+    // layer's callback, with its frame's backdrop. A backdrop is else under all of
+    // the frame's own regions, which are a level above it in this tree (effLevel),
+    // and over all of its parent's.
     struct Place {
         int level, layer, kind;
         auto operator<=>(const Place&) const = default;
@@ -1632,7 +1633,7 @@ void WidgetTree::collectDrawOrder() {
             return {2 * w->effLevel - 1, layerRank(w->layer), w->kind == WidgetKind::FontString ? kString : kTexture};
         if (w->isStatusBar && !w->barTexture.empty()) return {2 * w->effLevel + 1, layerRank(w->barLayer), kTexture};
         if (w->isEditBox || w->isMessageFrame || w->isSimpleHtml) return {2 * w->effLevel + 1, artwork, kString};
-        if (w->externalTexture != 0 && !w->hasBackdrop) return {2 * w->effLevel + 1, artwork, kCallback};
+        if (w->externalTexture != 0) return {2 * w->effLevel + 1, artwork, kCallback};
         return {2 * w->effLevel, layerRank(w->layer), kTexture};
     };
     std::sort(drawOrder_.begin(), drawOrder_.end(),

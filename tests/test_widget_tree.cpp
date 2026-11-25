@@ -4259,6 +4259,11 @@ TEST_CASE("A layer's textures, then its strings, then its models", "[widget][dra
     CHECK(at(over) < at(model));
     CHECK(at(modelUnder) < at(model));
     CHECK(at(model) < at(modelOver));
+    tree.get(model)->hasBackdrop = true;
+    tree.layout(kScreenW, kScreenH);
+    CHECK(at(over) < at(model));
+    CHECK(at(modelUnder) < at(model));
+    CHECK(at(model) < at(modelOver));
     CHECK(at(chatBack) < at(chat));
 }
 
