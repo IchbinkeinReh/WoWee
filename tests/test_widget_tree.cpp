@@ -4377,6 +4377,20 @@ TEST_CASE("what has a place of its own is drawn in a frame without one", "[widge
     tree.get(window)->shown = true;
     tree.layout(kScreenW, kScreenH);
     CHECK(tree.get(border)->visible);
+    // Held by two, one of them without a place: neither has it one.
+    const uint32_t between = tree.create(WidgetKind::Frame, window, "Between");
+    tree.addPoint(between, toBorder);
+    Anchor alsoBelow;
+    alsoBelow.point = "BOTTOM";
+    alsoBelow.relativePoint = "BOTTOM";
+    alsoBelow.relativeTo = below;
+    tree.addPoint(between, alsoBelow);
+    tree.layout(kScreenW, kScreenH);
+    CHECK_FALSE(tree.get(between)->visible);
+    // Asked anew with each layout, whatever was told of.
+    tree.get(between)->anchors.pop_back();
+    tree.layout(kScreenW, kScreenH);
+    CHECK(tree.get(between)->visible);
     // And what hangs on the holder once it has a place.
     tree.addPoint(holder, corner);
     tree.layout(kScreenW, kScreenH);

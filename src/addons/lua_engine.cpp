@@ -2364,6 +2364,10 @@ std::vector<lua_CFunction>& tooltipMethodTargets() {
     return targets;
 }
 
+/// A tooltip that a setter has shown: its OnShow in the same call (0x0061cff0 ->
+/// 0x0048f660), not with the next frame.
+void tooltipShown(lua_State* L, uint32_t tooltipId);
+
 int tooltipMethodTrampoline(lua_State* L) {
     takeSelfByHandle(L);
     const auto at = static_cast<std::size_t>(lua_tointeger(L, lua_upvalueindex(1)));
@@ -2372,7 +2376,10 @@ int tooltipMethodTrampoline(lua_State* L) {
     const uint32_t tooltipId = widgetIdOf(L, 1);
     const int results = targets[at](L);
     // Above the results and back down to them.
-    if (tooltipId != 0) syncTooltipLineStrings(L, tooltipId);
+    if (tooltipId != 0) {
+        syncTooltipLineStrings(L, tooltipId);
+        tooltipShown(L, tooltipId);
+    }
     return results;
 }
 
@@ -7394,6 +7401,15 @@ int lua_Button_IsEnabled(lua_State* L) {
     return 1;
 }
 
+void tooltipShown(lua_State* L, uint32_t tooltipId) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const auto* w = tree ? tree->get(tooltipId) : nullptr;
+    if (!w || w->objectType != "GameTooltip" || !w->shown || w->toldShown) return;
+    const int top = lua_gettop(L);
+    if (auto* engine = engineFrom(L)) engine->frameShown(tooltipId);
+    lua_settop(L, top);
+}
+
 /// Remember a frame that was just shown and declares OnAnimFinished, so that
 /// script can be run once the show has returned.
 ///
@@ -7444,8 +7460,11 @@ int lua_Region_Show(lua_State* L) {
 
     // The OnShow of everything that comes up with it, now: the next line of
     // the caller reads what they did (ContainerFrame_GenerateFrame's bagsShown).
-    if (becameShown)
+    if (becameShown) {
         if (auto* engine = engineFrom(L)) engine->frameShown(w->id);
+    } else if (w) {
+        tooltipShown(L, w->id);   // shown by what filled it, its handler not told
+    }
     return 0;
 }
 int lua_Region_Hide(lua_State* L) {
