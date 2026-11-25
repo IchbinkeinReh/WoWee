@@ -4202,3 +4202,62 @@ TEST_CASE("a frame's level and strata are those at once, with what is in it", "[
     CHECK(strata(a) == FrameStrata::Medium);
     CHECK(level(a) == 0);
 }
+
+// 0x00484b00
+TEST_CASE("A layer's textures, then its strings, then its models", "[widget][draworder]") {
+    WidgetTree tree;
+    const auto placed = [&](uint32_t id) {
+        tree.setWidth(id, 50.0f);
+        tree.setHeight(id, 50.0f);
+        Anchor p;
+        p.point = "CENTER";
+        p.relativePoint = "CENTER";
+        tree.addPoint(id, p);
+        return id;
+    };
+    const auto frame = [&](uint32_t parent) { return placed(tree.create(WidgetKind::Frame, parent, "")); };
+    const auto texture = [&](uint32_t parent, DrawLayer layer) {
+        const uint32_t id = placed(tree.create(WidgetKind::Texture, parent, ""));
+        tree.get(id)->solidColor = true;
+        tree.get(id)->layer = layer;
+        return id;
+    };
+    const auto text = [&](uint32_t parent, DrawLayer layer) {
+        const uint32_t id = placed(tree.create(WidgetKind::FontString, parent, ""));
+        tree.get(id)->text = "x";
+        tree.get(id)->layer = layer;
+        return id;
+    };
+    const uint32_t window = frame(tree.rootId());
+    const uint32_t label = text(window, DrawLayer::Artwork);
+    const uint32_t picture = texture(window, DrawLayer::Artwork);
+    const uint32_t over = text(window, DrawLayer::Overlay);
+    const uint32_t background = texture(window, DrawLayer::Background);
+    const uint32_t model = frame(window);
+    tree.get(model)->externalTexture = 1;
+    const uint32_t modelUnder = texture(model, DrawLayer::Artwork);
+    const uint32_t modelOver = text(model, DrawLayer::Overlay);
+    const uint32_t chat = frame(tree.rootId());
+    const uint32_t chatBack = texture(chat, DrawLayer::Background);
+    tree.get(chat)->isMessageFrame = true;
+    tree.get(chat)->messages.emplace_back();
+    const uint32_t panel = frame(window);
+    tree.get(panel)->hasBackdrop = true;
+    tree.layout(kScreenW, kScreenH);
+    const auto at = [&](uint32_t id) {
+        const auto& order = tree.drawOrder();
+        for (size_t i = 0; i < order.size(); ++i)
+            if (order[i]->id == id) return static_cast<int>(i);
+        return -1;
+    };
+    CHECK(at(background) >= 0);
+    CHECK(at(background) < at(picture));
+    CHECK(at(picture) < at(label));
+    CHECK(at(label) < at(over));
+    // What a frame in it draws of its own is over all of the window's.
+    CHECK(at(over) < at(panel));
+    CHECK(at(over) < at(model));
+    CHECK(at(modelUnder) < at(model));
+    CHECK(at(model) < at(modelOver));
+    CHECK(at(chatBack) < at(chat));
+}

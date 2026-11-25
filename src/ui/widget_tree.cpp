@@ -2,6 +2,7 @@
 #include "ui/layout_cache.hpp"
 
 #include <map>
+#include <compare>
 #include <chrono>
 
 #include <algorithm>
@@ -1605,48 +1606,32 @@ void WidgetTree::collectDrawOrder() {
         drawOrder_.push_back(&w);
     }
 
-    // A status bar draws its own fill, where the real client makes the fill a
-    // region of the bar like any other. So the bar sorts where its fill
-    // belongs rather than where the frame does: one level in, among the bar's
-    // own regions, ranked by the layer the fill asked for.
-    //
-    // Without this the fill went under everything the bar owns, whatever it
-    // declared - and a bar with a dark backing of its own wore it over the
-    // fill. The cast bar is exactly that: a BACKGROUND backing, a BORDER fill
-    // and ARTWORK border art, which has to come out in that order.
-    // An edit box draws its own text, the way a status bar draws its own fill,
-    // and it sorts the same way and for the same reason: one level in, among
-    // its own regions.
-    //
-    // Left at the frame's own level the text goes under everything the box
-    // owns - and a chat input box owns UI-ChatInputBorder-Mid2, a dark strip
-    // across its whole width in the BACKGROUND layer. So what you typed was
-    // painted at full white and then shaded to a third of it, while the "Say:"
-    // header beside it stayed bright: that one is a font string in ARTWORK and
-    // is drawn after the strip rather than under it. Measured at the pixel:
-    // (255,255,255) for the header, (81,82,81) for the text.
-    //
-    // ARTWORK, so it lands above the box's background and border art and
-    // alongside the header rather than over it - the two never overlap, the
-    // insets see to that.
-    auto sortLevel = [](const Widget* w) {
-        return ((w->isStatusBar && !w->barTexture.empty()) || w->isEditBox)
-                   ? w->effLevel + 1
-                   : w->effLevel;
+    // The client draws level by level, the layers of a level one after the other,
+    // and of a layer its textures, then its strings, then what is drawn by
+    // callback - models (0x00484b00). What a frame draws of its own here is put
+    // where that stands there: a status bar's fill is a texture of its layer, an
+    // edit box's and a message frame's text are strings in ARTWORK, a model the
+    // layer's callback. A backdrop is under all of the frame's own regions, which
+    // are a level above it in this tree (effLevel), and over all of its parent's.
+    struct Place {
+        int level, layer, kind;
+        auto operator<=>(const Place&) const = default;
     };
-    auto sortLayer = [](const Widget* w) {
-        if (w->isEditBox) return layerRank(DrawLayer::Artwork);
-        return layerRank((w->isStatusBar && !w->barTexture.empty()) ? w->barLayer : w->layer);
+    const auto placeOf = [](const Widget* w) -> Place {
+        constexpr int kTexture = 0, kString = 1, kCallback = 2;
+        const int artwork = layerRank(DrawLayer::Artwork);
+        if (w->kind != WidgetKind::Frame)
+            return {2 * w->effLevel - 1, layerRank(w->layer), w->kind == WidgetKind::FontString ? kString : kTexture};
+        if (w->isStatusBar && !w->barTexture.empty()) return {2 * w->effLevel + 1, layerRank(w->barLayer), kTexture};
+        if (w->isEditBox || w->isMessageFrame || w->isSimpleHtml) return {2 * w->effLevel + 1, artwork, kString};
+        if (w->externalTexture != 0 && !w->hasBackdrop) return {2 * w->effLevel + 1, artwork, kCallback};
+        return {2 * w->effLevel, layerRank(w->layer), kTexture};
     };
     std::sort(drawOrder_.begin(), drawOrder_.end(),
               [&](const Widget* a, const Widget* b) {
                   const int sa = strataRank(a->effStrata), sb = strataRank(b->effStrata);
                   if (sa != sb) return sa < sb;
-                  const int va = sortLevel(a), vb = sortLevel(b);
-                  if (va != vb) return va < vb;
-                  const int la = sortLayer(a), lb = sortLayer(b);
-                  if (la != lb) return la < lb;
-                  if (a->subLevel != b->subLevel) return a->subLevel < b->subLevel;
+                  if (const Place pa = placeOf(a), pb = placeOf(b); pa != pb) return pa < pb;
                   // Ties resolve by creation order, so a region added later sits
                   // on top of one added earlier - the same rule the real client
                   // uses within a layer.

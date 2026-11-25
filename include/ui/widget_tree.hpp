@@ -373,7 +373,6 @@ struct Widget {
     int level = 0;
     bool levelExplicit = false;
     DrawLayer layer = DrawLayer::Artwork;
-    int subLevel = 0;
 
     // Texture regions.
     std::string texturePath;
