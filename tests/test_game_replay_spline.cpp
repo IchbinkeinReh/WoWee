@@ -545,6 +545,80 @@ TEST_CASE("a transport's kind is its display's, before it is there", "[replay][t
     CHECK_FALSE(h.hasPendingPlayerTransportWorldTransfer());
 }
 
+// T283 (tester's): 0x00740ba0. The flags were dropped: a pet given Levitate stayed on the ground.
+TEST_CASE("a unit the server moves takes its movement flags", "[replay][blockspline]") {
+    using wowee::game::MovementFlags;
+    constexpr uint64_t kPet = 0xF140000001000002ull;
+    constexpr auto flag = [](MovementFlags f) { return static_cast<uint32_t>(f); };
+    Session s;
+    UpdateObject::Spline sp;
+    sp.moveFlags = 0;
+    sp.at = kAt;
+    const uint16_t hoverField = static_cast<uint16_t>(wowee::game::fieldIndex(UF::UNIT_FIELD_MAXHEALTHMODIFIER) + 1);
+    s.receive(UpdateObject().onSpline(kPet, {{UF::UNIT_FIELD_HEALTH, 100}}, sp));
+    const auto pet = s.handler().getEntityManager().getEntity(kPet);
+    REQUIRE(pet);
+    pet->setField(hoverField, 0x3f800000u);
+    const auto says = [&](Opcode opcode) {
+        wowee::network::Packet p(wowee::game::wireOpcode(opcode));
+        p.writePackedGuid(kPet);
+        s.receive(p);
+        return pet->getReportedMoveFlags();
+    };
+    const float ground = pet->getZ();
+    uint32_t told = 0, mask = 0;
+    s.handler().setUnitMoveFlagsCallback([&](uint64_t guid, uint32_t set, uint32_t m) {
+        CHECK(guid == kPet);
+        told = set;
+        mask = m;
+    });
+    // Up as a jump goes, and down to a yard over the ground.
+    CHECK((says(Opcode::SMSG_SPLINE_MOVE_SET_HOVER) & flag(MovementFlags::HOVER)) != 0);
+    CHECK(told == flag(MovementFlags::HOVER));
+    CHECK(mask == flag(MovementFlags::HOVER));
+    CHECK(pet->fallsInPlace());
+    CHECK(pet->isAirborne());
+    pet->updateMovement(0.412f);
+    CHECK(pet->getZ() - ground == Catch::Approx(1.640f).margin(0.01f));
+    pet->updateMovement(0.2f);
+    pet->updateMovement(0.2f);
+    CHECK(pet->getZ() - ground == Catch::Approx(1.0f).margin(0.001f));
+    CHECK_FALSE(pet->fallsInPlace());
+    CHECK((pet->getReportedMoveFlags() & flag(MovementFlags::FALLING)) == 0);
+    // Said again it is nothing.
+    says(Opcode::SMSG_SPLINE_MOVE_SET_HOVER);
+    CHECK_FALSE(pet->fallsInPlace());
+    // And a fall from rest.
+    says(Opcode::SMSG_SPLINE_MOVE_UNSET_HOVER);
+    CHECK_FALSE(pet->isAirborne());
+    pet->updateMovement(0.2f);
+    CHECK(pet->getZ() - ground == Catch::Approx(1.0f - 0.5f * 19.291105f * 0.04f).margin(0.01f));
+    pet->updateMovement(0.5f);
+    CHECK(pet->getZ() == Catch::Approx(ground).margin(0.001f));
+    // The others.
+    for (const auto& [on, off, bit] :
+         {std::tuple{Opcode::SMSG_SPLINE_MOVE_FEATHER_FALL, Opcode::SMSG_SPLINE_MOVE_NORMAL_FALL,
+                     flag(MovementFlags::FEATHER_FALL)},
+          std::tuple{Opcode::SMSG_SPLINE_MOVE_WATER_WALK, Opcode::SMSG_SPLINE_MOVE_LAND_WALK,
+                     flag(MovementFlags::WATER_WALK)},
+          std::tuple{Opcode::SMSG_SPLINE_MOVE_GRAVITY_DISABLE, Opcode::SMSG_SPLINE_MOVE_GRAVITY_ENABLE,
+                     flag(MovementFlags::LEVITATING)},
+          std::tuple{Opcode::SMSG_SPLINE_MOVE_START_SWIM, Opcode::SMSG_SPLINE_MOVE_STOP_SWIM,
+                     flag(MovementFlags::SWIMMING)},
+          std::tuple{Opcode::SMSG_SPLINE_MOVE_SET_WALK_MODE, Opcode::SMSG_SPLINE_MOVE_SET_RUN_MODE,
+                     flag(MovementFlags::WALKING)},
+          std::tuple{Opcode::SMSG_SPLINE_MOVE_SET_FLYING, Opcode::SMSG_SPLINE_MOVE_UNSET_FLYING,
+                     flag(MovementFlags::FLYING)},
+          std::tuple{Opcode::SMSG_SPLINE_MOVE_ROOT, Opcode::SMSG_SPLINE_MOVE_UNROOT, 0x800u}}) {
+        CHECK((says(on) & bit) != 0);
+        CHECK((says(off) & bit) == 0);
+    }
+    // Rooted, its directions are let go (0x0098c4f0).
+    pet->setMoveFlags(0x1u, 0x1u);
+    CHECK((says(Opcode::SMSG_SPLINE_MOVE_ROOT) & 0x801u) == 0x800u);
+    s.handler().setUnitMoveFlagsCallback({});
+}
+
 // A vehicle's passenger is in its seat.
 TEST_CASE("a passenger of a vehicle is not flown by its block", "[replay][blockspline]") {
     Session s;

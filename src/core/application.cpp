@@ -6285,7 +6285,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // In a seat its own movement flags carry no direction: its
                 // vehicle moves it (0x00717050 reads the unit's).
                 const bool isMovingNow = !deadOrCorpse && !charRenderer->isInstanceSeated(instanceId) &&
-                                         (entityIsMoving || positionOnlyLocomotion);
+                                         !entity->fallsInPlace() && (entityIsMoving || positionOnlyLocomotion);
                 if (creatureMount) charRenderer->setInstancePosition(creatureMount->instanceId, creatureMountPos);
                 if (deadOrCorpse || largeCorrection) {
                     charRenderer->setInstancePosition(instanceId, renderPos);
@@ -6516,7 +6516,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // In a seat its own movement flags carry no direction: its
                 // vehicle moves it (0x00717050 reads the unit's).
                 const bool isMovingNow = !deadOrCorpse && !charRenderer->isInstanceSeated(instanceId) &&
-                                         (entityIsMoving || positionOnlyLocomotion);
+                                         !entity->fallsInPlace() && (entityIsMoving || positionOnlyLocomotion);
 
                 if (deadOrCorpse || largeCorrection) {
                     charRenderer->setInstancePosition(instanceId, renderPos);

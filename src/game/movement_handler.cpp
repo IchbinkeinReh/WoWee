@@ -181,57 +181,59 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_COMPRESSED_MOVES] = [this](network::Packet& packet) { handleCompressedMoves(packet); };
     table[Opcode::SMSG_MONSTER_MOVE_TRANSPORT] = [this](network::Packet& packet) { handleMonsterMoveTransport(packet); };
 
-    // Spline move: consume-only (no state change)
-    for (auto op : { Opcode::SMSG_SPLINE_MOVE_FEATHER_FALL,
-                     Opcode::SMSG_SPLINE_MOVE_GRAVITY_DISABLE,
-                     Opcode::SMSG_SPLINE_MOVE_GRAVITY_ENABLE,
-                     Opcode::SMSG_SPLINE_MOVE_LAND_WALK,
-                     Opcode::SMSG_SPLINE_MOVE_NORMAL_FALL,
-                     Opcode::SMSG_SPLINE_MOVE_ROOT,
-                     Opcode::SMSG_SPLINE_MOVE_SET_HOVER }) {
-        table[op] = [](network::Packet& packet) {
-            if (packet.hasRemaining(1))
-                (void)packet.readPackedGuid();
-        };
-    }
-
-    // Spline move: synth flags (each opcode produces different flags)
+    // A unit the server moves: one flag each (0x00740ba0), the packed guid and
+    // nothing more. Several were read and dropped, so a creature or pet set to
+    // hover stayed on the ground until it walked, and what the unit's
+    // locomotion reads of its flags stayed what its create block had said.
     {
-        auto makeSynthHandler = [this](uint32_t synthFlags, uint32_t mask) {
-            return [this, synthFlags, mask](network::Packet& packet) {
-                if (!packet.hasRemaining(1)) return;
-                uint64_t guid = packet.readPackedGuid();
-                if (guid == 0 || guid == owner_.getPlayerGuid() || !owner_.unitMoveFlagsCallbackRef()) return;
-                owner_.unitMoveFlagsCallbackRef()(guid, synthFlags, mask);
-            };
-        };
         // These are this client's own movement flags, not wire values: the
-        // opcode carries no flag word and the handler invents one to describe
-        // what the unit is now doing. Naming them keeps them following
+        // opcode carries no flag word. Naming them keeps them following
         // MovementFlags, which is what every reader compares against.
         constexpr auto asFlag = [](MovementFlags f) { return static_cast<uint32_t>(f); };
         constexpr uint32_t kWalkBit = asFlag(MovementFlags::WALKING);
         constexpr uint32_t kSwimBit = asFlag(MovementFlags::SWIMMING);
         constexpr uint32_t kFlyBits =
             asFlag(MovementFlags::CAN_FLY) | asFlag(MovementFlags::FLYING);
+        constexpr uint32_t kHover = asFlag(MovementFlags::HOVER);
+        constexpr uint32_t kSafeFall = asFlag(MovementFlags::FEATHER_FALL);
+        constexpr uint32_t kWaterWalk = asFlag(MovementFlags::WATER_WALK);
+        constexpr uint32_t kNoGravity = asFlag(MovementFlags::LEVITATING);
+        constexpr uint32_t kRoot = asFlag(MovementFlags::ROOT);
+        constexpr uint32_t kRootBits = kRoot | asFlag(MovementFlags::PENDING_ROOT);
 
-        table[Opcode::SMSG_SPLINE_MOVE_SET_WALK_MODE] =
-            makeSynthHandler(kWalkBit, kWalkBit);
+        struct Change {
+            Opcode opcode;
+            uint32_t set, mask;
+        };
         // Run mode says the unit is not walking. It says nothing about
         // swimming or flying, and clearing those took the flight animation off
-        // anything that started moving.
-        table[Opcode::SMSG_SPLINE_MOVE_SET_RUN_MODE]  = makeSynthHandler(0u, kWalkBit);
-        // CAN_FLY because that is what the opcode means - AzerothCore sends it
-        // from Unit::SetCanFly for units the client does not control - and
-        // FLYING because that is the flag the animation reads.
-        //
-        // It used to synthesise CAN_FLY and DESCENDING. Nothing reads either:
-        // the callback these flags reach keys swimming, walking and flying off
-        // SWIMMING, WALKING and FLYING, so the opcode landed, was parsed, and
-        // changed nothing. A gryphon told to fly kept its ground animation.
-        table[Opcode::SMSG_SPLINE_MOVE_SET_FLYING]    = makeSynthHandler(kFlyBits, kFlyBits);
-        table[Opcode::SMSG_SPLINE_MOVE_START_SWIM]    = makeSynthHandler(kSwimBit, kSwimBit);
-        table[Opcode::SMSG_SPLINE_MOVE_STOP_SWIM]     = makeSynthHandler(0u, kSwimBit);
+        // anything that started moving. CAN_FLY because that is what
+        // SET_FLYING means - AzerothCore sends it from Unit::SetCanFly for
+        // units the client does not control - and FLYING because that is the
+        // flag the animation reads.
+        for (const Change& change : {Change{Opcode::SMSG_SPLINE_MOVE_SET_WALK_MODE, kWalkBit, kWalkBit},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_SET_RUN_MODE, 0u, kWalkBit},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_SET_FLYING, kFlyBits, kFlyBits},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_UNSET_FLYING, 0u, kFlyBits},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_START_SWIM, kSwimBit, kSwimBit},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_STOP_SWIM, 0u, kSwimBit},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_FEATHER_FALL, kSafeFall, kSafeFall},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_NORMAL_FALL, 0u, kSafeFall},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_WATER_WALK, kWaterWalk, kWaterWalk},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_LAND_WALK, 0u, kWaterWalk},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_GRAVITY_DISABLE, kNoGravity, kNoGravity},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_GRAVITY_ENABLE, 0u, kNoGravity},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_SET_HOVER, kHover, kHover},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_UNSET_HOVER, 0u, kHover},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_ROOT, kRoot, kRoot},
+                                     Change{Opcode::SMSG_SPLINE_MOVE_UNROOT, 0u, kRootBits}}) {
+            table[change.opcode] = [this, change](network::Packet& packet) {
+                if (!packet.hasRemaining(1)) return;
+                const uint64_t guid = packet.readPackedGuid();
+                if (guid == 0 || guid == owner_.getPlayerGuid()) return;
+                splineMoveFlags(guid, change.opcode, change.set, change.mask);
+            };
+        }
     }
 
     // Spline speed: all opcodes share the same PackedGuid+float format, differing
@@ -414,31 +416,6 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     // Client control update
     table[Opcode::SMSG_CLIENT_CONTROL_UPDATE] = [this](network::Packet& packet) {
         handleClientControlUpdate(packet);
-    };
-
-    // Spline move flag changes for other units (unroot/unset_hover/water_walk)
-    for (auto op : {Opcode::SMSG_SPLINE_MOVE_UNROOT,
-                    Opcode::SMSG_SPLINE_MOVE_UNSET_HOVER,
-                    Opcode::SMSG_SPLINE_MOVE_WATER_WALK}) {
-        table[op] = [](network::Packet& packet) {
-            // Minimal parse: PackedGuid only - no animation-relevant state change.
-            if (packet.hasRemaining(1)) {
-                (void)packet.readPackedGuid();
-            }
-        };
-    }
-
-    table[Opcode::SMSG_SPLINE_MOVE_UNSET_FLYING] = [this](network::Packet& packet) {
-        // PackedGuid + synthesised move-flags=0 → clears flying animation.
-        if (!packet.hasRemaining(1)) return;
-        uint64_t guid = packet.readPackedGuid();
-        if (guid == 0 || guid == owner_.getPlayerGuid() || !owner_.unitMoveFlagsCallbackRef()) return;
-        // Only the flying bits: this opcode says nothing about walking or
-        // swimming.
-        owner_.unitMoveFlagsCallbackRef()(
-            guid, 0u,
-            static_cast<uint32_t>(MovementFlags::CAN_FLY) |
-                static_cast<uint32_t>(MovementFlags::FLYING));
     };
 
     // Remaining spline speed opcodes - same factory as above.
@@ -1954,6 +1931,35 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     if (jump != ReportedJump::None && owner_.unitJumpCallbackRef()) {
         owner_.unitJumpCallbackRef()(moverGuid, jump);
     }
+}
+
+void MovementHandler::splineMoveFlags(uint64_t guid, Opcode opcode, uint32_t set, uint32_t mask) {
+    if (const auto entity = owner_.getEntityManager().getEntity(guid)) {
+        constexpr uint32_t kHover = static_cast<uint32_t>(MovementFlags::HOVER);
+        const bool hoveredBefore = (entity->getReportedMoveFlags() & kHover) != 0;
+        if (opcode == Opcode::SMSG_SPLINE_MOVE_ROOT) entity->setRooted(onMoveSpline(guid));
+        else entity->setMoveFlags(set, mask);
+        // 0x006eb060: up as a jump goes, or a fall - before the flag. The
+        // ground of a unit that stands is where it stands, of one that hovers
+        // the hover height under it (UNIT_FIELD_HOVERHEIGHT, the one after
+        // MAXHEALTHMODIFIER).
+        const bool hovers = (set & kHover) != 0;
+        if ((mask & kHover) != 0 && hovers != hoveredBefore && !entity->isActivelyMoving() && !onMoveSpline(guid)) {
+            const uint16_t before = fieldIndex(UF::UNIT_FIELD_MAXHEALTHMODIFIER);
+            const float height =
+                before == 0xFFFF ? 1.0f : std::bit_cast<float>(entity->getField(static_cast<uint16_t>(before + 1)));
+            // 0x009883f0, 0x00988370: not a flying, falling or rooted one, one on a
+            // transport, nor one without
+            // gravity; from the water faster.
+            const uint32_t flags = entity->getReportedMoveFlags();
+            const bool held = hovers ? (flags & 0x2001e00u) != 0 : (flags & 0x2201e00u) != 0;
+            if (!held && std::isfinite(height) && height > 0.0f && height < 100.0f) {
+                if (hovers) entity->fallInPlace(entity->getZ() + height, (flags & 0x200000u) != 0 ? -9.096f : -7.955547f);
+                else entity->fallInPlace(entity->getZ() - height, 0.0f);
+            }
+        }
+    }
+    if (owner_.unitMoveFlagsCallbackRef()) owner_.unitMoveFlagsCallbackRef()(guid, set, mask);
 }
 
 void MovementHandler::handleCompressedMoves(network::Packet& packet) {

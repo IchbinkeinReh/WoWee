@@ -687,6 +687,35 @@ public:
         reportedMoveFlags_ = flags;
         splineFlagsArrive_ = false;
     }
+    /// What an SMSG_SPLINE_MOVE_* packet sets or takes off (0x00740ba0), its
+    /// locomotion asked again after it (0x0073ac30).
+    void setMoveFlags(uint32_t set, uint32_t mask) {
+        reportedMoveFlags_ = (reportedMoveFlags_ & ~mask) | (set & mask);
+        locomotionRequested_ = true;
+    }
+    /// Rooted (0x0098c4f0): its keys' directions are let go; one in the air
+    /// and on no spline has it noted for where it lands.
+    void setRooted(bool onSpline) {
+        constexpr uint32_t kRoot = 0x800, kPendingRoot = 0x100000, kKept = 0xff203f00u;
+        if ((reportedMoveFlags_ & kRoot) == 0) {
+            if ((reportedMoveFlags_ & kFalling) != 0 && !onSpline) reportedMoveFlags_ |= kPendingRoot;
+            else reportedMoveFlags_ = (reportedMoveFlags_ | kRoot) & kKept;
+        }
+        locomotionRequested_ = true;
+    }
+    /// Up or down where it stands (0x00988370): set to hover it rises as a
+    /// jump does (0x009883f0) and comes to rest over the ground by its hover
+    /// height, let go of it falls from rest (0x0098b710). `floor` is where it
+    /// comes to rest. Not one on its way, whose path has its heights.
+    void fallInPlace(float floor, float verticalSpeed) {
+        if (isMoving_) return;
+        inPlace_ = InPlaceFall{.top = z, .speed = verticalSpeed, .floor = floor, .seconds = 0.0f};
+        reportedMoveFlags_ |= kFalling;
+        launched_ = verticalSpeed != 0.0f;
+        locomotionRequested_ = true;
+    }
+    [[nodiscard]] bool fallsInPlace() const { return inPlace_.has_value(); }
+
     /// The flags a monster move leaves (monster_move::afterMonsterMove),
     /// given after its move has been started here. `arrives` - a spline that
     /// is not cyclic - takes forward and back off again once the move is
@@ -880,8 +909,11 @@ public:
             orientation = wrapAngle(turnBase_ + turnRate_ * turnElapsed_);
         }
         if (isMoving_) {
+            endInPlace();
             if (movingByFlags_) advanceByFlags(gone);
             else advanceSegment(gone);
+        } else if (inPlace_) {
+            advanceInPlace(gone);
         }
         arriveSplineFlags();
         updateModelFacing(deltaTime);
@@ -1053,6 +1085,14 @@ private:
         curveLinear_ = false;
         arcDurationMs_ = 0;
         fallTop_.reset();
+        endInPlace();
+    }
+
+    void endInPlace() {
+        if (!inPlace_) return;
+        inPlace_.reset();
+        reportedMoveFlags_ &= ~(kFalling | kFallingFar);
+        launched_ = false;
     }
 
     /// 0x0098ca00: a fall that has come down to the path's end is over.
@@ -1306,6 +1346,29 @@ private:
         isMoving_ = false;
     }
 
+    void advanceInPlace(float deltaTime) {
+        constexpr float kGravity = 19.291105f;
+        constexpr float kHoverCatchUp = 3.5f;  // 0x00762980
+        InPlaceFall& f = *inPlace_;
+        f.seconds += deltaTime;
+        const float peakAt = f.speed < 0.0f ? -f.speed / kGravity : 0.0f;
+        const float peak = f.top - fallDistance(peakAt, f.speed, false);
+        bool done = false;
+        if (f.seconds < peakAt) {
+            z = f.top - fallDistance(f.seconds, f.speed, false);
+        } else if (f.floor > peak) {
+            // Higher than that takes it: on up as a hovering unit is held.
+            z = std::min(f.floor, peak + kHoverCatchUp * (f.seconds - peakAt));
+            done = z >= f.floor;
+        } else {
+            z = std::max(f.floor, f.top - fallDistance(f.seconds, f.speed, (reportedMoveFlags_ & kSafeFall) != 0));
+            done = z <= f.floor;
+        }
+        if (!done) return;
+        endInPlace();
+        locomotionRequested_ = true;
+    }
+
     void advanceByFlags(float deltaTime) {
         moveElapsed_ += deltaTime;
         const float t = std::min(moveElapsed_, kFlagDeadReckonLimitSec);
@@ -1393,6 +1456,11 @@ private:
     float flagSpeed_ = 0;                   // Horizontal speed
     float flagClimb_ = 0;                   // Vertical speed
     float flagArcRate_ = 0;                 // Rate the direction turns at
+    // Raised to hover or let down from it; see fallInPlace.
+    struct InPlaceFall {
+        float top = 0.0f, speed = 0.0f, floor = 0.0f, seconds = 0.0f;
+    };
+    std::optional<InPlaceFall> inPlace_;
     // Falling by the packet's fall: from fallTopZ_, where the fall began,
     // fallElapsedSec_ into it at the packet; see fallDistance.
     bool falling_ = false;

@@ -366,6 +366,7 @@ public:
     std::unordered_map<uint64_t, float>& otherPlayerSmoothedIntervalMsRef() { return otherPlayerSmoothedIntervalMs_; }
 
     // Methods also called from GameHandler's registerOpcodeHandlers
+    void splineMoveFlags(uint64_t guid, Opcode opcode, uint32_t set, uint32_t mask);
     void handleCompressedMoves(network::Packet& packet);
     void handleForceMoveFlagChange(network::Packet& packet, const char* name, Opcode ackOpcode, uint32_t flag, bool set);
     void handleMoveSetCollisionHeight(network::Packet& packet);
