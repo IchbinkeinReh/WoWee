@@ -1619,10 +1619,15 @@ void WidgetTree::collectDrawOrder() {
         if (w->kind != WidgetKind::Frame) return layerRank(w->layer);
         return layerRank(w->externalTexture != 0 ? DrawLayer::Artwork : DrawLayer::Background);
     };
-    // Before the layer's regions, among them, or after them.
+    // Before the layer's regions, among them, or after them: a level's layer is
+    // one batch of all its frames' regions (0x00494af0), and that draws its
+    // pictures, then its strings, then the models (0x00484b00) - whichever
+    // came first. The reputation window names its faction in strings the
+    // paper behind them is declared after.
     auto sortPart = [&](const Widget* w) {
+        if (w->kind == WidgetKind::FontString || w->isEditBox) return 2;
         if (w->kind != WidgetKind::Frame || special(w)) return 1;
-        return w->externalTexture != 0 ? 2 : 0;
+        return w->externalTexture != 0 ? 3 : 0;
     };
     std::sort(drawOrder_.begin(), drawOrder_.end(),
               [&](const Widget* a, const Widget* b) {

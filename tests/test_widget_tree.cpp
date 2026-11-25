@@ -3876,3 +3876,33 @@ TEST_CASE("a label between two sides breaks its lines there", "[widgets]") {
     tree.get(label)->autoSized = true;
     CHECK(textWrapWidth(*tree.get(label)) == 0.0f);
 }
+
+// P64: 0x00494af0 puts a level's layer in one batch, 0x00484b00 draws its pictures, then its
+// strings, then the models.
+TEST_CASE("a layer's strings are over its pictures", "[widget][draworder]") {
+    WidgetTree tree;
+    const uint32_t win = tree.create(WidgetKind::Frame, tree.root(), "Detail");
+    tree.get(win)->width = tree.get(win)->height = 100.0f;
+    const uint32_t name = tree.create(WidgetKind::FontString, win, "DetailName");
+    const uint32_t paper = tree.create(WidgetKind::Texture, win, "DetailPaper");
+    const uint32_t model = tree.create(WidgetKind::Frame, tree.root(), "DetailModel");
+    tree.get(name)->text = "Thrallmar";
+    tree.get(paper)->texturePath = "paper";
+    tree.get(model)->externalTexture = 1;
+    for (const uint32_t id : {name, paper, model}) {
+        tree.get(id)->layer = DrawLayer::Artwork;
+        tree.get(id)->width = tree.get(id)->height = 50.0f;
+    }
+    for (const uint32_t id : {win, name, paper, model})
+        tree.get(id)->anchors.push_back({});
+    tree.layout(1024.0f, 768.0f);
+    const auto& order = tree.drawOrder();
+    const auto at = [&](uint32_t id) {
+        return std::find_if(order.begin(), order.end(), [&](const Widget* w) { return w->id == id; }) - order.begin();
+    };
+    REQUIRE(order.size() == 3);
+    CHECK(at(paper) < at(name));
+    CHECK(at(name) < at(model));
+}
+
+/
