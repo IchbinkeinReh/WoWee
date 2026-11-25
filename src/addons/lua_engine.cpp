@@ -3126,6 +3126,7 @@ int lua_Tooltip_AppendText(lua_State* L) {
     return 0;
 }
 
+static std::string globalOr(lua_State* L, const char* name, const char* fallback);
 int lua_Tooltip_SetFrameStack(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* tree = wowee::addons::getWidgetTree(L);
@@ -3172,11 +3173,8 @@ int lua_Tooltip_SetFrameStack(lua_State* L) {
         return s;
     };
 
-    line("Frame Stack  (" + num(x) + ", " + num(y) + ")", 1.0f, 0.82f, 0.0f);
-    if (under.empty()) {
-        line("nothing under the cursor", 0.6f, 0.6f, 0.6f);
-        return 0;
-    }
+    line(globalOr(L, "DEBUG_FRAMESTACK", "Frame Stack") + "  (" + num(x) + ", " + num(y) + ")", 1.0f, 0.82f, 0.0f);
+    if (under.empty()) line("nothing under the cursor", 0.6f, 0.6f, 0.6f);
     for (const Entry& e : under) {
         const char* kind = e.w->kind == wowee::ui::WidgetKind::Texture    ? "texture"
                          : e.w->kind == wowee::ui::WidgetKind::FontString ? "label"
@@ -3194,6 +3192,12 @@ int lua_Tooltip_SetFrameStack(lua_State* L) {
             line("    " + e.w->texturePath, 0.5f, 0.5f, 0.5f);
         }
     }
+    // Its script, and shown (0x006230d0's end): /framestack's window is hidden
+    // until it is filled.
+    fireTooltipScript(L, w, "OnTooltipSetFrameStack");
+    lua_getfield(L, 1, "Show");
+    lua_pushvalue(L, 1);
+    lua_call(L, 1, 0);
     return 0;
 }
 
