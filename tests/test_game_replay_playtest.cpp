@@ -1429,3 +1429,34 @@ TEST_CASE("a unit's stats are its own fields", "[replay][stats]") {
     CHECK(stats.intellect == 479);
     CHECK(stats.spirit == 367);
 }
+
+// 0x00614190, 0x00740570, 0x00724d90: each token of the unit hears of it.
+TEST_CASE("a unit's tokens hear of its fields", "[replay][fieldevents]") {
+    constexpr uint64_t kWolf = 0xF130000ABC000001ull;
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kWolf, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 50}, {UF::UNIT_FIELD_MAXHEALTH, 50},
+                                     {UF::UNIT_FIELD_FACTIONTEMPLATE, 32}, {UF::UNIT_FIELD_FLAGS, 0}}));
+    s.handler().setTarget(kWolf);
+    s.handler().setFocus(kWolf);
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>& args) {
+        if (name.rfind("UNIT_", 0) == 0) events.push_back(name + (args.empty() ? "" : " " + args[0]));
+    });
+    const auto heard = [&](UF field, uint32_t value) {
+        events.clear();
+        s.receive(UpdateObject().values(kWolf, {{field, value}}));
+        std::sort(events.begin(), events.end());
+        std::string out;
+        for (const auto& e : events) out += e + ";";
+        return out;
+    };
+    CHECK(heard(UF::UNIT_FIELD_HEALTH, 20) == "UNIT_HEALTH focus;UNIT_HEALTH target;");
+    CHECK(heard(UF::UNIT_FIELD_HEALTH, 20).empty());
+    CHECK(heard(UF::UNIT_FIELD_FACTIONTEMPLATE, 35) == "UNIT_FACTION focus;UNIT_FACTION target;");
+    CHECK(heard(UF::UNIT_FIELD_FLAGS, 0x80000) == "UNIT_FLAGS focus;UNIT_FLAGS target;");
+    CHECK(heard(UF::UNIT_DYNAMIC_FLAGS, 4) ==
+          "UNIT_DYNAMIC_FLAGS focus;UNIT_DYNAMIC_FLAGS target;UNIT_FACTION focus;UNIT_FACTION target;");
+    s.handler().setAddonEventCallback({});
+}

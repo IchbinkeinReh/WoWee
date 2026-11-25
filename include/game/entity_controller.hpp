@@ -295,16 +295,6 @@ private:
         static PlayerFieldIndices resolve();
     };
     struct UnitFieldUpdateResult {
-        bool healthChanged = false;
-        /// Separately, because a frame registers for the two apart: the value
-        /// and the scale it is drawn against are different questions.
-        bool maxHealthChanged = false;
-        bool powerChanged = false;
-        /// Which power moved, as an index into the power tables, or -1. The
-        /// event a WotLK interface listens for is named after the power, so
-        /// knowing that something changed is not enough to tell it.
-        int  powerTypeChanged = -1;
-        int  maxPowerTypeChanged = -1;
         bool displayIdChanged = false;
         bool npcDeathNotified = false;
         bool npcRespawnNotified = false;

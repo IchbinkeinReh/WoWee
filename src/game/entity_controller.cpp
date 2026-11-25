@@ -1,3 +1,4 @@
+#include "game/unit_field_events.hpp"
 #include "game/mirror_image.hpp"
 #include "game/quest_status_requery.hpp"
 #include "game/entity_controller.hpp"
@@ -1195,7 +1196,6 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     for (const auto& [key, val] : block.fields) {
         if (key == ufi.health) {
             unit->setHealth(val);
-            result.healthChanged = true;
             // A unit dying in front of the client is a combat log entry
             // (0x007489c0 -> 0x007561e0), once, as its health runs out.
             if (val == 0 && oldHealth != 0) owner_.combatLogFeed().unitDied(block.guid);
@@ -1251,18 +1251,11 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         // (Classic packs maxHealth/level/faction adjacent to power indices)
         } else if (key == ufi.maxHealth) {
             unit->setMaxHealth(val);
-            result.healthChanged = true;
-            result.maxHealthChanged = true;
         }
         else if (key == ufi.bytes0) {
             uint8_t oldPT = unit->getPowerType();
             unit->setPowerType(static_cast<uint8_t>((val >> 24) & 0xFF));
-            if (unit->getPowerType() != oldPT) {
-                powerTypeMoved = true;
-                auto uid = owner_.guidToUnitId(block.guid);
-                if (!uid.empty())
-                    pendingEvents_.emit("UNIT_DISPLAYPOWER", {uid});
-            }
+            if (unit->getPowerType() != oldPT) powerTypeMoved = true;
         } else if (key == ufi.flags) {
             uint32_t oldFlags = unit->getUnitFlags();
             unit->setUnitFlags(val);
@@ -1417,7 +1410,6 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             if ((oldDyn & UNIT_DYNFLAG_LOOTABLE) == 0 && (val & UNIT_DYNFLAG_LOOTABLE) != 0)
                 owner_.triggerTutorial(6);
             if (block.guid == owner_.getPlayerGuid()) {
-                if (oldDyn != val) pendingEvents_.emit("UNIT_DYNAMIC_FLAGS", {"player"});
                 bool wasDead = (oldDyn & UNIT_DYNFLAG_DEAD) != 0;
                 bool nowDead = (val & UNIT_DYNFLAG_DEAD) != 0;
                 if (!wasDead && nowDead && isFeigningDeath(*entity, *unit)) {
@@ -1469,11 +1461,6 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         } else if (key == ufi.level) {
             uint32_t oldLvl = unit->getLevel();
             unit->setLevel(val);
-            if (val != oldLvl) {
-                auto uid = owner_.guidToUnitId(block.guid);
-                if (!uid.empty())
-                    pendingEvents_.emit("UNIT_LEVEL", {uid});
-            }
             // Any unit's, as its level changes (0x00730050 -> 0x0072e3a0); the
             // player's own comes with SMSG_LEVELUP_INFO.
             if (block.guid != owner_.getPlayerGuid() && val != oldLvl && oldLvl > 0)
@@ -1610,50 +1597,15 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         // Power/maxpower range checks AFTER all specific fields
         else if (key >= ufi.powerBase && key < ufi.powerBase + 7) {
             unit->setPowerByType(static_cast<uint8_t>(key - ufi.powerBase), val);
-            result.powerChanged = true;
-            result.powerTypeChanged = static_cast<int>(key - ufi.powerBase);
             powersMoved |= static_cast<uint8_t>(1u << (key - ufi.powerBase));
         } else if (key >= ufi.maxPowerBase && key < ufi.maxPowerBase + 7) {
             unit->setMaxPowerByType(static_cast<uint8_t>(key - ufi.maxPowerBase), val);
-            result.powerChanged = true;
-            result.maxPowerTypeChanged = static_cast<int>(key - ufi.maxPowerBase);
             maxPowersMoved |= static_cast<uint8_t>(1u << (key - ufi.maxPowerBase));
         }
     }
     // The fields' handlers (0x00741d00) in field order, once all are written.
     if (powerTypeMoved || powersMoved != 0 || maxPowersMoved != 0)
         owner_.powerFieldsChanged(*unit, block.guid, powerTypeMoved, powersMoved, maxPowersMoved);
-
-    // Fire the health and power events the interface listens for
-    if ((result.healthChanged || result.powerChanged)) {
-        auto unitId = owner_.guidToUnitId(block.guid);
-        if (!unitId.empty()) {
-            if (result.healthChanged) pendingEvents_.emit("UNIT_HEALTH", {unitId});
-            if (result.maxHealthChanged) pendingEvents_.emit("UNIT_MAXHEALTH", {unitId});
-            if (result.powerChanged) {
-                // The event a WotLK interface is listening for is named after
-                // the power itself: the client fires `0x13 + type` from the field
-                // setter (0x0060bf10), so UNIT_MANA, UNIT_RAGE, UNIT_ENERGY,
-                // UNIT_FOCUS, UNIT_HAPPINESS or UNIT_RUNIC_POWER, and the maxima
-                // at `0x1b + type`. Runes name nothing.
-                //
-                // "UNIT_POWER", which this branch used to fire as well, is not a
-                // name this client has at all - not in its event-id table, not
-                // once in Wow.exe where each of the named ones appears once, and
-                // not in any FrameXML listener. It was the generic Cataclysm
-                // name, and it is what the named branch above was written to
-                // work around while it kept being fired next to it.
-                if (result.powerTypeChanged >= 0 && result.powerTypeChanged < 7 &&
-                    power_prediction::kPowerEvents[result.powerTypeChanged] != nullptr)
-                    pendingEvents_.emit(power_prediction::kPowerEvents[result.powerTypeChanged], {unitId});
-                if (result.maxPowerTypeChanged >= 0 && result.maxPowerTypeChanged < 7 &&
-                    power_prediction::kMaxPowerEvents[result.maxPowerTypeChanged] != nullptr)
-                    pendingEvents_.emit(power_prediction::kMaxPowerEvents[result.maxPowerTypeChanged], {unitId});
-                // The usability events come from the prediction moving
-                // (0x00722c50 -> 0x0053d1b0), not from the field.
-            }
-        }
-    }
 
     // The pet frame's experience bar reads GetPetExperience and redraws on
     // this; without it the bar was filled once when the pet was summoned and
@@ -4195,6 +4147,37 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
                               block.fields.find(scaleIdx) != block.fields.end();
     const uint32_t oldScaleBits = watchesScale ? entity->getField(scaleIdx) : 0;
 
+    // The events of its fields (unit_field_events.hpp), for the tokens it has.
+    const auto tokens = isUnit && owner_.addonEventCallbackRef() ? owner_.unitTokensForGuid(block.guid)
+                                                                 : std::vector<std::string>{};
+    std::vector<const char*> fieldEvents;
+    UnitSigns signs;
+    const uint16_t bytes2At = fieldIndex(UF::UNIT_FIELD_BYTES_2), dynamicAt = fieldIndex(UF::UNIT_DYNAMIC_FLAGS);
+    const uint16_t flagsAt = fieldIndex(UF::UNIT_FIELD_FLAGS), bytes0At = fieldIndex(UF::UNIT_FIELD_BYTES_0);
+    const auto signsNow = [&] {
+        const auto at = [&](uint16_t index) { return index == 0xFFFF ? 0u : entity->getField(index); };
+        return UnitSigns{.flags = at(flagsAt),
+                         .dynamic = at(dynamicAt),
+                         .pvp = static_cast<uint8_t>(at(bytes2At) >> 8),
+                         .powerType = static_cast<uint8_t>(at(bytes0At) >> 24)};
+    };
+    if (!tokens.empty()) {
+        signs = signsNow();
+        const UnitEventFields at{.bytes0 = bytes0At,
+                                 .health = fieldIndex(UF::UNIT_FIELD_HEALTH),
+                                 .power1 = fieldIndex(UF::UNIT_FIELD_POWER1),
+                                 .maxHealth = fieldIndex(UF::UNIT_FIELD_MAXHEALTH),
+                                 .maxPower1 = fieldIndex(UF::UNIT_FIELD_MAXPOWER1),
+                                 .level = fieldIndex(UF::UNIT_FIELD_LEVEL),
+                                 .faction = fieldIndex(UF::UNIT_FIELD_FACTIONTEMPLATE),
+                                 .flags = flagsAt,
+                                 .flags2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2),
+                                 .dynamic = dynamicAt};
+        for (const auto& [key, value] : block.fields)
+            if (const char* event = unitFieldEvent(at, key); event && entity->getField(key) != value)
+                fieldEvents.push_back(event);
+    }
+
     // Set fields (common)
     for (const auto& field : block.fields) {
         entity->setField(field.first, field.second);
@@ -4203,6 +4186,11 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     // Dispatch to type-specific handler
     auto* handler = getTypeHandler(entity->getType());
     if (handler) handler->onValuesUpdate(block, entity);
+    if (!tokens.empty()) {
+        for (const char* event : unitSignEvents(signs, signsNow())) fieldEvents.push_back(event);
+        for (const char* event : fieldEvents)
+            for (const auto& token : tokens) pendingEvents_.emit(event, {token});
+    }
     if (watchesCharmer && charmerOf() != oldCharmer && owner_.getSpellHandler())
         owner_.getSpellHandler()->onUnitCharmedByChanged(block.guid, oldCharmer);
 

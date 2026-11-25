@@ -4358,6 +4358,10 @@ wowee_add_test(test_binding_sets
 wowee_add_test(test_item_book
     SOURCES test_item_book.cpp)
 
+# ── test_unit_field_events ───────────────────────────────────
+wowee_add_test(test_unit_field_events
+    SOURCES test_unit_field_events.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
