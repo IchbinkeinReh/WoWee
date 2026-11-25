@@ -2450,6 +2450,8 @@ static bool pushFrameOfWidget(lua_State* L, uint32_t wid) {
     return true;
 }
 
+constexpr int kAnchorNone = 9;   // among kTooltipAnchorTypes
+
 /// A tooltip started over (0x0061c620). Every setter begins here - SetOwner,
 /// ClearLines, SetText and each Set* - and so does every refill: the lines
 /// go, and with them what the tooltip was showing (the item GetItem answers
@@ -2466,6 +2468,7 @@ static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
     w->tooltipLines.clear();
     // And SetMinimumWidth's width, unless it was forced (+0x3d8, +0x3dc).
     if (!w->tooltipMinWidthForced) w->tooltipMinWidth = 0.0f;
+    w->tooltipUnit.clear();   // +0x328
     if (!pushFrameOfWidget(L, w->id)) return;
     const int tip = lua_gettop(L);
     lua_pushnil(L);
@@ -2479,6 +2482,22 @@ static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
     lua_setfield(L, tip, "__pendingQuestId");
     if (hadLines) callScriptOnTable(L, tip, "OnTooltipCleared", 0.0);
     lua_settop(L, tip - 1);
+}
+
+/// What goes with a tooltip as it is hidden, by whatever hides it (0x0061eb20 ->
+/// 0x0061ea00 with no owner): its lines, what it showed, its owner and a fade under way.
+static void tooltipGone(lua_State* L, wowee::ui::WidgetTree& tree, wowee::ui::Widget* w) {
+    if (!w || w->objectType != "GameTooltip") return;
+    clearTooltipLines(L, w);
+    w->tooltipFadeLeft = 0.0f;
+    w->alpha = 1.0f;
+    w->tooltipAnchorType = kAnchorNone;
+    w->tooltipAnchorX = w->tooltipAnchorY = 0.0f;
+    tree.setTooltipOwner(w->id, 0);
+    if (!pushFrameOfWidget(L, w->id)) return;
+    lua_pushnil(L);
+    lua_setfield(L, -2, "__owner");
+    lua_pop(L, 1);
 }
 
 /// A spell's tooltip built (0x006238a0's end, and the talent builder's,
@@ -3220,7 +3239,6 @@ constexpr const char* kTooltipAnchorTypes[] = {
     "ANCHOR_BOTTOMRIGHT", "ANCHOR_TOPLEFT", "ANCHOR_TOP", "ANCHOR_TOPRIGHT",
     "ANCHOR_CURSOR", "ANCHOR_NONE", "ANCHOR_PRESERVE", "ANCHOR_CURSOR_RIGHT",
 };
-constexpr int kAnchorNone = 9;
 constexpr int kAnchorPreserve = 10;
 
 int tooltipAnchorType(lua_State* L, int arg) {
@@ -5418,9 +5436,9 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     // make: each pops what it pushed, but the lines are counted by data.
     lua_checkstack(L, 8);
     w->isTooltip = true;
+    clearTooltipLines(L, w);
     // Whose tooltip this is, for IsUnit below.
     w->tooltipUnit = uidStr;
-    clearTooltipLines(L, w);
 
     auto addLine = [&w](std::string text, float r, float g, float b) {
         if (text.empty()) return;
@@ -7436,10 +7454,15 @@ int lua_Button_IsEnabled(lua_State* L) {
 
 void tooltipShown(lua_State* L, uint32_t tooltipId) {
     auto* tree = wowee::addons::getWidgetTree(L);
-    const auto* w = tree ? tree->get(tooltipId) : nullptr;
+    auto* w = tree ? tree->get(tooltipId) : nullptr;
     if (!w || w->objectType != "GameTooltip" || !w->shown || w->toldShown) return;
     const int top = lua_gettop(L);
-    if (auto* engine = engineFrom(L)) engine->frameShown(tooltipId);
+    if (w->tooltipOwnerId == 0) {   // 0x0061cff0: none without an owner
+        w->shown = false;
+        tooltipGone(L, *tree, w);
+    } else if (auto* engine = engineFrom(L)) {
+        engine->frameShown(tooltipId);
+    }
     lua_settop(L, top);
 }
 
@@ -7466,9 +7489,13 @@ static void queueAnimFinished(lua_State* L, int frameIndex) {
     lua_pop(L, 1);
 }
 
+int lua_Region_Hide(lua_State* L);
 int lua_Region_Show(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
+    // A tooltip without an owner or a line is hidden by it (0x0061cff0).
+    if (w && w->objectType == "GameTooltip" && (w->tooltipOwnerId == 0 || w->tooltipLines.empty()))
+        return lua_Region_Hide(L);
     const bool becameShown = w && !w->shown;
     if (w) {
         // Owed a look from updateVisibility, which reads only marked frames.
@@ -7506,33 +7533,7 @@ int lua_Region_Hide(lua_State* L) {
     const bool wasShown = w && w->shown;
     if (w) {
         if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markVisibilityPending(w->id);
-        // A hidden tooltip belongs to nobody.
-        //
-        // The owner is what FrameXML tests to decide whether a tooltip on
-        // screen is its own, and it is *set* on every hover and cleared by
-        // nothing here - so once a button had been hovered it owned the tooltip
-        // for the rest of the session. ActionButton_Update then does
-        //
-        //     if ( GameTooltip:GetOwner() == self ) then ActionButton_SetTooltip(self) end
-        //
-        // and SetTooltip shows it again. Any button that updates often enough
-        // put its tooltip back on screen with the cursor nowhere near it, and
-        // Execute updates on every change to the target's health, which is why
-        // it was the one that stuck.
-        //
-        // The real client answers nil here for the same reason: an owner is a
-        // property of a tooltip that is up.
-        //
-        // The interface's own idea of the owner, and only that one. The
-        // tree keeps a second, which is what takes a tooltip away with the
-        // panel it belonged to - clearing that as well made every hidden
-        // tooltip look orphaned the next time something showed it without
-        // naming an owner again, and the comparison tooltip flashed on and
-        // off at the tooltip update rate as the two fought.
-        if (w->isTooltip) {
-            lua_pushnil(L);
-            lua_setfield(L, 1, "__owner");
-        }
+        if (auto* tree = wowee::addons::getWidgetTree(L)) tooltipGone(L, *tree, w);
         w->shown = false;
         tooltipLineStringWritten(L, w);
     }
@@ -18246,6 +18247,11 @@ void LuaEngine::frameHidden(uint32_t id) {
 }
 
 void LuaEngine::tellVisibility(uint32_t id, bool up, bool shown) {
+    if (!up) {
+        const int top = lua_gettop(L_);
+        tooltipGone(L_, widgets_, widgets_.get(id));
+        lua_settop(L_, top);
+    }
     if (auto* button = widgets_.get(id); button && !up) button->mouseButtonState(false);   // 0x0096f410
     // A toplevel frame comes to the front as it is shown, before its OnShow
     // (0x00490410).
