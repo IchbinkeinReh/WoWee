@@ -2383,17 +2383,8 @@ enum GoAnimState : uint8_t {
     kGoClose = 4, kGoDestroy = 5, kGoDestroyed = 6, kGoRebuild = 7,
 };
 
-// FUN_0070d690: a change of the server's GOState (0 ACTIVE, 1 READY,
-// 2 ACTIVE_ALTERNATIVE) from `from` to `to`. The client also checks an
-// animation-progress value it is sent; it is unset (0xFFFF) outside a
-// transition in progress, which is what this assumes.
-GoAnimState goAnimStateFor(uint8_t from, uint8_t to) {
-    switch (to) {
-        case 0:  return from != 1 ? kGoOpened : kGoOpen;
-        case 1:  return from == 0 ? kGoClose : (from == 2 ? kGoRebuild : kGoClosed);
-        default: return from != 1 ? kGoDestroyed : kGoDestroy;
-    }
-}
+static_assert(game::go_interaction::stateForChange(0, 1) == kGoClose &&
+              game::go_interaction::stateForChange(1, 0) == kGoOpen);
 
 // 0x0070d510: a transition that reverses one still playing - Open and
 // Close, Destroy and Rebuild - is to start where that one got to, read
@@ -2454,7 +2445,7 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     if (!first && prevIt->second == goState) return;
     const uint8_t from = first ? goState : prevIt->second;
     gameObjectServerState_[guid] = goState;
-    const GoAnimState state = goAnimStateFor(from, goState);
+    const auto state = static_cast<GoAnimState>(game::go_interaction::stateForChange(from, goState));
 
     // Whether an open pose should also stop blocking.
     //
@@ -2469,6 +2460,8 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     // By its own field's type, not the template's: the template is not there
     // the first time an entry is met, and the state said again is nothing, so
     // the open doors of an instance stayed shut for the whole first visit.
+    // And by the state it plays: one that closes is in the way as that has
+    // played (enterGameObjectAnimState), not from its first frame.
     uint32_t goType = game::kGameObjectTypeUnknown;
     if (gameHandler_) {
         if (auto entity = gameHandler_->getEntityManager().getEntity(guid);
@@ -2477,7 +2470,7 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
             goType = game::gameObjectTypeOf(*entity, gameHandler_->getCachedGameObjectInfo(entry));
         }
     }
-    if (const auto collides = game::stateCollides(goType, goState)) {
+    if (const auto collides = game::stateCollides(goType, goState, state)) {
         m2->setSkipCollision(instanceId, !*collides);
         // Said for the first few, because a door that never opens and a door
         // the server never tells us to open look identical from in front of

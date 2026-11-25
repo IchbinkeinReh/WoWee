@@ -1548,7 +1548,9 @@ TEST_CASE("a game object's type is its field's, with its template there or not",
     REQUIRE(bytes1 != 0xFFFF);
     const auto collides = [&](uint32_t bytes, const game::GameObjectQueryResponseData* info) {
         door.setField(bytes1, bytes);
-        return game::stateCollides(game::gameObjectTypeOf(door, info), static_cast<uint8_t>(bytes & 0xFF));
+        const auto state = static_cast<uint8_t>(bytes & 0xFF);
+        return game::stateCollides(game::gameObjectTypeOf(door, info), state,
+                                   game::go_interaction::stateForChange(state, state));
     };
     // Animation progress, art kit, type, state.
     CHECK(collides(0xFF000000u, nullptr) == false);  // an open door
@@ -1562,4 +1564,25 @@ TEST_CASE("a game object's type is its field's, with its template there or not",
     chest.type = 3;
     CHECK(collides(0xFF000000u, &chest) == false);
     CHECK(game::gameObjectTypeOf(door, &chest) == 0);
+}
+
+// P79: a door that closes was in the way from the first frame of it. 0x0070d8d0 has it so in Closed alone,
+// and Close (Rebuild, for a broken one) goes there as it has played (0x0070d7e0).
+TEST_CASE("a closing door is in the way once it is shut", "[replay][gameobject]") {
+    namespace game = wowee::game;
+    namespace gi = wowee::game::go_interaction;
+    for (const uint8_t from : {uint8_t{0}, uint8_t{2}}) {
+        CAPTURE(from);
+        const uint8_t closing = gi::stateForChange(from, 1);
+        CHECK(game::stateCollides(0, 1, closing) == false);
+        const auto shut = gi::stateAfter(closing);
+        REQUIRE(shut);
+        CHECK(game::stateCollides(0, 1, *shut) == true);
+        CHECK(gi::collidesAfterEntering(0, *shut) == true);
+    }
+    // One that opens or breaks lets through at once.
+    CHECK(game::stateCollides(0, 0, gi::stateForChange(1, 0)) == false);
+    CHECK(game::stateCollides(0, 2, gi::stateForChange(1, 2)) == false);
+    // Where it came into view shut, it is.
+    CHECK(game::stateCollides(0, 1, gi::stateForChange(1, 1)) == true);
 }
