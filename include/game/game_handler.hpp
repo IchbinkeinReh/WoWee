@@ -4785,6 +4785,8 @@ public:
         auto it = taxiNpcHasRoutes_.find(guid);
         return it != taxiNpcHasRoutes_.end() && it->second;
     }
+    /// What SMSG_TAXINODE_STATUS said of each flight master.
+    const std::unordered_map<uint64_t, bool>& taxiNodeStatuses() const { return taxiNpcHasRoutes_; }
     /// A flight master SMSG_TAXINODE_STATUS said the player has not learned
     /// (0x006d5fc0: status 0 sets the unit's +0x94, which the minimap marks
     /// with ObjectIcons' cell 13).

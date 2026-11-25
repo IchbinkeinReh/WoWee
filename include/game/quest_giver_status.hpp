@@ -77,20 +77,23 @@ inline QuestGiverMarker questGiverMarker(QuestGiverStatus status) {
 /// ordinary quest, blue for a repeatable one (the _REP statuses), grey for one
 /// you cannot take yet or have not finished. The low-level statuses get their
 /// mark only while the minimap tracks trivial quests (0x0057bf30: the tracked
-/// entry is of kind 3). Null for none. The client names the .mdx and loads
-/// the .m2.
-inline const char* questGiverMarkerModel(QuestGiverStatus status, bool trackingTrivialQuests) {
+/// entry is of kind 3). Where that gives nothing, the green one over a flight
+/// master whose node is not known (+0x94 7, SMSG_TAXINODE_STATUS 0x006d5fc0).
+/// Null for none. The client names the .mdx and loads the .m2.
+inline const char* questGiverMarkerModel(QuestGiverStatus status, bool trackingTrivialQuests,
+                                         bool taxiNodeUnknown = false) {
     constexpr const char* kYellowBang = "Interface\\Buttons\\TalkToMe.m2";
     constexpr const char* kYellowQuestion = "Interface\\Buttons\\TalkToMeQuestionMark.m2";
     constexpr const char* kBlueBang = "Interface\\Buttons\\TalkToMeBlue.m2";
     constexpr const char* kBlueQuestion = "Interface\\Buttons\\TalkToMeQuestion_LTBlue.m2";
     constexpr const char* kGreyBang = "Interface\\Buttons\\TalkToMeGrey.m2";
     constexpr const char* kGreyQuestion = "Interface\\Buttons\\TalkToMeQuestion_Grey.m2";
+    const char* const others = taxiNodeUnknown ? "Interface\\Buttons\\TalkToMeGreen.m2" : nullptr;
     switch (status) {
         case QuestGiverStatus::UNAVAILABLE:             return kGreyBang;
-        case QuestGiverStatus::LOW_LEVEL_AVAILABLE:     return trackingTrivialQuests ? kYellowBang : nullptr;
-        case QuestGiverStatus::LOW_LEVEL_REWARD_REP:    return trackingTrivialQuests ? kBlueQuestion : nullptr;
-        case QuestGiverStatus::LOW_LEVEL_AVAILABLE_REP: return trackingTrivialQuests ? kBlueBang : nullptr;
+        case QuestGiverStatus::LOW_LEVEL_AVAILABLE:     return trackingTrivialQuests ? kYellowBang : others;
+        case QuestGiverStatus::LOW_LEVEL_REWARD_REP:    return trackingTrivialQuests ? kBlueQuestion : others;
+        case QuestGiverStatus::LOW_LEVEL_AVAILABLE_REP: return trackingTrivialQuests ? kBlueBang : others;
         case QuestGiverStatus::INCOMPLETE:              return kGreyQuestion;
         case QuestGiverStatus::REWARD_REP:              return kBlueQuestion;
         case QuestGiverStatus::AVAILABLE_REP:           return kBlueBang;
@@ -99,7 +102,7 @@ inline const char* questGiverMarkerModel(QuestGiverStatus status, bool trackingT
         case QuestGiverStatus::REWARD:                  return kYellowQuestion;
         case QuestGiverStatus::NONE:                    break;
     }
-    return nullptr;
+    return others;
 }
 
 }  // namespace wowee::game

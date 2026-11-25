@@ -8566,10 +8566,14 @@ void Application::updateQuestMarkers() {
     std::vector<rendering::QuestGiverMarkers::Marker> wanted;
     // Not with the interface hidden (Alt-Z): SetUIVisibility re-flags every
     // unit's TalkToMe model by it (0x00517c20 -> 0x00517be0 -> 0x00745140).
-    static const std::unordered_map<uint64_t, game::QuestGiverStatus> kNone;
-    const auto& statuses = gameHandler->isUiVisible() ? gameHandler->getNpcQuestStatuses() : kNone;
+    std::unordered_map<uint64_t, game::QuestGiverStatus> statuses;
+    if (gameHandler->isUiVisible()) {
+        statuses = gameHandler->getNpcQuestStatuses();
+        for (const auto& [guid, known] : gameHandler->taxiNodeStatuses())
+            if (!known) statuses.try_emplace(guid, game::QuestGiverStatus::NONE);
+    }
     for (const auto& [guid, status] : statuses) {
-        const char* model = game::questGiverMarkerModel(status, trivial);
+        const char* model = game::questGiverMarkerModel(status, trivial, gameHandler->isTaxiNodeUnknown(guid));
         if (!model) continue;
         auto entity = gameHandler->getEntityManager().getEntity(guid);
         if (!entity) continue;

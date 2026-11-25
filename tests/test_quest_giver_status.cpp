@@ -156,3 +156,19 @@ TEST_CASE("a unit that becomes a questgiver is asked once", "[questgiver]") {
     CHECK_FALSE(rq::becameQuestGiver(0x2, 0x0));   // stops being one
     CHECK_FALSE(rq::becameQuestGiver(0x1, 0x81));  // never one
 }
+
+// 0x00745da0, 0x006d5fc0
+TEST_CASE("a flight master not known has the green mark, under any quest's", "[questgiver]") {
+    const auto mark = [](uint8_t status, bool trivial = false) {
+        const char* m = wowee::game::questGiverMarkerModel(wire(status), trivial, true);
+        return std::string(m ? m : "");
+    };
+    const std::string green = "Interface\\Buttons\\TalkToMeGreen.m2";
+    CHECK(mark(0) == green);
+    CHECK(mark(8) == "Interface\\Buttons\\TalkToMe.m2");
+    CHECK(mark(1) == "Interface\\Buttons\\TalkToMeGrey.m2");
+    for (const uint8_t low : {2, 3, 4}) {
+        CHECK(mark(low) == green);
+        CHECK(mark(low, true) != green);
+    }
+}
