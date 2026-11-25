@@ -154,8 +154,7 @@ private:
     struct LoadWorld;
     /// The .toc of an addon, in any case of its name.
     [[nodiscard]] const TocFile* findAddon(const std::string& name) const;
-    [[nodiscard]] std::string getSavedVariablesPath(const TocFile& addon) const;
-    [[nodiscard]] std::string getSavedVariablesPerCharacterPath(const TocFile& addon) const;
+    [[nodiscard]] std::string savedVariablesPath(const TocFile& addon, bool perCharacter) const;
     std::string characterName_;
 
     // addonName -> enabled. Absent means enabled (default on).
@@ -167,9 +166,9 @@ private:
     std::string clientRealm_;
     std::unordered_map<std::string, bool> clientEnabled_;
     void readClientAddOnsTxt();
-    /// Drop-in mode: copy the original's WTF saved variables of one of the
-    /// player's own addons into WoWee\config\AddOnsSaved (client_saved_variables.hpp).
-    void copyClientSavedVariables(const TocFile& addon);
+    /// What an addon saved elsewhere into AddOnsSaved (client_saved_variables.hpp): drop-in mode,
+    /// the original's WTF of one of the player's own addons; else from beside the addon.
+    void copySavedVariables(const TocFile& addon);
     bool loggedNoWtfAccount_ = false;
     std::string frameXmlDir_;
     /// The same directory as it is actually spelled on disk.

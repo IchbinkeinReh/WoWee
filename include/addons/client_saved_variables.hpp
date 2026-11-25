@@ -62,6 +62,14 @@ inline std::filesystem::path copyPath(const std::string& configRoot, const std::
     return p / "SavedVariables" / (addon + ".lua");
 }
 
+/// Where an addon's file of this client's own folder was before it went where the original
+/// has it: beside the addon, one for all accounts and realms.
+inline std::filesystem::path besideAddonPath(const std::string& addonFolder, const std::string& addon,
+                                             const std::string& character, bool perCharacter) {
+    if (perCharacter && character.empty()) return {};
+    return std::filesystem::path(addonFolder) / (perCharacter ? addon + "." + character + ".lua.saved" : addon + ".lua.saved");
+}
+
 /// The original's file, if it exists.
 inline std::filesystem::path wtfPath(const std::string& clientRoot, const std::string& account,
                                      const std::string& realm, const std::string& character,

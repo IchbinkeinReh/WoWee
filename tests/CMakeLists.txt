@@ -626,6 +626,17 @@ target_link_libraries(test_addon_lua_snippets PRIVATE catch2_main lua51)
 add_test(NAME addon_lua_snippets COMMAND test_addon_lua_snippets)
 register_test_target(test_addon_lua_snippets)
 
+# ── test_saved_variables ─────────────────────────────────────
+add_executable(test_saved_variables
+    test_saved_variables.cpp
+)
+target_include_directories(test_saved_variables PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_saved_variables SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_saved_variables PRIVATE catch2_main lua51)
+add_test(NAME saved_variables COMMAND test_saved_variables)
+register_test_target(test_saved_variables)
+
 # ── test_stream_time ─────────────────────────────────────────
 # miniaudio's engine without a device, a decoder or anything of the system's.
 add_executable(test_stream_time

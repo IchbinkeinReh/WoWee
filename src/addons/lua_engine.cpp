@@ -1,3 +1,4 @@
+#include "addons/saved_variables.hpp"
 #include "addons/chat_bubble_lua.hpp"
 #include "addons/chunk_name.hpp"
 #include "addons/lua_engine.hpp"
@@ -20083,71 +20084,6 @@ bool LuaEngine::dispatchSlashCommand(const std::string& command, const std::stri
     return false;
 }
 
-// ---- SavedVariables serialization ----
-
-static void serializeLuaValue(lua_State* L, int idx, std::string& out, int indent);
-
-static void serializeLuaTable(lua_State* L, int idx, std::string& out, int indent) {
-    out += "{\n";
-    std::string pad(indent + 2, ' ');
-    lua_pushnil(L);
-    while (lua_next(L, idx) != 0) {
-        out += pad;
-        // Key
-        if (lua_type(L, -2) == LUA_TSTRING) {
-            const char* k = lua_tostring(L, -2);
-            out += "[\"";
-            for (const char* p = k; *p; ++p) {
-                if (*p == '"' || *p == '\\') out += '\\';
-                out += *p;
-            }
-            out += "\"] = ";
-        } else if (lua_type(L, -2) == LUA_TNUMBER) {
-            out += "[" + std::to_string(static_cast<long long>(lua_tonumber(L, -2))) + "] = ";
-        } else {
-            lua_pop(L, 1);
-            continue;
-        }
-        // Value
-        serializeLuaValue(L, lua_gettop(L), out, indent + 2);
-        out += ",\n";
-        lua_pop(L, 1);
-    }
-    out += std::string(indent, ' ') + "}";
-}
-
-static void serializeLuaValue(lua_State* L, int idx, std::string& out, int indent) {
-    switch (lua_type(L, idx)) {
-        case LUA_TNIL:     out += "nil"; break;
-        case LUA_TBOOLEAN: out += lua_toboolean(L, idx) ? "true" : "false"; break;
-        case LUA_TNUMBER: {
-            double v = lua_tonumber(L, idx);
-            char buf[64];
-            snprintf(buf, sizeof(buf), "%.17g", v);
-            out += buf;
-            break;
-        }
-        case LUA_TSTRING: {
-            const char* s = lua_tostring(L, idx);
-            out += "\"";
-            for (const char* p = s; *p; ++p) {
-                if (*p == '"' || *p == '\\') out += '\\';
-                else if (*p == '\n') { out += "\\n"; continue; }
-                else if (*p == '\r') continue;
-                out += *p;
-            }
-            out += "\"";
-            break;
-        }
-        case LUA_TTABLE:
-            serializeLuaTable(L, idx, out, indent);
-            break;
-        default:
-            out += "nil"; // Functions, userdata, etc. can't be serialized
-            break;
-    }
-}
-
 void LuaEngine::setAddonList(const std::vector<TocFile>& addons) {
     if (!L_) return;
     lua_pushnumber(L_, static_cast<double>(addons.size()));
@@ -20191,12 +20127,12 @@ void LuaEngine::setAddonList(const std::vector<TocFile>& addons) {
 
 bool LuaEngine::loadSavedVariables(const std::string& path) {
     if (!L_) return false;
-    std::ifstream f(path);
+    std::ifstream f(path, std::ios::binary);
     if (!f.is_open()) return false; // No saved data yet - not an error
-    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     if (content.empty()) return true;
-    int err = luaL_dostring(L_, content.c_str());
-    if (err != 0) {
+    const std::string chunk = "@" + path;
+    if (luaL_loadbuffer(L_, content.data(), content.size(), chunk.c_str()) != 0 || lua_pcall(L_, 0, 0, 0) != 0) {
         LOG_WARNING("LuaEngine: error loading saved variables from '", path, "': ",
                     lua_tostring(L_, -1));
         lua_pop(L_, 1);
@@ -20205,43 +20141,25 @@ bool LuaEngine::loadSavedVariables(const std::string& path) {
     return true;
 }
 
+// The globals as they are, those that are nil too (0x00818b50): only for what the interface
+// that is loaded has loaded itself, or the file says of it that it had nothing. The file
+// before it stays beside it (".bak", 0x005f5620).
 bool LuaEngine::saveSavedVariables(const std::string& path, const std::vector<std::string>& varNames) {
     if (!L_ || varNames.empty()) return false;
-    std::string output;
-    for (const auto& name : varNames) {
-        // Raw, so the missing-API fallback cannot answer for a variable that is
-        // not there - and only real data is written.
-        //
-        // That fallback hands back a stand-in *table* for any unknown global,
-        // which is what makes feature detection work; here it made every absent
-        // saved variable read as an empty table and be written as one. So an
-        // addon whose variables were not in this state - because the interface
-        // had been unloaded, which is exactly when they are written - had its
-        // file overwritten with `Settings = {}`, and everything the player had
-        // set was gone at the next start with nothing to say so.
-        lua_pushvalue(L_, LUA_GLOBALSINDEX);
-        lua_pushlstring(L_, name.data(), name.size());
-        lua_rawget(L_, -2);
-        const int type = lua_type(L_, -1);
-        const bool storable = (type == LUA_TTABLE) || (type == LUA_TSTRING) ||
-                              (type == LUA_TNUMBER) || (type == LUA_TBOOLEAN);
-        if (storable) {
-            output += name + " = ";
-            serializeLuaValue(L_, lua_gettop(L_), output, 0);
-            output += "\n";
-        }
-        lua_pop(L_, 2);
-    }
-    if (output.empty()) return true;
+    const std::string output = saved_variables::fileText(L_, varNames);
 
     // Ensure directory exists
-    size_t lastSlash = path.find_last_of("/\\");
-    if (lastSlash != std::string::npos) {
-        std::error_code ec;
-        std::filesystem::create_directories(path.substr(0, lastSlash), ec);
+    std::error_code ec;
+    const std::filesystem::path file(path);
+    if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path(), ec);
+    std::filesystem::path before = file;
+    before += ".bak";
+    if (std::filesystem::exists(file, ec)) {
+        std::filesystem::remove(before, ec);
+        std::filesystem::rename(file, before, ec);
     }
 
-    std::ofstream f(path);
+    std::ofstream f(file, std::ios::binary | std::ios::trunc);
     if (!f.is_open()) {
         LOG_WARNING("LuaEngine: cannot write saved variables to '", path, "'");
         return false;

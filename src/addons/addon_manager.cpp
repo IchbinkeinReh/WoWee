@@ -171,7 +171,7 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
     // Drop-in mode (core::enterDropInRoot sets WOWEE_CLIENT_ROOT): the player's
     // own addons, in the original client's Interface\AddOns, read in place.
     // Nothing is written there: their saved variables go to WoWee\ (see
-    // getSavedVariablesPath) and their enable state is read from the client's
+    // savedVariablesPath) and their enable state is read from the client's
     // AddOns.txt, never written back (readClientAddOnsTxt).
     clientAddonsRoot_.clear();
     if (const char* client = std::getenv("WOWEE_CLIENT_ROOT"); client && *client) {
@@ -747,36 +747,34 @@ std::string AddonManager::characterBindingsPath() const {
     return core::getConfigRoot() + "/characters/" + characterName_ + ".bindings.cfg";
 }
 
-std::string AddonManager::getSavedVariablesPath(const TocFile& addon) const {
-    // The player's own addons keep theirs in WoWee\, not in their folder of
-    // the original client's: AddOnsSaved\<ACCOUNT>\SavedVariables\<Addon>.lua,
-    // the original's WTF\Account layout (client_saved_variables.hpp).
-    if (isClientAddon(addon.basePath)) {
-        const fs::path p = client_sv::copyPath(core::getConfigRoot(), clientAccount_, clientRealm_,
-                                               characterName_, addon.addonName, false);
-        std::error_code ec;
-        fs::create_directories(p.parent_path(), ec);
-        return p.string();
-    }
-    return addon.basePath + "/" + addon.addonName + ".lua.saved";
+// Kept in the original's WTF\Account layout, not in the addon's folder:
+// AddOnsSaved\<ACCOUNT>\SavedVariables\<Addon>.lua (client_saved_variables.hpp).
+std::string AddonManager::savedVariablesPath(const TocFile& addon, bool perCharacter) const {
+    const fs::path p = client_sv::copyPath(core::getConfigRoot(), clientAccount_, clientRealm_, characterName_,
+                                           addon.addonName, perCharacter);
+    if (p.empty()) return "";
+    std::error_code ec;
+    fs::create_directories(p.parent_path(), ec);
+    return p.string();
 }
 
-std::string AddonManager::getSavedVariablesPerCharacterPath(const TocFile& addon) const {
-    if (characterName_.empty()) return "";
-    if (isClientAddon(addon.basePath)) {
-        const fs::path p = client_sv::copyPath(core::getConfigRoot(), clientAccount_, clientRealm_,
-                                               characterName_, addon.addonName, true);
-        if (p.empty()) return "";
-        std::error_code ec;
-        fs::create_directories(p.parent_path(), ec);
-        return p.string();
+void AddonManager::copySavedVariables(const TocFile& addon) {
+    if (!isClientAddon(addon.basePath)) {
+        for (const bool perCharacter : {false, true}) {
+            const fs::path from =
+                client_sv::besideAddonPath(addon.basePath, addon.addonName, characterName_, perCharacter);
+            const std::string to = savedVariablesPath(addon, perCharacter);
+            std::error_code ec;
+            bool copied = false;
+            std::string error;
+            if (from.empty() || to.empty() || !fs::is_regular_file(from, ec)) continue;
+            if (!client_sv::copyIfNewer(from, to, copied, error)) LOG_WARNING("AddonManager: ", error);
+            else if (copied) LOG_INFO("AddonManager: copied saved variables ", from.string(), " -> ", to);
+        }
+        return;
     }
-    return addon.basePath + "/" + addon.addonName + "." + characterName_ + ".lua.saved";
-}
-
-void AddonManager::copyClientSavedVariables(const TocFile& addon) {
     const char* client = std::getenv("WOWEE_CLIENT_ROOT");
-    if (!client || !*client || !isClientAddon(addon.basePath)) return;
+    if (!client || !*client) return;
     if (!client_sv::hasAccountFolder(client, clientAccount_)) {
         if (!loggedNoWtfAccount_) {
             LOG_INFO("AddonManager: the client's WTF has no folder for account '", client_sv::upper(clientAccount_),
@@ -1875,20 +1873,13 @@ bool AddonManager::loadAddon(const TocFile& addon) {
             !bindings.empty() && !loadXmlFile(bindings.string(), 0))
             LOG_WARNING("AddonManager: could not read the key bindings of ", addon.addonName, ": ", lastXmlError_);
         // What it saved, over what its files set: the account's, then the
-        // character's. The player's own addon: from the original's WTF first,
-        // copied when missing or newer there. Like the original's loader,
-        // which runs both files when they exist, whatever the .toc declares.
-        if (clientAddon) copyClientSavedVariables(addon);
-        if (clientAddon || !addon.getSavedVariables().empty()) {
-            luaEngine_.loadSavedVariables(getSavedVariablesPath(addon));
-            LOG_DEBUG("AddonManager: loaded saved variables for '", addon.addonName, "'");
-        }
-        if (clientAddon || !addon.getSavedVariablesPerCharacter().empty()) {
-            if (const std::string path = getSavedVariablesPerCharacterPath(addon); !path.empty()) {
+        // character's, copied from where it was kept before when missing or newer
+        // there. Like the original's loader, which runs both files when they exist,
+        // whatever the .toc declares.
+        copySavedVariables(addon);
+        for (const bool perCharacter : {false, true})
+            if (const std::string path = savedVariablesPath(addon, perCharacter); !path.empty())
                 luaEngine_.loadSavedVariables(path);
-                LOG_DEBUG("AddonManager: loaded per-character saved variables for '", addon.addonName, "'");
-            }
-        }
     }
     finishedAddons_.insert(lowered(addon.addonName));
     // Whatever became of its files.
@@ -2004,17 +1995,16 @@ void AddonManager::saveAllSavedVariables() {
         std::ofstream out(path, std::ios::trunc);
         if (out) out << chatColorTable().serialize();
     }
-    for (const auto& addon : addons_) {
-        auto savedVars = addon.getSavedVariables();
-        if (!savedVars.empty()) {
-            std::string svPath = getSavedVariablesPath(addon);
-            luaEngine_.saveSavedVariables(svPath, savedVars);
-        }
-        auto savedVarsPC = addon.getSavedVariablesPerCharacter();
-        if (!savedVarsPC.empty()) {
-            std::string svpcPath = getSavedVariablesPerCharacterPath(addon);
-            if (!svpcPath.empty()) {
-                luaEngine_.saveSavedVariables(svpcPath, savedVarsPC);
+    // Of every addon that has been loaded, those on demand too (0x005f5620): of one that was
+    // not, what its file holds stays.
+    for (const auto* list : {&addons_, &lodAddons_}) {
+        for (const TocFile& addon : *list) {
+            if (!finishedAddons_.count(lowered(addon.addonName))) continue;
+            for (const bool perCharacter : {false, true}) {
+                const auto names = perCharacter ? addon.getSavedVariablesPerCharacter() : addon.getSavedVariables();
+                if (names.empty()) continue;
+                if (const std::string path = savedVariablesPath(addon, perCharacter); !path.empty())
+                    luaEngine_.saveSavedVariables(path, names);
             }
         }
     }
