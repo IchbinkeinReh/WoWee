@@ -1421,6 +1421,12 @@ const std::array<GameHandler::TradeSlot, GameHandler::TRADE_SLOT_COUNT>& GameHan
             converted[i].itemGuid = src[i].itemGuid;
             converted[i].inst = src[i].inst;
             converted[i].occupied = (src[i].itemId != 0);
+            converted[i].creatorGuid = src[i].creatorGuid;
+            converted[i].giftCreatorGuid = src[i].giftCreatorGuid;
+            converted[i].wrapped = src[i].wrapped;
+            converted[i].charges = src[i].charges;
+            converted[i].maxDurability = src[i].maxDurability;
+            converted[i].durability = src[i].durability;
         }
         return converted;
     }

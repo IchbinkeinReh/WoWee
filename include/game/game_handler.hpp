@@ -3019,6 +3019,10 @@ public:
         /// The offer's own words about this copy: enchant, gems, rolled
         /// property and its seed.  See InventoryHandler::TradeSlot.
         ItemLinkInstance inst;
+        /// And what its tooltip says of it (0x0062f1e0): who made it, who gave it where it is
+        /// wrapped, its charges and its durability.
+        uint64_t creatorGuid = 0, giftCreatorGuid = 0;
+        uint32_t wrapped = 0, charges = 0, maxDurability = 0, durability = 0;
     };
 
     TradeStatus getTradeStatus() const;

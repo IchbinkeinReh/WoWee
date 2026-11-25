@@ -3325,12 +3325,10 @@ static int lua_GetTradeTargetItemInfo(lua_State* L) {
     if (!slot.occupied || slot.itemId == 0) return pushTradeItemEmpty(L, true);
     pushTradeItemLead(L, gh, slot);
     // The partner's half is the only one with a usability answer, and it is nil
-    // and not false when the item fails - 0x006dc3f0 measures the record's
-    // required level, class and race against this player and 0x00587c60 pushes
-    // nothing when it says no.  WoWee has no such measure for an item it was
-    // never offered, so it keeps answering the usable answer, which is what the
-    // client gives for an item that meets its requirements.
-    luaPushOneOrNil(L, 1);
+    // and not false when the item fails: 0x00587c60 asks 0x006dc3f0, as a
+    // merchant's does, and pushes nothing when it says no.
+    const auto* info = gh->getItemInfo(slot.itemId);
+    luaPushOneOrNil(L, !info || gh->judgeItemRequirements(*info).usable());
     if (i - 1 == game::GameHandler::TRADE_SLOT_NONTRADED) pushTradeEnchantment(L, gh, false);
     else lua_pushnil(L);
     return 6;
@@ -3366,6 +3364,37 @@ static int lua_GetTradeTargetItemLink(lua_State* L) {
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
     return pushTradeLink(L, gh, gh->getPeerTradeSlots()[i - 1]);
+}
+
+/// What the partner's offer says of an item beside its link, as a held item's
+/// (0x0062f1e0 fills the tooltip's record from the offer): who made it, or who
+/// gave it where it is wrapped, its charges, its durability. nil without one.
+static int lua_WoweeTradeTargetInstance(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
+    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return luaReturnNil(L);
+    const auto& slot = gh->getPeerTradeSlots()[i - 1];
+    if (!slot.occupied || slot.itemId == 0) return luaReturnNil(L);
+    lua_newtable(L);
+    const uint64_t who = slot.wrapped != 0 ? slot.giftCreatorGuid : slot.creatorGuid;
+    if (who != 0) {
+        const std::string& name = gh->lookupName(who);
+        if (name.empty()) {
+            gh->queryPlayerName(who);
+        } else {
+            lua_pushstring(L, name.c_str());
+            lua_setfield(L, -2, slot.wrapped != 0 ? "wrappedBy" : "creator");
+        }
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(static_cast<int32_t>(slot.charges)));
+    lua_setfield(L, -2, "charges0");
+    if (slot.maxDurability != 0 && slot.maxDurability != 0xFFFFFFFFu) {
+        lua_pushnumber(L, slot.maxDurability);
+        lua_setfield(L, -2, "maxDurability");
+        lua_pushnumber(L, slot.durability);
+        lua_setfield(L, -2, "durability");
+    }
+    return 1;
 }
 
 // ClickTradeButton(slot [, rightButton]) - put what is held into the slot, or
@@ -4589,6 +4618,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"GetTradeTargetItemInfo", lua_GetTradeTargetItemInfo},
                 {"GetTradePlayerItemLink", lua_GetTradePlayerItemLink},
                 {"GetTradeTargetItemLink", lua_GetTradeTargetItemLink},
+                {"__WoweeTradeTargetInstance", lua_WoweeTradeTargetInstance},
                 {"ClickTradeButton",    lua_ClickTradeButton},
                 {"ClickTargetTradeButton", lua_ClickTargetTradeButton},
                 {"SetTradeMoney",       lua_SetTradeMoney},

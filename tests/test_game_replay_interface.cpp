@@ -354,6 +354,18 @@ TEST_CASE("an item in a trade says what it would be enchanted with", "[replay][i
     };
     CHECK(after("tip:SetTradePlayerItem(7)").find("|Will receive Crusader.|Not traded!|") != std::string::npos);
     CHECK(after("tip:SetTradeTargetItem(7)").find("|Will receive Mongoose.|Not traded!|") != std::string::npos);
+    // Who made the partner's, and its state (0x0062f1e0): an item and not its template.
+    ui.run("ITEM_CREATED_BY, ITEM_WRAPPED_BY, DURABILITY_TEMPLATE = '<by %s>', '<gift of %s>', 'dur %d / %d' "
+           "__WoweeTradeTargetInstance = function(i) "
+           "  return i == 1 and {creator = 'Ann', charges0 = -3, maxDurability = 50, durability = 7} "
+           "    or i == 2 and {wrappedBy = 'Bob', charges0 = 0} or nil end");
+    CHECK(after("tip:SetTradeTargetItem(1)").find("|dur 7 / 50|<by Ann>|") != std::string::npos);
+    const std::string gift = after("tip:SetTradeTargetItem(2)");
+    CHECK(gift.find("|<gift of Bob>|") != std::string::npos);
+    CHECK(gift.find("dur") == std::string::npos);
+    CHECK(after("tip:SetTradeTargetItem(3)").find('<') == std::string::npos);
+    CHECK(after("tip:SetTradePlayerItem(1)").find('<') == std::string::npos);
+    CHECK(ui.is("__WoweeTooltipInst == nil"));
     CHECK(after("tip:SetTradeTargetItem(1)").find("receive") == std::string::npos);
     CHECK(after("tip:SetHyperlink('item:24021')").find("receive") == std::string::npos);
 }
