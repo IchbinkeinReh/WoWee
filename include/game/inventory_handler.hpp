@@ -683,6 +683,8 @@ public:
     void openGuildBank(uint64_t guid);
     void closeGuildBank();
     void queryGuildBankTab(uint8_t tabId);
+    /// The guild bank's tabs by the count bought, in copper (0x005a6b20).
+    static constexpr std::array<uint32_t, 6> kGuildBankTabCost{1000000u, 2500000u, 5000000u, 10000000u, 25000000u, 50000000u};
     void buyGuildBankTab();
     void depositGuildBankMoney(uint32_t amount);
     void withdrawGuildBankMoney(uint32_t amount);
@@ -1289,22 +1291,6 @@ private:
     /// Each list's selected auction id (0x00acf62c, 0x00acf630, 0x00acf634).
     std::array<uint32_t, 3> auctionSelectedIds_{kNoAuctionSelected, kNoAuctionSelected,
                                                 kNoAuctionSelected};
-    struct AuctionSearchParams {
-        std::string name;
-        uint8_t levelMin = 0, levelMax = 0;
-        uint32_t quality = 0xFFFFFFFF;
-        uint32_t itemClass = 0xFFFFFFFF;
-        uint32_t itemSubClass = 0xFFFFFFFF;
-        uint32_t invTypeMask = 0;
-        uint8_t usableOnly = 0;
-        uint32_t offset = 0;
-        /// Carried so the re-query after a successful bid asks for the same
-        /// ordering. Dropping it there would reorder the list under the player
-        /// at the moment they bought something.
-        std::vector<AuctionSortKey> sort;
-    };
-    AuctionSearchParams lastAuctionSearch_;
-    bool hasAuctionSearch_ = false;  // true after any search (including empty-name browse-all)
     enum class AuctionResultTarget { BROWSE, OWNER, BIDDER };
     void takeAuctionList(network::Packet& packet, AuctionResultTarget target);
     /// How many owner list answers are still to come (0xc0e73c): two for

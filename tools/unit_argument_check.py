@@ -76,7 +76,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ADDONS = ROOT / "src/addons"
 
 #: Reading the first argument, or resolving it, counts as looking at the unit.
-LOOKS = re.compile(r"resolveUnit|resolveUnitGuid|unitAsked|unitAskedOrTarget|unitUsedOn"
+LOOKS = re.compile(r"resolveUnit|namedUnitGuid|resolveUnitGuid|unitAsked|unitAskedOrTarget|unitUsedOn"
                    r"|luaL_(?:opt|check)string\(\s*L\s*,\s*1")
 #: State that belongs to the player and nobody else.
 #:

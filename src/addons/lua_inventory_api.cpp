@@ -7426,13 +7426,11 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // same figures - 100g, 250g, 500g, 1000g, 2500g, 5000g - though
                 // Guild.BankTabCost0-5 can be configured away from them.
                 {"GetGuildBankTabCost", [](lua_State* L) -> int {
-            static constexpr uint32_t kTabCost[6] = {
-                1000000u, 2500000u, 5000000u, 10000000u, 25000000u, 50000000u
-            };
+            constexpr const auto& kTabCost = game::InventoryHandler::kGuildBankTabCost;
             auto* gh = getGameHandler(L);
             // Indexed by the count bought (0x005a6b20).
             const size_t owned = gh ? gh->getGuildBankTabCount() : 0;
-            if (owned >= 6) { lua_pushnil(L); return 1; }
+            if (owned >= kTabCost.size()) { lua_pushnil(L); return 1; }
             lua_pushnumber(L, static_cast<lua_Number>(kTabCost[owned]));
             return 1;
         }},

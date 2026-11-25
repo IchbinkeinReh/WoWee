@@ -4918,9 +4918,8 @@ void InventoryHandler::buyGuildBankTab() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return;
     // For less than it costs the bank and the buyer together hold it is not
     // asked for (0x005a5d30).
-    static constexpr uint32_t kTabCost[6] = {1000000u, 2500000u, 5000000u, 10000000u, 25000000u, 50000000u};
-    if (guildBankTabCount_ < 6 &&
-        owner_.getGuildBankData().money + owner_.getMoneyCopper() < kTabCost[guildBankTabCount_]) {
+    if (guildBankTabCount_ < kGuildBankTabCost.size() &&
+        owner_.getGuildBankData().money + owner_.getMoneyCopper() < kGuildBankTabCost[guildBankTabCount_]) {
         owner_.addUIError(uiText("ERR_BANKSLOT_INSUFFICIENT_FUNDS", "You can't afford that."));
         owner_.playGameErrorSound("ERR_BANKSLOT_INSUFFICIENT_FUNDS");
         return;
@@ -5252,9 +5251,6 @@ void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, 
                                       uint32_t invTypeMask, uint8_t usableOnly, uint32_t offset,
                                       const std::vector<AuctionSortKey>& sort, bool getAll) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
-    lastAuctionSearch_ = {.name = name, .levelMin = levelMin, .levelMax = levelMax, .quality = quality, .itemClass = itemClass, .itemSubClass = itemSubClass,
-                          .invTypeMask = invTypeMask, .usableOnly = usableOnly, .offset = offset, .sort = sort};
-    hasAuctionSearch_ = true;
     LOG_INFO("CMSG_AUCTION_LIST_ITEMS: offset=", offset, " class=", static_cast<int32_t>(itemClass),
              " subclass=", static_cast<int32_t>(itemSubClass), " invType=",
              static_cast<int32_t>(invTypeMask), " quality=", static_cast<int32_t>(quality),

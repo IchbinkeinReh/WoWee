@@ -82,22 +82,6 @@ inline bool isWeaponInventoryType(uint8_t inventoryType) {
     }
 }
 
-/// Whether an item of this INVTYPE swings from the off hand.
-///
-/// Two INVTYPEs go in the off-hand slot and only these two are weapons: 13,
-/// which is any one-hander and may be equipped in either hand, and 22, which
-/// is the off-hand-only weapon. 23 is the held-in-off-hand book or orb and 14
-/// is a shield; neither swings.
-///
-/// 22 was read as the book for a while - the name is close and the comment on
-/// it said so - and the cost was dual wielding. Both places that ask this
-/// tested 13 alone, so an off-hand-only weapon left the character with no
-/// off-hand attack animation and, until the main hand was drawn, no reason to
-/// unsheathe.
-inline bool isOffHandWeaponInventoryType(uint8_t inventoryType) {
-    return inventoryType == InvType::ONE_HAND || inventoryType == InvType::OFF_HAND;
-}
-
 /// The equipped slots an item of this INVTYPE should be compared against, in
 /// the order to try them.
 ///

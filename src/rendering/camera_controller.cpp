@@ -676,12 +676,14 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
 
     // A building the realm has made here and the disk has not brought yet:
     // the client's gather fails in its box and the unit is not moved
-    // (core/ground_coming.hpp). A model's only holds one that would fall.
+    // (core/ground_coming.hpp). A model's only holds one that would fall, and
+    // a flyer or a swimmer, who does not, is let be: the client's loads are
+    // shorter than its box is wide to them.
     {
         const glm::vec3 reach(0.5f, 0.5f, 0.0f);
         const float below = 1.0f + std::max(-verticalVelocity, 0.0f) * std::min(f.physicsDeltaTime, 0.25f);
         const bool models = !grounded || portPlacedFall_;
-        const bool held = objectHold_.step(!externalFollow_ && objectComing_ &&
+        const bool held = objectHold_.step(!externalFollow_ && !isFlightAirborne() && !swimming && objectComing_ &&
                                                objectComing_(targetPos - reach - glm::vec3(0.0f, 0.0f, below),
                                                              targetPos + reach + glm::vec3(0.0f, 0.0f, 2.5f), models),
                                            f.physicsDeltaTime);

@@ -8,6 +8,8 @@
 // next buttons walk. Ids here count from 0, as the client's own functions
 // take them; the Lua functions take them from 1.
 
+#include "game/item_slot_rules.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -146,10 +148,7 @@ struct ItemPushTutorialInput {
 /// pushed to anyone.
 [[nodiscard]] inline std::vector<uint32_t> itemPushTutorials(const ItemPushTutorialInput& in) {
     // DAT_00a2d288: the equipment slots each inventory type fits.
-    static constexpr std::array<uint32_t, 29> kSlotMask = {
-        0x0,     0x1,    0x2,      0x4,     0x8,     0x10,    0x20,    0x40,     0x80,       0x100,
-        0x200,   0xc00,  0x3000,   0x18000, 0x10000, 0x20000, 0x4000,  0x18000,  0x780000,   0x40000,
-        0x10,    0x18000, 0x18000, 0x10000, 0x0,     0x20000, 0x20000, 0x0,      0x20000};
+    constexpr const auto& kSlotMask = item_slots::kFits;
     std::vector<uint32_t> out;
     const bool consumableFoodOrScroll = in.itemClass == 0 && (in.subClass == 4 || in.subClass == 5);
     if (in.self) {
