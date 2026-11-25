@@ -1650,3 +1650,58 @@ TEST_CASE("a corpse on another map has its place on that map", "[replay][interfa
     ui.run("x, y = GetCorpseMapPosition()");
     CHECK(ui.is("x == 0 and y == 0"));
 }
+
+// T305: 0x0058dd50 keeps what the page shown gives, the giver's offer and its
+// reward alike; the spell's line goes by the trade spell's attribute and by
+// what the spell cast at completion does (0x0058d670).
+TEST_CASE("a quest's page shows all it gives", "[replay][interface]") {
+    constexpr uint64_t kGiver = 0xF130000BEC00150Eull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    gh.spellNameCacheRef()[3100].name = "Blacksmithing";
+    gh.spellNameCacheRef()[3100].attr = 0x20;
+    gh.spellNameCacheRef()[3101].name = "Learning";
+    gh.spellNameCacheRef()[3101].effectIds[0] = 36;
+    const auto rewards = [](wowee::network::Packet& p) {
+        p.writeUInt32(500);
+        p.writeUInt32(250);
+        p.writeUInt32(1240);   // honor x 10
+        p.writeFloat(0.0f);
+    };
+    wowee::network::Packet offer(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_DETAILS));
+    offer.writeUInt64(kGiver);
+    offer.writeUInt64(0);
+    offer.writeUInt32(861);
+    for (const char* text : {"The Way", "Details.", "Objectives."}) offer.writeString(text);
+    offer.writeUInt8(0);
+    for (int i = 0; i < 2; ++i) offer.writeUInt32(0);
+    offer.writeUInt8(0);
+    for (int i = 0; i < 2; ++i) offer.writeUInt32(0);
+    rewards(offer);
+    for (uint32_t v : {3100u, 3101u, 0u, 2u, 15u, 0u}) offer.writeUInt32(v);
+    for (int i = 0; i < 16; ++i) offer.writeUInt32(0);
+    s.receive(offer);
+    CHECK(ui.is("GetRewardHonor() == 124 and GetRewardTalents() == 2 and GetRewardArenaPoints() == 15"));
+    CHECK(ui.is("select('#', GetRewardSpell()) == 4"));
+    CHECK(ui.is("select(2, GetRewardSpell()) == 'Blacksmithing' and select(3, GetRewardSpell()) == 1"));
+    CHECK(ui.is("select(4, GetRewardSpell()) == 1 and GetRewardSpell() == nil"));   // no icon's file here
+    CHECK(ui.is("GetQuestSpellLink():find('|Hspell:3100|h', 1, true) ~= nil"));
+    CHECK(ui.is("select('#', GetQuestLogRewardSpell()) == 4 and GetQuestLogRewardTitle() == nil"));
+
+    wowee::network::Packet pay(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_OFFER_REWARD));
+    pay.writeUInt64(kGiver);
+    pay.writeUInt32(862);
+    for (const char* text : {"The Way", "Well done."}) pay.writeString(text);
+    pay.writeUInt8(0);
+    for (int i = 0; i < 5; ++i) pay.writeUInt32(0);   // flags, players, emotes, choices, items
+    rewards(pay);
+    for (uint32_t v : {8u, 3101u, 0u, 0u, 1u, 7u, 0u}) pay.writeUInt32(v);
+    for (int i = 0; i < 15; ++i) pay.writeUInt32(0);
+    s.receive(pay);
+    CHECK(ui.is("GetRewardHonor() == 124 and GetRewardTalents() == 1 and GetRewardArenaPoints() == 7"));
+    CHECK(ui.is("select(2, GetRewardSpell()) == 'Learning' and not select(3, GetRewardSpell())"));
+    CHECK(ui.is("not select(4, GetRewardSpell())"));
+    CHECK(ui.is("GetQuestSpellLink():find('|Hspell:3101|h', 1, true) ~= nil"));
+}

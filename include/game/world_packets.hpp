@@ -3378,13 +3378,14 @@ struct QuestDetailsData {
     uint32_t rewardXp = 0;
     std::vector<QuestRewardItem> rewardChoiceItems;  // Player picks one of these
     std::vector<QuestRewardItem> rewardItems;         // These are always given
-    /// The spell shown under "You will learn:" on the offer. Sent three fields
-    /// past the XP - honor, an unused float, then this.
-    ///
-    /// The cast id and the title id follow it on the wire and are deliberately
-    /// not kept: nothing reads them, and a field stored for nobody is a claim
-    /// that something uses it.
+    /// Past the XP (0x006d0460): the honor (the packet's x10 unscaled), the spell
+    /// shown and the one cast, the title, talents and arena points.
+    uint32_t rewardHonor = 0;
     uint32_t rewardSpellId = 0;
+    uint32_t rewardSpellCastId = 0;
+    uint32_t rewardTitleId = 0;
+    uint32_t rewardTalents = 0;
+    uint32_t rewardArenaPoints = 0;
 };
 
 /** SMSG_QUESTGIVER_QUEST_DETAILS parser */
@@ -3437,6 +3438,8 @@ struct QuestOfferRewardData {
     uint32_t rewardTalents = 0;
     uint32_t rewardArenaPoints = 0;
     uint32_t rewardTitleId = 0;  // CharTitles.dbc id of an awarded title, 0 = none
+    uint32_t rewardSpellId = 0;      // the spell shown
+    uint32_t rewardSpellCastId = 0;  // and the one cast at completion
     struct FactionReward { uint32_t factionId = 0; int32_t valueId = 0; int32_t override = 0; };
     std::array<FactionReward, 5> factionRewards{};
     std::vector<QuestRewardItem> choiceRewards;  // Pick one

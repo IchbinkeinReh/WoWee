@@ -338,53 +338,6 @@ static int lua_IsCurrentQuestFailed(lua_State* L) {
 // this client parses parses none of them, and each is asked behind `if ( ... )`
 // before its block is drawn - so nil leaves the block out rather than drawing
 // an empty one.
-// GetRewardSpell() - the quest *giver's* reward spell.
-//
-// The offer's own, not the log's: the panel asking this is showing a quest
-// being offered, which is usually not the one selected in the log, so the log
-// form cannot stand in for it.
-//
-// It answered nil because the details packet was not read this far. It is now
-// - four fields past the XP - so a quest that teaches a recipe shows what it
-// teaches. Same four values and same three flags as the log form beside it.
-static int lua_GetQuestRewardSpell(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) return luaReturnNil(L);
-    const uint32_t spellId = gh->getQuestDetails().rewardSpellId;
-    if (spellId == 0) return luaReturnNil(L);
-    const std::string name = gh->getSpellName(spellId);
-    if (name.empty()) return luaReturnNil(L);
-    const std::string icon = gh->getSpellIconPath(spellId);
-    lua_pushstring(L, icon.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
-                                   : icon.c_str());
-    lua_pushstring(L, name.c_str());
-    luaPushOneOrNil(L, gh->isProfessionSpell(spellId) ? 1 : 0);
-    luaPushOneOrNil(L, gh->getKnownSpells().count(spellId) > 0 ? 1 : 0);
-    return 4;
-}
-// GetQuestLogRewardTitle() → the title a quest awards, formatted with the
-// player's name, or nil for the many quests that award none. The CharTitleId is
-// in the query response (field 19) and the name in CharTitles.dbc, both of
-// which this now reads; the old answer was a flat nil.
-static int lua_GetQuestRewardTitle(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    // The offer panel (GetRewardTitle) and the log panel (GetQuestLogRewardTitle)
-    // share this; read whichever is open, the offer's own title id when it is,
-    // else the selected log quest's - the log selection is not the offer's.
-    uint32_t titleId = 0;
-    if (gh->isQuestOfferRewardOpen()) {
-        titleId = gh->getQuestOfferReward().rewardTitleId;
-    } else {
-        if (const auto* q = gh->getSelectedQuest()) titleId = q->rewardTitleId;   // 0x005e4c10
-    }
-    if (titleId == 0) { return luaReturnNil(L); }
-    const std::string name = gh->getFormattedTitleById(titleId);
-    if (name.empty()) { return luaReturnNil(L); }
-    lua_pushstring(L, name.c_str());
-    return 1;
-}
-
 // The selected quest's five reputation reward slots, packed to the front (the
 // panel walks 1..GetNumQuestLogRewardFactions expecting no gaps). Inlined
 // selection because selectedQuest is defined further down.
@@ -4326,29 +4279,16 @@ static const game::GameHandler::QuestLogEntry* selectedLogEntry(game::GameHandle
     return gh ? gh->getSelectedQuest() : nullptr;
 }
 
-// GetQuestLogRewardSpell() → texture, name, isTradeskillSpell, isSpellLearned
-//
-// Nil for every quest, and questinfo.lua gates the whole reward-spell row on
-// `if ( GetQuestLogRewardSpell() )` - so a quest that teaches a recipe or hands
-// out a buff showed no sign of it, and the tooltip setter beside it had nothing
-// to describe. The spell is in SMSG_QUEST_QUERY_RESPONSE at the field between
-// two the reward parser already reads.
-//
-// The three flags decide only which line is printed under the icon:
-// REWARD_TRADESKILL_SPELL for a recipe, REWARD_AURA for something not yet
-// known, REWARD_SPELL otherwise.
-static int lua_GetQuestLogRewardSpell(lua_State* L) {
-    // 0x005e4d10: icon (nil when none), name, 1 for a trade spell (Attributes
-    // 0x20), and 1 when the spell cast on completion teaches one (effect 36 or
-    // 57); four nils with no reward spell.
-    const auto none = [L]() { for (int i = 0; i < 4; ++i) lua_pushnil(L); return 4; };
-    auto* gh = getGameHandler(L);
-    if (!gh) return none();
-    const auto* q = selectedLogEntry(gh);
-    const uint32_t spellId = q ? q->rewardSpellId : 0u;
-    if (spellId == 0) return none();
-    const std::string name = gh->getSpellName(spellId);
-    if (name.empty()) return none();
+/// A quest's reward spell, for its log page (0x005e4d10) and its giver's
+/// (0x0058d670): icon (nil when none), name, 1 for a trade spell (Attributes
+/// 0x20), and 1 when the spell cast on completion teaches one (effect 36 or
+/// 57); four nils with none. questinfo.lua picks the line over it by the flags.
+static int pushRewardSpell(lua_State* L, game::GameHandler* gh, uint32_t spellId, uint32_t castId) {
+    const std::string name = gh && spellId != 0 ? gh->getSpellName(spellId) : std::string();
+    if (name.empty()) {
+        for (int i = 0; i < 4; ++i) lua_pushnil(L);
+        return 4;
+    }
     const std::string icon = gh->getSpellIconPath(spellId);
     if (icon.empty()) lua_pushnil(L); else lua_pushstring(L, icon.c_str());
     lua_pushstring(L, name.c_str());
@@ -4356,14 +4296,35 @@ static int lua_GetQuestLogRewardSpell(lua_State* L) {
     const auto it = cache.find(spellId);
     luaPushOneOrNil(L, it != cache.end() && (it->second.attr & 0x20u));
     bool teaches = false;
-    if (q->rewardSpellCastId) {
-        gh->getSpellName(q->rewardSpellCastId);
-        const auto c = cache.find(q->rewardSpellCastId);
-        if (c != cache.end())
-            for (uint32_t e : c->second.effectIds) teaches = teaches || e == 36 || e == 57;
+    if (castId) {
+        gh->getSpellName(castId);
+        if (const auto cast = cache.find(castId); cast != cache.end())
+            for (uint32_t e : cast->second.effectIds) teaches = teaches || e == 36 || e == 57;
     }
     luaPushOneOrNil(L, teaches);
     return 4;
+}
+
+// GetQuestLogRewardSpell() (0x005e4d10), of the selected quest.
+static int lua_GetQuestLogRewardSpell(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* q = gh ? selectedLogEntry(gh) : nullptr;
+    return pushRewardSpell(L, gh, q ? q->rewardSpellId : 0u, q ? q->rewardSpellCastId : 0u);
+}
+
+/// A title's name for the player, nil for none.
+static int pushRewardTitle(lua_State* L, game::GameHandler* gh, uint32_t titleId) {
+    const std::string name = gh && titleId != 0 ? gh->getFormattedTitleById(titleId) : std::string();
+    if (name.empty()) return luaReturnNil(L);
+    lua_pushstring(L, name.c_str());
+    return 1;
+}
+
+// GetQuestLogRewardTitle() (0x005e4c10), of the selected quest.
+static int lua_GetQuestLogRewardTitle(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* q = gh ? selectedLogEntry(gh) : nullptr;
+    return pushRewardTitle(L, gh, q ? q->rewardTitleId : 0u);
 }
 
 // isUsable, the fifth answer of GetQuestItemInfo, GetQuestLogRewardInfo and
@@ -4576,6 +4537,9 @@ struct QuestSource {
     uint32_t honor = 0;
     uint32_t talents = 0;
     uint32_t arenaPoints = 0;
+    uint32_t spell = 0;
+    uint32_t spellCast = 0;
+    uint32_t rewardTitle = 0;
 };
 
 QuestSource currentQuestSource(game::GameHandler* gh) {
@@ -4583,14 +4547,15 @@ QuestSource currentQuestSource(game::GameHandler* gh) {
     if (!gh) return s;
     if (gh->isQuestOfferRewardOpen()) {
         const auto& d = gh->getQuestOfferReward();
-        s = {&d.title, &d.fixedRewards, &d.choiceRewards, d.rewardMoney, d.rewardXp,
-             d.rewardHonor, d.rewardTalents, d.rewardArenaPoints};
+        s = {&d.title, &d.fixedRewards, &d.choiceRewards, d.rewardMoney, d.rewardXp, d.rewardHonor,
+             d.rewardTalents, d.rewardArenaPoints, d.rewardSpellId, d.rewardSpellCastId, d.rewardTitleId};
     } else if (gh->isQuestRequestItemsOpen()) {
         const auto& d = gh->getQuestRequestItems();
         s.title = &d.title;
     } else if (gh->isQuestDetailsOpen()) {
         const auto& d = gh->getQuestDetails();
-        s = {&d.title, &d.rewardItems, &d.rewardChoiceItems, d.rewardMoney, d.rewardXp};
+        s = {&d.title, &d.rewardItems, &d.rewardChoiceItems, d.rewardMoney, d.rewardXp, d.rewardHonor,
+             d.rewardTalents, d.rewardArenaPoints, d.rewardSpellId, d.rewardSpellCastId, d.rewardTitleId};
     }
     return s;
 }
@@ -4817,15 +4782,27 @@ static int lua_GetQuestItemLink(lua_State* L) {
     return luaReturnNil(L);
 }
 
-// GetQuestSpellLink(...) - the spell a quest gives, as a link.
-//
-// Nil, and deliberately: no quest packet this client parses carries a reward
-// spell, so there is nothing to name. The click handler passes whatever it
-// gets to HandleModifiedItemClick, which does nothing with nil - where a
-// made-up link would put a spell in someone's chat that the quest does not
-// give.
+// GetRewardSpell() (0x0058d670) and GetRewardTitle() (0x0058d810): of the page
+// shown, the giver's offer or its reward (0x0058dd50 sets both alike).
+static int lua_GetQuestRewardSpell(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const QuestSource s = currentQuestSource(gh);
+    return pushRewardSpell(L, gh, s.spell, s.spellCast);
+}
+
+static int lua_GetQuestRewardTitle(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    return pushRewardTitle(L, gh, currentQuestSource(gh).rewardTitle);
+}
+
+// GetQuestSpellLink() (0x0058dab0): that spell as a link, nil without one.
 static int lua_GetQuestSpellLink(lua_State* L) {
-    return luaReturnNil(L);
+    auto* gh = getGameHandler(L);
+    const uint32_t spell = currentQuestSource(gh).spell;
+    const std::string name = gh && spell != 0 ? gh->getSpellName(spell) : std::string();
+    if (name.empty()) return luaReturnNil(L);
+    lua_pushstring(L, game::spellChatLink(spell, name).c_str());
+    return 1;
 }
 
 void registerQuestLuaAPI(lua_State* L) {
@@ -4866,7 +4843,7 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"GetQuestLogRewardSpell",  lua_GetQuestLogRewardSpell},
                 {"GetRewardSpell",          lua_GetQuestRewardSpell},
                 {"GetRewardTitle",          lua_GetQuestRewardTitle},
-                {"GetQuestLogRewardTitle",  lua_GetQuestRewardTitle},
+                {"GetQuestLogRewardTitle",  lua_GetQuestLogRewardTitle},
                 {"ProcessQuestLogRewardFactions", lua_ProcessQuestLogRewardFactions},
                 {"GetNumQuestLogRewardFactions",  lua_GetNumQuestLogRewardFactions},
                 {"GetQuestLogRewardFactionInfo",  lua_GetQuestLogRewardFactionInfo},

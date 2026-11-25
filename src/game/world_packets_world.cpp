@@ -925,26 +925,22 @@ bool QuestDetailsParser::parse(network::Packet& packet, QuestDetailsData& data) 
     //     float  unused, commented "honor multiplier?"
     //     uint32 reward spell        <- the icon under "You will learn:"
     //
-    // The cast id and the title id come next and are left on the wire: nothing
-    // reads them, and stopping here is honest about that.
-    //
-    // The offer panel gates its whole reward-spell row on being given one, so
-    // a quest that teaches a recipe showed no sign of it. Each read is guarded
-    // on its own: an older realm that stops short leaves the spell at zero
-    // rather than taking a value out of the next packet, and a realm whose
-    // layout differs here yields an id no spell answers to, which reads as
-    // no reward spell - the same as before.
-    if (packet.hasRemaining(4)) /*honor*/            packet.readUInt32();
-    if (packet.hasRemaining(4)) /*honorMultiplier*/  packet.readFloat();
-    if (packet.hasRemaining(4))
-        data.rewardSpellId = packet.readUInt32();
+    // Each read is guarded on its own: an older realm that stops short leaves
+    // the rest at zero rather than taking a value out of the next packet.
+    if (packet.hasRemaining(4)) data.rewardHonor = packet.readUInt32() / 10u;
+    if (packet.hasRemaining(4)) /*honorMultiplier*/ packet.readFloat();
+    if (packet.hasRemaining(4)) data.rewardSpellId = packet.readUInt32();
     // 0x006d0460 goes on: the cast spell, title, talents, arena points and
     // a word; the five reputation factions, their values and overrides; then
     // the emote count and as many (emote, delay) pairs, which the giver plays
     // (0x0071a260).
-    constexpr size_t kAfterSpell = 5 * 4 + 15 * 4;
-    if (packet.hasRemaining(kAfterSpell + 4)) {
-        packet.setReadPos(packet.getReadPos() + kAfterSpell);
+    if (packet.hasRemaining(4)) data.rewardSpellCastId = packet.readUInt32();
+    if (packet.hasRemaining(4)) data.rewardTitleId = packet.readUInt32();
+    if (packet.hasRemaining(4)) data.rewardTalents = packet.readUInt32();
+    if (packet.hasRemaining(4)) data.rewardArenaPoints = packet.readUInt32();
+    constexpr size_t kAfterPoints = 4 + 15 * 4;
+    if (packet.hasRemaining(kAfterPoints + 4)) {
+        packet.setReadPos(packet.getReadPos() + kAfterPoints);
         const uint32_t emoteCount = packet.readUInt32();
         for (uint32_t i = 0; i < emoteCount && i < 32 && packet.hasRemaining(8); ++i) {
             DialogEmote e;
@@ -1359,8 +1355,8 @@ bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData
         if (packet.hasRemaining(4)) data.rewardHonor = packet.readUInt32() / 10u;
         if (packet.hasRemaining(4)) packet.readFloat();   // honour multiplier
         if (packet.hasRemaining(4)) packet.readUInt32();  // unused
-        if (packet.hasRemaining(4)) packet.readUInt32();  // reward spell
-        if (packet.hasRemaining(4)) packet.readUInt32();  // reward spell cast
+        if (packet.hasRemaining(4)) data.rewardSpellId = packet.readUInt32();
+        if (packet.hasRemaining(4)) data.rewardSpellCastId = packet.readUInt32();
         if (packet.hasRemaining(4)) data.rewardTitleId = packet.readUInt32();
         if (packet.hasRemaining(4)) data.rewardTalents = packet.readUInt32();
         if (packet.hasRemaining(4)) data.rewardArenaPoints = packet.readUInt32();
