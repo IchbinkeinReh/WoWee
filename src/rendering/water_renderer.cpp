@@ -2188,6 +2188,11 @@ void WaterRenderer::gatherLiquidFacets(const glm::vec3& boxMin, const glm::vec3&
     for (const auto& surface : surfaces) {
         if (surface.heights.empty() || surface.width == 0 || surface.height == 0) continue;
         if (surface.maxHeight < boxMin.z - 1.0f || surface.minHeight > boxMax.z + 1.0f) continue;
+        const glm::vec2 spanX(surface.stepX * static_cast<float>(surface.width));
+        const glm::vec2 spanY(surface.stepY * static_cast<float>(surface.height));
+        const glm::vec2 lo = glm::vec2(surface.origin) + glm::min(spanX, glm::vec2(0.0f)) + glm::min(spanY, glm::vec2(0.0f));
+        const glm::vec2 hi = glm::vec2(surface.origin) + glm::max(spanX, glm::vec2(0.0f)) + glm::max(spanY, glm::vec2(0.0f));
+        if (hi.x < boxMin.x || lo.x > boxMax.x || hi.y < boxMin.y || lo.y > boxMax.y) continue;
         const int gw = static_cast<int>(surface.width) + 1;
         for (int iy = 0; iy < static_cast<int>(surface.height); ++iy) {
             for (int ix = 0; ix < static_cast<int>(surface.width); ++ix) {

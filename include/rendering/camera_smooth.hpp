@@ -105,10 +105,9 @@ constexpr float kPitchMin = 0.0f;
 constexpr float kPitchMax = 30.0f;
 constexpr float kTimeMin = 0.1f;
 constexpr float kTimeMax = 2.0f;
-/// cameraWaterCollision's default (on) and cameraSubmergeFinalPitch /
-/// cameraSurfaceFinalPitch's (5 degrees down each): the pitch the camera
-/// turns to as it goes under the water or comes up out of it (0x00606f90).
-constexpr bool kWaterCollision = true;
+/// cameraSubmergeFinalPitch's and cameraSurfaceFinalPitch's defaults (5 degrees
+/// down each): the pitch the camera turns to as the unit it looks at goes under
+/// the water or comes up out of it (0x00606f90), with cameraWaterCollision.
 constexpr float kSubmergeFinalPitch = 5.0f;
 constexpr float kSurfaceFinalPitch = 5.0f;
 /// The eases' own threshold, 0.001 radians (0x00601190, 0x00601410).

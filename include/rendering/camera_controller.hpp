@@ -856,7 +856,10 @@ public:
         smoothStyle_ = smoothStyle;
         smoothTrackingStyle_ = trackingStyle;
     }
+    /// cameraWaterCollision: the liquids' surfaces are in the camera's way (0x005fec50).
+    void setWaterCollision(bool on) { waterCollision_ = on; }
 private:
+    bool waterCollision_ = true;
     int smoothStyle_ = camera_smooth::kDefaultStyle;
     int smoothTrackingStyle_ = camera_smooth::kDefaultStyle;
     /// The Fear state's ease, planned for a character carried by a server
@@ -1092,11 +1095,11 @@ private:
     /// below, the water surface. Eased both ways so crossing the water's
     /// edge does not jump the view.
     float waterNudgeZ_ = 0.0f;
-    /// Which side of the water's surface the camera was on last frame, for
-    /// the pitch it takes as it crosses (0x00606f90, camera flags 0x200000
-    /// under and 0x100000 above).
-    bool cameraUnderWater_ = false;
-    bool cameraWaterKnown_ = false;
+    /// Where the followed unit's eyes are in the water (0x006049c0), for what the
+    /// camera stays on the same side of and the pitch it takes as they cross.
+    camera_pivot::Water followedWater_ = camera_pivot::Water::None;
+    /// The liquids' surfaces within a box, three points a triangle.
+    void gatherWaterTriangles(const glm::vec3& lo, const glm::vec3& hi, std::vector<glm::vec3>& out) const;
 
     // Gravity / grounding
     float verticalVelocity = 0.0f;

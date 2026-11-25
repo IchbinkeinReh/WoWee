@@ -122,21 +122,21 @@ TEST_CASE("the height eases to a new target at 1.2 yards a second along half a c
 TEST_CASE("the pivot is drawn down by what is over the unit", "[camera]") {
     const float floor = cp::unitHeightFloor(kElfCollision);  // 1.5232
     // Nothing over it: the height wanted, no more than the eased one.
-    CHECK_THAT(cp::collidedHeight(1.864f, 1.864f, std::nullopt, floor), WithinAbs(1.864f, 1e-6));
+    CHECK_THAT(cp::collidedHeight(1.864f, {cp::kMinPivot, 1.864f}, std::nullopt, floor), WithinAbs(1.864f, 1e-6));
     // A ceiling 2.0 over the feet against a mounted 2.714: the line up from
     // 0.8333 is 1.8813 long and meets it at 1.1667 (a share of 0.6202),
     // less a ninth: 1.0556 + 0.8333 = 1.8889.
     const float wanted = 2.714553f;
     const float len = wanted - cp::kMinPivot;
-    CHECK_THAT(cp::collidedHeight(wanted, wanted, (2.0f - cp::kMinPivot) / len, floor),
+    CHECK_THAT(cp::collidedHeight(wanted, {cp::kMinPivot, wanted}, (2.0f - cp::kMinPivot) / len, floor),
                WithinAbs(1.888889f, 1e-5));
     // A low beam: never under three quarters of the collision height...
-    CHECK_THAT(cp::collidedHeight(wanted, wanted, 0.05f, floor), WithinAbs(1.523250f, 1e-5));
+    CHECK_THAT(cp::collidedHeight(wanted, {cp::kMinPivot, wanted}, 0.05f, floor), WithinAbs(1.523250f, 1e-5));
     // ... the mounted one on a mount ...
-    CHECK_THAT(cp::collidedHeight(wanted, wanted, 0.05f, cp::unitHeightFloor(2.881220f)), WithinAbs(2.160915f, 1e-5));
+    CHECK_THAT(cp::collidedHeight(wanted, {cp::kMinPivot, wanted}, 0.05f, cp::unitHeightFloor(2.881220f)), WithinAbs(2.160915f, 1e-5));
     // ... nor 0.8333, and never over the eased height.
-    CHECK_THAT(cp::collidedHeight(wanted, wanted, 0.0f, 0.0f), WithinAbs(0.944444f, 1e-5));
-    CHECK_THAT(cp::collidedHeight(wanted, 1.2f, std::nullopt, 0.0f), WithinAbs(1.2f, 1e-6));
+    CHECK_THAT(cp::collidedHeight(wanted, {cp::kMinPivot, wanted}, 0.0f, 0.0f), WithinAbs(0.944444f, 1e-5));
+    CHECK_THAT(cp::collidedHeight(wanted, {cp::kMinPivot, 1.2f}, std::nullopt, 0.0f), WithinAbs(1.2f, 1e-6));
 }
 
 TEST_CASE("a collision draws the eased value in and it eases back over two seconds", "[camera]") {
@@ -171,4 +171,35 @@ TEST_CASE("the camera fades its model along half a cosine (0x008ca080)", "[camer
           Catch::Approx(249.0f / 255.0f));
     CHECK(cameraFadeAlpha(1.9f, kCameraFadeNear, kCameraFadeFar) == 1.0f);
     CHECK(cameraFadeAlpha(0.001f, kCameraFadeNear, kCameraFadeFar) == 0.0f);
+}
+
+// 0x006049c0, 0x00605d60
+TEST_CASE("the pivot stays on its side of the water", "[camera]") {
+    using cp::Water;
+    constexpr float kHeight = 2.0f;
+    CHECK(cp::waterState(std::nullopt, kHeight) == Water::None);
+    CHECK(cp::waterState(1.5f, kHeight) == Water::Surface);
+    CHECK(cp::waterState(kHeight - 0.2223f, kHeight) == Water::Surface);
+    CHECK(cp::waterState(1.8f, kHeight) == Water::Under);
+    // At the surface: two ninths over it, though the swimmer's own is lower.
+    const auto top = cp::heightRange(Water::Surface, 1.5f, 1.1f);
+    CHECK_THAT(cp::collidedHeight(1.1f, top, std::nullopt, 0.0f), WithinAbs(1.722222f, 1e-5));
+    const auto wading = cp::heightRange(Water::Surface, 0.4f, 1.6f);
+    CHECK_THAT(cp::collidedHeight(1.6f, wading, std::nullopt, 0.0f), WithinAbs(1.6f, 1e-5));
+    // Under it: 0.8333 under the surface at the most, and no lower than 0.8333.
+    const auto under = cp::heightRange(Water::Under, 2.0f, 1.9f);
+    CHECK_THAT(cp::collidedHeight(1.9f, under, std::nullopt, 0.0f), WithinAbs(1.166667f, 1e-5));
+    const auto low = cp::heightRange(Water::Under, 1.0f, 1.9f);
+    CHECK_THAT(cp::collidedHeight(1.9f, low, std::nullopt, 0.0f), WithinAbs(cp::kMinPivot, 1e-5));
+    const auto deep = cp::heightRange(Water::Under, 30.0f, 1.2f);
+    CHECK_THAT(cp::collidedHeight(1.9f, deep, std::nullopt, 0.0f), WithinAbs(1.9f, 1e-5));
+    CHECK(cp::heightRange(Water::None, 0.0f, 1.9f).least == cp::kMinPivot);
+    CHECK(cp::heightRange(Water::None, 0.0f, 1.9f).most == 1.9f);
+    CHECK(cp::pitchForWater(Water::Surface, Water::Under, 5.0f, 7.0f) == 5.0f);
+    CHECK(cp::pitchForWater(Water::Under, Water::Surface, 5.0f, 7.0f) == 7.0f);
+    CHECK_FALSE(cp::pitchForWater(Water::Under, Water::Surface, 5.0f, 0.0f));
+    CHECK_FALSE(cp::pitchForWater(Water::None, Water::Under, 5.0f, 7.0f));
+    CHECK_FALSE(cp::pitchForWater(Water::None, Water::Surface, 5.0f, 7.0f));
+    CHECK_FALSE(cp::pitchForWater(Water::Under, Water::None, 5.0f, 7.0f));
+    CHECK_FALSE(cp::pitchForWater(Water::Under, Water::Under, 5.0f, 7.0f));
 }

@@ -218,16 +218,49 @@ struct Ease {
 
 // ---- The pivot's own collision (0x00605d60) ------------------------------
 
+/// Where a unit's eyes are in a liquid whose surface is `depth` over its feet
+/// (0x006049c0, camera flags 0x100000 and 0x200000).
+enum class Water { None, Surface, Under };
+/// Two ninths: what the eyes are below the top of a unit at the surface.
+inline constexpr float kWaterClear = 2.0f / 9.0f;
+[[nodiscard]] inline Water waterState(std::optional<float> depth, float collisionHeight) {
+    if (!depth) return Water::None;
+    return *depth <= collisionHeight - kWaterClear ? Water::Surface : Water::Under;
+}
+/// Between what the pivot stands over the feet, `current` the eased height. With
+/// cameraWaterCollision over the surface while the eyes are, and 0.8333 under it
+/// while they are not - no matter the eased height then.
+struct HeightRange {
+    float least = kMinPivot, most = kMinPivot;
+};
+[[nodiscard]] inline HeightRange heightRange(Water water, float depth, float current) {
+    HeightRange r{kMinPivot, current};
+    if (water == Water::Surface) {
+        r.least = depth + kWaterClear;
+        if (r.most <= r.least) r.most = r.least;
+    } else if (water == Water::Under) {
+        r.most = depth - kMinPivot;
+        if (r.most <= kMinPivot) r.most = kMinPivot;
+    }
+    return r;
+}
+/// The pitch, in degrees down, the camera turns to as the unit's eyes go under or
+/// come up out of it (0x00606f90); none while they stay where they are.
+[[nodiscard]] inline std::optional<float> pitchForWater(Water before, Water now, float submerged, float surfaced) {
+    if (before == Water::Under && now == Water::Surface && surfaced != 0.0f) return surfaced;
+    if (before == Water::Surface && now == Water::Under && submerged != 0.0f) return submerged;
+    return std::nullopt;
+}
+
 /// The height the pivot may stand at over the feet. The line straight up
-/// from 0.8333 over the feet to the height wanted (the larger of the eased
+/// from the least of the range to the height wanted (the larger of the eased
 /// height and its target) is cut where it first meets the world -
 /// `hitShare` of the way along, none for nothing - and, cut, drawn a ninth
 /// further in, no shorter than a ninth. Then held no lower than a unit's
 /// floor (`unitFloor`: three quarters of its collision height, 0 for none)
-/// or 0.8333, and no higher than the eased height `current`.
-[[nodiscard]] inline float collidedHeight(float wanted, float current, std::optional<float> hitShare,
-                                          float unitFloor) {
-    float len = wanted - kMinPivot;
+/// or the least, and no higher than the most.
+[[nodiscard]] inline float collidedHeight(float wanted, HeightRange range, std::optional<float> hitShare, float unitFloor) {
+    float len = wanted - range.least;
     if (len <= kNinth) len = kNinth;
     float cut = len;
     if (hitShare) cut = *hitShare * len;
@@ -235,10 +268,10 @@ struct Ease {
         cut -= kNinth;
         if (cut <= kNinth) cut = kNinth;
     }
-    float h = cut + kMinPivot;
+    float h = cut + range.least;
     if (h < unitFloor) h = unitFloor;
-    if (h < kMinPivot) h = kMinPivot;
-    if (current < h) h = current;
+    if (h < range.least) h = range.least;
+    if (range.most < h) h = range.most;
     return h;
 }
 

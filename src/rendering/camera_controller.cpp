@@ -965,6 +965,8 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // are not relevant for camera pivoting.
         cachedPivotLift_ = 0.0f;
     }
+    // Not out of the water the unit is under.
+    if (waterCollision_ && followedWater_ == camera_pivot::Water::Under) pivotLift = 0.0f;
     glm::vec3 pivot = targetPos + glm::vec3(0.0f, 0.0f, pivotHeightNow + pivotLift);
 
     // Camera direction from yaw/pitch (already computed as forward3D)
@@ -1056,6 +1058,13 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             const glm::vec3 pad(1.5f);
             m2Renderer->gatherCollisionTriangles(glm::min(pivot, tip) - pad, glm::max(pivot, tip) + pad,
                                                  doodadTris, false, /*includeGameObjects=*/true);
+        }
+        // And the liquids' surfaces, from above and below, with
+        // cameraWaterCollision (the trace's 0x20000).
+        if (waterCollision_) {
+            const glm::vec3 tip = pivot + camDir * probeDistance;
+            const glm::vec3 pad(1.5f);
+            gatherWaterTriangles(glm::min(pivot, tip) - pad, glm::max(pivot, tip) + pad, doodadTris);
         }
         auto doodadHit = [&](const glm::vec3& from, const glm::vec3& dir, float reach) -> float {
             float nearest = reach;
@@ -1307,27 +1316,8 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                 actualCam.y += outward.y * waterNudgeZ_ * 0.6f;
             }
         }
-        // 0x00606f90: with cameraWaterCollision on, the camera going under the
-        // surface turns to cameraSubmergeFinalPitch and coming up out of it to
-        // cameraSurfaceFinalPitch, eased at cameraPitchSmoothSpeed
-        // (0x00601190); a pitch of 0 asks for nothing.
-        const bool underNow = surfaceZ && actualCam.z < *surfaceZ;
-        if (camera_smooth::kWaterCollision && cameraWaterKnown_ && underNow != cameraUnderWater_) {
-            const float target = underNow ? camera_smooth::kSubmergeFinalPitch : camera_smooth::kSurfaceFinalPitch;
-            const float pitchTo = -target;   // the client counts down as positive
-            if (target != 0.0f && std::fabs(pitch - pitchTo) >= camera_smooth::kAtRest) {
-                const auto ms = static_cast<uint32_t>(std::fabs(pitch - pitchTo) / camera_smooth::kPitchSpeed * 1000.0f);
-                viewPitch_.startMs = viewPitch_.endMs;
-                viewPitch_.value = pitch;
-                viewPitch_.set(pitchTo, cameraClockMs_, cameraClockMs_ + ms);
-                viewBlending_ = true;
-            }
-        }
-        cameraUnderWater_ = underNow;
-        cameraWaterKnown_ = true;
     } else {
         waterNudgeZ_ = 0.0f;
-        cameraWaterKnown_ = false;
     }
 
     // The camera sits exactly where it was computed, after collision has
@@ -1825,6 +1815,15 @@ void CameraController::measureFollowedPoses() {
     }
 }
 
+void CameraController::gatherWaterTriangles(const glm::vec3& lo, const glm::vec3& hi,
+                                            std::vector<glm::vec3>& out) const {
+    if (!waterRenderer) return;
+    static thread_local std::vector<collision::Facet> facets;
+    facets.clear();
+    waterRenderer->gatherLiquidFacets(lo, hi, facets);
+    for (const collision::Facet& f : facets) out.insert(out.end(), std::begin(f.v), std::end(f.v));
+}
+
 float CameraController::collideFollowedPivot(const glm::vec3& feet, float deltaTime) {
     // The target, eased to at cameraHeightSmoothSpeed (0x00604640 ->
     // 0x00603230); the first one taken at once.
@@ -1834,29 +1833,48 @@ float CameraController::collideFollowedPivot(const glm::vec3& feet, float deltaT
     // eased height and its target, against the world's built geometry and
     // its doodads (the camera's trace, 0x100171).
     const float wanted = std::max(pivotEase_.value, pivotEase_.to);
-    const float reach = std::max(wanted - camera_pivot::kMinPivot, camera_pivot::kNinth);
-    const glm::vec3 from = feet + glm::vec3(0.0f, 0.0f, camera_pivot::kMinPivot);
-    const glm::vec3 up(0.0f, 0.0f, 1.0f);
-    float hit = reach;
-    if (wmoRenderer) hit = std::min(hit, wmoRenderer->raycastBoundingBoxes(from, up, reach));
-    if (m2Renderer) {
-        static thread_local std::vector<glm::vec3> tris;
-        tris.clear();
-        const glm::vec3 pad(0.25f, 0.25f, 0.0f);
-        m2Renderer->gatherCollisionTriangles(from - pad, from + up * reach + pad, tris, false,
-                                             /*includeGameObjects=*/true);
-        for (size_t i = 0; i + 2 < tris.size(); i += 3) {
-            const float t = rayTriangleIntersect(from, up, tris[i], tris[i + 1], tris[i + 2]);
-            if (t > 0.0f && t < hit) hit = t;
-        }
-    }
-    const std::optional<float> share = hit < reach ? std::optional<float>(hit / reach) : std::nullopt;
     // Not under three quarters of the unit's collision height (+0x854 x
     // 0.75), the mounted one on a mount.
     const float height = followingMount() && mountPivot_->collisionHeight > 0.0f ? mountPivot_->collisionHeight
                                                                                  : followedCollisionHeight();
-    const float h = camera_pivot::collidedHeight(wanted, pivotEase_.value, share,
-                                                 camera_pivot::unitHeightFloor(height));
+    // In the water (0x006049c0) it keeps to its side of the surface.
+    const auto surface = liquid_query::surfaceOverUnit({waterRenderer, wmoRenderer, terrainManager}, feet);
+    const std::optional<float> depth = surface ? std::optional<float>(*surface - feet.z) : std::nullopt;
+    const camera_pivot::Water water = camera_pivot::waterState(depth, height);
+    if (const auto turned = camera_pivot::pitchForWater(followedWater_, water, camera_smooth::kSubmergeFinalPitch,
+                                                        camera_smooth::kSurfaceFinalPitch);
+        turned && waterCollision_) {
+        // Eased at cameraPitchSmoothSpeed (0x00601190).
+        const float pitchTo = -*turned;   // the client counts down as positive
+        if (std::fabs(pitch - pitchTo) >= camera_smooth::kAtRest) {
+            const auto ms = static_cast<uint32_t>(std::fabs(pitch - pitchTo) / camera_smooth::kPitchSpeed * 1000.0f);
+            viewPitch_.startMs = viewPitch_.endMs;
+            viewPitch_.value = pitch;
+            viewPitch_.set(pitchTo, cameraClockMs_, cameraClockMs_ + ms);
+            viewBlending_ = true;
+        }
+    }
+    followedWater_ = water;
+    const camera_pivot::HeightRange range = camera_pivot::heightRange(
+        waterCollision_ ? water : camera_pivot::Water::None, depth.value_or(0.0f), pivotEase_.value);
+    const float reach = std::max(wanted - range.least, camera_pivot::kNinth);
+    const glm::vec3 from = feet + glm::vec3(0.0f, 0.0f, range.least);
+    const glm::vec3 up(0.0f, 0.0f, 1.0f);
+    float hit = reach;
+    if (wmoRenderer) hit = std::min(hit, wmoRenderer->raycastBoundingBoxes(from, up, reach));
+    static thread_local std::vector<glm::vec3> tris;
+    tris.clear();
+    const glm::vec3 pad(0.25f, 0.25f, 0.0f);
+    if (m2Renderer)
+        m2Renderer->gatherCollisionTriangles(from - pad, from + up * reach + pad, tris, false,
+                                             /*includeGameObjects=*/true);
+    if (waterCollision_) gatherWaterTriangles(from - pad, from + up * reach + pad, tris);
+    for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+        const float t = rayTriangleIntersect(from, up, tris[i], tris[i + 1], tris[i + 2]);
+        if (t > 0.0f && t < hit) hit = t;
+    }
+    const std::optional<float> share = hit < reach ? std::optional<float>(hit / reach) : std::nullopt;
+    const float h = camera_pivot::collidedHeight(wanted, range, share, camera_pivot::unitHeightFloor(height));
     // More than a ninth under the eased height, the height itself is drawn
     // in and eases back over two seconds (0x00606f90, +0x128).
     if (auto held = camera_pivot::pulledIn(pivotEase_.value, h)) pivotEase_.pullIn(*held);
