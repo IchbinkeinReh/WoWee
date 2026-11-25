@@ -1,6 +1,7 @@
 #include "ui/widget_tree.hpp"
 #include "ui/layout_cache.hpp"
 
+#include <unordered_map>
 #include <map>
 #include <compare>
 #include <chrono>
@@ -791,10 +792,20 @@ bool WidgetTree::placedBy(const Widget& w, const std::function<bool(uint32_t)>& 
                        [&](const Anchor& a) { return other(a.relativeTo != 0 ? a.relativeTo : w.parent); });
 }
 
-bool WidgetTree::placed(uint32_t id, int depth) const {
-    const Widget* w = get(id);
-    if (!w || id == rootId_ || id == uiParentId_ || depth > 64) return true;
-    return placedBy(*w, [this, depth](uint32_t other) { return placed(other, depth + 1); });
+bool WidgetTree::placed(uint32_t id) const {
+    // Each is asked once: rows held by two points of the one before are a chain
+    // that would else be asked twice as often with each.
+    std::unordered_map<uint32_t, bool> known;
+    const std::function<bool(uint32_t, int)> ask = [&](uint32_t at, int depth) {
+        const Widget* w = get(at);
+        if (!w || at == rootId_ || at == uiParentId_ || depth > 256) return true;
+        const auto [it, fresh] = known.try_emplace(at, true);   // before its own, which may come back to it
+        if (!fresh) return it->second;
+        const bool is = placedBy(*w, [&](uint32_t other) { return ask(other, depth + 1); });
+        known[at] = is;
+        return is;
+    };
+    return ask(id, 0);
 }
 
 bool WidgetTree::placedOnce(uint32_t id, int depth) {

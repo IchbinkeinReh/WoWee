@@ -4430,3 +4430,24 @@ TEST_CASE("a texture's size is its picture's until one is set", "[widgets]") {
     tree.sizeTexture(frame);
     CHECK(asked == before);
 }
+
+TEST_CASE("a long list of rows held by two points is placed at once", "[widgets][points]") {
+    WidgetTree tree;
+    uint32_t before = tree.create(WidgetKind::Frame, tree.rootId(), "First");
+    tree.addPoint(before, {"CENTER", 0, "CENTER", 0.0f, 0.0f});
+    for (int i = 0; i < 60; ++i) {
+        const uint32_t row = tree.create(WidgetKind::Frame, tree.rootId(), "");
+        Anchor left, right;
+        left.point = "TOPLEFT";
+        left.relativePoint = "BOTTOMLEFT";
+        right.point = "TOPRIGHT";
+        right.relativePoint = "BOTTOMRIGHT";
+        left.relativeTo = right.relativeTo = before;
+        tree.addPoint(row, left);
+        tree.addPoint(row, right);
+        before = row;
+    }
+    CHECK(tree.placed(before));
+    tree.layout(kScreenW, kScreenH);
+    CHECK(tree.get(before)->visible);
+}

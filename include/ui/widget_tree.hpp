@@ -1221,7 +1221,7 @@ public:
     /// Whether a region's rect can be worked out (0x00489230 after
     /// 0x00489de0): a frame with no points has none, and what is placed by it
     /// has none either.
-    [[nodiscard]] bool placed(uint32_t id, int depth = 0) const;
+    [[nodiscard]] bool placed(uint32_t id) const;
     /// A widget's alpha times that of every frame it is in (0x0049f900).
     [[nodiscard]] float effectiveAlpha(const Widget& w) const {
         float alpha = w.alpha;
