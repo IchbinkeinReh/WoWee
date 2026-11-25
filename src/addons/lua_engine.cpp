@@ -2472,6 +2472,15 @@ constexpr int kAnchorNone = 9;   // among kTooltipAnchorTypes
 static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
     if (!w) return;
     const bool hadLines = !w->tooltipLines.empty();
+    if (auto* tree = wowee::addons::getWidgetTree(L)) {
+        for (const auto& line : w->tooltipLines) {
+            wowee::ui::Widget* picture = line.iconWidget ? tree->get(line.iconWidget) : nullptr;
+            if (!picture) continue;
+            picture->shown = false;
+            tree->markVisibilityPending(picture->id);
+            tree->markLayoutDirty();
+        }
+    }
     w->tooltipLines.clear();
     // And SetMinimumWidth's width, unless it was forced (+0x3d8, +0x3dc).
     if (!w->tooltipMinWidthForced) w->tooltipMinWidth = 0.0f;
@@ -2489,6 +2498,42 @@ static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
     lua_setfield(L, tip, "__pendingQuestId");
     if (hadLines) callScriptOnTable(L, tip, "OnTooltipCleared", 0.0);
     lua_settop(L, tip - 1);
+}
+
+/// A picture at the front of the last line, as tall as that, its text moved along past
+/// it: the next of the tooltip's own textures - $parentTexture1 to 10 - placed and shown;
+/// none without one, or on the first line (0x0061c8b0).
+static void addTooltipTexture(lua_State* L, wowee::ui::Widget* w, const std::string& path, const float (&uv)[4],
+                              const float (&tint)[4]) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (!tree || !w || w->name.empty() || w->tooltipLines.size() < 2 || !w->tooltipLines.back().icon.empty()) return;
+    int used = 0;
+    for (const auto& line : w->tooltipLines) used += line.icon.empty() ? 0 : 1;
+    const std::string name = w->name + "Texture" + std::to_string(used + 1);
+    const wowee::ui::Widget* picture = used < 10 ? tree->findByName(name) : nullptr;
+    if (!picture) return;
+    auto& line = w->tooltipLines.back();
+    line.icon = path;
+    line.iconWidget = picture->id;
+    taint::Quiet quiet;
+    const int top = lua_gettop(L);
+    lua_getglobal(L, name.c_str());
+    const int region = lua_gettop(L);
+    const auto method = [&](const char* what, std::initializer_list<double> args, const char* text = nullptr) {
+        lua_getfield(L, region, what);
+        if (!lua_isfunction(L, -1)) return;
+        lua_pushvalue(L, region);
+        if (text) lua_pushstring(L, text);
+        for (const double v : args) lua_pushnumber(L, v);
+        lua_call(L, 1 + (text ? 1 : 0) + static_cast<int>(args.size()), 0);
+    };
+    if (lua_istable(L, region)) {
+        method("SetTexture", {}, path.c_str());
+        method("SetTexCoord", {uv[0], uv[1], uv[2], uv[3]});
+        method("SetVertexColor", {tint[0], tint[1], tint[2], tint[3]});
+        method("Show", {});
+    }
+    lua_settop(L, top);
 }
 
 /// What goes with a tooltip as it is hidden, by whatever hides it (0x0061eb20 ->
@@ -3105,6 +3150,7 @@ int lua_Tooltip_AddLine(lua_State* L) {
     if (!w) return 0;
     wowee::ui::Widget::TooltipLine line;
     line.left = luaL_optstring(L, 2, "");
+    if (line.left.empty()) return 0;   // 0x0061fec0
     tooltipLineColour(L, 3, line.lc);
     tooltipLineColour(L, 3, line.rc);
     // AddLine(text, r, g, b, wrapText). The sixth argument was read off the
@@ -3230,6 +3276,7 @@ int lua_Tooltip_AddDoubleLine(lua_State* L) {
     wowee::ui::Widget::TooltipLine line;
     line.left  = luaL_optstring(L, 2, "");
     line.right = luaL_optstring(L, 3, "");
+    if (line.left.empty() && line.right.empty()) return 0;   // 0x0061fec0
     tooltipLineColour(L, 4, line.lc);
     tooltipLineColour(L, 7, line.rc);
     line.wrap = lua_toboolean(L, 10) != 0;
@@ -3388,6 +3435,7 @@ int lua_Tooltip_SetAnchorType(lua_State* L) {
 /// The one-line form. GameTooltip:SetText replaces what the tooltip says
 /// rather than setting a font string, and returns whether it did - so the
 /// shared SetText can hand off and stop.
+int lua_Region_Hide(lua_State* L);
 int lua_Tooltip_SetText(lua_State* L) {
     auto* w = widgetOf(L, 1);
     // A GameTooltip is one before anything has been put in it.
@@ -3422,6 +3470,11 @@ int lua_Tooltip_SetText(lua_State* L) {
     }
     wowee::ui::Widget::TooltipLine line;
     line.left = luaL_optstring(L, 2, "");
+    if (line.left.empty()) {   // no line, and so hidden (0x0061fec0, 0x0061cff0)
+        (void)lua_Region_Hide(L);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
     tooltipLineColour(L, 3, line.lc);
     tooltipLineColour(L, 3, line.rc);
     // SetText(text, r, g, b, a, textWrap) - the seventh here, since alpha sits
@@ -5867,10 +5920,9 @@ int lua_Tooltip_SetUnit(lua_State* L) {
                     1.0f, 1.0f, 1.0f);
             // In front of it the threat icon, tinted by the status.
             const uint32_t tint = game::threatStatusColor(threat.standing.status);
-            auto& tl = w->tooltipLines.back();
-            tl.icon = "Interface\\RaidFrame\\UI-RaidFrame-Threat";
-            for (int i = 0; i < 3; ++i) tl.iconTint[i] = static_cast<float>(tint >> (16 - 8 * i) & 0xff) / 255.0f;
-            tl.iconTint[3] = 1.0f;
+            float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            for (int i = 0; i < 3; ++i) color[i] = static_cast<float>(tint >> (16 - 8 * i) & 0xff) / 255.0f;
+            addTooltipTexture(L, w, "Interface\\RaidFrame\\UI-RaidFrame-Threat", {0.0f, 1.0f, 0.0f, 1.0f}, color);
             threatShown = true;
         }
     }
@@ -7012,18 +7064,11 @@ int lua_Tooltip_SetCurrencyToken(lua_State* L) {
 /// are given, is that fraction of the file.
 static int lua_Tooltip_AddTexture(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (!w || w->tooltipLines.empty() || !lua_isstring(L, 2)) return 0;
-    int pictures = 0;
-    for (const auto& line : w->tooltipLines) pictures += line.left.rfind("|T", 0) == 0 ? 1 : 0;
-    if (pictures >= 10) return 0;
-    std::string escape = std::string("|T") + lua_tostring(L, 2) + ":0";
-    if (lua_isnumber(L, 3) && lua_isnumber(L, 4) && lua_isnumber(L, 5) && lua_isnumber(L, 6)) {
-        constexpr double kScale = 10000.0;
-        const auto px = [&](int i) { return std::to_string(std::lround(lua_tonumber(L, i) * kScale)); };
-        escape += ":0:0:0:10000:10000:" + px(3) + ":" + px(4) + ":" + px(5) + ":" + px(6);
-    }
-    escape += "|t ";
-    w->tooltipLines.back().left = escape + w->tooltipLines.back().left;
+    if (!w || !lua_isstring(L, 2)) return 0;
+    float uv[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+    if (lua_isnumber(L, 3) && lua_isnumber(L, 4) && lua_isnumber(L, 5) && lua_isnumber(L, 6))
+        for (int i = 0; i < 4; ++i) uv[i] = static_cast<float>(lua_tonumber(L, 3 + i));
+    addTooltipTexture(L, w, lua_tostring(L, 2), uv, {1.0f, 1.0f, 1.0f, 1.0f});
     return 0;
 }
 
@@ -7478,7 +7523,7 @@ void tooltipShown(lua_State* L, uint32_t tooltipId) {
     auto* w = tree ? tree->get(tooltipId) : nullptr;
     if (!w || w->objectType != "GameTooltip" || !w->shown || w->toldShown) return;
     const int top = lua_gettop(L);
-    if (w->tooltipOwnerId == 0) {   // 0x0061cff0: none without an owner
+    if (w->tooltipOwnerId == 0 || w->tooltipLines.empty()) {   // 0x0061cff0
         w->shown = false;
         tooltipGone(L, *tree, w);
     } else if (auto* engine = engineFrom(L)) {

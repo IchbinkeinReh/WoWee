@@ -618,16 +618,26 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
                 const std::string ln = w->name + "TextLeft" + std::to_string(i + 1);
                 if (const Widget* found = tree.findByName(ln)) rid = found->id;
             }
+            // Its picture, and the text past that.
+            const auto& line = w->tooltipLines[i];
+            const float past = line.icon.empty() ? 0.0f : line.size + tl::kTextureGap * screenUnits;
+            Anchor a;
+            a.point = "TOPLEFT";
+            a.relativeTo = w->id;
+            a.relativePoint = "TOPLEFT";
+            a.x = kPad;
+            a.y = -top;
+            if (line.iconWidget != 0) {
+                tree.clearPoints(line.iconWidget);
+                tree.addPoint(line.iconWidget, a);
+                tree.setWidth(line.iconWidget, line.size);
+                tree.setHeight(line.iconWidget, line.size);
+            }
             if (rid != 0) {
-                Anchor a;
-                a.point = "TOPLEFT";
-                a.relativeTo = w->id;
-                a.relativePoint = "TOPLEFT";
-                a.x = kPad;
-                a.y = -top;
+                a.x = kPad + past;
                 tree.clearPoints(rid);
                 tree.addPoint(rid, a);
-                tree.setWidth(rid, std::max(w->width - kPad * 2.0f, 1.0f));
+                tree.setWidth(rid, std::max(w->width - kPad * 2.0f - past, 1.0f));
                 tree.setHeight(rid, rowH);
             }
             if (w->tooltipLines[i].leftVisible()) top += rowH + tl::kGap;
@@ -2782,16 +2792,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     const float size = tipLineSize(i);
                     float lc[4] = {line.lc[0], line.lc[1], line.lc[2], line.lc[3]};
                     float textX = x0 + pad;
-                    if (!line.icon.empty()) {
-                        if (VkDescriptorSet tex = resident(line.icon); tex != kMissing) {
-                            float tint[4] = {line.iconTint[0], line.iconTint[1], line.iconTint[2], line.iconTint[3]};
-                            dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(textX, y),
-                                         ImVec2(textX + size, y + size),
-                                         ImVec2(line.iconUV[0], line.iconUV[2]),
-                                         ImVec2(line.iconUV[1], line.iconUV[3]), packColor(tint, w->drawAlpha));
-                        }
-                        textX += size + tooltip_layout::kTextureGap * screenW;
-                    }
+                    if (!line.icon.empty()) textX += size + tooltip_layout::kTextureGap * screenW;
                     // A side whose font string was hidden keeps its row
                     // and shows nothing, as a hidden region does.
                     if (line.leftVisible()) {

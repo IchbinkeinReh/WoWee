@@ -776,8 +776,7 @@ struct Widget {
         /// the threat status icon a unit's tooltip ends with (0x00621070 ->
         /// 0x0061c8b0 with a colour). Empty for none.
         std::string icon;
-        float iconUV[4] = {0.0f, 1.0f, 0.0f, 1.0f};
-        float iconTint[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        uint32_t iconWidget = 0;   ///< the tooltip's own texture that shows it
         /// AddFontStrings (0x0061fe30): the two font strings the line is made
         /// of, whose text and colour it shows as they stand. 0 for a line of
         /// its own.
