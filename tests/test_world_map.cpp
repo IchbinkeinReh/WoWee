@@ -14,6 +14,8 @@
 using wowee::rendering::world_map::Zone;
 using wowee::rendering::world_map::OverlayEntry;
 using wowee::rendering::world_map::POI;
+using wowee::rendering::world_map::MapContinent;
+using wowee::rendering::world_map::isContinentArea;
 
 // ── MapPOI struct ────────────────────────────────────────────
 
@@ -536,4 +538,17 @@ TEST_CASE("names are in order without case or accents", "[world_map]") {
     CHECK(compareCaseless("Stra\xC3\x9F" "e", "Strassd") > 0);
     CHECK(compareCaseless("Tal", "Tal") == 0);
     CHECK(compareCaseless("Tal", "Tale") < 0);
+}
+
+// 0x00546310: which areas are chosen by continent and zone.
+TEST_CASE("a continent's areas are its own row and its zones'", "[world_map]") {
+    std::vector<MapContinent> list(2);
+    list[0].wmaId = 14;
+    list[0].zones = {{.wmaId = 15, .name = "A"}, {.wmaId = 16, .name = "B"}};
+    list[1].wmaId = 485;
+    CHECK(isContinentArea(list, 14));
+    CHECK(isContinentArea(list, 16));
+    CHECK(isContinentArea(list, 485));
+    CHECK_FALSE(isContinentArea(list, 520));
+    CHECK_FALSE(isContinentArea({}, 14));
 }

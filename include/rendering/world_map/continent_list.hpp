@@ -67,4 +67,14 @@ inline int shownContinent(ViewLevel level, std::optional<uint32_t> mapId, const 
     return -1;
 }
 
+/// Whether a WorldMapArea row is a continent's own or one of its zones'.
+[[nodiscard]] inline bool isContinentArea(const std::vector<MapContinent>& continents, uint32_t wmaId) {
+    for (const MapContinent& c : continents) {
+        if (c.wmaId == wmaId) return true;
+        for (const MapContinent::ZoneRow& z : c.zones)
+            if (z.wmaId == wmaId) return true;
+    }
+    return false;
+}
+
 }  // namespace wowee::rendering::world_map

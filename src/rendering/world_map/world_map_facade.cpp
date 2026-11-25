@@ -2023,6 +2023,10 @@ int WorldMapFacade::dungeonLevelCount() {
                                     impl_->viewState.continentIdx(),
                                     impl_->viewState.currentZoneIdx());
     if (!area) return 0;
+    // A zone of a continent, or the continent, is a map of floors only where its row
+    // names one, as Dalaran's does (0x00546310, +0x24): the floor rows of its map are
+    // another place's.
+    if (area->defaultDungeonFloorRowId < 1 && isContinentArea(impl_->continents(), area->wmaID)) return 0;
 
     // The distinct floor numbers of every floor row on the area's map, which is
     // the bitmask the client builds (0x00546190) - two rows can describe one
@@ -2047,6 +2051,7 @@ int WorldMapFacade::currentDungeonLevel() {
                                     impl_->viewState.continentIdx(),
                                     impl_->viewState.currentZoneIdx());
     if (!area) return 0;
+    if (area->defaultDungeonFloorRowId < 1 && isContinentArea(impl_->continents(), area->wmaID)) return 0;
 
     if (impl_->dungeonLevelAreaId != area->wmaID) {
         impl_->dungeonLevelAreaId = area->wmaID;
