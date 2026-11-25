@@ -90,7 +90,10 @@ bool EntitySpawner::destructibleLook(uint64_t guid, uint32_t entry, Destructible
     const uint32_t rowId = info->hasData ? info->data[kDestructibleDataIndex] : 0;
     auto dbc = rowId ? assetManager_->loadDBCOptional("DestructibleModelData.dbc") : nullptr;
     const int32_t row = dbc && dbc->getFieldCount() > kColHealEffectSpeed ? dbc->findRecordById(rowId) : -1;
-    if (row < 0) return true;   // the intact look and no sets
+    if (row < 0) {   // the intact look
+        out.sets.push_back(0);
+        return true;
+    }
     const auto r = static_cast<uint32_t>(row);
     out.hasRow = true;
     // Each state's display, else the state before it's (0x00710be0).
@@ -377,6 +380,14 @@ void EntitySpawner::updateDestructibles() {
         }
         wmo->setInstanceTransform(run.newInstance, lowered(run.newBase, newDown));
         if (run.oldInstance) wmo->setInstanceTransform(run.oldInstance, lowered(run.oldBase, oldDown));
+    }
+}
+
+void EntitySpawner::noteDestructible(uint64_t guid, const DestructibleLook& look) {
+    destructibleStates_[guid] = look.state;
+    if (auto e = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr) {
+        const uint16_t flagsField = game::fieldIndex(game::UF::GAMEOBJECT_FLAGS);
+        if (flagsField != 0xFFFF && !destructibleFlags_.count(guid)) destructibleFlags_[guid] = e->getField(flagsField);
     }
 }
 

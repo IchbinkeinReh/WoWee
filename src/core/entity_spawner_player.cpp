@@ -792,12 +792,7 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
 
     // A destructible building shows its state's look, not its display field.
     if (DestructibleLook look; destructibleLook(guid, entry, look)) {
-        destructibleStates_[guid] = look.state;
-        if (auto e = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr) {
-            const uint16_t flagsField = game::fieldIndex(game::UF::GAMEOBJECT_FLAGS);
-            if (flagsField != 0xFFFF && !destructibleFlags_.count(guid))
-                destructibleFlags_[guid] = e->getField(flagsField);
-        }
+        noteDestructible(guid, look);
         if (look.display != 0) displayId = look.display;
     }
 
@@ -981,37 +976,7 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
             LOG_DEBUG("Spawned gameobject WMO: guid=0x", std::hex, guid, std::dec,
                      " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 
-            // Spawn transport WMO doodads (chairs, furniture, etc.) as child M2 instances
-            bool isTransport = false;
-            if (gameHandler_) {
-                std::string lowerModelPath = modelPath;
-                std::transform(lowerModelPath.begin(), lowerModelPath.end(), lowerModelPath.begin(),
-                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                isTransport = (lowerModelPath.find("transport") != std::string::npos);
-            }
-
-            auto* m2Renderer = renderer_->getM2Renderer();
-            if (m2Renderer && isTransport) {
-                const auto* doodadTemplates = wmoRenderer->getDoodadTemplates(modelId);
-                if (doodadTemplates && !doodadTemplates->empty()) {
-                    constexpr size_t kMaxTransportDoodads = 192;
-                    const size_t doodadBudget = std::min(doodadTemplates->size(), kMaxTransportDoodads);
-                    LOG_DEBUG("Queueing ", doodadBudget, "/", doodadTemplates->size(),
-                             " transport doodads for WMO instance ", instanceId);
-                    pendingTransportDoodadBatches_.push_back(PendingTransportDoodadBatch{
-                        guid,
-                        modelId,
-                        instanceId,
-                        0,
-                        doodadBudget,
-                        0,
-                        x, y, z,
-                        orientation
-                    });
-                } else {
-                LOG_DEBUG("Transport WMO has no doodads or templates not available");
-            }
-            }
+            queueWmoDoodads(guid, modelId, instanceId, glm::vec3(x, y, z), orientation, modelPath);
 
             // Transport GameObjects are not always named "transport" in their WMO path
             // (e.g. elevators/lifts). If the server marks it as a transport, always

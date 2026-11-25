@@ -1529,6 +1529,7 @@ private:
     void dropPlayerThroughDestructible(uint32_t oldState, uint32_t newState, uint32_t oldInstance,
                                        bool oldIsWmo, const std::string& oldWmoPath);
     void spawnDestructibleDoodads(uint64_t guid, const std::string& wmoPath);
+    void noteDestructible(uint64_t guid, const DestructibleLook& look);
     void clearDestructible(uint64_t guid);
     void updateDestructibles();
     std::unordered_map<uint64_t, uint32_t> destructibleStates_;
@@ -1653,9 +1654,12 @@ private:
         size_t nextIndex = 0;
         size_t doodadBudget = 0;
         size_t spawnedDoodads = 0;
+        bool transport = false;
         float x = 0.0f, y = 0.0f, z = 0.0f, orientation = 0.0f;
     };
     std::vector<PendingTransportDoodadBatch> pendingTransportDoodadBatches_;
+    void queueWmoDoodads(uint64_t guid, uint32_t modelId, uint32_t instanceId, const glm::vec3& at, float orientation,
+                         const std::string& modelPath);
     static constexpr size_t MAX_TRANSPORT_DOODADS_PER_FRAME = 4;
     void processPendingTransportRegistrations();
     void processPendingTransportDoodads();

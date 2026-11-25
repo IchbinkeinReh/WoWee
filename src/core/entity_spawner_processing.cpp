@@ -962,6 +962,17 @@ void EntitySpawner::finishWmoSpawn(const PreparedGameObjectWMO& result, uint32_t
     auto* wmoRenderer = renderer_ ? renderer_->getWMORenderer() : nullptr;
     if (!wmoRenderer) return;
 
+    // A destructible building's template, or its state, may have come while
+    // its model was read: another look, again; else as the synchronous path.
+    DestructibleLook look;
+    const bool destructible = destructibleLook(result.guid, result.entry, look);
+    if (destructible && look.display != 0 && look.display != result.displayId) {
+        queueGameObjectSpawn(result.guid, result.entry, look.display, result.x, result.y, result.z,
+                             result.orientation, result.scale);
+        return;
+    }
+    if (destructible) noteDestructible(result.guid, look);
+
     glm::vec3 renderPos = core::coords::canonicalToRender(
         glm::vec3(result.x, result.y, result.z));
     // Drawn by its rotation, as the synchronous path draws it (0x00712ee0).
@@ -971,6 +982,7 @@ void EntitySpawner::finishWmoSpawn(const PreparedGameObjectWMO& result, uint32_t
 
     gameObjectInstances_[result.guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = true,
                                          .scale = result.scale};
+    if (destructible) spawnDestructibleDoodads(result.guid, result.modelPath);
 
     // The synchronous WMO path notifies TransportManager after creating the
     // render instance. Do the same here: unique/uncached transport WMOs (notably
@@ -982,25 +994,33 @@ void EntitySpawner::finishWmoSpawn(const PreparedGameObjectWMO& result, uint32_t
             result.x, result.y, result.z, result.orientation);
     }
 
-    // Queue transport doodad loading if applicable
-    std::string lowerPath = result.modelPath;
+    queueWmoDoodads(result.guid, modelId, instanceId, glm::vec3(result.x, result.y, result.z), result.orientation,
+                    result.modelPath);
+}
+
+// A game object's building has its doodad set 0 as any other (0x007bf740): the
+// gunships' lamps and cannons, a tower's furniture. A destructible one's are its
+// look's (spawnDestructibleDoodads).
+void EntitySpawner::queueWmoDoodads(uint64_t guid, uint32_t modelId, uint32_t instanceId, const glm::vec3& at,
+                                    float orientation, const std::string& modelPath) {
+    auto* wmoRenderer = renderer_ ? renderer_->getWMORenderer() : nullptr;
+    const auto* templates = wmoRenderer ? wmoRenderer->getDoodadTemplates(modelId) : nullptr;
+    if (!templates || templates->empty() || destructibleRuns_.count(guid)) return;
+    std::string lowerPath = modelPath;
     std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (lowerPath.find("transport") != std::string::npos) {
-        const auto* doodadTemplates = wmoRenderer->getDoodadTemplates(modelId);
-        if (doodadTemplates && !doodadTemplates->empty()) {
-            PendingTransportDoodadBatch batch;
-            batch.guid = result.guid;
-            batch.modelId = modelId;
-            batch.instanceId = instanceId;
-            batch.x = result.x;
-            batch.y = result.y;
-            batch.z = result.z;
-            batch.orientation = result.orientation;
-            batch.doodadBudget = doodadTemplates->size();
-            pendingTransportDoodadBatches_.push_back(batch);
-        }
-    }
+    PendingTransportDoodadBatch batch;
+    batch.guid = guid;
+    batch.modelId = modelId;
+    batch.instanceId = instanceId;
+    batch.x = at.x;
+    batch.y = at.y;
+    batch.z = at.z;
+    batch.orientation = orientation;
+    batch.doodadBudget = templates->size();
+    batch.transport = (gameHandler_ && gameHandler_->isTransportGuid(guid)) ||
+                      lowerPath.find("transport") != std::string::npos;
+    pendingTransportDoodadBatches_.push_back(batch);
 }
 
 // Uploads one pending model per frame under a budget, finishing its spawn when
@@ -1143,6 +1163,9 @@ void EntitySpawner::processGameObjectSpawnQueue() {
         if (elapsedMs >= kBudgetMs) break;
 
         auto& s = pendingGameObjectSpawns_.front();
+        // A destructible building's model is its state's look's.
+        if (DestructibleLook look; destructibleLook(s.guid, s.entry, look) && look.display != 0)
+            s.displayId = look.display;
         gameObjectSpawnRecords_[s.guid] = s;
         // A DUNGEON_DIFFICULTY object for another difficulty: held back.
         if (!gameObjectShownByDifficulty(s.entry)) {
@@ -1576,34 +1599,36 @@ void EntitySpawner::processPendingTransportDoodads() {
             // resolve leaves isValid() false and drops the piece; that is the
             // one worth naming loudly.
             uint32_t doodadModelId = static_cast<uint32_t>(std::hash<std::string>{}(doodadTemplate.m2Path));
-            auto m2Data = assetManager_->readFile(doodadTemplate.m2Path);
-            if (m2Data.empty()) {
-                LOG_WARNING("Transport doodad missing: ", doodadTemplate.m2Path);
-                continue;
-            }
+            if (!m2Renderer->hasModel(doodadModelId)) {
+                auto m2Data = assetManager_->readFile(doodadTemplate.m2Path);
+                if (m2Data.empty()) {
+                    LOG_WARNING("Transport doodad missing: ", doodadTemplate.m2Path);
+                    continue;
+                }
 
-            pipeline::M2Model m2Model = pipeline::M2Loader::load(m2Data);
-            if (m2Model.name.empty()) m2Model.name = doodadTemplate.m2Path;
-            std::string skinPath = pipeline::skinPathForM2(doodadTemplate.m2Path);
-            std::vector<uint8_t> skinData = assetManager_->readFile(skinPath);
-            if (!skinData.empty() && m2Model.version >= 264) {
-                pipeline::M2Loader::loadSkin(skinData, m2Model);
-            } else if (skinData.empty() && m2Model.version >= 264) {
-                LOG_WARNING("Transport doodad ", doodadTemplate.m2Path, " is version ",
-                            m2Model.version, " and its skin '", skinPath,
-                            "' did not resolve - it has no indices and will be skipped");
-            }
-            if (!m2Model.hasDrawableContent()) {
-                LOG_WARNING("Transport doodad unusable: ", doodadTemplate.m2Path,
-                            " version=", m2Model.version,
-                            " verts=", m2Model.vertices.size(),
-                            " indices=", m2Model.indices.size());
-                continue;
-            }
+                pipeline::M2Model m2Model = pipeline::M2Loader::load(m2Data);
+                if (m2Model.name.empty()) m2Model.name = doodadTemplate.m2Path;
+                std::string skinPath = pipeline::skinPathForM2(doodadTemplate.m2Path);
+                std::vector<uint8_t> skinData = assetManager_->readFile(skinPath);
+                if (!skinData.empty() && m2Model.version >= 264) {
+                    pipeline::M2Loader::loadSkin(skinData, m2Model);
+                } else if (skinData.empty() && m2Model.version >= 264) {
+                    LOG_WARNING("Transport doodad ", doodadTemplate.m2Path, " is version ",
+                                m2Model.version, " and its skin '", skinPath,
+                                "' did not resolve - it has no indices and will be skipped");
+                }
+                if (!m2Model.hasDrawableContent()) {
+                    LOG_WARNING("Transport doodad unusable: ", doodadTemplate.m2Path,
+                                " version=", m2Model.version,
+                                " verts=", m2Model.vertices.size(),
+                                " indices=", m2Model.indices.size());
+                    continue;
+                }
 
-            if (!m2Renderer->loadModel(m2Model, doodadModelId)) {
-                LOG_WARNING("Transport doodad failed to upload: ", doodadTemplate.m2Path);
-                continue;
+                if (!m2Renderer->loadModel(m2Model, doodadModelId)) {
+                    LOG_WARNING("Transport doodad failed to upload: ", doodadTemplate.m2Path);
+                    continue;
+                }
             }
             // Created at the origin and moved into place by the parent WMO's
             // transform, so its position here is a placeholder and must not be
@@ -1617,7 +1642,8 @@ void EntitySpawner::processPendingTransportDoodads() {
                 LOG_WARNING("Transport doodad got no instance: ", doodadTemplate.m2Path);
                 continue;
             }
-            m2Renderer->setSkipCollision(m2InstanceId, true);
+            // A moving hull's are not collided with; a building's are.
+            m2Renderer->setSkipCollision(m2InstanceId, it->transport);
             // The WMO's doodads are map doodads (0x007bf740 -> 0x007bef40,
             // which registers 0x007bd5a0 for their events).
             m2Renderer->setInstanceEventOwner(m2InstanceId, rendering::m2_event::Owner::Doodad, 0);
@@ -1631,7 +1657,7 @@ void EntitySpawner::processPendingTransportDoodads() {
             // 162=ShipStart, 163=ShipMoving, 164=ShipStop. Leaving them on the
             // first sequence freezes the icebreaker paddle (its sequence 0 is
             // static) and can leave the Bravery's sail rig in its furled pose.
-            m2Renderer->setInstanceAnimation(m2InstanceId, rendering::anim::SHIP_MOVING, true);
+            if (it->transport) m2Renderer->setInstanceAnimation(m2InstanceId, rendering::anim::SHIP_MOVING, true);
             std::string doodadPathLower = doodadTemplate.m2Path;
             std::transform(doodadPathLower.begin(), doodadPathLower.end(), doodadPathLower.begin(),
                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1661,7 +1687,7 @@ void EntitySpawner::processPendingTransportDoodads() {
         }
 
         if (it->nextIndex >= maxIndex) {
-            if (it->spawnedDoodads > 0) {
+            if (it->spawnedDoodads > 0 && it->transport) {
                 LOG_DEBUG("Spawned ", it->spawnedDoodads,
                          " transport doodads for WMO instance ", it->instanceId);
                 glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(it->x, it->y, it->z));
