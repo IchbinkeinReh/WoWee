@@ -1051,6 +1051,10 @@ public:
     VkTexture* loadTexture(const std::string& path, uint32_t texFlags = 0x3);
     [[nodiscard]] VkTexture* getTransparentTexture() const { return transparentTexture_.get(); }
 
+    /// Into a picture of its own (a render pass override): its model lit by the frame's light,
+    /// as what hangs on it is, or drawn with its texture alone.
+    void setLitPreview(bool lit) { litPreview_ = lit; }
+
     /** Replace a loaded model's texture at the given slot. */
     void setModelTexture(uint32_t modelId, uint32_t textureSlot, VkTexture* texture);
 
@@ -1063,6 +1067,7 @@ private:
 
     VkContext* vkCtx_ = nullptr;
     VkRenderPass renderPassOverride_ = VK_NULL_HANDLE;
+    bool litPreview_ = false;
     VkSampleCountFlagBits msaaSamplesOverride_ = VK_SAMPLE_COUNT_1_BIT;
     pipeline::AssetManager* assetManager = nullptr;
 

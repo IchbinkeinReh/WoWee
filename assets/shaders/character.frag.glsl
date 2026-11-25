@@ -59,7 +59,8 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     float emissiveTintB;
     float specularIntensity;
     int enableNormalMap;
-    // 1: the character preview's main model, drawn with its texture alone.
+    // Into a picture of its own: 1 with its texture alone, 2 lit. What is not
+    // blended covers what is behind the picture, wholly.
     int previewSimpleTexture;
     float normalMapStrength;
     int hairMaterial;
@@ -326,7 +327,7 @@ void main() {
     TexCoord2 = src1 == 2 ? inEnvCoord
               : src1 == 3 ? inTexCoord
               : vec2(uv2M00 * set1.x + uv2M01 * set1.y + uv2Tx, uv2M10 * set1.x + uv2M11 * set1.y + uv2Ty);
-    if (previewSimpleTexture != 0) {
+    if (previewSimpleTexture == 1) {
         vec4 texColor = samplePreviewTexture(uTexture, TexCoord);
         if (isMagentaKeyColor(texColor)) {
             discard;
@@ -377,7 +378,7 @@ void main() {
     const float stageAlpha = combineStages(vec4(1.0, 1.0, 1.0, opacity), tex0, tex1).a;
     vec4 texColor = vec4(tex0.rgb, stageAlpha / max(opacity, 1e-6));
 
-    if (alphaTest == 1 && hairMaterial != 0) {
+    if (alphaTest == 1 && (hairMaterial != 0 || previewSimpleTexture == 2)) {
         if (texColor.a < ALPHA_KEY_REF) {
             discard;
         }
@@ -537,6 +538,7 @@ void main() {
     }
 
     shaded.rgb = rtGiDebug(shaded.rgb);
+    if (previewSimpleTexture == 2 && alphaTest != 2) shaded.a = opacity;
     outColor = shaded;
     rtWriteGbuffer(rtSurface, outColor.rgb);
 }

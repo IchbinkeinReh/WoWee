@@ -258,6 +258,7 @@ private:
     bool portraitCameraOnPlayer_ = false;
     /// setPortraitFraming was the last framing asked for.
     bool portraitFraming_ = false;
+    float portraitYaw_ = 0.0f;   ///< how the model stands turned for it, in radians
     float portraitHeadroom_ = 1.35f;
     float modelBoundMinZ_ = 0.0f;
     float modelBoundMaxZ_ = 2.0f;

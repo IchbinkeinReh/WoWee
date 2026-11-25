@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "pipeline/m2_loader.hpp"
+#include "rendering/model_lights.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
@@ -96,29 +97,28 @@ template <typename Frame>
             .nearDist = f.modelFogNear * per, .farDist = f.modelFogFar * per};
 }
 
-/// What a lit surface gets: a point light shines from where it is toward the model, a
-/// directional one along its vector. Off, the model's lighting starts at nothing each frame
-/// (0x00831af0 -> 0x00834900) and the frame's callback adds none (0x00960070), so that only
-/// unlit batches and particles show; the direction is the one 0x00835280 falls back to.
-struct Lighting {
-    glm::vec3 direction{0.0f, 0.0f, -1.0f};
-    glm::vec3 diffuse{0.0f};
-    glm::vec3 ambient{0.0f};
-};
+/// What a lit surface gets: a directional light is merged as any is (0x00834f60), a point
+/// light adds no ambient and is taken as it reaches the model's origin. Off, the model's
+/// lighting starts at nothing each frame (0x00831af0 -> 0x00834900) and the frame's callback
+/// adds none (0x00960070), so that only unlit batches and particles show; the direction is the
+/// one 0x00835280 falls back to.
+using Lighting = model_lights::Lighting;
 [[nodiscard]] inline Lighting lighting(const Light& light) {
-    Lighting out;
-    if (!light.enabled) return out;
-    const glm::vec3 dir = light.omni ? -light.vec : light.vec;
-    if (glm::dot(dir, dir) >= 1e-12f) out.direction = glm::normalize(dir);
-    out.diffuse = light.diffuse;
-    out.ambient = light.ambient;
-    return out;
+    if (!light.enabled) return {};
+    model_lights::Sum sum;
+    if (light.omni) {
+        const float d = glm::length(light.vec);
+        if (d >= 1e-5f) sum.addDirectional(light.diffuse * model_lights::pointReach(d), -light.vec / d);
+    } else {
+        sum.addAmbient(light.ambient);
+        sum.addDirectional(light.diffuse, light.vec);
+    }
+    return sum.merged();
 }
 
 /// The same for a frame's data, as the shaders take them.
 template <typename PerFrame>
-void put(const Light& light, const Fog& fog, PerFrame& ubo) {
-    const Lighting l = lighting(light);
+void put(const Lighting& l, const Fog& fog, PerFrame& ubo) {
     ubo.lightDir = glm::vec4(l.direction, 0.0f);
     ubo.lightColor = glm::vec4(l.diffuse, 0.0f);
     ubo.ambientColor = glm::vec4(l.ambient, 0.0f);
@@ -129,6 +129,10 @@ void put(const Light& light, const Fog& fog, PerFrame& ubo) {
         ubo.fogColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         ubo.fogParams = glm::vec4(99999.0f, 100000.0f, 0.0f, 0.0f);
     }
+}
+template <typename PerFrame>
+void put(const Light& light, const Fog& fog, PerFrame& ubo) {
+    put(lighting(light), fog, ubo);
 }
 
 }  // namespace model_frame

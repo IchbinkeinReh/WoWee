@@ -332,7 +332,8 @@ struct CharMaterialUBO {
     float emissiveTintR, emissiveTintG, emissiveTintB;
     float specularIntensity;
     int32_t enableNormalMap;
-    // 1: the character preview's main model, drawn with its texture alone.
+    // Into a picture of its own: 1 with its texture alone, 2 lit. What is not
+    // blended covers what is behind the picture, wholly.
     int32_t previewSimpleTexture;
     float normalMapStrength;
     int32_t hairMaterial;
@@ -5019,7 +5020,6 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 }
 
                 const bool useAdvancedMaterials = !previewMainModel;
-                const bool usePreviewSimpleShader = previewMainModel;
 
                 // Create per-batch material UBO
                 CharMaterialUBO matData{};
@@ -5115,10 +5115,8 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
                     matData.specularIntensity = 0.08f;
                     matData.enableNormalMap = 0;
                 }
-                if (usePreviewSimpleShader) {
-                    matData.enableNormalMap = 0;
-                    matData.previewSimpleTexture = 1;
-                }
+                if (renderPassOverride_ != VK_NULL_HANDLE)
+                    matData.previewSimpleTexture = previewMainModel && !litPreview_ ? 1 : 2;
 
                 // WOWEE_SCENE_DIAG=1 dumps what each backdrop batch is actually told to
                 // draw - texture, blend mode, shader path - once per scene model.
@@ -5198,15 +5196,12 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
             const bool previewMainModel = renderPassOverride_ != VK_NULL_HANDLE &&
                                           !instance.hasOverrideModelMatrix;
             const bool useAdvancedMaterials = !previewMainModel;
-            const bool usePreviewSimpleShader = previewMainModel;
             matData.enableNormalMap = (useAdvancedMaterials && normalMappingEnabled_) ? 1 : 0;
             matData.normalMapStrength = normalMapStrength_;
             matData.hairMaterial = 0;
             matData.fogMode = 1;   // the world's fog, as this path always had
-            if (usePreviewSimpleShader) {
-                matData.enableNormalMap = 0;
-                matData.previewSimpleTexture = 1;
-            }
+            if (renderPassOverride_ != VK_NULL_HANDLE)
+                matData.previewSimpleTexture = previewMainModel && !litPreview_ ? 1 : 2;
 
             // Sub-allocate material UBO from ring buffer
             uint32_t matOffset2 = 0;

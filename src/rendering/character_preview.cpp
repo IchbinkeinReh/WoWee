@@ -1297,8 +1297,16 @@ void CharacterPreview::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
     // No fog in preview
     ubo.fogColor = glm::vec4(0.05f, 0.05f, 0.1f, 1.0f);
     ubo.fogParams = glm::vec4(9999.0f, 10000.0f, 0.0f, 0.0f);
-    // A model frame's figure: the frame's own (0x00960070).
-    if (figureFraming_) model_frame::put(figureLight_, figureFog_, ubo);
+    // A model frame's figure: the frame's own (0x00960070). A portrait: its own.
+    if (figureFraming_) {
+        model_frame::put(figureLight_, figureFog_, ubo);
+    } else if (portraitFraming_) {
+        model_lights::Lighting light = model_lights::portrait();
+        light.direction = glm::vec3(glm::rotate(glm::mat4(1.0f), portraitYaw_, glm::vec3(0.0f, 0.0f, 1.0f)) *
+                                    glm::vec4(light.direction, 0.0f));
+        model_frame::put(light, {}, ubo);
+    }
+    charRenderer_->setLitPreview(figureFraming_ || portraitFraming_);
     // Off-screen preview has no real shadow pass/light-space setup. Sampling
     // the global shadow binding here can produce unstable fragments on some
     // drivers, so keep the portrait on studio lighting only.
@@ -1471,6 +1479,7 @@ void CharacterPreview::applyPreviewView() {
             charRenderer_->setInstancePosition(instanceId_, previewStandPosition_);
             charRenderer_->setInstanceRotation(instanceId_, glm::vec3(0.0f));
         }
+        portraitYaw_ = 0.0f;
         return;
     }
 
@@ -1516,6 +1525,7 @@ void CharacterPreview::applyPreviewView() {
         charRenderer_->setInstancePosition(instanceId_, previewStandPosition_);
         charRenderer_->setInstanceRotation(instanceId_, glm::vec3(0.0f, 0.0f, modelYaw_));
     }
+    portraitYaw_ = modelYaw_;
 }
 
 } // namespace rendering
