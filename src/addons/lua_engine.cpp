@@ -2735,6 +2735,9 @@ int lua_Texture_SetButtonArt(lua_State* L) {
     else if (slot == "DisabledTexture")        w->buttonArt = ButtonArt::Disabled;
     else if (slot == "CheckedTexture")         w->buttonArt = ButtonArt::Checked;
     else if (slot == "DisabledCheckedTexture") w->buttonArt = ButtonArt::DisabledChecked;
+    // Taken off its button: the client frees it (0x0096f920, 0x009623f0), and
+    // a state without one keeps the picture of the one before.
+    else if (slot.empty())                     w->buttonArt = ButtonArt::None;
     return 0;
 }
 
@@ -13544,7 +13547,7 @@ void LuaEngine::registerCoreAPI() {
         // its icon and a letter that had been sent kept all of them.
         "        if tex == nil or tex == false then\n"
         "            local existing = self[key]\n"
-        "            if type(existing) == 'table' then existing:SetTexture(nil) end\n"
+        "            if type(existing) == 'table' then existing:SetTexture(nil) __WoweeSetButtonArt(existing, '') end\n"
         "        end\n"
         "        self[key] = tex\n"
         "    end\n"

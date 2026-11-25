@@ -1452,6 +1452,13 @@ void WidgetTree::framesAt(float x, float y, bool forWheel, const std::function<v
     }
 }
 
+bool WidgetTree::hasButtonArt(const Widget& owner, ButtonArt kind) const {
+    return std::any_of(owner.children.begin(), owner.children.end(), [&](uint32_t id) {
+        const Widget* region = get(id);
+        return region && region->buttonArt == kind;
+    });
+}
+
 bool WidgetTree::buttonArtVisible(const Widget& w) const {
     if (w.buttonArt == ButtonArt::None) return true;
 
@@ -1491,8 +1498,14 @@ bool WidgetTree::buttonArtVisible(const Widget& w) const {
         case ButtonArt::Highlight:       return (hovered || owner->highlightLocked) && usable;
         case ButtonArt::Disabled:        return !usable;
         case ButtonArt::Pushed:          return usable && pressed;
-        case ButtonArt::Normal:          return usable && !pressed;
-        case ButtonArt::Checked:         return owner->checked && usable;
+        // The picture shown stays where the new state has none of its own
+        // (0x0096fe30): a check box without a DisabledTexture keeps its box.
+        case ButtonArt::Normal:
+            if (!usable) return !hasButtonArt(*owner, ButtonArt::Disabled);
+            return !pressed || !hasButtonArt(*owner, ButtonArt::Pushed);
+        // And a check mark where there is no disabled one (0x00962340).
+        case ButtonArt::Checked:
+            return owner->checked && (usable || !hasButtonArt(*owner, ButtonArt::DisabledChecked));
         case ButtonArt::DisabledChecked: return owner->checked && !usable;
         default:                         return true;
     }

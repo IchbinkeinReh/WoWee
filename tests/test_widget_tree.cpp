@@ -3905,4 +3905,48 @@ TEST_CASE("a layer's strings are over its pictures", "[widget][draworder]") {
     CHECK(at(name) < at(model));
 }
 
+// P65: 0x0096fe30 takes the picture shown away only for one of the new state's, 0x00962340 the
+// check mark.
+TEST_CASE("a button without a picture for its state keeps the one it has", "[widget][buttonart]") {
+    WidgetTree tree;
+    const uint32_t box = tree.create(WidgetKind::Frame, tree.root(), "AtWar");
+    const auto art = [&](ButtonArt kind) {
+        const uint32_t id = tree.create(WidgetKind::Texture, box, "");
+        tree.get(id)->buttonArt = kind;
+        tree.get(id)->texturePath = "art";
+        tree.get(id)->width = tree.get(id)->height = 30.0f;
+        tree.get(id)->anchors.push_back({});
+        return id;
+    };
+    tree.get(box)->width = tree.get(box)->height = 30.0f;
+    tree.get(box)->anchors.push_back({});
+    const auto shown = [&](uint32_t id) {
+        tree.layout(1024.0f, 768.0f);
+        const auto& order = tree.drawOrder();
+        return std::any_of(order.begin(), order.end(), [&](const Widget* w) { return w->id == id; });
+    };
+    const uint32_t normal = art(ButtonArt::Normal);
+    const uint32_t check = art(ButtonArt::Checked);
+    tree.get(box)->checked = true;
+    CHECK(shown(normal));
+    CHECK(shown(check));
+    tree.get(box)->enabled = false;
+    CHECK(shown(normal));
+    CHECK(shown(check));
+    tree.get(box)->enabled = true;
+    tree.get(box)->forcedState = Widget::Forced::Pushed;
+    CHECK(shown(normal));
+    const uint32_t pushed = art(ButtonArt::Pushed);
+    CHECK_FALSE(shown(normal));
+    CHECK(shown(pushed));
+    const uint32_t disabled = art(ButtonArt::Disabled);
+    const uint32_t greyCheck = art(ButtonArt::DisabledChecked);
+    tree.get(box)->forcedState = Widget::Forced::None;
+    tree.get(box)->enabled = false;
+    CHECK_FALSE(shown(normal));
+    CHECK(shown(disabled));
+    CHECK_FALSE(shown(check));
+    CHECK(shown(greyCheck));
+}
+
 /

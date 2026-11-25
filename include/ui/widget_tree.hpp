@@ -1684,6 +1684,8 @@ private:
 
     /// Whether a state texture should be drawn given what the mouse is doing.
     [[nodiscard]] bool buttonArtVisible(const Widget& w) const;
+    /// The owner has a state picture of its own of this kind.
+    [[nodiscard]] bool hasButtonArt(const Widget& owner, ButtonArt kind) const;
     std::deque<Widget> widgets_;   ///< Index 0 is a placeholder; id == index.
     /// What findByName last answered for a name, and how far up widgets_ it
     /// had looked: the next lookup reads only the widgets made since. The
