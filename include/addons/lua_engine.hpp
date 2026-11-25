@@ -2,6 +2,7 @@
 
 #include "addons/lua_services.hpp"
 #include "game/combat_log.hpp"
+#include "ui/chat/chat_bubble_view.hpp"
 #include "ui/world_mouse.hpp"
 #include "ui/text_changes.hpp"
 #include "ui/widget_tree.hpp"
@@ -23,6 +24,7 @@ namespace wowee::addons {
 struct TocFile;  // forward declaration
 
 class LuaEngine {
+    bool chatBubblesUp_ = false;   ///< any were shown the frame before
 public:
     LuaEngine();
     ~LuaEngine();
@@ -63,6 +65,8 @@ public:
     };
     bool executeFile(const std::string& path);
     bool executeString(const std::string& code);
+    /// The chat bubbles there are, at this scale (chat_bubble_lua.hpp).
+    void showChatBubbles(float scale, const std::vector<ui::ChatBubbleView>& bubbles);
 
     /// Run typed text the way RunScript does (0x00819210): tainted by
     /// `taint`, with a failure handed to the interface's error handler.

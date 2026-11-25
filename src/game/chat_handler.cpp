@@ -1273,9 +1273,7 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
             const float dy = speaker->getY() - player->getY();
             const float dz = speaker->getZ() - player->getZ();
             if (chat_bubble_rule::inRange(dx * dx + dy * dy + dz * dz)) {
-                const bool isYell = (data.type == ChatType::YELL || data.type == ChatType::MONSTER_YELL);
-                owner_.chatBubbleCallbackRef()(data.senderGuid, data.message, isYell,
-                                               setting == chat_bubble_rule::Setting::ChatBubblesParty);
+                owner_.chatBubbleCallbackRef()(data.senderGuid, data.message, static_cast<uint8_t>(data.type));
             }
         }
     }

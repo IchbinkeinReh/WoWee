@@ -3,6 +3,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "ui/chat/chat_bubble_timing.hpp"
+#include "ui/chat/chat_bubble_view.hpp"
 
 namespace cb = wowee::ui::chat_bubble;
 
@@ -33,4 +34,24 @@ TEST_CASE("Fades take 250 ms each way and turn back where they are", "[chat_bubb
     a = cb::stepAlpha(a, false, 1.0f);
     CHECK(a == 0.0f);
     CHECK(cb::kRangeYards * cb::kRangeYards == 625.0f);
+}
+
+// 0x007e1680
+TEST_CASE("a bubble's words are without their markup", "[chat_bubble]") {
+    CHECK(cb::bubbleText("Hallo [du]") == "Hallo [du]");
+    CHECK(cb::bubbleText("da: |cff9d9d9d|Hitem:1:0|h[Kaputte Reisszaehne]|h|r [so]") == "da: Kaputte Reisszaehne [so]");
+    CHECK(cb::bubbleText("a|TInterface\\Icons\\x:0|tb") == "ab");
+    CHECK(cb::bubbleText("a||b|nc|") == "a||b|nc|");
+    CHECK(cb::bubbleText("a|cff") == "a");
+    CHECK(cb::bubbleText("a|Hitem:1") == "a");
+}
+
+// 0x00720010
+TEST_CASE("a bubble's words have their chat type's colour", "[chat_bubble]") {
+    CHECK(std::string(cb::typeName(1)) == "SAY");
+    CHECK(std::string(cb::typeName(2)) == "PARTY");
+    CHECK(std::string(cb::typeName(6)) == "YELL");
+    CHECK(std::string(cb::typeName(0x0c)) == "MONSTER_SAY");
+    CHECK(std::string(cb::typeName(0x0e)) == "MONSTER_YELL");
+    CHECK(std::string(cb::typeName(0x33)) == "PARTY_LEADER");
 }

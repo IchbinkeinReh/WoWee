@@ -1,3 +1,4 @@
+#include "addons/chat_bubble_lua.hpp"
 #include "addons/chunk_name.hpp"
 #include "addons/lua_engine.hpp"
 #include "addons/frame_attributes.hpp"
@@ -20027,6 +20028,40 @@ bool LuaEngine::executeFile(const std::string& path) {
 /// The stack is left as it was found, whatever the chunk does: this runs from
 /// the input path, once per key press, and a value left behind on each one
 /// grows until the state is exhausted.
+void LuaEngine::showChatBubbles(float scale, const std::vector<ui::ChatBubbleView>& bubbles) {
+    if (!L_ || (bubbles.empty() && !chatBubblesUp_)) return;
+    chatBubblesUp_ = !bubbles.empty();
+    taint::Quiet quiet;   // the client's own frames
+    const int base = lua_gettop(L_);
+    static constexpr const char* kKey = "wowee.ChatBubbles";
+    lua_getfield(L_, LUA_REGISTRYINDEX, kKey);
+    if (lua_isnil(L_, -1)) {
+        lua_pop(L_, 1);
+        if (luaL_loadstring(L_, kChatBubblesLua) != 0 || lua_pcall(L_, 0, 1, 0) != 0) {
+            LOG_WARNING("Chat bubbles: ", lua_tostring(L_, -1) ? lua_tostring(L_, -1) : "(unknown)");
+            lua_settop(L_, base);
+            lua_pushboolean(L_, 0);   // not again
+        }
+        lua_pushvalue(L_, -1);
+        lua_setfield(L_, LUA_REGISTRYINDEX, kKey);
+    }
+    if (lua_isfunction(L_, -1)) {
+        luaL_checkstack(L_, static_cast<int>(bubbles.size()) * 6 + 2, "too many chat bubbles");
+        lua_pushnumber(L_, scale);
+        for (const ui::ChatBubbleView& b : bubbles) {
+            lua_pushnumber(L_, b.id);
+            lua_pushstring(L_, b.text.c_str());
+            lua_pushstring(L_, b.type);
+            lua_pushnumber(L_, b.alpha);
+            lua_pushnumber(L_, b.x);
+            lua_pushnumber(L_, b.y);
+        }
+        if (lua_pcall(L_, static_cast<int>(bubbles.size()) * 6 + 1, 0, 0) != 0)
+            LOG_WARNING("Chat bubbles: ", lua_tostring(L_, -1) ? lua_tostring(L_, -1) : "(unknown)");
+    }
+    lua_settop(L_, base);
+}
+
 bool LuaEngine::evaluateBoolean(const std::string& expression) {
     if (!L_ || expression.empty()) return false;
     const std::string chunk = "return (" + expression + ")";

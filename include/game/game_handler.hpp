@@ -499,9 +499,8 @@ public:
     ChatAutoJoin chatAutoJoin;
     void autoJoinDefaultChannels();
 
-    /// Chat bubble callback: (speaker, line, yell, party): party for a PARTY or PARTY_LEADER line,
-    /// shown under chatBubblesParty rather than chatBubbles (0x00720010).
-    using ChatBubbleCallback = std::function<void(uint64_t, const std::string&, bool, bool)>;
+    /// A chat bubble over a speaker (0x00720010): its line and the line's chat type.
+    using ChatBubbleCallback = std::function<void(uint64_t, const std::string&, uint8_t chatType)>;
     void setChatBubbleCallback(ChatBubbleCallback cb) { chatBubbleCallback_ = std::move(cb); }
 
     // Addon chat event callback: fires when any chat message is received (for Lua event dispatch)

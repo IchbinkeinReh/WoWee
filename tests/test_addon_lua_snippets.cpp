@@ -24,6 +24,7 @@ extern "C" {
 
 #include "addons/addon_lua_snippets.hpp"
 #include "addons/animation_lua.hpp"
+#include "addons/chat_bubble_lua.hpp"
 #include "addons/button_label_lua.hpp"
 
 namespace {
@@ -371,4 +372,66 @@ TEST_CASE("two groups on a region play together", "[animation]") {
           "5 0 0 1 1 0.8");
     CHECK(animated("local a = group{rad = 1, rotAnim = {originPoint = 'TOP'}, scaleAnim = {originPoint = 'LEFT'}} "
                    "__WoweeShowAnimation(region) return shown.rAt .. ' ' .. shown.sAt") == "TOP LEFT");
+}
+
+namespace {
+/// Frames, textures and font strings that write down what is done to them.
+constexpr const char* kFakeBubbleWorldLua = R"LUA(
+made = 0
+local function thing()
+    local t = {shown = true}
+    local function keep(name) return function(self, ...) self['got' .. name] = {...} end end
+    for _, n in ipairs({'SetFrameStrata', 'SetBackdrop', 'SetTexture', 'SetHeight', 'SetFont', 'SetTextColor',
+                        'SetScale', 'SetAlpha', 'SetFrameLevel', 'ClearAllPoints'}) do t[n] = keep(n) end
+    t.points = 0
+    function t:SetPoint(...) self.points = self.points + 1; self.at = {...} end
+    function t:SetWidth(w) self.w = w end
+    function t:SetText(s) self.s = s end
+    function t:GetStringWidth() return #self.s * 8 end
+    function t:GetHeight() return 12.8 end
+    function t:Show() self.shown = true end
+    function t:Hide() self.shown = false end
+    return t
+end
+WorldFrame = thing()
+ChatTypeInfo = {YELL = {r = 1, g = 0.25, b = 0.25}}
+frames = {}
+function CreateFrame()
+    made = made + 1
+    local f = thing()
+    function f:CreateTexture() self.tail = thing() return self.tail end
+    function f:CreateFontString() self.text = thing() return self.text end
+    frames[made] = f
+    return f
+end
+)LUA";
+}  // namespace
+
+// 0x0056cad0, 0x0056c7f0, 0x0056c340
+TEST_CASE("chat bubbles are the WorldFrame's frames, used again", "[addons][lua][chat_bubble]") {
+    const std::string result = runChunks({
+        {kFakeBubbleWorldLua, "world"},
+        {(std::string("show = (function() ") + wowee::addons::kChatBubblesLua + " end)()").c_str(), "bubbles"},
+        {R"LUA(
+show(1.5, 1, 'Hi', 'YELL', 0.5, 100, 200)
+local f = frames[1]
+local out = made .. ' ' .. f.text.w .. ' ' .. f.w .. ' ' .. f.gotSetScale[1] .. ' ' .. f.gotSetAlpha[1] .. ' ' .. f.gotSetFrameLevel[1]
+out = out .. ' ' .. f.at[1] .. ' ' .. f.at[3] .. ' ' .. f.at[4] .. ' ' .. f.at[5] .. ' ' .. f.text.gotSetTextColor[2]
+-- Less than a unit off: where it was.
+show(1.5, 1, 'Hi', 'YELL', 1, 100.9, 199.5)
+out = out .. ' ' .. f.points
+show(1.5, 1, 'Hi', 'YELL', 1, 101.1, 199.5)
+out = out .. ' ' .. f.points .. ' ' .. f.at[4]
+-- A second, long one over it; the first is gone, and its frame the next one's.
+show(1.5, 1, 'Hi', 'YELL', 1, 101, 200, 2, 'x', 'SAY', 1, 0, 0)
+out = out .. ' ' .. made .. ' ' .. frames[2].gotSetFrameLevel[1] .. ' ' .. frames[2].text.gotSetTextColor[2]
+show(1.5, 2, 'x', 'SAY', 1, 0, 0)
+out = out .. ' ' .. tostring(f.shown)
+show(1.5, 2, 'x', 'SAY', 1, 0, 0, 3, '0123456789012345678901234567890123456789', 'SAY', 1, 0, 0)
+out = out .. ' ' .. made .. ' ' .. tostring(f.shown) .. ' ' .. f.text.w
+show(1.5)
+out = out .. ' ' .. tostring(f.shown) .. ' ' .. tostring(frames[2].shown)
+return out
+)LUA", "check"}});
+    CHECK(result == "1 32 57.6 1.5 0.5 2 BOTTOM BOTTOMLEFT 100 187.2 0.25 1 2 101.1 2 3 1 false 2 true 256 false false");
 }
