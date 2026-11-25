@@ -3135,7 +3135,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // against what is drawn, not what is held - to the left of a
                 // link is its display name.
                 const auto across = [&](size_t line, size_t at) {
-                    if (!font) return 0.0f;
+                    at = std::min(at, editBoxLineEnd(*w, shown, line));
+                    if (!font || at <= starts[line]) return 0.0f;
                     const std::string upTo = strippedText(shown.substr(starts[line], at - starts[line]));
                     return font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x;
                 };
@@ -3150,7 +3151,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     const size_t first = editLineOf(starts, w->selStart), last = editLineOf(starts, w->selEnd);
                     for (size_t line = first; line <= last; ++line) {
                         const float sa = line == first ? across(line, w->selStart) : 0.0f;
-                        const float sb = across(line, line == last ? w->selEnd : editLineEnd(shown, starts, line));
+                        const float sb = across(line, line == last ? w->selEnd : editBoxLineEnd(*w, shown, line));
                         if (sb <= sa) continue;
                         dl->AddRectFilled(ImVec2(x0 + pad + sa, lineTop(line)), ImVec2(x0 + pad + sb, lineTop(line) + size),
                                           IM_COL32(110, 140, 220, static_cast<int>(140.0f * w->drawAlpha)));
@@ -3160,9 +3161,10 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     for (size_t line = 0; line < starts.size(); ++line) {
                         if (lineTop(line) + size < dl->GetClipRectMin().y || lineTop(line) > dl->GetClipRectMax().y)
                             continue;
-                        const std::string text =
-                            shown.substr(starts[line], editLineEnd(shown, starts, line) - starts[line]);
-                        if (text.empty()) continue;
+                        const size_t end = editBoxLineEnd(*w, shown, line);
+                        if (end <= starts[line]) continue;
+                        const std::string text = (w->editPassword ? std::string() : editOpenColour(shown, starts[line])) +
+                                                 shown.substr(starts[line], end - starts[line]);
                         // The shadow first, under the words, as a font string's
                         // is. ChatFontNormal declares one and every edit box in
                         // the interface inherits it.

@@ -128,3 +128,28 @@ TEST_CASE("a long text is laid out and edited in a moment", "[edit]") {
     CHECK(editLineMove(text, starts, text.size(), -1, moved) < text.size());
     CHECK(moved);
 }
+
+// 0x00966710, 0x009649d0: a box of one line shows what the caret is in.
+TEST_CASE("a line longer than its box goes along with the caret", "[edit_lines]") {
+    const std::string s = "abcdefghijklmnopqrstuvwxyz";
+    const auto is = [](const EditShown& e, size_t first, size_t end) { return e.first == first && e.end == end; };
+    CHECK(is(editShown(s, 0, 4, 8.0f, letters), 0, 8));
+    CHECK(is(editShown(s, 0, 8, 8.0f, letters), 0, 8));
+    // Past the end: three quarters of the width are before the caret.
+    CHECK(is(editShown(s, 0, 9, 8.0f, letters), 3, 11));
+    CHECK(is(editShown(s, 0, 26, 8.0f, letters), 20, 26));
+    // Within what is shown it stays, before it a quarter is left of the caret.
+    CHECK(is(editShown(s, 20, 21, 8.0f, letters), 20, 26));
+    CHECK(is(editShown(s, 20, 10, 8.0f, letters), 8, 16));
+    CHECK(is(editShown(s, 20, 0, 8.0f, letters), 0, 8));
+    CHECK(is(editShown("ab", 20, 2, 8.0f, letters), 0, 2));
+    CHECK(is(editShown(s, 20, 2, 0.0f, letters), 0, 26));
+    // A link is one letter to it.
+    const std::string link = "abcd|cffffffff|Hitem:1|h[xyz]|h|refgh";
+    CHECK(is(editShown(link, 0, link.size(), 8.0f, letters), link.size() - 4, link.size()));
+
+    CHECK(editOpenColour(link, 3).empty());
+    CHECK(editOpenColour(link, 20) == "|cffffffff");
+    CHECK(editOpenColour(link, link.size() - 1).empty());
+    CHECK(editOpenColour("a||cffffffffb", 12).empty());
+}

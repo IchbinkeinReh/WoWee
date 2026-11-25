@@ -192,15 +192,32 @@ float editTextWidth(const Widget& box, const std::string& piece) {
 }
 
 const std::vector<size_t>& editBoxLines(const Widget& box) {
-    if (!box.editMultiLine) {
-        box.editStarts.assign(1, 0);
-        box.editStartsWidth = -1.0f;
-        return box.editStarts;
-    }
     const float scale = box.effScale > 0.0f ? box.effScale : 1.0f;
     const float width =
         (box.rectW > 0.0f ? box.rectW / scale : box.width) - box.textInsetLeft - box.textInsetRight;
     const float size = interfaceFontSize(box.fontHeight);
+    if (!box.editMultiLine) {
+        // Its one line, of which it shows what the caret is in; a password's
+        // from its start (0x00966710).
+        if (box.editStarts.size() == 1 && box.editStartsWidth == width && box.editStartsSize == size &&
+            box.editStartsFace == box.fontFace && box.editStartsCaret == box.cursorPos &&
+            box.editStartsText == box.editText) {
+            return box.editStarts;
+        }
+        const size_t first = box.editStarts.size() == 1 && !box.editPassword ? box.editStarts.front() : 0;
+        const std::string shown = box.editPassword ? std::string(box.editText.size(), '*') : box.editText;
+        const EditShown part = editShown(shown, first, box.editPassword ? 0 : box.cursorPos,
+                                         width > 4.0f ? width - 4.0f : width,
+                                         [&box](const std::string& piece) { return editTextWidth(box, piece); });
+        box.editStarts.assign(1, part.first);
+        box.editShownEnd = part.end;
+        box.editStartsText = box.editText;
+        box.editStartsWidth = width;
+        box.editStartsSize = size;
+        box.editStartsFace = box.fontFace;
+        box.editStartsCaret = box.cursorPos;
+        return box.editStarts;
+    }
     if (box.editStartsText != box.editText || box.editStartsWidth != width || box.editStartsSize != size ||
         box.editStartsFace != box.fontFace) {
         box.editStarts = editLines(box.editText, std::max(width, 0.0f),
@@ -209,8 +226,14 @@ const std::vector<size_t>& editBoxLines(const Widget& box) {
         box.editStartsWidth = width;
         box.editStartsSize = size;
         box.editStartsFace = box.fontFace;
+        box.editStartsCaret = static_cast<size_t>(-1);
     }
     return box.editStarts;
+}
+
+size_t editBoxLineEnd(const Widget& box, const std::string& shown, size_t line) {
+    const auto& starts = editBoxLines(box);
+    return box.editMultiLine ? editLineEnd(shown, starts, line) : std::min(box.editShownEnd, shown.size());
 }
 
 float editBoxHeight(const Widget& box) {

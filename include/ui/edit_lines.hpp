@@ -44,6 +44,63 @@ std::vector<size_t> editLines(const std::string& s, float width, Measure measure
     return starts;
 }
 
+/// What of a box's one line is shown (0x00966710): from `first` on, up to `end`.
+struct EditShown {
+    size_t first = 0, end = 0;
+};
+
+/// What fits `width` from the place shown first until now - and where the caret
+/// is out of that, what has it a quarter of the width from the left, or
+/// three from there where it is past the end (0x009649d0). All of it where the
+/// box has no width yet.
+template <typename Measure>
+EditShown editShown(const std::string& s, size_t first, size_t caret, float width, Measure measure) {
+    if (!(width > 0.0f)) return {0, s.size()};
+    const EditSteps steps(s);
+    const auto fits = [&](size_t from) {
+        size_t at = from;
+        while (at < s.size()) {
+            const size_t next = std::max(steps.right(at), at + 1);
+            if (measure(s.substr(from, next - from)) > width) break;
+            at = next;
+        }
+        return at;
+    };
+    EditShown shown;
+    caret = std::min(caret, s.size());
+    if (caret >= first) {
+        shown.first = first;
+        shown.end = fits(shown.first);
+        if (caret <= shown.end) return shown;
+    }
+    const float before = (caret < first ? 0.25f : 0.75f) * width;
+    shown.first = caret;
+    while (shown.first > 0) {
+        const size_t prev = steps.left(shown.first);
+        if (prev >= shown.first || measure(s.substr(prev, caret - prev)) > before) break;
+        shown.first = prev;
+    }
+    shown.end = fits(shown.first);
+    return shown;
+}
+
+/// The colour a text has at a place, as its markup, empty for its font's: what
+/// a piece of the text from there on is drawn behind (0x00966710 puts it in
+/// front of what it shows).
+[[nodiscard]] inline std::string editOpenColour(const std::string& s, size_t at) {
+    size_t open = std::string::npos;
+    for (size_t i = 0; i + 1 < s.size() && i < at;) {
+        if (s[i] != '|') {
+            ++i;
+            continue;
+        }
+        if (s[i + 1] == 'c' && i + 10 <= s.size()) open = i;
+        if (s[i + 1] == 'r') open = std::string::npos;
+        i += 2;
+    }
+    return open == std::string::npos ? std::string() : s.substr(open, 10);
+}
+
 /// The line a place in the text is on: the one it starts, at its start.
 [[nodiscard]] inline size_t editLineOf(const std::vector<size_t>& starts, size_t at) {
     const auto after = std::upper_bound(starts.begin(), starts.end(), at);

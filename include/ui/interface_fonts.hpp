@@ -71,9 +71,11 @@ std::string interfaceFittedText(const std::string& text, const std::string& font
                                 int lines, bool wordWrap, bool nonSpaceWrap, float frameScale = 1.0f);
 
 struct Widget;
-/// Where an edit box's lines start in its text (edit_lines.hpp): one line of it
-/// that is not multi-line, whatever its width. Kept on the widget.
+/// Where an edit box's lines start in its text (edit_lines.hpp); of one that is
+/// not multi-line, what is shown first of its one line. Kept on the widget.
 const std::vector<size_t>& editBoxLines(const Widget& box);
+/// Where a line of it ends in what it shows.
+size_t editBoxLineEnd(const Widget& box, const std::string& shown, size_t line);
 /// How wide a piece of an edit box's text is drawn, in its own units.
 float editTextWidth(const Widget& box, const std::string& piece);
 /// How tall a multi-line box is (0x00966710): its lines between its insets.

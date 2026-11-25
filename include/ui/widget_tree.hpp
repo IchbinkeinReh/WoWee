@@ -597,6 +597,9 @@ struct Widget {
     mutable std::vector<size_t> editStarts{0};
     mutable std::string editStartsText, editStartsFace;
     mutable float editStartsWidth = -1.0f, editStartsSize = -1.0f;
+    /// Of a box of one line, where what it shows of it ends and the caret it
+    /// was worked out for (editShown).
+    mutable size_t editShownEnd = 0, editStartsCaret = static_cast<size_t>(-1);
     int   editMaxLetters = 0;   ///< Zero is no limit, which is WoW's default.
     /// SetMaxBytes / <FontString bytes="">: the most bytes the text may hold,
     /// kept as the client keeps it (+0x2c4) - one under the number given,
