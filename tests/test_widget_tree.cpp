@@ -4293,7 +4293,7 @@ TEST_CASE("A tooltip is sized for what it was filled with at once", "[widget][to
     tree.addPoint(tip, p);
     tree.layout(kScreenW, kScreenH);
     tree.setTooltipSizer([](Widget& w) {
-        w.width = 20.0f * static_cast<float>(w.tooltipLines.size());
+        w.width = 5.0f + 20.0f * static_cast<float>(w.tooltipLines.size());
         w.height = 30.0f;
     });
     // Nothing to size it for, and none but a tooltip.
@@ -4307,6 +4307,6 @@ TEST_CASE("A tooltip is sized for what it was filled with at once", "[widget][to
     tree.get(tip)->isTooltip = true;
     tree.sizeTooltip(tip);
     tree.resolveWidget(tip);
-    CHECK(tree.get(tip)->rectW == Catch::Approx(60.0f));
+    CHECK(tree.get(tip)->rectW == Catch::Approx(65.0f));
     CHECK(tree.get(tip)->rectH == Catch::Approx(30.0f));
 }
