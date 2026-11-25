@@ -332,6 +332,32 @@ TEST_CASE("what an item rolled is before its price", "[replay][interface]") {
     CHECK(text().find("Strength") == std::string::npos);
 }
 
+// T161: 0x006277f0, +0x480: what the item that is not traded would be enchanted with.
+TEST_CASE("an item in a trade says what it would be enchanted with", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    answerItem(s, 24021, "Light-Touched Breastplate", 5);
+    ui.run("GetTradePlayerItemLink = function() return 'item:24021:0:0:0:0:0:0:0' end "
+           "GetTradeTargetItemLink = GetTradePlayerItemLink "
+           "GetTradePlayerItemInfo = function(i) return 'x', 't', 1, 2, i == 7 and 'Crusader' or nil end "
+           "GetTradeTargetItemInfo = function(i) return 'x', 't', 1, 2, 1, i == 7 and 'Mongoose' or nil end "
+           "ITEM_PROPOSED_ENCHANT, ITEM_ENCHANT_DISCLAIMER = 'Will receive %s.', 'Not traded!' "
+           "tip = CreateFrame('GameTooltip', 'PlayTradeTip', UIParent) tip:SetOwner(UIParent, 'ANCHOR_NONE')");
+    const auto* w = ui.engine.widgets().findByName("PlayTradeTip");
+    REQUIRE(w);
+    const auto after = [&](const char* call) {
+        ui.run(std::string("tip:SetOwner(UIParent, 'ANCHOR_NONE') ") + call);
+        std::string all;
+        for (const auto& line : w->tooltipLines) all += line.left + "|";
+        return all;
+    };
+    CHECK(after("tip:SetTradePlayerItem(7)").find("|Will receive Crusader.|Not traded!|") != std::string::npos);
+    CHECK(after("tip:SetTradeTargetItem(7)").find("|Will receive Mongoose.|Not traded!|") != std::string::npos);
+    CHECK(after("tip:SetTradeTargetItem(1)").find("receive") == std::string::npos);
+    CHECK(after("tip:SetHyperlink('item:24021')").find("receive") == std::string::npos);
+}
+
 // P61: 0x005980d0 goes by the slot an item takes, not by its kind.
 TEST_CASE("the dressing room puts an item where it goes", "[replay][interface]") {
     namespace room = wowee::game::dressing_room;
