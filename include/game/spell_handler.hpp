@@ -659,6 +659,8 @@ public:
     [[nodiscard]] uint32_t resolveHighestKnownRank(uint32_t spellId) const;
     /// The skill's own name, by SkillLine.dbc id.
     [[nodiscard]] const std::string& getSkillLineName(uint32_t skillLineId) const;
+    /// Its alternate verb, "" for a skill without one.
+    [[nodiscard]] const std::string& getSkillLineVerb(uint32_t skillLineId) const;
 
     // Cast state
     void stopCasting();
@@ -969,6 +971,7 @@ private:
     /// the const reach test reports through it.
     mutable cast_failure::RepeatHold failureHold_;
     mutable std::optional<ResistanceSounds> resistanceSounds_;
+    std::unordered_map<uint32_t, std::string> skillLineVerbs_;
     /// 0x00af5274: the casts whose missile still flies.
     spell_missiles::InFlightList missilesInFlight_;
     /// 0x0080e1b0: a cast whose spell has a missile Speed joins the list.

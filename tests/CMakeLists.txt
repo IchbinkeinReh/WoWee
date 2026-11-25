@@ -4390,6 +4390,10 @@ wowee_add_test(test_character_config
 wowee_add_test(test_loading_tip
     SOURCES test_loading_tip.cpp)
 
+# ── test_trade_skill_verb ────────────────────────────────────
+wowee_add_test(test_trade_skill_verb
+    SOURCES test_trade_skill_verb.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)

@@ -8042,6 +8042,12 @@ uint32_t SpellHandler::getSpellImplicitTargetA(uint32_t spellId) const {
     return (it != owner_.spellNameCacheRef().end()) ? it->second.implicitTargetA : 0;
 }
 
+const std::string& SpellHandler::getSkillLineVerb(uint32_t skillLineId) const {
+    owner_.loadSkillLineDbc();
+    const auto it = skillLineVerbs_.find(skillLineId);
+    return it != skillLineVerbs_.end() ? it->second : SPELL_EMPTY_STRING;
+}
+
 const std::string& SpellHandler::getSkillLineName(uint32_t skillLineId) const {
     // By skill line id, which is what every caller holds: the trade skill
     // window's own line and a trainer service's required skill. Reading the id
@@ -8101,6 +8107,12 @@ void SpellHandler::loadSkillLineDbc() {
                 if (uint32_t icon = dbc->getUInt32(i, slIconField); icon > 0) {
                     owner_.skillLineIconsRef()[id] = icon;
                 }
+            }
+            // Behind the icon, a localised string as the name is, in the files
+            // that have one.
+            if (slIconField + 17 < fieldCount) {
+                std::string verb = dbc->getString(i, slIconField + 1);
+                if (!verb.empty()) skillLineVerbs_[id] = std::move(verb);
             }
             if (slDescField < fieldCount) {
                 std::string desc = dbc->getString(i, slDescField);

@@ -1,6 +1,8 @@
 // lua_quest_api.cpp - Quest log, skills, talents, glyphs, and achievements Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "core/local_time.hpp"
+#include "game/spell_handler.hpp"
+#include "game/trade_skill_verb.hpp"
 #include "game/quest_link.hpp"
 #include "game/item_text.hpp"
 #include "game/item_stat_text.hpp"
@@ -5888,7 +5890,15 @@ void registerQuestLuaAPI(lua_State* L) {
             // heading's alone and nil on a recipe, and there is no skill-up
             // count in this client.
             lua_pushnil(L);             // isExpanded
-            lua_pushnil(L);             // altVerb
+            // The skill's own verb, of a recipe that makes no item.
+            const auto spell = gh->spellNameCacheRef().find(r.spellId);
+            const auto* spells = gh->getSpellHandler();
+            const std::string verb =
+                spells && spell != gh->spellNameCacheRef().end() && game::recipeHasSkillVerb(spell->second.effectIds[0])
+                    ? spells->getSkillLineVerb(gh->getCraftingSkillLine())
+                    : std::string();
+            if (verb.empty()) lua_pushnil(L);
+            else lua_pushstring(L, verb.c_str());
             return 5;
         }},
                 {"GetTradeSkillIcon", [](lua_State* L) -> int {
