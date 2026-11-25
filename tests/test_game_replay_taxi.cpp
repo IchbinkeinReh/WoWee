@@ -783,3 +783,25 @@ TEST_CASE("the camera turns with the flight and begins behind it", "[taxi][camer
     }
     CHECK(off() == Catch::Approx(-30.0f).margin(0.1f));
 }
+
+// P71: after a map change the picture stood at the spawn's pitch, 15 degrees, while the camera was
+// kept at its own: restoreSaved set the one it is kept at and did not turn the view.
+TEST_CASE("the camera looks by the pitch it is put back to", "[taxi][camera]") {
+    Walker w;
+    const auto drawn = [&w] { return glm::degrees(std::asin(glm::normalize(w.camera.getForward()).z)); };
+    w.controller.setDefaultSpawn(glm::vec3(0.0f), 90.0f, -15.0f);
+    w.controller.reset();
+    CHECK(drawn() == Catch::Approx(-15.0f).margin(0.01f));
+    for (const float pitch : {-40.0f, 10.0f, 45.0f, -20.0f}) {
+        w.controller.restoreSaved(7.5f, pitch);
+        CHECK(w.controller.savedPitch() == Catch::Approx(pitch));
+        CHECK(drawn() == Catch::Approx(pitch).margin(0.01f));
+    }
+    // FlipCameraYaw turns the view with the camera too (0x005ff2c0).
+    const glm::vec3 before = w.camera.getForward();
+    w.controller.flipYaw(180.0f);
+    const glm::vec3 after = w.camera.getForward();
+    CHECK(after.x == Catch::Approx(-before.x).margin(0.001f));
+    CHECK(after.y == Catch::Approx(-before.y).margin(0.001f));
+    CHECK(after.z == Catch::Approx(before.z).margin(0.001f));
+}

@@ -133,6 +133,10 @@ public:
     void restoreSaved(float distance, float pitchDeg) {
         userTargetDistance = currentDistance = clampedZoomDistance(std::clamp(distance, 0.0f, 50.0f));
         pitch = pitchDeg;
+        // The view is only turned where something turns it: reset() had turned
+        // it to the spawn's own pitch, and it stayed there while the camera
+        // was kept, and read, at this one until the first turn by the mouse.
+        if (camera) camera->setRotation(yaw, pitch);
     }
     /// Put the unit at `pos`; it then falls from there unless on ground
     /// (portMove), not when `onTransport` - 0x00988370 starts no fall for a
@@ -595,7 +599,10 @@ public:
     [[nodiscard]] bool viewMovedByPlayer() const { return viewMovedByPlayer_; }
     /// FlipCameraYaw(degrees) (0x005ff2c0): the camera turned about the
     /// character by that much.
-    void flipYaw(float degrees) { yaw += degrees; }
+    void flipYaw(float degrees) {
+        yaw += degrees;
+        if (camera) camera->setRotation(yaw, pitch);
+    }
     /// MoveView{In,Out,Left,Right,Up,Down}Start (0x005ff000): the view
     /// moves one way - 0 in, 1 out, 2 left, 3 right, 4 up, 5 down - from
     /// now (camera +0x164), at `speed` times `rate` a second (+0x1ac; the
