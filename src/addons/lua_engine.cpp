@@ -15912,9 +15912,10 @@ void LuaEngine::registerCoreAPI() {
         // the most it makes, priced, as the script's maxcost.
         "        local most = tonumber(__WoweeTooltipItemMaxCount)\n"
         "        local maxMoney = (not inst and most and most > (tonumber(__WoweeTooltipItemCount) or 1)) and sellPrice * most or nil\n"
+        // Without the script there is none (0x0061a0d0): the comparison's and
+        // the socketing window's tooltips have none.
         "        local onMoney = self.GetScript and self:GetScript('OnTooltipAddMoney')\n"
-        "        if onMoney then onMoney(self, money, maxMoney)\n"
-        "        else self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(money), 1, 1, 1) end\n"
+        "        if onMoney then onMoney(self, money, maxMoney) end\n"
         "    elseif inst and inst.unsellable then\n"
         "        self:AddLine(ITEM_UNSELLABLE or 'No sell price', 1, 1, 1)\n"
         "    end\n"
