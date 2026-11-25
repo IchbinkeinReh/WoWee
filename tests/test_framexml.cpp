@@ -1657,3 +1657,29 @@ TEST_CASE("a model's scale is none of its frame's", "[framexml]") {
     REQUIRE(has(r.lua, ":SetModelScale(2.0)"));
     REQUIRE_FALSE(has(r.lua, ":SetScale("));
 }
+
+TEST_CASE("What a frame's XML says besides", "[framexml][emit]") {
+    XmlNode root = parseOrFail(
+        "<Ui>"
+        "<Frame name=\"A\"><ResizeBounds><minResize><AbsDimension x=\"296\" y=\"120\"/></minResize>"
+        "<maxResize><AbsDimension x=\"608\" y=\"400\"/></maxResize></ResizeBounds>"
+        "<Attributes><Attribute name=\"n\" type=\"nil\"/></Attributes></Frame>"
+        "<EditBox name=\"B\"><TextInsets><AbsInset left=\"5\" right=\"6\" top=\"1\" bottom=\"2\"/></TextInsets></EditBox>"
+        "<StatusBar name=\"C\" drawLayer=\"OVERLAY\"><BarTexture file=\"x\"/></StatusBar>"
+        "<CheckButton name=\"D\" checked=\"true\"/>"
+        "<Button name=\"E\" text=\"Los\"><ButtonText name=\"$parentText\"/></Button>"
+        "<Frame name=\"F\"><Animations><AnimationGroup><Scripts><OnLoad>G = self</OnLoad></Scripts>"
+        "<Alpha change=\"1\" duration=\"1\"/></AnimationGroup></Animations></Frame>"
+        "</Ui>");
+    const EmitResult r = emitFrameXml(root);
+    CHECK(has(r.lua, ":SetMinResize(296"));
+    CHECK(has(r.lua, ":SetMaxResize(608"));
+    CHECK(has(r.lua, ":SetAttribute(\"n\", nil)"));
+    CHECK(has(r.lua, ":SetTextInsets(5, 6, 1, 2)"));
+    CHECK(has(r.lua, ":SetStatusBarTexture(\"x\", \"OVERLAY\")"));
+    CHECK(has(r.lua, ":SetChecked(true)"));
+    // The text goes to the label, and an animation group is told once it is there.
+    CHECK(r.lua.find(":SetFontString(") < r.lua.find(":SetText(\"Los\")"));
+    CHECK(has(r.lua, ":GetScript(\"OnLoad\") if load then load("));
+    CHECK(r.lua.find(":CreateAnimation(") < r.lua.find(":GetScript(\"OnLoad\") if load"));
+}

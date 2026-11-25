@@ -10465,7 +10465,23 @@ int lua_StatusBar_SetStatusBarTexture(lua_State* L) {
         } else {
             w->barTexture.clear();
         }
+        if (lua_isstring(L, 3)) w->barLayer = wowee::ui::parseDrawLayer(lua_tostring(L, 3));
     }
+    return 0;
+}
+/// __WoweeBarTextureFor(bar, texture, made): the object GetStatusBarTexture answers says
+/// the bar's file, and as it is made its layer. The bar draws the fill itself.
+int lua_wowee_barTextureFor(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const auto* bar = widgetOf(L, 1);
+    const uint32_t id = lua_istable(L, 2) ? widgetIdOf(L, 2) : 0;
+    auto* texture = tree && id ? tree->get(id) : nullptr;
+    if (!bar || !texture) return 0;
+    if (lua_toboolean(L, 3)) {
+        texture->isBarFill = true;
+        texture->layer = bar->barLayer;
+    }
+    if (texture->isBarFill) texture->texturePath = bar->barTexture;
     return 0;
 }
 int lua_wowee_barHasTexture(lua_State* L) {
@@ -12190,6 +12206,8 @@ void LuaEngine::registerCoreAPI() {
 
     lua_pushcfunction(L_, lua_wowee_barHasTexture);
     lua_setglobal(L_, "__WoweeBarHasTexture");
+    lua_pushcfunction(L_, lua_wowee_barTextureFor);
+    lua_setglobal(L_, "__WoweeBarTextureFor");
     lua_pushcfunction(L_, lua_wowee_setAnimOffset);
     lua_setglobal(L_, "__WoweeSetAnimOffset");
     lua_pushcfunction(L_, lua_wowee_setAnimRotation);
@@ -13909,7 +13927,9 @@ void LuaEngine::registerCoreAPI() {
         "    if not __WoweeBarHasTexture(self) then return nil end\n"
         "    if not self.__barTexture then\n"
         "        self.__barTexture = self:CreateTexture(nil, 'ARTWORK', true)\n"
+        "        __WoweeBarTextureFor(self, self.__barTexture, true)\n"
         "    end\n"
+        "    __WoweeBarTextureFor(self, self.__barTexture)\n"
         "    return self.__barTexture\n"
         "end\n"
         // A button's text is its font string's text; keeping them apart means

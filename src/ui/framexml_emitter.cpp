@@ -657,6 +657,18 @@ struct Emitter {
             for (const XmlNode& sc : a.children) {
                 if (sc.name == "Scripts") emitScripts(sc, avar);
             }
+            emitOwnOnLoad(a, avar);
+        }
+        emitOwnOnLoad(group, gvar);
+    }
+
+    /// The OnLoad of an animation or a group of them, which have no template's to run
+    /// with it.
+    void emitOwnOnLoad(const XmlNode& node, const std::string& var) {
+        for (const XmlNode& scripts : node.children) {
+            if (scripts.name != "Scripts" || !scripts.child("OnLoad")) continue;
+            line("do local load = " + var + ":GetScript(\"OnLoad\") if load then load(" + var + ") end end");
+            return;
         }
     }
 
@@ -1405,6 +1417,21 @@ struct Emitter {
             }
             break;
         }
+        // <ResizeBounds> (0x00490000's loader, 2789): how small and how large it may be.
+        if (const XmlNode* bounds = node.child("ResizeBounds")) {
+            float x = 0.0f, y = 0.0f;
+            if (const XmlNode* least = bounds->child("minResize"); least && readDimension(*least, x, y))
+                line(var + ":SetMinResize(" + std::to_string(x) + ", " + std::to_string(y) + ")");
+            if (const XmlNode* most = bounds->child("maxResize"); most && readDimension(*most, x, y))
+                line(var + ":SetMaxResize(" + std::to_string(x) + ", " + std::to_string(y) + ")");
+        }
+        // <TextInsets> of an edit box or a message frame (0x00960000's loaders).
+        if (const XmlNode* insets = node.child("TextInsets")) {
+            if (const XmlNode* abs = insets->child("AbsInset"))
+                line("if " + var + ".SetTextInsets then " + var + ":SetTextInsets(" + abs->attrOr("left", "0") + ", " +
+                     abs->attrOr("right", "0") + ", " + abs->attrOr("top", "0") + ", " + abs->attrOr("bottom", "0") +
+                     ") end");
+        }
         // A model frame's model and its model scale (CSimpleModel's XML,
         // 0x0095f800: file, and scale into +0x32c when above 0). "scale" is an
         // attribute of models alone, and no frame's scale.
@@ -1510,7 +1537,6 @@ struct Emitter {
         // windows, the character sheet - so leaving it unread meant StartMoving
         // was asked of a frame that had never been told it was movable, and
         // every one of those windows was nailed down.
-        emitTextAttr(node, var);
         // A frame declares this the same way it declares movable, and it was
         // going nowhere: the chat window says resizable="true" and its size
         // grabber called StartSizing on a frame that had never been told it
@@ -1610,6 +1636,7 @@ struct Emitter {
                 std::string literal;
                 if (type == "number")       literal = std::to_string(a.attrFloat("value", 0.0f));
                 else if (type == "boolean") literal = a.attrBool("value") ? "true" : "false";
+                else if (type == "nil")     literal = "nil";
                 else                        literal = quote(val);
                 line(var + ":SetAttribute(" + quote(*an) + ", " + literal + ")");
             }
@@ -1654,7 +1681,8 @@ struct Emitter {
         // the health should be.
         if (const XmlNode* bar = node.child("BarTexture")) {
             if (const std::string* file = bar->attr("file")) {
-                line(var + ":SetStatusBarTexture(" + quote(*file) + ")");
+                line(var + ":SetStatusBarTexture(" + quote(*file) +
+                     (node.attr("drawLayer") ? ", " + quote(*node.attr("drawLayer")) : std::string()) + ")");
             }
         }
         if (const XmlNode* col = node.child("BarColor")) {
@@ -1693,6 +1721,11 @@ struct Emitter {
         // Before Frames and Scripts, so a child anchoring to $parentNormalTexture
         // and an OnLoad reading its own label both find something there.
         emitButtonRegions(node, var, name);
+        // To the <ButtonText> it has got now.
+        emitTextAttr(node, var);
+        // A check button can come checked (0x00960000's loader, 1757).
+        if (node.name == "CheckButton" && node.attr("checked"))
+            line(var + ":SetChecked(" + (node.attrBool("checked") ? "true" : "false") + ")");
         // A scroll frame's content, which is a frame like any other but reached
         // through SetScrollChild rather than sitting in Frames.
         // HybridScrollFrameScrollChild_OnLoad does self:GetParent().scrollChild

@@ -324,6 +324,7 @@ struct Widget {
     /// template, is given its points as it is loaded (0x004830e0, 0x004836d0),
     /// which the layout does for any other without them.
     bool needsPoint = false;
+    bool isBarFill = false;   ///< a status bar's texture as an object: the bar draws it
 
     float scale = 1.0f;
     float effScale = 1.0f;

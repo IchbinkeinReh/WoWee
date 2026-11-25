@@ -1600,6 +1600,7 @@ void WidgetTree::collectDrawOrder() {
             !(w.isMessageFrame && !w.messages.empty()) &&
             !(w.isTooltip && !w.tooltipLines.empty())) continue;
         if ((w.rectW <= 0.0f || w.rectH <= 0.0f) && w.modelPad <= 0.0f) continue;
+        if (w.isBarFill) continue;
         // A texture with nothing to show is dropped - unless it is the colour
         // picker's, whose art is generated rather than loaded.
         //
