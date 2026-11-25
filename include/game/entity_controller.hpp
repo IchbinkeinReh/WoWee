@@ -107,8 +107,7 @@ public:
 
     // --- Update object work queue ---
     void enqueueUpdateObjectWork(UpdateObjectData&& data);
-    void processPendingUpdateObjectWork(const std::chrono::steady_clock::time_point& start,
-                                        float budgetMs);
+    void processPendingUpdateObjectWork();
     [[nodiscard]] bool hasPendingUpdateObjectWork() const { return !pendingUpdateObjectWork_.empty(); }
 
     // --- Reset all state (called on disconnect / character switch) ---

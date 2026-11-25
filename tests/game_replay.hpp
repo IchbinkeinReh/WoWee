@@ -52,6 +52,12 @@ struct GameHandlerTestAccess {
         for (int frame = 0; frame < 1000 && pending(); ++frame) gh.processQueuedIncomingPackets();
         REQUIRE_FALSE(pending());
     }
+    // What one frame makes of what is there.
+    static void queue(GameHandler& gh, const network::Packet& packet) { gh.enqueueIncomingPacket(packet); }
+    static void frame(GameHandler& gh) { gh.processQueuedIncomingPackets(); }
+    static size_t queued(const GameHandler& gh) {
+        return gh.pendingIncomingPackets_.size() + (gh.entityController_->hasPendingUpdateObjectWork() ? 1 : 0);
+    }
     static void enterWorld(GameHandler& gh) { gh.setState(WorldState::IN_WORLD); }
     static void setSocket(GameHandler& gh, std::unique_ptr<network::WorldSocket> socket) {
         gh.socket = std::move(socket);

@@ -407,10 +407,8 @@ void GameHandler::updateNetworking() {
     // The zone channels, once the player has a zone to name them after.
     if (chatHandler_) chatHandler_->updateLoginChannelJoin();
 
-    // Update socket (processes incoming data and triggers callbacks). Not while
-    // our own queue is too full to take what it would hand over; see
-    // incomingQueueHasRoomForSocket.
-    if (socket && incomingQueueHasRoomForSocket()) {
+    // Update socket (processes incoming data and triggers callbacks).
+    if (socket) {
         auto socketStart = std::chrono::steady_clock::now();
         socket->update();
         float socketMs = std::chrono::duration<float, std::milli>(
@@ -425,7 +423,7 @@ void GameHandler::updateNetworking() {
         processQueuedIncomingPackets();
         float packetMs = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - packetStart).count();
-        if (packetMs > 3.0f) {
+        if (packetMs > 30.0f) {
             LOG_WARNING("SLOW queued packet handling: ", packetMs, "ms");
         }
     }

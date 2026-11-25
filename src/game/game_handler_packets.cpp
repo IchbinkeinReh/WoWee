@@ -98,29 +98,11 @@ bool isAuthCharPipelineOpcode(LogicalOpcode op) {
     }
 }
 
-int incomingPacketsBudgetPerUpdate(WorldState state) {
-    static const int inWorldBudget =
-        core::envIntClamped("WOWEE_NET_MAX_GAMEHANDLER_PACKETS", 24, 1, 512);
-    static const int loginBudget =
-        core::envIntClamped("WOWEE_NET_MAX_GAMEHANDLER_PACKETS_LOGIN", 96, 1, 512);
-    return state == WorldState::IN_WORLD ? inWorldBudget : loginBudget;
-}
-
-float incomingPacketBudgetMs(WorldState state) {
-    static const int inWorldBudgetMs =
-        core::envIntClamped("WOWEE_NET_MAX_GAMEHANDLER_PACKET_MS", 2, 1, 50);
-    static const int loginBudgetMs =
-        core::envIntClamped("WOWEE_NET_MAX_GAMEHANDLER_PACKET_MS_LOGIN", 8, 1, 50);
-    return static_cast<float>(state == WorldState::IN_WORLD ? inWorldBudgetMs : loginBudgetMs);
-}
-
 float slowPacketLogThresholdMs() {
     static const int thresholdMs =
         core::envIntClamped("WOWEE_NET_SLOW_PACKET_LOG_MS", 10, 1, 60000);
     return static_cast<float>(thresholdMs);
 }
-
-constexpr size_t kMaxQueuedInboundPackets = 4096;
 
 /// A GlobalStrings text as FrameScript_GetText (0x00819d40) looks it up: the
 /// interface's, or enUS's for want of one.
@@ -4377,66 +4359,28 @@ void GameHandler::handlePacket(network::Packet& packet) {
 
 void GameHandler::enqueueIncomingPacket(const network::Packet& packet) {
     if (deafForTest_) return;
-    if (pendingIncomingPackets_.size() >= kMaxQueuedInboundPackets) {
-        LOG_ERROR("Inbound packet queue overflow (", pendingIncomingPackets_.size(),
-                  " packets); dropping oldest packet to preserve responsiveness");
-        pendingIncomingPackets_.pop_front();
-    }
     pendingIncomingPackets_.push_back(packet);
     lastRxTime_ = std::chrono::steady_clock::now();
     rxSilenceLogged_ = false;
     rxSilence15sLogged_ = false;
 }
 
-// Whether one more socket update could hand over all it may without this
-// queue dropping any of it. A dropped packet is lost for good - a create
-// block, a field update - and nothing notices, while one left with the socket
-// only waits: the socket stops reading once its own queue fills, and TCP holds
-// the server until there is room again.
-bool GameHandler::incomingQueueHasRoomForSocket() const {
-    return pendingIncomingPackets_.size() + network::WorldSocket::kMaxPacketCallbacksPerUpdate <=
-           kMaxQueuedInboundPackets;
-}
-
 void GameHandler::enqueueIncomingPacketFront(network::Packet&& packet) {
-    if (pendingIncomingPackets_.size() >= kMaxQueuedInboundPackets) {
-        LOG_ERROR("Inbound packet queue overflow while prepending (", pendingIncomingPackets_.size(),
-                  " packets); dropping newest queued packet to preserve ordering");
-        pendingIncomingPackets_.pop_back();
-    }
     pendingIncomingPackets_.emplace_front(std::move(packet));
 }
 
 // enqueueUpdateObjectWork and processPendingUpdateObjectWork moved to EntityController
 
+// All of it, each frame (0x006334f0 walks the whole list, whatever it is): the server's
+// say is never older than a frame. It was two milliseconds and 24 packets a frame, and in a
+// crowded place, with few frames a second, the client fell minutes behind.
 void GameHandler::processQueuedIncomingPackets() {
-    if (pendingIncomingPackets_.empty() && !entityController_->hasPendingUpdateObjectWork()) {
-        return;
-    }
-
-    const int maxPacketsThisUpdate = incomingPacketsBudgetPerUpdate(state);
-    const float budgetMs = incomingPacketBudgetMs(state);
-    const auto start = std::chrono::steady_clock::now();
-    int processed = 0;
-
-    while (processed < maxPacketsThisUpdate) {
-        float elapsedMs = std::chrono::duration<float, std::milli>(
-            std::chrono::steady_clock::now() - start).count();
-        if (elapsedMs >= budgetMs) {
-            break;
-        }
-
-        if (entityController_->hasPendingUpdateObjectWork()) {
-            entityController_->processPendingUpdateObjectWork(start, budgetMs);
-            if (entityController_->hasPendingUpdateObjectWork()) {
-                break;
-            }
-            continue;
-        }
-
-        if (pendingIncomingPackets_.empty()) {
-            break;
-        }
+    while (true) {
+        entityController_->processPendingUpdateObjectWork();
+        if (pendingIncomingPackets_.empty()) break;
+        // A new world is read in the handler itself in the client (0x00403b70), so what
+        // came behind it finds it there; here it is after this update.
+        if (worldEntryPending_ && worldEntryPending_()) break;
 
         network::Packet packet = std::move(pendingIncomingPackets_.front());
         pendingIncomingPackets_.pop_front();
@@ -4456,17 +4400,6 @@ void GameHandler::processQueuedIncomingPackets() {
                         " size=", packet.getSize(),
                         " state=", worldStateName(state));
         }
-        ++processed;
-    }
-
-    if (entityController_->hasPendingUpdateObjectWork()) {
-        return;
-    }
-
-    if (!pendingIncomingPackets_.empty()) {
-        LOG_DEBUG("GameHandler packet budget reached (processed=", processed,
-                  ", remaining=", pendingIncomingPackets_.size(),
-                  ", state=", worldStateName(state), ")");
     }
 }
 

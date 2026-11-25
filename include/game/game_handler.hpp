@@ -2327,6 +2327,9 @@ public:
     // Parameters: mapId, x, y, z (canonical WoW coords), isInitialEntry=true on first login or reconnect
     using WorldEntryCallback = std::function<void(uint32_t mapId, float x, float y, float z, bool isInitialEntry)>;
     void setWorldEntryCallback(WorldEntryCallback cb) { worldEntryCallback_ = std::move(cb); }
+    /// Whether a world the callback was told of is still to be read in: what came behind it
+    /// waits for it (processQueuedIncomingPackets).
+    void setWorldEntryPendingQuery(std::function<bool()> query) { worldEntryPending_ = std::move(query); }
 
     // Knockback callback: called when server sends SMSG_MOVE_KNOCK_BACK for the player.
     // Parameters: vcos, vsin (2D direction vector in server/wire coord space - the
@@ -6529,7 +6532,6 @@ private:
     void registerHandler(LogicalOpcode op, void (GameHandler::*handler)(network::Packet&));
     void enqueueIncomingPacket(const network::Packet& packet);
     void enqueueIncomingPacketFront(network::Packet&& packet);
-    [[nodiscard]] bool incomingQueueHasRoomForSocket() const;
     void processQueuedIncomingPackets();
 
     /**
@@ -7007,6 +7009,7 @@ private:
     std::deque<std::string>    areaTriggerMsgs_;
 
     WorldEntryCallback worldEntryCallback_;
+    std::function<bool()> worldEntryPending_;
     KnockBackCallback knockBackCallback_;
     MoverEventCallback moverEventCallback_;
     MoverStopCallback moverStopCallback_;

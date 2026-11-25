@@ -1519,3 +1519,29 @@ TEST_CASE("the socketing window hears of the gems that went in", "[replay][field
     CHECK(updates == 1);
     s.handler().setAddonEventCallback({});
 }
+
+// 0x006334f0: all that is there, each frame - and behind a new world, once it has been read in.
+TEST_CASE("a frame handles every packet there is", "[replay][playtest]") {
+    using Access = wowee::game::GameHandlerTestAccess;
+    Session s;
+    spawnPlayer(s);
+    for (uint32_t i = 0; i < 300; ++i)
+        Access::queue(s.handler(), UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 100 + i}}).packet());
+    Access::frame(s.handler());
+    CHECK(Access::queued(s.handler()) == 0);
+    const auto me = std::dynamic_pointer_cast<wowee::game::Unit>(
+        s.handler().getEntityManager().getEntity(Session::kPlayerGuid));
+    REQUIRE(me);
+    CHECK(me->getHealth() == 399);
+
+    bool pending = true;
+    s.handler().setWorldEntryPendingQuery([&pending] { return pending; });
+    Access::queue(s.handler(), UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 50}}).packet());
+    Access::frame(s.handler());
+    CHECK(Access::queued(s.handler()) == 1);
+    CHECK(me->getHealth() == 399);
+    pending = false;
+    Access::frame(s.handler());
+    CHECK(Access::queued(s.handler()) == 0);
+    CHECK(me->getHealth() == 50);
+}

@@ -153,6 +153,7 @@ static void precacheNearbyTiles(rendering::TerrainManager* terrainMgr,
 
 void WorldEntryCallbackHandler::setupCallbacks() {
     // World entry callback (online mode) - load terrain when entering world
+    gameHandler_.setWorldEntryPendingQuery([this]() { return worldLoader_ && worldLoader_->hasPendingEntry(); });
     gameHandler_.setWorldEntryCallback([this](uint32_t mapId, float x, float y, float z, bool isInitialEntry) {
         LOG_INFO("Online world entry: mapId=", mapId, " pos=(", x, ", ", y, ", ", z, ")"
                  " initial=", isInitialEntry);

@@ -49,14 +49,6 @@ LastPlayerFlags& lastPlayerFlags() {
     return flags;
 }
 
-int updateObjectBlocksBudgetPerUpdate(WorldState state) {
-    static const int inWorldBudget =
-        core::envIntClamped("WOWEE_NET_MAX_UPDATE_OBJECT_BLOCKS", 24, 1, 2048);
-    static const int loginBudget =
-        core::envIntClamped("WOWEE_NET_MAX_UPDATE_OBJECT_BLOCKS_LOGIN", 128, 1, 4096);
-    return state == WorldState::IN_WORLD ? inWorldBudget : loginBudget;
-}
-
 float slowUpdateObjectBlockLogThresholdMs() {
     static const int thresholdMs =
         core::envIntClamped("WOWEE_NET_SLOW_UPDATE_BLOCK_LOG_MS", 10, 1, 60000);
@@ -154,22 +146,8 @@ void EntityController::clearAll() {
 void EntityController::enqueueUpdateObjectWork(UpdateObjectData&& data) {
     pendingUpdateObjectWork_.push_back(PendingUpdateObjectWork{.data = std::move(data)});
 }
-void EntityController::processPendingUpdateObjectWork(const std::chrono::steady_clock::time_point& start,
-                                                 float budgetMs) {
-    if (pendingUpdateObjectWork_.empty()) {
-        return;
-    }
-
-    const int maxBlocksThisUpdate = updateObjectBlocksBudgetPerUpdate(owner_.getState());
-    int processedBlocks = 0;
-
-    while (!pendingUpdateObjectWork_.empty() && processedBlocks < maxBlocksThisUpdate) {
-        float elapsedMs = std::chrono::duration<float, std::milli>(
-            std::chrono::steady_clock::now() - start).count();
-        if (elapsedMs >= budgetMs) {
-            break;
-        }
-
+void EntityController::processPendingUpdateObjectWork() {
+    while (!pendingUpdateObjectWork_.empty()) {
         auto& work = pendingUpdateObjectWork_.front();
         if (!work.outOfRangeProcessed) {
             auto outOfRangeStart = std::chrono::steady_clock::now();
@@ -183,13 +161,7 @@ void EntityController::processPendingUpdateObjectWork(const std::chrono::steady_
             work.outOfRangeProcessed = true;
         }
 
-        while (work.nextBlockIndex < work.data.blocks.size() && processedBlocks < maxBlocksThisUpdate) {
-            elapsedMs = std::chrono::duration<float, std::milli>(
-                std::chrono::steady_clock::now() - start).count();
-            if (elapsedMs >= budgetMs) {
-                break;
-            }
-
+        while (work.nextBlockIndex < work.data.blocks.size()) {
             const UpdateBlock& block = work.data.blocks[work.nextBlockIndex];
             currentUpdateReceivedMs_ = work.data.receivedMs;
             auto blockStart = std::chrono::steady_clock::now();
@@ -206,22 +178,10 @@ void EntityController::processPendingUpdateObjectWork(const std::chrono::steady_
                             " hasMovement=", block.hasMovement ? 1 : 0);
             }
             ++work.nextBlockIndex;
-            ++processedBlocks;
         }
 
-        if (work.nextBlockIndex >= work.data.blocks.size()) {
-            finalizeUpdateObjectBatch(work.newItemCreated);
-            pendingUpdateObjectWork_.pop_front();
-            continue;
-        }
-        break;
-    }
-
-    if (!pendingUpdateObjectWork_.empty()) {
-        const auto& work = pendingUpdateObjectWork_.front();
-        LOG_DEBUG("GameHandler update-object budget reached (remainingBatches=",
-                  pendingUpdateObjectWork_.size(), ", nextBlockIndex=", work.nextBlockIndex,
-                  "/", work.data.blocks.size(), ", owner_.getState()=", worldStateName(owner_.getState()), ")");
+        finalizeUpdateObjectBatch(work.newItemCreated);
+        pendingUpdateObjectWork_.pop_front();
     }
 }
 void EntityController::handleUpdateObject(network::Packet& packet) {

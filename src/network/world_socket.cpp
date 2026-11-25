@@ -22,22 +22,12 @@
 
 namespace {
 constexpr size_t kMaxReceiveBufferBytes = 8 * 1024 * 1024;
-// Per-frame packet budgets prevent a burst of server data from starving the
-// render loop. Tunable via env vars for debugging heavy-traffic scenarios
-// (e.g. SMSG_UPDATE_OBJECT floods on login to crowded zones).
-constexpr int kDefaultMaxParsedPacketsPerUpdate = 64;
-constexpr int kAbsoluteMaxParsedPacketsPerUpdate = 220;
-constexpr int kMinParsedPacketsPerUpdate = 8;
-constexpr int kDefaultMaxPacketCallbacksPerUpdate = 48;
-constexpr int kAbsoluteMaxPacketCallbacksPerUpdate =
-    static_cast<int>(wowee::network::WorldSocket::kMaxPacketCallbacksPerUpdate);
-constexpr int kMinPacketCallbacksPerUpdate = 1;
 constexpr int kMaxRecvCallsPerUpdate = 64;
 constexpr size_t kMaxRecvBytesPerUpdate = 512 * 1024;
 // Parsed packets the main thread has not taken yet. At this many the pump
 // stops reading the socket rather than going on queueing (see pumpNetworkIO),
 // so it bounds memory without throwing a session away.
-constexpr size_t kMaxQueuedPacketCallbacks = 4096;
+constexpr size_t kMaxQueuedPacketCallbacks = 65536;
 constexpr int kAsyncPumpSleepMs = 2;
 constexpr size_t kRecentPacketHistoryLimit = 96;
 // Parsed bytes left at the front of the receive buffer before they are moved
@@ -46,34 +36,6 @@ constexpr size_t kCompactAfterReadBytes = 64 * 1024;
 // WotLK's RC4 header cipher throws away this much keystream before first use.
 constexpr size_t kRc4KeystreamDropBytes = 1024;
 constexpr auto kRecentPacketHistoryWindow = std::chrono::seconds(15);
-
-inline int parsedPacketsBudgetPerUpdate() {
-    static int budget = []() {
-        const char* raw = std::getenv("WOWEE_NET_MAX_PARSED_PACKETS");
-        if (!raw || !*raw) return kDefaultMaxParsedPacketsPerUpdate;
-        char* end = nullptr;
-        long parsed = std::strtol(raw, &end, 10);
-        if (end == raw) return kDefaultMaxParsedPacketsPerUpdate;
-        if (parsed < kMinParsedPacketsPerUpdate) return kMinParsedPacketsPerUpdate;
-        if (parsed > kAbsoluteMaxParsedPacketsPerUpdate) return kAbsoluteMaxParsedPacketsPerUpdate;
-        return static_cast<int>(parsed);
-    }();
-    return budget;
-}
-
-inline int packetCallbacksBudgetPerUpdate() {
-    static int budget = []() {
-        const char* raw = std::getenv("WOWEE_NET_MAX_PACKET_CALLBACKS");
-        if (!raw || !*raw) return kDefaultMaxPacketCallbacksPerUpdate;
-        char* end = nullptr;
-        long parsed = std::strtol(raw, &end, 10);
-        if (end == raw) return kDefaultMaxPacketCallbacksPerUpdate;
-        if (parsed < kMinPacketCallbacksPerUpdate) return kMinPacketCallbacksPerUpdate;
-        if (parsed > kAbsoluteMaxPacketCallbacksPerUpdate) return kAbsoluteMaxPacketCallbacksPerUpdate;
-        return static_cast<int>(parsed);
-    }();
-    return budget;
-}
 
 inline bool isLoginPipelineSmsg(uint16_t opcode) {
     switch (opcode) {
@@ -144,9 +106,7 @@ WorldSocket::WorldSocket() {
     }
     LOG_INFO("WorldSocket net opts: fast_recv_append=", useFastRecvAppend_ ? "on" : "off",
              " async_pump=", useAsyncPump_ ? "on" : "off",
-             " parse_scratch=", useParseScratchQueue_ ? "on" : "off",
-             " max_parsed_packets=", parsedPacketsBudgetPerUpdate(),
-             " max_packet_callbacks=", packetCallbacksBudgetPerUpdate());
+             " parse_scratch=", useParseScratchQueue_ ? "on" : "off");
 }
 
 WorldSocket::~WorldSocket() {
@@ -677,8 +637,7 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
     }
     // No more than the callback queue has room for, so it never passes its
     // bound; the rest stays in the receive buffer for the next tick.
-    const int maxParsedThisTick = static_cast<int>(
-        std::min<size_t>(static_cast<size_t>(parsedPacketsBudgetPerUpdate()), callbackRoom));
+    const int maxParsedThisTick = static_cast<int>(callbackRoom);
     while ((receiveBuffer.size() - parseOffset) >= wire::kServerHeaderBytes &&
            parsedThisTick < maxParsedThisTick) {
         // The header as it came off the wire, kept for the desync logs below.
@@ -852,16 +811,7 @@ void WorldSocket::dispatchQueuedPackets() {
         if (!packetCallback || pendingPacketCallbacks_.empty()) {
             return;
         }
-        const int maxCallbacksThisTick = packetCallbacksBudgetPerUpdate();
-        for (int i = 0; i < maxCallbacksThisTick && !pendingPacketCallbacks_.empty(); ++i) {
-            localPackets.push_back(std::move(pendingPacketCallbacks_.front()));
-            pendingPacketCallbacks_.pop_front();
-        }
-        if (!pendingPacketCallbacks_.empty()) {
-            LOG_DEBUG("World socket callback budget reached (", localPackets.size(),
-                      " callbacks); deferring ", pendingPacketCallbacks_.size(),
-                      " queued packet callbacks");
-        }
+        localPackets.swap(pendingPacketCallbacks_);
     }
 
     while (!localPackets.empty()) {

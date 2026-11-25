@@ -39,11 +39,6 @@ public:
     WorldSocket();
     ~WorldSocket() override;
 
-    /// The most packets one update() hands to the packet callback. The
-    /// callback's owner keeps this much room in its own queue before it calls
-    /// update(), so a hand-over never has to drop anything.
-    static constexpr size_t kMaxPacketCallbacksPerUpdate = 64;
-
     bool connect(const std::string& host, uint16_t port) override;
     void disconnect() override;
     [[nodiscard]] bool isConnected() const override;
