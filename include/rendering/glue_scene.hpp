@@ -6,7 +6,10 @@
 
 #include "game/character.hpp"
 
+#include <cmath>
 #include <cstdint>
+
+#include <glm/glm.hpp>
 
 namespace wowee::rendering::glue_scene {
 
@@ -31,5 +34,16 @@ inline const char* backgroundScene(game::Race race, uint8_t classId) {
     }
     return nullptr;
 }
+
+/// How the character is turned, in radians: toward the scene's camera - the scene's stand, its
+/// attachment 0, is turned there - and by SetCharacterSelectFacing's or SetCharacterCreateFacing's
+/// degrees.
+[[nodiscard]] inline float standsTurned(const glm::vec3& toCamera, float facingDegrees) {
+    return std::atan2(toCamera.y, toCamera.x) + glm::radians(facingDegrees);
+}
+/// charactercreate.lua: as the screen is shown, and at every other race.
+inline constexpr float kCreateFacing = -15.0f;
+/// charactercreate.lua, characterselect.lua: CHARACTER_ROTATION_CONSTANT, a pixel of dragging.
+inline constexpr float kDegreesPerPixel = 0.6f;
 
 }  // namespace wowee::rendering::glue_scene

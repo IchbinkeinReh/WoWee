@@ -684,7 +684,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
     // Create instance at origin with current yaw
     instanceId_ = charRenderer_->createInstance(PREVIEW_MODEL_ID,
         glm::vec3(0.0f, 0.0f, 0.0f),
-        glm::vec3(0.0f, 0.0f, modelYaw_),
+        glm::vec3(0.0f, 0.0f, standsTurned()),
         1.0f);
 
     if (instanceId_ == 0) {
@@ -1032,7 +1032,7 @@ bool CharacterPreview::loadCreature(
 
     instanceId_ = charRenderer_->createInstance(PREVIEW_MODEL_ID,
         glm::vec3(0.0f, 0.0f, 0.0f),
-        glm::vec3(0.0f, 0.0f, modelYaw_),
+        glm::vec3(0.0f, 0.0f, standsTurned()),
         1.0f);
     if (instanceId_ == 0) {
         LOG_WARNING("CharacterPreview: failed to create creature instance");
@@ -1204,7 +1204,6 @@ void CharacterPreview::loadRacialBackdrop(game::Race race) {
     backdropScene_ = sceneName ? sceneName : "";
     previewStandPosition_ = glm::vec3(0.0f);
     previewViewDirection_ = glm::vec3(0.0f, 1.0f, 0.0f);
-    modelYaw_ = 90.0f;
     applyPreviewView();
     if (!sceneName) return;
 
@@ -1248,7 +1247,6 @@ void CharacterPreview::loadRacialBackdrop(game::Race race) {
     if (glm::length(toCamera) < 0.001f) toCamera = glm::vec3(0.0f, 1.0f, 0.0f);
     previewStandPosition_ = standPos;
     previewViewDirection_ = glm::normalize(toCamera);
-    modelYaw_ = glm::degrees(std::atan2(previewViewDirection_.y, previewViewDirection_.x));
     applyPreviewView();
 
     LOG_INFO("CharacterPreview: racial backdrop ", scenePath,
@@ -1340,11 +1338,16 @@ void CharacterPreview::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
     compositeRendered_ = true;
 }
 
-void CharacterPreview::rotate(float yawDelta) {
-    modelYaw_ += yawDelta;
-    if (instanceId_ > 0 && charRenderer_) {
-        charRenderer_->setInstanceRotation(instanceId_, glm::vec3(0.0f, 0.0f, modelYaw_));
-    }
+float CharacterPreview::standsTurned() const {
+    return glue_scene::standsTurned(previewViewDirection_, facingDegrees_);
+}
+
+void CharacterPreview::rotate(float degrees) { setFacing(facingDegrees_ + degrees); }
+
+void CharacterPreview::setFacing(float degrees) {
+    facingDegrees_ = degrees;
+    if (instanceId_ > 0 && charRenderer_)
+        charRenderer_->setInstanceRotation(instanceId_, glm::vec3(0.0f, 0.0f, standsTurned()));
 }
 
 void CharacterPreview::zoom(float wheelDelta) {
@@ -1393,12 +1396,10 @@ void CharacterPreview::setPortraitFraming() {
     zoomLevel_ = 1.0f;
     portraitFraming_ = true;
     figureFraming_ = false;
-    // Straight at the character. The model is turned to face the camera in the
-    // same breath, which is the part loadRacialBackdrop would otherwise be the
-    // only place to do.
+    // Straight at the character, which is turned to face the camera by it
+    // (standsTurned).
     previewViewDirection_ = glm::vec3(0.0f, 1.0f, 0.0f);
-    modelYaw_ = glm::degrees(std::atan2(previewViewDirection_.y,
-                                        previewViewDirection_.x));
+    facingDegrees_ = 0.0f;
     applyPreviewView();
 }
 
@@ -1523,9 +1524,9 @@ void CharacterPreview::applyPreviewView() {
 
     if (instanceId_ > 0 && charRenderer_) {
         charRenderer_->setInstancePosition(instanceId_, previewStandPosition_);
-        charRenderer_->setInstanceRotation(instanceId_, glm::vec3(0.0f, 0.0f, modelYaw_));
+        charRenderer_->setInstanceRotation(instanceId_, glm::vec3(0.0f, 0.0f, standsTurned()));
     }
-    portraitYaw_ = modelYaw_;
+    portraitYaw_ = standsTurned();
 }
 
 } // namespace rendering

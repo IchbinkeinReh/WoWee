@@ -2,6 +2,7 @@
 #include "core/logger.hpp"
 #include "ui/ui_colors.hpp"
 #include "rendering/character_preview.hpp"
+#include "rendering/glue_scene.hpp"
 #include "rendering/renderer.hpp"
 #include "core/application.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -262,6 +263,7 @@ void CharacterCreateScreen::updatePreviewIfNeeded() {
     changed = changed || cls != prevClass_;
 
     if (changed) {
+        if (raceIndex != prevRaceIndex_) preview_->setFacing(rendering::glue_scene::kCreateFacing);
         preview_->setCharacterClass(static_cast<uint8_t>(cls));
         bool useFemaleModel = (genderIndex == 2 && bodyTypeIndex == 1);  // Nonbinary + Feminine
         // Dressed in the start outfit, as the client's create screen is.
@@ -526,7 +528,7 @@ void CharacterCreateScreen::render(game::GameHandler& /*gameHandler*/) {
         // Mouse drag rotation and hover-only wheel zoom on the preview image.
         if (ui_.hover(imgA, imgB)) {
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                preview_->rotate(ImGui::GetIO().MouseDelta.x * 0.2f);
+                preview_->rotate(ImGui::GetIO().MouseDelta.x * rendering::glue_scene::kDegreesPerPixel);
             }
             if (ImGui::GetIO().MouseWheel != 0.0f) {
                 preview_->zoom(ImGui::GetIO().MouseWheel);

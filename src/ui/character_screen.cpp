@@ -3,6 +3,7 @@
 #include "game/equipment_hash.hpp"
 #include "ui/ui_colors.hpp"
 #include "rendering/character_preview.hpp"
+#include "rendering/glue_scene.hpp"
 #include "rendering/character_preview_warm.hpp"
 #include "pipeline/data_stream.hpp"
 #include <chrono>
@@ -603,7 +604,7 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
         const ImVec2 imgB(imgX + imgW, col.y + mat + imgH);
         ui_.image(reinterpret_cast<ImTextureID>(preview_->getTextureId()), imgA, imgB);
         if (ui_.hover(imgA, imgB) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            preview_->rotate(ImGui::GetIO().MouseDelta.x * 0.2f);
+            preview_->rotate(ImGui::GetIO().MouseDelta.x * rendering::glue_scene::kDegreesPerPixel);
         }
         col.y = imgB.y + mat + px(14);
     } else if (!assetManager_ || !assetManager_->isInitialized()) {

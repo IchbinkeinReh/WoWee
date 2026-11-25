@@ -89,7 +89,9 @@ public:
 
     void update(float deltaTime);
     void render();
-    void rotate(float yawDelta);
+    /// Turns the character by so many degrees, or to so many away from facing the camera.
+    void rotate(float degrees);
+    void setFacing(float degrees);
     void zoom(float wheelDelta);
     void resetView();
 
@@ -228,7 +230,9 @@ private:
     bool modelLoaded_ = false;
     bool compositeRequested_ = false;
     bool compositeRendered_ = false;  // True after first successful compositePass
-    float modelYaw_ = 90.0f;
+    /// How the character stands turned for the scene and the facing (glue_scene::standsTurned).
+    [[nodiscard]] float standsTurned() const;
+    float facingDegrees_ = 0.0f;
 
     // Character-creation portrait rig. The full-body distance is recomputed for
     // each race; wheel zoom interpolates its focus upward toward the face.
