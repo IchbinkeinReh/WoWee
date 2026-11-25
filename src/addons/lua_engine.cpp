@@ -554,6 +554,7 @@ static int lua_Frame_SetScript(lua_State* L) {
     // the two side by side), and that is what it runs under - see
     // pcallScript. Read first, so a handler an insecure caller hands over
     // taints the setter as reading it does in the client.
+    lua_settop(L, 3);
     lua_pushvalue(L, 3);
     const int setter = taint::current();
     // arg 3 can be function or nil
@@ -10923,6 +10924,9 @@ static int lua_CreateFrame(lua_State* L) {
     if (const int t = lua_type(L, 3);
         !lua_isstring(L, 1) || (t != LUA_TNONE && t != LUA_TNIL && t != LUA_TTABLE))
         return luaL_error(L, "Usage: CreateFrame(\"frameType\" [, \"name\"] [, parent] [, \"template\"] [, id])");
+    // What follows asks for them again with the frame's own table on the stack: of two
+    // that would be the third, and the frame its own parent.
+    lua_settop(L, 5);
     // A parent table must be a frame: one with no object behind it, or a
     // region, is refused (0x0081bb20).
     if (lua_istable(L, 3)) {
