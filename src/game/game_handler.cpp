@@ -4636,7 +4636,7 @@ void GameHandler::onLeaveWorld(bool worldport) {
     // The socketing window (0x005c4ee0 -> 0x005c4680, SOCKET_INFO_CLOSE).
     if (inventoryHandler_) inventoryHandler_->closeSocketing();
     // The barber's chair (0x0052e9f0, BARBER_SHOP_CLOSE).
-    if (barberShopOpen_) closeBarberShop();
+    closeBarberShop(/*standUp=*/false);
     // The interaction object, with no farewell (0x00512e60).
     releaseInteractionObject();
     // The target, the focus and the units remembered (0x00512a30, 0xbd07b8,

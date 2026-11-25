@@ -5374,6 +5374,8 @@ void Application::applyServerMovementState(float deltaTime) {
     }
     if (renderer) {
         if (auto* ac = renderer->getAnimationController()) ac->setTaxiFlight(onTaxi);
+        if (gameHandler && gameHandler->takeBarberLeft() && uiManager)
+            uiManager->getGameScreen().windowManager().barberResetSelections(*gameHandler);
         // The barber's cape on as its window opens, and off again (0x0052f9b0,
         // 0x0052e9f0).
         if (appearanceComposer_ && gameHandler &&

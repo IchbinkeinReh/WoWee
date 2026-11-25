@@ -2863,7 +2863,11 @@ public:
 
     // Barber shop
     bool isBarberShopOpen() const { return barberShopOpen_; }
-    void closeBarberShop() { barberShopOpen_ = false; fireAddonEvent("BARBER_SHOP_CLOSE", {}); }
+    /// 0x0052e9f0: the window's end, and the player stands up out of the chair.
+    void closeBarberShop(bool standUp = true);
+    /// Whether the chair was left with the window open: its choices are to be
+    /// put back. Once.
+    [[nodiscard]] bool takeBarberLeft() { return std::exchange(barberLeft_, false); }
     void sendAlterAppearance(uint32_t hairStyleEntry, uint32_t hairColor,
                              uint32_t facialHairEntry, uint32_t skinColorEntry);
 
@@ -7377,6 +7381,7 @@ private:
 
     // Barber shop
     bool barberShopOpen_ = false;
+    bool barberLeft_ = false;
 
     // ---- Loot ----
     bool lootWindowOpen = false;

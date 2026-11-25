@@ -1718,3 +1718,37 @@ TEST_CASE("a change of map empties the cursor", "[replay][interface]") {
     s.receive(p);
     CHECK(ui.is("GetCursorInfo() == nil"));
 }
+
+// T329: 0x0052e9f0 stands the player up as the barber's window goes; and a stand
+// state that is no chair's takes the window (0x006e2b30).
+TEST_CASE("the barber's chair and window go together", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    const auto state = [&](uint8_t v) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_STANDSTATE_UPDATE));
+        p.writeUInt8(v);
+        s.receive(p);
+    };
+    const auto open = [&] {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ENABLE_BARBER_SHOP));
+        s.receive(p);
+        state(5);
+        REQUIRE(gh.isBarberShopOpen());
+    };
+    const auto stood = [&] { return s.sent().of(Opcode::CMSG_STANDSTATECHANGE).size(); };
+    open();
+    ui.run("CancelBarberShop()");
+    CHECK_FALSE(gh.isBarberShopOpen());
+    REQUIRE(stood() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_STANDSTATECHANGE).back().readUInt32() == 0);
+    state(0);
+    CHECK(stood() == 1);
+    CHECK_FALSE(gh.takeBarberLeft());
+    open();
+    state(0);
+    CHECK_FALSE(gh.isBarberShopOpen());
+    CHECK(stood() == 1);
+    CHECK(gh.takeBarberLeft());
+}

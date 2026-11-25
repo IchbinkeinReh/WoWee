@@ -2228,6 +2228,13 @@ void GameHandler::sendSetDifficulty(uint32_t difficulty, bool raid) {
     if (socialHandler_) socialHandler_->sendSetDifficulty(difficulty, raid);
 }
 
+void GameHandler::closeBarberShop(bool standUp) {
+    if (!barberShopOpen_) return;
+    barberShopOpen_ = false;
+    fireAddonEvent("BARBER_SHOP_CLOSE", {});
+    if (standUp && standState_ >= 4 && standState_ <= 6) setStandState(0);
+}
+
 void GameHandler::setStandState(uint8_t standState) {
     if (socialHandler_) socialHandler_->setStandState(standState);
 }

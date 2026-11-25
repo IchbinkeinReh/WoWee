@@ -1661,6 +1661,11 @@ void GameHandler::registerCoreOpcodes() {
                 return;
             }
             standState_ = newStandState;
+            // Out of the chair the barber's window closes (0x006e2b30).
+            if (barberShopOpen_ && (newStandState < 4 || newStandState > 6)) {
+                barberLeft_ = true;
+                closeBarberShop(/*standUp=*/false);
+            }
             // 0=stand, 1=sit, 2-6=sit variants, 7=dead, 8=kneel. Logged because a
             // wrong state here is indistinguishable, in-game, from a wrong animation.
             // At warning level: the file log filters info out by default.
