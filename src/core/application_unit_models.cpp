@@ -5,6 +5,7 @@
 #include "core/application.hpp"
 
 #include "addons/addon_manager.hpp"
+#include "addons/lua_engine.hpp"
 #include "core/entity_spawner.hpp"
 #include "game/character.hpp"
 #include "game/game_handler.hpp"
@@ -124,6 +125,7 @@ ui::UnitLook Application::unitLook(uint64_t guid) {
 
 void Application::drawUnitModels(ui::WidgetTree& widgets, float screenW, float screenH, float deltaTime) {
     ++unitFigureFrame_;
+    std::vector<uint32_t> updated;
     const float uiScale = widgets.uiScale();
     if (screenW > 0.0f && screenH > 0.0f && uiScale > 0.0f) {
         const float ddcH = rendering::model_frame::ddcHeight(screenW / screenH);
@@ -175,8 +177,12 @@ void Application::drawUnitModels(ui::WidgetTree& widgets, float screenW, float s
             figure.view->setTurning(frame->modelTurn, frame->modelTurnSerial);
             figure.view->setSequence(frame->modelSequence, frame->modelSequenceSerial);
             frame->externalTexture = drawn ? figure.view->textureId() : 0;
+            if (drawn) updated.push_back(id);
         }
     }
+    // OnUpdateModel (0x0095fba0), once all are placed: a script may make frames.
+    if (auto* engine = addonManager_ ? addonManager_->getLuaEngine() : nullptr)
+        for (const uint32_t id : updated) engine->runFrameScript(id, "OnUpdateModel");
     // A frame that shows nothing of the sort any more has no model
     // (0x00597210); its view is kept for when it does again, up to a few.
     constexpr size_t kKept = 12;

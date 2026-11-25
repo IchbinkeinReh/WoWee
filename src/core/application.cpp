@@ -7345,6 +7345,7 @@ void Application::render() {
                 const float screenW = io.DisplaySize.x, screenH = io.DisplaySize.y;
                 const float uiScale = widgets.uiScale();
                 std::unordered_set<uint32_t> shown;
+                std::vector<uint32_t> modelsUpdated;
                 if (screenW > 0.0f && screenH > 0.0f && uiScale > 0.0f) {
                     const float ddcH = rendering::model_frame::ddcHeight(screenW / screenH);
                     const float ddcPerUnit = ddcH / (screenH / uiScale);
@@ -7410,6 +7411,7 @@ void Application::render() {
                         view->setFog(fog);
                         view->update(io.DeltaTime);
                         view->requestComposite();
+                        modelsUpdated.push_back(id);
                         frame->externalTexture = view->textureId();
                         frame->externalPremultiplied = true;
                         shown.insert(id);
@@ -7421,6 +7423,8 @@ void Application::render() {
                     const ui::Widget* arrow = widgets.findByName("PlayerArrowFrame");
                     wm->setInterfaceDrawsPlayerArrow(arrow && !(arrow->visible && arrow->externalTexture == 0));
                 }
+                // OnUpdateModel (0x0095fba0), once all are placed: a script may make frames.
+                for (const uint32_t id : modelsUpdated) engine->runFrameScript(id, "OnUpdateModel");
                 // A frame hidden, gone or cleared lets its view go.
                 for (auto it = modelFrameViews_.begin(); it != modelFrameViews_.end();) {
                     if (shown.count(it->first)) { ++it; continue; }

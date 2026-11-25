@@ -218,6 +218,8 @@ public:
     /// that comes up or goes with it run now, as the client runs them inside
     /// Show() and Hide() (0x004918f0, 0x00491830).
     void frameShown(uint32_t id);
+    /// A script of a frame's, without an argument.
+    void runFrameScript(uint32_t wid, const char* script) { callFrameScript(wid, script); }
     void frameHidden(uint32_t id);
 
     /// OnSizeChanged of what has another size than it was told last.

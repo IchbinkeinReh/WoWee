@@ -885,6 +885,7 @@ uint32_t widgetIdByAnchorName(lua_State* L, int selfIndex, const char* name) {
     return id;
 }
 
+static void messageScrollChanged(lua_State* L, uint32_t id);
 LuaEngine* engineFrom(lua_State* L);
 
 /// Report a script that raised, from the free functions that call one.
@@ -2895,6 +2896,7 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
     }
     // The slot the line took in the client's ring of maxLines.
     w->messageRingLine = (w->messageRingLine + 1) % static_cast<int>(std::max<size_t>(w->maxMessages, 1));
+    if (w->messageScroll == 0) messageScrollChanged(L, w->id);
     return 0;
 }
 /// GetMessageInfo(index[, accessID]) → text, accessID, lineID, extraData.
@@ -7263,23 +7265,34 @@ int lua_MessageFrame_SetMaxLines(lua_State* L) {
     w->messageRingLine = -1;
     return 0;
 }
+/// The line at the lower end is another (0x00969fa0: +0x2c8).
+static void messageScrollChanged(lua_State* L, uint32_t id) {
+    const int top = lua_gettop(L);
+    if (auto* engine = engineFrom(L)) engine->runFrameScript(id, "OnMessageScrollChanged");
+    lua_settop(L, top);
+}
+static void setMessageScroll(lua_State* L, wowee::ui::Widget& w, int offset) {
+    if (offset == w.messageScroll) return;
+    w.messageScroll = offset;
+    messageScrollChanged(L, w.id);
+}
 int lua_MessageFrame_ScrollUp(lua_State* L) {
     // A display line at a time (0x009732f0), the client's ring holding the
     // wrapped lines rather than the messages.
     if (auto* w = widgetOf(L, 1)) {
         if (w->messageScroll + 1 < std::max(w->messageLinesTotal, static_cast<int>(w->messages.size())))
-            ++w->messageScroll;
+            setMessageScroll(L, *w, w->messageScroll + 1);
     }
     return 0;
 }
 int lua_MessageFrame_ScrollDown(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
-        if (w->messageScroll > 0) --w->messageScroll;
+        if (w->messageScroll > 0) setMessageScroll(L, *w, w->messageScroll - 1);
     }
     return 0;
 }
 int lua_MessageFrame_ScrollToBottom(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->messageScroll = 0;
+    if (auto* w = widgetOf(L, 1)) setMessageScroll(L, *w, 0);
     return 0;
 }
 
@@ -7291,8 +7304,8 @@ int lastScroll(const wowee::ui::Widget& w) {
     const int lines = std::max(w.messageLinesTotal, static_cast<int>(w.messages.size()));
     return lines > 0 ? lines - 1 : 0;
 }
-void scrollTo(wowee::ui::Widget& w, int offset) {
-    w.messageScroll = std::clamp(offset, 0, lastScroll(w));
+void scrollTo(lua_State* L, wowee::ui::Widget& w, int offset) {
+    setMessageScroll(L, w, std::clamp(offset, 0, lastScroll(w)));
 }
 }  // namespace
 
@@ -7300,24 +7313,24 @@ void scrollTo(wowee::ui::Widget& w, int offset) {
 /// less one, so the line at the top stays in view at the bottom.
 int lua_MessageFrame_PageUp(lua_State* L) {
     if (auto* w = widgetOf(L, 1))
-        scrollTo(*w, w->messageScroll + std::max(w->messagesDisplayed - 1, 1));
+        scrollTo(L, *w, w->messageScroll + std::max(w->messagesDisplayed - 1, 1));
     return 0;
 }
 /// PageDown (0x009733b0), the same page forward.
 int lua_MessageFrame_PageDown(lua_State* L) {
     if (auto* w = widgetOf(L, 1))
-        scrollTo(*w, w->messageScroll - std::max(w->messagesDisplayed - 1, 1));
+        scrollTo(L, *w, w->messageScroll - std::max(w->messagesDisplayed - 1, 1));
     return 0;
 }
 /// ScrollToTop (0x009733f0): as far back as the history goes.
 int lua_MessageFrame_ScrollToTop(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->messageScroll = lastScroll(*w);
+    if (auto* w = widgetOf(L, 1)) scrollTo(L, *w, lastScroll(*w));
     return 0;
 }
 /// SetScrollOffset(offset) (0x00973470): that far back from the newest.
 int lua_MessageFrame_SetScrollOffset(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (w && lua_isnumber(L, 2)) scrollTo(*w, static_cast<int>(lua_tonumber(L, 2)));
+    if (w && lua_isnumber(L, 2)) scrollTo(L, *w, static_cast<int>(lua_tonumber(L, 2)));
     return 0;
 }
 /// GetCurrentScroll (0x009736f0 -> 0x009690c0): how far back it is.
