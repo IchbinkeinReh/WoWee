@@ -1,3 +1,4 @@
+#include "ui/font_flags.hpp"
 #include "ui/framexml_emitter.hpp"
 #include <cctype>
 
@@ -338,6 +339,13 @@ struct Emitter {
     /// What a FontString's element says of its text besides its place
     /// (0x00487310's loader): the font - an object or a file, with FontHeight
     /// and outline -, spacing, Shadow, and how its lines are broken.
+    /// The flags of a font in the XML (outline, monochrome), by their names.
+    static std::string fontFlags(const XmlNode& node) {
+        const std::string* outline = node.attr("outline");
+        return font_flags::names(font_flags::ofXml(outline ? *outline : std::string(),
+                                                   node.attr("monochrome") && node.attrBool("monochrome")));
+    }
+
     void emitFontStringAttributes(const XmlNode& node, const std::string& var) {
         const auto flag = [&](const char* attr, const char* method) {
             if (node.attr(attr))
@@ -353,7 +361,7 @@ struct Emitter {
             line("if type(_G[" + quote(*font) + "]) == \"table\" then " + var + ":SetFontObject(" + quote(*font) +
                  ") else " + var + ":SetFont(" + quote(*font) + ", " +
                  (height > 0.0f ? std::to_string(height) : std::string("nil")) + ", " +
-                 (outline ? quote(*outline) : std::string("nil")) + ") end");
+                 (outline || node.attr("monochrome") ? quote(fontFlags(node)) : std::string("nil")) + ") end");
         }
         if (node.attr("spacing")) line(var + ":SetSpacing(" + std::to_string(node.attrFloat("spacing", 0.0f)) + ")");
         if (const XmlNode* sh = node.child("Shadow")) emitShadow(*sh, var);
@@ -741,11 +749,11 @@ struct Emitter {
         const std::string* face = node.attr("font");
         const std::string* outline = node.attr("outline");
         if (face || outline) {
-            // SetFont takes all three together, so what this node does not
-            // state is left to what it inherited - nil rather than a default.
-            line(var + ":SetFont(" + (face ? quote(*face) : std::string("nil")) + ", " +
-                 (height > 0.0f ? std::to_string(height) : std::string("nil")) + ", " +
-                 (outline ? quote(*outline) : std::string("nil")) + ")");
+            // SetFont takes all three together: what this node does not state is
+            // what it inherited.
+            line(var + ":SetFont(" + (face ? quote(*face) : "(" + var + ":GetFont())") + ", " +
+                 (height > 0.0f ? std::to_string(height) : "select(2, " + var + ":GetFont())") + ", " +
+                 (outline || node.attr("monochrome") ? quote(fontFlags(node)) : "select(3, " + var + ":GetFont())") + ")");
         } else if (height > 0.0f) {
             line(var + ":SetTextHeight(" + std::to_string(height) + ")");
         }
@@ -856,8 +864,8 @@ struct Emitter {
         if (height > 0.0f) line(name + ".height = " + std::to_string(height));
         if (const std::string* f = node.attr("font"))
             line(name + ".font = " + quote(*f));
-        if (const std::string* o = node.attr("outline"))
-            line(name + ".outline = " + quote(*o));
+        if (node.attr("outline") || node.attr("monochrome"))
+            line(name + ".outline = " + quote(fontFlags(node)));   // 0x00490000's font, 6180
         if (const XmlNode* col = node.child("Color")) {
             const auto rgba = xmlColor(*col);   // 0x00815c30
             line(name + ".r = " + std::to_string(rgba[0]));

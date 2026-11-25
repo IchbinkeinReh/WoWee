@@ -1008,7 +1008,7 @@ struct Widget {
     bool  hasShadow = false;
     float shadowX = 1.0f, shadowY = -1.0f;
     float shadowColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    /// NORMAL or THICK, as a font object writes it. Empty is no outline.
+    /// Its font's flags by their names (font_flags.hpp).
     std::string fontOutline;
     /// Extra space between wrapped lines, which FrameXML reads back.
     float lineSpacing = 0.0f;

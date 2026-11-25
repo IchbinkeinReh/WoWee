@@ -11,6 +11,7 @@
 #include "core/test_frame_shot.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
+#include "ui/font_flags.hpp"
 #include "ui/edit_typing.hpp"
 #include "ui/mouse_over.hpp"
 #include "ui/macro_text.hpp"
@@ -8118,6 +8119,12 @@ int lua_FontString_SetTextColor(lua_State* L) {
     return 0;
 }
 
+/// __WoweeFontFlags(flags): the flags by their names, as GetFont answers them.
+int lua_WoweeFontFlags(lua_State* L) {
+    lua_pushstring(L, ui::font_flags::names(lua_isstring(L, 1) ? ui::font_flags::parse(lua_tostring(L, 1)) : 0u).c_str());
+    return 1;
+}
+
 // SetFont("font", fontHeight [, flags]) (0x0048d5b0): a string and a number,
 // or the usage error; a height not above FLT_EPSILON is its own error; an
 // empty face changes nothing and answers nothing. Otherwise 1 for a font set
@@ -8151,13 +8158,8 @@ int lua_FontString_SetFont(lua_State* L) {
     }
     if (auto* m = widgetToRemeasure(L, 1)) {
         if (lua_isstring(L, 2)) m->fontFace = lua_tostring(L, 2);
-        // The flags argument, where "OUTLINE" and "THICKOUTLINE" arrive.
-        if (const char* flags = lua_isstring(L, 4) ? lua_tostring(L, 4) : nullptr) {
-            const std::string f(flags);
-            if (f.find("THICK") != std::string::npos)        m->fontOutline = "THICK";
-            else if (f.find("OUTLINE") != std::string::npos) m->fontOutline = "NORMAL";
-            else                                             m->fontOutline.clear();
-        }
+        // The flags, none where none are given.
+        m->fontOutline = ui::font_flags::names(lua_isstring(L, 4) ? ui::font_flags::parse(lua_tostring(L, 4)) : 0u);
         m->fontHeight = height;
     }
     lua_pushnumber(L, 1);
@@ -8245,7 +8247,7 @@ static void applyFontObject(lua_State* L, int fontIndex, wowee::ui::Widget* w) {
         if (lua_isstring(L, -1)) w->fontFace = lua_tostring(L, -1);
         lua_pop(L, 1);
         lua_getfield(L, -1, "outline");
-        if (lua_isstring(L, -1)) w->fontOutline = lua_tostring(L, -1);
+        w->fontOutline = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
         lua_pop(L, 1);
         // Which way it sits in its box. A font object carries this and it was
         // being read off the object by nothing, so GameFontNormalLeft and
@@ -14109,6 +14111,8 @@ void LuaEngine::registerCoreAPI() {
 
     // Reached from the button-art setters, which are written in Lua so they
     // cover every slot from one loop.
+    lua_pushcfunction(L_, lua_WoweeFontFlags);
+    lua_setglobal(L_, "__WoweeFontFlags");
     lua_pushcfunction(L_, lua_Texture_SetButtonArt);
     lua_setglobal(L_, "__WoweeSetButtonArt");
 
@@ -15719,7 +15723,7 @@ void LuaEngine::registerCoreAPI() {
         "            fontUsage(self, 'Usage: %s:SetFont(\"font\", fontHeight [, flags])')\n"
         "        end\n"
         "        self.font, self.height = tostring(f), tonumber(h)\n"
-        "        self.outline = (type(flags) == 'string' or type(flags) == 'number') and tostring(flags) or nil\n"
+        "        self.outline = __WoweeFontFlags(flags)\n"
         "        return 1\n"
         "    end,\n"
         // GetName (0x004a4220): the name, or nil for none.

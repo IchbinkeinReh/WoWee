@@ -1643,7 +1643,7 @@ TEST_CASE("a font string's element says how its text is drawn and broken", "[fra
     CHECK(has(lua, ":SetShadowColor("));
     CHECK(has(lua, ":SetFontObject(\"GameFontHighlight\")"));
     CHECK(has(lua, ":SetFont(\"Fonts/ARIALN.TTF\", 18.0"));
-    CHECK(has(lua, "\"NORMAL\""));
+    CHECK(has(lua, "\"OUTLINE\""));
     // Once: the texture has no text.
     CHECK(lua.find(":SetNonSpaceWrap(") == lua.rfind(":SetNonSpaceWrap("));
 }

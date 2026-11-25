@@ -3515,8 +3515,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // ImGui has no outlined draw, and offsetting a few copies is what
             // the effect amounts to at these sizes - it is what keeps a
             // nameplate legible against whatever is behind it.
-            if (!w->fontOutline.empty()) {
-                const float d = (w->fontOutline == "THICK") ? 2.0f : 1.0f;
+            if (w->fontOutline.find("OUTLINE") != std::string::npos) {
+                const float d = w->fontOutline.find("THICKOUTLINE") != std::string::npos ? 2.0f : 1.0f;
                 const uint32_t shadow = IM_COL32(0, 0, 0,
                     static_cast<int>(std::clamp(w->drawAlpha, 0.0f, 1.0f) * 255.0f));
                 const ImVec2 around[8] = {

@@ -4427,6 +4427,10 @@ wowee_add_test(test_skill_list
 wowee_add_test(test_achievement_category
     SOURCES test_achievement_category.cpp)
 
+# ── test_font_flags ──────────────────────────────────────────
+wowee_add_test(test_font_flags
+    SOURCES test_font_flags.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
