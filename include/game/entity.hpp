@@ -1137,6 +1137,20 @@ private:
         activeSpline_.emplace(std::move(keys), /*timeClosed=*/false);
     }
 
+public:
+    /// How far round its cycle the server has it, of 1 (SMSG_FLIGHT_SPLINE_SYNC,
+    /// 0x0098b5d0): its next round is the longer or the shorter by what it is
+    /// ahead or behind, within half and twice its time.
+    void syncCycle(float fraction) {
+        if (!usePathMode_ || !splineCyclic_ || rawDurationMs_ == 0 || !(moveDuration_ > 0.0f)) return;
+        float ahead = fraction - moveElapsed_ / moveDuration_;
+        if (ahead > 0.5f) ahead -= 1.0f;
+        if (ahead < -0.5f) ahead += 1.0f;
+        const float raw = static_cast<float>(rawDurationMs_);
+        nextDurationMs_ = scaledDuration(rawDurationMs_, std::clamp((raw - std::round(raw * ahead)) / raw, 0.5f, 2.0f));
+    }
+
+private:
     /// A cyclic spline that has run out begins again with what is over
     /// (0x0098ca00); one entering its cycle leaves its first point out from
     /// then on (0x0098c940).

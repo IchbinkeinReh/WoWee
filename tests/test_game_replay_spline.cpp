@@ -222,6 +222,43 @@ TEST_CASE("a cyclic spline is run round and round", "[replay][blockspline]") {
     }
 }
 
+// SMSG_FLIGHT_SPLINE_SYNC (0x00716940 -> 0x0098b5d0): the next round makes good
+// what the unit is behind or ahead of the server.
+TEST_CASE("a cyclic spline keeps the server's time", "[replay][blockspline]") {
+    const std::vector<glm::vec3> ring = {kAt, kAt + glm::vec3(20, 0, 0), kAt + glm::vec3(20, 20, 0), kAt + glm::vec3(0, 20, 0)};
+    const std::vector<glm::vec3> points = {ring[3], ring[0], ring[1], ring[2], ring[3], ring[0], ring[1]};
+    auto sp = spline(points, glm::vec3(0.0f), 0x82000, 1);
+    sp.passed = 0;
+    sp.duration = 4000;
+    const auto run = [](auto& e, int steps) {
+        for (int i = 0; i < steps; ++i) e.updateMovement(0.05f);
+    };
+    const auto sync = [&](Session& s, float fraction) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_FLIGHT_SPLINE_SYNC));
+        p.writeFloat(fraction);
+        p.writePackedGuid(kWalker);
+        s.receive(p);
+    };
+    Session s;
+    const auto e = make(s, sp);
+    run(*e, 1);
+    sync(s, 0.2625f);   // a quarter of a round behind
+    run(*e, 79);
+    CHECK(closeTo(placeOf(*e), ring[0], 0.6f));
+    run(*e, 60);
+    CHECK(closeTo(placeOf(*e), ring[0], 0.6f));   // a round of three seconds
+    run(*e, 80);
+    CHECK(closeTo(placeOf(*e), ring[0], 0.6f));   // and then its own again
+
+    Session t;
+    const auto f = make(t, sp);
+    run(*f, 20);
+    sync(t, 0.0f);      // a quarter ahead
+    run(*f, 60 + 80);
+    run(*f, 20);
+    CHECK(closeTo(placeOf(*f), ring[0], 0.6f));   // five seconds
+}
+
 TEST_CASE("a parabolic spline arcs over its path", "[replay][blockspline]") {
     Session s;
     const std::vector<glm::vec3> way = {kAt, kAt + glm::vec3(10, 0, 0), kAt + glm::vec3(20, 0, 0), kAt + glm::vec3(30, 0, 0)};

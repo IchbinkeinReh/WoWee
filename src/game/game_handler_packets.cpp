@@ -989,9 +989,16 @@ void GameHandler::registerCoreOpcodes() {
             }
         }
     };
+    // 0x00716940: the place of a unit that goes round and round.
+    dispatchTable_[Opcode::SMSG_FLIGHT_SPLINE_SYNC] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(5)) return;
+        const float fraction = packet.readFloat();
+        const uint64_t guid = packet.readPackedGuid();
+        if (const auto unit = entityController_->getEntityManager().getEntity(guid); unit && std::isfinite(fraction))
+            unit->syncCycle(fraction);
+    };
     // Consume silently - opcodes we receive but don't need to act on
     for (auto op : {
-        Opcode::SMSG_FLIGHT_SPLINE_SYNC,
         Opcode::SMSG_FORCE_SEND_QUEUED_PACKETS, Opcode::SMSG_FORCE_SET_VEHICLE_REC_ID,
         Opcode::SMSG_DAMAGE_CALC_LOG,
         Opcode::SMSG_DYNAMIC_DROP_ROLL_RESULT,
