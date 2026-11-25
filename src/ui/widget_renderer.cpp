@@ -3156,11 +3156,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 }
                 if (!w->editText.empty()) {
                     for (size_t line = 0; line < starts.size(); ++line) {
+                        if (lineTop(line) + size < dl->GetClipRectMin().y || lineTop(line) > dl->GetClipRectMax().y)
+                            continue;
                         const std::string text =
                             shown.substr(starts[line], editLineEnd(shown, starts, line) - starts[line]);
-                        if (text.empty() || lineTop(line) + size < dl->GetClipRectMin().y ||
-                            lineTop(line) > dl->GetClipRectMax().y)
-                            continue;
+                        if (text.empty()) continue;
                         // The shadow first, under the words, as a font string's
                         // is. ChatFontNormal declares one and every edit box in
                         // the interface inherits it.

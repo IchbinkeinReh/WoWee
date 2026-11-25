@@ -20,6 +20,7 @@ namespace wowee::ui {
 template <typename Measure>
 std::vector<size_t> editLines(const std::string& s, float width, Measure measure) {
     std::vector<size_t> starts{0};
+    const EditSteps steps(s);
     size_t line = 0, afterSpace = 0, at = 0;
     while (at < s.size()) {
         if (s[at] == '\n') {
@@ -27,7 +28,7 @@ std::vector<size_t> editLines(const std::string& s, float width, Measure measure
             line = afterSpace = at;
             continue;
         }
-        const size_t next = std::max(caretStepRight(s, at), at + 1);
+        const size_t next = std::max(steps.right(at), at + 1);
         if (editIsSpace(s[at])) {
             afterSpace = at = next;
             continue;
@@ -65,9 +66,10 @@ std::vector<size_t> editLines(const std::string& s, float width, Measure measure
     const size_t line = editLineOf(starts, caret);
     moved = dir < 0 ? line > 0 : line + 1 < starts.size();
     if (!moved) return caret;
+    const EditSteps steps(s);
     size_t column = 0;
     for (size_t p = starts[line]; p < caret; ++column) {
-        const size_t q = caretStepRight(s, p);
+        const size_t q = steps.right(p);
         if (q <= p) break;
         p = q;
     }
@@ -77,7 +79,7 @@ std::vector<size_t> editLines(const std::string& s, float width, Measure measure
     const size_t end = editLineEnd(s, starts, to);
     size_t target = starts[to];
     for (; column > 0 && target < end; --column) {
-        const size_t q = caretStepRight(s, target);
+        const size_t q = steps.right(target);
         if (q <= target || q > end || (wrapped && q == end)) break;
         target = q;
     }
@@ -92,9 +94,10 @@ size_t editPlaceIn(const std::string& s, const std::vector<size_t>& starts, size
     const size_t start = starts[std::min(line, starts.size() - 1)];
     const size_t end = editLineEnd(s, starts, std::min(line, starts.size() - 1));
     const bool wrapped = line + 1 < starts.size() && end == starts[line + 1];
+    const EditSteps steps(s);
     size_t at = start;
     while (at < end) {
-        const size_t next = std::max(caretStepRight(s, at), at + 1);
+        const size_t next = std::max(steps.right(at), at + 1);
         if (next > end || (wrapped && next == end) || measure(s.substr(start, next - start)) > x) break;
         at = next;
     }

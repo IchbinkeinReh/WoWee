@@ -316,6 +316,68 @@ inline std::vector<EditToken> editTokens(const std::string& s) {
     return out;
 }
 
+/// The caret's steps through a text: what it is of is read once, however often they are asked
+/// for. Read forward from the start - the escapes are only unambiguous in the direction they
+/// were written.
+class EditSteps {
+public:
+    explicit EditSteps(const std::string& s) : tokens_(editTokens(s)), size_(s.size()) {}
+
+    /// caretStepRight's.
+    [[nodiscard]] size_t right(size_t at) const {
+        size_t i = first(at);
+        for (; i < tokens_.size(); ++i) {
+            const EditToken& t = tokens_[i];
+            if (t.type == EditToken::Color || t.type == EditToken::Link || t.type == EditToken::Picture) continue;
+            if (!t.linked || t.type == EditToken::LinkEnd) break;
+        }
+        if (i < tokens_.size()) ++i;
+        while (i < tokens_.size() && (tokens_[i].type == EditToken::ColorEnd || tokens_[i].type == EditToken::LinkEnd ||
+                                      tokens_[i].type == EditToken::PictureEnd))
+            ++i;
+        return i < tokens_.size() ? tokens_[i].at : size_;
+    }
+    /// caretStepLeft's; of the text up to a place the caret can be at, the same.
+    [[nodiscard]] size_t left(size_t at) const {
+        size_t i = first(at);
+        const auto trailing = [](const EditToken& t) {
+            return t.type == EditToken::ColorEnd || t.type == EditToken::LinkEnd || t.type == EditToken::PictureEnd ||
+                   (t.linked && t.type != EditToken::Link);
+        };
+        const auto leading = [](const EditToken& t) {
+            return t.type == EditToken::Color || t.type == EditToken::Link || t.type == EditToken::Picture;
+        };
+        while (i > 0 && trailing(tokens_[i - 1])) --i;
+        if (i > 0) --i;
+        while (i > 0 && leading(tokens_[i - 1])) --i;
+        return i < tokens_.size() ? tokens_[i].at : 0;
+    }
+    /// Where what is before `at` begins; none is `size()`.
+    [[nodiscard]] size_t before(size_t at) const {
+        const size_t i = first(at);
+        return i > 0 ? tokens_[i - 1].at : size_;
+    }
+    /// The letters that are to be seen from one place to another.
+    [[nodiscard]] size_t visible(size_t from, size_t to) const {
+        size_t n = 0;
+        for (size_t i = first(from); i < tokens_.size() && tokens_[i].at < to; ++i)
+            if (tokens_[i].type == EditToken::Plain || tokens_[i].type == EditToken::Break ||
+                tokens_[i].type == EditToken::Bar)
+                ++n;
+        return n;
+    }
+
+private:
+    [[nodiscard]] size_t first(size_t at) const {
+        const auto it = std::lower_bound(tokens_.begin(), tokens_.end(), at,
+                                         [](const EditToken& t, size_t place) { return t.at < place; });
+        return static_cast<size_t>(it - tokens_.begin());
+    }
+
+    std::vector<EditToken> tokens_;
+    size_t size_ = 0;
+};
+
 /// The next caret position after `at`, treating an escape as one step (0x00962d50).
 ///
 /// A caret walks what is drawn, not what is held. "|Hitem:3299|h[Fractured
@@ -328,41 +390,10 @@ inline std::vector<EditToken> editTokens(const std::string& s) {
 /// colours, links and pictures with the one before. A link is one step whole - the
 /// caret cannot rest inside it - and a backspace therefore removes the link, its
 /// colour with it, rather than a byte of its payload.
-inline size_t caretStepRight(const std::string& s, size_t at) {
-    const auto tokens = editTokens(s);
-    size_t i = 0;
-    while (i < tokens.size() && tokens[i].at < at) ++i;
-    for (; i < tokens.size(); ++i) {
-        const EditToken& t = tokens[i];
-        if (t.type == EditToken::Color || t.type == EditToken::Link || t.type == EditToken::Picture) continue;
-        if (!t.linked || t.type == EditToken::LinkEnd) break;
-    }
-    if (i < tokens.size()) ++i;
-    while (i < tokens.size() && (tokens[i].type == EditToken::ColorEnd || tokens[i].type == EditToken::LinkEnd ||
-                                 tokens[i].type == EditToken::PictureEnd))
-        ++i;
-    return i < tokens.size() ? tokens[i].at : s.size();
-}
+inline size_t caretStepRight(const std::string& s, size_t at) { return EditSteps(s).right(at); }
 
-/// The previous caret position, by the same rule. Walked forward from the
-/// start rather than backward: the escapes are only unambiguous read in the
-/// direction they were written, and a box holds a line of chat, not a book.
-inline size_t caretStepLeft(const std::string& s, size_t at) {
-    const auto tokens = editTokens(s);
-    size_t i = 0;
-    while (i < tokens.size() && tokens[i].at < at) ++i;
-    const auto trailing = [](const EditToken& t) {
-        return t.type == EditToken::ColorEnd || t.type == EditToken::LinkEnd || t.type == EditToken::PictureEnd ||
-               (t.linked && t.type != EditToken::Link);
-    };
-    const auto leading = [](const EditToken& t) {
-        return t.type == EditToken::Color || t.type == EditToken::Link || t.type == EditToken::Picture;
-    };
-    while (i > 0 && trailing(tokens[i - 1])) --i;
-    if (i > 0) --i;
-    while (i > 0 && leading(tokens[i - 1])) --i;
-    return i < tokens.size() ? tokens[i].at : 0;
-}
+/// The previous caret position, by the same rule.
+inline size_t caretStepLeft(const std::string& s, size_t at) { return EditSteps(s).left(at); }
 
 /// The nearest position at or before `at` that the caret can actually occupy.
 ///
@@ -375,9 +406,10 @@ inline size_t caretStepLeft(const std::string& s, size_t at) {
 /// break it is not one.
 inline size_t caretSnap(const std::string& s, size_t at) {
     if (at >= s.size()) return s.size();
+    const EditSteps steps(s);
     size_t p = 0;
     while (p < at) {
-        const size_t next = caretStepRight(s, p);
+        const size_t next = steps.right(p);
         if (next <= p) break;          // no progress: stop rather than spin
         if (next > at) return p;       // `at` fell inside this step
         p = next;
@@ -399,12 +431,7 @@ inline size_t codepoints(const std::string& s) {
         if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++n;
     return n;
 }
-inline size_t visibleLength(const std::string& s) {
-    size_t n = 0;
-    for (const EditToken& t : editTokens(s))
-        if (t.type == EditToken::Plain || t.type == EditToken::Break || t.type == EditToken::Bar) ++n;
-    return n;
-}
+inline size_t visibleLength(const std::string& s) { return EditSteps(s).visible(0, s.size()); }
 
 /// An edit box's text after `add` at `cursor`, within its limits (0x00965960): what
 /// is over them - the bytes, then the letters; none for a limit under 0 and 1 - goes
@@ -414,15 +441,23 @@ inline size_t insertIntoEditBox(std::string& text, size_t cursor, const std::str
     cursor = std::min(cursor, text.size());
     text.insert(cursor, add);
     cursor += add.size();
-    const auto trimEnd = [&text](auto over) {
-        while (!text.empty() && over()) text.resize(caretStepLeft(text, text.size()));
-    };
-    if (maxBytes >= 0) trimEnd([&] { return text.size() > static_cast<size_t>(maxBytes); });
+    if (maxBytes < 0 && maxLetters <= 0) return cursor;
+    const EditSteps steps(text);
+    size_t end = text.size();
+    if (maxBytes >= 0)
+        while (end > static_cast<size_t>(maxBytes)) end = steps.left(end);
     if (maxLetters > 0) {
-        trimEnd([&] {
-            return (countInvisible ? codepoints(text) : visibleLength(text)) > static_cast<size_t>(maxLetters);
-        });
+        const auto letters = [&](size_t from, size_t to) {
+            return countInvisible ? codepoints(text.substr(from, to - from)) : steps.visible(from, to);
+        };
+        size_t held = letters(0, end);
+        while (end > 0 && held > static_cast<size_t>(maxLetters)) {
+            const size_t to = steps.left(end);
+            held -= letters(to, end);
+            end = to;
+        }
     }
+    text.resize(end);
     return std::min(cursor, text.size());
 }
 
@@ -455,14 +490,15 @@ inline size_t replaceSelection(std::string& text, size_t cursor,
 /// then over the word to its first character. A link is one step, as
 /// everywhere the caret goes.
 inline size_t caretWordLeft(const std::string& s, size_t at) {
+    const EditSteps steps(s);
     size_t p = (at < s.size()) ? at : s.size();
     while (p > 0) {
-        const size_t q = caretStepLeft(s, p);
+        const size_t q = steps.left(p);
         if (s[q] != ' ') break;
         p = q;
     }
     while (p > 0) {
-        const size_t q = caretStepLeft(s, p);
+        const size_t q = steps.left(p);
         if (s[q] == ' ') break;
         p = q;
     }
@@ -472,9 +508,10 @@ inline size_t caretWordLeft(const std::string& s, size_t at) {
 /// The caret a word to the right, as Ctrl+Right moves it: over the rest of
 /// the word and the spaces after it, to the start of the next.
 inline size_t caretWordRight(const std::string& s, size_t at) {
+    const EditSteps steps(s);
     size_t p = (at < s.size()) ? at : s.size();
-    while (p < s.size() && s[p] != ' ') p = caretStepRight(s, p);
-    while (p < s.size() && s[p] == ' ') p = caretStepRight(s, p);
+    while (p < s.size() && s[p] != ' ') p = steps.right(p);
+    while (p < s.size() && s[p] == ' ') p = steps.right(p);
     return p;
 }
 
@@ -516,9 +553,10 @@ inline EditSelection dragSelection(size_t caret, EditSelection sel, size_t targe
 /// The start of the line the caret is on: back until the character before it
 /// is a line break (0x00964200, plain Home).
 inline size_t caretLineStart(const std::string& s, size_t at) {
+    const EditSteps steps(s);
     size_t p = (at < s.size()) ? at : s.size();
     while (p > 0 && s[p - 1] != '\n') {
-        const size_t q = caretStepLeft(s, p);
+        const size_t q = steps.left(p);
         if (q >= p) break;
         p = q;
     }
@@ -528,9 +566,10 @@ inline size_t caretLineStart(const std::string& s, size_t at) {
 /// The end of the caret's line: forward until the character at it is a line
 /// break or the text ends (0x009642e0, plain End).
 inline size_t caretLineEnd(const std::string& s, size_t at) {
+    const EditSteps steps(s);
     size_t p = (at < s.size()) ? at : s.size();
     while (p < s.size() && s[p] != '\n') {
-        const size_t q = caretStepRight(s, p);
+        const size_t q = steps.right(p);
         if (q <= p) break;
         p = q;
     }
@@ -558,27 +597,24 @@ inline bool editIsSpace(char c) {
 /// whitespace before the caret, then over the word before that.
 inline size_t wordDeleteBackFrom(const std::string& s, size_t at) {
     size_t p = (at < s.size()) ? at : s.size();
-    const auto tokens = editTokens(s);
+    const EditSteps steps(s);
     // The last of what is before the caret, whatever the step over it takes along.
     const auto spaceBefore = [&] {
-        char last = 0;
-        for (const EditToken& t : tokens) {
-            if (t.at >= p) break;
-            last = s[t.at];
-        }
-        return editIsSpace(last);
+        const size_t last = steps.before(p);
+        return last < s.size() && editIsSpace(s[last]);
     };
-    while (p > 0 && spaceBefore()) p = caretStepLeft(s, p);
-    while (p > 0 && !spaceBefore()) p = caretStepLeft(s, p);
+    while (p > 0 && spaceBefore()) p = steps.left(p);
+    while (p > 0 && !spaceBefore()) p = steps.left(p);
     return p;
 }
 
 /// Where Ctrl+Delete deletes forward to (0x00963a10): over the whitespace
 /// after the caret, then over the word after that.
 inline size_t wordDeleteForwardTo(const std::string& s, size_t at) {
+    const EditSteps steps(s);
     size_t p = (at < s.size()) ? at : s.size();
-    while (p < s.size() && editIsSpace(s[p])) p = caretStepRight(s, p);
-    while (p < s.size() && !editIsSpace(s[p])) p = caretStepRight(s, p);
+    while (p < s.size() && editIsSpace(s[p])) p = steps.right(p);
+    while (p < s.size() && !editIsSpace(s[p])) p = steps.right(p);
     return p;
 }
 

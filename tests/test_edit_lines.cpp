@@ -104,3 +104,27 @@ TEST_CASE("the mouse finds the letters before it", "[edit_lines]") {
     CHECK(editLineOf(starts, editPlaceIn(s, starts, 0, 100.0f, letters)) == 0);
     CHECK(editPlaceIn(s, starts, 9, 1.0f, letters) == 15);
 }
+
+// A long text is stepped through once: it took a minute for each of these.
+TEST_CASE("a long text is laid out and edited in a moment", "[edit]") {
+    std::string text;
+    for (int i = 0; i < 5000; ++i) text += "zeile|n";
+    text += std::string(100000, 'x');
+    const auto measure = [](const std::string& piece) {
+        size_t letters = 0;
+        for (const auto& run : parseMarkup(piece)) letters += run.text.size();
+        return 6.0f * static_cast<float>(letters);
+    };
+    const auto starts = editLines(text, 100.0f, measure);
+    CHECK(starts.size() > 6000);
+    CHECK(editLines(text, 0.0f, measure).size() == 1);
+    CHECK(caretSnap(text, text.size() - 1) == text.size() - 1);
+    std::string box;
+    const size_t caret = insertIntoEditBox(box, 0, text, -1, 255, false);
+    CHECK(caret == box.size());
+    CHECK(visibleLength(box) == 255);
+    CHECK(wordDeleteBackFrom(text, text.size()) == 0);
+    bool moved = false;
+    CHECK(editLineMove(text, starts, text.size(), -1, moved) < text.size());
+    CHECK(moved);
+}
