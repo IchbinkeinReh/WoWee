@@ -951,6 +951,9 @@ public:
     /** Return and clear the model IDs evicted by cleanupUnusedModels() since the
      *  last call. Lets callers that track uploaded models drop stale entries. */
     std::vector<uint32_t> drainReapedModelIds();
+    /// Asked of a model that nothing has drawn for a while: whether it may be thrown out
+    /// (model_claims.hpp). From the thread cleanupUnusedModels runs on.
+    void setModelLetGo(std::function<bool(uint32_t)> letGo) { modelLetGo_ = std::move(letGo); }
 
     bool checkCollision(const glm::vec3& from, const glm::vec3& to,
                         glm::vec3& adjustedPos, float playerRadius = 0.5f) const;
@@ -1547,6 +1550,7 @@ private:
     // cache "already uploaded" model IDs (e.g. TerrainManager) reconcile against
     // this so a reaped model is re-loaded instead of skipped as a stale hit.
     std::vector<uint32_t> reapedModelIds_;
+    std::function<bool(uint32_t)> modelLetGo_;
     std::vector<M2Instance> instances;
 
     // Which instance of a model stands at a place.

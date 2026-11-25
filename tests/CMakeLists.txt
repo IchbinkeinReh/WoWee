@@ -4643,6 +4643,11 @@ wowee_add_test(test_keys_held_into_typing
 wowee_add_test(test_water_motes
     SOURCES test_water_motes.cpp)
 
+# ── test_model_claims ────────────────────────────────
+# The models tiles on their way count on.
+wowee_add_test(test_model_claims
+    SOURCES test_model_claims.cpp)
+
 # ── test_model_frame_pose ────────────────────────────
 # A UI model frame's pose (0x0095fba0) and the DDC screen (0x0047bf90).
 wowee_add_test(test_model_frame_pose

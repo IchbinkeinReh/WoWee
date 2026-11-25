@@ -1063,6 +1063,8 @@ void M2Renderer::cleanupUnusedModels() {
             // First cycle with no instances - start the grace timer
             modelUnusedSince_[id] = now;
         } else if (now - unusedIt->second >= kGracePeriod) {
+            // A tile on its way counts on it: not before that is up or gone.
+            if (modelLetGo_ && !modelLetGo_(id)) continue;
             // Grace period expired - mark for removal
             toRemove.push_back(id);
             modelUnusedSince_.erase(unusedIt);

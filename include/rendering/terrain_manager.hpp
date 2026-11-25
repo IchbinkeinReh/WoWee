@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/model_claims.hpp"
 #include "rendering/memory_report.hpp"
 #include "rendering/collision_facets.hpp"
 
@@ -98,6 +99,8 @@ struct TerrainTile {
  */
 struct PendingTile {
     TileCoord coord;
+    /// The models it counts on (model_claims.hpp).
+    ModelClaims::Hold models;
     pipeline::ADTTerrain terrain;
     pipeline::TerrainMesh mesh;
 
@@ -304,7 +307,7 @@ public:
     void getGroundEffectDoodads(uint32_t effectId, std::vector<std::string>& outModels,
                                 std::vector<uint32_t>& outWeights) const;
     void setWaterRenderer(WaterRenderer* renderer) { waterRenderer = renderer; }
-    void setM2Renderer(M2Renderer* renderer) { m2Renderer = renderer; }
+    void setM2Renderer(M2Renderer* renderer);
     void setWMORenderer(WMORenderer* renderer) { wmoRenderer = renderer; }
 
     /**
@@ -676,8 +679,7 @@ private:
 
     // Thread-safe set of M2 model IDs already uploaded to GPU
     // (checked by workers to skip redundant file I/O + parsing)
-    std::unordered_set<uint32_t> uploadedM2Ids_;
-    std::mutex uploadedM2IdsMutex_;
+    std::shared_ptr<ModelClaims> modelClaims_ = std::make_shared<ModelClaims>();
 
     // Cross-tile dedup for WMO doodad preparation on background workers
     // (prevents re-parsing thousands of doodads when same WMO spans multiple tiles)

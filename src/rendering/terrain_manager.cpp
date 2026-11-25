@@ -150,6 +150,11 @@ TerrainManager::~TerrainManager() {
     stopWorkers();
 }
 
+void TerrainManager::setM2Renderer(M2Renderer* renderer) {
+    m2Renderer = renderer;
+    if (renderer) renderer->setModelLetGo([claims = modelClaims_](uint32_t id) { return claims->letGo(id); });
+}
+
 bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer* renderer) {
     assetManager = assets;
     terrainRenderer = renderer;
@@ -248,10 +253,7 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
     // spawn on revisit with "M2 model has no renderable content".
     if (m2Renderer) {
         std::vector<uint32_t> reaped = m2Renderer->drainReapedModelIds();
-        if (!reaped.empty()) {
-            std::lock_guard<std::mutex> lock(uploadedM2IdsMutex_);
-            for (uint32_t id : reaped) uploadedM2Ids_.erase(id);
-        }
+        if (!reaped.empty()) modelClaims_->forget(reaped);
     }
 
     // Streamed about the focus the camera turns about, else the eye: the
@@ -567,6 +569,7 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
 
     auto pending = std::make_shared<PendingTile>();
     pending->coord = coord;
+    pending->models = ModelClaims::Hold(modelClaims_);
     pending->terrain = std::move(*terrainPtr);
     pending->mesh = std::move(mesh);
 
@@ -579,12 +582,9 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
         if (preparedModelIds.find(modelId) != preparedModelIds.end()) return true;
 
         // Skip file I/O + parsing for models already uploaded to GPU from previous tiles
-        {
-            std::lock_guard<std::mutex> lock(uploadedM2IdsMutex_);
-            if (uploadedM2Ids_.count(modelId)) {
-                preparedModelIds.insert(modelId);
-                return true;
-            }
+        if (pending->models.take(modelId)) {
+            preparedModelIds.insert(modelId);
+            return true;
         }
 
         // Check for WOM open format first (custom zone models)
@@ -1003,11 +1003,7 @@ bool TerrainManager::prepareWmoDoodadModels(
     for (const auto& d : doodads) ids.push_back(d.modelId);
 
     // A model an earlier tile uploaded is not read again.
-    std::vector<uint32_t> toParse;
-    {
-        std::lock_guard<std::mutex> lock(uploadedM2IdsMutex_);
-        toParse = plan::modelsToParse(ids, [this](uint32_t id) { return uploadedM2Ids_.count(id) > 0; });
-    }
+    std::vector<uint32_t> toParse = plan::modelsToParse(ids, [&pending](uint32_t id) { return pending.models.take(id); });
 
     struct Parsed {
         bool ok = false;
@@ -1210,8 +1206,7 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                 if (m2Renderer->loadModel(m2Ready.model, m2Ready.modelId)) {
                     ft.uploadedM2ModelIds.insert(m2Ready.modelId);
                     // Track uploaded model IDs so background threads can skip re-reading
-                    std::lock_guard<std::mutex> lock(uploadedM2IdsMutex_);
-                    uploadedM2Ids_.insert(m2Ready.modelId);
+                    modelClaims_->uploaded(m2Ready.modelId);
                 }
                 ft.m2ModelIndex++;
                 uploaded++;
@@ -1416,10 +1411,7 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                     uploaded++;
                     continue;
                 }
-                {
-                    std::lock_guard<std::mutex> lock(uploadedM2IdsMutex_);
-                    uploadedM2Ids_.insert(doodad.modelId);
-                }
+                modelClaims_->uploaded(doodad.modelId);
                 uint32_t wmoDoodadInstId = m2Renderer->createInstanceWithMatrix(
                     doodad.modelId, doodad.modelMatrix, doodad.worldPosition);
                 if (wmoDoodadInstId) {
@@ -1937,10 +1929,7 @@ void TerrainManager::softReset() {
     finalizingTiles_.clear();
     placedDoodadIds.clear();
     placedWmoIds.clear();
-    {
-        std::lock_guard<std::mutex> lock(uploadedM2IdsMutex_);
-        uploadedM2Ids_.clear();
-    }
+    modelClaims_->clear();
     {
         std::lock_guard<std::mutex> lock(preparedWmoUniqueIdsMutex_);
         preparedWmoUniqueIds_.clear();
