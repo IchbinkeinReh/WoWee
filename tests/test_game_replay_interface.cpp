@@ -878,6 +878,41 @@ TEST_CASE("a frame to be clicked is found by its name", "[replay][interface]") {
     CHECK(ui.is("not pcall(GetClickFrame)"));
 }
 
+// T198: 0x008167e0: a table of methods for each type.
+TEST_CASE("an object has the methods of its type", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("function index(o) return getmetatable(o).__index end "
+           "f, f2, b, c, e = CreateFrame('Frame'), CreateFrame('Frame'), CreateFrame('Button'), CreateFrame('CheckButton'), "
+           "  CreateFrame('EditBox') e:SetAutoFocus(false) cd, cd2 = CreateFrame('Cooldown'), CreateFrame('Cooldown') "
+           "tip = CreateFrame('GameTooltip', 'PlayTypes') m, p = CreateFrame('Model'), CreateFrame('DressUpModel') "
+           "sb, sl = CreateFrame('StatusBar'), CreateFrame('Slider') t, w = f:CreateTexture(), f:CreateFontString()");
+    for (const char* none : {"f.GetChecked", "f.SetCooldown", "f.GetText", "f.SetNormalTexture", "f.SetMinMaxValues",
+                             "b.GetChecked", "b.SetCooldown", "b.AddLine", "b.SetCursorPosition", "e.SetNormalTexture",
+                             "e.GetChecked", "cd.SetText", "tip.SetNormalTexture", "m.SetUnit", "sb.SetValueStep", "sl.SetStatusBarColor",
+                             "t.GetStringHeight", "t.SetText", "t.GetScale", "w.GetTexture", "w.SetTexCoord", "w.SetScript"}) {
+        INFO(none);
+        CHECK(ui.is(std::string(none) + " == nil"));
+    }
+    for (const char* some : {"f.SetScript", "f.SetBackdrop", "f.GetParent", "f.IsMouseOver", "b.SetText", "b.Click", "b.SetScript",
+                             "c.SetChecked", "c.SetText", "e.SetText", "e.SetFontObject", "cd.SetCooldown", "tip.AddLine",
+                             "tip.SetUnit", "m.SetModel", "p.SetModel", "p.SetUnit", "p.TryOn", "sb.SetStatusBarColor",
+                             "sl.SetValueStep", "t.SetTexture", "t.SetPoint", "w.SetText", "w.GetName"}) {
+        INFO(some);
+        CHECK(ui.is(std::string("type(") + some + ") == 'function'"));
+    }
+    CHECK(ui.is("index(f) == index(f2) and index(f) ~= index(b) and index(b) ~= index(c) and index(t) ~= index(w)"));
+    CHECK(ui.is("f.Own == nil and f.own == nil and t.Own == nil"));
+    // A hook in a type's table is of that type alone.
+    ui.run("n = 0 hooksecurefunc(index(cd), 'SetCooldown', function(self) n = n + 1 who = self end) cd2:SetCooldown(1, 2) "
+           "k = 0 hooksecurefunc(index(b), 'SetText', function() k = k + 1 end) b:SetText('x') c:SetText('y') e:SetText('z') "
+           "tip:SetText('w')");
+    CHECK(ui.is("n == 1 and who == cd2 and k == 1"));
+    // Put in by an addon.
+    ui.run("index(f).PlayOwn = function(self) return self end");
+    CHECK(ui.is("f2:PlayOwn() == f2 and b.PlayOwn == nil"));
+}
+
 // T278: 0x004fdbc0: what a chat line's event has.
 TEST_CASE("the client's own chat lines are from no one", "[replay][interface]") {
     Session s;

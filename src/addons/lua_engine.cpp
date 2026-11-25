@@ -1,4 +1,5 @@
 #include "core/crt_round.hpp"
+#include "addons/widget_types.hpp"
 #include "addons/event_arg_text.hpp"
 #include "addons/saved_variables.hpp"
 #include "addons/chat_bubble_lua.hpp"
@@ -838,6 +839,8 @@ uint32_t makeTooltipLineString(lua_State* L, uint32_t tooltipId, std::size_t lin
 void syncTooltipLineStrings(lua_State* L, uint32_t tooltipId);
 void syncTooltipLineStringOf(lua_State* L, const wowee::ui::Widget* fontString);
 void tooltipLineStringWritten(lua_State* L, const wowee::ui::Widget* fontString);
+
+constexpr const char* kWidgetTypesKey = "wowee.widgetTypes";
 
 /// A script object's own name as it is given (0x0048b540): $parent is the name of the first
 /// above it that has one, "Top" where none has (0x009ea9f8).
@@ -11413,8 +11416,16 @@ static int lua_CreateFrame(lua_State* L) {
     lua_pushboolean(L, 1);
     lua_setfield(L, -2, "__visible");
 
-    // Apply frame metatable with methods
-    lua_getglobal(L, "__WoweeFrameMT");
+    // The metatable of its type (widget_types.hpp), or the one of all.
+    lua_getfield(L, LUA_REGISTRYINDEX, kWidgetTypesKey);
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, frameType);
+        lua_remove(L, -2);
+    }
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_getglobal(L, "__WoweeFrameMT");
+    }
     lua_setmetatable(L, -2);
 
     // The fourth argument names a template, which FrameXML uses constantly:
@@ -11579,6 +11590,8 @@ LuaEngine::~LuaEngine() {
     shutdown();
 }
 
+static void partWidgetTypes(lua_State* L);
+
 bool LuaEngine::initialize() {
     if (L_) return true;
 
@@ -11639,6 +11652,7 @@ bool LuaEngine::initialize() {
     lua_getglobal(L_, "__WoweeFrameMT");
     makeMethodsByHandle(L_);
     lua_pop(L_, 1);
+    if (!game::isPreWotlk()) partWidgetTypes(L_);
 
     // Last, so every bootstrap block above reads a _G that answers honestly.
     installMissingApiFallback();
@@ -11714,6 +11728,41 @@ void LuaEngine::setGameHandler(game::GameHandler* handler) {
         lua_pushlightuserdata(L_, handler);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_game_handler");
     }
+}
+
+/// The frames' one table of methods made one for each type (widget_types.hpp).
+static void partWidgetTypes(lua_State* L) {
+    taint::Quiet quiet;
+    const int top = lua_gettop(L);
+    if (luaL_loadstring(L, kWidgetTypesLua) != 0) {
+        LOG_ERROR("Widget types: ", lua_tostring(L, -1));
+        lua_settop(L, top);
+        return;
+    }
+    lua_newtable(L);
+    int at = 0;
+    for (const WidgetType& t : kWidgetTypes) {
+        lua_newtable(L);
+        lua_pushstring(L, t.name);
+        lua_setfield(L, -2, "name");
+        lua_pushstring(L, t.parent);
+        lua_setfield(L, -2, "parent");
+        lua_pushstring(L, t.methods);
+        lua_setfield(L, -2, "methods");
+        lua_rawseti(L, -2, ++at);
+    }
+    lua_getglobal(L, "__WoweeFrameMT");
+    lua_pushcfunction(L, [](lua_State* S) -> int {
+        const bool texture = sameWord(luaL_checkstring(S, 1), "Texture");
+        lua_newtable(S);
+        installRegionMethods(S, texture, !texture);
+        lua_getmetatable(S, -1);
+        lua_getfield(S, -1, "__index");
+        return 1;
+    });
+    if (lua_pcall(L, 3, 1, 0) != 0) LOG_ERROR("Widget types: ", lua_tostring(L, -1));
+    else lua_setfield(L, LUA_REGISTRYINDEX, kWidgetTypesKey);
+    lua_settop(L, top);
 }
 
 void LuaEngine::noteGlobalsBefore() {
