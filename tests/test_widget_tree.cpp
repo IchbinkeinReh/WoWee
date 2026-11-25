@@ -788,6 +788,9 @@ TEST_CASE("A button shows one state texture, not all of them",
         const uint32_t t = tree.create(WidgetKind::Texture, button, name);
         tree.get(t)->texturePath = "Interface\\Art";
         tree.get(t)->buttonArt = kind;
+        if (kind == ButtonArt::Normal) tree.get(button)->artShown.give(ButtonArtShown::Normal);
+        if (kind == ButtonArt::Pushed) tree.get(button)->artShown.give(ButtonArtShown::Pushed);
+        if (kind == ButtonArt::Disabled) tree.get(button)->artShown.give(ButtonArtShown::Disabled);
         tree.setAllPoints(t, button);
         return t;
     };
@@ -824,7 +827,7 @@ TEST_CASE("A button shows one state texture, not all of them",
     REQUIRE_FALSE(drawn(normal));
 
     // Disabled: only the disabled art, and no highlight however hovered.
-    tree.get(button)->enabled = false;
+    tree.get(button)->setEnabled(false);
     tree.setInteraction(button);
     tree.layout(1024.0f, 768.0f);
     REQUIRE(drawn(disabled));
@@ -847,6 +850,9 @@ TEST_CASE("A state the interface asked for outlasts the cursor",
         const uint32_t t = tree.create(WidgetKind::Texture, button, name);
         tree.get(t)->texturePath = "Interface\\Art";
         tree.get(t)->buttonArt = kind;
+        if (kind == ButtonArt::Normal) tree.get(button)->artShown.give(ButtonArtShown::Normal);
+        if (kind == ButtonArt::Pushed) tree.get(button)->artShown.give(ButtonArtShown::Pushed);
+        if (kind == ButtonArt::Disabled) tree.get(button)->artShown.give(ButtonArtShown::Disabled);
         tree.setAllPoints(t, button);
         return t;
     };
