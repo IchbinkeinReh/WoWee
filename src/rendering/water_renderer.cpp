@@ -698,12 +698,12 @@ void WaterRenderer::createSceneHistoryResources(VkExtent2D extent, VkFormat colo
 }
 
 void WaterRenderer::updateMaterialUBO(WaterSurface& surface) {
-    glm::vec4 color = getLiquidColor(surface.liquidType);
-    float alpha = getLiquidAlpha(surface.liquidType);
+    glm::vec4 color = getLiquidColor(surface.look);
+    float alpha = getLiquidAlpha(surface.look);
 
     // WMO liquid material override
     if (surface.wmoId != 0) {
-        const uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
+        const uint8_t basicType = wave_surface::basicTypeOf(surface.look);
         if (basicType == 2) {
             // Magma - bright orange-red, opaque
             color = glm::vec4(1.0f, 0.35f, 0.05f, 1.0f);
@@ -715,7 +715,7 @@ void WaterRenderer::updateMaterialUBO(WaterSurface& surface) {
         }
     }
 
-    bool canalProfile = (surface.wmoId != 0) || (surface.liquidType == 5);
+    bool canalProfile = (surface.wmoId != 0) || (surface.look == 5);
     float shimmerStrength = canalProfile ? 0.95f : 0.50f;
     // A canal is a couple of yards deep, and the water's colour is weighted by
     // depth - so it came out as clear glass over the stone bed. Its own colour
@@ -723,7 +723,7 @@ void WaterRenderer::updateMaterialUBO(WaterSurface& surface) {
     // thinned below open water.
     float alphaScale = canalProfile ? 1.15f : 1.00f;
     float bodyFloor = 0.0f;
-    if (canalProfile && (surface.liquidType == 0 || (surface.liquidType - 1) % 4 < 2)) {
+    if (canalProfile && wave_surface::basicTypeOf(surface.look) < 2) {
         color = glm::vec4(0.08f, 0.30f, 0.40f, 1.0f);
         bodyFloor = 0.45f;
     }
@@ -982,6 +982,7 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
 
                 surface.mask = layer.mask;
                 surface.clientLiquidType = clientTypeOfLayer(layer);
+                surface.look = lookOfRow(surface.clientLiquidType);
                 if (layer.depths.size() == numVertices) surface.depths = layer.depths;
                 if (layer.uvs.size() == numVertices * 2) {
                     surface.storedUVs.resize(numVertices);
@@ -1030,6 +1031,7 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
         surface.heights.resize(gridW * gridH, groupHeight);
         surface.clientLiquidType = chunkLayers.empty() ? key.liquidType
                                                        : clientTypeOfLayer(*chunkLayers.front().layer);
+        surface.look = lookOfRow(surface.clientLiquidType);
 
         // Initialize mask (128×128 sub-tiles)
         // Mask uses LSB bit order: tileIndex = row * 128 + col
@@ -1228,6 +1230,7 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
             it = clientTypeRecords_.find(type);
         }
         const uint32_t ltFlags = it != clientTypeRecords_.end() ? it->second.flags : 0u;
+        surface.look = lookOfRow(type);
         surface.wmoInterior = client_liquid::wmoLiquidIsInterior(liquid.groupFlags, liquid.groupInfoFlags, ltFlags);
         surface.clientLiquidType = surface.wmoInterior ? client_liquid::wmoInteriorLiquidType(type) : type;
         surface.wmoColorBGRA = momtDiffuseBGRA;
@@ -1442,11 +1445,11 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         }
 
         bool isWmoWater = (surface.wmoId != 0);
-        uint8_t basicType = wave_surface::basicTypeOf(surface.liquidType);
+        uint8_t basicType = wave_surface::basicTypeOf(surface.look);
         // The waves' push constants (wave_surface::paramsFor, which the
         // swimmers and boats riding them read as well, so the two agree).
         // None for magma and slime: the client's (renderClient).
-        const auto waves = wave_surface::paramsFor(surface.liquidType, isWmoWater, waveSettings());
+        const auto waves = wave_surface::paramsFor(surface.look, isWmoWater, waveSettings());
         if (!waves) continue;
 
         WaterPushConstants push{};
@@ -1959,7 +1962,7 @@ std::optional<WaterRenderer::WaveSurfaceSample> WaterRenderer::waveSurfaceAt(flo
     if (!best) return std::nullopt;
     WaveSurfaceSample out;
     out.flatLevel = bestHeight;
-    const auto waves = wave_surface::rideParams(rideOn, rtWaterDrawn(), best->liquidType, best->wmoId != 0,
+    const auto waves = wave_surface::rideParams(rideOn, rtWaterDrawn(), best->look, best->wmoId != 0,
                                                 waveSettings());
     if (!waves) return out;
     // The bed under a point of this surface, as the shader has it between
@@ -2015,7 +2018,7 @@ std::string WaterRenderer::testWaterProbe(glm::vec2 from, glm::vec2 dir, float t
     }
     if (best) {
         const WaterSurface& surface = *best;
-        const auto params = wave_surface::paramsFor(best->liquidType, best->wmoId != 0, waveSettings());
+        const auto params = wave_surface::paramsFor(best->look, best->wmoId != 0, waveSettings());
         const int gridWidth = surface.width + 1;
         const int gridHeight = surface.height + 1;
         auto bedAt = [&](glm::vec2 at) -> std::optional<glm::vec4> {
@@ -2802,6 +2805,7 @@ void WaterRenderer::loadClientLiquids(pipeline::AssetManager* assetManager) {
             const uint32_t fields = dbc.getFieldCount();
             const uint32_t idCol = lt->tryField("ID");
             const uint32_t flagsCol = lt->tryField("Flags");
+            const uint32_t typeCol = lt->tryField("Type");
             const uint32_t matCol = lt->tryField("MaterialID");
             const uint32_t texCol = lt->tryField("Texture");
             const uint32_t floatCol = lt->tryField("Float");
@@ -2812,6 +2816,7 @@ void WaterRenderer::loadClientLiquids(pipeline::AssetManager* assetManager) {
                     client_liquid::LiquidTypeRecord r;
                     r.id = dbc.getUInt32(i, idCol);
                     if (flagsCol < fields) r.flags = dbc.getUInt32(i, flagsCol);
+                    if (typeCol < fields) r.type = dbc.getUInt32(i, typeCol);
                     r.materialId = dbc.getUInt32(i, matCol);
                     for (int t = 0; t < 6; ++t) r.textures[t] = dbc.getString(i, texCol + t);
                     for (int f = 0; f < 18; ++f) r.floats[f] = dbc.getFloat(i, floatCol + f);
@@ -2843,6 +2848,13 @@ void WaterRenderer::loadClientLiquids(pipeline::AssetManager* assetManager) {
     }
     LOG_INFO("Water: client liquids - ", clientTypeRecords_.size(), " LiquidType rows, ",
              clientMaterials_.size(), " LiquidMaterial rows");
+}
+
+uint16_t WaterRenderer::lookOfRow(uint32_t row) const {
+    auto it = clientTypeRecords_.find(row);
+    // A row the table lacks is drawn as water (0x008a1fa0).
+    if (it == clientTypeRecords_.end() && !clientTypeRecords_.empty()) it = clientTypeRecords_.find(1);
+    return client_liquid::lookOfRow(row, it != clientTypeRecords_.end() ? &it->second : nullptr);
 }
 
 WaterRenderer::ClientLiquid* WaterRenderer::clientLiquidFor(uint32_t liquidType) {
@@ -3494,7 +3506,7 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
         for (auto& surface : surfaces) {
             if (!surface.clientVertexBuffer || !surface.indexBuffer || surface.indexCount == 0) continue;
             if (tracedWater) {
-                const uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
+                const uint8_t basicType = wave_surface::basicTypeOf(surface.look);
                 // The traced water's, a building's interior water with it: that
                 // has its own colour, this draw's averaged (water.frag).
                 if (basicType < 2) continue;

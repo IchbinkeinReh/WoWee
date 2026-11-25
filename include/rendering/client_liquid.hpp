@@ -31,6 +31,7 @@ namespace wowee::rendering::client_liquid {
 struct LiquidTypeRecord {
     uint32_t id = 0;
     uint32_t flags = 0;
+    uint32_t type = 0;   ///< 0 water, 1 ocean, 2 magma, 3 slime
     uint32_t materialId = 0;
     std::array<std::string, 6> textures{};
     std::array<float, 18> floats{};
@@ -69,6 +70,37 @@ inline MaterialKind liquidKindOfRow(uint32_t row, const LiquidTypeRecord* record
     return MaterialKind::Water;
 }
 
+
+/// What a LiquidType row looks like, as one of the first rows' numbers (1
+/// water, 2 ocean, 3 magma, 4 slime; 5 a canal's water): what the traced water
+/// goes by, which draws the first two and 5, and the client's own draw the
+/// rest. The rows past the twentieth follow no order - Naxxramas' slime is 21,
+/// the Chamber's magma 141 - so the row's own columns say it: its material
+/// (magma, lava and slime both), and a water whose texture is lava (181) is
+/// not the traced water's. Procedural water is the client's draw.
+inline uint16_t lookOfRow(uint32_t row, const LiquidTypeRecord* record) {
+    if (record) {
+        const auto has = [&](const char* what) {
+            std::string t = record->textures[0];
+            for (char& ch : t) ch = static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch - 'A' + 'a' : ch);
+            return t.find(what) != std::string::npos;
+        };
+        switch (materialKind(record->materialId)) {
+            case MaterialKind::Magma: return record->type == 3 || has("slime") ? 4 : 3;
+            case MaterialKind::ProcWater: return 4;
+            case MaterialKind::Water:
+                if (has("lava")) return 3;
+                if (has("slime")) return 4;
+                if (record->type == 1 || has("ocean")) return 2;
+                return row == 5 ? 5 : 1;
+            default: break;
+        }
+        return 1;
+    }
+    if (row == 0) return 1;
+    if (row == 5) return 5;
+    return static_cast<uint16_t>(row < 0x15 ? ((row - 1) & 3) + 1 : 1);
+}
 
 /// The period a texture slot not tied to a LiquidType int is animated over,
 /// in milliseconds: the 0x4e2 each fixed-function material passes to 0x008a1d60.

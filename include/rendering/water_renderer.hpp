@@ -55,6 +55,8 @@ struct WaterSurface {
     float minHeight;
     float maxHeight;
     uint16_t liquidType;
+    /// What it is drawn as (client_liquid::lookOfRow), whatever its row.
+    uint16_t look = 1;
 
     int tileX = -1, tileY = -1;
     uint32_t wmoId = 0;
@@ -529,6 +531,7 @@ private:
     void createWaterMesh(WaterSurface& surface);
     void destroyWaterMesh(WaterSurface& surface);
 
+    [[nodiscard]] uint16_t lookOfRow(uint32_t row) const;
     glm::vec4 getLiquidColor(uint16_t liquidType) const;
     float getLiquidAlpha(uint16_t liquidType) const;
 

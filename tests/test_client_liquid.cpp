@@ -239,3 +239,32 @@ TEST_CASE("a LiquidType row is water or magma by its material", "[liquid]") {
     CHECK(cl::liquidKindOfRow(19, nullptr) == cl::MaterialKind::Magma);
     CHECK(cl::liquidKindOfRow(17, nullptr) == cl::MaterialKind::Water);
 }
+
+// U8: past the twentieth row the numbers follow no order, and what the traced
+// water draws was told by the number: the Chamber's magma (141) was water.
+TEST_CASE("a liquid looks as its row says", "[client_liquid]") {
+    using wowee::rendering::client_liquid::LiquidTypeRecord;
+    using wowee::rendering::client_liquid::lookOfRow;
+    const auto row = [](uint32_t id, uint32_t type, uint32_t material, const char* texture) {
+        LiquidTypeRecord r;
+        r.id = id;
+        r.type = type;
+        r.materialId = material;
+        r.textures[0] = texture;
+        return lookOfRow(id, &r);
+    };
+    CHECK(row(1, 0, 1, "XTextures/river/lake_a.%d.blp") == 1);
+    CHECK(row(5, 0, 1, "XTextures/river/lake_a.%d.blp") == 5);
+    CHECK(row(14, 1, 1, "XTextures/ocean/ocean_h.%d.blp") == 2);
+    CHECK(row(19, 2, 2, "XTextures/lava/lava.%d.blp") == 3);
+    CHECK(row(21, 3, 2, "XTextures/slime/slime.%d.blp") == 4);
+    CHECK(row(41, 0, 1, "XTextures/river/lake_a.%d.blp") == 1);
+    CHECK(row(100, 1, 3, "XTextures/procWater/basicReflectionMap.blp") > 2);
+    CHECK(row(121, 2, 2, "XTextures/lava/lava.%d.blp") == 3);
+    CHECK(row(141, 2, 2, "XTextures/lava/lava.%d.blp") == 3);
+    CHECK(row(181, 0, 1, "XTEXTURES/LavaOrange/LavaOrange.%d.blp") == 3);
+    // Without the table, the first rows' order.
+    CHECK(lookOfRow(0, nullptr) == 1);
+    CHECK(lookOfRow(19, nullptr) == 3);
+    CHECK(lookOfRow(141, nullptr) == 1);
+}
