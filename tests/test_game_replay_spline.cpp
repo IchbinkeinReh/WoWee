@@ -367,7 +367,7 @@ TEST_CASE("the player made on a spline is carried by it to its end", "[replay][b
     self->updateMovement(0.15f);
     mh->updateMoverSplineDone();
     REQUIRE(s.sent().of(Opcode::CMSG_MOVE_SPLINE_DONE).size() == 1);
-    const auto& done = s.sent().of(Opcode::CMSG_MOVE_SPLINE_DONE).front().getData();
+    const auto done = s.sent().of(Opcode::CMSG_MOVE_SPLINE_DONE).front().getData();   // of()'s is gone after this
     REQUIRE(done.size() > 4);
     uint32_t id = 0;
     for (int i = 0; i < 4; ++i) id |= static_cast<uint32_t>(done[done.size() - 4 + i]) << (8 * i);
