@@ -2174,11 +2174,17 @@ int lua_Region_SetScale(lua_State* L) {
         const auto v = static_cast<float>(lua_tonumber(L, 2));
         if (!(v > 0.0f)) return luaL_error(L, "%s:SetScale(): Scale must be > 0", who);
         w->scale = v;
+        // What hangs on it is to be worked out again, by whoever asks (0x00489e90).
+        if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markLayoutDirty();
     }
     return 0;
 }
 int lua_Region_GetEffectiveScale(lua_State* L) {
     const auto* w = widgetOf(L, 1);
+    if (auto* tree = w ? wowee::addons::getWidgetTree(L) : nullptr) {
+        tree->resolveWidget(w->id);
+        w = tree->get(w->id);
+    }
     lua_pushnumber(L, w ? w->effScale : 1.0);
     return 1;
 }
@@ -16791,6 +16797,14 @@ void LuaEngine::callFrameScript4Numbers(uint32_t wid, const char* script,
     finishFrameScript(wid, script, handlerIdx, 5);
 }
 
+void LuaEngine::callFrameScriptNumbers(uint32_t wid, const char* script, double a, double b) {
+    const int handlerIdx = beginFrameScript(wid, script);
+    if (handlerIdx == 0) return;
+    lua_pushnumber(L_, a);
+    lua_pushnumber(L_, b);
+    finishFrameScript(wid, script, handlerIdx, 3);
+}
+
 void LuaEngine::callFrameScriptNumber(uint32_t wid, const char* script, double arg) {
     const int handlerIdx = beginFrameScript(wid, script);
     if (handlerIdx == 0) return;
@@ -18179,13 +18193,9 @@ void LuaEngine::reportEventListenersOnce() {
     LOG_WARNING("Event listeners: ", line);
 }
 
-/// Fire OnSizeChanged for anything whose rect changed since the last frame.
-///
-/// Declared by FrameXML and reached for constantly by addons, which resize a
-/// panel and expect the pieces inside it to be told. Noticed here rather than
-/// fired from SetWidth, because a frame is far more often resized by its
-/// anchors than by anyone calling a setter - a scroll child stretched by its
-/// parent never goes near SetWidth.
+/// OnSizeChanged of what has another size than it was told last (0x0048fa20), the
+/// first one too, shown or not: its width and height in its own units. The client
+/// tells it as the rect is resolved, which is at the latest with the frame.
 ///
 /// Only the frames the tree saw resized, or never reported: every write of a
 /// rect marks the widget (WidgetTree::markResizePending), so the rest would
@@ -18201,44 +18211,15 @@ void LuaEngine::updateSizeChanges() {
     if (widgets_.takeFloatingChatUpdateDue()) fireEvent("UPDATE_FLOATING_CHAT_WINDOWS");
     for (uint32_t id = widgets_.takeResizePending(1); id != 0;
          id = widgets_.takeResizePending(id + 1)) {
-        const ui::Widget* wp = widgets_.get(id);
-        if (!wp) continue;
-        const ui::Widget& w = *wp;
-        if (w.id == 0 || w.kind != ui::WidgetKind::Frame) continue;
-        const bool known = (w.lastReportedW >= 0.0f);
-        if (known && w.lastReportedW == w.rectW && w.lastReportedH == w.rectH) {
-            continue;
-        }
-        // Written through the tree, since the loop reads a const view.
-        if (auto* mut = widgets_.get(w.id)) {
-            mut->lastReportedW = w.rectW;
-            mut->lastReportedH = w.rectH;
-        }
-        // Nothing is fired the first time a frame is measured: every frame in
-        // the interface would report a change on the first layout, which says
-        // nothing and runs 3000 handlers to say it.
-        if (!known) continue;
-        if (w.rectW <= 0.0f || w.rectH <= 0.0f) continue;
-        lua_getglobal(L_, "__WoweeFramesByWid");
-        if (!lua_istable(L_, -1)) { lua_pop(L_, 1); return; }
-        lua_pushinteger(L_, static_cast<lua_Integer>(w.id));
-        lua_rawget(L_, -2);
-        if (lua_istable(L_, -1)) {
-            lua_getfield(L_, -1, "OnSizeChanged");
-            if (lua_isfunction(L_, -1)) {
-                lua_pushvalue(L_, -2);
-                lua_pushnumber(L_, w.rectW);
-                lua_pushnumber(L_, w.rectH);
-                if (pcallScript(L_, "OnSizeChanged", 3, 0) != 0) {
-                    LOG_WARNING("OnSizeChanged error: ",
-                                luaL_optstring(L_, -1, "?"));
-                    lua_pop(L_, 1);
-                }
-            } else {
-                lua_pop(L_, 1);
-            }
-        }
-        lua_pop(L_, 2);
+        widgets_.resolveWidget(id);   // a setter's number is in the rect until then
+        auto* w = widgets_.get(id);
+        if (!w || w->id == 0 || w->kind != ui::WidgetKind::Frame || !widgets_.placed(id)) continue;
+        const float width = w->rectW, height = w->rectH;
+        if (ui::sameSize(w->lastReportedW, w->lastReportedH, width, height)) continue;
+        w->lastReportedW = width;
+        w->lastReportedH = height;
+        const double scale = w->effScale > 0.0f ? w->effScale : 1.0;
+        callFrameScriptNumbers(id, "OnSizeChanged", width / scale, height / scale);
     }
 }
 

@@ -220,8 +220,7 @@ public:
     void frameShown(uint32_t id);
     void frameHidden(uint32_t id);
 
-    /// Fires OnSizeChanged for anything whose rect changed. Declared by
-    /// FrameXML and used heavily by addons, and never fired until now.
+    /// OnSizeChanged of what has another size than it was told last.
     void updateSizeChanges();
 
     /// Says once, a little after loading, how many frames are listening for
@@ -522,6 +521,7 @@ private:
     void callFrameScriptMotion(uint32_t wid, const char* script, bool motion);
     /// OnHyperlinkEnter and OnHyperlinkLeave: the link and its text.
     void callFrameScript2(uint32_t wid, const char* script, const char* a, const char* b);
+    void callFrameScriptNumbers(uint32_t wid, const char* script, double a, double b);
     /// Three string arguments, which OnHyperlinkClick takes: the link, its
     /// text, and the mouse button.
     void callFrameScript3(uint32_t wid, const char* script, const char* a,

@@ -21,6 +21,7 @@
 #include <functional>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -297,7 +298,7 @@ struct Widget {
     /// widget rather than in a map beside it: the pass runs every frame over
     /// every widget, and a hash lookup each was paying for a comparison that
     /// two floats here answer directly.
-    float lastReportedW = -1.0f, lastReportedH = -1.0f;
+    float lastReportedW = 0.0f, lastReportedH = 0.0f;
 
     /// The layout generation this widget's rect was last resolved in. Zero
     /// means never, which is older than any generation.
@@ -1094,6 +1095,11 @@ struct LinkRect {
 /// they are counted (0x00483fa0): never that between its sides. 0 for none.
 [[nodiscard]] inline float givenWidth(const Widget& w) {
     return w.wrapsToWidth || (!w.autoSized && w.width > 0.0f) ? w.width : 0.0f;
+}
+
+/// Whether two sizes are one to OnSizeChanged (0x0048fa20).
+[[nodiscard]] inline bool sameSize(float wasW, float wasH, float w, float h) {
+    return !(std::fabs(wasW - w) >= 1e-3f) && !(std::fabs(wasH - h) >= 1e-3f);
 }
 
 class WidgetTree {
