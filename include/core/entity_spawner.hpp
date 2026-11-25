@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/ground_coming.hpp"
 #include "rendering/pointer_pick.hpp"
 #include "game/object_effect.hpp"
 #include "game/character.hpp"
@@ -149,6 +150,10 @@ public:
 
     // Clear all queues and instances (logout, reconnect)
     void clearAllQueues();
+    /// Whether a game object not loaded yet may have something in this box
+    /// (render space): a building, or with `models` a model as well. A
+    /// transport is waited for by its passenger alone.
+    [[nodiscard]] bool objectComingIn(const glm::vec3& lo, const glm::vec3& hi, bool models) const;
     void despawnAllCreatures();
     void despawnAllPlayers();
     void despawnAllGameObjects();
@@ -1051,6 +1056,7 @@ private:
 
     // GameObject display lookups
     std::unordered_map<uint32_t, std::string> gameObjectDisplayIdToPath_;
+    std::unordered_map<uint32_t, ground_coming::Box> gameObjectDisplayBoxes_;
     bool gameObjectLookupsBuilt_ = false;
     void buildGameObjectDisplayLookups();
 
@@ -1599,6 +1605,7 @@ private:
         std::string modelPath;
     };
     struct AsyncGameObjectLoad {
+        PendingGameObjectSpawn spawn;
         std::future<PreparedGameObjectWMO> future;
     };
 

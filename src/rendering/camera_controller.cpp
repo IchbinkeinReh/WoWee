@@ -674,6 +674,22 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         }
     }
 
+    // A building the realm has made here and the disk has not brought yet:
+    // the client's gather fails in its box and the unit is not moved
+    // (core/ground_coming.hpp). A model's only holds one that would fall.
+    {
+        const glm::vec3 reach(0.5f, 0.5f, 0.0f);
+        const float below = 1.0f + std::max(-verticalVelocity, 0.0f) * std::min(f.physicsDeltaTime, 0.25f);
+        const bool models = !grounded || portPlacedFall_;
+        const bool held = objectHold_.step(!externalFollow_ && objectComing_ &&
+                                               objectComing_(targetPos - reach - glm::vec3(0.0f, 0.0f, below),
+                                                             targetPos + reach + glm::vec3(0.0f, 0.0f, 2.5f), models),
+                                           f.physicsDeltaTime);
+        if (held != objectHeld_)
+            LOG_WARNING("Movement: ", held ? "held, a game object here is not loaded yet" : "the game object is there");
+        objectHeld_ = held;
+    }
+
     if (!externalFollow_) {
         // Whether the unit swims is the client's decision (0x00730d10) from
         // the liquid where it looks (portLiquidLevelAt); a jump out of the
@@ -3517,7 +3533,7 @@ void CameraController::teleportTo(const glm::vec3& pos, bool onTransport) {
 }
 
 bool CameraController::groundNotStreamedYet(float x, float y) const {
-    return terrainManager != nullptr && terrainManager->isTileComingAt(x, y);
+    return objectHeld_ || (terrainManager != nullptr && terrainManager->isTileComingAt(x, y));
 }
 
 std::optional<glm::vec3> CameraController::eyePoint() const {

@@ -634,6 +634,32 @@ void EntitySpawner::queueDressedEquipment(uint64_t guid) {
 
 // --- Immediate despawn wrappers ---
 
+bool EntitySpawner::objectComingIn(const glm::vec3& lo, const glm::vec3& hi, bool models) const {
+    if (pendingGameObjectSpawns_.empty() && asyncGameObjectLoads_.empty() && pendingWmoUploads_.empty()) return false;
+    const auto reaches = [&](uint64_t guid, uint32_t displayId, const glm::vec3& canonical, float scale) {
+        const auto box = gameObjectDisplayBoxes_.find(displayId);
+        if (box == gameObjectDisplayBoxes_.end()) return false;
+        if (gameHandler_ && gameHandler_->isTransportGuid(guid)) return false;
+        return ground_coming::reaches(box->second, core::coords::canonicalToRender(canonical), scale, lo, hi);
+    };
+    for (const auto& s : pendingGameObjectSpawns_) {
+        if (gameObjectInstances_.count(s.guid)) continue;
+        if (!reaches(s.guid, s.displayId, glm::vec3(s.x, s.y, s.z), s.scale)) continue;
+        const std::string path = getGameObjectModelPathForDisplayId(s.displayId);
+        if (path.empty() || !gameObjectShownByDifficulty(s.entry)) continue;
+        if (models || ground_coming::isBuilding(path)) return true;
+    }
+    for (const auto& load : asyncGameObjectLoads_) {
+        const auto& s = load.spawn;
+        if (reaches(s.guid, s.displayId, glm::vec3(s.x, s.y, s.z), s.scale)) return true;
+    }
+    for (const auto& up : pendingWmoUploads_) {
+        const auto& r = up.result;
+        if (reaches(r.guid, r.displayId, glm::vec3(r.x, r.y, r.z), r.scale)) return true;
+    }
+    return false;
+}
+
 void EntitySpawner::clearAllQueues() {
     pendingCreatureSpawns_.clear();
     pendingCreatureSpawnGuids_.clear();
@@ -1795,6 +1821,11 @@ void EntitySpawner::buildGameObjectDisplayLookups() {
             // the first, so a .mdl gameobject had no model path at all.
             modelName = pipeline::modelPathToM2(modelName);
             gameObjectDisplayIdToPath_[displayId] = modelName;
+            const uint32_t boxCol = godiL ? godiL->tryField("GeoBoxMinX") : 12u;
+            if (boxCol != 0xFFFFFFFFu && boxCol + 6 <= godi->getFieldCount()) {
+                const auto at = [&](uint32_t k) { return godi->getFloat(i, boxCol + k); };
+                gameObjectDisplayBoxes_[displayId] = {glm::vec3(at(0), at(1), at(2)), glm::vec3(at(3), at(4), at(5))};
+            }
         }
         LOG_INFO("Loaded ", gameObjectDisplayIdToPath_.size(), " gameobject display mappings");
     } else {

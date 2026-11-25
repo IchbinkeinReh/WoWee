@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/ground_coming.hpp"
 #include "rendering/keys_held_into_typing.hpp"
 #include "rendering/camera_pivot.hpp"
 
@@ -310,6 +311,13 @@ public:
     [[nodiscard]] bool followTargetOverUnstreamedGround() const {
         return followTarget && groundNotStreamedYet(followTarget->x, followTarget->y);
     }
+    /// Whether a game object not loaded yet may have something in a box (the
+    /// last: a model's as well as a building's), asked for where the followed
+    /// unit is (core/ground_coming.hpp): it is held while one may.
+    void setObjectComing(std::function<bool(const glm::vec3& lo, const glm::vec3& hi, bool models)> query) {
+        objectComing_ = std::move(query);
+    }
+    [[nodiscard]] bool heldForObject() const { return objectHeld_; }
     /// The character's eyes for a view that is not this rig's - a headset's:
     /// where it stands, raised by the pivot height and a mount's offset, and
     /// nothing else. None of the third-person camera's terrain lift, wall
@@ -1297,6 +1305,9 @@ private:
     /// True while the tile under a position has not finished streaming, which
     /// is when there is no floor to find and gravity must wait for one.
     [[nodiscard]] bool groundNotStreamedYet(float x, float y) const;
+    std::function<bool(const glm::vec3&, const glm::vec3&, bool)> objectComing_;
+    core::ground_coming::Hold objectHold_;
+    bool objectHeld_ = false;
 
     bool rotationSuppressed_ = false;
     bool cinematicKeysHeld_ = false;

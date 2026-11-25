@@ -1312,6 +1312,13 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         gameHandler->setCameraTransportClearedCallback([this](uint64_t transportGuid) {
             if (entitySpawner_) entitySpawner_->localCameraLeavesTransport(transportGuid);
         });
+        // Nothing moves the player in what is not loaded yet (0x007a55e0).
+        if (renderer && renderer->getCameraController()) {
+            renderer->getCameraController()->setObjectComing(
+                [this](const glm::vec3& lo, const glm::vec3& hi, bool models) {
+                    return entitySpawner_ && entitySpawner_->objectComingIn(lo, hi, models);
+                });
+        }
         gameHandler->setPlacedFallCallback([this] {
             if (renderer && renderer->getCameraController()) renderer->getCameraController()->queuePlacedFall();
             ++playerSplineMoves_;

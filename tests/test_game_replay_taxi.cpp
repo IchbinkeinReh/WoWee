@@ -749,6 +749,60 @@ TEST_CASE("a fall does not outlive the flight it was taken from", "[taxi][camera
     }
 }
 
+// U9. 0x007a55e0: the gather fails in the box of a building that is not loaded
+// yet, a game object's too, and the unit there is not moved: the platform of the
+// Eye of Eternity on a slow disk.
+TEST_CASE("nothing falls where a game object is still to be loaded", "[camera]") {
+    namespace gc = wowee::core::ground_coming;
+    const glm::vec3 platform(754.35f, 1300.87f, 256.25f);
+    const gc::Box box{glm::vec3(-143.5f, -124.1f, -51.1f), glm::vec3(143.2f, 122.3f, 54.8f)};
+    const glm::vec3 place(728.0f, 1327.0f, 267.5f);
+    Walker w;
+    bool loaded = false;
+    int asked = 0;
+    w.controller.setObjectComing([&](const glm::vec3& lo, const glm::vec3& hi, bool) {
+        ++asked;
+        CHECK(lo.z < w.at.z);
+        CHECK(hi.z > w.at.z);
+        return !loaded && gc::reaches(box, platform, 1.0f, lo, hi);
+    });
+    std::vector<uint32_t> sent;
+    w.controller.setMovementCallback([&](uint32_t opcode) { sent.push_back(opcode); });
+    w.at = place;
+    w.controller.teleportTo(w.at);
+    w.run(5.0f);
+    CHECK(asked > 0);
+    CHECK(w.at == place);
+    CHECK(w.controller.heldForObject());
+    CHECK(w.controller.followTargetOverUnstreamedGround());
+    CHECK(sent.empty());
+    // There, or not: it is moved as before.
+    loaded = true;
+    w.run(0.5f);
+    CHECK_FALSE(w.controller.heldForObject());
+    CHECK(w.at.z < place.z - 1.0f);
+
+    // Nothing is waited for for ever, and none of it outside the box.
+    loaded = false;
+    Walker high;
+    high.controller.setObjectComing([&](const glm::vec3& lo, const glm::vec3& hi, bool) {
+        return gc::reaches(box, platform, 1.0f, lo, hi);
+    });
+    high.at = place + glm::vec3(0.0f, 0.0f, 80.0f);
+    high.controller.teleportTo(high.at);
+    high.run(0.5f);
+    CHECK(high.at.z < place.z + 79.0f);
+    gc::Hold hold;
+    float seconds = 0.0f;
+    while (hold.step(true, 0.5f)) seconds += 0.5f;
+    CHECK(seconds == gc::kHoldSeconds);
+    CHECK_FALSE(hold.step(false, 0.5f));
+    CHECK(hold.step(true, 0.5f));
+    CHECK_FALSE(gc::reaches(gc::Box{}, platform, 1.0f, place, place));
+    CHECK(gc::isBuilding("world\\wmo\\A.WMO"));
+    CHECK_FALSE(gc::isBuilding("world\\a.m2"));
+}
+
 // P44. 0x00606f90: the yaw is off the facing on a flight path, and as the
 // flight begins it eases behind the unit.
 TEST_CASE("the camera turns with the flight and begins behind it", "[taxi][camera]") {

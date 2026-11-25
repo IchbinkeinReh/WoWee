@@ -1176,8 +1176,10 @@ void EntitySpawner::processGameObjectSpawnQueue() {
             PendingGameObjectSpawn capture = s;
             std::string capturePath = modelPath;
             AsyncGameObjectLoad load;
+            load.spawn = s;
             load.future = std::async(std::launch::async,
                 [am, capture, capturePath]() -> PreparedGameObjectWMO {
+                    ground_coming::debugDelay();
                     PreparedGameObjectWMO result;
                     result.guid = capture.guid;
                     result.entry = capture.entry;
@@ -1263,6 +1265,7 @@ void EntitySpawner::processGameObjectSpawnQueue() {
                 load.displayId = s.displayId;
                 load.future = std::async(std::launch::async,
                     [am = assetManager_, displayId = s.displayId, path = modelPath]() {
+                        ground_coming::debugDelay();
                         return prepareGameObjectM2(*am, displayId, path);
                     });
                 asyncGameObjectM2Loads_.push_back(std::move(load));
