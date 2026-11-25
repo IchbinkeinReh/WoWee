@@ -151,7 +151,9 @@ void Application::drawUnitModels(ui::WidgetTree& widgets, float screenW, float s
                 continue;
             }
             if (look.character && frame->objectType == "DressUpModel")
-                look.worn = ui::wornWithTriedOn(std::move(look.worn), frame->undressed, frame->tryOnItems);
+                look.worn = ui::wornWithTriedOn(std::move(look.worn), frame->undressed, frame->tryOnItems,
+                                                frame->modelUnit == gameHandler->getPlayerGuid() &&
+                                                    !frame->tryOnItems.empty() && gameHandler->playerCanDualWield());
             frame->modelShown = look.character
                                     ? game::getPlayerModelPath(static_cast<game::Race>(look.race),
                                                                static_cast<game::Gender>(look.gender), look.femaleModel)

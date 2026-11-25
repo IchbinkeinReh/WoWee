@@ -853,7 +853,7 @@ struct Widget {
     /// and inventory type. The dressing room's contents belong to the frame
     /// rather than to the application: a second one would have its own, and
     /// closing this one is what empties it.
-    struct TryOnItem { uint32_t displayInfoId; uint8_t inventoryType; };
+    struct TryOnItem { uint32_t displayInfoId; uint8_t inventoryType; bool offHand = false; };
     std::vector<TryOnItem> tryOnItems;
     /// Undress was asked (0x00597ba0): the frame's own figure has every item
     /// slot and both hands emptied, under whatever is tried on after. Dress,

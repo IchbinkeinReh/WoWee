@@ -1,5 +1,6 @@
 // lua_inventory_api.cpp - Items, containers, merchant, loot, equipment, trading, auction, and mail Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "ui/unit_look.hpp"
 #include "game/mail_text.hpp"
 #include "game/packed_time.hpp"
 #include "game/item_text.hpp"
@@ -947,16 +948,67 @@ static int lua_WoweeTryOn(lua_State* L) {
         return 0;
     }
     const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
-    if (!info || info->displayInfoId == 0) return 0;
-
-    const uint8_t slot = static_cast<uint8_t>(info->inventoryType);
-    for (auto& worn : w->tryOnItems) {
-        if (worn.inventoryType == slot) {
-            worn.displayInfoId = info->displayInfoId;
-            return 0;
+    // A recipe shows what it teaches to make (0x005980d0): the spell its own teaches,
+    // or the one of trigger 6, where that makes an item.
+    if (info && info->inventoryType == 0) {
+        gh->loadSpellNameCache();
+        const auto& cache = gh->spellNameCacheRef();
+        uint32_t made = 0;
+        for (const auto& spell : info->spells) {
+            const auto own = spell.spellId != 0 ? cache.find(spell.spellId) : cache.end();
+            if (own == cache.end() || own->second.effectIds[0] != 36) continue;
+            uint32_t teach = own->second.effectTriggerSpell[0];
+            if (teach == 0) {
+                for (const auto& other : info->spells)
+                    if (other.spellTrigger == 6) {
+                        teach = other.spellId;
+                        break;
+                    }
+            }
+            const auto taught = cache.find(teach);
+            if (taught != cache.end() && taught->second.effectIds[0] == 24) made = taught->second.effectItemType0;
+            if (made != 0) break;
+        }
+        if (made != 0) {
+            itemId = made;
+            info = gh->getItemInfo(made);
         }
     }
-    w->tryOnItems.push_back({info->displayInfoId, slot});
+    if (itemId != 0 && (!info || !info->valid)) gh->ensureItemInfo(itemId);
+    if (!info || info->displayInfoId == 0) return 0;
+
+    const auto type = static_cast<uint8_t>(info->inventoryType);
+    const int place = ui::dressPlace(type);
+    if (place == ui::kDressNowhere) {
+        // Not a word for what is worn unseen, a ring or a trinket.
+        if (type != 2 && type != 11 && type != 12 && type != 28) gh->sayGameError(game::server_notice::kNotEquippable);
+        return 0;
+    }
+    // A one-hand weapon goes into the main hand, or by turns into both where the
+    // player's own figure has one there and can hold two (0x00acf548).
+    static bool nextInOffHand = false;
+    bool offHand = place == ui::kDressOffHand;
+    if (type == 13) {
+        const auto holds = [](uint8_t t) { return t == 13 || t == 17 || t == 21; };
+        bool held = false;
+        for (const auto& tried : w->tryOnItems)
+            if (!tried.offHand && ui::dressPlace(tried.inventoryType) == ui::kDressMainHand) held = holds(tried.inventoryType);
+        if (!held && !w->undressed) {
+            const auto& hand = gh->getInventory().getEquipSlot(game::EquipSlot::MAIN_HAND);
+            held = !hand.empty() && holds(static_cast<uint8_t>(hand.item.inventoryType));
+        }
+        if (held && w->modelUnit == gh->getPlayerGuid() && gh->playerCanDualWield()) {
+            offHand = nextInOffHand;
+            nextInOffHand = !nextInOffHand;
+        }
+    } else if (place == ui::kDressMainHand || offHand) {
+        nextInOffHand = false;
+    }
+    const int where = offHand ? ui::kDressOffHand : place;
+    std::erase_if(w->tryOnItems, [where](const auto& tried) {
+        return (tried.offHand ? ui::kDressOffHand : ui::dressPlace(tried.inventoryType)) == where;
+    });
+    w->tryOnItems.push_back({info->displayInfoId, type, offHand});
     return 0;
 }
 
