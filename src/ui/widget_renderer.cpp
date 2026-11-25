@@ -1,5 +1,6 @@
 #include <cstring>
 #include "pipeline/tga_image.hpp"
+#include "ui/alpha_gradient.hpp"
 #include "ui/tooltip_layout.hpp"
 #include "ui/texture_variant.hpp"
 #include "ui/interface_file.hpp"
@@ -796,13 +797,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                     const float gw = font->CalcTextSizeA(size, FLT_MAX, 0.0f, glyph.c_str()).x;
                     if (glyph != " " && glyph != "\t") {
                         const int k = gradientGlyph_++;
-                        float f = 0.0f;
-                        if (k < gradientStart_) {
-                            f = 1.0f;
-                        } else if (gradientLength_ > 0 && k < gradientStart_ + gradientLength_) {
-                            f = std::max(0.0f, 1.0f - static_cast<float>(2 * (k - gradientStart_) + 1) /
-                                                          static_cast<float>(gradientLength_));
-                        }
+                        const float f = gradientAlpha(gradientStart_, gradientLength_, k);
                         if (f > 0.0f) {
                             const uint32_t a = static_cast<uint32_t>(((col >> IM_COL32_A_SHIFT) & 0xffu) * f);
                             dl->AddText(font, size, ImVec2(gx, y),
@@ -3494,7 +3489,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 WidgetRenderer& r;
                 ~GradientScope() { r.gradientStart_ = -1; }
             } gradientScope{*this};
-            gradientStart_ = w->alphaGradientStart;
+            gradientStart_ = alphaGradientOn(w->alphaGradientStart, w->alphaGradientLength) ? w->alphaGradientStart : -1;
             gradientLength_ = w->alphaGradientLength;
             float tx = x0;
             if (wrapW <= 0.0f && !overflows) {
