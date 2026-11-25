@@ -570,6 +570,62 @@ TEST_CASE("a window closes as its object is left", "[replay][playtest]") {
     CHECK_FALSE(s.handler().isBankOpen());
 }
 
+// T294: 0x00524010: a ghost by a battleground's spirit guide asks it and is let go of by it.
+TEST_CASE("a ghost takes the spirit guide it comes to", "[replay][playtest]") {
+    constexpr uint64_t kGuide = 0xF1300033B7000078ull;
+    Session s;
+    s.handler().setFactionTemplates({{35u, {.id = 35, .faction = 31, .factionGroup = 1, .friendGroup = 1}}});
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 1},
+                   {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::UNIT_FIELD_FACTIONTEMPLATE, 35},
+                   {UF::PLAYER_FLAGS, 0x10u}});
+    s.receive(replay::UpdateObject().create(kGuide, wowee::game::ObjectType::UNIT,
+                                            {{UF::UNIT_FIELD_HEALTH, 100},
+                                             {UF::UNIT_NPC_FLAGS, 0x8001u},
+                                             {UF::UNIT_FIELD_FACTIONTEMPLATE, 35}}));
+    auto& gh = s.handler();
+    const auto guide = gh.getEntityManager().getEntity(kGuide);
+    REQUIRE(guide);
+    const auto& me = gh.playerMovementInfo();
+    const auto asked = [&] { return s.sent().of(Opcode::CMSG_AREA_SPIRIT_HEALER_QUERY).size(); };
+    const auto cancelled = [&] { return s.sent().of(Opcode::CMSG_CANCEL_AURA).size(); };
+    const auto at = [&](float yards) {
+        guide->setPosition(me.x + yards, me.y, me.z, 0.0f);
+        gh.stepSpiritGuide();
+    };
+    REQUIRE(gh.isPlayerGhost());
+    REQUIRE(gh.unitMayAssist(Session::kPlayerGuid, kGuide));
+    at(21.0f);
+    CHECK(asked() == 0);
+    at(19.0f);
+    CHECK(asked() == 1);
+    CHECK(gh.getAreaSpiritHealerGuid() == kGuide);
+    at(21.5f);
+    CHECK(asked() == 1);
+    // Its answer.
+    int inRange = 0;
+    wowee::network::Packet time(wowee::game::wireOpcode(Opcode::SMSG_AREA_SPIRIT_HEALER_TIME));
+    time.writeUInt64(kGuide);
+    time.writeUInt32(20000);
+    gh.setAddonEventCallback([&](const std::string& e, const auto&) { inRange += e == "AREA_SPIRIT_HEALER_IN_RANGE"; });
+    s.receive(time);
+    CHECK(inRange == 1);
+    CHECK(cancelled() == 0);
+    at(22.5f);
+    CHECK(gh.getAreaSpiritHealerGuid() == 0);
+    CHECK(cancelled() == 1);
+    // An answer of one the ghost is not at is nothing.
+    s.receive(time);
+    CHECK(inRange == 1);
+    // Alive again.
+    at(5.0f);
+    CHECK(asked() == 2);
+    s.receive(replay::UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FLAGS, 0u}}));
+    gh.stepSpiritGuide();
+    CHECK(gh.getAreaSpiritHealerGuid() == 0);
+    gh.setAddonEventCallback({});
+}
+
 // What is read of a packet is counted: too little or too much of it.
 TEST_CASE("packets read short or past their end are counted", "[replay][playtest]") {
     Session s;

@@ -468,6 +468,12 @@ public:
     void declineLevelGrant() { levelGrantMentorGuid_ = 0; }
     /// Ask an area spirit healer when the next mass resurrection is.
     void queryAreaSpiritHealer(uint64_t guid);
+    /// 0x00524010, every frame: a ghost's battleground spirit guide, taken within 20 yards and let
+    /// go past 22 or with the ghost.
+    void stepSpiritGuide();
+    /// 0x00523eb0: another guide, or none: one that had answered is given up - Waiting to
+    /// Resurrect (0x0051f710) -, and the new one is asked.
+    void takeSpiritGuide(uint64_t guid);
     /// Join that resurrection. Nothing happens without it.
     void queueAreaSpiritHeal();
     bool resurrectHasSickness() const { return resurrectHasSickness_; }
@@ -8060,6 +8066,7 @@ private:
     bool        resurrectHasSickness_ = false;
     bool        resurrectHasTimer_ = true;
     uint64_t    areaSpiritHealerGuid_ = 0;
+    bool        areaSpiritHealerAnswered_ = false;   ///< 0x00bd0840
     /// The conversation last asked for, until the server answers it.
     ///
     /// A server that refuses one says nothing - out of reach, a creature that

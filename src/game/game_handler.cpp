@@ -1056,6 +1056,7 @@ void GameHandler::update(float deltaTime) {
             pendingNpcHello_.guid = 0;
         }
         closeLeftInteractions();
+        stepSpiritGuide();
 
         updateEntityInterpolation(deltaTime);
 

@@ -1474,7 +1474,10 @@ void GameHandler::registerCoreOpcodes() {
         if (!packet.hasRemaining(12)) { packet.skipAll(); return; }
         const uint64_t guid = packet.readUInt64();
         const uint32_t timeMs = packet.readUInt32();
-        areaSpiritHealerGuid_ = guid;
+        // 0x00524b10: the guide the ghost is at, looked at once more.
+        stepSpiritGuide();
+        if (guid != areaSpiritHealerGuid_ || timeMs == 0) return;
+        areaSpiritHealerAnswered_ = true;
         areaSpiritHealerSeconds_ = static_cast<float>(timeMs) / 1000.0f;
         // No chat line: 0x00524b10 keeps the time and raises
         // AREA_SPIRIT_HEALER_IN_RANGE, and the dialog counts down. This also

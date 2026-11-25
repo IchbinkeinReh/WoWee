@@ -4165,7 +4165,10 @@ void GameHandler::interactWithNpc(uint64_t guid, bool clickToMove) {
         case ni::Hello::SpiritGuide:
             // 0x006db180: a ghost asks the battleground's spirit healer when
             // it next resurrects (CMSG_AREA_SPIRIT_HEALER_QUERY).
-            if (isPlayerGhost()) queryAreaSpiritHealer(guid);
+            if (isPlayerGhost()) {
+                takeSpiritGuide(0);
+                takeSpiritGuide(guid);
+            }
             return;
         case ni::Hello::Innkeeper:
             // 0x006d2120: remembered and asked, nothing sent until the accept.
@@ -4479,9 +4482,45 @@ void GameHandler::loadingKeepAlive(bool starting) {
     nextLoadingKeepAlive_ = now + std::chrono::seconds(30);
 }
 
+void GameHandler::takeSpiritGuide(uint64_t guid) {
+    if (areaSpiritHealerGuid_ == guid) return;
+    areaSpiritHealerGuid_ = guid;
+    constexpr uint32_t kWaitingToResurrect = 0xa18;
+    if (areaSpiritHealerAnswered_) cancelAura(kWaitingToResurrect);
+    areaSpiritHealerAnswered_ = false;
+    if (guid != 0) queryAreaSpiritHealer(guid);
+}
+
+void GameHandler::stepSpiritGuide() {
+    if (!isPlayerGhost()) {
+        takeSpiritGuide(0);
+        return;
+    }
+    const auto self = getEntityManager().getEntity(playerGuid);
+    if (!self) return;
+    const MovementInfo& me = playerMovementInfo();
+    const auto distSq = [&me](const Entity& e) {
+        const glm::vec3 away(me.x - e.getX(), me.y - e.getY(), me.z - e.getZ());
+        return glm::dot(away, away);
+    };
+    if (areaSpiritHealerGuid_ != 0) {
+        const auto guide = getEntityManager().getEntity(areaSpiritHealerGuid_);
+        if (!guide || !guide->isUnit() || distSq(*guide) > 484.00003f) takeSpiritGuide(0);
+    }
+    if (areaSpiritHealerGuid_ != 0) return;
+    // Each that qualifies in turn (0x004d4b30 with 0x00523f80).
+    std::vector<std::shared_ptr<Entity>> around;
+    getEntityManager().getEntitiesNear(me.x, me.y, 20.0f, around);
+    for (const auto& e : around) {
+        if (!e->isUnit()) continue;
+        const auto& unit = static_cast<const Unit&>(*e);
+        if ((unit.getNpcFlags() & 0x8000u) == 0 || !unitMayAssist(playerGuid, unit.getGuid())) continue;
+        if (distSq(unit) <= 400.0f) takeSpiritGuide(unit.getGuid());
+    }
+}
+
 void GameHandler::queryAreaSpiritHealer(uint64_t guid) {
     if (!isInWorld() || !socket) return;
-    areaSpiritHealerGuid_ = guid;
     network::Packet packet(wireOpcode(Opcode::CMSG_AREA_SPIRIT_HEALER_QUERY));
     packet.writeUInt64(guid);
     socket->send(packet);
