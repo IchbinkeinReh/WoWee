@@ -6794,6 +6794,10 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
             // These events fire unconditionally on any rep change (not gated by callback).
             owner_.fireAddonEvent("UPDATE_FACTION", {});
             if (gainLine != 0) owner_.addLocalChatLine(ChatType::COMBAT_FACTION_CHANGE, line);
+            // 0x0074d460(0x24, ...) beside it, where it has the amount.
+            if (gainLine == 1)
+                owner_.fireAddonEventValues("COMBAT_TEXT_UPDATE", {
+                    combat_log::Arg::str("FACTION"), combat_log::Arg::str(name), combat_log::Arg::num(delta)});
         }
         // The standing's rank, before and after (0x005d0600), and what it
         // does to the flags and the list (0x005d20a0).

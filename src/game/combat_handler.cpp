@@ -1285,23 +1285,43 @@ void CombatHandler::handlePvpCredit(network::Packet& packet) {
         // honour, COMBATLOG_HONORGAIN_NO_RANK where the rank is negative.
         // This was "You gain N honor points." in English.
         //
-        // A ranked kill is COMBATLOG_HONORGAIN with the victim's
-        // PVP_RANK_<rank>_<n> title, n chosen from their race's flags,
-        // which this client does not read; that one keeps the English.
+        // A ranked kill is COMBATLOG_HONORGAIN with the victim's title,
+        // PVP_RANK_<rank>_<n>: n by the victim's FactionTemplate group, 0 for the
+        // Horde's (4), 1 for the Alliance's (2), none else.
+        std::string title;
+        const auto victim = victimGuid != 0 ? owner_.getEntityManager().getEntity(victimGuid) : nullptr;
+        if (victim && static_cast<int32_t>(honor) > 0 && static_cast<int32_t>(rank) >= 0) {
+            const uint16_t ft = fieldIndex(UF::UNIT_FIELD_FACTIONTEMPLATE);
+            auto* am = owner_.services().assetManager;
+            auto templates = am && am->isInitialized() ? am->loadDBCOptional("FactionTemplate.dbc") : nullptr;
+            const int32_t row = templates && templates->isLoaded() && ft != 0xFFFF
+                ? templates->findRecordById(victim->getField(ft)) : -1;
+            if (row >= 0) {
+                const uint32_t group = templates->getUInt32(static_cast<uint32_t>(row), 3);
+                const int side = (group & 4u) != 0 ? 0 : ((group & 2u) != 0 ? 1 : -1);
+                if (side >= 0) {
+                    const std::string key = "PVP_RANK_" + std::to_string(rank) + "_" + std::to_string(side);
+                    title = interfaceString(key.c_str(), nullptr);
+                }
+            }
+        }
         std::string msg;
         if (victimGuid == 0) {
             msg = interfaceFormat("COMBATLOG_HONORAWARD", "You have been awarded %d honor points.",
                                   {std::to_string(honor)});
-        } else if (static_cast<int32_t>(honor) > 0 && owner_.getEntityManager().getEntity(victimGuid)) {
+        } else if (static_cast<int32_t>(honor) > 0 && victim) {
             const std::string victimName = owner_.lookupName(victimGuid);
-            if (static_cast<int32_t>(rank) < 0) {
-                msg = interfaceFormat("COMBATLOG_HONORGAIN_NO_RANK", "%s dies, honorable kill (%d Honor Points)",
-                                      {victimName, std::to_string(honor)});
-            } else {
-                msg = "You gain " + std::to_string(honor) + " honor points.";
-            }
+            msg = static_cast<int32_t>(rank) < 0
+                ? interfaceFormat("COMBATLOG_HONORGAIN_NO_RANK", "%s dies, honorable kill (%d Honor Points)",
+                                  {victimName, std::to_string(honor)})
+                : interfaceFormat("COMBATLOG_HONORGAIN", "%s dies, honorable kill Rank: %s (%d Honor Points)",
+                                  {victimName, title, std::to_string(honor)});
         }
-        if (!msg.empty()) owner_.addLocalChatLine(ChatType::COMBAT_HONOR_GAIN, msg);
+        if (!msg.empty()) {
+            owner_.addLocalChatLine(ChatType::COMBAT_HONOR_GAIN, msg);
+            owner_.fireAddonEventValues("COMBAT_TEXT_UPDATE",   // 0x0074d4f0(0x2b, ...)
+                                        {combat_log::Arg::str("HONOR_GAINED"), combat_log::Arg::num(honor)});
+        }
         if (honor > 0) addCombatText(CombatTextEntry::HONOR_GAIN, static_cast<int32_t>(honor), 0, true);
         // 0x0050b6d0 -> 0x007155d0: a ranked victim this client has, for some
         // honour, gets "HK: <rank title>" over it (world text kind 5). The
@@ -1309,21 +1329,7 @@ void CombatHandler::handlePvpCredit(network::Packet& packet) {
         // group: 0 for the Horde's (4), 1 for the Alliance's (2), none else.
         // The DK form needs an honour below 1, which never gets this far.
         if (static_cast<int32_t>(honor) > 0 && static_cast<int32_t>(rank) >= 0) {
-            if (const auto victim = owner_.getEntityManager().getEntity(victimGuid)) {
-                std::string title;
-                const uint16_t ft = fieldIndex(UF::UNIT_FIELD_FACTIONTEMPLATE);
-                auto* am = owner_.services().assetManager;
-                auto templates = am && am->isInitialized() ? am->loadDBCOptional("FactionTemplate.dbc") : nullptr;
-                const int32_t row = templates && templates->isLoaded() && ft != 0xFFFF
-                    ? templates->findRecordById(victim->getField(ft)) : -1;
-                if (row >= 0) {
-                    const uint32_t group = templates->getUInt32(static_cast<uint32_t>(row), 3);
-                    const int side = (group & 4u) != 0 ? 0 : ((group & 2u) != 0 ? 1 : -1);
-                    if (side >= 0) {
-                        const std::string key = "PVP_RANK_" + std::to_string(rank) + "_" + std::to_string(side);
-                        title = interfaceString(key.c_str(), nullptr);
-                    }
-                }
+            if (victim) {
                 std::string hk = interfaceString("HK", nullptr);
                 if (hk.empty()) hk = "HK";
                 // The victim's rank goes with it, for its badge (0x007155d0

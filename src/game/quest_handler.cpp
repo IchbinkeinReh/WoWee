@@ -688,6 +688,8 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                         owner_.addLocalChatLine(ChatType::COMBAT_HONOR_GAIN,
                             interfaceFormat("COMBATLOG_HONORAWARD", "You have been awarded %d honor points.",
                                             {std::to_string(honor / 10)}));
+                        owner_.fireAddonEventValues("COMBAT_TEXT_UPDATE",   // 0x0074d4f0(0x2b, ...)
+                                                    {combat_log::Arg::str("HONOR_GAINED"), combat_log::Arg::num(honor / 10)});
                     }
                     if (talents > 0) {
                         owner_.addLocalChatLine(ChatType::MONEY,
@@ -698,6 +700,8 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                         owner_.addLocalChatLine(ChatType::ARENA_POINTS,
                             interfaceFormat("COMBATLOG_ARENAPOINTSAWARD", "You have been awarded %d arena points.",
                                             {std::to_string(arena)}));
+                        owner_.fireAddonEventValues("COMBAT_TEXT_UPDATE",   // 0x0074d4f0(0x2f, ...)
+                                                    {combat_log::Arg::str("ARENA_POINTS_GAINED"), combat_log::Arg::num(arena)});
                     }
                 }
             }
