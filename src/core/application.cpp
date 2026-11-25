@@ -1316,6 +1316,13 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         if (renderer && renderer->getCameraController()) {
             renderer->getCameraController()->setObjectComing(
                 [this](const glm::vec3& lo, const glm::vec3& hi, bool models) {
+                    // Nor before it is in the world: the client's player is
+                    // made by the realm's create, and what it stands on comes
+                    // with that. Behind the loading screen it fell for as long
+                    // as the create took.
+                    if (gameHandler && gameHandler->getState() == game::WorldState::IN_WORLD &&
+                        !gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid()))
+                        return true;
                     return entitySpawner_ && entitySpawner_->objectComingIn(lo, hi, models);
                 });
         }
