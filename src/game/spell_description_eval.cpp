@@ -74,8 +74,9 @@ DescriptionBranch pickDescriptionBranch(const std::string& raw, std::size_t at,
                 tail = raw.find(']', o);
                 if (tail == std::string::npos) return out;
             }
-            const std::size_t elseOpen = tail + 1;
-            if (elseOpen >= raw.size() || raw[elseOpen] != '[') return out;
+            // The next bracket, whatever stands before it (0x00577030).
+            const std::size_t elseOpen = raw.find('[', tail + 1);
+            if (elseOpen == std::string::npos) return out;
             const std::size_t elseClose = raw.find(']', elseOpen);
             if (elseClose == std::string::npos) return out;
             out = {true, elseClose + 1, raw.substr(open + 1, close - open - 1)};
@@ -85,8 +86,8 @@ DescriptionBranch pickDescriptionBranch(const std::string& raw, std::size_t at,
             condAt = close + 2;
             continue;
         }
-        const std::size_t elseOpen = close + 1;
-        if (elseOpen >= raw.size() || raw[elseOpen] != '[') return out;
+        const std::size_t elseOpen = raw.find('[', close + 1);
+        if (elseOpen == std::string::npos) return out;
         const std::size_t elseClose = raw.find(']', elseOpen);
         if (elseClose == std::string::npos) return out;
         out = {true, elseClose + 1, raw.substr(elseOpen + 1, elseClose - elseOpen - 1)};
@@ -298,7 +299,9 @@ bool Parser::atom(const std::string& text, std::size_t& i, float& out) {
         // the expression rather than passing unnoticed behind a condition that
         // happened not to choose it.
         auto bracketed = [&](std::string& body) -> bool {
-            if (i >= text.size() || text[i] != '[') return false;
+            // The next one, whatever stands before it (0x00577030).
+            i = std::min(text.find('[', i), text.size());
+            if (i >= text.size()) return false;
             int open = 0;
             const std::size_t start = ++i;
             for (; i < text.size(); ++i) {

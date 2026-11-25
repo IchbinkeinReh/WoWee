@@ -74,6 +74,22 @@ TEST_CASE("a talent the player has changes the number", "[spell][description]") 
     CHECK(evaluated("percent", contextFor(kSinisterStrike, {14057, 14072})) == Catch::Approx(120.0));
 }
 
+// 0x00577030: the German row of Slice and Dice.
+TEST_CASE("what stands between the two brackets is passed over", "[spell][description]") {
+    const std::string declared = "$glyph=$?s56810[${3}]$[${0}]";
+    CHECK(evaluated("glyph", contextFor(declared)) == Catch::Approx(0.0));
+    CHECK(evaluated("glyph", contextFor(declared, {56810})) == Catch::Approx(3.0));
+    const std::string raw = "$?s1[A]$[B]y";
+    auto b = pickDescriptionBranch(raw, 2, [](char, uint32_t) { return false; });
+    REQUIRE(b.ok);
+    CHECK(b.body == "B");
+    CHECK(raw.substr(b.end) == "y");
+    b = pickDescriptionBranch(raw, 2, [](char, uint32_t) { return true; });
+    REQUIRE(b.ok);
+    CHECK(b.body == "A");
+    CHECK(raw.substr(b.end) == "y");
+}
+
 TEST_CASE("a declaration can name another one", "[spell][description]") {
     // $percent's else branch is ${$<opportunity1>}, so resolving it at all
     // means the nested lookup worked.
