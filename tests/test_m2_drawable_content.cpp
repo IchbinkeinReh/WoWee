@@ -165,3 +165,17 @@ TEST_CASE("no group of a building is told by its name", "[wmo]") {
         CHECK(renderer.find(rule) == std::string::npos);
     }
 }
+
+// T326: what a model collides with, is picked by and casts is its own triangles
+// and batches (0x007a50c0, 0x0081cff0): a name that sounds like an effect, or few
+// vertices with many emitters, made a hazard light's barrel air.
+TEST_CASE("no solid model is taken for an effect by its name", "[m2]") {
+    const std::string queries = source("src/rendering/m2_renderer_instance.cpp");
+    REQUIRE(!queries.empty());
+    CHECK(queries.find("isSpellEffect") == std::string::npos);
+    const std::string renderer = source("src/rendering/m2_renderer.cpp");
+    const size_t at = renderer.find("void M2Renderer::registerRtModel(");
+    REQUIRE(at != std::string::npos);
+    CHECK(renderer.substr(at, 1500).find("isSpellEffect") == std::string::npos);
+    CHECK(renderer.substr(at, 1500).find("isSpellKit") != std::string::npos);
+}

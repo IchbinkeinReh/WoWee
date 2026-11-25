@@ -2346,7 +2346,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     // effects, not things). Everything else drawn casts while tracing -
     // ground clutter, a bird, a rug - but what is see-through: a blended
     // batch, and an alpha key's cut-away texels (below).
-    if (gpuModel.isInvisibleTrap || gpuModel.isSpellEffect || gpuModel.isLightBeam) return;
+    if (gpuModel.isInvisibleTrap || gpuModel.isSpellKit || gpuModel.isLightBeam) return;
     // An animated model - a door, a chest, a banner, a lantern on its chain -
     // as one mesh would cast its bind pose, not the pose on screen. It is
     // cut into pieces by bone instead, which syncRtScene places by this

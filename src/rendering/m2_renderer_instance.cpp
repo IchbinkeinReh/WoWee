@@ -1428,7 +1428,7 @@ void M2Renderer::gatherCollisionTriangles(const glm::vec3& boxMin, const glm::ve
             continue;
         }
         const M2ModelGPU& model = *instance.cachedModel;
-        if (!model.collision.valid() || model.isInvisibleTrap || model.isSpellEffect) continue;
+        if (!model.collision.valid() || model.isInvisibleTrap || model.isSpellKit) continue;
 
         // The box in the model's own space, for the mesh's cell grid.
         glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
@@ -1478,7 +1478,7 @@ std::optional<float> M2Renderer::rayHitDrawnDoodad(const glm::vec3& origin, cons
         const auto& instance = instances[idx];
         if (!instance.cachedModel || instance.detailDoodad || instance.isGameObject) continue;
         const M2ModelGPU& model = *instance.cachedModel;
-        if (model.pickMesh.empty() || model.isInvisibleTrap || model.isSpellEffect) continue;
+        if (model.pickMesh.empty() || model.isInvisibleTrap || model.isSpellKit) continue;
         if (instance.scale <= 0.001f || instance.fade <= 0.0f) continue;
         // 0x0081cff0: the models whose bounding sphere the ray meets.
         const glm::vec3 toCenter = instance.cachedCullCenter - origin;
@@ -1609,7 +1609,7 @@ void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3&
         // invisible trap) - a mount's, a creature's - which drew a mounted
         // player's own steed round it as a wall. Units are not in the
         // client's collision lists at all.
-        if (model.isSpellEffect || model.isInvisibleTrap || !model.collision.valid()) continue;
+        if (model.isSpellKit || model.isInvisibleTrap || !model.collision.valid()) continue;
 
         glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
         for (int c = 0; c < 8; ++c) {
@@ -1692,7 +1692,7 @@ void M2Renderer::gatherFloorCandidates(const glm::vec3& boxMin, const glm::vec3&
         }
         if (!inst.cachedModel || inst.scale <= 0.001f || inst.skipCollision) continue;
         const M2ModelGPU& model = *inst.cachedModel;
-        if (!model.collision.valid() || model.isInvisibleTrap || model.isSpellEffect) continue;
+        if (!model.collision.valid() || model.isInvisibleTrap || model.isSpellKit) continue;
         outIds.push_back(inst.id);
     }
 }
@@ -1755,7 +1755,7 @@ std::optional<float> M2Renderer::floorAmong(const std::vector<size_t>& candidate
         // from the bounds of everything the name test did not call soft is
         // how a campfire - elwynncampfire.m2, with no collision triangles -
         // came to stop a character the client walks straight through.
-        if (!authoredCollision || model.isInvisibleTrap || model.isSpellEffect) continue;
+        if (!authoredCollision || model.isInvisibleTrap || model.isSpellKit) continue;
         if (instance.skipCollision) continue;
 
         // --- Mesh-based floor: vertical ray vs collision triangles ---
@@ -1966,7 +1966,7 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
         // from the bounds of everything the name test did not call soft is
         // how a campfire - elwynncampfire.m2, with no collision triangles -
         // came to stop a character the client walks straight through.
-        if (!authoredCollision || model.isInvisibleTrap || model.isSpellEffect) continue;
+        if (!authoredCollision || model.isInvisibleTrap || model.isSpellKit) continue;
         if (instance.skipCollision) continue;
         if (instance.scale <= 0.001f) continue;
 
@@ -2262,7 +2262,7 @@ float M2Renderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3&
         // from the bounds of everything the name test did not call soft is
         // how a campfire - elwynncampfire.m2, with no collision triangles -
         // came to stop a character the client walks straight through.
-        if (!authoredCollision || model.isInvisibleTrap || model.isSpellEffect) continue;
+        if (!authoredCollision || model.isInvisibleTrap || model.isSpellKit) continue;
         glm::vec3 localMin, localMax;
         getTightCollisionBounds(model, localMin, localMax);
         // Skip tiny doodads for camera occlusion; they cause jitter and false hits.

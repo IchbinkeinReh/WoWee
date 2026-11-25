@@ -202,7 +202,7 @@ void M2Renderer::seedIdleSequence(const M2ModelGPU& model, M2Instance& instance)
     instance.currentSequenceIndex = idle.index;
     instance.idleSequenceIndex = idle.index;
     instance.animDuration = static_cast<float>(duration);
-    instance.idlesAlone = !model.isSpellEffect;
+    instance.idlesAlone = !model.isSpellKit;
     if (idle.mode == anim::PlayMode::HoldStart || idle.mode == anim::PlayMode::HoldEnd) {
         instance.animTime = idle.mode == anim::PlayMode::HoldEnd ? instance.animDuration : 0.0f;
         instance.animSpeed = 0.0f;

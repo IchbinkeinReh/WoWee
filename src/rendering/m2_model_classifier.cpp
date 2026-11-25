@@ -458,8 +458,7 @@ M2ClassificationResult classifyM2Model(
     // Walk into the arch, walk onto the pad - never around either. Set after the
     // curb override so nothing can put the block back.
     if (teleportStructure) r.collisionNoBlock = true;
-    // isSpellEffect already excludes VFX from every collision path; say it
-    // outright too, so a future path that reads only this flag agrees.
+    // An emitter's holder is no obstacle to what reads this flag.
     if (particleEmitterVfx) r.collisionNoBlock = true;
     // Ground-clutter detail cards are always non-blocking.
     if (r.isGroundDetail) r.collisionNoBlock = true;
