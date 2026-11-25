@@ -2621,7 +2621,8 @@ static int lua_GetCombatRatingBonus(lua_State* L) {
 static int lua_GetArmorPenetration(lua_State* L) {
     auto* gh = getGameHandler(L);
     constexpr int kCrArmorPenetration = 24;  // 0-based CombatRating enum
-    lua_pushnumber(L, gh ? gh->getCombatRatingBonus(kCrArmorPenetration) : 0.0);
+    // No more than all of it (0x0060e4e0).
+    lua_pushnumber(L, gh ? std::min<double>(gh->getCombatRatingBonus(kCrArmorPenetration), 100.0) : 0.0);
     return 1;
 }
 
