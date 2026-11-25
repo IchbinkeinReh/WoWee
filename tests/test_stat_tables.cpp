@@ -81,3 +81,8 @@ TEST_CASE("only a companion's spell unlearns a companion", "[removed_spell]") {
     // The last of them.
     CHECK(removedSpellEvents(false, true, false) == Events{"COMPANION_UNLEARNED", "SPELLS_CHANGED"});
 }
+
+TEST_CASE("a companion learned brings the lists up to date", "[removed_spell]") {
+    using Events = std::vector<std::string>;
+    CHECK(wowee::game::learnedCompanionEvents() == Events{"COMPANION_UPDATE", "COMPANION_LEARNED"});
+}

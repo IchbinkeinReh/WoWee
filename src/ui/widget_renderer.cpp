@@ -3431,7 +3431,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             const float indent = w->indentedWordWrap ? kIndentedWrapPixels : 0.0f;
             if (boxed && (w->fittedFrom != w->text || w->fittedWidth != boxWidth || w->fittedSize != size ||
                           w->fittedLines != (w->wordWrap ? most : -most - 2) || w->fittedFace != w->fontFace)) {
-                w->fittedText = interfaceFittedText(w->text, font, size, boxWidth, w->wordWrap ? most : 1, w->wordWrap,
+                w->fittedText = interfaceFittedText(w->text, font, size, boxWidth, w->wordWrap ? most : std::min(most, 1), w->wordWrap,
                                                     w->nonSpaceWrap, indent);
                 w->fittedFrom = w->text;
                 w->fittedWidth = boxWidth;

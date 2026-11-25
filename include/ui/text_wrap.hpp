@@ -239,11 +239,10 @@ inline constexpr float kIndentedWrapPixels = 15.0f;
 /// The text a box shows of one (0x00483a40): all of it where it fits, else as
 /// many of its letters as fit with "..." after them, cut between characters
 /// (UTF-8). `fits` says of a text whether the box shows it whole; when not even
-/// the dots fit they are it.
+/// the dots fit they are it. Without dots, what can be drawn of it.
 template <typename Fits>
-std::string fitText(const std::string& text, Fits&& fits) {
+std::string fitText(const std::string& text, Fits&& fits, const std::string& dots = "...") {
     if (text.empty() || fits(text)) return text;
-    static const std::string kDots = "...";
     std::vector<std::size_t> starts;   // of each character
     for (std::size_t i = 0; i < text.size(); ++i)
         if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) starts.push_back(i);
@@ -251,10 +250,10 @@ std::string fitText(const std::string& text, Fits&& fits) {
     std::size_t low = 0, high = starts.size();
     while (low + 1 < high) {
         const std::size_t mid = low + (high - low) / 2;
-        if (fits(text.substr(0, starts[mid]) + kDots)) low = mid;
+        if (fits(text.substr(0, starts[mid]) + dots)) low = mid;
         else high = mid;
     }
-    return text.substr(0, starts[low]) + kDots;
+    return text.substr(0, starts[low]) + dots;
 }
 
 /// Where a line starts inside its box, measured from the box's left edge.

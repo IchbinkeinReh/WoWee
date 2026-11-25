@@ -1889,9 +1889,9 @@ std::string fontStringShown(const wowee::ui::Widget& w) {
     if (width <= 0.0f && !given) return w.text;
     const float size = wowee::ui::interfaceFontSize(w.fontHeight);
     return wowee::ui::interfaceFittedText(w.text, w.fontFace, w.fontHeight, given ? w.width : width,
-                                          !w.wordWrap ? 1
-                                          : given     ? wowee::ui::linesThatFit(w.height, size, w.lineSpacing)
-                                                      : 0,
+                                          !given       ? 0
+                                          : w.wordWrap ? wowee::ui::linesThatFit(w.height, size, w.lineSpacing)
+                                                       : 1,
                                           w.wordWrap, w.nonSpaceWrap);
 }
 

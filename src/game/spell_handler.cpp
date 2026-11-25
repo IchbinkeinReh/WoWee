@@ -5929,7 +5929,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
             for (const auto& c : owner_.getCompanions(mount))
                 if (c.spellId == spellId) creature = c.creatureId;
             if (creature == 0 || owner_.getCreatureInfoCache().count(creature)) {
-                owner_.addonEventCallbackRef()("COMPANION_LEARNED", {});
+                for (const std::string& event : learnedCompanionEvents()) owner_.addonEventCallbackRef()(event, {});
             } else {
                 GameHandler& gh = owner_;
                 owner_.askEntryThen(false, creature, "companion learned " + std::to_string(spellId),
@@ -5937,7 +5937,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
                     if (!found) return;
                     const std::string line = learnedSpellText(gh, spellId);
                     if (!line.empty()) gh.addSystemChatMessage(line);
-                    gh.fireAddonEvent("COMPANION_LEARNED", {});
+                    for (const std::string& event : learnedCompanionEvents()) gh.fireAddonEvent(event, {});
                 });
             }
         } else {

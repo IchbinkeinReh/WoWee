@@ -21,4 +21,9 @@ namespace wowee::game {
     return events;
 }
 
+/// And of a companion learned, as its creature is known (0x00542030, 0x0053ebc0).
+[[nodiscard]] inline std::vector<std::string> learnedCompanionEvents() {
+    return {"COMPANION_UPDATE", "COMPANION_LEARNED"};
+}
+
 }  // namespace wowee::game

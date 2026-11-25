@@ -337,3 +337,11 @@ TEST_CASE("a break at the end is a line of the string's height", "[textwrap]") {
     CHECK(textHeight(lines("-\n"), 12.0f, 0.0f) == Catch::Approx(24.0f));
     CHECK(textHeight(lines("-\n-\n"), 12.0f, 0.0f) == Catch::Approx(36.0f));
 }
+
+// 0x00483a40: one without a height.
+TEST_CASE("a text that is not shortened ends without dots", "[text_wrap]") {
+    const auto upTo = [](size_t most) { return [most](const std::string& t) { return t.size() <= most; }; };
+    CHECK(fitText("Anglerwettbewerb", upTo(6), "") == "Angler");
+    CHECK(fitText("Anglerwettbewerb", upTo(6)) == "Ang...");
+    CHECK(fitText("Angler", upTo(6), "") == "Angler");
+}

@@ -120,7 +120,9 @@ int interfaceTextLines(const std::string& text, const std::string& fontFace,
 
 std::string interfaceFittedText(const std::string& text, ImFont* font, float size, float width, int lines,
                                 bool wordWrap, bool nonSpaceWrap, float indent) {
-    if (text.empty() || width <= 0.0f) return text;
+    // 0x00483a40: one without a height is not shortened - its lines are broken
+    // at its width, and end where a word is too long for one.
+    if (text.empty() || width <= 0.0f || (lines <= 0 && !wordWrap)) return text;
     const auto measure = [&](const std::string& piece) {
         if (font) return font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
         return static_cast<float>(piece.size()) * size * 0.5f;
@@ -140,7 +142,7 @@ std::string interfaceFittedText(const std::string& text, ImFont* font, float siz
             }
         }
         return wide <= width + 0.5f;
-    });
+    }, lines > 0 ? "..." : "");
 }
 
 std::string interfaceFittedText(const std::string& text, const std::string& fontFace, float fontHeight, float width,
