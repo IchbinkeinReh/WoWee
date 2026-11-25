@@ -7249,6 +7249,7 @@ void Application::render() {
                     // interface toggled off, UIParent:Hide()) nothing of the
                     // map is drawn - not the bare disc in the corner.
                     map->setFrameHidden(mm && !mm->visible);
+                    map->setFrameAlpha(mm ? widgets.effectiveAlpha(*mm) : 1.0f);
                     if (mm && mm->visible && mm->rectW > 0.0f && mm->rectH > 0.0f) {
                         const float sc = widgets.uiScale();
                         map->setScreenRect(mm->left * sc,

@@ -120,6 +120,9 @@ public:
     /// back to the corner this client's own interface puts it in, a bare
     /// disc over the world.
     void setFrameHidden(bool hidden) { frameHidden_ = hidden; }
+    /// How opaque that frame is: the map is as it is.
+    void setFrameAlpha(float alpha) { frameAlpha_ = alpha; }
+    [[nodiscard]] bool isShown() const { return enabled && !frameHidden_; }
     /// Where the map is actually being drawn, when something placed it.
     ///
     /// The marker pass needs this: it used to assume the corner this client
@@ -227,6 +230,7 @@ private:
     float opacity_ = 1.0f;
     bool  haveRect_ = false;
     bool  frameHidden_ = false;
+    float frameAlpha_ = 1.0f;
     float rectX_ = 0.0f, rectY_ = 0.0f, rectW_ = 0.0f, rectH_ = 0.0f;
 
     // Throttling

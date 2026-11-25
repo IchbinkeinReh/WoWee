@@ -8177,7 +8177,10 @@ void Renderer::recordScreenEffects() {
                 break;
             }
         }
-        if (minimap && minimap->isEnabled() && window && window->getWidth() > 0 && window->getHeight() > 0) {
+        // The map is kept out of it where it has been drawn already - not where it comes
+        // after, or is hidden: a disc of the bare scene.
+        if (minimap && minimap->isShown() && !minimapDrawsInOverlay_ && window && window->getWidth() > 0 &&
+            window->getHeight() > 0) {
             in.keepRect = minimap->screenUvRect(window->getWidth(), window->getHeight());
         }
     }

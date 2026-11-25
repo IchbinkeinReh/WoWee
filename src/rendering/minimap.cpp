@@ -882,7 +882,7 @@ void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
     push.rotation = rotation;
     push.zoomRadius = zoomRadius;
     push.squareShape = squareShape ? 1 : 0;
-    push.opacity = opacity_;
+    push.opacity = opacity_ * frameAlpha_;
     push.hasMask = maskLoaded_ ? 1 : 0;
 
     vkCmdPushConstants(cmd, displayPipelineLayout,
