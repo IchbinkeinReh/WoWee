@@ -159,3 +159,23 @@ TEST_CASE("the table behind a widget", "[lua]") {
         CHECK(lua_gettaintof(s.L, -1) == addon);
     }
 }
+
+// 0x004a1f10, 0x004a2510: what GetRegions and GetChildren answer.
+TEST_CASE("the objects of some widgets", "[lua]") {
+    State s;
+    lua_settop(s.L, 0);
+    s.frame("F3", 9);
+    REQUIRE(wowee::addons::pushObjects(s.L, {9, 7, 5}) == 2);
+    REQUIRE(lua_gettop(s.L) == 2);
+    const auto name = [&](int at) {
+        lua_getfield(s.L, at, "__name");
+        const std::string out = lua_tostring(s.L, -1) ? lua_tostring(s.L, -1) : "";
+        lua_pop(s.L, 1);
+        return out;
+    };
+    CHECK(name(1) == "F3");
+    CHECK(name(2) == "F1");
+    CHECK(wowee::addons::pushObjects(s.L, {}) == 0);
+    CHECK(wowee::addons::pushObjects(s.L, std::vector<uint32_t>(2000000, 5)) == -1);
+    CHECK(lua_gettop(s.L) == 2);
+}

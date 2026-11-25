@@ -711,23 +711,7 @@ uint32_t widgetIdOf(lua_State* L, int index) {
 /// made with the taint set aside): fresh, taking the caller's taint, whoever
 /// created the frame. The registry here is a table its creator wrote into, so
 /// it is read quietly and the frame stamped as the client's push would be.
-void pushFrameByWid(lua_State* L, uint32_t wid) {
-    const int caller = taint::current();
-    {
-        taint::Quiet quiet;
-        lua_getglobal(L, "__WoweeFramesByWid");
-        if (lua_istable(L, -1)) {
-            lua_pushinteger(L, static_cast<lua_Integer>(wid));
-            lua_rawget(L, -2);
-            lua_remove(L, -2);          // drop the registry, keep the frame
-            if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_pushnil(L); }
-        } else {
-            lua_pop(L, 1);
-            lua_pushnil(L);
-        }
-    }
-    lua_settaintof(L, -1, caller);
-}
+void pushFrameByWid(lua_State* L, uint32_t wid) { wowee::addons::pushFrameByHandle(L, wid); }
 
 wowee::ui::Widget* widgetOf(lua_State* L, int index) {
     auto* tree = wowee::addons::getWidgetTree(L);
@@ -8990,54 +8974,21 @@ namespace {
 /// GetNumRegions) rather than pushed.
 int pushChildWidgets(lua_State* L, bool regions, bool countOnly) {
     auto* tree = wowee::addons::getWidgetTree(L);
-    const uint32_t id = widgetIdOf(L, 1);
-    if (!tree || id == 0) return 0;
-    const auto* w = tree->get(id);
+    const auto* w = tree ? tree->get(widgetIdOf(L, 1)) : nullptr;
     if (!w) return 0;
-
-    // Reached quietly, each child pushed fresh: see pushFrameByWid.
-    const int caller = taint::current();
-    taint::Quiet quiet;
-    lua_getglobal(L, "__WoweeFramesByWid");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
-    const int registry = lua_gettop(L);
-
-    // Room for all of them before any are pushed. Lua guarantees only a small
-    // slack above the arguments, and UIParent has hundreds of children - the
-    // first run of this corrupted the heap rather than raising, because
-    // lua_pushinteger past the top writes outside the stack.
-    if (!lua_checkstack(L, static_cast<int>(w->children.size()) + 2)) {
-        lua_pop(L, 1);
-        LOG_WARNING("GetChildren: no room for ", w->children.size(),
-                    " children of '", w->name, "'; answering none");
-        return 0;
-    }
-
-    int pushed = 0;
+    std::vector<uint32_t> ids;
     for (const uint32_t childId : w->children) {
         const auto* child = tree->get(childId);
-        if (!child || (child->kind == wowee::ui::WidgetKind::Frame) == regions || child->isTitleRegion) continue;
-        lua_pushinteger(L, static_cast<lua_Integer>(childId));
-        lua_rawget(L, registry);
-        if (lua_istable(L, -1) && countOnly) {
-            lua_pop(L, 1);
-            ++pushed;
-        } else if (lua_istable(L, -1)) {
-            lua_settaintof(L, -1, caller);   // fresh, as GetParent
-            ++pushed;
-        } else {
-            // A widget with no Lua table behind it is not a child anyone can
-            // be handed; dropping it keeps the list free of nils, which a
-            // vararg callee would count as children.
-            lua_pop(L, 1);
-        }
+        if (child && (child->kind == wowee::ui::WidgetKind::Frame) != regions && !child->isTitleRegion)
+            ids.push_back(childId);
     }
-    lua_remove(L, registry);    // drop the registry, keep the children above it
-    if (countOnly) {
-        lua_pushinteger(L, pushed);
-        return 1;
-    }
-    return pushed;
+    const int pushed = wowee::addons::pushObjects(L, ids);
+    if (pushed < 0)
+        return luaL_error(L, "%s:%s(): Stack overflow", frameNameOnStack(L, 1), regions ? "GetRegions" : "GetChildren");
+    if (!countOnly) return pushed;
+    lua_pop(L, pushed);
+    lua_pushnumber(L, pushed);
+    return 1;
 }
 
 /// Region:GetSize() - the width and the height, as GetWidth and GetHeight

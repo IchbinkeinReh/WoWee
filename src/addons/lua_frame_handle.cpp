@@ -67,6 +67,17 @@ void pushFrameByHandle(lua_State* L, uint32_t widget) {
     lua_settaintof(L, -1, caller);
 }
 
+int pushObjects(lua_State* L, const std::vector<uint32_t>& widgets) {
+    if (!lua_checkstack(L, static_cast<int>(widgets.size()) + 4)) return -1;
+    int pushed = 0;
+    for (const uint32_t widget : widgets) {
+        pushFrameByHandle(L, widget);
+        if (lua_istable(L, -1)) ++pushed;
+        else lua_pop(L, 1);
+    }
+    return pushed;
+}
+
 void takeSelfByHandle(lua_State* L) {
     if (lua_type(L, 1) != LUA_TTABLE) return;
     const int caller = taint::current();

@@ -7,6 +7,7 @@
 /// type(frame[0]) == "userdata".
 
 #include <cstdint>
+#include <vector>
 
 struct lua_State;
 extern "C" {
@@ -23,6 +24,10 @@ void setFrameHandle(lua_State* L, uint32_t widget);
 /// Pushes the table behind a widget, as the client pushes an object - with the
 /// caller's taint - or nil for a widget that has none.
 void pushFrameByHandle(lua_State* L, uint32_t widget);
+
+/// Pushes the tables behind the widgets, without those that have none, and
+/// answers how many; -1, and nothing pushed, where the stack has no room.
+int pushObjects(lua_State* L, const std::vector<uint32_t>& widgets);
 
 /// The widget of a handle, 0 for a pointer that is none.
 uint32_t widgetOfHandle(const void* handle);
