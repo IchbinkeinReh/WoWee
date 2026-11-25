@@ -3957,6 +3957,14 @@ public:
         return collapsedFactionIds_.count(factionId) > 0;
     }
     void setFactionCollapsed(uint32_t factionId, bool collapsed);
+    /// The factions or their flags are others: the list is made anew when it is
+    /// next asked for (0x005d1880).
+    void reputationListChanged() {
+        reputationListBuilt_ = false;
+        reputationRowsDirty_ = true;
+    }
+    /// Faction.dbc's description, "" for one without.
+    const std::string& getFactionDescription(uint32_t factionId) const;
     /// The faction this one is grouped under, or 0 for a top-level one.
     uint32_t getFactionParentId(uint32_t factionId) const;
 
@@ -5871,7 +5879,10 @@ public:
     auto& playerExploredZonesRef() { return playerExploredZones_; }
     auto& hasPlayerExploredZonesRef() { return hasPlayerExploredZones_; }
     auto& factionStandingsRef() { return factionStandings_; }
-    auto& initialFactionsRef() { return initialFactions_; }
+    auto& initialFactionsRef() {
+        reputationListChanged();
+        return initialFactions_;
+    }
 
     // ── Corpse & Home Bind ───────────────────────────────────────────
     auto& corpseGuidRef() { return corpseGuid_; }
@@ -7145,6 +7156,7 @@ private:
     std::unordered_map<uint32_t, int32_t> factionStandings_;
     // Faction name cache (factionId → name), populated lazily from Faction.dbc
     mutable std::unordered_map<uint32_t, std::string> factionNameCache_;
+    mutable std::unordered_map<uint32_t, std::string> factionDescriptionCache_;
     // repListId → factionId mapping (populated with factionNameCache)
     mutable std::unordered_map<uint32_t, uint32_t> factionRepListToId_;
     // factionId → repListId reverse mapping

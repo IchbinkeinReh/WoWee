@@ -1,3 +1,4 @@
+#include "game/reputation_tree.hpp"
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
 #include "game/macro_slots.hpp"
@@ -3003,6 +3004,10 @@ void GameHandler::loadFactionNameCache() const {
             if (!name.empty()) {
                 factionNameCache_[factionId] = std::move(name);
             }
+            // The description is the second localised string, as long as the first.
+            const uint32_t descField = nameField + (dbc->getFieldCount() - nameField) / 2;
+            std::string desc = descField > nameField ? dbc->getString(i, descField) : std::string();
+            if (!desc.empty()) factionDescriptionCache_[factionId] = std::move(desc);
         }
         if (hasParentField) {
             const uint32_t parentId = dbc->getUInt32(i, PARENT_FIELD);
@@ -3413,6 +3418,7 @@ void GameHandler::setFactionAtWar(uint32_t repListId, bool atWar) {
     // the realm either way.
     if (atWar && !isFactionPeaceForced(repListId)) initialFactions_[repListId].flags |= FACTION_FLAG_AT_WAR;
     else initialFactions_[repListId].flags &= ~FACTION_FLAG_AT_WAR;
+    reputationListChanged();
     if (!isInWorld() || !socket) return;
     // CMSG_SET_FACTION_ATWAR: uint32 repListId + uint8 flag
     network::Packet pkt(wireOpcode(Opcode::CMSG_SET_FACTION_ATWAR));
@@ -3427,6 +3433,7 @@ void GameHandler::setFactionInactive(uint32_t repListId, bool inactive) {
     // No SMSG confirmation is sent for inactive, so update the local flag directly.
     if (inactive) initialFactions_[repListId].flags |=  FACTION_FLAG_INACTIVE;
     else          initialFactions_[repListId].flags &= ~FACTION_FLAG_INACTIVE;
+    reputationListChanged();
     if (!isInWorld() || !socket) return;
     // CMSG_SET_FACTION_INACTIVE: uint32 repListId + uint8 flag
     network::Packet pkt(wireOpcode(Opcode::CMSG_SET_FACTION_INACTIVE));
@@ -3434,12 +3441,21 @@ void GameHandler::setFactionInactive(uint32_t repListId, bool inactive) {
     pkt.writeUInt8(inactive ? 1u : 0u);
     socket->send(pkt);
     LOG_DEBUG("CMSG_SET_FACTION_INACTIVE: repListId=", repListId, " inactive=", inactive);
+    fireAddonEvent("UPDATE_FACTION", {});  // 0x005d1880
 }
 
 std::string GameHandler::getFactionName(uint32_t factionId) const {
     auto it = factionNameCache_.find(factionId);
     if (it != factionNameCache_.end()) return it->second;
     return "faction #" + std::to_string(factionId);
+}
+
+const std::string& GameHandler::getFactionDescription(uint32_t factionId) const {
+    loadFactionNameCache();
+    const auto it = factionDescriptionCache_.find(factionId);
+    if (it != factionDescriptionCache_.end()) return it->second;
+    static const std::string empty;
+    return empty;
 }
 
 const std::string& GameHandler::getFactionNamePublic(uint32_t factionId) const {
@@ -6207,6 +6223,7 @@ const std::vector<GameHandler::ReputationEntry>& GameHandler::getReputationList(
     // getFactionIdByRepListId loads the cache itself on the first ask, so there
     // is nothing to prime here.
     reputationListBuilt_ = true;
+    reputationList_.clear();
 
     for (size_t repIndex = 0; repIndex < initialFactions_.size(); ++repIndex) {
         const auto& standing = initialFactions_[repIndex];
@@ -6227,7 +6244,7 @@ const std::vector<GameHandler::ReputationEntry>& GameHandler::getReputationList(
         reputationList_.push_back(std::move(e));
     }
     // Walked in the server's own order already, so no sort is needed.
-    LOG_INFO("Reputation: ", reputationList_.size(), " visible factions");
+    LOG_DEBUG("Reputation: ", reputationList_.size(), " visible factions");
     return reputationList_;
 }
 
@@ -6319,95 +6336,33 @@ const std::vector<GameHandler::ReputationRow>& GameHandler::getReputationRows() 
     if (flat.empty()) return reputationRows_;
     reputationRowsDirty_ = false;
 
-    // Everything drawn: the visible factions, plus every faction one of them
-    // descends from. A group whose members the player has not met is not drawn
-    // at all, so its heading is not either.
+    namespace tree = reputation_tree;
     std::unordered_map<uint32_t, const ReputationEntry*> byId;
-    std::unordered_set<uint32_t> displayed;
-    for (const auto& e : flat) { byId[e.factionId] = &e; displayed.insert(e.factionId); }
+    std::vector<tree::Known> known;
     for (const auto& e : flat) {
-        // Faction.dbc is data, and a cycle in it would spin here. The real
-        // chain is three deep, so a small ceiling costs nothing.
-        uint32_t p = getFactionParentId(e.factionId);
-        for (int depth = 0; p != 0 && depth < 8; ++depth) {
-            displayed.insert(p);
-            p = getFactionParentId(p);
-        }
+        byId[e.factionId] = &e;
+        known.push_back({e.factionId, (e.flags & FACTION_FLAG_INACTIVE) != 0});
     }
-
-    // Where each group sits: at its first member's place in the server's list.
-    // Ordering by the heading's own repListId instead would scatter the groups,
-    // since Classic is 96 while the factions inside it start at 10.
-    constexpr size_t kNoRank = static_cast<size_t>(-1);
-    std::unordered_map<uint32_t, size_t> rank;
-    for (uint32_t id : displayed) rank[id] = kNoRank;
-    for (size_t i = 0; i < flat.size(); ++i) {
-        uint32_t id = flat[i].factionId;
-        for (int depth = 0; id != 0 && depth < 9; ++depth) {
-            auto it = rank.find(id);
-            if (it != rank.end() && i < it->second) it->second = i;
-            id = getFactionParentId(id);
-        }
-    }
-
-    // The tree, with a parent outside the drawn set counting as no parent.
-    std::unordered_map<uint32_t, std::vector<uint32_t>> children;
-    for (uint32_t id : displayed) {
-        const uint32_t parent = getFactionParentId(id);
-        children[displayed.count(parent) ? parent : 0u].push_back(id);
-    }
-    const auto byRank = [&](uint32_t a, uint32_t b) {
-        if (rank[a] != rank[b]) return rank[a] < rank[b];
-        return getFactionNamePublic(a) < getFactionNamePublic(b);
+    const auto nameOf = [this](uint32_t id) {
+        if (id == tree::kOther) return interfaceString("FACTION_OTHER", "Other");
+        if (id == tree::kInactive) return interfaceString("FACTION_INACTIVE", "Inactive");
+        return getFactionNamePublic(id);
     };
-    for (auto& [parent, kids] : children) {
-        (void)parent;
-        std::sort(kids.begin(), kids.end(), byRank);
-    }
-
-    // Depth first, so a heading is immediately followed by what is under it.
-    // FrameXML draws a flat list and takes the nesting from isHeader/isChild,
-    // which means the order *is* the grouping: emitting in the server's order
-    // and relying on the flags would file each faction under whichever heading
-    // happened to be printed last.
-    std::vector<std::pair<uint32_t, int>> stack;
-    for (uint32_t child : std::views::reverse(children[0])) {
-        stack.emplace_back(child, 0);
-    }
-    while (!stack.empty()) {
-        const auto [factionId, depth] = stack.back();
-        stack.pop_back();
-
-        auto kidsIt = children.find(factionId);
-        const bool isHeader = kidsIt != children.end() && !kidsIt->second.empty();
-
+    for (const tree::Row& at : tree::rows(known, {.parent = [this](uint32_t id) { return getFactionParentId(id); },
+                                                  .name = nameOf,
+                                                  .collapsed = [this](uint32_t id) { return isFactionCollapsed(id); }})) {
         ReputationRow row;
-        row.factionId = factionId;
-        row.isHeader = isHeader;
-        // Only two levels are drawn: FrameXML knows a heading and an indented
-        // row and nothing deeper, so everything below the top shares one indent.
-        row.isChild = depth > 0;
-        auto entry = byId.find(factionId);
-        if (entry != byId.end()) {
+        row.factionId = at.id;
+        row.isHeader = at.header;
+        row.isChild = at.child;
+        row.name = nameOf(at.id);
+        if (const auto entry = byId.find(at.id); entry != byId.end()) {
             row.reputationIndex = entry->second->reputationIndex;
             row.name = entry->second->name;
             row.flags = entry->second->flags;
             row.hasRep = true;
-        } else {
-            // A heading the player has no standing with - Classic and the two
-            // expansion groups are the usual ones. Drawn as a bare heading.
-            row.name = getFactionNamePublic(factionId);
-            row.hasRep = false;
         }
         reputationRows_.push_back(std::move(row));
-
-        // A closed group keeps its heading and loses everything under it: the
-        // panel counts rows and indexes into them, so a hidden row must not be
-        // in the list at all.
-        if (!isHeader || isFactionCollapsed(factionId)) continue;
-        for (uint32_t child : std::views::reverse(kidsIt->second)) {
-            stack.emplace_back(child, depth + 1);
-        }
     }
     return reputationRows_;
 }

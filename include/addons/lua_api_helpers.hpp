@@ -18,6 +18,7 @@
 #include <cmath>
 #include <algorithm>
 
+#include "game/reputation_tree.hpp"
 #include "game/container_place.hpp"
 #include "game/action_drop.hpp"
 #include "game/item_text.hpp"
@@ -1004,37 +1005,29 @@ inline int pushFactionInfo(lua_State* L, game::GameHandler* gh,
                            const game::GameHandler::ReputationEntry& f,
                            bool isHeader = false, bool isCollapsed = false,
                            bool hasRep = true, bool isChild = false) {
-    const int32_t value = gh->getFactionStanding(f.factionId);
+    // 0x005d0da0: the two groups that are no faction have a name and nothing else.
+    const bool faction = f.factionId < game::reputation_tree::kOther;
+    const int32_t value = faction ? gh->getFactionStanding(f.factionId) : 0;
     const auto& band = game::reputationStandingFor(value);
-    const bool atWar = (f.flags & game::GameHandler::FACTION_FLAG_AT_WAR) != 0;
-    const bool peaceForced =
-        (f.flags & game::GameHandler::FACTION_FLAG_PEACE_FORCED) != 0;
-
-    lua_pushstring(L, f.name.c_str());                          // 1: name
-    lua_pushstring(L, "");                                      // 2: description
-    lua_pushnumber(L, band.id);                                 // 3: standingId
-    lua_pushnumber(L, band.floor);                              // 4: barMin
+    lua_pushstring(L, f.name.c_str());                                             // 1: name
+    lua_pushstring(L, faction ? gh->getFactionDescription(f.factionId).c_str() : "");  // 2: description
+    lua_pushnumber(L, faction ? band.id : 0);                                      // 3: standingId
+    lua_pushnumber(L, faction ? band.floor : 0);                                   // 4: barMin
     // The bar's top is one past the last value still at this standing, so a
     // faction sitting at the ceiling reads as full rather than as over.
-    lua_pushnumber(L, band.ceiling + 1);                        // 5: barMax
-    lua_pushnumber(L, value);                                   // 6: barValue
-    lua_pushboolean(L, atWar ? 1 : 0);                          // 7: atWarWith
-    lua_pushboolean(L, peaceForced ? 0 : 1);                    // 8: canToggleAtWar
-    // Whether this row is a heading, and whether it is drawn indented. Both
-    // come from Faction.dbc's parent chain, and both used to be false because
-    // the rule looked for was the wrong one: a header was taken to be a parent
-    // with no reputation of its own, and no faction in the file is that -
-    // Alliance is ReputationListID 11, Horde is 12, Classic is 96. But isHeader
-    // and hasRep are separate answers precisely so that a heading can carry a
-    // standing too, which is what Alliance is. The rule is simply "something
-    // visible descends from it", and it yields the groups the original panel
-    // draws: Classic, The Burning Crusade and Wrath of the Lich King at the
-    // top, with Alliance, Horde, Steamwheedle Cartel and the rest inside them.
-    lua_pushboolean(L, isHeader ? 1 : 0);                       // 9: isHeader
-    lua_pushboolean(L, isCollapsed ? 1 : 0);                    // 10: isCollapsed
-    lua_pushboolean(L, hasRep ? 1 : 0);                         // 11: hasRep
-    lua_pushboolean(L, f.factionId == gh->getWatchedFactionId() ? 1 : 0);  // 12: isWatched
-    lua_pushboolean(L, isChild ? 1 : 0);                        // 13: isChild
+    lua_pushnumber(L, faction ? band.ceiling + 1 : 0);                             // 5: barMax
+    lua_pushnumber(L, value);                                                      // 6: barValue
+    luaPushOneOrNil(L, (f.flags & game::GameHandler::FACTION_FLAG_AT_WAR) != 0);   // 7: atWarWith
+    // Not of one that hates the player, nor where peace is forced.
+    luaPushOneOrNil(L, faction && value >= -3000 &&
+                           (f.flags & game::GameHandler::FACTION_FLAG_PEACE_FORCED) == 0);  // 8: canToggleAtWar
+    // isHeader and hasRep are separate answers: a heading may have a standing too,
+    // which is what Alliance is.
+    luaPushOneOrNil(L, isHeader);                                                  // 9: isHeader
+    luaPushOneOrNil(L, isCollapsed);                                               // 10: isCollapsed
+    luaPushOneOrNil(L, hasRep);                                                    // 11: hasRep
+    luaPushOneOrNil(L, faction && f.factionId == gh->getWatchedFactionId());       // 12: isWatched
+    luaPushOneOrNil(L, isChild);                                                   // 13: isChild
     return 13;
 }
 

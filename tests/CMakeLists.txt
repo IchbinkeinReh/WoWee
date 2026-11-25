@@ -4394,6 +4394,10 @@ wowee_add_test(test_loading_tip
 wowee_add_test(test_trade_skill_verb
     SOURCES test_trade_skill_verb.cpp)
 
+# ── test_reputation_tree ─────────────────────────────────────
+wowee_add_test(test_reputation_tree
+    SOURCES test_reputation_tree.cpp)
+
 # ── test_unit_look ───────────────────────────────────────────
 wowee_add_test(test_unit_look
     SOURCES test_unit_look.cpp)
