@@ -429,6 +429,7 @@ private:
     /// Announce where the caret is, which is what sets cursorOffset on the
     /// interface's scrolling edit boxes.
     void fireCursorChanged(uint32_t wid);
+    void sizeMultiLineEdit(uint32_t wid);
     /// An edit box's text changed: the caret first and then
     /// OnTextChanged(userInput), as 0x00967020 tells both.
     void fireTextChanged(uint32_t wid, bool userInput);

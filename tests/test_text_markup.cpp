@@ -11,6 +11,7 @@
 // It went unnoticed because the function lived inside widget_renderer.cpp with
 // ImGui, where nothing could reach it.
 #include "catch_amalgamated.hpp"
+#include "ui/edit_lines.hpp"
 #include "ui/text_markup.hpp"
 
 #include <string>
@@ -457,15 +458,47 @@ TEST_CASE("Up and Down in a multi-line box keep the column", "[text_markup][edit
     // 0x00964550: as far into the next line as into this one, never past
     // its end; nothing above the first line or below the last.
     const std::string t = "abcd\nx\nwxyz";
+    const auto letters = [](const std::string& piece) { return static_cast<float>(piece.size()); };
+    const auto lines = wowee::ui::editLineStarts(t, 0.0f, letters);
     bool moved = false;
-    CHECK(wowee::ui::caretLineMove(t, 3, 1, moved) == 6);   // "abc|d" -> "x|"
+    CHECK(wowee::ui::caretLineMove(t, lines, 3, 1, moved) == 6);   // "abc|d" -> "x|"
     CHECK(moved);
-    CHECK(wowee::ui::caretLineMove(t, 6, 1, moved) == 8);   // "x|" -> "w|xyz"
-    CHECK(wowee::ui::caretLineMove(t, 10, -1, moved) == 6);
-    CHECK(wowee::ui::caretLineMove(t, 2, -1, moved) == 2);
+    CHECK(wowee::ui::caretLineMove(t, lines, 6, 1, moved) == 8);   // "x|" -> "w|xyz"
+    CHECK(wowee::ui::caretLineMove(t, lines, 10, -1, moved) == 6);
+    CHECK(wowee::ui::caretLineMove(t, lines, 2, -1, moved) == 2);
     CHECK_FALSE(moved);
-    CHECK(wowee::ui::caretLineMove(t, 11, 1, moved) == 11);
+    CHECK(wowee::ui::caretLineMove(t, lines, 11, 1, moved) == 11);
     CHECK_FALSE(moved);
+}
+
+// P67: 0x00966710 breaks a multi-line box's text at its width and at its line breaks.
+TEST_CASE("a multi-line box breaks its text into the lines it draws", "[text_markup][editbox]") {
+    using wowee::ui::editLineStarts;
+    using Starts = std::vector<size_t>;
+    const auto letters = [](const std::string& piece) { return static_cast<float>(piece.size()); };
+    CHECK(editLineStarts("", 10.0f, letters) == Starts{0});
+    CHECK(editLineStarts("one\ntwo\n", 0.0f, letters) == Starts{0, 4, 8});
+    // At the last space that fits, the space staying behind.
+    const std::string t = "#show one two three";
+    CHECK(editLineStarts(t, 10.0f, letters) == Starts{0, 10});
+    CHECK(wowee::ui::editLineText(t, {0, 10}, 0) == "#show one ");
+    CHECK(wowee::ui::editLineText(t, {0, 10}, 1) == "two three");
+    // Inside a word where one is longer than the line.
+    CHECK(editLineStarts("abcdefghij", 4.0f, letters) == Starts{0, 4, 8});
+    // What is not drawn takes no room.
+    CHECK(editLineStarts("|cffff0000abcd|r", 4.0f, letters) == Starts{0});
+    // The caret is on the line it is drawn on; a break's place begins the next.
+    const Starts s{0, 10, 14};
+    CHECK(wowee::ui::editLineOf(s, 9) == 0);
+    CHECK(wowee::ui::editLineOf(s, 10) == 1);
+    CHECK(wowee::ui::editLineOf(s, 99) == 2);
+    // Up and down go by the drawn lines.
+    bool moved = false;
+    CHECK(wowee::ui::caretLineMove(t, {0, 10}, 3, 1, moved) == 13);
+    CHECK(moved);
+    CHECK(wowee::ui::caretLineMove(t, {0, 10}, 12, -1, moved) == 2);
+    CHECK(wowee::ui::editBoxHeight(0, 12.0f, 3.0f, 2.0f) == 17.0f);
+    CHECK(wowee::ui::editBoxHeight(4, 12.0f, 3.0f, 2.0f) == 53.0f);
 }
 
 TEST_CASE("Word deletes take the spaces and one word", "[text_markup][editbox]") {

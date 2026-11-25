@@ -373,39 +373,6 @@ inline bool leavesArrows(bool ignoreArrows, bool altHeld) {
     return ignoreArrows && !altHeld;
 }
 
-/// The caret one line up (dir < 0) or down (dir > 0) in a multi-line box,
-/// as 0x00964550 moves it: as many characters into the new line as it was
-/// into its own, and no further than that line's end. `moved` is false when
-/// there is no line that way. The lines are the ones drawn, and an edit box
-/// here draws its text unwrapped, so they are the text's own line breaks.
-inline size_t caretLineMove(const std::string& s, size_t at, int dir, bool& moved) {
-    const size_t caret = (at < s.size()) ? at : s.size();
-    const size_t start = caretLineStart(s, caret);
-    size_t column = 0;
-    for (size_t p = start; p < caret;) {
-        const size_t q = caretStepRight(s, p);
-        if (q <= p) break;
-        ++column;
-        p = q;
-    }
-    size_t target;
-    if (dir < 0) {
-        if (start == 0) { moved = false; return caret; }
-        target = caretLineStart(s, start - 1);
-    } else {
-        const size_t end = caretLineEnd(s, caret);
-        if (end >= s.size()) { moved = false; return caret; }
-        target = end + 1;
-    }
-    moved = true;
-    for (; column > 0 && target < s.size() && s[target] != '\n'; --column) {
-        const size_t q = caretStepRight(s, target);
-        if (q <= target) break;
-        target = q;
-    }
-    return target;
-}
-
 /// Whitespace as the word deletes see it (iswspace): the ASCII kind; a byte
 /// of a multi-byte character never is.
 inline bool editIsSpace(char c) {

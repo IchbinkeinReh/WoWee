@@ -1,6 +1,7 @@
 #include <cstring>
 #include "ui/widget_renderer.hpp"
 #include "ui/texture_variants.hpp"
+#include "ui/edit_lines.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/simple_html.hpp"
 #include "ui/link_hit.hpp"
@@ -90,13 +91,17 @@ bool caretBlinkOn(const Widget& w) {
 }
 
 /// The same string with every escape taken out, for measuring.
-std::string strippedText(const std::string& in) {
-    std::string out;
-    for (const TextRun& r : parseMarkup(in)) out += r.text;
-    return out;
-}
+std::string strippedText(const std::string& in) { return editDrawnText(in); }
 
 } // namespace
+
+std::vector<size_t> editLinesOf(const Widget& box) {
+    const float own = box.rectW > 0.0f && box.effScale > 0.0f ? box.rectW / box.effScale : box.width;
+    return editLineStarts(box.editText, std::max(own - box.textInsetLeft - box.textInsetRight, 0.0f),
+                          [&](const std::string& piece) {
+                              return interfaceTextWidth(piece, box.fontFace, box.fontHeight);
+                          });
+}
 
 void WidgetRenderer::initialize(pipeline::AssetManager* assets,
                                 rendering::VkContext* vkCtx) {
@@ -3088,31 +3093,49 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // frame, so a box with art above its text does not sit high.
                 const float boxTop = y0 + w->textInsetTop * s;
                 const float boxBottom = y1 - w->textInsetBottom * s;
-                const float ty = boxTop + ((boxBottom - boxTop) - size) * 0.5f;
+                // One line stands in the middle, several begin at the top
+                // (0x00964a90 hangs the caret off the text's TOPLEFT for a
+                // multi-line box, off its LEFT for another).
+                const float ty = w->editMultiLine ? boxTop : boxTop + ((boxBottom - boxTop) - size) * 0.5f;
+                const float lineH = size * kEditLineSpacing;
                 const float pad = w->textInsetLeft * s;
                 // A password box draws a '*' for each byte it holds
                 // (0x00966710: '*' over the text's length).
                 const std::string masked = w->editPassword
                     ? std::string(w->editText.size(), '*') : std::string();
                 const std::string& shown = w->editPassword ? masked : w->editText;
+                const std::vector<size_t> lines =
+                    w->editMultiLine ? editLinesOf(*w) : std::vector<size_t>{0};
+                const auto lineEnd = [&](size_t line) {
+                    return line + 1 < lines.size() ? lines[line + 1] : shown.size();
+                };
+                // How far along its line a place is, measured against what is
+                // drawn and not what is held: to the left of a link is its
+                // display name.
+                const auto along = [&](size_t line, size_t at) {
+                    const std::string upTo = strippedText(shown.substr(lines[line], at - lines[line]));
+                    return font ? font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x : 0.0f;
+                };
                 // The highlighted run, under the words: Shift with the arrows,
-                // Ctrl+A, or HighlightText from the interface. Measured against
-                // what is drawn, as the caret is below. Only while the box has
-                // focus, which is the only time the run means anything.
+                // Ctrl+A, or HighlightText from the interface. Only while the
+                // box has focus, which is the only time the run means anything.
                 if (w->editFocused && w->hasSelection && w->selEnd > w->selStart &&
                     font && w->selEnd <= w->editText.size()) {
-                    const std::string before = strippedText(shown.substr(0, w->selStart));
-                    const std::string upTo = strippedText(shown.substr(0, w->selEnd));
-                    const float sa = font->CalcTextSizeA(size, FLT_MAX, 0.0f, before.c_str()).x;
-                    const float sb = font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x;
-                    if (sb > sa) {
-                        dl->AddRectFilled(ImVec2(x0 + pad + sa, ty),
-                                          ImVec2(x0 + pad + sb, ty + size),
-                                          IM_COL32(110, 140, 220,
-                                                   static_cast<int>(140.0f * w->alpha)));
+                    for (size_t line = 0; line < lines.size(); ++line) {
+                        const size_t from = std::max(w->selStart, lines[line]);
+                        const size_t to = std::min(w->selEnd, lineEnd(line));
+                        if (to <= from) continue;
+                        const float sa = along(line, from);
+                        const float sb = along(line, to);
+                        if (sb <= sa) continue;
+                        const float ly = ty + static_cast<float>(line) * lineH;
+                        dl->AddRectFilled(ImVec2(x0 + pad + sa, ly), ImVec2(x0 + pad + sb, ly + size),
+                                          IM_COL32(110, 140, 220, static_cast<int>(140.0f * w->alpha)));
                     }
                 }
-                if (!w->editText.empty()) {
+                for (size_t line = 0; line < lines.size() && !w->editText.empty(); ++line) {
+                    const std::string words = editLineText(shown, lines, line);
+                    const float ly = ty + static_cast<float>(line) * lineH;
                     // The shadow first, under the words, as a font string's
                     // is. ChatFontNormal declares one and every edit box in
                     // the interface inherits it, and this path drew none - so
@@ -3123,9 +3146,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                        w->shadowColor[2], w->shadowColor[3]};
                         drawMarkupText(dl, font, size,
                                        ImVec2(x0 + pad + w->shadowX * s,
-                                              ty - w->shadowY * s),
+                                              ly - w->shadowY * s),
                                        packColor(sc, w->alpha * w->shadowColor[3]),
-                                       w->alpha, shown, 0.0f, false,
+                                       w->alpha, words, 0.0f, false,
                                        nullptr, true);
                     }
                     // Through the markup parser like everything else. An edit
@@ -3133,23 +3156,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // words - but shift-clicking a link puts the whole
                     // "|Hitem:3299|h[Fractured Canine]|h" into it, and drawn
                     // raw that is what the player sees themselves typing.
-                    // Links are only clickable at all as of this branch, so
-                    // this became reachable at the same moment.
-                    drawMarkupText(dl, font, size, ImVec2(x0 + pad, ty), col,
-                                   w->alpha, shown);
+                    drawMarkupText(dl, font, size, ImVec2(x0 + pad, ly), col, w->alpha, words);
                 }
                 if (w->editFocused && caretBlinkOn(*w)) {
-                    // Measured against what is drawn, not what is held. The
-                    // caret sits after the text to its left, and to the left of
-                    // a link is its display name - measuring the raw string
-                    // would put the caret an escape sequence too far right.
-                    const std::string upTo = strippedText(shown.substr(
-                        0, std::min(w->cursorPos, w->editText.size())));
-                    const float caret = font
-                        ? font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x
-                        : 0.0f;
-                    const float cx = x0 + pad + caret;
-                    dl->AddLine(ImVec2(cx, ty), ImVec2(cx, ty + size), col);
+                    const size_t at = std::min(w->cursorPos, w->editText.size());
+                    const size_t line = editLineOf(lines, at);
+                    const float cx = x0 + pad + along(line, at);
+                    const float cy = ty + static_cast<float>(line) * lineH;
+                    dl->AddLine(ImVec2(cx, cy), ImVec2(cx, cy + size), col);
                 }
             }
             continue;

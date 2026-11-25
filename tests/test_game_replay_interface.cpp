@@ -411,3 +411,36 @@ TEST_CASE("trying on a recipe, a stranger and a ring", "[replay][interface]") {
     wowee::addons::tryOnAskedItems(*w, &gh);
     CHECK(w->tryOnItems.size() == 2);
 }
+
+// P67: 0x00966710 makes a multi-line box as tall as its lines, which is what its scroll frame
+// scrolls; 0x00964a90 tells the caret's place from where the text begins.
+TEST_CASE("a multi-line box is as tall as its text", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("box = CreateFrame('EditBox', 'PlayMacroText', UIParent) box:SetMultiLine(true) "
+           "box:SetWidth(200) box:SetHeight(103) box:SetPoint('TOPLEFT') box:SetTextInsets(0, 0, 0, 0) "
+           "box:SetScript('OnCursorChanged', function(self, x, y) cx, cy = x, y end) "
+           "box:SetText('/one') ");
+    ui.layout();
+    ui.engine.dispatchOnUpdate(0.05f);
+    ui.run("one = box:GetHeight() oneY = cy");
+    CHECK(ui.is("one < 60"));
+    CHECK(ui.is("oneY == 0"));
+    ui.run("box:SetText('/one\\n/two\\n/three\\n/four')");
+    ui.engine.dispatchOnUpdate(0.05f);
+    ui.layout();
+    CHECK(ui.is("math.abs(box:GetHeight() - 4 * one) < 0.01"));
+    CHECK(ui.is("math.abs(cy + 3 * one) < 0.01"));
+    CHECK(ui.is("cx > 0"));
+    // A long line breaks at the box's width.
+    ui.run("box:SetText(('word '):rep(40))");
+    ui.engine.dispatchOnUpdate(0.05f);
+    ui.layout();
+    CHECK(ui.is("box:GetHeight() > 4 * one"));
+    // One line of another box stays as tall as it was made.
+    ui.run("line = CreateFrame('EditBox', 'PlayLine', UIParent) line:SetWidth(200) line:SetHeight(20) "
+           "line:SetPoint('TOPLEFT') line:SetText('word word')");
+    ui.engine.dispatchOnUpdate(0.05f);
+    CHECK(ui.is("line:GetHeight() == 20"));
+}

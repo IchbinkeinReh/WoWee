@@ -9,6 +9,7 @@
 #include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
 #include "ui/link_hit.hpp"
+#include "ui/edit_lines.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
 #include "game/game_utils.hpp"
@@ -16597,21 +16598,32 @@ void LuaEngine::callFrameScript3(uint32_t wid, const char* script,
 /// So the first character typed into the mail body, the macro editor or the
 /// guild information box raised there, before anything was drawn.
 ///
-/// y is negative going down and is the only value the interface reads besides
-/// the height: it scrolls the frame to keep the caret's line in view. Measured
-/// in lines rather than in laid-out pixels, because a line is what the caret
-/// moves by and the box has one height for all of them.
+/// y is negative going down, x to the right, both from where the text begins
+/// (0x00964a90, 0x009627e0).
 void LuaEngine::fireCursorChanged(uint32_t wid) {
+    sizeMultiLineEdit(wid);
     const auto* w = widgets_.get(wid);
     if (!w || !w->isEditBox) return;
     const size_t upTo = std::min(w->cursorPos, w->editText.size());
-    size_t line = 0;
-    for (size_t i = 0; i < upTo; ++i) {
-        if (w->editText[i] == '\n') ++line;
-    }
     const double lineH = wowee::ui::interfaceFontSize(w->fontHeight);
-    callFrameScript4Numbers(wid, "OnCursorChanged", 0.0,
-                            -static_cast<double>(line) * lineH, 0.0, lineH);
+    const std::vector<size_t> lines =
+        w->editMultiLine ? ui::editLinesOf(*w) : std::vector<size_t>{0};
+    const size_t line = ui::editLineOf(lines, upTo);
+    const double x = ui::interfaceTextWidth(ui::editDrawnText(w->editText.substr(lines[line], upTo - lines[line])),
+                                            w->fontFace, w->fontHeight);
+    callFrameScript4Numbers(wid, "OnCursorChanged", x,
+                            -static_cast<double>(line) * lineH * ui::kEditLineSpacing, 0.0, lineH);
+}
+
+/// A multi-line box is as tall as its lines and the insets over and under
+/// them (0x00966710), so what scrolls it has something to scroll.
+void LuaEngine::sizeMultiLineEdit(uint32_t wid) {
+    const auto* w = widgets_.get(wid);
+    if (!w || !w->isEditBox || !w->editMultiLine) return;
+    const float height =
+        ui::editBoxHeight(ui::editLinesOf(*w).size(), ui::interfaceFontSize(w->fontHeight) * ui::kEditLineSpacing,
+                          w->textInsetTop, w->textInsetBottom);
+    if (std::abs(w->height - height) > 0.01f) widgets_.setHeight(wid, height);
 }
 
 void LuaEngine::fireTextChanged(uint32_t wid, bool userInput) {
@@ -17849,7 +17861,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                 const size_t caret = std::min(w->cursorPos, len);
                 bool moved = false;
                 const size_t target = ui::caretLineMove(
-                    w->editText, caret, sdlKeycode == kUp ? -1 : 1, moved);
+                    w->editText, ui::editLinesOf(*w), caret, sdlKeycode == kUp ? -1 : 1, moved);
                 const ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
                 const bool selected = sel.active && sel.stop > sel.start && sel.stop <= len;
                 if (!moved) {
@@ -18030,6 +18042,8 @@ void LuaEngine::updateSizeChanges() {
             mut->lastReportedW = w.rectW;
             mut->lastReportedH = w.rectH;
         }
+        // Another width breaks its lines elsewhere.
+        sizeMultiLineEdit(w.id);
         // Nothing is fired the first time a frame is measured: every frame in
         // the interface would report a change on the first layout, which says
         // nothing and runs 3000 handlers to say it.
