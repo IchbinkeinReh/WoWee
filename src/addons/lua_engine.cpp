@@ -20118,9 +20118,9 @@ bool LuaEngine::dispatchSlashCommand(const std::string& command, const std::stri
     return false;
 }
 
-void LuaEngine::setAddonList(const std::vector<TocFile>& addons) {
+void LuaEngine::setAddonList(const std::vector<TocFile>& addons, size_t listed) {
     if (!L_) return;
-    lua_pushnumber(L_, static_cast<double>(addons.size()));
+    lua_pushnumber(L_, static_cast<double>(listed));
     lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_addon_count");
 
     lua_newtable(L_);

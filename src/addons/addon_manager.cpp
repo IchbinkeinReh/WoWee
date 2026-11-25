@@ -403,6 +403,7 @@ struct AddonManager::LoadWorld : addon_load::World {
         // One the server banned (SMSG_ADDON_INFO, 0x005f79a0).
         a.banned = manager.isAddonBanned(toc->addonName);
         a.onDemand = toc->isLoadOnDemand();
+        a.interface = toc->interfaceVersion();
         a.optional = toc->getOptionalDependencies();
         a.required = toc->getRequiredDependencies();
         a.managers = toc->getLoadManagers();
@@ -412,6 +413,12 @@ struct AddonManager::LoadWorld : addon_load::World {
                     if (lowered(with) == key) a.withIt.push_back(other.addonName);
         return &known.emplace(key, std::move(a)).first->second;
     }
+    uint32_t interfaceVersion() override {
+        const auto* profile =
+            manager.luaServices_.expansionRegistry ? manager.luaServices_.expansionRegistry->getActive() : nullptr;
+        return !profile || profile->majorVersion >= 3 ? 30300u : profile->majorVersion == 2 ? 20400u : 11200u;
+    }
+    bool checkVersion() override { return storedCVarValue("checkAddonVersion", "1") != "0"; }
     bool loaded(const addon_load::Addon& a) override { return manager.loadedAddons_.count(lowered(a.name)) != 0; }
     void begin(const addon_load::Addon& a, bool on) override {
         if (on) manager.loadedAddons_.insert(lowered(a.name));
@@ -534,21 +541,17 @@ void AddonManager::loadAllAddons() {
         ui::frameXmlReportUnaccountedElements();
     }
 
-    // Only hand the Lua VM the addons that are actually enabled, so disabled ones
-    // don't appear via GetNumAddOns/IsAddOnLoaded either.
-    std::vector<TocFile> enabled;
-    enabled.reserve(addons_.size() + lodAddons_.size());
-    for (const auto& addon : addons_) {
-        if (isAddonEnabled(addon.addonName)) enabled.push_back(addon);
+    // The player's own addons, in their order, and behind them those that are known by name
+    // alone: Blizzard's, which the server vouches for (0x005f79a0: +0x29).
+    {
+        std::vector<TocFile> all;
+        const auto listed = listedAddons();
+        for (const TocFile* addon : listed) all.push_back(*addon);
+        for (const auto* list : {&addons_, &lodAddons_})
+            for (const TocFile& addon : *list)
+                if (std::find(listed.begin(), listed.end(), &addon) == listed.end()) all.push_back(addon);
+        luaEngine_.setAddonList(all, listed.size());
     }
-    // Load-on-demand addons are listed too, as WoW lists them: an addon
-    // manager panel shows the talent tree and the auction house alongside
-    // everything else, and GetNumAddOns counts them. They carry a flag so
-    // IsAddOnLoaded does not mistake being listed for being loaded.
-    for (const auto& addon : lodAddons_) {
-        if (isAddonEnabled(addon.addonName)) enabled.push_back(addon);
-    }
-    luaEngine_.setAddonList(enabled);
     // In their order, each with what it needs (0x005f84a0).
     {
         std::vector<std::string> names;
@@ -626,10 +629,21 @@ void AddonManager::saveAddonUrls() const {
 bool AddonManager::isAddonEnabled(const std::string& addonName) const {
     auto it = addonEnabled_.find(addonName);
     if (it != addonEnabled_.end()) return it->second;
-    // The original client's list for the player's own addons; enabled when
-    // it does not name one.
+    // The original client's list for the player's own addons; as its .toc says
+    // (0x005f7d70) when it does not name one.
     auto client = clientEnabled_.find(addonName);
-    return client == clientEnabled_.end() ? true : client->second;
+    if (client != clientEnabled_.end()) return client->second;
+    const TocFile* toc = findAddon(addonName);
+    return !toc || toc->enabledByDefault();
+}
+
+std::vector<const TocFile*> AddonManager::listedAddons() const {
+    std::vector<const TocFile*> out;
+    for (const auto* list : {&addons_, &lodAddons_})
+        for (const TocFile& addon : *list)
+            if (addon.addonName.rfind("Blizzard_", 0) != 0) out.push_back(&addon);
+    std::stable_sort(out.begin(), out.end(), [](const TocFile* a, const TocFile* b) { return listedBefore(*a, *b); });
+    return out;
 }
 
 bool AddonManager::isClientAddon(const std::string& basePath) const {

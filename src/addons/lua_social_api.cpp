@@ -567,7 +567,7 @@ int setAllAddOnsEnabled(lua_State* L, bool enabled) {
     if (!svc || !svc->setAddOnEnabled) return 0;
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_info");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
-    const int count = static_cast<int>(lua_objlen(L, -1));
+    const int count = listedAddonCount(L);
     for (int i = 1; i <= count; ++i) {
         lua_rawgeti(L, -1, i);
         if (lua_istable(L, -1)) {

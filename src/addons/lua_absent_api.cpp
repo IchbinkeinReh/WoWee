@@ -102,9 +102,7 @@ int kbQueryArticleHeader(lua_State* L) {
 /// addons raises; a name is taken as it is.
 int addOnCPUUsage(lua_State* L) {
     if (lua_isnumber(L, 1)) {
-        lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_count");
-        const int count = static_cast<int>(lua_tonumber(L, -1));
-        lua_pop(L, 1);
+        const int count = listedAddonCount(L);
         const int index = static_cast<int>(lua_tonumber(L, 1));
         if (index < 1 || index > count)
             return luaL_error(L, "AddOn index must be in the range of 1 to %d", count);

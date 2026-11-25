@@ -60,6 +60,8 @@ public:
     void reapplyStoredCVars();
 
     [[nodiscard]] const std::vector<TocFile>& getAddons() const { return addons_; }
+    /// The player's own, those on demand too, in the order of their list (0x005f7910).
+    [[nodiscard]] std::vector<const TocFile*> listedAddons() const;
     /// The addons that wait to be asked for. Half the interface's own panels
     /// are here - the talent tree, the achievements, the macro editor - and
     /// each is loaded whole or not at all, so one of them raising during load

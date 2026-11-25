@@ -2,6 +2,7 @@
 #include <fstream>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 namespace wowee::addons {
 
@@ -12,6 +13,25 @@ std::string TocFile::getTitle() const {
 bool TocFile::isLoadOnDemand() const {
     auto it = directives.find("LoadOnDemand");
     return (it != directives.end()) && it->second == "1";
+}
+
+uint32_t TocFile::interfaceVersion() const {
+    const auto it = directives.find("Interface");
+    return it == directives.end() ? 0u : static_cast<uint32_t>(std::max(std::atoi(it->second.c_str()), 0));
+}
+bool TocFile::enabledByDefault() const {
+    const auto it = directives.find("DefaultState");
+    if (it == directives.end()) return true;
+    std::string state = it->second;
+    for (char& c : state) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return state != "disabled";
+}
+
+bool listedBefore(const TocFile& a, const TocFile& b) {
+    const std::string x = a.getTitle(), y = b.getTitle();
+    return std::lexicographical_compare(x.begin(), x.end(), y.begin(), y.end(), [](unsigned char l, unsigned char r) {
+        return std::tolower(l) < std::tolower(r);
+    });
 }
 
 /// The spelling FrameXML uses for a Blizzard addon, given the one on disk.

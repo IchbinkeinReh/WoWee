@@ -120,6 +120,9 @@ struct ItemPlace {
     bool worn = false;
 };
 std::optional<ItemPlace> placeOfItem(game::GameHandler* gh, uint64_t guid);
+
+/// How many addons have an index (0x005f4ff0); the rest are known by name.
+int listedAddonCount(lua_State* L);
 /// The item with this GUID the player carries or wears, null for none.
 const game::ItemDef* heldItem(game::GameHandler* gh, uint64_t guid);
 /// The items that lie in a window, and are locked so (+0x394 bit 0x1, 0x00513740):

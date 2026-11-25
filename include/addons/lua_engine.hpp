@@ -352,7 +352,8 @@ public:
     bool saveSavedVariables(const std::string& path, const std::vector<std::string>& varNames);
 
     // Store addon info in registry for GetAddOnInfo/GetNumAddOns
-    void setAddonList(const std::vector<TocFile>& addons);
+    /// The addons there are: the first `listed` by their index too, the rest by name alone.
+    void setAddonList(const std::vector<TocFile>& addons, size_t listed);
 
     /// The widget tree CreateFrame and CreateTexture build into. Owned here so
     /// its lifetime matches the Lua state that holds handles into it.

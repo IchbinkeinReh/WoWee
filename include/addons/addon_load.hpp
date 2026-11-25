@@ -3,6 +3,7 @@
 /// Which addons are loaded, and in what order (0x005f7e90, 0x005f80b0,
 /// 0x005f84a0).
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@ struct Addon {
     bool enabled = true;
     bool banned = false;
     bool onDemand = false;
+    uint32_t interface = 30300;          ///< ## Interface, 0 without
     std::vector<std::string> optional;   ///< OptionalDeps: loaded before it, where they can be
     std::vector<std::string> required;   ///< not loaded without these
     std::vector<std::string> managers;   ///< LoadManagers: with one of them, it waits for it
@@ -30,6 +32,10 @@ struct World {
     virtual void begin(const Addon& addon, bool on) = 0;
     /// Its files, its bindings and what it saved (0x005f80b0's middle).
     virtual void run(const Addon& addon) = 0;
+    /// The interface addons are for, and whether one for another may not be loaded
+    /// (checkAddonVersion; "Load out of date AddOns" off).
+    virtual uint32_t interfaceVersion() { return 30300; }
+    virtual bool checkVersion() { return true; }
 };
 
 /// Why an addon is not loaded, "" where it may be: its own reason, or a
@@ -43,6 +49,9 @@ inline std::string refusal(World& world, const std::string& name, bool asked, st
         if (on == addon) return "";
     if (!addon->enabled) return "DISABLED";
     if (addon->banned) return "BANNED";
+    // One for an interface before 2.0, or for none, not at all.
+    if (addon->interface < 20000 && world.interfaceVersion() >= 20000) return "INCOMPATIBLE";
+    if (addon->interface != world.interfaceVersion() && world.checkVersion()) return "INTERFACE_VERSION";
     path.push_back(addon);
     for (const std::string& needed : addon->required) {
         const Addon* dep = world.find(needed);

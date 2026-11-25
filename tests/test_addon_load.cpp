@@ -28,6 +28,10 @@ struct Addons : World {
         if (is) on.insert(a.name);
         else on.erase(a.name);
     }
+    uint32_t version = 30300;
+    bool check = true;
+    uint32_t interfaceVersion() override { return version; }
+    bool checkVersion() override { return check; }
     void run(const Addon& a) override {
         order += (order.empty() ? "" : " ") + a.name;
         if (const auto it = asks.find(a.name); it != asks.end()) load(*this, it->second, true);
@@ -108,4 +112,31 @@ TEST_CASE("an addon with a manager waits for it", "[addon_load]") {
     w.add("B").managers = {"Nowhere"};
     loadAll(w, {"A", "B", "M"});
     CHECK(w.order == "M B");
+}
+
+// 0x005f7e90
+TEST_CASE("an addon for another interface", "[addon_load]") {
+    Addons w;
+    w.add("Now");
+    w.add("Older").interface = 30000;
+    w.add("Old").interface = 11200;
+    w.add("None").interface = 0;
+    w.add("Needs").required = {"Older"};
+    CHECK(refusal(w, "Now", false).empty());
+    CHECK(refusal(w, "Older", false) == "INTERFACE_VERSION");
+    CHECK(refusal(w, "Old", false) == "INCOMPATIBLE");
+    CHECK(refusal(w, "None", false) == "INCOMPATIBLE");
+    CHECK(refusal(w, "Needs", false) == "DEP_INTERFACE_VERSION");
+    w.check = false;
+    CHECK(refusal(w, "Older", false).empty());
+    CHECK(refusal(w, "Needs", false).empty());
+    CHECK(refusal(w, "Old", false) == "INCOMPATIBLE");
+    w.all["Old"].enabled = false;
+    CHECK(refusal(w, "Old", false) == "DISABLED");
+    // An interface before 2.0 takes its own.
+    w.check = true;
+    w.version = 11200;
+    w.all["Old"].enabled = true;
+    CHECK(refusal(w, "Old", false).empty());
+    CHECK(refusal(w, "Now", false) == "INTERFACE_VERSION");
 }

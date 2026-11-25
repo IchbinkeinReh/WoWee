@@ -12,6 +12,7 @@
 #include "core/config_paths.hpp"
 #include "core/env_flag.hpp"
 #include "core/logger.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include "addons/addon_manager.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -755,16 +756,24 @@ void CharacterScreen::renderAddonsSheet(float screenW, float screenH) {
         return;
     }
 
-    const auto& addons = am->getAddons();
+    const auto list = am->listedAddons();
     ui_.text(col.at(), "Enabled addons load when you enter the world, or on /reload.",
              smallSize, theme.pencil);
     col.gap(ui_.lineHeight(smallSize) + px(8));
+    // ADDON_FORCE_LOAD: checkAddonVersion turned round.
+    {
+        const float boxSize = px(17);
+        bool force = addons::storedCVarValue("checkAddonVersion", "1") == "0";
+        if (ui_.checkbox("addons.force", col.at(), boxSize, "Load out of date AddOns", &force))
+            addons::setStoredCVar("checkAddonVersion", force ? "0" : "1");
+        col.gap(boxSize + px(8));
+    }
     ui_.rule(ImVec2(col.x0, col.y), ImVec2(col.x1, col.y), paperFade(theme.ink, 0.45f),
              px(1.2f), 0x7712u);
     col.gap(px(8));
 
     const float listBottom = b.y - px(28);
-    if (addons.empty()) {
+    if (list.empty()) {
         col.gap(ui_.wrapped(col.at(), col.width(),
                             "None installed. Put addon folders under interface/AddOns/ in your "
                             "data path, then restart the client.",
@@ -776,9 +785,9 @@ void CharacterScreen::renderAddonsSheet(float screenW, float screenH) {
     const float rowH = px(38);
     const PaperUI::ListResult picked = ui_.list(
         "addons", ImVec2(col.x0, col.y), ImVec2(col.x1, listBottom),
-        static_cast<int>(addons.size()), rowH, -1,
+        static_cast<int>(list.size()), rowH, -1,
         [&](int index, ImVec2 rowA, ImVec2 rowB, bool, bool) {
-            const auto& addon = addons[static_cast<size_t>(index)];
+            const auto& addon = *list[static_cast<size_t>(index)];
             const bool enabled = am->isAddonEnabled(addon.addonName);
             const float boxSize = px(17);
             const float cy = (rowA.y + rowB.y) * 0.5f;

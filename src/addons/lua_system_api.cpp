@@ -1208,6 +1208,7 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // On (0x0051d9b0 registers it "1"): a tutorial not yet triggered pops
     // out rather than being flagged unseen (0x00530840).
     else if (n == "showtutorials") lua_pushstring(L, "1");
+    else if (n == "checkaddonversion") lua_pushstring(L, "1");
     // Nothing filled yet (registered "0"): a bit per totem bar element the
     // client has already filled with its first spell (0x005ab9d0).
     else if (n == "autofilledmulticastslots") lua_pushstring(L, "0");
@@ -2975,6 +2976,14 @@ static int lua_GetNumAddOns(lua_State* L) {
     return 1;
 }
 
+/// How many addons have an index (0x005f4ff0); the rest are known by name.
+int listedAddonCount(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_count");
+    const int count = static_cast<int>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    return count;
+}
+
 /// Pushes the addon registry table and resolves argument `arg` to a 1-based
 /// index into it.
 ///
@@ -2999,6 +3008,7 @@ int pushAddonRegistryAndIndex(lua_State* L, int arg) {
     int idx = 0;
     if (lua_isnumber(L, arg)) {
         idx = static_cast<int>(lua_tonumber(L, arg));
+        if (idx > listedAddonCount(L)) idx = 0;
     } else if (lua_isstring(L, arg)) {
         const char* wanted = lua_tostring(L, arg);
         const int count = static_cast<int>(lua_objlen(L, -1));
@@ -3028,7 +3038,7 @@ static std::string addonNameArg(lua_State* L, int arg, const char* usage) {
     if (lua_isnumber(L, arg)) {
         const long n = std::lround(lua_tonumber(L, arg));
         lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_info");
-        const int count = lua_istable(L, -1) ? static_cast<int>(lua_objlen(L, -1)) : 0;
+        const int count = lua_istable(L, -1) ? listedAddonCount(L) : 0;
         if (n < 1 || n > count) {
             lua_pop(L, 1);
             luaL_error(L, "AddOn index must be in the range of 1 to %d", count);
@@ -3107,9 +3117,7 @@ static bool pushAddonEntryForQuery(lua_State* L, const char* usage) {
         return false;
     }
     if (lua_type(L, 1) == LUA_TNUMBER) {
-        lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_count");
-        const int count = static_cast<int>(lua_tonumber(L, -1));
-        lua_pop(L, 1);
+        const int count = listedAddonCount(L);
         const int64_t index = std::llround(lua_tonumber(L, 1));
         if (index < 1 || index > count) {
             luaL_error(L, "AddOn index must be in the range of 1 to %d", count);
