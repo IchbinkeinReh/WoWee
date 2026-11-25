@@ -575,6 +575,14 @@ private:
     /// Set once the device is found without tessellation shaders, or their
     /// pipeline failed to build: the grid is drawn as it is from then on.
     bool tessellationOff_ = false;
+    /// What the passes were like that the traced water's pipelines are for.
+    struct RtPassKind {
+        VkFormat colour = VK_FORMAT_UNDEFINED;
+        VkFormat depth = VK_FORMAT_UNDEFINED;
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+        bool operator==(const RtPassKind&) const = default;
+    };
+    RtPassKind rtPassKind_;
     bool rtPipelineFailed_ = false;  ///< said once, the client's liquid from then on
     // The stages the water's push constants reach: the tessellation stages
     // as well where the device has them.

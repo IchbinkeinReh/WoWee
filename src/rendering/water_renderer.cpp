@@ -306,6 +306,7 @@ VkPipeline WaterRenderer::readyRtPipeline() {
                                    : (onePass ? rt1xPipeline_ : rtPipeline_);
     if (pipe || rtPipelineFailed_) return pipe;
     if (std::none_of(rtBuilds_.begin(), rtBuilds_.end(), [&](const RtBuild& b) { return b.into == &pipe; })) {
+        rtPassKind_ = {vkCtx->getSwapchainFormat(), vkCtx->getDepthFormat(), vkCtx->getMsaaSamples()};
         const VkRenderPass pass = onePass ? water1xRenderPass : vkCtx->getImGuiRenderPass();
         const VkSampleCountFlagBits samples = onePass ? VK_SAMPLE_COUNT_1_BIT : vkCtx->getMsaaSamples();
         const char* frag = rtHardware_ ? "assets/shaders/water_rt_hw.frag.spv" : "assets/shaders/water.frag.spv";
@@ -330,8 +331,15 @@ void WaterRenderer::setRtWaterFrame(const RtWaterFrame& frame) {
 
 void WaterRenderer::recreatePipelines() {
     if (!vkCtx) return;
-    // Built again against the new passes when next drawn with.
-    destroyRtPipelines();
+    // Built again against the new passes when next drawn with - where they
+    // are others in kind: a pipeline is as good for a pass compatible with
+    // the one it was made for, and a change of the window's size is no more
+    // than that (T330: each compiled it for twenty seconds).
+    finishRtBuilds();
+    rtDrawn_ = VK_NULL_HANDLE;
+    const RtPassKind kind{vkCtx->getSwapchainFormat(), vkCtx->getDepthFormat(), vkCtx->getMsaaSamples()};
+    if (!(kind == rtPassKind_)) destroyRtPipelines();
+    rtPassKind_ = kind;
 
     destroyFrameUBO();
     createFrameUBO();
@@ -2708,8 +2716,6 @@ void WaterRenderer::destroyWater1xResources() {
     water1xFramebuffers.clear();
     finishRtBuilds();
     rtDrawn_ = VK_NULL_HANDLE;
-    destroy(device, rt1xPipeline_);
-    destroy(device, rt1xTessPipeline_);
     destroy(device, clientWater1xPipeline_);
     destroy(device, clientMagma1xPipeline_);
     destroy(device, clientProc1xPipeline_);
