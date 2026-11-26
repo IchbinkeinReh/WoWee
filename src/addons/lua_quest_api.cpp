@@ -7187,31 +7187,31 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, c.id);                           // 10: criteriaID
             return 10;
         }},
-                // GetLatestCompletedAchievements() → the most recent earned
-                // ids, newest first. The summary page fills its top rows from
-                // these. The earn date is a WoW PackedTime - year in the low
-                // sixteen bits, then day, then month - so it does not sort as
-                // a plain integer and has to be unpacked first.
+                // GetLatestCompletedAchievements() (0x005b1c20) → up to five of
+                // the player's earned achievements outside the Statistics
+                // (0x005b0d50), in the order the client keeps its earned list
+                // (0x005b28d0 inserting): the latest first by the whole packed
+                // time, minute and hour too, and of one time the larger UI
+                // order first - as GetLatestCompletedComparisonAchievements.
+                // By the day alone, with the id breaking ties, five earned on
+                // one day came out by their ids (T349).
                 {"GetLatestCompletedAchievements", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            std::vector<std::pair<uint32_t, uint32_t>> byDate;  // sortKey, id
-            for (uint32_t id : gh->getEarnedAchievements()) {
-                const game::WowDate d =
-                    game::unpackWowPackedTime(gh->getAchievementDate(id));
-                byDate.emplace_back(
-                    (static_cast<uint32_t>(d.yearSince2000) << 9) |
-                    (static_cast<uint32_t>(d.month) << 5) |
-                    static_cast<uint32_t>(d.day), id);
+            gh->ensureAchievementNamesLoaded();
+            gh->ensureAchievementCategoriesLoaded();
+            std::vector<game::EarnedAchievement> earned;
+            for (const uint32_t id : gh->getEarnedAchievements())
+                earned.push_back({id, gh->getAchievementDate(id), gh->getAchievementUiOrder(id)});
+            if (!lua_checkstack(L, 5)) return 0;
+            int n = 0;
+            for (const uint32_t id : game::newestFirst(std::move(earned))) {
+                if (n == 5) break;
+                if (!isAchievementNotStatistic(gh, id)) continue;
+                lua_pushnumber(L, id);
+                ++n;
             }
-            std::sort(byDate.begin(), byDate.end(),
-                      [](const auto& a, const auto& b) {
-                          if (a.first != b.first) return a.first > b.first;
-                          return a.second > b.second;  // stable, and a total order
-                      });
-            const size_t n = std::min<size_t>(byDate.size(), 5);
-            for (size_t i = 0; i < n; ++i) lua_pushnumber(L, byDate[i].second);
-            return static_cast<int>(n);
+            return n;
         }},
                 // GetAchievementInfoFromCriteria(criteriaID) → the achievement
                 // that criterion belongs to.

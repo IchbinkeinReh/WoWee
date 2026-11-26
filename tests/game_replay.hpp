@@ -72,6 +72,18 @@ struct GameHandlerTestAccess {
         gh.characters = {character};
         gh.activeCharacterGuid_ = guid;
     }
+    // An Achievement.dbc row and an Achievement_Category.dbc row as the caches
+    // hold them, for tests without the client's files.
+    static void setAchievement(GameHandler& gh, uint32_t id, uint32_t category, uint32_t uiOrder) {
+        gh.achievementCategoryCache_[id] = category;
+        gh.achievementUiOrderCache_[id] = uiOrder;
+    }
+    static void setAchievementCategory(GameHandler& gh, uint32_t id, int32_t parent, bool statistic) {
+        GameHandler::AchievementCategoryInfo info;
+        info.parentId = parent;
+        info.isStatistic = statistic;
+        gh.achievementCategoryInfo_[id] = info;
+    }
     static void setExpansions(core::Application& app, std::unique_ptr<ExpansionRegistry> registry) {
         app.expansionRegistry_ = std::move(registry);
     }

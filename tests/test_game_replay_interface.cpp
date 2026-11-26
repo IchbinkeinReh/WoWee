@@ -2230,3 +2230,39 @@ TEST_CASE("the minimap's zoom is kept in minimapZoom and minimapInsideZoom", "[r
     std::filesystem::remove_all(root, ec);
 }
 
+// T349: GetLatestCompletedAchievements (0x005b1c20) walks the earned list as
+// 0x005b28d0 keeps it - the latest first by the whole time, of one time the
+// larger UI order first - and leaves out the Statistics (0x005b0d50). By the
+// day alone with the id breaking ties, five earned on one day came out by id.
+TEST_CASE("the latest achievements come by the time of day, then by their order", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    using wowee::game::GameHandlerTestAccess;
+    auto& gh = s.handler();
+    GameHandlerTestAccess::setAchievementCategory(gh, 92, -1, false);  // General
+    GameHandlerTestAccess::setAchievementCategory(gh, 1, -1, true);    // Statistics
+    GameHandlerTestAccess::setAchievementCategory(gh, 130, 1, true);
+    GameHandlerTestAccess::setAchievement(gh, 2078, 92, 5);
+    GameHandlerTestAccess::setAchievement(gh, 2097, 92, 1);
+    GameHandlerTestAccess::setAchievement(gh, 545, 92, 9);
+    GameHandlerTestAccess::setAchievement(gh, 868, 92, 2);
+    GameHandlerTestAccess::setAchievement(gh, 100, 130, 1);
+    // Packed: minute, hour, weekday, day - 1, month - 1, year - 2000 from the low bits up.
+    const auto at = [](uint32_t day, uint32_t hour, uint32_t minute) {
+        return 26u << 24 | 10u << 20 | (day - 1) << 14 | 2u << 11 | hour << 6 | minute;
+    };
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ALL_ACHIEVEMENT_DATA));
+    for (const auto& [id, time] : std::vector<std::pair<uint32_t, uint32_t>>{
+             {2078, at(24, 18, 5)}, {2097, at(24, 9, 0)}, {545, at(24, 18, 5)}, {868, at(23, 23, 59)},
+             {100, at(25, 12, 0)}}) {
+        p.writeUInt32(id);
+        p.writeUInt32(time);
+    }
+    p.writeUInt32(0xFFFFFFFFu);
+    p.writeUInt32(0xFFFFFFFFu);
+    s.receive(p);
+    ui.run("latest = {GetLatestCompletedAchievements()}");
+    CHECK(ui.is("#latest == 4"));
+    CHECK(ui.is("latest[1] == 545 and latest[2] == 2078 and latest[3] == 2097 and latest[4] == 868"));
+}
