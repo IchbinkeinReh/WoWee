@@ -5040,8 +5040,20 @@ static bool auctionChargesIntact(game::GameHandler* gh, uint32_t itemId, uint64_
 static bool auctionItemRepaired(game::GameHandler* gh, const game::ItemSlot& slot, uint64_t guid) {
     constexpr uint32_t kItemWrapped = 0x8;
     if (gh->getItemFieldFlags(guid) & kItemWrapped) return true;
-    const auto& item = slot.item;
-    if (item.maxDurability == 0 || item.curDurability >= item.maxDurability) return true;
+    // Read off the item object itself (+0xd8/+0xdc of its descriptor, as
+    // 0x0059d0b0 does), not the bag's copy, which can lag behind a values
+    // update (lead 3 of tester session 15: 'must repair' once for a whole item).
+    uint32_t cur = slot.item.curDurability;
+    uint32_t max = slot.item.maxDurability;
+    if (const auto obj = guid ? gh->getEntityManager().getEntity(guid) : nullptr) {
+        const uint16_t curIdx = game::fieldIndex(game::UF::ITEM_FIELD_DURABILITY);
+        const uint16_t maxIdx = game::fieldIndex(game::UF::ITEM_FIELD_MAXDURABILITY);
+        if (curIdx != 0xFFFF && maxIdx != 0xFFFF) {
+            cur = obj->getField(curIdx);
+            max = obj->getField(maxIdx);
+        }
+    }
+    if (max == 0 || cur >= max) return true;
     gh->playGameErrorSound("ERR_AUCTION_REPAIR_ITEM");
     gh->addUIError(game::interfaceString("ERR_AUCTION_REPAIR_ITEM", "You must repair that item before you can auction it."));
     return false;
