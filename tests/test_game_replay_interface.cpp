@@ -2631,6 +2631,33 @@ TEST_CASE("an item in the bank keeps its own bound flag", "[replay][interface]")
     CHECK(slot.item.guid == kItem);
 }
 
+// T364: PickupInventoryItem takes the bank's slots (40-67) and its bags'
+// slots (68-74) while a banker is open (0x005e7c00, 0x005e85d0 refuses them
+// only with none open). It did nothing for any slot past 23.
+TEST_CASE("PickupInventoryItem takes up a bank slot while the bank is open", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("ClearCursor()");
+    constexpr uint64_t kItem = 0x4000000000000932ull;
+    s.receive(UpdateObject().create(kItem, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 2589}, {UF::ITEM_FIELD_STACK_COUNT, 5}}));
+    const uint16_t bank = static_cast<uint16_t>(wowee::game::fieldIndex(UF::PLAYER_FIELD_BANK_SLOT_1) + 2);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid,
+                                      {{bank, static_cast<uint32_t>(kItem)},
+                                       {static_cast<uint16_t>(bank + 1), static_cast<uint32_t>(kItem >> 32)}}));
+    REQUIRE(s.handler().getInventory().getBankSlot(1).item.itemId == 2589);
+    // Closed: refused.
+    ui.run("PickupInventoryItem(41)");
+    CHECK(ui.is("not CursorHasItem()"));
+    wowee::network::Packet open(wowee::game::wireOpcode(Opcode::SMSG_SHOW_BANK));
+    open.writeUInt64(0xF130000C2E000010ull);
+    s.receive(open);
+    ui.run("PickupInventoryItem(41)");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("ClearCursor()");
+}
+
 // T358: names 12340's widgets do not have (later clients' SetShown, the
 // animation's Play/Stop/Reset, FrameXML's data fields OnUpdate/UpdateTooltip,
 // globals such as ShowUIPanel and SetBinding) answered on every frame and

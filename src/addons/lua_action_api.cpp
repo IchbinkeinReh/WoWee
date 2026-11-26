@@ -2803,6 +2803,25 @@ static int lua_PickupInventoryItem(lua_State* L) {
         gh->setAmmo(0);
         return 0;
     }
+
+    // The bank's slots and its bags' slots are inventory slots like the worn
+    // ones (0x005e7c00 takes them); 0x005e85d0 refuses them only while no
+    // banker is open (DAT_00beb9a0/a4). They are taken up and put down as the
+    // bank frame's own PickupContainerItem(-1, n) and PickupBagFromSlot do.
+    const int bankGeneral = game::slots::toWireSlot(slot) - game::slots::kBankGeneralFirst;
+    const int bankBag = slot - game::slots::firstBankBagInventorySlot();
+    if (bankGeneral >= 0 && bankGeneral < game::slots::bankGeneralCount()) {
+        if (!gh->isBankOpen()) return 0;
+        lua_settop(L, 0);
+        lua_pushnumber(L, -1);
+        lua_pushnumber(L, bankGeneral + 1);
+        return lua_PickupContainerItem(L);
+    }
+    if (bankBag >= 0 && bankBag < game::slots::bankBagCount()) {
+        if (!gh->isBankOpen()) return 0;
+        lua_settop(L, 1);
+        return lua_PickupBagFromSlot(L);
+    }
     if (slot < 1 || slot > 23) return 0;
 
     // Before the pickup, because the paperdoll has no SpellCanTargetItem branch
