@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include <cstdint>
 
+#include "rendering/scene_depth_view.hpp"
 #include "rendering/screen_target.hpp"
 
 namespace wowee {
@@ -87,9 +88,6 @@ private:
     bool ensureTargets(VkExtent2D extent);
     void destroyTargets();
     bool ensureCompositePipeline();
-    /// The depth view for this frame's depth image, made anew when the image
-    /// or its generation changes; the old one goes once no frame can use it.
-    VkImageView depthViewFor(VkImage image, uint64_t generation);
 
     VkContext* ctx_ = nullptr;
     bool usable_ = false;
@@ -108,10 +106,7 @@ private:
 
     // The depth view, and which one each slot's mask set was last written
     // with (by serial: a destroyed view's handle can be given out again).
-    VkImage depthImage_ = VK_NULL_HANDLE;
-    uint64_t depthGeneration_ = 0;
-    VkImageView depthView_ = VK_NULL_HANDLE;
-    uint64_t depthViewSerial_ = 0;
+    SceneDepthView depthView_;
     uint64_t maskSetSerial_[MAX_FRAMES] = {};
 
     VkDescriptorSetLayout maskSetLayout_ = VK_NULL_HANDLE;

@@ -378,32 +378,6 @@ void EyeAdaptationPass::destroyCopies() {
     for (bool& w : depthSetWritten_) w = false;
 }
 
-VkImageView EyeAdaptationPass::depthViewFor(VkImage image, uint64_t generation) {
-    if (image == depthImage_ && generation == depthGeneration_ && depthView_ != VK_NULL_HANDLE) return depthView_;
-    VkDevice device = ctx_->getDevice();
-    if (depthView_ != VK_NULL_HANDLE) {
-        // A slot's sets may still name it in a frame in flight.
-        VkImageView old = depthView_;
-        ctx_->deferAfterAllFrameFences([device, old]() { vkDestroyImageView(device, old, nullptr); });
-        depthView_ = VK_NULL_HANDLE;
-    }
-    depthImage_ = image;
-    depthGeneration_ = generation;
-    VkImageViewCreateInfo vi{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vi.image = image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = ctx_->getDepthFormat();
-    vi.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1,
-                           .baseArrayLayer = 0, .layerCount = 1};
-    if (vkCreateImageView(device, &vi, nullptr, &depthView_) != VK_SUCCESS) {
-        depthView_ = VK_NULL_HANDLE;
-        depthImage_ = VK_NULL_HANDLE;
-        return VK_NULL_HANDLE;
-    }
-    ++depthViewSerial_;
-    return depthView_;
-}
-
 bool EyeAdaptationPass::ensureCopies(VkExtent2D extent) {
     if (extent.width == copyExtent_.width && extent.height == copyExtent_.height &&
         frameCopy_[0].image != VK_NULL_HANDLE) {
@@ -531,10 +505,10 @@ bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, Vk
     // none to read, the frame's copy stands in, unread. This slot's sets
     // were last bound two frames ago, which has finished.
     const VkImageView depthView =
-        depthSampleable_ && depth.image != VK_NULL_HANDLE ? depthViewFor(depth.image, depth.generation)
+        depthSampleable_ && depth.image != VK_NULL_HANDLE ? depthView_.viewFor(*ctx_, depth.image, depth.generation)
                                                           : VK_NULL_HANDLE;
     const bool haveDepth = depthView != VK_NULL_HANDLE;
-    const uint64_t depthSerial = haveDepth ? depthViewSerial_ : 0;
+    const uint64_t depthSerial = haveDepth ? depthView_.serial : 0;
     if (!depthSetWritten_[frame] || depthSetSerial_[frame] != depthSerial) {
         VkDescriptorImageInfo depthIn{.sampler = sampler_, .imageView = haveDepth ? depthView : frameCopy_[frame].view,
                                       .imageLayout = haveDepth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
@@ -649,9 +623,7 @@ void EyeAdaptationPass::shutdown() {
     destroy(device, compositeSetLayout_);
     destroy(device, maskPipeline_);
     destroy(device, maskPipelineMs_);
-    if (depthView_ != VK_NULL_HANDLE) vkDestroyImageView(device, depthView_, nullptr);
-    depthView_ = VK_NULL_HANDLE;
-    depthImage_ = VK_NULL_HANDLE;
+    depthView_.destroy(device);
     for (bool& w : depthSetWritten_) w = false;
     destroy(device, maskLayout_);
     destroy(device, maskSetLayout_);

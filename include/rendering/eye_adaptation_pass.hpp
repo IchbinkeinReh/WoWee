@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "rendering/eye_adaptation.hpp"
+#include "rendering/scene_depth_view.hpp"
 #include "rendering/screen_target.hpp"
 #include "rendering/vk_utils.hpp"
 
@@ -101,8 +102,6 @@ private:
 
     bool ensureCompositePipeline();
     bool ensureCopies(VkExtent2D extent);
-    /// The view of this frame's depth image, made anew when it changes.
-    VkImageView depthViewFor(VkImage image, uint64_t generation);
     void destroyCopies();
     void forget();
 
@@ -145,10 +144,7 @@ private:
     /// The depth view, and what each slot's mask and blur sets were last
     /// given for binding 2: the serial of the depth view, or 0 for the
     /// frame's copy standing in where there is no depth.
-    VkImage depthImage_ = VK_NULL_HANDLE;
-    uint64_t depthGeneration_ = 0;
-    VkImageView depthView_ = VK_NULL_HANDLE;
-    uint64_t depthViewSerial_ = 0;
+    SceneDepthView depthView_;
     uint64_t depthSetSerial_[MAX_FRAMES] = {};
     bool depthSetWritten_[MAX_FRAMES] = {};
     bool depthSampleable_ = false;

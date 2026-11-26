@@ -294,32 +294,6 @@ bool SunShafts::ensureTargets(VkExtent2D extent) {
     return true;
 }
 
-VkImageView SunShafts::depthViewFor(VkImage image, uint64_t generation) {
-    if (image == depthImage_ && generation == depthGeneration_ && depthView_ != VK_NULL_HANDLE) return depthView_;
-    VkDevice device = ctx_->getDevice();
-    if (depthView_ != VK_NULL_HANDLE) {
-        // A slot's mask set may still name it in a frame in flight.
-        VkImageView old = depthView_;
-        ctx_->deferAfterAllFrameFences([device, old]() { vkDestroyImageView(device, old, nullptr); });
-        depthView_ = VK_NULL_HANDLE;
-    }
-    depthImage_ = image;
-    depthGeneration_ = generation;
-    VkImageViewCreateInfo vi{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vi.image = image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = ctx_->getDepthFormat();
-    vi.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1,
-                           .baseArrayLayer = 0, .layerCount = 1};
-    if (vkCreateImageView(device, &vi, nullptr, &depthView_) != VK_SUCCESS) {
-        depthView_ = VK_NULL_HANDLE;
-        depthImage_ = VK_NULL_HANDLE;
-        return VK_NULL_HANDLE;
-    }
-    ++depthViewSerial_;
-    return depthView_;
-}
-
 bool SunShafts::record(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainImage,
                        VkExtent2D extent, const FrameInputs& in) {
     ZoneScopedN("SunShafts::record");
@@ -341,11 +315,11 @@ bool SunShafts::record(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainIma
         maskPipeline_ == VK_NULL_HANDLE || maskPipelineMs_ == VK_NULL_HANDLE) {
         return false;
     }
-    const VkImageView depthView = depthViewFor(in.depthImage, in.depthGeneration);
+    const VkImageView depthView = depthView_.viewFor(*ctx_, in.depthImage, in.depthGeneration);
     if (depthView == VK_NULL_HANDLE) return false;
     // This slot's set was last bound by its frame two frames ago, which has
     // finished: it can be written again.
-    if (maskSetSerial_[frame] != depthViewSerial_) {
+    if (maskSetSerial_[frame] != depthView_.serial) {
         VkDescriptorImageInfo copyIn{.sampler = sampler_, .imageView = frameCopy_[frame].view,
                                      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo depthIn{.sampler = pointSampler_, .imageView = depthView,
@@ -363,7 +337,7 @@ bool SunShafts::record(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainIma
             w[b].pImageInfo = infos[b];
         }
         vkUpdateDescriptorSets(ctx_->getDevice(), 3, w, 0, nullptr);
-        maskSetSerial_[frame] = depthViewSerial_;
+        maskSetSerial_[frame] = depthView_.serial;
     }
 
     const auto barrier = [&](VkImage image, VkImageLayout from, VkImageLayout to,
@@ -494,9 +468,7 @@ void SunShafts::shutdown() {
     ::wowee::rendering::deviceWaitIdle(device);
     destroyTargets();
     destroy(device, descPool_);
-    if (depthView_ != VK_NULL_HANDLE) vkDestroyImageView(device, depthView_, nullptr);
-    depthView_ = VK_NULL_HANDLE;
-    depthImage_ = VK_NULL_HANDLE;
+    depthView_.destroy(device);
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         maskSets_[i] = VK_NULL_HANDLE;
         maskSetSerial_[i] = 0;
