@@ -2095,6 +2095,37 @@ TEST_CASE("a buff the player's spellsteal could take is stealable", "[replay][in
     CHECK(ui.is("select(9, UnitAura('player', 'Mark of the Wild')) == nil"));
 }
 
+// T347: 0x005210d0 refuses an item outside the spell's item class
+// (SPELL_FAILED_BAD_TARGETS) and one milling or prospecting cannot take
+// (CANT_BE_MILLED / _PROSPECTED) the same way: 0x00808200 says it, nothing is
+// sent, and the cursor still waits. The milling refusal put it down.
+TEST_CASE("an item milling cannot take leaves the cursor waiting", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    auto& gh = s.handler();
+    constexpr uint64_t kTusk = 0x4000000000000901ull;
+    constexpr uint32_t kTuskEntry = 3169, kMilling = 51005, kProspecting = 31252;
+    s.receive(UpdateObject().create(kTusk, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, kTuskEntry}, {UF::ITEM_FIELD_STACK_COUNT, 1}}));
+    auto& tusk = gh.itemInfoCacheRef()[kTuskEntry];
+    tusk.entry = kTuskEntry;
+    tusk.valid = true;
+    tusk.itemFlags = 0;
+    gh.spellNameCacheRef()[kMilling].name = "Milling";
+    gh.spellNameCacheRef()[kMilling].effectIds[0] = 158;
+    gh.spellNameCacheRef()[kProspecting].name = "Prospecting";
+    gh.spellNameCacheRef()[kProspecting].effectIds[0] = 127;
+    for (const uint32_t spell : {kMilling, kProspecting}) {
+        INFO(spell);
+        gh.beginSpellItemTargeting(spell, "spell");
+        REQUIRE(gh.isAwaitingItemTarget());
+        gh.completeItemUseOnItem(kTusk);
+        CHECK(gh.isAwaitingItemTarget());
+        CHECK(s.sent().of(Opcode::CMSG_CAST_SPELL).empty());
+        gh.cancelItemTargeting();
+    }
+}
+
 // T339 (c): the video panel's "full screen glow" box writes ffxGlow, which the
 // client asks before the glow is drawn (0x008c1270); it reached no setting,
 // so the box moved and the glow stayed. It is the screen glow's row now.

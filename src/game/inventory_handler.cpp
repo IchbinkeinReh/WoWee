@@ -2888,8 +2888,9 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
                 if (effect == 127 && (targetInfo->itemFlags & 0x40000u) == 0) refusal = 0x11;
                 if (effect == 158 && (targetInfo->itemFlags & 0x20000000u) == 0) refusal = 0x10;
             }
+            // As the class check above: 0x005210d0 says it through
+            // 0x00808200 alike, and the cursor still waits (T347).
             if (refusal != 0) {
-                pendingItemTarget_.reset();
                 if (auto* spells = owner_.getSpellHandler()) spells->reportLocalCastFailure(pending.spellId, refusal);
                 return;
             }
