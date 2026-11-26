@@ -1597,6 +1597,13 @@ elseif(IOS)
         # iPhone and iPad.
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_ENABLE_BITCODE NO)
+    # The increased memory limit (ios/wowee.entitlements): only for a signing
+    # identity whose App ID has the capability, which a free team's has not.
+    option(WOWEE_IOS_INCREASED_MEMORY "Sign the iOS app with the increased memory limit entitlement" OFF)
+    if(WOWEE_IOS_INCREASED_MEMORY)
+        set_target_properties(wowee PROPERTIES
+            XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS ${CMAKE_CURRENT_SOURCE_DIR}/ios/wowee.entitlements)
+    endif()
 else()
     add_executable(wowee ${WOWEE_SOURCES} ${WOWEE_HEADERS} ${WOWEE_PLATFORM_SOURCES} ${WOWEE_MACOS_SOURCES})
 endif()

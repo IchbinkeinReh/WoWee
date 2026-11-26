@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for signing the iOS app (U10). iOS ends an app that grows past
+  its memory limit without a word to it, and the limit counts the app's GPU
+  memory too (os_proc_available_memory: an iPhone with 12 GB had 538 MB of
+  headroom left at 1.6 GB resident and 1.4 GB of Vulkan blocks). The increased
+  memory limit raises it on the devices that allow it. A signing identity whose
+  App ID lacks the capability cannot sign with it, so CMake adds this file only
+  with -DWOWEE_IOS_INCREASED_MEMORY=ON; a re-signing tool can be handed it
+  directly.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.developer.kernel.increased-memory-limit</key>
+    <true/>
+</dict>
+</plist>
