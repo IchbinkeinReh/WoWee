@@ -601,7 +601,12 @@ static int lua_UnitAura(lua_State* L, int forced) {
                 lua_pushnil(L);
             }
             lua_pushnil(L);                  // isStealable
-            lua_pushnil(L);                  // shouldConsolidate
+            // shouldConsolidate: 1 for a spell whose AttributesEx7 has
+            // 0x10000000 (0x006147c0), nil otherwise. BuffFrame.lua puts
+            // such a buff in the summary box while "consolidateBuffs" is
+            // on; always nil, the option's box moved nothing (T339).
+            if ((gh->getSpellAttributesEx7(aura.spellId) & 0x10000000u) != 0) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
             lua_pushnumber(L, aura.spellId); // spellId
             lastUnitAuraAnswer() = {true, aura.level, aura.charges};
             return 11;

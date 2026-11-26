@@ -1392,6 +1392,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "mapquestdifficulty") lua_pushstring(L, "0");
     else if (n == "autoquestprogress") lua_pushstring(L, "1");
     else if (n == "consolidatebuffs") lua_pushstring(L, "0");
+    // On where the card can draw it (0x007ea260 registers "1", else "0"),
+    // which every card this client runs on can; the renderer reads it so.
+    else if (n == "ffxdeath") lua_pushstring(L, "1");
     else if (n == "watchframewidth") lua_pushstring(L, "0");
     // Nameplates and names for totems: plates on both sides, names on
     // neither (0x00511xxx, 0x007e6150).
@@ -1891,6 +1894,10 @@ constexpr ClientCVarBinding kClientCVars[] = {
     // the CVar answers from.
     {"nameplateshowenemies", "enemyplates"},
     {"rotateminimap",        "minimaprotate"},
+    // The video panel's "full screen glow" box (videooptionspanels.xml): the
+    // glow's own CVar, which 0x008c1270 asks before the effect is drawn - the
+    // row the renderer reads for it.
+    {"ffxglow",              "screenglow"},
 };
 // NOLINTEND(modernize-use-designated-initializers)
 

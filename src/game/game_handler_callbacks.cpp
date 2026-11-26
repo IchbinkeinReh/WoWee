@@ -1199,6 +1199,13 @@ uint32_t GameHandler::getSpellAttributesEx2(uint32_t spellId) const {
     return it != spellNameCache_.end() ? it->second.attrEx2 : 0u;
 }
 
+uint32_t GameHandler::getSpellAttributesEx7(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    return it != spellNameCache_.end() ? it->second.attrEx7 : 0u;
+}
+
 void GameHandler::sendRequestVehicleExit() {
     if (state != WorldState::IN_WORLD || !socket) return;
     if (drivesItsVehicle(vehicleRoster_, playerGuid, activeMover())) {

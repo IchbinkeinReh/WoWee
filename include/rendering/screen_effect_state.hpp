@@ -9,7 +9,9 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace wowee {
@@ -82,6 +84,13 @@ inline float drunkAmount(uint32_t playerBytes3, uint32_t fakeInebriation) {
     if (most >= 100) return 1.0f;
     if (fake < real) return static_cast<float>(real) * 0.01f;
     return static_cast<float>(static_cast<uint32_t>(fake) & 0xFFu) * 0.01f;
+}
+
+/// Whether an effect whose CVar reads `value` is drawn: 0x008c1270 tests the
+/// CVar's integer (+0x30, atol of its string, 0x008c02a0), so anything that
+/// reads as a number other than 0 is on and "0", "" or a word is off.
+inline bool effectCVarOn(const std::string& value) {
+    return std::strtol(value.c_str(), nullptr, 10) != 0;
 }
 
 /// A 0..1 value as the byte 0x004f8770 makes of it: the float bits of

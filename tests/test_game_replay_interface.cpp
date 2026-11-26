@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -1991,4 +1992,56 @@ TEST_CASE("an eject from the battlefield says why as the client reads it", "[rep
     // battleID, playerExited, relocated, battleActive, lowLevel.
     CHECK(ui.is("not seen[1][2] and not seen[1][3] and seen[1][4] ~= nil and seen[1][5] ~= nil"));
     CHECK(ui.is("seen[2][2] ~= nil and seen[2][3] ~= nil and not seen[2][4] and not seen[2][5]"));
+}
+
+// T339 (c): the "consolidate buffs" box. BuffFrame.lua puts a buff in the
+// summary box when UnitAura's tenth value says so, which 0x006147c0 answers
+// 1 for a spell with AttributesEx7 0x10000000 and nil for the rest; always
+// nil, the box changed nothing.
+TEST_CASE("a buff the spell marks for it is to be consolidated", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    auto& gh = s.handler();
+    constexpr uint32_t kKings = 20217, kShield = 17;
+    gh.spellNameCacheRef()[kKings].name = "Blessing of Kings";
+    gh.spellNameCacheRef()[kKings].attrEx7 = 0x10000000u;
+    gh.spellNameCacheRef()[kShield].name = "Power Word: Shield";
+    Interface ui(s);
+    const auto aura = [&](uint8_t slot, uint32_t spell) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt8(slot);
+        p.writeUInt32(spell);
+        p.writeUInt8(0x10 | 0x08 | 0x01);
+        p.writeUInt8(80);
+        p.writeUInt8(0);
+        s.receive(p);
+    };
+    aura(0, kKings);
+    aura(1, kShield);
+    CHECK(ui.is("select(10, UnitAura('player', 'Blessing of Kings')) == 1"));
+    CHECK(ui.is("select(10, UnitAura('player', 'Power Word: Shield')) == nil"));
+    CHECK(ui.is("select(11, UnitAura('player', 'Power Word: Shield')) == 17"));
+}
+
+// T339 (c): the video panel's "full screen glow" box writes ffxGlow, which the
+// client asks before the glow is drawn (0x008c1270); it reached no setting,
+// so the box moved and the glow stayed. It is the screen glow's row now.
+TEST_CASE("the full screen glow's box turns the glow", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    std::map<std::string, std::string> settings{{"screenglow", "1"}};
+    wowee::addons::LuaServices services;
+    services.getClientSetting = [&](const std::string& key) {
+        const auto it = settings.find(key);
+        return it == settings.end() ? std::string{} : it->second;
+    };
+    services.setClientSetting = [&](const std::string& key, const std::string& value) { settings[key] = value; };
+    ui.engine.setLuaServices(services);
+    CHECK(ui.is("GetCVar('ffxGlow') == '1'"));
+    ui.run("SetCVar('ffxGlow', '0')");
+    CHECK(settings["screenglow"] == "0");
+    settings["screenglow"] = "1";
+    CHECK(ui.is("GetCVar('ffxGlow') == '1'"));
 }

@@ -210,3 +210,14 @@ TEST_CASE("a screen effect's sounds follow the client's sound day", "[screen_eff
     CHECK(sea::dayOrNight(11, 22, true) == 11);
     CHECK(sea::dayOrNight(11, 22, false) == 22);
 }
+
+// T339 (c): an effect is drawn only while its CVar's number is not 0
+// (0x008c1270, the CVar's +0x30): "ffxDeath" off, a ghost's world is plain.
+TEST_CASE("a full-screen effect's CVar turns it on and off by its number", "[screen_effect]") {
+    using wowee::rendering::screen_effect::effectCVarOn;
+    CHECK(effectCVarOn("1"));
+    CHECK(effectCVarOn("2"));
+    CHECK_FALSE(effectCVarOn("0"));
+    CHECK_FALSE(effectCVarOn(""));
+    CHECK_FALSE(effectCVarOn("off"));
+}

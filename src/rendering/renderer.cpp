@@ -8268,7 +8268,11 @@ void Renderer::recordScreenEffects() {
         const float lightGlow = lightingManager->getLightingParams().glow;
         switch (screenEffectState_.kind()) {
             case se::Kind::Death:
-                // ffxDeath in the glow's place (0x007ea260).
+                // ffxDeath in the glow's place (0x007ea260). An effect is
+                // drawn only while its CVar is on (0x008c1270 reads its
+                // +0x30): with "ffxDeath" off a ghost sees the world as it
+                // is, glow and all gone, as the video panel's box says.
+                if (!screen_effect::effectCVarOn(addons::storedCVarValue("ffxDeath", "1"))) break;
                 in.mode = ScreenEffects::Mode::Death;
                 in.glow = screenGlowEnabled_ ? lightGlow : 0.0f;
                 draw = true;

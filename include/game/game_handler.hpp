@@ -4992,6 +4992,8 @@ public:
     std::optional<uint32_t> keptMoveSplineFlags(uint64_t guid) const;
     /// A spell's AttributesEx2.
     [[nodiscard]] uint32_t getSpellAttributesEx2(uint32_t spellId) const;
+    /// A spell's AttributesEx7 (column 11, +0x2c).
+    [[nodiscard]] uint32_t getSpellAttributesEx7(uint32_t spellId) const;
     /// An auto-repeating ranged spell of the player's going (+0xa38 0x200):
     /// set by a cast of one with AttributesEx2 0x20 (0x007fa2e0), cleared
     /// by SMSG_CANCEL_AUTO_REPEAT (0x00807560).
