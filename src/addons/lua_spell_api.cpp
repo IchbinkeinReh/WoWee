@@ -1769,7 +1769,10 @@ static int lua_CastSpellByID(lua_State* L) {
     // targeted instead, so healing a party member through their frame hit the
     // current target.
     // Nothing without the player (0x0053e060).
-    if (!gh->getEntityManager().getEntity(gh->getPlayerGuid())) return 0;
+    if (!gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+        LOG_WARNING("CastSpellByID: no player object - nothing cast (0x0053e060)");
+        return 0;
+    }
     const auto target = unitAskedOrTarget(L, gh, 2);   // as CastSpellByName
     if (!target) return 0;
     // A spell of the player's own list (0x00be6d88): 0x0080da40 ->

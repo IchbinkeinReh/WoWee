@@ -1913,7 +1913,10 @@ static int lua_SplitContainerItem(lua_State* L) {
     if (!gh || slot < 1 || count < 1) return 0;
     // The player, in control or on a taxi (0x005d84f0: 0x00bcfb8c or
     // UNIT_FIELD_FLAGS 0x100000), or nothing is split.
-    if (!gh->playerHandsFree()) return 0;
+    if (!gh->playerHandsFree()) {
+        LOG_WARNING("SplitContainerItem: the player has no control of itself - nothing done (0x005d84f0)");
+        return 0;
+    }
 
     // Every container the interface can name, through the one mapping.
     // bankframe splits from BANK_CONTAINER, which this could not name before.
@@ -5752,7 +5755,12 @@ static int lua_PutItemInBag(lua_State* L) {
     const bool isWorn = wornIndex >= 0 && wornIndex < game::Inventory::NUM_BAG_SLOTS;
     const bool isBank = bankIndex >= 0 && bankIndex < game::slots::bankBagCount();
     // 0x005e8d30: the player in control (0x00bcfb8c; a taxi does not do).
-    if (!gh || !gh->playerInControl() || (!isWorn && !isBank) || !heldWireSlot(srcBag, srcSlot)) {
+    if (gh && !gh->playerInControl()) {
+        LOG_WARNING("PutItemInBag: the player has no control of itself - nothing done (0x005e8d30)");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!gh || (!isWorn && !isBank) || !heldWireSlot(srcBag, srcSlot)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -5831,7 +5839,12 @@ static int lua_PutItemInBackpack(lua_State* L) {
     uint8_t srcBag = 0, srcSlot = 0;
     // 0x005ea7f0 -> 0x005e8d30: the player in control (0x00bcfb8c; a taxi
     // does not do), or nil.
-    if (!gh || !gh->playerInControl() || !heldWireSlot(srcBag, srcSlot)) {
+    if (gh && !gh->playerInControl()) {
+        LOG_WARNING("PutItemInBackpack: the player has no control of itself - nothing done (0x005e8d30)");
+        luaPushOneOrNil(L, 0);
+        return 1;
+    }
+    if (!gh || !heldWireSlot(srcBag, srcSlot)) {
         luaPushOneOrNil(L, 0);
         return 1;
     }
@@ -6886,7 +6899,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             // 0x0057bbc0: the player there and in control (0x00bcfb8c).
-            if (!gh->playerInControl()) return 0;
+            if (!gh->playerInControl()) {
+                LOG_WARNING("PurchaseSlot: the player has no control of itself - nothing done (0x0057bbc0)");
+                return 0;
+            }
             if (!gh->getEntityManager().getEntity(gh->getPlayerGuid()) || !gh->isBankOpen()) {
                 LOG_WARNING("PurchaseSlot: no bank open, ignored");
                 return 0;
