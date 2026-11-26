@@ -3,6 +3,7 @@
 // where the waves carried the flat surface's point to, and there are none
 // where the traced water has none.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "rendering/wave_surface.hpp"
 

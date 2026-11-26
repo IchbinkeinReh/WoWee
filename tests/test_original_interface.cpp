@@ -4,6 +4,7 @@
 // picks, nothing reset on hide), and the option panels keep every control
 // and page FrameXML builds (nothing taken off them).
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include <fstream>
 #include <sstream>

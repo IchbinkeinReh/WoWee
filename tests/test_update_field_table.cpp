@@ -1,4 +1,5 @@
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "game/update_field_table.hpp"
 #include "game/known_currencies.hpp"

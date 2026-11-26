@@ -3,9 +3,11 @@
 // selection's renderer and its effects' compiled pipelines for 13 s on the
 // frame that took the keys, with the driver's cache empty.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "rendering/built_beside.hpp"
 
+#include <chrono>
 #include <fstream>
 #include <future>
 #include <memory>

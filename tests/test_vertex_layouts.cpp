@@ -14,6 +14,7 @@
 // somebody adds an input to the shader without adding an attribute, this fails
 // with the name of the input.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include <cstdlib>
 #include <fstream>

@@ -1,5 +1,6 @@
 // The quest log through GameHandler's own dispatch. See game_replay.hpp.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "game_replay.hpp"
 #include "game/quest_handler.hpp"

@@ -3,6 +3,7 @@
 // ground's. The Coilfang entrance rooms lie ninety yards under their lake and
 // are dry; asked by x and y alone they were drawn as under water.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "rendering/collision_liquid.hpp"
 #include "rendering/liquid_place.hpp"

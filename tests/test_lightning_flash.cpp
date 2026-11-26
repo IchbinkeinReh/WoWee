@@ -3,6 +3,7 @@
 // the light's colours, and that the lighting and the ray traced probes take it
 // as they should.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "rendering/lightning_flash.hpp"
 

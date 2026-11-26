@@ -14,6 +14,7 @@
 // present - the only way to know the two agree on real data rather than on
 // the cases someone thought to write down.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "pipeline/blp_loader.hpp"
 

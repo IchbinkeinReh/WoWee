@@ -18,6 +18,7 @@
 // test to read back.
 
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "core/application.hpp"
 #include "core/app_clock.hpp"

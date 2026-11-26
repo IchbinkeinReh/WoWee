@@ -19,6 +19,7 @@
 // is that format's statement of what identifies an entry. These tests read
 // those handlers and hold the format table to what they say.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include <filesystem>
 #include <fstream>

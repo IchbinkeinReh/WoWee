@@ -14,6 +14,7 @@
 // as a rule that holds, so this builds both cases by hand and then checks the
 // block reader against the decoder over whatever files are present.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "pipeline/blp_loader.hpp"
 

@@ -12,6 +12,7 @@
 // ask the game for its weather and then draw strokes or dots with ImGui near
 // it, and the overlay itself must not come back.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include <filesystem>
 #include <fstream>

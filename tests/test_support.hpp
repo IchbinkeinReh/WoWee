@@ -11,10 +11,16 @@
 /// about capitalisation, so a copy that lost the fold would find nothing on
 /// one machine and everything on another.
 ///
-/// WOWEE_SOURCE_DIR is a compile definition the test's CMake block sets. Not
-/// every test target sets it, so the fallback is an empty root and the caller
-/// gets whatever a relative path means - which is what each copy already did.
+/// The tree's root is found as the test runs, never compiled in: a path built
+/// into an object is the checkout it was first compiled in, and a compiler
+/// cache hands that object to every other checkout, whose tests then read
+/// (or fail to find) another tree's files. CTest gives each test the tree in
+/// WOWEE_SOURCE_DIR (tests/CMakeLists.txt, at its end); a test run by hand
+/// from inside the tree finds it by walking up to this file. WOWEE_SOURCE_DIR
+/// is the macro the tests have always read; it names sourceDir() now.
 
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -24,13 +30,32 @@
 
 namespace wowee::test {
 
-/// The tree's root with a trailing slash, or empty when nothing defined it.
+/// The tree's root without a trailing slash: the environment's
+/// WOWEE_SOURCE_DIR, else the first directory up from the working one that
+/// holds tests/test_support.hpp, else empty (paths stay relative).
+inline const std::string& sourceDir() {
+    static const std::string dir = [] {
+        if (const char* env = std::getenv("WOWEE_SOURCE_DIR"); env != nullptr && *env != '\0') {
+            std::string d(env);
+            while (d.size() > 1 && (d.back() == '/' || d.back() == '\\')) d.pop_back();
+            return d;
+        }
+        std::error_code ec;
+        std::filesystem::path at = std::filesystem::current_path(ec);
+        while (!ec && !at.empty()) {
+            if (std::filesystem::exists(at / "tests" / "test_support.hpp", ec)) return at.generic_string();
+            const std::filesystem::path up = at.parent_path();
+            if (up == at) break;
+            at = up;
+        }
+        return std::string{};
+    }();
+    return dir;
+}
+
+/// The tree's root with a trailing slash, or empty when it was not found.
 inline const std::string& sourceRoot() {
-#ifdef WOWEE_SOURCE_DIR
-    static const std::string root = std::string(WOWEE_SOURCE_DIR) + "/";
-#else
-    static const std::string root;
-#endif
+    static const std::string root = sourceDir().empty() ? std::string{} : sourceDir() + "/";
     return root;
 }
 
@@ -92,3 +117,7 @@ inline std::filesystem::path dbcPathFor(const std::string& table) {
 }
 
 }  // namespace wowee::test
+
+#ifndef WOWEE_SOURCE_DIR
+#define WOWEE_SOURCE_DIR (::wowee::test::sourceDir())
+#endif

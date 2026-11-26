@@ -8,6 +8,7 @@
 // glow (MongooseGlow_High), a helm's (Helm_Robe_RaidPriest_C_01). All of them
 // were turned down as broken.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "pipeline/wmo_loader.hpp"
 #include "pipeline/asset_manager.hpp"

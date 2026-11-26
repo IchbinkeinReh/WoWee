@@ -14,6 +14,7 @@
 // This is real-asset coverage: it needs a model with ribbons extracted, and
 // skips when there is none.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include <cstring>
 #include <fstream>

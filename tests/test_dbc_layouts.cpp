@@ -1,4 +1,5 @@
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "pipeline/dbc_layout.hpp"
 

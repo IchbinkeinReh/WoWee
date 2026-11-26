@@ -14,6 +14,7 @@
 // The oracle is AzerothCore's UpdateFields.h, read once and recorded here.
 // Comparing our whole table against it found that one field out of 75.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include <fstream>
 #include <map>

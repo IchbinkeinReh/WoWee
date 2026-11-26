@@ -431,8 +431,6 @@ add_executable(test_framexml
 target_include_directories(test_framexml PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_framexml SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
-target_compile_definitions(test_framexml PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_framexml PRIVATE catch2_main lua51)
 add_test(NAME framexml COMMAND test_framexml)
 register_test_target(test_framexml)
@@ -573,8 +571,6 @@ add_executable(test_settings_schema_consistency
 )
 target_include_directories(test_settings_schema_consistency PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_settings_schema_consistency SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_settings_schema_consistency PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_settings_schema_consistency PRIVATE catch2_main)
 # Its water tessellation row check includes water_tessellation.hpp, which reaches glm.
 wowee_test_link_glm(test_settings_schema_consistency)
@@ -1151,8 +1147,6 @@ add_executable(test_m2_ribbon_tracks
 )
 target_include_directories(test_m2_ribbon_tracks PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_m2_ribbon_tracks SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_m2_ribbon_tracks PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_m2_ribbon_tracks PRIVATE catch2_main)
 wowee_test_link_glm(test_m2_ribbon_tracks)
 add_test(NAME m2_ribbon_tracks COMMAND test_m2_ribbon_tracks)
@@ -1478,8 +1472,6 @@ add_executable(test_vertex_layouts
     ${TEST_COMMON_SOURCES})
 target_include_directories(test_vertex_layouts PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_vertex_layouts SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_vertex_layouts PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_vertex_layouts PRIVATE catch2_main)
 wowee_test_link_glm(test_vertex_layouts)
 add_test(NAME vertex_layouts COMMAND test_vertex_layouts)
@@ -1657,8 +1649,6 @@ add_executable(test_m2_color_alpha
 )
 target_include_directories(test_m2_color_alpha PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_m2_color_alpha SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_m2_color_alpha PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_m2_color_alpha PRIVATE catch2_main)
 wowee_test_link_glm(test_m2_color_alpha)
 add_test(NAME m2_color_alpha COMMAND test_m2_color_alpha)
@@ -1674,8 +1664,6 @@ add_executable(test_m2_footstep_events
 )
 target_include_directories(test_m2_footstep_events PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_m2_footstep_events SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_m2_footstep_events PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_m2_footstep_events PRIVATE catch2_main)
 wowee_test_link_glm(test_m2_footstep_events)
 add_test(NAME m2_footstep_events COMMAND test_m2_footstep_events)
@@ -1720,7 +1708,6 @@ add_executable(test_blp_alpha_scan
 )
 target_include_directories(test_blp_alpha_scan PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_blp_alpha_scan SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_blp_alpha_scan PRIVATE WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_blp_alpha_scan PRIVATE catch2_main)
 add_test(NAME blp_alpha_scan COMMAND test_blp_alpha_scan)
 register_test_target(test_blp_alpha_scan)
@@ -1737,7 +1724,6 @@ add_executable(test_blp_alpha_silhouette
 )
 target_include_directories(test_blp_alpha_silhouette PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_blp_alpha_silhouette SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_blp_alpha_silhouette PRIVATE WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_blp_alpha_silhouette PRIVATE catch2_main)
 add_test(NAME blp_alpha_silhouette COMMAND test_blp_alpha_silhouette)
 register_test_target(test_blp_alpha_silhouette)
@@ -1770,16 +1756,12 @@ wowee_add_test(test_rt_reconstruct
 # the apply pass over it, against the forward shaders' own lighting formulas.
 wowee_add_test(test_rt_gbuffer
     SOURCES test_rt_gbuffer.cpp)
-target_compile_definitions(test_rt_gbuffer PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_rt_see_through ──────────────────────────────────────
 # Header-only: the traced lights of a unit drawn see-through, by the shader's
 # own source.
 wowee_add_test(test_rt_see_through
     SOURCES test_rt_see_through.cpp)
-target_compile_definitions(test_rt_see_through PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_rt_upsample ─────────────────────────────────────────
 # Header-only: how a pixel finds its own surface among the half-resolution
@@ -1831,8 +1813,6 @@ wowee_add_test(test_rt_light_kinds
     SOURCES test_rt_light_kinds.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
             ${TEST_COMMON_SOURCES})
-target_compile_definitions(test_rt_light_kinds PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_rt_glow ─────────────────────────────────────────────
 # Header-only: what glows gathered into patches at load, their lights, an
@@ -1850,8 +1830,6 @@ wowee_add_test(test_shadow_sun
 # shaders that read it.
 wowee_add_test(test_shadow_unit_tile
     SOURCES test_shadow_unit_tile.cpp)
-target_compile_definitions(test_shadow_unit_tile PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # -- test_sound_entry: a SoundEntries row's file path and the swings its flags ask.
 wowee_add_test(test_sound_entry
@@ -1888,8 +1866,6 @@ wowee_add_test(test_msaa_memory
 # -- test_rt_water: the ray traced water's optics.
 wowee_add_test(test_rt_water
     SOURCES test_rt_water.cpp)
-target_compile_definitions(test_rt_water PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # -- test_rt_detail: the textures traced hits are coloured by, and their store.
 wowee_add_test(test_rt_detail
@@ -2672,8 +2648,6 @@ add_executable(test_dbc_layouts
 )
 target_include_directories(test_dbc_layouts PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_dbc_layouts SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_dbc_layouts PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_dbc_layouts PRIVATE catch2_main)
 add_test(NAME dbc_layouts COMMAND test_dbc_layouts)
 register_test_target(test_dbc_layouts)
@@ -2686,8 +2660,6 @@ add_executable(test_update_field_table
 )
 target_include_directories(test_update_field_table PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_update_field_table SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_update_field_table PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_update_field_table PRIVATE catch2_main)
 add_test(NAME update_field_table COMMAND test_update_field_table)
 register_test_target(test_update_field_table)
@@ -3002,8 +2974,6 @@ target_include_directories(test_catalog_entry_key SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS}
     ${CMAKE_SOURCE_DIR}/extern/nlohmann
 )
-target_compile_definitions(test_catalog_entry_key PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_catalog_entry_key PRIVATE catch2_main)
 add_test(NAME catalog_entry_key COMMAND test_catalog_entry_key)
 register_test_target(test_catalog_entry_key)
@@ -3085,8 +3055,6 @@ target_include_directories(test_format_lookup PRIVATE
 )
 target_include_directories(test_format_lookup SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_format_lookup PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_format_lookup PRIVATE catch2_main)
 add_test(NAME format_lookup COMMAND test_format_lookup)
 register_test_target(test_format_lookup)
@@ -3110,8 +3078,6 @@ add_executable(test_settings_apply_on_load
 target_include_directories(test_settings_apply_on_load PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_settings_apply_on_load SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_settings_apply_on_load PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_settings_apply_on_load PRIVATE catch2_main)
 add_test(NAME settings_apply_on_load COMMAND test_settings_apply_on_load)
 register_test_target(test_settings_apply_on_load)
@@ -3134,8 +3100,6 @@ add_executable(test_light_bands
 target_include_directories(test_light_bands PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_light_bands SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_light_bands PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_light_bands PRIVATE catch2_main)
 wowee_test_link_glm(test_light_bands)
 add_test(NAME light_bands COMMAND test_light_bands)
@@ -3164,8 +3128,6 @@ register_test_target(test_m2_view_distance)
 # range.
 wowee_add_test(test_day_night
     SOURCES test_day_night.cpp)
-target_compile_definitions(test_day_night PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_sky_client ──────────────────────────────────────────
 # The rest of the client's sky (Wow.exe 3.3.5a): the sun and moons' sizes and
@@ -3180,8 +3142,6 @@ wowee_add_test(test_sky_client
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
-target_compile_definitions(test_sky_client PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_wmo_doodad_light ────────────────────────────────────
 # How the client lights M2s inside a WMO interior (Wow.exe 3.3.5a): a doodad by
@@ -3275,8 +3235,6 @@ add_executable(test_dbc_layout_columns
 target_include_directories(test_dbc_layout_columns PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_dbc_layout_columns SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_dbc_layout_columns PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_dbc_layout_columns PRIVATE catch2_main)
 add_test(NAME dbc_layout_columns COMMAND test_dbc_layout_columns)
 register_test_target(test_dbc_layout_columns)
@@ -3291,8 +3249,6 @@ add_executable(test_update_field_indices
 target_include_directories(test_update_field_indices PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_update_field_indices SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_update_field_indices PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_update_field_indices PRIVATE catch2_main)
 add_test(NAME update_field_indices COMMAND test_update_field_indices)
 register_test_target(test_update_field_indices)
@@ -3307,8 +3263,6 @@ add_executable(test_opcode_tables
 target_include_directories(test_opcode_tables PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_opcode_tables SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_opcode_tables PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_opcode_tables PRIVATE catch2_main)
 add_test(NAME opcode_tables COMMAND test_opcode_tables)
 register_test_target(test_opcode_tables)
@@ -3331,8 +3285,6 @@ add_executable(test_spell_icon_columns
 target_include_directories(test_spell_icon_columns PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_spell_icon_columns SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(test_spell_icon_columns PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_spell_icon_columns PRIVATE catch2_main)
 wowee_test_link_glm(test_spell_icon_columns)
 add_test(NAME spell_icon_columns COMMAND test_spell_icon_columns)
@@ -3634,8 +3586,6 @@ wowee_add_test(test_collision_liquid
 wowee_add_test(test_liquid_place
     SOURCES test_liquid_place.cpp
             ${TEST_COMMON_SOURCES})
-target_compile_definitions(test_liquid_place PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_stream_times ────────────────────────────────────────
 # The length shown of a stream is not asked of the decoder the audio thread
@@ -3794,16 +3744,12 @@ wowee_add_test(test_spell_missile
 # ── test_original_interface ──────────────────────────
 # The interface departures the user took back (T339).
 wowee_add_test(test_original_interface SOURCES test_original_interface.cpp)
-target_compile_definitions(test_original_interface PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_built_beside ────────────────────────────────
 # What a frame takes from a thread of its own once it is there, and the
 # character selection's view made so.
 wowee_add_test(test_built_beside SOURCES test_built_beside.cpp)
 target_link_libraries(test_built_beside PRIVATE Threads::Threads)
-target_compile_definitions(test_built_beside PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_char_sections ───────────────────────────────
 # CharSections' head layers - face, facial hair, scalp - in the client's order.
@@ -3813,8 +3759,6 @@ wowee_add_test(test_char_sections
             ${CMAKE_SOURCE_DIR}/src/pipeline/char_sections.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_layout.cpp)
-target_compile_definitions(test_char_sections PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_spell_kit ───────────────────────────────────
 # A spell visual kit on a unit: its models' attachments, a model-attach row's
@@ -3992,7 +3936,6 @@ if(NOT ANDROID)
         $<TARGET_PROPERTY:wowee,INCLUDE_DIRECTORIES>)
     target_include_directories(test_game_replay SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
     target_compile_definitions(test_game_replay PRIVATE
-        WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         $<TARGET_PROPERTY:wowee,COMPILE_DEFINITIONS>)
     target_link_libraries(test_game_replay PRIVATE catch2_main
         $<TARGET_PROPERTY:wowee,LINK_LIBRARIES>)
@@ -4326,8 +4269,6 @@ wowee_add_test(test_m2_drawable_content
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_asset_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
             ${TEST_COMMON_SOURCES})
-target_compile_definitions(test_m2_drawable_content PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_binding_command ─────────────────────────────────────
 # The SPELL, ITEM, MACRO and CLICK binding commands the key dispatch carries
@@ -4765,8 +4706,6 @@ target_include_directories(test_keybinding_defaults SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/extern/imgui
 )
 target_link_libraries(test_keybinding_defaults PRIVATE catch2_main imgui)
-target_compile_definitions(test_keybinding_defaults PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME keybinding_defaults COMMAND test_keybinding_defaults)
 register_test_target(test_keybinding_defaults)
 
@@ -4789,28 +4728,20 @@ wowee_add_test(test_wave_spectrum SOURCES test_wave_spectrum.cpp)
 # A thunderstorm's lightning lighting up the world (lightning_flash.hpp):
 # the strike's shape, when the weather strikes, what it lights. Header-only.
 wowee_add_test(test_lightning_flash SOURCES test_lightning_flash.cpp)
-target_compile_definitions(test_lightning_flash PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # Waves coming into shallow water: finite-depth dispersion, shoaling,
 # refraction and McCowan's breaking limit (shallow_water.hpp). Header-only.
 wowee_add_test(test_shallow_water SOURCES test_shallow_water.cpp)
-target_compile_definitions(test_shallow_water PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # The traced water's waves on the CPU, which swimmers, boats and the camera
 # ride (wave_surface.hpp): the surface over a point found by inverting the
 # Gerstner displacement, none where the water has no waves. Header-only.
 wowee_add_test(test_wave_surface SOURCES test_wave_surface.cpp)
-target_compile_definitions(test_wave_surface PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # The tessellated water's curve and the rings' and wakes' heights against the
 # slopes the water shades with, and how they settle (water_tessellation.hpp,
 # water_interaction.glsli). Header-only.
 wowee_add_test(test_water_tessellation SOURCES test_water_tessellation.cpp)
-target_compile_definitions(test_water_tessellation PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── Shared objects for the sources tests compile from the game ────────────
 # This must stay the last thing in this file: it walks every registered test.
@@ -4957,5 +4888,16 @@ target_link_libraries(test_mcp_server PRIVATE OpenSSL::Crypto)
 # only rain (test_no_screen_weather.cpp). Reads the sources.
 wowee_add_test(test_no_screen_weather
     SOURCES test_no_screen_weather.cpp)
-target_compile_definitions(test_no_screen_weather PRIVATE
-    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+# ── test_source_dir ──────────────────────────────────
+# The tree a test reads is the one CTest names as it runs (test_support.hpp).
+wowee_add_test(test_source_dir SOURCES test_source_dir.cpp)
+
+# Where the tree is, told to every test as it runs rather than built into its
+# objects: a path compiled in is the tree the object was first built in, and a
+# compiler cache hands that object to every other checkout (test_support.hpp,
+# sourceDir()).
+get_property(_wowee_all_tests DIRECTORY PROPERTY TESTS)
+if(_wowee_all_tests)
+    set_property(TEST ${_wowee_all_tests} APPEND PROPERTY ENVIRONMENT "WOWEE_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+endif()

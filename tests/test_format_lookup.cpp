@@ -10,6 +10,7 @@
 // The oracle is the format table itself: every row names an extension, and
 // looking that extension up has to come back to the same row.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include <filesystem>
 #include <fstream>

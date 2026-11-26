@@ -5,6 +5,7 @@
 // in that order: face, facial hair, scalp (0x004ea1f0, 0x004e90e0,
 // 0x004e8ff0). The reader dropped both.
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "pipeline/char_sections.hpp"
 #include "pipeline/dbc_layout.hpp"

@@ -3,6 +3,7 @@
 // stands behind it, what a building stops left out, and the same light of each
 // as the trace gives a body (rt_lamp_light.glsli, run here itself).
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 
 #include "rendering/rt_see_through.hpp"
 
