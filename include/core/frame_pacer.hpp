@@ -48,8 +48,25 @@ constexpr int capInEffect(int foregroundLimit, int backgroundLimit, bool windowI
     return chosen < kLowestFrameCap ? kLowestFrameCap : chosen;
 }
 
+/// What a FramePacer reads and how it waits: the steady clock, the thread's
+/// sleep and its yield (steadyPacerClock), or a test's own, so that what the
+/// pacer does is checked against a clock the test moves and not against the
+/// load of the machine running it.
+class PacerClock {
+public:
+    virtual ~PacerClock() = default;
+    [[nodiscard]] virtual std::int64_t nowNs() = 0;
+    virtual void sleepNs(std::int64_t ns) = 0;
+    virtual void yield() = 0;
+};
+/// The real one: FramePacer::nowNs, std::this_thread's sleep_for and yield.
+PacerClock& steadyPacerClock();
+
 class FramePacer {
 public:
+    FramePacer() : clock_(&steadyPacerClock()) {}
+    explicit FramePacer(PacerClock& clock) : clock_(&clock) {}
+
     /// Nanoseconds since the last call, from a monotonic clock. The first
     /// call establishes the baseline and returns 0.
     [[nodiscard]] std::int64_t tickNs();
@@ -80,6 +97,7 @@ public:
     [[nodiscard]] static std::int64_t nowNs();
 
 private:
+    PacerClock* clock_;
     std::int64_t lastNs_ = 0;
     bool started_ = false;
     /// The running estimate of how late a sleep returns, which is what the

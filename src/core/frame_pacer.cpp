@@ -39,8 +39,18 @@ std::int64_t FramePacer::nowNs() {
         .count();
 }
 
+PacerClock& steadyPacerClock() {
+    struct Steady final : PacerClock {
+        std::int64_t nowNs() override { return FramePacer::nowNs(); }
+        void sleepNs(std::int64_t ns) override { std::this_thread::sleep_for(std::chrono::nanoseconds(ns)); }
+        void yield() override { std::this_thread::yield(); }
+    };
+    static Steady steady;
+    return steady;
+}
+
 std::int64_t FramePacer::tickNs() {
-    const std::int64_t now = nowNs();
+    const std::int64_t now = clock_->nowNs();
     if (!started_) {
         started_ = true;
         lastNs_ = now;
@@ -68,18 +78,18 @@ void FramePacer::waitForCap(int fps) {
     const std::int64_t frameNs = 1'000'000'000LL / fps;
     const std::int64_t deadline = lastNs_ + frameNs;
 
-    if (nowNs() >= deadline) return;   // already over budget; do not add to it
+    if (clock_->nowNs() >= deadline) return;   // already over budget; do not add to it
 
     // Sleep to within the current slack estimate, measuring how far past the
     // request the sleep actually returns. One sleep, not a loop: each one
     // costs another overshoot, so re-sleeping the remainder is how a wait
     // drifts further late the more careful it tries to be.
     const std::int64_t sleepUntil = deadline - sleepSlackNs_;
-    const std::int64_t beforeSleep = nowNs();
+    const std::int64_t beforeSleep = clock_->nowNs();
     if (sleepUntil > beforeSleep) {
         const std::int64_t asked = sleepUntil - beforeSleep;
-        std::this_thread::sleep_for(std::chrono::nanoseconds(asked));
-        const std::int64_t overshoot = (nowNs() - beforeSleep) - asked;
+        clock_->sleepNs(asked);
+        const std::int64_t overshoot = (clock_->nowNs() - beforeSleep) - asked;
 
         // Track the worst recent overshoot rather than the average: the
         // margin has to cover the bad frames, since those are the ones that
@@ -96,8 +106,8 @@ void FramePacer::waitForCap(int fps) {
     // The rest by hand. yield() rather than a bare loop so a single-core
     // machine, or one with the render thread pinned beside something else,
     // is not starved for the last of every frame.
-    while (nowNs() < deadline) {
-        std::this_thread::yield();
+    while (clock_->nowNs() < deadline) {
+        clock_->yield();
     }
 }
 
