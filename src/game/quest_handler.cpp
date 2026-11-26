@@ -127,10 +127,6 @@ const QuestHandler::QuestLogEntry* QuestHandler::selectedQuest() const {
 void QuestHandler::reconcileItemObjectivesFromInventory(
     const std::unordered_map<uint32_t, uint32_t>& carriedCounts) {
     bool changedAny = false;
-    // Which quests moved, so QUEST_WATCH_UPDATE can name each of them. The
-    // event carries one log index and the interface auto-watches that quest;
-    // firing it once with nothing named watched nothing at all.
-    std::vector<uint32_t> movedQuests;
     for (auto& quest : questLog_) {
         if (quest.complete) continue;
         for (const auto& obj : quest.itemObjectives) {
@@ -146,10 +142,6 @@ void QuestHandler::reconcileItemObjectivesFromInventory(
 
             tracked = newCount;
             changedAny = true;
-            if (std::find(movedQuests.begin(), movedQuests.end(), quest.questId)
-                    == movedQuests.end()) {
-                movedQuests.push_back(quest.questId);
-            }
 
             // Push the per-objective progress to the on-screen tracker.
             std::string itemLabel = "item #" + std::to_string(obj.itemId);
@@ -165,14 +157,11 @@ void QuestHandler::reconcileItemObjectivesFromInventory(
         }
     }
 
+    // No QUEST_WATCH_UPDATE here: 12340 raises it for an item objective only
+    // from the item push (0x006d7c30, see announceQuestItemPushed), not when
+    // the bags' count changes otherwise - a login, a sale, a destroyed stack
+    // auto-watched every such quest.
     if (changedAny && owner_.addonEventCallbackRef()) {
-        for (uint32_t moved : movedQuests) {
-            const int index = questLogIndexOf(moved);
-            if (index > 0) {
-                owner_.addonEventCallbackRef()("QUEST_WATCH_UPDATE",
-                                               {std::to_string(index)});
-            }
-        }
         owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
         owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
     }
@@ -186,13 +175,22 @@ void QuestHandler::reconcileItemObjectivesFromInventory(
 void QuestHandler::announceQuestItemPushed(uint32_t itemId, uint32_t count,
                                            uint32_t totalCount, const std::string& itemName) {
     for (const auto& quest : questLog_) {
+        // 0x006d7de0 passes over a failed quest (0x005dee60).
+        if (quest.failed) continue;
         for (const auto& obj : quest.itemObjectives) {
             if (obj.itemId != itemId || obj.required == 0) continue;
             const int64_t before = int64_t(totalCount) - int64_t(count);
-            if (before < int64_t(obj.required) && !itemName.empty()) {
-                owner_.addUIInfoMessage(interfaceFormat("ERR_QUEST_ADD_ITEM_SII", "%1$s: %2$d/%3$d",
-                    {itemName, std::to_string(std::min(totalCount, obj.required)),
-                     std::to_string(obj.required)}));
+            if (before < int64_t(obj.required)) {
+                if (!itemName.empty()) {
+                    owner_.addUIInfoMessage(interfaceFormat("ERR_QUEST_ADD_ITEM_SII", "%1$s: %2$d/%3$d",
+                        {itemName, std::to_string(std::min(totalCount, obj.required)),
+                         std::to_string(obj.required)}));
+                }
+                // Then the quest's log index (0x005deeb0) as QUEST_WATCH_UPDATE
+                // (event 0x1e5), which the interface auto-watches from.
+                const int index = questLogIndexOf(quest.questId);
+                if (index > 0 && owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()("QUEST_WATCH_UPDATE", {std::to_string(index)});
             }
             return;
         }

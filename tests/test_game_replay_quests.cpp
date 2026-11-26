@@ -303,6 +303,61 @@ TEST_CASE("a quest is named by its row in the log, headers counted", "[replay][q
     s.handler().setAddonEventCallback(nullptr);
 }
 
+// QUEST_WATCH_UPDATE (event 0x1e5, the auto-watch's cue) for an item objective
+// comes only from an item push short of the count (0x006d7de0 -> 0x006d7c30),
+// after ERR_QUEST_ADD_ITEM; it came whenever the bags' count changed - at login
+// for every quest whose items were carried.
+TEST_CASE("only an item push short of the count is a watch update", "[replay][quest]") {
+    constexpr uint64_t kItem = 0x40000000000000A1ull;
+    std::vector<std::string> watched, lines;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 10120}}));
+    s.receive(questAnswer(10120, "wotlk", 0, 28024, 3));
+    wowee::network::Packet name(wowee::game::wireOpcode(Opcode::SMSG_ITEM_QUERY_SINGLE_RESPONSE));
+    name.writeUInt32(28024);
+    for (int i = 0; i < 3; ++i) name.writeUInt32(0);
+    name.writeString("Kalynastachel");
+    for (int i = 0; i < 3; ++i) name.writeString("");
+    for (int i = 0; i < 160; ++i) name.writeUInt32(0);
+    s.receive(name);
+    s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event == "QUEST_WATCH_UPDATE") watched.push_back(args.empty() ? std::string() : args[0]);
+        if (event == "UI_INFO_MESSAGE" && !args.empty()) lines.push_back(args[0]);
+    });
+    // Carried already, as at a login: the count is taken, nothing watched.
+    s.receive(UpdateObject().create(kItem, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 28024}, {UF::ITEM_FIELD_STACK_COUNT, 2}}));
+    const uint16_t pack = wowee::game::fieldIndex(UF::PLAYER_FIELD_PACK_SLOT_1);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid,
+                                      {{pack, static_cast<uint32_t>(kItem)},
+                                       {static_cast<uint16_t>(pack + 1), static_cast<uint32_t>(kItem >> 32)}}));
+    REQUIRE(s.handler().countItemInBags(28024) == 2);
+    CHECK(watched.empty());
+    const auto push = [&](uint32_t count, uint32_t carried) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ITEM_PUSH_RESULT));
+        p.writeUInt64(Session::kPlayerGuid);
+        p.writeUInt32(0);
+        p.writeUInt32(0);
+        p.writeUInt32(1);
+        p.writeUInt8(255);
+        p.writeUInt32(23);
+        p.writeUInt32(28024);
+        p.writeUInt32(0);
+        p.writeUInt32(0);
+        p.writeUInt32(count);
+        p.writeUInt32(carried);
+        s.receive(p);
+    };
+    push(1, 3);  // 2 before, 3 wanted
+    REQUIRE(watched.size() == 1);
+    CHECK(watched[0] == std::to_string(s.handler().getQuestHandler()->questLogIndexOf(10120)));
+    CHECK(lines.size() == 1);
+    push(1, 4);  // 3 before: enough already
+    CHECK(watched.size() == 1);
+    s.handler().setAddonEventCallback(nullptr);
+}
+
 // The reward chosen on the frame was let go by every item answer that came in
 // while a quest window was open.
 TEST_CASE("only an item the quest window waits for is its news", "[replay][quest]") {
