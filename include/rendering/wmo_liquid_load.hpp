@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace wowee {
 namespace rendering {
@@ -23,6 +24,28 @@ namespace wmo_liquid_load {
 inline uint32_t momtColor(const pipeline::WMOModel& model, const pipeline::WMOGroup& group) {
     return group.liquid.momtIndex < model.materials.size()
         ? model.materials[group.liquid.momtIndex].color2 : 0xffffffffu;
+}
+
+/// Which of an MLIQ's (xTiles + 1) x (yTiles + 1) vertices a liquid tile
+/// uses: the corners of every tile whose low nibble is not 0xF. The group's
+/// liquid search reads the four corners of the tile under the point, and
+/// only where that tile has liquid (0x0079b760); the height of a vertex no
+/// such tile uses means nothing. T376: the heights were kept only within 8
+/// yards of the MLIQ's base, and Molten Core's lava stands 71 yards over its
+/// base (Blackrock_lower_guild_003: base -228.9, the river -157.3), so every
+/// query took the base and no one swam in it.
+inline std::vector<uint8_t> usedVertices(uint32_t xTiles, uint32_t yTiles, const std::vector<uint8_t>& tileFlags) {
+    const size_t xVerts = static_cast<size_t>(xTiles) + 1;
+    std::vector<uint8_t> used(xVerts * (static_cast<size_t>(yTiles) + 1), 0);
+    for (uint32_t ty = 0; ty < yTiles; ++ty) {
+        for (uint32_t tx = 0; tx < xTiles; ++tx) {
+            const size_t t = static_cast<size_t>(ty) * xTiles + tx;
+            if (t < tileFlags.size() && (tileFlags[t] & 0x0F) == 0x0F) continue;
+            const size_t v = static_cast<size_t>(ty) * xVerts + tx;
+            used[v] = used[v + 1] = used[v + xVerts] = used[v + xVerts + 1] = 1;
+        }
+    }
+    return used;
 }
 
 /// Hands the groups from `next` on that have a liquid to

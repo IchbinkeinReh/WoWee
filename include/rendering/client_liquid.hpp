@@ -355,6 +355,19 @@ inline bool wmoLiquidIsInterior(uint32_t groupFlags, uint32_t groupInfoFlags, ui
 }
 
 
+/// Whether a liquid is drawn into the camera's fog rather than the zone's
+/// (T375). Its CClientEnvironment_Liquid (0x007d5120) picks the fog in
+/// 0x007d4f40 by its +4: clear, the camera's (0xd38b8c, the interior's MFOG
+/// blended in by 0x007f16f0); set, the zone's (0xd38ba0). 0x007964a0 sets that
+/// +4 from the building group's 0x8000 - the bit that also makes the group's
+/// own batches take the zone's fog (0x007a9380's local_14, 0x007a8440) - so a
+/// group's liquid has the fog its group is drawn in: the camera's for a group
+/// in the camera's interior pass. Molten Core's magma took the zone's lavender
+/// distance fog under its red halls and turned pale far off.
+inline bool liquidTakesCameraFog(bool buildingLiquid, bool groupInInteriorPass) {
+    return buildingLiquid && groupInInteriorPass;
+}
+
 /// The type an interior WMO water is drawn as (0x00793d20): one of the water
 /// types 1, 5, 9, 13, 17 becomes 17.
 inline uint32_t wmoInteriorLiquidType(uint32_t liquidType) {

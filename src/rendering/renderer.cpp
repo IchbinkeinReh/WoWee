@@ -5912,6 +5912,10 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         } else {
             waterRenderer->loadClientLiquids(assetManager);
             waterRenderer->setClientSpecular(clientSpecular_);
+            // A building's liquid takes the fog its group is drawn in (T375).
+            waterRenderer->setInteriorPassQuery([this](uint32_t instanceId, uint32_t group) {
+                return wmoRenderer && wmoRenderer->groupInInteriorPass(instanceId, group);
+            });
             if (rtScene_) {
                 waterRenderer->setRtWaterScene(rtScene_->descriptorSetLayout(),
                                                rtScene_->backend() == RtScene::Backend::Hardware);

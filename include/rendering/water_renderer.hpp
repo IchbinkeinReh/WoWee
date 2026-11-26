@@ -438,8 +438,15 @@ public:
         lightWaterColors_ = colors;
         hasLightWaterColors_ = true;
     }
+    /// Which building groups are in the camera's interior pass this frame
+    /// (WMORenderer::groupInInteriorPass): their liquids take the camera's
+    /// fog (client_liquid::liquidTakesCameraFog). Without it, the zone's.
+    void setInteriorPassQuery(std::function<bool(uint32_t instanceId, uint32_t group)> query) {
+        interiorPassQuery_ = std::move(query);
+    }
 
 private:
+    std::function<bool(uint32_t, uint32_t)> interiorPassQuery_;
     LightWaterColors lightWaterColors_;
     bool hasLightWaterColors_ = false;
     /// The client's 'specular' option (0x0078de60 sets world flag 0x8000000),

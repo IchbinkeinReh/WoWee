@@ -4939,6 +4939,11 @@ bool WMORenderer::inInteriorPass(const glm::vec3& pos) const {
     return false;
 }
 
+bool WMORenderer::groupInInteriorPass(uint32_t instanceId, uint32_t group) const {
+    const auto it = interiorPass_.find(instanceId);
+    return it != interiorPass_.end() && group < it->second.size() && it->second[group] != 0;
+}
+
 std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::vec3& pos) const {
     // Group flags the client treats as outside (0x007a1150 skips groups with
     // either): 0x8 exterior, 0x40 exterior-lit.

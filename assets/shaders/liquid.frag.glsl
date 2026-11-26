@@ -36,13 +36,15 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerPos;
     vec4 playerWake;
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
+    vec4 rtParams;
+    vec4 cameraFogColor;    // the camera's fog, its interior's blended in
 };
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
 layout(push_constant) uniform Push {
     vec4 animMatrix;
     vec4 params;   // x depth v scale, y light, z kind (0 water, 1 magma), w depth source
-    vec4 scroll;
+    vec4 scroll;   // xy the surface coordinate's translation; z 1: the camera's fog
     vec4 specular;
 } push;
 
@@ -111,5 +113,10 @@ void main() {
     } else {
         color = vec4(vPrimary.rgb * texture(uAnimTex, vSurfaceUV).rgb, 1.0);
     }
-    outColor = vec4(liquidAir(mix(fogColor.rgb, clamp(color.rgb, 0.0, 1.0), vFog), vWorld), color.a);
+    // The fog its group is drawn in (0x007d4f40): the camera's - its
+    // interior's MFOG blended in - for a building group in the camera's
+    // interior pass, the zone's otherwise (client_liquid::liquidTakesCameraFog).
+    // Molten Core's magma took the zone's lavender far off under red halls.
+    vec3 distanceFog = push.scroll.z > 0.5 ? cameraFogColor.rgb : fogColor.rgb;
+    outColor = vec4(liquidAir(mix(distanceFog, clamp(color.rgb, 0.0, 1.0), vFog), vWorld), color.a);
 }

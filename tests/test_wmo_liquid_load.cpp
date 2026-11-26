@@ -6,6 +6,7 @@
 #include <catch_amalgamated.hpp>
 #include "test_support.hpp"
 
+#include "rendering/client_liquid.hpp"
 #include "rendering/wmo_liquid_load.hpp"
 
 #include <string>
@@ -83,4 +84,58 @@ TEST_CASE("a map that is one building places its groups' liquids too", "[wmo_liq
     const std::string terrain = test::slurp("src/rendering/terrain_manager.cpp");
     REQUIRE_FALSE(terrain.empty());
     CHECK(terrain.find("placeGroupLiquids") != std::string::npos);
+}
+
+// T375: Molten Core's magma turned pale lavender far off. Its group's
+// CClientEnvironment_Liquid (0x007d5120) takes its fog in 0x007d4f40 by the
+// group's 0x8000 (0x007964a0): clear - the group in the camera's interior
+// pass - the camera's fog with the interior's MFOG in it (0xd38b8c), set the
+// zone's (0xd38ba0). The client's liquid draw took the zone's always.
+TEST_CASE("a building group's liquid takes the fog its group is drawn in (T375)", "[wmo_liquid_load]") {
+    using rendering::client_liquid::liquidTakesCameraFog;
+    CHECK(liquidTakesCameraFog(true, true));
+    CHECK_FALSE(liquidTakesCameraFog(true, false));
+    CHECK_FALSE(liquidTakesCameraFog(false, true));
+
+    const std::string frag = test::slurp("assets/shaders/liquid.frag.glsl");
+    REQUIRE_FALSE(frag.empty());
+    CHECK(frag.find("vec4 cameraFogColor;") != std::string::npos);
+    CHECK(frag.find("push.scroll.z > 0.5 ? cameraFogColor.rgb : fogColor.rgb") != std::string::npos);
+
+    const std::string water = test::slurp("src/rendering/water_renderer.cpp");
+    REQUIRE_FALSE(water.empty());
+    CHECK(water.find("push.scroll.z = client_liquid::liquidTakesCameraFog(") != std::string::npos);
+
+    const std::string renderer = test::slurp("src/rendering/renderer.cpp");
+    REQUIRE_FALSE(renderer.empty());
+    CHECK(renderer.find("groupInInteriorPass(instanceId, group)") != std::string::npos);
+}
+
+// T376: Molten Core's lava stands 71 yards over its MLIQ's base
+// (Blackrock_lower_guild_003.wmo: base -228.9, the river -157.3), and the
+// water renderer kept a vertex's height only within 8 yards of the base: the
+// swim, camera and fog queries all took the base, and no one swam in the lava.
+// The group's liquid search reads a liquid tile's four corners (0x0079b760),
+// whatever their height.
+TEST_CASE("a liquid tile's corners keep their heights, however far over the base (T376)", "[wmo_liquid_load]") {
+    using rendering::wmo_liquid_load::usedVertices;
+    // 3 x 2 tiles; the middle of the top row has no liquid (0x0F), nor the
+    // last of the bottom row (0x1F: the low nibble is what counts).
+    const std::vector<uint8_t> flags{0x46, 0x0F, 0x46, 0x46, 0x46, 0x1F};
+    const auto used = usedVertices(3, 2, flags);
+    REQUIRE(used.size() == 4u * 3u);
+    // Vertex rows: y 0, 1, 2; x 0..3.
+    const std::vector<uint8_t> want{1, 1, 1, 1,   // tiles 0 and 2 use all four of the first row
+                                    1, 1, 1, 1,
+                                    1, 1, 1, 0};  // tile 5 has none: its far corner is no tile's
+    CHECK(used == want);
+    CHECK(usedVertices(2, 1, {0x0F, 0xFF}) == std::vector<uint8_t>(6, 0));
+
+    const std::string water = test::slurp("src/rendering/water_renderer.cpp");
+    REQUIRE_FALSE(water.empty());
+    const size_t from = water.find("void WaterRenderer::loadFromWMO(");
+    REQUIRE(from != std::string::npos);
+    const std::string load = water.substr(from, water.find("void WaterRenderer::removeWMOs(", from) - from);
+    CHECK(load.find("wmo_liquid_load::usedVertices(") != std::string::npos);
+    CHECK(load.find("std::abs(z - surface.origin.z) <= 8.0f") == std::string::npos);
 }

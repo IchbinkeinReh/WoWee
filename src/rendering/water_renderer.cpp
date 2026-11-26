@@ -9,6 +9,7 @@
 #include "rendering/shallow_water.hpp"
 #include "rendering/collision_liquid.hpp"
 #include "rendering/collision_facets.hpp"
+#include "rendering/wmo_liquid_load.hpp"
 #include <array>
 #include <unordered_set>
 #include "rendering/water_mask.hpp"
@@ -1221,8 +1222,11 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
     // client's own draw kept the file's, so in the Stormwind canals a
     // swimmer floated a yard under the surface drawn over him, head and all.
     surface.heights.assign(vertexCount, surface.origin.z);
-    surface.minHeight = surface.origin.z;
-    surface.maxHeight = surface.origin.z;
+    surface.minHeight = std::numeric_limits<float>::max();
+    surface.maxHeight = -std::numeric_limits<float>::max();
+    // The vertices a liquid tile uses, each at its own height (T376).
+    const std::vector<uint8_t> usedVertex =
+        wmo_liquid_load::usedVertices(surface.width, surface.height, liquid.flags);
 
     if (surface.origin.z > 2000.0f || surface.origin.z < -500.0f) return;
 
@@ -1256,10 +1260,11 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
                 const glm::vec3 local = localBase + localStepX * static_cast<float>(gx) +
                                         localStepY * static_cast<float>(gy);
                 surface.clientPositions[i] = glm::vec3(modelMatrix * glm::vec4(local.x, local.y, h, 1.0f));
-                // A height far off the base is a vertex no tile uses; the
-                // queries keep the base there.
+                // A vertex no liquid tile uses has no height of its own
+                // (wmo_liquid_load::usedVertices); the rest are where the
+                // file has them, however far over the MLIQ's base.
                 const float z = surface.clientPositions[i].z;
-                if (std::isfinite(z) && std::abs(z - surface.origin.z) <= 8.0f) {
+                if (std::isfinite(z) && usedVertex[static_cast<size_t>(i)] != 0) {
                     surface.heights[i] = z;
                     surface.minHeight = std::min(surface.minHeight, z);
                     surface.maxHeight = std::max(surface.maxHeight, z);
@@ -1272,6 +1277,15 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
                 }
             }
         }
+    }
+
+    if (surface.minHeight > surface.maxHeight) {
+        surface.minHeight = surface.maxHeight = surface.origin.z;
+    }
+    // The unused ones at the lowest used height, inside the surface's band
+    // (raySurfaceHit's span), not at the base far under it.
+    for (int i = 0; i < vertexCount; ++i) {
+        if (usedVertex[static_cast<size_t>(i)] == 0) surface.heights[i] = surface.minHeight;
     }
 
     // Build tile mask from MLIQ flags
@@ -3606,6 +3620,13 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
                     push.specular = glm::vec4(sun, kLiquidSpecularPower);
                 }
             }
+
+            // The fog its group is drawn in (client_liquid::liquidTakesCameraFog):
+            // scroll.z 1 for the camera's (liquid.frag).
+            push.scroll.z = client_liquid::liquidTakesCameraFog(
+                                surface.wmoId != 0,
+                                interiorPassQuery_ && interiorPassQuery_(surface.wmoId, surface.wmoGroup))
+                                ? 1.0f : 0.0f;
 
             VkPipeline pipe = isMagma ? magmaPipe : waterPipe;
             if (boundPipe != pipe) {

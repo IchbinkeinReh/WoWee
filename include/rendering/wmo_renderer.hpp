@@ -560,6 +560,10 @@ public:
     /// Whether a point is in a group drawn in that pass: what sets an
     /// object's 0x8000, and the camera's fog colour with it (0x007c1730).
     [[nodiscard]] bool inInteriorPass(const glm::vec3& pos) const;
+    /// Whether a building's group is drawn in that pass: the group's own
+    /// 0x8000 clear, which also gives its liquid the camera's fog (0x007964a0
+    /// hands that bit to the liquid's CClientEnvironment_Liquid, 0x007d4f40).
+    [[nodiscard]] bool groupInInteriorPass(uint32_t instanceId, uint32_t group) const;
 
     using GroupRef = minimap_indoor::GroupRef;
     struct GroupAlong {
