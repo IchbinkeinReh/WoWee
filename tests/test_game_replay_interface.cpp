@@ -4368,3 +4368,33 @@ TEST_CASE("a dungeon proposal answers as the client holds it (T408)", "[replay][
     CHECK(ui.is("select('#', GetLFGProposal()) == 0"));
     CHECK(gh.getLfgProposalId() == 0);
 }
+
+// T407 (FIXER Y): AcceptBattlefieldPort (0x0054da10) only sends; the slot
+// stays as the realm last described it until its next status - a queue left
+// from the minimap menu read as gone at once while the realm kept it.
+TEST_CASE("leaving a battleground queue waits for the realm (T407)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto queued = bgStatus(0, kWarsongRecord, 1, 0);
+    queued.writeUInt32(60000); queued.writeUInt32(1000);   // average wait, time queued
+    s.receive(queued);
+    REQUIRE(ui.is("GetBattlefieldStatus(1) == 'queued'"));
+    ui.run("statusEvents = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_BATTLEFIELD_STATUS') "
+           "f:SetScript('OnEvent', function() statusEvents = statusEvents + 1 end)");
+    ui.run("AcceptBattlefieldPort(1, nil)");
+    REQUIRE(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).size() == 1);
+    CHECK(ui.is("GetBattlefieldStatus(1) == 'queued'"));
+    CHECK(ui.is("statusEvents == 0"));
+    wowee::network::Packet none(wowee::game::wireOpcode(Opcode::SMSG_BATTLEFIELD_STATUS));
+    none.writeUInt32(0);
+    none.writeUInt64(0);
+    s.receive(none);
+    CHECK(ui.is("GetBattlefieldStatus(1) == 'none'"));
+    CHECK(ui.is("statusEvents >= 1"));
+
+    // An acceptance leaves the invitation as it is too.
+    s.receive(bgStatus(0, kWarsongRecord, 2, 489));
+    ui.run("AcceptBattlefieldPort(1, 1)");
+    CHECK(ui.is("GetBattlefieldStatus(1) == 'confirm'"));
+}

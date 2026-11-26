@@ -4891,8 +4891,9 @@ void SocialHandler::acceptBattlefield(uint32_t queueSlot) {
     writeBgSlotRecord(pkt, *slot);
     pkt.writeUInt8(1);
     owner_.getSocket()->send(pkt);
-    uint32_t clearSlot = slot->queueSlot;
-    if (clearSlot < bgQueues_.size()) bgQueues_[clearSlot].statusId = 3;
+    // The slot is left as the realm last described it: 0x0054da10 changes
+    // nothing of 0x00bea4b8 after sending, and the realm's next status says
+    // what became of the answer.
 }
 
 // Leave the battleground the player is standing in, which is a different thing
@@ -5000,12 +5001,14 @@ void SocialHandler::declineBattlefield(uint32_t queueSlot) {
     writeBgSlotRecord(pkt, *slot);
     pkt.writeUInt8(0);
     owner_.getSocket()->send(pkt);
-    uint32_t clearSlot = slot->queueSlot;
-    if (clearSlot < bgQueues_.size()) bgQueues_[clearSlot] = BgQueueSlot{};
-    // The minimap icon and the panel read the queues on this event; without
-    // it they kept showing the queue until the server's next word.
-    if (owner_.addonEventCallbackRef())
-        owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_STATUS", {std::to_string(clearSlot + 1)});
+    // 0x0054da10 keeps the slot (0x00bea4b8) as it is until the realm's
+    // SMSG_BATTLEFIELD_STATUS drops it: clearing it here showed a queue as
+    // left that the realm had not let go of (T407; the queue popped later).
+    // The one thing a refusal does at once is close the battlemaster's list
+    // when it shows the same battleground (slot +0x10 == 0x00bea53c:
+    // BATTLEFIELDS_CLOSED, event 0x19c).
+    if (lastBattlefieldList_.bgTypeId != 0 && slot->bgTypeId == lastBattlefieldList_.bgTypeId)
+        owner_.fireAddonEvent("BATTLEFIELDS_CLOSED", {});
 }
 
 // RequestBattlefieldScoreData 0x0054dcb0 -> 0x0054cf60: MSG_PVP_LOG_DATA only
