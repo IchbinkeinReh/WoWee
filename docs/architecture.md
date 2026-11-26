@@ -315,7 +315,7 @@ FrameXML calls into, plus what the client draws in the world.
 - `ItemTooltipRenderer` - Chat-embedded item tooltip rendering
 - `CastSequenceTracker` - `/castsequence` state tracking
 - 11 command modules under `commands/`: channel, combat, emote, GM, group, guild, help, misc, social, system, target
-- 206-command GM data table with dot-prefix interception and `/gmhelp`
+- 206-command GM data table with dot-prefix interception (tab-completion)
 
 ### 8. Audio System (`src/audio/`)
 

@@ -5377,23 +5377,23 @@ uint32_t GameHandler::getItemIdForSpell(uint32_t spellId) const {
 void GameHandler::unstuck() {
     if (unstuckCallback_) {
         unstuckCallback_();
-        addSystemChatMessage("Unstuck: snapped upward. Use /unstuckgy for full teleport.");
+        addSystemChatMessage("Befreit: nach oben versetzt. /unstuckgy bringt Euch zum Friedhof.");
     }
 }
 
 void GameHandler::unstuckGy() {
     if (unstuckGyCallback_) {
         unstuckGyCallback_();
-        addSystemChatMessage("Unstuck: teleported to safe location.");
+        addSystemChatMessage("Befreit: an einen sicheren Ort teleportiert.");
     }
 }
 
 void GameHandler::unstuckHearth() {
     if (unstuckHearthCallback_) {
         unstuckHearthCallback_();
-        addSystemChatMessage("Unstuck: teleported to hearthstone location.");
+        addSystemChatMessage("Befreit: zum Ort Eures Ruhesteins teleportiert.");
     } else {
-        addSystemChatMessage("No hearthstone bind point set.");
+        addSystemChatMessage("Für Euren Ruhestein ist kein Ort gesetzt.");
     }
 }
 

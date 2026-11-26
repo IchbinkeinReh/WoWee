@@ -15,14 +15,14 @@
 
 namespace wowee { namespace ui {
 
-// --- /readycheck, /rc ---
+// --- /readycheck ---
 class ReadyCheckCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         ctx.gameHandler.initiateReadyCheck();
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"readycheck", "rc"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"readycheck"}; }
     [[nodiscard]] std::string helpText() const override { return "Initiate ready check"; }
 };
 
@@ -35,17 +35,6 @@ public:
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"ready"}; }
     [[nodiscard]] std::string helpText() const override { return "Respond yes to ready check"; }
-};
-
-// --- /notready, /nr ---
-class NotReadyCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        ctx.gameHandler.respondToReadyCheck(false);
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"notready", "nr"}; }
-    [[nodiscard]] std::string helpText() const override { return "Respond no to ready check"; }
 };
 
 // --- /yield, /forfeit, /surrender ---
@@ -100,7 +89,7 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Remove player from group"; }
 };
 
-// --- /leave, /leaveparty ---
+// --- /leave ---
 // /leave - leave party (no args) or leave channel (with args, WoW-style overload)
 class LeavePartyCommand : public IChatCommand {
 public:
@@ -113,7 +102,7 @@ public:
         }
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"leave", "leaveparty"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"leave"}; }
     [[nodiscard]] std::string helpText() const override { return "Leave party/raid or channel"; }
 };
 
@@ -222,166 +211,7 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Show raid instance lockouts"; }
 };
 
-// --- /raidconvert ---
-class RaidConvertCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        ctx.gameHandler.convertToRaid();
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"raidconvert"}; }
-    [[nodiscard]] std::string helpText() const override { return "Convert party to raid"; }
-};
-
-// --- /lootmethod, /grouploot, /setloot ---
-class LootMethodCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        if (!ctx.gameHandler.isInGroup()) {
-            ctx.gameHandler.addUIError("You are not in a group.");
-            return {};
-        }
-        if (ctx.args.empty()) {
-            const auto& pd = ctx.gameHandler.getPartyData();
-            const char* cur = game::lootMethodName(pd.lootMethod);
-            game::MessageChatData msg;
-            msg.type = game::ChatType::SYSTEM;
-            msg.language = game::ChatLanguage::UNIVERSAL;
-            msg.message = std::string("Current loot method: ") + cur;
-            ctx.gameHandler.addLocalChatMessage(msg);
-            msg.message = "Usage: /lootmethod ffa|roundrobin|master|group|needbeforegreed";
-            ctx.gameHandler.addLocalChatMessage(msg);
-            return {};
-        }
-        std::string arg = ctx.args;
-        for (auto& c : arg) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        uint32_t method = 0xFFFFFFFF;
-        if (arg == "ffa" || arg == "freeforall")         method = 0;
-        else if (arg == "roundrobin" || arg == "rr")     method = 1;
-        else if (arg == "master" || arg == "masterloot") method = 2;
-        else if (arg == "group" || arg == "grouploot")   method = 3;
-        else if (arg == "needbeforegreed" || arg == "nbg" || arg == "need") method = 4;
-
-        if (method == 0xFFFFFFFF) {
-            ctx.gameHandler.addUIError("Unknown loot method. Use: ffa, roundrobin, master, group, needbeforegreed");
-        } else {
-            const auto& pd = ctx.gameHandler.getPartyData();
-            uint64_t masterGuid = (method == 2) ? ctx.gameHandler.getPlayerGuid() : 0;
-            ctx.gameHandler.sendSetLootMethod(method, pd.lootThreshold, masterGuid);
-        }
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"lootmethod", "grouploot", "setloot"}; }
-    [[nodiscard]] std::string helpText() const override { return "Set loot method"; }
-};
-
-// --- /lootthreshold ---
-class LootThresholdCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        if (!ctx.gameHandler.isInGroup()) {
-            ctx.gameHandler.addUIError("You are not in a group.");
-            return {};
-        }
-        if (ctx.args.empty()) {
-            const auto& pd = ctx.gameHandler.getPartyData();
-            static constexpr const char* kQualityNames[] = {
-                "Poor (grey)", "Common (white)", "Uncommon (green)",
-                "Rare (blue)", "Epic (purple)", "Legendary (orange)"
-            };
-            const char* cur = (pd.lootThreshold < 6) ? kQualityNames[pd.lootThreshold] : "Unknown";
-            game::MessageChatData msg;
-            msg.type = game::ChatType::SYSTEM;
-            msg.language = game::ChatLanguage::UNIVERSAL;
-            msg.message = std::string("Current loot threshold: ") + cur;
-            ctx.gameHandler.addLocalChatMessage(msg);
-            msg.message = "Usage: /lootthreshold <0-5> (0=Poor, 1=Common, 2=Uncommon, 3=Rare, 4=Epic, 5=Legendary)";
-            ctx.gameHandler.addLocalChatMessage(msg);
-            return {};
-        }
-        std::string arg = ctx.args;
-        while (!arg.empty() && arg.front() == ' ') arg.erase(arg.begin());
-        uint32_t threshold = 0xFFFFFFFF;
-        if (arg.size() == 1 && arg[0] >= '0' && arg[0] <= '5') {
-            threshold = static_cast<uint32_t>(arg[0] - '0');
-        } else {
-            for (auto& c : arg) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (arg == "poor" || arg == "grey" || arg == "gray") threshold = 0;
-            else if (arg == "common" || arg == "white")          threshold = 1;
-            else if (arg == "uncommon" || arg == "green")        threshold = 2;
-            else if (arg == "rare" || arg == "blue")             threshold = 3;
-            else if (arg == "epic" || arg == "purple")           threshold = 4;
-            else if (arg == "legendary" || arg == "orange")      threshold = 5;
-        }
-        if (threshold == 0xFFFFFFFF) {
-            ctx.gameHandler.addUIError("Invalid threshold. Use 0-5 or: poor, common, uncommon, rare, epic, legendary");
-        } else {
-            const auto& pd = ctx.gameHandler.getPartyData();
-            uint64_t masterGuid = (pd.lootMethod == 2) ? ctx.gameHandler.getPlayerGuid() : 0;
-            ctx.gameHandler.sendSetLootMethod(pd.lootMethod, threshold, masterGuid);
-        }
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"lootthreshold"}; }
-    [[nodiscard]] std::string helpText() const override { return "Set loot quality threshold"; }
-};
-
-// --- /mark, /marktarget, /raidtarget ---
-class MarkCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        if (!ctx.gameHandler.hasTarget()) {
-            game::MessageChatData noTgt;
-            noTgt.type = game::ChatType::SYSTEM;
-            noTgt.language = game::ChatLanguage::UNIVERSAL;
-            noTgt.message = "No target selected.";
-            ctx.gameHandler.addLocalChatMessage(noTgt);
-            return {};
-        }
-        // The eight names, lowercased for matching and for the line that
-        // lists them. They are spelled once, in group_defines.hpp.
-        std::string markList;
-        for (uint32_t mi = 0; mi < game::kRaidMarkCount; ++mi) {
-            if (!markList.empty()) markList += ' ';
-            markList += ui::chat_utils::toLower(game::raidMarkName(static_cast<uint8_t>(mi)));
-        }
-        uint8_t icon = 7; // default: skull
-        if (!ctx.args.empty()) {
-            std::string argLow = ui::chat_utils::toLower(ctx.args);
-            while (!argLow.empty() && argLow.front() == ' ') argLow.erase(argLow.begin());
-            if (argLow == "clear" || argLow == "0" || argLow == "none") {
-                ctx.gameHandler.setRaidMark(ctx.gameHandler.getTargetGuid(), 0xFF);
-                return {};
-            }
-            bool found = false;
-            for (uint32_t mi = 0; mi < game::kRaidMarkCount; ++mi) {
-                if (argLow == ui::chat_utils::toLower(game::raidMarkName(static_cast<uint8_t>(mi)))) {
-                    icon = static_cast<uint8_t>(mi);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found && !argLow.empty() && argLow[0] >= '1' && argLow[0] <= '8') {
-                icon = static_cast<uint8_t>(argLow[0] - '1');
-                found = true;
-            }
-            if (!found) {
-                game::MessageChatData badArg;
-                badArg.type = game::ChatType::SYSTEM;
-                badArg.language = game::ChatLanguage::UNIVERSAL;
-                badArg.message = "Unknown mark. Use: " + markList;
-                ctx.gameHandler.addLocalChatMessage(badArg);
-                return {};
-            }
-        }
-        ctx.gameHandler.setRaidMark(ctx.gameHandler.getTargetGuid(), icon);
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"mark", "marktarget", "raidtarget"}; }
-    [[nodiscard]] std::string helpText() const override { return "Set raid target mark on target"; }
-};
-
-// --- /roll, /random, /rnd ---
+// --- /random, /rnd ---
 class RollCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
@@ -407,7 +237,7 @@ public:
         ctx.gameHandler.randomRoll(minRoll, maxRoll);
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"roll", "random", "rnd"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"random", "rnd"}; }
     [[nodiscard]] std::string helpText() const override { return "Random dice roll"; }
 };
 
@@ -415,7 +245,6 @@ public:
 void registerGroupCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ReadyCheckCommand>());
     reg.registerCommand(std::make_unique<ReadyCommand>());
-    reg.registerCommand(std::make_unique<NotReadyCommand>());
     reg.registerCommand(std::make_unique<YieldCommand>());
     reg.registerCommand(std::make_unique<AfkCommand>());
     reg.registerCommand(std::make_unique<DndCommand>());
@@ -426,10 +255,6 @@ void registerGroupCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ClearMainTankCommand>());
     reg.registerCommand(std::make_unique<ClearMainAssistCommand>());
     reg.registerCommand(std::make_unique<RaidInfoCommand>());
-    reg.registerCommand(std::make_unique<RaidConvertCommand>());
-    reg.registerCommand(std::make_unique<LootMethodCommand>());
-    reg.registerCommand(std::make_unique<LootThresholdCommand>());
-    reg.registerCommand(std::make_unique<MarkCommand>());
     reg.registerCommand(std::make_unique<RollCommand>());
 }
 

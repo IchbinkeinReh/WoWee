@@ -141,14 +141,14 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Cycle to next friendly unit"; }
 };
 
-// --- /targetlasttarget, /targetlast ---
+// --- /targetlasttarget ---
 class TargetLastTargetCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         ctx.gameHandler.targetLastTarget();
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"targetlasttarget", "targetlast"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"targetlasttarget"}; }
     [[nodiscard]] std::string helpText() const override { return "Target previous target"; }
 };
 

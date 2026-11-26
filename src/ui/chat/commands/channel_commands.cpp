@@ -108,13 +108,13 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Raid chat"; }
 };
 
-// --- /raidwarning, /rw ---
+// --- /rw ---
 class RaidWarningCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         return sendAndSwitch(ctx, game::ChatType::RAID_WARNING, 8);
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"raidwarning", "rw"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"rw"}; }
     [[nodiscard]] std::string helpText() const override { return "Raid warning"; }
 };
 
@@ -138,13 +138,13 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Battleground chat"; }
 };
 
-// --- /instance, /i ---
+// --- /i ---
 class InstanceChatCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         return sendAndSwitch(ctx, game::ChatType::PARTY, 9);
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"instance", "i"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"i"}; }
     [[nodiscard]] std::string helpText() const override { return "Instance chat"; }
 };
 
@@ -166,59 +166,6 @@ public:
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"join"}; }
     [[nodiscard]] std::string helpText() const override { return "Join a chat channel"; }
-};
-
-// --- /leave (channel) ---
-// Note: /leave without args is handled by group_commands (leave party).
-// This command only triggers with args (channel name).
-class LeaveChannelCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        if (!ctx.args.empty()) {
-            ctx.gameHandler.leaveChannel(ctx.args);
-        }
-        // If no args, the group LeaveCommand will handle /leave (leave party)
-        // so we return not-handled to allow fallthrough
-        if (ctx.args.empty()) return {.handled = false, .clearInput = false};
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"leavechannel"}; }
-    [[nodiscard]] std::string helpText() const override { return "Leave a chat channel"; }
-};
-
-// --- /wts, /wtb ---
-class TradeChannelCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        if (ctx.args.empty()) return {.handled = false, .clearInput = false};
-        const std::string tag = (ctx.fullCommand == "wts") ? "[WTS] " : "[WTB] ";
-        std::string tradeChan;
-        // The Trade channel by what it is - its ChatChannels.dbc row - not by
-        // a name that is "Handel - Hauptstädte" on a German client.
-        if (auto* chat = ctx.gameHandler.getChatHandler()) {
-            for (const auto& s : chat->channelSlots().all()) {
-                if (s.number == 0 || s.pending || s.zoneChannelId == 0) continue;
-                for (const auto& r : chat->channelRows()) {
-                    if (r.id == s.zoneChannelId && (r.flags & game::chat_channels::kFlagTrade) &&
-                        !(r.flags & game::chat_channels::kFlagLookingForGroup))
-                        tradeChan = s.name;
-                }
-                if (!tradeChan.empty()) break;
-            }
-        }
-        if (tradeChan.empty()) {
-            game::MessageChatData errMsg;
-            errMsg.type = game::ChatType::SYSTEM;
-            errMsg.language = game::ChatLanguage::UNIVERSAL;
-            errMsg.message = "You are not in the Trade channel.";
-            ctx.gameHandler.addLocalChatMessage(errMsg);
-            return {};
-        }
-        ctx.gameHandler.sendChatMessage(game::ChatType::CHANNEL, tag + ctx.args, tradeChan);
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"wts", "wtb"}; }
-    [[nodiscard]] std::string helpText() const override { return "Send to Trade channel ([WTS]/[WTB] prefix)"; }
 };
 
 // --- /1 through /9 - channel shortcuts ---
@@ -312,8 +259,6 @@ void registerChannelCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<BattlegroundChatCommand>());
     reg.registerCommand(std::make_unique<InstanceChatCommand>());
     reg.registerCommand(std::make_unique<JoinCommand>());
-    reg.registerCommand(std::make_unique<LeaveChannelCommand>());
-    reg.registerCommand(std::make_unique<TradeChannelCommand>());
     for (int n = 1; n <= 9; ++n)
         reg.registerCommand(std::make_unique<ChannelNumberCommand>(n));
     reg.registerCommand(std::make_unique<WhisperCommand>());

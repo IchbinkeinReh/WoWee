@@ -33,11 +33,12 @@ inline std::string goXyzLine(uint32_t mapId, float x, float y, float z, float se
     return buf;
 }
 
-/// The zone line: "Zone: Undercity - Trade Quarter", the subzone left out
-/// when there is none or it is the zone again; empty with no zone.
+/// The zone line: "Gebiet: Unterstadt - Handelsviertel", the subzone left
+/// out when there is none or it is the zone again; empty with no zone.
+/// German as every line the client prints (T369, the user's answer).
 inline std::string zoneLine(const std::string& zone, const std::string& subzone) {
     if (zone.empty() && subzone.empty()) return {};
-    std::string out = "Zone: " + (zone.empty() ? subzone : zone);
+    std::string out = "Gebiet: " + (zone.empty() ? subzone : zone);
     if (!zone.empty() && !subzone.empty() && subzone != zone) out += " - " + subzone;
     return out;
 }
@@ -58,17 +59,18 @@ struct CameraPose {
     float yaw = 0.0f;
 };
 
-/// "Camera: distance 12.40 pitch 20.00 yaw -35.50", which /cam takes back
+/// "Kamera: Abstand 12.40 Neigung 20.00 Gier -35.50", which /cam takes back
 /// whole or as its three numbers.
 inline std::string cameraLine(const CameraPose& c) {
     char buf[128];
-    std::snprintf(buf, sizeof(buf), "Camera: distance %.2f pitch %.2f yaw %.2f",
+    std::snprintf(buf, sizeof(buf), "Kamera: Abstand %.2f Neigung %.2f Gier %.2f",
                   static_cast<double>(c.distance), static_cast<double>(c.pitch), static_cast<double>(c.yaw));
     return buf;
 }
 
 /// /cam's argument: three numbers - distance, pitch, yaw - or a /gps camera
-/// line with the words; none if it is neither, or a number is not finite or
+/// line with the words (the German ones, or the English ones the line had
+/// before T369, so an older report still goes back); none if it is neither, or a number is not finite or
 /// the distance is below zero.
 inline std::optional<CameraPose> parseCamera(const std::string& text) {
     std::istringstream in(text);
@@ -77,7 +79,9 @@ inline std::optional<CameraPose> parseCamera(const std::string& text) {
     float* next[3] = {&c.distance, &c.pitch, &c.yaw};
     int got = 0;
     while (in >> word && got < 3) {
-        if (word == "Camera:" || word == "distance" || word == "pitch" || word == "yaw") continue;
+        if (word == "Kamera:" || word == "Abstand" || word == "Neigung" || word == "Gier" ||
+            word == "Camera:" || word == "distance" || word == "pitch" || word == "yaw")
+            continue;
         try {
             size_t used = 0;
             const float v = std::stof(word, &used);
@@ -102,22 +106,23 @@ inline std::string clockText(float hours) {
     return buf;
 }
 
-/// "Time: 19:30" - the time of day the lighting is drawn for - and, with the
-/// Debug Time override on (`overrideHours` at or over 0), "(Debug Time
+/// "Zeit: 19:30" - the time of day the lighting is drawn for - and, with the
+/// Debug Time override on (`overrideHours` at or over 0), "(Debug-Zeit
 /// 19.50)" after it: what /daytime takes back to draw the same light again.
 inline std::string timeLine(float lightHours, float overrideHours) {
-    std::string out = "Time: " + clockText(lightHours);
+    std::string out = "Zeit: " + clockText(lightHours);
     if (overrideHours >= 0.0f) {
         char buf[48];
-        std::snprintf(buf, sizeof(buf), " (Debug Time %.2f)", static_cast<double>(overrideHours));
+        std::snprintf(buf, sizeof(buf), " (Debug-Zeit %.2f)", static_cast<double>(overrideHours));
         out += buf;
     }
     return out;
 }
 
 /// /daytime's argument: hours ("19.5"), a clock ("19:30"),
-/// "off" for the server's time again, or a /gps "Time:" line - its Debug
-/// Time when it names one, its clock otherwise.
+/// "off" for the server's time again, or a /gps "Zeit:" line (or the
+/// English "Time:" line of before T369) - its Debug Time when it names one,
+/// its clock otherwise.
 struct TimeArg {
     bool off = false;
     float hours = 0.0f;
@@ -155,10 +160,13 @@ inline std::optional<TimeArg> parseTime(const std::string& text) {
     std::optional<float> clockHours, debugHours, plain;
     for (size_t i = 0; i < words.size(); ++i) {
         const std::string& w = words[i];
-        if (w == "Time:" || w == "Debug") continue;
+        if (w == "Zeit:" || w == "Time:" || w == "Debug") continue;
         float v = 0.0f;
-        if (w == "Time" && i > 0 && words[i - 1] == "Debug") continue;
-        if (i > 0 && words[i - 1] == "Time" && i > 1 && words[i - 2] == "Debug" && number(w, v)) {
+        if (w == "Debug-Zeit" || (w == "Time" && i > 0 && words[i - 1] == "Debug")) continue;
+        const bool afterDebugTime =
+            (i > 0 && words[i - 1] == "Debug-Zeit") ||
+            (i > 1 && words[i - 1] == "Time" && words[i - 2] == "Debug");
+        if (afterDebugTime && number(w, v)) {
             debugHours = v;
         } else if (clock(w, v)) {
             clockHours = v;

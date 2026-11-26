@@ -53,7 +53,7 @@ public:
         if (am) {
             am->runScript(ctx.args);
         } else {
-            ctx.gameHandler.addUIError("Addon system not initialized.");
+            ctx.gameHandler.addUIError("Addon-System nicht bereit.");
         }
         return {};
     }
@@ -61,7 +61,7 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Execute Lua code"; }
 };
 
-// --- /dump, /print ---
+// --- /dump ---
 class DumpCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
@@ -80,16 +80,16 @@ public:
             game::MessageChatData errMsg;
             errMsg.type = game::ChatType::SYSTEM;
             errMsg.language = game::ChatLanguage::UNIVERSAL;
-            errMsg.message = "Addon system not initialized.";
+            errMsg.message = "Addon-System nicht bereit.";
             ctx.gameHandler.addLocalChatMessage(errMsg);
         }
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"dump", "print"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"dump"}; }
     [[nodiscard]] std::string helpText() const override { return "Evaluate & print Lua expression"; }
 };
 
-// --- /reload, /reloadui, /rl ---
+// --- /reload ---
 class ReloadCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
@@ -106,12 +106,12 @@ public:
             game::MessageChatData rlMsg;
             rlMsg.type = game::ChatType::SYSTEM;
             rlMsg.language = game::ChatLanguage::UNIVERSAL;
-            rlMsg.message = "Addon system not available.";
+            rlMsg.message = "Addon-System nicht verfügbar.";
             ctx.gameHandler.addLocalChatMessage(rlMsg);
         }
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"reload", "reloadui", "rl"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"reload"}; }
     [[nodiscard]] std::string helpText() const override { return "Reload all addons"; }
 };
 
@@ -146,7 +146,7 @@ public:
         game::MessageChatData msg;
         msg.type = game::ChatType::SYSTEM;
         msg.language = game::ChatLanguage::UNIVERSAL;
-        msg.message = "FrameXML takeover check written to the log.";
+        msg.message = "FrameXML-Prüfung ins Log geschrieben.";
         ctx.gameHandler.addLocalChatMessage(msg);
         return {};
     }
@@ -201,53 +201,6 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Clear chat history"; }
 };
 
-// --- /difficulty ---
-class DifficultyCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        std::string arg = ctx.args;
-        // Trim whitespace
-        size_t first = arg.find_first_not_of(" \t");
-        size_t last  = arg.find_last_not_of(" \t");
-        if (first != std::string::npos)
-            arg = arg.substr(first, last - first + 1);
-        else
-            arg.clear();
-        for (auto& ch : arg) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-
-        uint32_t diff = 0;
-        bool valid = true;
-        if (arg == "normal" || arg == "0")         diff = 0;
-        else if (arg == "heroic" || arg == "1")    diff = 1;
-        else if (arg == "25" || arg == "25normal" || arg == "25man" || arg == "2")
-            diff = 2;
-        else if (arg == "25heroic" || arg == "25manheroic" || arg == "3")
-            diff = 3;
-        else valid = false;
-
-        if (!valid || arg.empty()) {
-            game::MessageChatData msg;
-            msg.type = game::ChatType::SYSTEM;
-            msg.language = game::ChatLanguage::UNIVERSAL;
-            msg.message = "Usage: /difficulty normal|heroic|25|25heroic  (0-3)";
-            ctx.gameHandler.addLocalChatMessage(msg);
-        } else {
-            static constexpr const char* kDiffNames[] = {
-                "Normal (5-man)", "Heroic (5-man)", "Normal (25-man)", "Heroic (25-man)"
-            };
-            game::MessageChatData msg;
-            msg.type = game::ChatType::SYSTEM;
-            msg.language = game::ChatLanguage::UNIVERSAL;
-            msg.message = std::string("Setting difficulty to: ") + kDiffNames[diff];
-            ctx.gameHandler.addLocalChatMessage(msg);
-            ctx.gameHandler.sendSetDifficulty(diff);
-        }
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"difficulty"}; }
-    [[nodiscard]] std::string helpText() const override { return "Set dungeon difficulty"; }
-};
-
 // --- Registration ---
 // ---------------------------------------------------------------------------
 // /gps - where the client has the player, as `.go xyz X Y Z MAP O` in the
@@ -275,7 +228,7 @@ public:
         }
         say(client_gps::goXyzLine(mapId, drawn.x, drawn.y, drawn.z, facing));
         if (client_gps::differs(drawn.x, drawn.y, drawn.z, sent.x, sent.y, sent.z)) {
-            say("Sent to the server: " + client_gps::goXyzLine(mapId, sent.x, sent.y, sent.z, facing));
+            say("An den Server gesendet: " + client_gps::goXyzLine(mapId, sent.x, sent.y, sent.z, facing));
         }
         // The view, as /cam puts it back: where the camera is going - its
         // distance, its pitch, its yaw from the facing (it orbits).
@@ -293,18 +246,18 @@ public:
         if (ctx.gameHandler.isOnTransport()) {
             const uint64_t tguid = ctx.gameHandler.getPlayerTransportGuid();
             const glm::vec3 off = ctx.gameHandler.getPlayerTransportOffset();
-            std::string line = "On transport " + std::to_string(tguid & 0xFFFFFFu);
+            std::string line = "Auf Transport " + std::to_string(tguid & 0xFFFFFFu);
             if (auto* tm = ctx.gameHandler.getTransportManager()) {
                 if (const auto* tr = tm->getTransport(tguid)) {
                     const glm::vec3 at = core::coords::canonicalToServer(tr->position);
                     char buf[160];
-                    std::snprintf(buf, sizeof(buf), " (entry %u) at %.3f %.3f %.3f",
+                    std::snprintf(buf, sizeof(buf), " (Eintrag %u) bei %.3f %.3f %.3f",
                                   tr->entry, at.x, at.y, at.z);
                     line += buf;
                 }
             }
             char buf[96];
-            std::snprintf(buf, sizeof(buf), ", offset %.3f %.3f %.3f", off.x, off.y, off.z);
+            std::snprintf(buf, sizeof(buf), ", Versatz %.3f %.3f %.3f", off.x, off.y, off.z);
             say(line + buf);
         }
         if (const auto* t = renderer ? renderer->getZoneTexts() : nullptr) {
@@ -334,12 +287,12 @@ public:
         auto* renderer = ctx.services.renderer;
         auto* cam = renderer ? renderer->getCameraController() : nullptr;
         if (!cam) {
-            say("Camera: no camera to set.");
+            say("Kamera: keine Kamera zum Setzen.");
             return {};
         }
         const auto pose = client_gps::parseCamera(ctx.args);
         if (!pose) {
-            say("Usage: /cam <distance> <pitch> <yaw>, or a /gps Camera: line");
+            say("Aufruf: /cam <Abstand> <Neigung> <Gier>, oder eine Kamera:-Zeile von /gps");
             return {};
         }
         cam->goToViewPose({pose->distance, pose->pitch, pose->yaw}, 0.0f);
@@ -369,7 +322,7 @@ public:
         };
         const auto arg = client_gps::parseTime(ctx.args);
         if (!arg) {
-            say("Usage: /daytime <hours> | <hh:mm> | off, or a /gps Time: line");
+            say("Aufruf: /daytime <Stunden> | <hh:mm> | off, oder eine Zeit:-Zeile von /gps");
             return {};
         }
         // Through the settings themselves, not a script of theirs: a client
@@ -387,11 +340,11 @@ public:
             done = true;
         }
         if (!done) {
-            say("Debug Time: not set.");
+            say("Debug-Zeit: nicht gesetzt.");
             return {};
         }
-        say(arg->off ? std::string("Debug Time: off - the server's time of day again.")
-                     : "Debug Time: " + client_gps::clockText(arg->hours));
+        say(arg->off ? std::string("Debug-Zeit: aus - wieder die Tageszeit des Servers.")
+                     : "Debug-Zeit: " + client_gps::clockText(arg->hours));
         return {};
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"daytime"}; }
@@ -415,7 +368,7 @@ public:
         if (ctx.args.find("low") != std::string::npos) {
             renderer->noteSystemLowMemory();
             ctx.gameHandler.addLocalChatMessage(
-                chat_utils::makeSystemMessage("Memory: the system's low-memory signal, simulated."));
+                chat_utils::makeSystemMessage("Speicher: Speichermangel-Meldung des Systems nachgestellt."));
             return {};
         }
         // "/mem dump": every allocation the Vulkan allocator holds, to a file.
@@ -457,7 +410,7 @@ public:
         // alongside the table (the overlay shows the same line).
         const auto saySettings = [&]() {
             if (auto* renderer = ctx.services.renderer) {
-                const std::string line = "Settings: " + renderer->qualitySummary();
+                const std::string line = "Einstellungen: " + renderer->qualitySummary();
                 say(line);
                 LOG_WARNING(line);
             }
@@ -466,16 +419,16 @@ public:
         if (arg.empty() || arg == "on" || arg == "off") {
             const bool want = arg.empty() ? !core::FrameProfiler::enabled() : arg == "on";
             prof.setEnabled(want);
-            say(want ? "Frame profiler: on. The table fills in after a second; /profile dump "
-                       "writes it to the log."
-                     : "Frame profiler: off.");
+            say(want ? "Bildzeitmessung: an. Die Tabelle füllt sich nach einer Sekunde; /profile dump "
+                       "schreibt sie ins Log."
+                     : "Bildzeitmessung: aus.");
             if (want) saySettings();
         } else if (arg == "dump") {
             // A dump of nothing is no use, so asking for one starts it, and
             // the table lands in the log once a second has been measured.
             if (!core::FrameProfiler::enabled()) prof.setEnabled(true);
             prof.requestDump();
-            say("Frame profiler: the next second's table goes to the log.");
+            say("Bildzeitmessung: die Tabelle der nächsten Sekunde geht ins Log.");
             saySettings();
         } else if (arg == "ablate" || arg == "ablation") {
             // The scene pass's cost by switching each pass off for a few
@@ -483,19 +436,19 @@ public:
             // puts the whole pass on its first mark.
             auto* renderer = ctx.services.renderer;
             if (!renderer) {
-                say("Pass ablation: no renderer.");
+                say("Pass-Abschaltung: kein Renderer.");
             } else if (!renderer->startPassAblation()) {
-                say("Pass ablation: one is already running.");
+                say("Pass-Abschaltung: es läuft schon eine.");
             } else {
-                say("Pass ablation: started. Stand still outdoors and leave the camera alone "
-                    "for about a minute and a half; the table goes to the log, and "
-                    "/perf ablate report shows it here.");
+                say("Pass-Abschaltung: gestartet. Steht etwa anderthalb Minuten still im Freien und "
+                    "lasst die Kamera in Ruhe; die Tabelle geht ins Log, und "
+                    "/perf ablate report zeigt sie hier.");
             }
         } else if (arg == "ablate report" || arg == "ablation report") {
             auto* renderer = ctx.services.renderer;
             const std::string report = renderer ? renderer->passAblationReport() : std::string();
             if (report.empty()) {
-                say("Pass ablation: no finished run yet.");
+                say("Pass-Abschaltung: noch kein Lauf beendet.");
             } else {
                 size_t start = 0;
                 while (start < report.size()) {
@@ -514,20 +467,20 @@ public:
             while (!path.empty() && std::isspace(static_cast<unsigned char>(path.back()))) path.pop_back();
             if (path == "off" || path == "stop") {
                 prof.stopCsv();
-                say("Frame profiler: CSV closed.");
+                say("Bildzeitmessung: CSV geschlossen.");
             } else {
                 if (path.empty()) path = "wowee_profile.csv";
                 std::string error;
                 if (prof.startCsv(path, error)) {
                     if (!core::FrameProfiler::enabled()) prof.setEnabled(true);
-                    say("Frame profiler: a row per stage per second to " + path +
-                        " until /profile csv off.");
+                    say("Bildzeitmessung: eine Zeile je Abschnitt und Sekunde nach " + path +
+                        " bis /profile csv off.");
                 } else {
-                    say("Frame profiler: " + error);
+                    say("Bildzeitmessung: " + error);
                 }
             }
         } else {
-            say("Usage: /profile [on|off|dump|csv [path|off]|ablate [report]]");
+            say("Aufruf: /profile [on|off|dump|csv [Pfad|off]|ablate [report]]");
         }
         return {};
     }
@@ -1103,7 +1056,6 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<StopMacroCommand>());
     reg.registerCommand(std::make_unique<ClearCommand>());
     reg.registerCommand(std::make_unique<UpdatePoiCommand>());
-    reg.registerCommand(std::make_unique<DifficultyCommand>());
     reg.registerCommand(std::make_unique<CVarListCommand>());
     reg.registerCommand(std::make_unique<CVarResetCommand>());
     reg.registerCommand(std::make_unique<CVarDefaultCommand>());

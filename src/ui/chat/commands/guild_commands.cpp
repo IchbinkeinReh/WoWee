@@ -86,14 +86,14 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Demote guild member"; }
 };
 
-// --- /gquit, /guildquit, /leaveguild ---
+// --- /gquit, /guildquit ---
 class GuildQuitCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         ctx.gameHandler.leaveGuild();
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"gquit", "guildquit", "leaveguild"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"gquit", "guildquit"}; }
     [[nodiscard]] std::string helpText() const override { return "Leave guild"; }
 };
 
@@ -114,44 +114,6 @@ public:
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"ginvite", "guildinvite"}; }
     [[nodiscard]] std::string helpText() const override { return "Invite player to guild"; }
-};
-
-// --- /gkick, /guildkick ---
-class GuildKickCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        if (!ctx.args.empty()) {
-            ctx.gameHandler.kickGuildMember(ctx.args);
-            return {};
-        }
-        game::MessageChatData msg;
-        msg.type = game::ChatType::SYSTEM;
-        msg.language = game::ChatLanguage::UNIVERSAL;
-        msg.message = "Usage: /gkick <player>";
-        ctx.gameHandler.addLocalChatMessage(msg);
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"gkick", "guildkick"}; }
-    [[nodiscard]] std::string helpText() const override { return "Kick player from guild"; }
-};
-
-// --- /gcreate, /guildcreate ---
-class GuildCreateCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        if (!ctx.args.empty()) {
-            ctx.gameHandler.createGuild(ctx.args);
-            return {};
-        }
-        game::MessageChatData msg;
-        msg.type = game::ChatType::SYSTEM;
-        msg.language = game::ChatLanguage::UNIVERSAL;
-        msg.message = "Usage: /gcreate <guild name>";
-        ctx.gameHandler.addLocalChatMessage(msg);
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"gcreate", "guildcreate"}; }
-    [[nodiscard]] std::string helpText() const override { return "Create a guild"; }
 };
 
 // --- /gdisband, /guilddisband ---
@@ -193,8 +155,6 @@ void registerGuildCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<GuildDemoteCommand>());
     reg.registerCommand(std::make_unique<GuildQuitCommand>());
     reg.registerCommand(std::make_unique<GuildInviteCommand>());
-    reg.registerCommand(std::make_unique<GuildKickCommand>());
-    reg.registerCommand(std::make_unique<GuildCreateCommand>());
     reg.registerCommand(std::make_unique<GuildDisbandCommand>());
     reg.registerCommand(std::make_unique<GuildLeaderCommand>());
 }

@@ -32,7 +32,7 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Inspect target's equipment"; }
 };
 
-// --- /friend, /addfriend ---
+// --- /friend ---
 class FriendCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
@@ -61,11 +61,11 @@ public:
         ctx.gameHandler.addLocalChatMessage(msg);
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"friend", "addfriend"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"friend"}; }
     [[nodiscard]] std::string helpText() const override { return "Add/remove friend"; }
 };
 
-// --- /removefriend, /delfriend, /remfriend ---
+// --- /removefriend, /remfriend ---
 class RemoveFriendCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
@@ -80,7 +80,7 @@ public:
         ctx.gameHandler.addLocalChatMessage(msg);
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"removefriend", "delfriend", "remfriend"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"removefriend", "remfriend"}; }
     [[nodiscard]] std::string helpText() const override { return "Remove friend"; }
 };
 
@@ -122,7 +122,7 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Unignore player"; }
 };
 
-// --- /who, /whois, /online, /players ---
+// --- /who ---
 class WhoCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
@@ -152,7 +152,7 @@ public:
         ctx.panel.getSlashCmds().showWho = true;
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"who", "whois", "online", "players"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"who"}; }
     [[nodiscard]] std::string helpText() const override { return "List online players"; }
 };
 

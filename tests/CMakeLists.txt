@@ -882,6 +882,17 @@ if(Python3_Interpreter_FOUND)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/sweep_guard.py)
 endif()
 
+# ── slash_command_names ─────────────────────────────────────────
+# T369 (the user's answer): the client's own slash commands are the 12340 deDE
+# names plus the developer/diagnostic tools the user kept; shortcuts 12340 does
+# not know (/rl /gkick /wts /nr /lootmethod ...) give the original's
+# unknown-command line. Fails on a name in neither set. Instant.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME slash_command_names
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_SOURCE_DIR}/tools/slash_command_names_check.py)
+endif()
+
 # ── unicorn_stub_compiles ────────────────────────────────────────
 # Unicorn is optional and every build here has it, so the stub branch the
 # Warden emulator falls back to compiles in no configuration anyone runs. It

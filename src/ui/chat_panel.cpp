@@ -221,14 +221,14 @@ void ChatPanel::sendChatMessage(game::GameHandler& gameHandler) {
             if (am) {
                 am->runScript(luaCode);
             } else {
-                gameHandler.addUIError("Addon system not initialized.");
+                gameHandler.addUIError("Addon-System nicht bereit.");
             }
             chatInputBuffer_[0] = '\0';
             return;
         }
 
         // /dump <expression>
-        if ((cmdLower == "dump" || cmdLower == "print") && spacePos != std::string::npos) {
+        if (cmdLower == "dump" && spacePos != std::string::npos) {
             std::string expr = command.substr(spacePos + 1);
             auto* am = services_.addonManager;
             if (am && am->isInitialized()) {
@@ -243,7 +243,7 @@ void ChatPanel::sendChatMessage(game::GameHandler& gameHandler) {
                 game::MessageChatData errMsg;
                 errMsg.type = game::ChatType::SYSTEM;
                 errMsg.language = game::ChatLanguage::UNIVERSAL;
-                errMsg.message = "Addon system not initialized.";
+                errMsg.message = "Addon-System nicht bereit.";
                 gameHandler.addLocalChatMessage(errMsg);
             }
             chatInputBuffer_[0] = '\0';

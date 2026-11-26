@@ -839,9 +839,9 @@ void GameScreen::startRecording() {
     if (renderer->startRecording(path, error)) {
         recordingPath_ = path;
         services_.gameHandler->addSystemChatMessage(
-            "Recording to " + path + ". Type /record again to stop.");
+            "Aufnahme nach " + path + ". /record beendet sie.");
     } else {
-        services_.gameHandler->addSystemChatMessage("Could not start recording: " + error + ".");
+        services_.gameHandler->addSystemChatMessage("Aufnahme konnte nicht beginnen: " + error + ".");
     }
 }
 
@@ -853,10 +853,10 @@ void GameScreen::stopRecording() {
     const int seconds = static_cast<int>(stats.seconds + 0.5);
     char length[32];
     std::snprintf(length, sizeof(length), "%d:%02d", seconds / 60, seconds % 60);
-    std::string message = "Recording saved: " + recordingPath_ + " (" + length;
-    if (!stats.hasAudio) message += ", no sound";
+    std::string message = "Aufnahme gespeichert: " + recordingPath_ + " (" + length;
+    if (!stats.hasAudio) message += ", ohne Ton";
     if (stats.framesDropped > 0) {
-        message += ", " + std::to_string(stats.framesDropped) + " frames dropped";
+        message += ", " + std::to_string(stats.framesDropped) + " Bilder ausgelassen";
     }
     services_.gameHandler->addSystemChatMessage(message + ").");
 }
@@ -877,7 +877,7 @@ void GameScreen::reportRecordingFailure() {
     const std::string failure = renderer->takeRecordingFailure();
     if (failure.empty()) return;
     services_.gameHandler->addSystemChatMessage(
-        "Recording stopped: " + failure + ". What was recorded is saved in " + recordingPath_ + ".");
+        "Aufnahme abgebrochen: " + failure + ". Das Aufgenommene ist in " + recordingPath_ + " gespeichert.");
 }
 
 // 0x004a8570, the client's screenshot. Its CVars: screenshotFormat (0x00401b20,

@@ -36,9 +36,9 @@ public:
             ctx.gameHandler.addLocalChatMessage(m);
         };
         auto* tm = ctx.gameHandler.getTransportManager();
-        if (!tm) { say("Transport manager unavailable."); return {}; }
+        if (!tm) { say("Transportverwaltung nicht verfügbar."); return {}; }
         const auto& transports = tm->getTransports();
-        say("Active transports: " + std::to_string(transports.size()));
+        say("Aktive Transporte: " + std::to_string(transports.size()));
         for (const auto& [guid, t] : transports) {
             char buf[256];
             snprintf(buf, sizeof(buf),
@@ -50,7 +50,7 @@ public:
                                           : "server",
                      t.serverUpdateCount,
                      t.wmoInstanceId,
-                     t.wmoInstanceId == 0 ? " (NO RENDER INSTANCE)" : "");
+                     t.wmoInstanceId == 0 ? " (KEINE RENDER-INSTANZ)" : "");
             say(buf);
         }
         return {};
@@ -104,7 +104,7 @@ public:
         game::MessageChatData sysMsg;
         sysMsg.type = game::ChatType::SYSTEM;
         sysMsg.language = game::ChatLanguage::UNIVERSAL;
-        sysMsg.message = zoneName.empty() ? "You are not in a known zone." : "You are in: " + zoneName;
+        sysMsg.message = zoneName.empty() ? "Ihr seid in keinem bekannten Gebiet." : "Ihr seid in: " + zoneName;
         ctx.gameHandler.addLocalChatMessage(sysMsg);
         return {};
     }
@@ -121,17 +121,6 @@ public:
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"played"}; }
     [[nodiscard]] std::string helpText() const override { return "Show time played"; }
-};
-
-// --- /screenshot, /ss ---
-class ScreenshotCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        ctx.panel.getSlashCmds().takeScreenshot = true;
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"screenshot", "ss"}; }
-    [[nodiscard]] std::string helpText() const override { return "Take a screenshot"; }
 };
 
 // --- /record ---
@@ -158,29 +147,6 @@ public:
     }
 };
 
-// --- /ticket, /gmticket, /gm ---
-class TicketCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        ctx.panel.getSlashCmds().showGmTicket = true;
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"ticket", "gmticket", "gm"}; }
-    [[nodiscard]] std::string helpText() const override { return "Open GM ticket"; }
-};
-
-// --- /score ---
-class ScoreCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        ctx.gameHandler.requestPvpLog();
-        ctx.panel.getSlashCmds().showBgScore = true;
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"score"}; }
-    [[nodiscard]] std::string helpText() const override { return "Show BG scoreboard"; }
-};
-
 // --- /threat ---
 class ThreatCommand : public IChatCommand {
 public:
@@ -192,35 +158,35 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Toggle threat display"; }
 };
 
-// --- /combatlog, /cl ---
+// --- /combatlog ---
 class CombatLogCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         ctx.panel.getSlashCmds().toggleCombatLog = true;
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"combatlog", "cl"}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"combatlog"}; }
     [[nodiscard]] std::string helpText() const override { return "Toggle combat log"; }
 };
 
-// --- /helm, /helmet, /showhelm, /togglehelm ---
+// --- /togglehelm ---
 class HelmCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         ctx.gameHandler.toggleHelm();
         return {};
     }
-    /// The last of these is the name the original registers - the console
-    /// command table (`FUN_00769100("togglehelm", 0x00407710, 4, 0)`, where the
-    /// 4 says "slash command"), and the same table gives the cloak one as
-    /// `togglecloak`. The shorter names are this client's own.
+    /// The name the original registers - the console command table
+    /// (`FUN_00769100("togglehelm", 0x00407710, 4, 0)`), and the same table
+    /// gives the cloak one as `togglecloak`. The shorter names this client had
+    /// (/helm /helmet /showhelm) went with T369: 12340 does not know them.
     [[nodiscard]] std::vector<std::string> aliases() const override {
-        return {"helm", "helmet", "showhelm", "togglehelm"};
+        return {"togglehelm"};
     }
     [[nodiscard]] std::string helpText() const override { return "Toggle helmet visibility"; }
 };
 
-// --- /cloak, /showcloak, /togglecloak ---
+// --- /togglecloak ---
 class CloakCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
@@ -231,7 +197,7 @@ public:
     /// (`FUN_00769100("togglecloak", 0x004077c0, 4, 0)`); see HelmCommand for
     /// the same pair.
     [[nodiscard]] std::vector<std::string> aliases() const override {
-        return {"cloak", "showcloak", "togglecloak"};
+        return {"togglecloak"};
     }
     [[nodiscard]] std::string helpText() const override { return "Toggle cloak visibility"; }
 };
@@ -245,17 +211,6 @@ public:
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"follow", "f"}; }
     [[nodiscard]] std::string helpText() const override { return "Walk toward and camera-follow your current target"; }
-};
-
-// --- /stopfollow ---
-class StopFollowCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        ctx.gameHandler.cancelFollow();
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"stopfollow"}; }
-    [[nodiscard]] std::string helpText() const override { return "Stop following"; }
 };
 
 // --- /assist ---
@@ -391,13 +346,13 @@ public:
                 game::MessageChatData msg;
                 msg.type = game::ChatType::SYSTEM;
                 msg.language = game::ChatLanguage::UNIVERSAL;
-                msg.message = "Boarded test transport. Use '/transport leave' to disembark.";
+                msg.message = "Testtransport betreten. '/transport leave' verlässt ihn.";
                 ctx.gameHandler.addLocalChatMessage(msg);
             } else {
                 game::MessageChatData msg;
                 msg.type = game::ChatType::SYSTEM;
                 msg.language = game::ChatLanguage::UNIVERSAL;
-                msg.message = "Transport system not available.";
+                msg.message = "Transportsystem nicht verfügbar.";
                 ctx.gameHandler.addLocalChatMessage(msg);
             }
             return {};
@@ -407,13 +362,13 @@ public:
                 game::MessageChatData msg;
                 msg.type = game::ChatType::SYSTEM;
                 msg.language = game::ChatLanguage::UNIVERSAL;
-                msg.message = "Disembarked from transport.";
+                msg.message = "Transport verlassen.";
                 ctx.gameHandler.addLocalChatMessage(msg);
             } else {
                 game::MessageChatData msg;
                 msg.type = game::ChatType::SYSTEM;
                 msg.language = game::ChatLanguage::UNIVERSAL;
-                msg.message = "You are not on a transport.";
+                msg.message = "Ihr seid auf keinem Transport.";
                 ctx.gameHandler.addLocalChatMessage(msg);
             }
             return {};
@@ -431,16 +386,12 @@ void registerMiscCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<LocCommand>());
     reg.registerCommand(std::make_unique<ZoneCommand>());
     reg.registerCommand(std::make_unique<PlayedCommand>());
-    reg.registerCommand(std::make_unique<ScreenshotCommand>());
     reg.registerCommand(std::make_unique<RecordCommand>());
-    reg.registerCommand(std::make_unique<TicketCommand>());
-    reg.registerCommand(std::make_unique<ScoreCommand>());
     reg.registerCommand(std::make_unique<ThreatCommand>());
     reg.registerCommand(std::make_unique<CombatLogCommand>());
     reg.registerCommand(std::make_unique<HelmCommand>());
     reg.registerCommand(std::make_unique<CloakCommand>());
     reg.registerCommand(std::make_unique<FollowCommand>());
-    reg.registerCommand(std::make_unique<StopFollowCommand>());
     reg.registerCommand(std::make_unique<AssistCommand>());
     reg.registerCommand(std::make_unique<PvpCommand>());
     reg.registerCommand(std::make_unique<UnstuckCommand>());
