@@ -1,12 +1,14 @@
 # Unit test infrastructure using Catch2 v3 (amalgamated)
 
-# Catch2 amalgamated as a library target
+# Catch2 amalgamated, with a main of our own (catch_main.cpp) that keeps a
+# test started by hand out of the player's folders.
 add_library(catch2_main STATIC
-    ${CMAKE_SOURCE_DIR}/extern/catch2/catch_amalgamated.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/catch_main.cpp
 )
 target_include_directories(catch2_main PUBLIC
     ${CMAKE_SOURCE_DIR}/extern/catch2
 )
+target_include_directories(catch2_main PRIVATE ${CMAKE_SOURCE_DIR}/include)
 # Catch2 v3 needs C++17 minimum
 target_compile_features(catch2_main PUBLIC cxx_std_17)
 
@@ -4955,3 +4957,12 @@ get_property(_wowee_all_tests DIRECTORY PROPERTY TESTS)
 if(_wowee_all_tests)
     set_property(TEST ${_wowee_all_tests} APPEND PROPERTY ENVIRONMENT "WOWEE_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
 endif()
+
+# No test finds the player's own per-user folders (test_user_paths.hpp).
+wowee_add_test(test_user_paths_sandboxed
+    SOURCES test_user_paths_sandboxed.cpp ${CMAKE_SOURCE_DIR}/src/core/config_paths.cpp
+            ${TEST_COMMON_SOURCES})
+
+# Per-user folders of their own for every test, and the guard that the
+# player's real ones stay as they were (cmake/WoweeTestSandbox.cmake).
+wowee_sandbox_directory_tests()

@@ -1943,6 +1943,7 @@ endfunction()
 
 if(WOWEE_BUILD_TESTS)
     enable_testing()
+    include(cmake/WoweeTestSandbox.cmake)
     add_subdirectory(tests)
 endif()
 
@@ -2261,6 +2262,8 @@ if(WOWEE_BUILD_FRAMEXML_RUN)
         set_tests_properties(framexml_options_tabs PROPERTIES
             SKIP_RETURN_CODE 77
             ENVIRONMENT "WOWEE_CONFIG_ROOT=${_taint_play_dir}/config_options;WOWEE_LOG_FILE=${_taint_play_dir}/framexml_options_tabs.log")
+        # Their own per-user folders, like every test (WoweeTestSandbox.cmake).
+        wowee_sandbox_directory_tests()
     endif()
 endif()
 
