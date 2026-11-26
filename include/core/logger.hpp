@@ -136,6 +136,10 @@ public:
     /// from sitting in the buffer afterwards, so a warning still reaches the
     /// file within a frame or two of being written.
     void flushIfStale();
+    /// Put whatever is buffered on disk now: where the system may end the
+    /// process without a word (a phone short of memory, U10), the lines
+    /// still in the buffer would be lost with it.
+    void flushNow();
 private:
     void flushSuppressedLocked();
     void ensureFile();

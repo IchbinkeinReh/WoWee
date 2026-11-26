@@ -1881,6 +1881,10 @@ wowee_add_test(test_rt_lamp_wrap
 wowee_add_test(test_rt_memory_guard
     SOURCES test_rt_memory_guard.cpp)
 
+# -- test_msaa_memory: whether the multisampled scene fits before a raise (U10).
+wowee_add_test(test_msaa_memory
+    SOURCES test_msaa_memory.cpp)
+
 # -- test_rt_water: the ray traced water's optics.
 wowee_add_test(test_rt_water
     SOURCES test_rt_water.cpp)

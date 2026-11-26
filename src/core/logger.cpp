@@ -253,6 +253,14 @@ void Logger::flushIfStale() {
     unflushed_ = false;
 }
 
+void Logger::flushNow() {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!fileStream.is_open()) return;
+    lastFlushTime_ = std::chrono::steady_clock::now();
+    fileStream.flush();
+    unflushed_ = false;
+}
+
 void Logger::flushSuppressedLocked() {
     if (suppressedCount_ == 0) return;
     emitLineLocked(lastLevel_, "Previous message repeated " + std::to_string(suppressedCount_) + " times");

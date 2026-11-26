@@ -20,6 +20,7 @@
 #include "rendering/horizon_renderer.hpp"
 #include "pipeline/wdl_loader.hpp"
 #include "pipeline/adt_tile_name.hpp"
+#include "rendering/msaa_memory.hpp"
 #include "core/env_flag.hpp"
 #include "rendering/sky_params_from_lighting.hpp"
 #include "core/coordinates.hpp"
@@ -1490,6 +1491,22 @@ void Renderer::setMsaaSamples(VkSampleCountFlagBits samples) {
     VkSampleCountFlagBits maxSamples = vkCtx->getMaxUsableSampleCount();
     if (samples > maxSamples) samples = maxSamples;
 
+#ifdef WOWEE_MOBILE
+    // A phone's GPU memory is the app's RAM, and past its limit the system
+    // ends the app (U10): a raise is held to what fits (msaa_memory.hpp).
+    if (samples > vkCtx->getMsaaSamples()) {
+        const VkExtent2D ext = sceneRenderExtent();
+        const bool rt = rtLighting_ && rtLighting_->mode() != RtLighting::Mode::Off;
+        const auto fits = static_cast<VkSampleCountFlagBits>(msaa_memory::samplesThatFit(
+            static_cast<uint32_t>(samples), static_cast<uint32_t>(vkCtx->getMsaaSamples()), ext.width, ext.height,
+            rt, memorySnapshot()));
+        if (fits != samples) {
+            LOG_WARNING("Multisampling held at ", static_cast<int>(fits), "x of ", static_cast<int>(samples),
+                        "x asked for want of memory (", ext.width, "x", ext.height, ")");
+            samples = fits;
+        }
+    }
+#endif
     if (samples == vkCtx->getMsaaSamples()) return;
 
     // Defer to between frames - cannot destroy render pass/framebuffers mid-frame

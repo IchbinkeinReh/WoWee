@@ -727,6 +727,8 @@ bool SDLCALL lifecycleWatch(void* userdata, SDL_Event* event) {
             LOG_WARNING("SDL_EVENT_LOW_MEMORY: the system is short of memory");
             // The ray tracing's guard offers to switch it off (rt_memory_guard).
             if (auto* r = core::Application::getInstance().getRenderer()) r->noteSystemLowMemory();
+            // The system may end the app next: what the log holds goes to disk now.
+            Logger::getInstance().flushNow();
             return true;
         case SDL_EVENT_TERMINATING:
             LOG_WARNING("SDL_EVENT_TERMINATING: the system is ending the app");
