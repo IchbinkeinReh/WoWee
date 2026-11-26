@@ -209,9 +209,14 @@ void QuestHandler::announceQuestItemPushed(uint32_t itemId, uint32_t count,
 /// The same three every other quest-progress path fires, by the same rules:
 /// the watch update carries the quest's position in the log, because that is
 /// what the interface auto-watches from.
-void QuestHandler::announceQuestLogChanged(uint32_t questId) {
+/// `watchUpdate` false leaves QUEST_WATCH_UPDATE out: 12340 raises it (event
+/// 0x1e5) only for a credit and for an objective completed with the quest's
+/// EndText (0x006d8030 cases 0x46f, 0x198, 0x199; items 0x006d7c30) - not for
+/// a failed or timed-out quest (0x196, 0x197), a completion without EndText,
+/// nor a quest joining the log.
+void QuestHandler::announceQuestLogChanged(uint32_t questId, bool watchUpdate) {
     if (!owner_.addonEventCallbackRef()) return;
-    const int index = questLogIndexOf(questId);
+    const int index = watchUpdate ? questLogIndexOf(questId) : 0;
     if (index > 0) {
         owner_.addonEventCallbackRef()("QUEST_WATCH_UPDATE", {std::to_string(index)});
     }
@@ -551,7 +556,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             }
             // Same omission as the complete handler had: a line of chat is not
             // a redraw, and a failed quest goes on looking fine in the log.
-            announceQuestLogChanged(questId);
+            announceQuestLogChanged(questId, false);
         }
     };
 
@@ -569,7 +574,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
                 owner_.playGameErrorSound("ERR_QUEST_FAILED_S");
             }
-            announceQuestLogChanged(questId);
+            announceQuestLogChanged(questId, false);
         }
     };
 
@@ -907,9 +912,14 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     // or ERR_QUEST_UNKNOWN_COMPLETE, on screen in yellow
                     // (0x006d8030, case 0x198). This was "Quest Complete:
                     // Title" in chat.
-                    owner_.addUIInfoMessage(questObjectiveCompleteText(questId));
+                    // Nothing on screen for a failed one (case 0x198 asks the
+                    // log slot's failed bit first).
+                    if (!quest.failed) owner_.addUIInfoMessage(questObjectiveCompleteText(questId));
                     LOG_INFO("Marked quest ", questId, " as complete");
-                    announceQuestLogChanged(questId);
+                    // The watch update only with the EndText line.
+                    const auto end = questEndTexts().find(questId);
+                    announceQuestLogChanged(questId, !quest.failed && end != questEndTexts().end() &&
+                                                         !end->second.empty());
                     break;
                 }
             }
@@ -2053,7 +2063,7 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
                 if (after.count(id) == 0) owner_.setQuestTracked(id, false);
             }
             for (uint32_t id : after) {
-                if (before.count(id) == 0) announceQuestLogChanged(id);
+                if (before.count(id) == 0) announceQuestLogChanged(id, false);
             }
         }
     }

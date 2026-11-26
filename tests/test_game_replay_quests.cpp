@@ -358,6 +358,34 @@ TEST_CASE("only an item push short of the count is a watch update", "[replay][qu
     s.handler().setAddonEventCallback(nullptr);
 }
 
+// 0x006d8030: no QUEST_WATCH_UPDATE for a quest joining the log, failing,
+// timing out (0x196, 0x197) or completing without its EndText (0x198); a kill
+// credit (0x199) has one.
+TEST_CASE("a failed or new quest is no watch update", "[replay][quest]") {
+    std::vector<std::string> watched;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event == "QUEST_WATCH_UPDATE") watched.push_back(args.empty() ? std::string() : args[0]);
+    });
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 9387}}));
+    REQUIRE(questOf(s, 9387));
+    CHECK(watched.empty());
+    for (const Opcode op : {Opcode::SMSG_QUESTUPDATE_FAILED, Opcode::SMSG_QUESTUPDATE_FAILEDTIMER,
+                            Opcode::SMSG_QUESTUPDATE_COMPLETE}) {
+        wowee::network::Packet p(wowee::game::wireOpcode(op));
+        p.writeUInt32(9387);
+        s.receive(p);
+    }
+    CHECK(watched.empty());
+    wowee::network::Packet kill(wowee::game::wireOpcode(Opcode::SMSG_QUESTUPDATE_ADD_KILL));
+    for (const uint32_t v : {9387u, 16927u, 2u, 8u}) kill.writeUInt32(v);
+    kill.writeUInt64(0xF130004221000099ull);
+    s.receive(kill);
+    CHECK(watched.size() == 1);
+    s.handler().setAddonEventCallback(nullptr);
+}
+
 // The reward chosen on the frame was let go by every item answer that came in
 // while a quest window was open.
 TEST_CASE("only an item the quest window waits for is its news", "[replay][quest]") {

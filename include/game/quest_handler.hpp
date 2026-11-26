@@ -365,7 +365,7 @@ public:
     /// server happened to overwrite them.
     /// Tell the interface a quest moved - see the definition for why the
     /// three events go together.
-    void announceQuestLogChanged(uint32_t questId);
+    void announceQuestLogChanged(uint32_t questId, bool watchUpdate = true);
     /// A quest put in a log slot - a new one, or a failed one taken again
     /// (0x006df370): announced once the quest is known, else when its query
     /// answers (0x006df2b0).
