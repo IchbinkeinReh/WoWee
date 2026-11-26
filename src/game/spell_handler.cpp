@@ -3816,8 +3816,8 @@ uint32_t SpellHandler::supersededBy(uint32_t spellId) const {
     const auto [lo, hi] = supersedes_.equal_range(spellId);
     for (auto it = lo; it != hi; ++it) {
         const auto& [raceMask, classMask, next] = it->second;
-        if ((raceMask == 0 || (race != 0 && (raceMask & (1u << (race - 1))) != 0)) &&
-            (classMask == 0 || (cls != 0 && (classMask & (1u << (cls - 1))) != 0)))
+        if ((raceMask == 0 || (raceMask & raceClassBit(race)) != 0) &&
+            (classMask == 0 || (classMask & raceClassBit(cls)) != 0))
             return next;
     }
     return 0;

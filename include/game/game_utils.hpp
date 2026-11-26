@@ -9,6 +9,13 @@
 namespace wowee {
 namespace game {
 
+/// A race or class id's bit in a DBC/quest mask (id 1 = 0x1), 0 for an id
+/// with no bit - 0, or past 32 from a packet or a DBC row, where the shift
+/// would be undefined.
+[[nodiscard]] constexpr uint32_t raceClassBit(uint32_t id) {
+    return id >= 1 && id <= 32 ? 1u << (id - 1u) : 0u;
+}
+
 inline bool isActiveExpansion(const char* expansionId) {
     auto& app = core::Application::getInstance();
     auto* registry = app.getExpansionRegistry();

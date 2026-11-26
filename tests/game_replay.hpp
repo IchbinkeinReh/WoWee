@@ -317,6 +317,34 @@ public:
         wowee::game::GameHandlerTestAccess::enterWorld(handler_);
     }
 
+    // The callbacks the tests set capture the test's own locals, which are
+    // gone before the session is: a test that fails between setting one and
+    // clearing it would leave the handler's teardown calling into them. They
+    // are cleared here, before the handler goes.
+    ~Session() {
+        handler_.setAddonEventCallback({});
+        handler_.setAddonEventValuesCallback({});
+        handler_.setWorldEntryCallback({});
+        handler_.setUnitTooltipCallback({});
+        handler_.setMountCallback({});
+        handler_.setVehicleSeatMovedCallback({});
+        handler_.setUnitMoveFlagsCallback({});
+        handler_.setUnitEffectCallback({});
+        handler_.setPlacedFallCallback({});
+        handler_.setNpcLineCallback({});
+        handler_.setMoverEventCallback({});
+        handler_.setMeleeHitCallback({});
+        handler_.setFallEndsCallback({});
+        handler_.setBloodSpurtCallback({});
+        handler_.setUnitDrawnCallback({});
+        handler_.setSoundAtUnitCallback({});
+        handler_.setLogoutCompleteCallback({});
+        handler_.setCreatureMoveCallback({});
+        handler_.setEmoteAnimCallback({});
+    }
+    Session(const Session&) = delete;
+    Session& operator=(const Session&) = delete;
+
     wowee::game::GameHandler& handler() { return handler_; }
     const SentPackets& sent() const { return *sent_; }
     void setConnected(bool connected) { sent_->connected = connected; }

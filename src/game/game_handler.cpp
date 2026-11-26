@@ -3359,8 +3359,8 @@ int32_t GameHandler::factionBaseReputation(uint32_t factionId) const {
     if (it == factionRepBase_.end()) return 0;
     const uint8_t race = getPlayerRace();
     const uint8_t cls = getPlayerClass();
-    const uint32_t raceMask = race ? (1u << (race - 1)) : 0;
-    const uint32_t classMask = cls ? (1u << (cls - 1)) : 0;
+    const uint32_t raceMask = raceClassBit(race);
+    const uint32_t classMask = raceClassBit(cls);
     const auto& f = it->second;
     // The server's own rule, slot by slot: a slot for this race, or a
     // class-only slot, whose class mask is this class or empty.

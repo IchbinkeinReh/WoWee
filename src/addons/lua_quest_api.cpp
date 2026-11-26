@@ -2601,7 +2601,7 @@ static std::vector<const game::GameHandler::TalentTabEntry*> classTalentTabs(
         game::GameHandler* gh, uint8_t classId) {
     std::vector<const game::GameHandler::TalentTabEntry*> tabs;
     if (!gh || classId == 0) return tabs;
-    const uint32_t classMask = 1u << (classId - 1);
+    const uint32_t classMask = game::raceClassBit(classId);
     for (const auto& [tabId, tab] : gh->getAllTalentTabs()) {
         if (tab.classMask & classMask) tabs.push_back(&tab);
     }
@@ -2713,7 +2713,7 @@ static int lua_GetNumTalentTabs(lua_State* L) {
     if (!gh) { return luaReturnZero(L); }
     // Count tabs matching the class in question
     uint8_t classId = talentClassId(gh, luaClientSwitchArg(L, 1, false));
-    uint32_t classMask = (classId > 0) ? (1u << (classId - 1)) : 0;
+    uint32_t classMask = game::raceClassBit(classId);
     int count = 0;
     for (const auto& [tabId, tab] : gh->getAllTalentTabs()) {
         if (tab.classMask & classMask) count++;

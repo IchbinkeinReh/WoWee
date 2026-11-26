@@ -263,14 +263,7 @@ public:
     void deleteEquipmentSet(const std::string& name);
 
     // ---- Vendor ----
-    struct BuybackItem {
-        uint64_t itemGuid = 0;
-        ItemDef item;
-        uint32_t count = 1;
-        // Inventory slot sent in CMSG_BUYBACK_ITEM (74..85).  This is server
-        // identity, not the item's current row in the buyback UI.
-        uint32_t wireSlot = 0;
-    };
+    using BuybackItem = game::BuybackItem;
     void openVendor(uint64_t npcGuid);
     void closeVendor();
     // Drop the session-persistent buyback mirror (fresh character world entry).

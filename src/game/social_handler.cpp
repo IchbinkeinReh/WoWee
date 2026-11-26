@@ -283,7 +283,7 @@ static bool decodeTbcInspectTalentBitfield(GameHandler& owner,
 
     owner.loadTalentDbc();
 
-    const uint32_t classMask = 1u << (classId - 1u);
+    const uint32_t classMask = raceClassBit(classId);
     std::vector<const TalentTabEntry*> classTabs;
     for (const auto& [tabId, tab] : owner.getAllTalentTabs()) {
         if (tab.classMask & classMask) {

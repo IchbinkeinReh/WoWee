@@ -201,6 +201,16 @@ struct ItemDef {
     uint64_t guid = 0;
 };
 
+/// One row of a vendor's buyback tab: the item sold, and the inventory slot
+/// CMSG_BUYBACK_ITEM names it by (74..85) - server identity, not the row the
+/// tab shows it in. Shared by InventoryHandler and GameHandler.
+struct BuybackItem {
+    uint64_t itemGuid = 0;
+    ItemDef item;
+    uint32_t count = 1;
+    uint32_t wireSlot = 0;
+};
+
 struct ItemSlot {
     ItemDef item;
     [[nodiscard]] bool empty() const { return item.itemId == 0; }

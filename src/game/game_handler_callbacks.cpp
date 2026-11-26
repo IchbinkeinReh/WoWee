@@ -1608,8 +1608,7 @@ void GameHandler::setVendorCanRepair(bool v) {
 }
 const std::deque<GameHandler::BuybackItem>& GameHandler::getBuybackItems() const {
     if (inventoryHandler_) {
-        // Layout-identical structs (InventoryHandler::BuybackItem == GameHandler::BuybackItem)
-        return reinterpret_cast<const std::deque<BuybackItem>&>(inventoryHandler_->getBuybackItems());
+        return inventoryHandler_->getBuybackItems();
     }
     return buybackItems_;
 }
@@ -1628,8 +1627,7 @@ uint32_t GameHandler::buybackRowCount() const {
 }
 const GameHandler::BuybackItem* GameHandler::buybackRowAt(uint32_t row) const {
     if (inventoryHandler_) {
-        // Layout-identical structs; see getBuybackItems.  nullptr stays nullptr.
-        return reinterpret_cast<const BuybackItem*>(inventoryHandler_->buybackRow(row));
+        return inventoryHandler_->buybackRow(row);
     }
     if (row >= buybackItems_.size()) return nullptr;
     return &buybackItems_[row];
