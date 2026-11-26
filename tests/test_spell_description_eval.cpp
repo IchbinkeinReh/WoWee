@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "game/spell_description_eval.hpp"
+#include "test_support.hpp"
 
 using namespace wowee::game;
 
@@ -819,4 +820,31 @@ TEST_CASE("$F rounds halves away from zero (0x005773b0)", "[spell][description][
     CHECK(spellRoundHalfAway(2.4f) == 2);
     CHECK(spellRoundHalfAway(-2.5f) == -3);
     CHECK(spellRoundHalfAway(0.0f) == 0);
+}
+
+// T374: a spell whose Description is empty (25759-25762, 38511, 61263) showed
+// its aura's text in the spell tooltip. 0x006238a0 adds the Description (the
+// record's +0x228) only where it is not empty, and nothing in its place.
+TEST_CASE("an empty Description has no stand-in (T374)", "[spell_description]") {
+    const std::string src = wowee::test::slurp("src/game/spell_handler.cpp");
+    REQUIRE_FALSE(src.empty());
+    CHECK(src.find("entry.description = entry.auraDescription") == std::string::npos);
+}
+
+// T374: Erdschild (974 and its ranks) declares its heal with an aura
+// condition (SpellDescriptionVariables 170). The client reads a
+// declaration's condition as a sentence's (0x00579e50 -> 0x00579ba0 ->
+// 0x005797f0): spells and auras, '!', '&', '|'. Only $?s was taken, and
+// the tooltip kept "$<heal>".
+TEST_CASE("a declaration's condition may ask an aura (T374)", "[spell][description]") {
+    const std::string earthShield = "$heal=$?a63279[${$m1*1.2}][${$m1}]";
+    auto ctx = contextFor(earthShield, {}, {375.0});
+    CHECK(evaluated("heal", ctx) == Catch::Approx(375.0));
+    ctx.hasAura = [](uint32_t id) { return id == 63279; };
+    CHECK(evaluated("heal", ctx) == Catch::Approx(450.0));
+    // And the rest of a sentence's conditions: negation, '&', '|'.
+    auto both = contextFor("$x=$?!a1&s2[${10}][${20}]", {2}, {});
+    CHECK(evaluated("x", both) == Catch::Approx(10.0));
+    both.hasAura = [](uint32_t id) { return id == 1; };
+    CHECK(evaluated("x", both) == Catch::Approx(20.0));
 }

@@ -66,6 +66,9 @@ struct SpellDescriptionContext {
     std::function<bool(uint32_t spellId, const std::string& name, double& out)> variable;
     /// Whether the player knows a spell, for $?s<id>[then][else].
     std::function<bool(uint32_t spellId)> knowsSpell;
+    /// Whether the player has an aura, for $?a<id>[then][else] (T374:
+    /// Erdschild's "$heal=$?a63279[${$m1*1.2}][${$m1}]").
+    std::function<bool(uint32_t spellId)> hasAura;
     /// The "$name=expression" lines this spell draws on, or null.
     const std::string* declarations = nullptr;
 };

@@ -5904,6 +5904,12 @@ SpellDescriptionContext GameHandler::descriptionContext(
     // for every spell in the game, so "$?s61331[${115}][...]" took the
     // talent's branch for anyone and Sinister Strike read 115% for a mage.
     ctx.knowsSpell = [this](uint32_t id) { return spellHandler_ && spellHandler_->hasKnownSpell(id); };
+    // The player's auras, as a sentence's $?a asks them (T374).
+    ctx.hasAura = [this](uint32_t id) {
+        for (const auto& a : getPlayerAuras())
+            if (!a.isEmpty() && a.spellId == id) return true;
+        return false;
+    };
     // $d in seconds, $t in milliseconds, and another spell's tokens
     // (0x005782d0).
     ctx.quantity = [this, spellId, scale](uint32_t refId, char code, int index, double& out) {

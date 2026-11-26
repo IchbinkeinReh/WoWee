@@ -282,19 +282,20 @@ bool Parser::atom(const std::string& text, std::size_t& i, float& out) {
         return nested.whole(decl, out);
     }
 
-    // $?s<id>[then][else], as a declaration is written.
+    // $?cond[then][else], as a declaration is written: the condition up to
+    // the first '[' (0x00577030), read as a sentence's is (0x005797f0) -
+    // known spells (s), the player's auras (a), '!', '&', '|' and
+    // parentheses. Erdschild's "$heal=$?a63279[...]" took an aura (T374).
     if (text[i] == '?') {
         ++i;
-        if (i >= text.size() || (text[i] != 's' && text[i] != 'S')) return false;
-        ++i;
-        uint32_t condId = 0;
-        bool any = false;
-        while (i < text.size() && std::isdigit(static_cast<unsigned char>(text[i]))) {
-            condId = condId * 10 + static_cast<uint32_t>(text[i] - '0');
-            any = true;
-            ++i;
-        }
-        if (!any) return false;
+        const std::size_t open = text.find('[', i);
+        if (open == std::string::npos || open == i) return false;
+        std::size_t p = i;
+        const bool known = branchCondition(text, p, open, [this](char letter, uint32_t id) {
+            if (letter == 's') return ctx.knowsSpell && ctx.knowsSpell(id);
+            return ctx.hasAura && ctx.hasAura(id);
+        }, 0);
+        i = open;
 
         // Both branches are read whichever is taken, so a malformed one fails
         // the expression rather than passing unnoticed behind a condition that
@@ -325,7 +326,6 @@ bool Parser::atom(const std::string& text, std::size_t& i, float& out) {
         if (!bracketed(elseBody)) return false;
         if (depth > kMaxDepth) return false;
 
-        const bool known = ctx.knowsSpell && ctx.knowsSpell(condId);
         Parser nested{ctx, depth + 1};
         return nested.whole(known ? thenBody : elseBody, out);
     }

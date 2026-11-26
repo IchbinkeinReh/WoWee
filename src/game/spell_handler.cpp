@@ -7293,7 +7293,10 @@ void SpellHandler::loadSpellNameCache() const {
             if (tooltipField != 0xFFFFFFFF) {
                 entry.auraDescription = dbc->getString(i, tooltipField);
             }
-            if (entry.description.empty()) entry.description = entry.auraDescription;
+            // No stand-in for an empty Description: the spell tooltip
+            // (0x006238a0) shows the Description (its record's +0x228) only
+            // where it is not empty, and nothing in its place - never the
+            // aura's text (T374: 25759-25762, 38511, 61263).
             if (descVarField != 0xFFFFFFFF) {
                 entry.descriptionVariableId = dbc->getUInt32(i, descVarField);
             }
