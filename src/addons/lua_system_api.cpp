@@ -2405,14 +2405,22 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // greys the button that can no longer go any further - without it a map
     // restored at full zoom offers a zoom-in that does nothing.
     // The inside step waits on the widget for the map to first go indoors.
-    if (key == "wowee_minimapinsidezoom") {
+    //
+    // Under the client's names (T348): read back at start only, as the client
+    // reads them (0x007f4f60 area) - a SetCVar while playing moves no map
+    // there, the CVar has no callback. The names WoWee kept them under before
+    // are still read, where the client's are not stored yet.
+    const bool legacyZoom = key == "wowee_minimapinsidezoom" || key == "wowee_minimapzoom";
+    const bool restoreZoom =
+        g_replayingStoredCVars && !(legacyZoom && cvarStore().count(key.substr(6)) != 0);
+    if (restoreZoom && (key == "minimapinsidezoom" || key == "wowee_minimapinsidezoom")) {
         if (auto* tree = getWidgetTree(L)) {
             if (auto* mm = tree->findByName("Minimap")) {
                 mm->savedInsideZoom = rendering::minimap_zoom::clampLevel(std::atoi(value.c_str()));
             }
         }
     }
-    if (key == "wowee_minimapzoom") {
+    if (restoreZoom && (key == "minimapzoom" || key == "wowee_minimapzoom")) {
         if (auto* tree = getWidgetTree(L)) {
             if (auto* mm = tree->findByName("Minimap")) {
                 const int z = std::atoi(value.c_str());

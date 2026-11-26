@@ -4,6 +4,7 @@
 
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_engine.hpp"
+#include "core/env.hpp"
 #include "core/input.hpp"
 #include "core/preview_dressing.hpp"
 #include "game/dressing_room.hpp"
@@ -17,6 +18,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <tuple>
@@ -2187,3 +2190,43 @@ TEST_CASE("a character without a title has title 0", "[replay][interface]") {
     s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_CHOSEN_TITLE, 42}}));
     CHECK(ui.is("GetCurrentTitle() == 42"));
 }
+
+// T348: the minimap's zoom setter (0x007f3ae0) keeps the level in the
+// client's own CVar - minimapInsideZoom indoors, minimapZoom outside - so
+// GetCVar("minimapZoom") follows the map. It stayed "3", the level kept under
+// a name of WoWee's own.
+TEST_CASE("the minimap's zoom is kept in minimapZoom and minimapInsideZoom", "[replay][interface]") {
+    // The CVar store is saved as it changes: into a corner of this test's own.
+    const int tag = 0;
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        ("wowee_minimap_zoom_" + std::to_string(reinterpret_cast<std::uintptr_t>(&tag)));
+    std::filesystem::create_directories(root);
+    wowee::core::setEnvVar("WOWEE_CONFIG_ROOT", root.string().c_str());
+    {
+        Session s;
+        s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+        Interface ui(s);
+        ui.run("CreateFrame('Minimap', 'Minimap')");
+        ui.run("Minimap:SetZoom(5)");
+        CHECK(ui.is("Minimap:GetZoom() == 5"));
+        CHECK(ui.is("GetCVar('minimapZoom') == '5'"));
+        ui.run("Minimap:SetZoom(1)");
+        CHECK(ui.is("GetCVar('minimapZoom') == '1'"));
+        // Indoors the other one, the outside level left as it was.
+        auto* map = ui.engine.widgets().findByName("Minimap");
+        REQUIRE(map != nullptr);
+        map->zoomIndoors = true;
+        ui.run("Minimap:SetZoom(4)");
+        CHECK(ui.is("GetCVar('minimapInsideZoom') == '4'"));
+        CHECK(ui.is("GetCVar('minimapZoom') == '1'"));
+        // Another frame sent SetZoom is not the map.
+        map->zoomIndoors = false;
+        ui.run("CreateFrame('Minimap', 'NotTheMap'):SetZoom(3)");
+        CHECK(ui.is("GetCVar('minimapZoom') == '1'"));
+    }
+    wowee::core::unsetEnvVar("WOWEE_CONFIG_ROOT");
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+

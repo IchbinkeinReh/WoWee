@@ -7526,21 +7526,20 @@ int lua_Minimap_SetZoom(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         const int z = static_cast<int>(std::lround(luaL_optnumber(L, 2, 0)));
         w->zoomLevel = rendering::minimap_zoom::clampLevel(z);
-        // And kept, because the player set it by using the map rather than by
-        // setting a setting, and it was gone at every start: the ring came back
-        // at its widest however far in it had been left. Written to the CVar
-        // store, which is saved as it changes - see setStoredCVar - and read
+        // And kept in the client's own CVars, as its zoom setter keeps it
+        // (0x007f3ae0: the level, at most 5, and when it changed the CVar set
+        // to it - minimapInsideZoom indoors, minimapZoom outside), which it
+        // reads back at start (0x007f4f60 area). So GetCVar("minimapZoom")
+        // follows the map (T348; it stayed "3" under a name of our own), and
+        // the level goes with the character's config to the server as the
+        // original's does. Saved as it changes - see setStoredCVar - and read
         // back once FrameXML has a Minimap to put it on.
         //
         // Only for the map itself. SetZoom sits on the frame metatable, so any
         // frame can be sent one, and a stray call on another frame must not be
         // what the minimap opens at next time.
-        //
-        // The inside step under its own name, as the client keeps
-        // minimapInsideZoom apart from minimapZoom.
         if (w->name == "Minimap") {
-            setStoredCVar(w->zoomIndoors ? "wowee_minimapInsideZoom" : "wowee_minimapZoom",
-                          std::to_string(w->zoomLevel));
+            setStoredCVar(rendering::minimap_zoom::cvarName(w->zoomIndoors), std::to_string(w->zoomLevel));
         }
     }
     return 0;

@@ -22,6 +22,12 @@ constexpr std::array<float, kLevels> kIndoorRadius = {150.0f, 120.0f, 90.0f, 60.
 
 /// 0x007f3ae0: what Minimap:SetZoom keeps. Taken unsigned, so anything past 4
 /// - a negative level included - becomes 5.
+/// The CVar the client keeps a level in (0x007f3ae0 sets it, 0x007f4f60's
+/// area reads it back): one for indoors, one for outside, each "3" at first.
+constexpr const char* cvarName(bool indoors) {
+    return indoors ? "minimapInsideZoom" : "minimapZoom";
+}
+
 constexpr int clampLevel(int level) {
     return static_cast<unsigned>(level) > 4u ? 5 : level;
 }
