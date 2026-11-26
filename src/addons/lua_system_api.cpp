@@ -11374,8 +11374,14 @@ void registerSystemLuaAPI(lua_State* L) {
             return 3;
         }},
                 {"GetCurrentTitle", [](lua_State* L) -> int {
+            // 0x0051b3b0: the player's PLAYER_CHOSEN_TITLE (+0x2b4) as it is,
+            // 0 without a title or a player - never -1, which is only what
+            // SetCurrentTitle asks for (T346).
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? gh->getChosenTitleBit() : -1);
+            const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+            const uint16_t field = game::fieldIndex(game::UF::PLAYER_CHOSEN_TITLE);
+            lua_pushnumber(L, player && field != 0xFFFF ? static_cast<double>(static_cast<int32_t>(player->getField(field)))
+                                                        : 0.0);
             return 1;
         }},
                 // GetTitleName(titleMaskID) - the client's own usage line, and

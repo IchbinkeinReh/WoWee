@@ -2074,3 +2074,14 @@ TEST_CASE("a weapon's temporary enchant is cancelled by its slot", "[replay][int
     REQUIRE(sent.size() == 2);
     CHECK(sent.back().readUInt32() == 16);
 }
+
+// T346: GetCurrentTitle (0x0051b3b0) is the player's PLAYER_CHOSEN_TITLE as
+// it is - 0 without a title, as a create that leaves the field out says.
+TEST_CASE("a character without a title has title 0", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("GetCurrentTitle() == 0"));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_CHOSEN_TITLE, 42}}));
+    CHECK(ui.is("GetCurrentTitle() == 42"));
+}

@@ -525,6 +525,9 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     arenaRoster_.clear();
     // The battlefield's state starts afresh with the world (0x0054e720).
     worldPvpQueue_.reset();
+    // As the title: a field of 0 is not in the player's create, so the last
+    // character's would stay.
+    chosenTitleBit_ = 0;
 
     LOG_INFO("========================================");
     LOG_INFO("   ENTERING WORLD");

@@ -2491,7 +2491,9 @@ void GameHandler::sendSetTitle(int32_t bit) {
     if (!isInWorld()) return;
     auto packet = SetTitlePacket::build(bit);
     socket->send(packet);
-    chosenTitleBit_ = bit;
+    // The title is the realm's answer, PLAYER_CHOSEN_TITLE (0x0051b3b0 reads
+    // only the field); -1 here stayed until then, or for good where the
+    // field was 0 already.
     LOG_INFO("sendSetTitle: bit=", bit);
 }
 
