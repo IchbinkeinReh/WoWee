@@ -1025,6 +1025,17 @@ jobs:
         export ANDROID_NDK_ROOT="${ANDROID_HOME}/ndk/28.2.13676358"
         tools/build-android-deps.sh arm64-v8a
 
+    - name: Cache Gradle downloads
+      # Maven Central answers 429 to a runner that asks for every plugin
+      # and library afresh; with the caches the build asks for almost none.
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: android-gradle-${{ hashFiles('android/**/*.gradle', 'android/gradle.properties', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+        restore-keys: android-gradle-
+
     - name: Build the APK
       working-directory: android
       env:
@@ -1039,7 +1050,14 @@ jobs:
           export WOWEE_KEYSTORE_FILE="${RUNNER_TEMP}/wowee.jks"
           echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${WOWEE_KEYSTORE_FILE}"
         fi
-        ./gradlew :app:assembleRelease --no-daemon
+        # A 429 or a timeout from a repository is retried after a pause,
+        # three tries in all; a compile error fails the same way each time.
+        GRADLE_NET="-Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000 -Dorg.gradle.internal.repository.max.retries=5 -Dorg.gradle.internal.repository.initial.backoff=2000"
+        for try in 1 2 3; do
+          ./gradlew :app:assembleRelease --no-daemon ${GRADLE_NET} && exit 0
+          [ "${try}" -lt 3 ] && sleep $((try * 60))
+        done
+        exit 1
 
     - name: Upload APK
       uses: actions/upload-artifact@v5
