@@ -4266,3 +4266,28 @@ TEST_CASE("a slot casting nothing is usable only in control (0x005a9e20)", "[rep
     CHECK(ui.is(usable(2)));
     CHECK(ui.is(usable(4)));
 }
+
+// T406 (FIXER X): GetInventoryItemCount (0x005e9e40) answers 0 for a
+// container - a bag on the bag bar showed "1" - and 1 for a slot holding
+// nothing; a plain item its stack.
+TEST_CASE("a bag's inventory count is no stack (T406)", "[replay][interface]") {
+    using wowee::game::EquipSlot;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    wowee::game::ItemDef bag;
+    bag.itemId = 4500;
+    bag.name = "Traveler's Backpack";
+    bag.bagSlots = 16;
+    bag.stackCount = 1;
+    REQUIRE(gh.inventoryRef().setEquipSlot(EquipSlot::BAG1, bag));
+    wowee::game::ItemDef ring;
+    ring.itemId = 2589;
+    ring.name = "Linen Cloth";
+    ring.stackCount = 7;
+    REQUIRE(gh.inventoryRef().setEquipSlot(EquipSlot::RING1, ring));
+    CHECK(ui.is("GetInventoryItemCount('player', 20) == 0"));
+    CHECK(ui.is("GetInventoryItemCount('player', 21) == 1"));    // nothing there
+    CHECK(ui.is("GetInventoryItemCount('player', 11) == 7"));
+}

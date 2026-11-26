@@ -5270,8 +5270,33 @@ static int lua_GetInventoryItemCount(lua_State* L) {
         lua_pushnumber(L, 0);
         return 1;
     }
-    const auto& slot = *inventorySlotItem(gh->getInventory(), slotId);
-    if (slot.empty()) { lua_pushnumber(L, 0); return 1; }
+    const auto& inv = gh->getInventory();
+    const auto& slot = *inventorySlotItem(inv, slotId);
+    // 0x005e9e40: a slot with no item object (0x00754390 none) falls through
+    // to the one; the interface never shows it - every caller asks only where
+    // GetInventoryItemTexture names something.
+    if (slot.empty()) { lua_pushnumber(L, 1); return 1; }
+    // A container (the object's type mask 0x4) is no stack: 0, so the bag bar
+    // and the bank's bag row print no number (T406). One of the four worn bag
+    // slots (index below 0x17) whose ItemSubClass row has DisplayFlags 0x4 - a
+    // quiver, an ammunition pouch - answers what it holds (0x00754d00 with the
+    // id -1 over that bag, every stack counted), 0 when empty.
+    const auto* info = gh->getItemInfo(slot.item.itemId);
+    const bool container = slot.item.bagSlots > 0 || (info && info->containerSlots > 0);
+    if (container) {
+        uint32_t held = 0;
+        if (slotId >= 20 && slotId <= 23 && info) {
+            const auto& flags = itemClassNames(gh).subclassDisplayFlags;
+            const auto it = flags.find({info->itemClass, info->subClass});
+            if (it != flags.end() && (it->second & 0x4u) != 0) {
+                const int bag = slotId - 20;
+                for (int i = 0; i < inv.getBagSize(bag); ++i)
+                    if (const auto& s = inv.getBagSlot(bag, i); !s.empty()) held += s.item.stackCount;
+            }
+        }
+        lua_pushnumber(L, held);
+        return 1;
+    }
     // A single item reports a stack of one rather than zero, which is how the
     // count is drawn: zero would print nothing where the client prints nothing
     // for one either, but the two mean different things to a caller.
