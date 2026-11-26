@@ -1658,8 +1658,12 @@ CHECKS = [
     # (0x00500560, its jump past the send when 0xbd1948 is empty).
     # 24 on 2026-11-14: InviteUnit with no name does nothing and says nothing,
     # as the client's does (0x0051a6e0: its string read gives null, no send).
+    # 25 on 2026-11-26 (FIXER R): CancelAuction on a pending sale sends nothing
+    # and says nothing (0x0059ddf0: +0x9c must be 0), and ConfirmLootSlot for a
+    # slot that did not ask does nothing (0x00589300: slot != 0x00acee24) -
+    # both as the client; ConfirmLootSlot's old guard counted one already.
     ("silent_refusal_check.py",
-     r"^(\d+) state or lookup refusal", 24,
+     r"^(\d+) state or lookup refusal", 25,
      "action bindings that refuse on missing state and say nothing"),
     ("silent_refusal_check.py",
      r"^(\d+) argument-bound refusal", 27,
