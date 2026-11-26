@@ -3540,9 +3540,6 @@ void MovementHandler::applyTaxiMountForCurrentNode() {
         static constexpr uint32_t kHordeTaxiDisplays[] = {1310u, 1311u, 1312u};
         mountId = isAlliance ? kAllianceTaxiDisplays[0] : kHordeTaxiDisplays[0];
     }
-    if (mountId == 0) {
-        mountId = isAlliance ? 30412u : 30413u;
-    }
     if (mountId != 0) {
         taxiMountActive_ = true;
         LOG_INFO("Taxi mount apply: displayId=", mountId);

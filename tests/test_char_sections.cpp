@@ -165,3 +165,24 @@ TEST_CASE("every composite places the head's layers on the face", "[char_section
     const std::string processing = sourceText("src/core/entity_spawner_processing.cpp");
     CHECK(processing.find("charRenderer->setFaceRegionLayer(path, lower)") != std::string::npos);
 }
+
+// T334: the wind rider and gryphon cubs (displays 30413/30412) were answered
+// with the taxi models before CreatureDisplayInfo was asked, so the cub was a
+// white grown-up wyvern. 12340 names a creature's model by its display row
+// alone; no display id is special, neither for a creature nor for the taxi.
+TEST_CASE("no display id names a model of its own", "[char_sections][creature_display]") {
+    const std::string spawner = sourceText("src/core/entity_spawner.cpp");
+    REQUIRE_FALSE(spawner.empty());
+    const size_t begin = spawner.find("std::string EntitySpawner::getModelPathForDisplayId(");
+    REQUIRE(begin != std::string::npos);
+    const size_t end = spawner.find("EntitySpawner::setMirrorLook", begin);
+    REQUIRE(end != std::string::npos);
+    const std::string body = spawner.substr(begin, end - begin);
+    CHECK(body.find("displayId == 3") == std::string::npos);
+    CHECK(body.find("case 3") == std::string::npos);
+    CHECK(body.find(".m2\"") == std::string::npos);
+    const std::string movement = sourceText("src/game/movement_handler.cpp");
+    REQUIRE_FALSE(movement.empty());
+    CHECK(movement.find("30412u") == std::string::npos);
+    CHECK(movement.find("30413u") == std::string::npos);
+}
