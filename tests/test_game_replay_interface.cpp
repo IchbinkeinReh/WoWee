@@ -4320,3 +4320,51 @@ TEST_CASE("the action predicates read the slot's spell (0x005a96d0/0x005a9360)",
     CHECK(ui.is("IsAttackAction(2) == 1"));
     CHECK(ui.is("IsAttackAction(1) == nil"));
 }
+
+// T408 (FIXER Y): GetLFGProposal (0x00554170) answers no value at all
+// without a proposal; with one, hasResponded is the player's own row's
+// answered flag. AcceptProposal/RejectProposal (0x00554450) mark the own row
+// answered+accepted, or drop the proposal, at once and fire
+// LFG_PROPOSAL_UPDATE; GetLFGProposalMember (0x00553000) answers nothing
+// without a proposal and 'UNKNOWN' for a mask without a role bit.
+TEST_CASE("a dungeon proposal answers as the client holds it (T408)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    CHECK(ui.is("select('#', GetLFGProposal()) == 0"));
+    CHECK(ui.is("select('#', GetLFGProposalMember(1)) == 0"));
+
+    const auto offer = [&](uint32_t id) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_LFG_PROPOSAL_UPDATE));
+        p.writeUInt32(261u | (1u << 24));   // dungeon entry (type 1)
+        p.writeUInt8(0);                    // initiating
+        p.writeUInt32(id);
+        p.writeUInt32(0);                   // encounters done
+        p.writeUInt8(0);                    // not silent
+        p.writeUInt8(2);
+        p.writeUInt32(0x08); for (int b : {1, 0, 0, 0, 0}) p.writeUInt8(static_cast<uint8_t>(b));
+        p.writeUInt32(0x00); for (int b : {0, 0, 0, 0, 0}) p.writeUInt8(static_cast<uint8_t>(b));
+        s.receive(p);
+    };
+    offer(77);
+    REQUIRE(ui.is("select('#', GetLFGProposal()) == 12"));
+    CHECK(ui.is("select(6, GetLFGProposal()) == 'DAMAGER'"));
+    CHECK(ui.is("select(7, GetLFGProposal()) == false"));
+    CHECK(ui.is("select(2, GetLFGProposalMember(2)) == 'UNKNOWN'"));
+    CHECK(ui.is("select('#', GetLFGProposalMember(6)) == 0"));
+
+    ui.run("updates = 0 local f = CreateFrame('Frame') f:RegisterEvent('LFG_PROPOSAL_UPDATE') "
+           "f:SetScript('OnEvent', function() updates = updates + 1 end)");
+    gh.lfgAcceptProposal(77, true);
+    CHECK(s.sent().of(Opcode::CMSG_LFG_PROPOSAL_RESULT).size() == 1);
+    CHECK(ui.is("updates == 1"));
+    CHECK(ui.is("select(7, GetLFGProposal()) == true"));
+    CHECK(ui.is("select(4, GetLFGProposalMember(1)) == true and select(5, GetLFGProposalMember(1)) == true"));
+
+    offer(78);
+    gh.lfgAcceptProposal(78, false);
+    CHECK(ui.is("updates == 3"));   // the offer's own update, then the refusal's
+    CHECK(ui.is("select('#', GetLFGProposal()) == 0"));
+    CHECK(gh.getLfgProposalId() == 0);
+}

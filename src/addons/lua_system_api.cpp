@@ -6247,13 +6247,10 @@ static int lua_HasLFGRestrictions(lua_State* L) {
 //                    hasResponded, totalEncounters, completedEncounters,
 //                    numMembers, isLeader, isHoliday
 //
-// Twelve values, which is what the client returns (0x00554170, `return 0xc`).
-// The count matters twice over: lfdframe reads the eighth and the twelfth to
-// themselves with select(), and a return short of those is an error there and
-// not an answer of "none".  The client answers nothing at all when no proposal
-// is pending - so every caller has to test the first value before it touches
-// another - but each caller in the interface does exactly that, which is why
-// the twelve nils here are only a stand-in for a call FrameXML never makes.
+// Twelve values while a proposal is held (0x00554170, `return 0xc`), and none
+// at all without one (`if (DAT_00bea980 == 0) return 0;`) - not twelve nils,
+// which `select('#', GetLFGProposal())` tells apart (T408).  lfdframe's
+// select(8, ...) / select(12, ...) of an empty return are empty, not errors.
 //
 // The tenth is WoWee's own: the client pushes the constant 5.0 (0x00554170:3510)
 // and lets GetLFGProposalMember answer nil for the empty seats of a five-seat
@@ -6261,8 +6258,11 @@ static int lua_HasLFGRestrictions(lua_State* L) {
 // for anything else.
 static int lua_GetLFGProposal(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const bool pending = gh && gh->getLfgState() == game::LfgState::Proposal;
-    if (!pending) { for (int i = 0; i < 12; ++i) lua_pushnil(L); return 12; }
+    // A proposal refused here is gone at once (0x00554450 zeroes 0x00bea980),
+    // which clears the id while the queue state waits for the realm.
+    const bool pending = gh && gh->getLfgState() == game::LfgState::Proposal
+                         && gh->getLfgProposalId() != 0;
+    if (!pending) return 0;
 
     // Nils here are not survivable, which only showed once the dialog could
     // actually open. LFDDungeonReadyPopup_Update builds a path with
@@ -6293,9 +6293,15 @@ static int lua_GetLFGProposal(lua_State* L) {
     // 2/4/8 for the three role names and 1 on its own for its eleventh value
     // (0x00554170:3480, :3511).  lfdframe.lua:541 draws the leader mark with it.
     const bool isLeader = (roles & 0x01) != 0;
+    // 'UNKNOWN' for a mask without any of the three role bits (0x00554170:3477).
     const char* role = (roles & 0x02) ? "TANK"
                      : (roles & 0x04) ? "HEALER"
-                                      : "DAMAGER";
+                     : (roles & 0x08) ? "DAMAGER"
+                                      : "UNKNOWN";
+    // hasResponded is the player's own row's answered flag (0x00554170:3473,
+    // 0x00bea9a4 of the row flagged self): after AcceptProposal the dialog
+    // turns to the status view of who has answered.
+    const bool hasResponded = self != members.end() && self->answered;
 
     lua_pushboolean(L, 1);                                       // 1: proposalExists
     lua_pushnumber(L, dungeon ? dungeon->typeId : 1);            // 2: typeID
@@ -6308,7 +6314,7 @@ static int lua_GetLFGProposal(lua_State* L) {
     // path is built from.
     lua_pushstring(L, dungeon ? dungeon->texture.c_str() : "");  // 5: texture
     lua_pushstring(L, role);                                     // 6: role
-    lua_pushboolean(L, 0);                                       // 7: hasResponded
+    lua_pushboolean(L, hasResponded ? 1 : 0);                    // 7: hasResponded
     // Bosses there are and bosses done. The client derives both rather than
     // reading them: it walks DungeonEncounter.dbc for the offered dungeon's map
     // and difficulty and counts the rows against the mask the proposal carries

@@ -1181,6 +1181,9 @@ private:
     /// queue update ends it - the condition 0x0055bdc0 tests before firing
     /// LFG_PROPOSAL_SUCCEEDED or _FAILED.
     bool lfgProposalValid_ = false;
+    /// AcceptProposal/RejectProposal's own throttle (0x00acdd58, 0x00beabb0).
+    int lfgProposalAnswerCount_ = 0;
+    double lfgProposalAnswerStamp_ = -1.0e9;
     /// The last player and party queue bodies (0x00acd9a0, 0x00acdac0).
     LfgUpdateBody lfgPlayerUpdate_;
     LfgUpdateBody lfgPartyUpdate_;

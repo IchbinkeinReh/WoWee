@@ -6173,12 +6173,39 @@ int SocialHandler::lfgCompleteRoleCheck(bool accept) {
 }
 
 void SocialHandler::lfgAcceptProposal(uint32_t proposalId, bool accept) {
-    if (!owner_.getSocket()) return;
-    const uint16_t wire = wireOpcode(Opcode::CMSG_LFG_PROPOSAL_RESULT);
-    if (wire == 0xFFFF) return;   // no dungeon finder before Wrath
-    network::Packet pkt(wire);
-    pkt.writeUInt32(proposalId); pkt.writeUInt8(accept ? 1 : 0);
-    owner_.getSocket()->send(pkt);
+    // 0x00554450 (AcceptProposal / RejectProposal): nothing without a held
+    // proposal; at most three answers, then one more only once ten seconds have
+    // passed since the last reset (0x00acdd58 counter, 0x00beabb0 stamp).
+    if (proposalId == 0) return;
+    if (++lfgProposalAnswerCount_ > 2) {
+        const double now = core::appTimeSeconds();
+        if (now - lfgProposalAnswerStamp_ < 10.0) return;
+        lfgProposalAnswerStamp_ = now;
+        lfgProposalAnswerCount_ = 0;
+    }
+    if (owner_.getSocket()) {
+        const uint16_t wire = wireOpcode(Opcode::CMSG_LFG_PROPOSAL_RESULT);
+        if (wire != 0xFFFF) {   // no dungeon finder before Wrath
+            network::Packet pkt(wire);
+            pkt.writeUInt32(proposalId); pkt.writeUInt8(accept ? 1 : 0);
+            owner_.getSocket()->send(pkt);
+        }
+    }
+    // The client does not wait for the realm to say what it did: a refusal
+    // drops the whole proposal at once (0x00bea980..0x00bea990 and the member
+    // rows zeroed), an acceptance marks the player's own row answered and
+    // accepted - so the ready dialog's very next update (hasResponded) turns
+    // to the status view - and either way LFG_PROPOSAL_UPDATE (0x1f6) follows.
+    if (!accept) {
+        clearLfgProposal();
+    } else {
+        for (auto& m : lfgProposalMembers_) {
+            if (!m.isSelf) continue;
+            m.answered = true;
+            m.accepted = true;
+        }
+    }
+    owner_.fireAddonEvent("LFG_PROPOSAL_UPDATE");
 }
 
 void SocialHandler::lfgTeleport(bool toLfgDungeon) {

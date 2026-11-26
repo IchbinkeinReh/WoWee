@@ -772,10 +772,14 @@ void registerLfgLuaAPI(lua_State* L) {
         if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGProposalMember(index)");   // 0x00553000
         auto* gh = getGameHandler(L);
         const int index = static_cast<int>(luaL_optinteger(L, 1, 0));
-        if (!gh || index < 1) return luaReturnNil(L);
+        // Nothing at all without a held proposal or for an index outside the
+        // five rows (0x00553000: `return 0`); a row the realm left empty reads
+        // as the zeroed row it is in the client's table.
+        if (!gh || gh->getLfgProposalId() == 0 || index < 1 || index > 5) return 0;
         const auto& members = gh->getLfgProposalMembers();
-        if (index > static_cast<int>(members.size())) return luaReturnNil(L);
-        const auto& m = members[static_cast<size_t>(index) - 1];
+        static const game::LfgProposalMember kEmptyRow{};
+        const auto& m = index <= static_cast<int>(members.size())
+                            ? members[static_cast<size_t>(index) - 1] : kEmptyRow;
         // The group leader of the offered party, which is not a separate field:
         // it is bit 0 of the very mask the next value's name comes from
         // (0x00553000:2519 pushes `roles & 1`, then tests 2/4/8 for the token).
@@ -784,7 +788,8 @@ void registerLfgLuaAPI(lua_State* L) {
         // SetLFGRoles sends: 2 tank, 4 healer, 8 damage.
         lua_pushstring(L, (m.role & 0x02) ? "TANK"
                         : (m.role & 0x04) ? "HEALER"
-                                          : "DAMAGER");   // 2: role
+                        : (m.role & 0x08) ? "DAMAGER"
+                                          : "UNKNOWN");   // 2: role
         // Nought rather than nil, which is what the client answers here
         // (0x00553000:2527) while leaving the two strings nil: the packet has no
         // level either, but this one is read as a number by its callers.
