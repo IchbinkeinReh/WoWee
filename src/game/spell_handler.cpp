@@ -876,11 +876,18 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
         pendingPetNameQueries_.erase(it);
         owner_.combatLogFeed().petNameAnswered(guid, name, !name.empty());
         if (name.empty()) return;
-        petNames_[guid] = name;
-
         auto entity = owner_.getEntityManager().getEntity(guid);
-        if (!entity) return;
         auto unit = std::dynamic_pointer_cast<Unit>(entity);
+        // Only a unit with a pet number is called by the pet's name
+        // (00720000.c ~7791-7812: UNIT_FIELD_PETNUMBER 0 takes the creature
+        // cache's, localised); an enslaved or charmed creature keeps its own,
+        // now and when it is seen again - the realm's answer is its
+        // template's English name (T345).
+        if (unit) {
+            if (const uint16_t number = fieldIndex(UF::UNIT_FIELD_PETNUMBER);
+                number == 0xFFFF || unit->getField(number) == 0) return;
+        }
+        petNames_[guid] = name;
         if (!unit) return;
         unit->setName(name);
         LOG_INFO("Pet name: 0x", std::hex, guid, std::dec, " is '", name, "'");

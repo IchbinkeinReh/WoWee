@@ -2255,7 +2255,8 @@ TEST_CASE("a pet's name is told by every token it has", "[replay][playtest]") {
     Session s;
     spawnPlayer(s);
     s.receive(UpdateObject().create(kPet, wowee::game::ObjectType::UNIT,
-                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                                     {UF::UNIT_FIELD_PETNUMBER, 7}}));
     auto& gh = s.handler();
     gh.setTarget(kPet);
     gh.setFocus(kPet);
@@ -2285,7 +2286,8 @@ TEST_CASE("a pet keeps its own name when its creature's comes after", "[replay][
     spawnPlayer(s);
     const auto create = [&] {
         s.receive(UpdateObject().create(kPet, wowee::game::ObjectType::UNIT,
-                                        {{UF::OBJECT_FIELD_ENTRY, 416}, {UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+                                        {{UF::OBJECT_FIELD_ENTRY, 416}, {UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                                         {UF::UNIT_FIELD_PETNUMBER, 3}}));
     };
     create();
     auto& gh = s.handler();
@@ -2314,6 +2316,31 @@ TEST_CASE("a pet keeps its own name when its creature's comes after", "[replay][
     // Seen again: its own at once.
     create();
     CHECK(name() == "Karuri");
+}
+
+// T345: an enslaved demon is the player's pet but has no pet number; its name
+// is its creature's, localised (00720000.c ~7791-7812), and the realm's answer
+// to the pet name query - its template's English name - is not taken.
+TEST_CASE("a charmed creature keeps its own name", "[replay][playtest]") {
+    constexpr uint64_t kServant = 0xF130004233000B99ull;
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kServant, wowee::game::ObjectType::UNIT,
+                                    {{UF::OBJECT_FIELD_ENTRY, 16947}, {UF::UNIT_FIELD_HEALTH, 10},
+                                     {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    auto& gh = s.handler();
+    const auto unit = std::dynamic_pointer_cast<wowee::game::Unit>(gh.getEntityManager().getEntity(kServant));
+    REQUIRE(unit);
+    unit->setName("Diener der Gan'arg");
+    gh.getSpellHandler()->requestPetName(kServant);
+    REQUIRE_FALSE(s.sent().of(Opcode::CMSG_PET_NAME_QUERY).empty());
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_PET_NAME_QUERY_RESPONSE));
+    answer.writeUInt32(s.sent().of(Opcode::CMSG_PET_NAME_QUERY).back().readUInt32());
+    answer.writeString("Gan'arg Servant");
+    answer.writeUInt32(0);
+    answer.writeUInt8(0);
+    s.receive(answer);
+    CHECK(unit->getName() == "Diener der Gan'arg");
 }
 
 // P59: the player stayed, for the game, where it got on, and stood there when it was let go;
