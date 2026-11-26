@@ -2909,11 +2909,31 @@ static int lua_AutoEquipCursorItem(lua_State* L) {
         !taint::allowed(L, 0x16)) {
         return 0;
     }
-    // Kept in the hand while a bind-on-equip item's question is open, as a
-    // drop on its slot (T352).
+    if (!gh) return 0;
+    // 0x006dfc40: held ammunition (cursor type 9) is put on (CMSG_SET_AMMO).
+    if (s_cursorType == CursorType::AMMO) {
+        gh->setAmmo(s_cursorId);
+        clearCursorItem(L);
+        return 0;
+    }
+    if (s_cursorType != CursorType::ITEM || s_cursorId == 0) return 0;
+    // The item on the cursor, where it is (0x00513680) - not the first of its
+    // entry, and not used (T357: it sent CMSG_USE_ITEM of the first item of
+    // that id). One the player wears already is just put down.
+    if (cursorItemSlot().equipped) {
+        clearCursorItem(L);
+        return 0;
+    }
+    // A bind-on-equip piece not yet bound parks the move and asks
+    // (AUTOEQUIP_BIND_CONFIRM, 0x110) with the item kept in the hand;
+    // else CMSG_AUTOEQUIP_ITEM with its bag and slot.
     const size_t parked = parkedEquipMoves(L);
-    if (gh && s_cursorType == CursorType::ITEM && s_cursorId != 0) {
-        gh->useItemById(s_cursorId);
+    if (s_cursorBag == 0) {
+        gh->autoEquipItemBySlot(s_cursorSlot - 1);
+    } else if (s_cursorBag >= 1 && s_cursorBag <= game::Inventory::NUM_BAG_SLOTS) {
+        gh->autoEquipItemInBag(s_cursorBag - 1, s_cursorSlot - 1);
+    } else {
+        LOG_WARNING("AutoEquipCursorItem: the held item is not in a carried bag");
     }
     dropCursorAfterMove(L, parked);
     return 0;

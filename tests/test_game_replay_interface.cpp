@@ -2521,3 +2521,31 @@ TEST_CASE("the realm's time zone comes with its time", "[replay][interface]") {
     CHECK(gh.realmZoneHours() == 0);
     CHECK(gh.holidayZoneShift() == 0);
 }
+
+// T357: AutoEquipCursorItem (0x006dfc40) wears the item ON the cursor (its bag
+// and slot, 0x00513680): a bind-on-equip one not yet bound is parked and
+// AUTOEQUIP_BIND_CONFIRM asked with the item kept in the hand, else
+// CMSG_AUTOEQUIP_ITEM. It used the first item of that entry instead.
+TEST_CASE("AutoEquipCursorItem wears the held item", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    ui.run("asked = nil local f = CreateFrame('Frame') f:RegisterEvent('AUTOEQUIP_BIND_CONFIRM') "
+           "f:SetScript('OnEvent', function(self, event, index) asked = index end)");
+    ui.run("ClearCursor()");  // the cursor is the process's, as the client's
+    carry(s, 10019, 10, 2);  // hands, bind on equip
+    ui.run("PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    ui.run("AutoEquipCursorItem()");
+    CHECK(ui.is("asked ~= nil"));
+    CHECK(ui.is("CursorHasItem() == 1"));
+    CHECK(s.sent().of(Opcode::CMSG_USE_ITEM).empty());
+    ui.run("ClearCursor()");
+    carry(s, 2361, 17, 0);  // a two-hand mace, binds on nothing
+    ui.run("PickupContainerItem(0, 1)");
+    ui.run("AutoEquipCursorItem()");
+    CHECK(s.sent().of(Opcode::CMSG_AUTOEQUIP_ITEM).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_USE_ITEM).empty());
+    CHECK(ui.is("not CursorHasItem()"));
+}
