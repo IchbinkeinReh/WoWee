@@ -39,8 +39,10 @@ public:
     Outcome submit(std::function<std::shared_ptr<Script>()> make, bool hands, std::chrono::milliseconds patience);
 
     /// The game's loop, once a frame: for `budget` at most, though always one
-    /// step of one call. `now` in seconds.
-    void pump(double now, std::chrono::microseconds budget);
+    /// step of one call. `now` in seconds. True where a call someone waits
+    /// for was worked on: the player's hands at work, which keeps the client
+    /// from going idle (Input::noteHardwareEvent) as a key press does.
+    bool pump(double now, std::chrono::microseconds budget);
 
     /// No more calls; the ones waiting are told so. From the game's thread.
     void close();

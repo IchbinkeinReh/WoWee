@@ -2638,7 +2638,9 @@ void Application::run() {
 #ifndef WOWEE_MOBILE
         // The MCP server's calls, where the command line asked for one: before
         // the events are read, so that what they press is this frame's.
-        if (mcp_) mcp_->pump(deltaTime);
+        // A call worked on is the player's hands at work, as a key press is:
+        // a long MCP wait does not run into the idle logout (0x00b499a4).
+        if (mcp_ && mcp_->pump(deltaTime)) Input::getInstance().noteHardwareEvent();
 #endif
 
         SDL_Event event;

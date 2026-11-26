@@ -37,7 +37,8 @@ public:
 
     /// Before the frame's events are read: the calls that have come in, for a
     /// few milliseconds.
-    void pump(float deltaTime);
+    /// True where a call was worked on this frame (MainQueue::pump).
+    bool pump(float deltaTime);
     /// Each event off the queue, before anything else has it. True drops it.
     bool filterEvent(const SDL_Event& event);
     /// With the frame drawn and not yet shown to the next: a picture of it,

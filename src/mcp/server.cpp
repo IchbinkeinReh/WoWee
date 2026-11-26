@@ -167,7 +167,7 @@ Server::~Server() {
     gServer = nullptr;
 }
 
-void Server::pump(float deltaTime) {
+bool Server::pump(float deltaTime) {
     context_.now += deltaTime;
     gNow.store(context_.now, std::memory_order_relaxed);
     ++context_.frame;
@@ -178,7 +178,7 @@ void Server::pump(float deltaTime) {
         nextSecrets_ = context_.now + 2.0;
         refreshSecrets();
     }
-    queue_.pump(context_.now, kFrameBudget);
+    return queue_.pump(context_.now, kFrameBudget);
 }
 
 bool Server::filterEvent(const SDL_Event& event) {

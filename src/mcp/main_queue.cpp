@@ -25,13 +25,13 @@ MainQueue::Outcome MainQueue::submit(std::function<std::shared_ptr<Script>()> ma
     return {.kind = Outcome::Kind::Finished, .script = call->script};
 }
 
-void MainQueue::pump(double now, std::chrono::microseconds budget) {
+bool MainQueue::pump(double now, std::chrono::microseconds budget) {
     const auto start = std::chrono::steady_clock::now();
     std::vector<std::shared_ptr<Call>> todo;
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         lastPump_ = start;
-        if (calls_.empty()) return;
+        if (calls_.empty()) return false;
         bool handsTaken = false;
         for (const auto& call : calls_) {
             // The first that presses something has the hands; the others wait
@@ -45,6 +45,7 @@ void MainQueue::pump(double now, std::chrono::microseconds budget) {
     }
 
     bool any = false;
+    bool worked = false;
     for (const auto& call : todo) {
         if (any && std::chrono::steady_clock::now() - start > budget) break;
         bool abandoned = false;
@@ -58,6 +59,7 @@ void MainQueue::pump(double now, std::chrono::microseconds budget) {
             if (call->script) call->script->cancel();
             ended = true;
         } else {
+            worked = true;
             try {
                 if (!call->script) call->script = call->make();
                 ended = call->script->run(now);
@@ -77,6 +79,7 @@ void MainQueue::pump(double now, std::chrono::microseconds budget) {
         calls_.erase(std::remove(calls_.begin(), calls_.end(), call), calls_.end());
         over_.notify_all();
     }
+    return worked;
 }
 
 void MainQueue::close() {

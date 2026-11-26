@@ -242,6 +242,34 @@ TEST_CASE("a call is run by the loop, step by step", "[mcp][queue]") {
     loop.join();
 }
 
+// A call worked on is the hands at work: the loop counts it as input, so a
+// long wait of a tool does not run into the idle logout (tester's wish).
+TEST_CASE("the loop says when it worked on a call", "[mcp][queue]") {
+    MainQueue queue;
+    CHECK_FALSE(queue.pump(0.0, 4ms));
+    std::atomic<bool> stop{false};
+    std::atomic<int> worked{0};
+    std::thread loop([&] {
+        double now = 0.0;
+        while (!stop) {
+            if (queue.pump(now += 0.016, 4ms)) ++worked;
+            std::this_thread::sleep_for(1ms);
+        }
+    });
+    const auto answer = queue.submit(
+        [] {
+            auto s = std::make_shared<Script>();
+            s->then(Script::frames(3));
+            return s;
+        },
+        false, 5s);
+    REQUIRE(answer.kind == MainQueue::Outcome::Kind::Finished);
+    stop = true;
+    loop.join();
+    CHECK(worked >= 3);
+    CHECK_FALSE(queue.pump(1.0, 4ms));
+}
+
 TEST_CASE("calls that press something wait their turn; calls that look do not", "[mcp][queue]") {
     MainQueue queue;
     std::atomic<bool> stop{false};
