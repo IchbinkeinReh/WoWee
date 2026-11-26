@@ -600,7 +600,11 @@ static int lua_UnitAura(lua_State* L, int forced) {
             } else {
                 lua_pushnil(L);
             }
-            lua_pushnil(L);                  // isStealable
+            // isStealable: 1 where the player's spellsteal could take it
+            // (0x0053d680), else nil.
+            if (const auto* sh = gh->getSpellHandler(); sh && sh->auraIsStealable(unitGuid, aura.spellId, aura.flags))
+                lua_pushnumber(L, 1);
+            else lua_pushnil(L);
             // shouldConsolidate: 1 for a spell whose AttributesEx7 has
             // 0x10000000 (0x006147c0), nil otherwise. BuffFrame.lua puts
             // such a buff in the summary box while "consolidateBuffs" is

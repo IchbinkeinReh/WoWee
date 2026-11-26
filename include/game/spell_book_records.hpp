@@ -19,6 +19,10 @@ struct Row {
     uint32_t attrEx4 = 0;   // AttributesEx4 (+0x20)
     uint32_t effect0 = 0;   // Effect[0] (+0x11c)
     int32_t misc0 = 0;      // EffectMiscValue[0] (+0x1b8)
+    uint32_t targetA0 = 0;  // EffectImplicitTargetA[0] (+0x158)
+    /// SpellDispelType.dbc's Mask (+8) of the row misc0 names, 0 where the
+    /// table has no such row or the row no mask.
+    uint32_t dispelMask0 = 0;
 };
 
 /// The first effect's kinds 0x00542030 notes: SPELL_EFFECT_SKINNING (95),
@@ -26,6 +30,12 @@ struct Row {
 /// engineering - and SPELL_EFFECT_SKIN_PLAYER_CORPSE (116).
 inline constexpr uint32_t kEffectSkinning = 95;
 inline constexpr uint32_t kEffectSkinPlayerCorpse = 116;
+
+/// SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126) aimed at TARGET_UNIT_TARGET_ENEMY
+/// (6) as the first effect: a spellsteal, whose dispel types make the mask
+/// UnitAura's isStealable asks (0x0053d680).
+inline constexpr uint32_t kEffectStealBeneficialBuff = 126;
+inline constexpr uint32_t kTargetUnitTargetEnemy = 6;
 
 /// AttributesEx4 0x01000000: the ranged attack that autoRangedCombat swaps
 /// a melee swing for (Shoot, Auto Shot, Throw).
@@ -38,9 +48,15 @@ struct Records {
     uint32_t skin[4] = {0, 0, 0, 0};
     /// 0x00be5d7c: the last spell that takes a player's insignia.
     uint32_t skinPlayerCorpse = 0;
+    /// 0x00be5d68: the dispel types the last spellsteal learned takes - its
+    /// SpellDispelType row's mask, else the type's own bit. A forgotten
+    /// spell leaves it; only the book's end clears it (0x0053ec40).
+    uint32_t stealMask = 0;
 
     /// 0x00542030: a spell learned.
     void learned(uint32_t spellId, const Row& r) {
+        if (r.effect0 == kEffectStealBeneficialBuff && r.targetA0 == kTargetUnitTargetEnemy)
+            stealMask = r.dispelMask0 != 0 ? r.dispelMask0 : 1u << (static_cast<uint32_t>(r.misc0) & 31u);
         if (r.effect0 == kEffectSkinning) {
             // The client indexes by the misc value unchecked; a row past
             // the four is not one it has.

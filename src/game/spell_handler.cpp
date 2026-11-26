@@ -2710,6 +2710,36 @@ uint64_t SpellHandler::enchantWeapon(uint32_t spellId) const {
     return 0;
 }
 
+namespace {
+/// The fields of an aura's spell row 0x00728500 and 0x0053d680 read.
+template <class Cache>
+std::optional<dispel_check::AuraSpell> dispelAuraSpell(const Cache& cache, uint32_t id) {
+    const auto a = cache.find(id);
+    if (id == 0 || a == cache.end()) return std::nullopt;
+    dispel_check::AuraSpell s;
+    s.attributes = a->second.attr;
+    s.attributesEx = a->second.attrEx;
+    s.attributesEx4 = a->second.attrEx4;
+    s.dispel = a->second.dispelType;
+    s.mechanic = a->second.mechanic;
+    for (size_t k = 0; k < 3; ++k) {
+        s.effect[k] = a->second.effectIds[k];
+        s.effectMechanic[k] = a->second.effectMechanic[k];
+    }
+    return s;
+}
+}  // namespace
+
+bool SpellHandler::auraIsStealable(uint64_t unit, uint32_t spellId, uint8_t flags) const {
+    // 0x0053d680: the book's steal mask first; no spellsteal, nothing asked.
+    const uint32_t mask = spellBookRecords().stealMask;
+    if (mask == 0 || unit == 0) return false;
+    loadSpellNameCache();
+    const auto s = dispelAuraSpell(owner_.spellNameCacheRef(), spellId);
+    if (!s) return false;
+    return dispel_check::auraStealable(mask, unitMayAttack(owner_.getPlayerGuid(), unit), flags, *s);
+}
+
 uint8_t SpellHandler::removalRefusal(uint32_t spellId, uint64_t target) const {
     // 0x0080ac90 -> 0x00803500: a dispel, mechanic dispel or spellsteal
     // whose units hold nothing it could take is refused before it is sent.
@@ -2729,21 +2759,7 @@ uint8_t SpellHandler::removalRefusal(uint32_t spellId, uint64_t target) const {
     }
     if (target != 0) units.push_back(target);
     auto& em = owner_.getEntityManager();
-    const auto auraSpellOf = [&](uint32_t id) -> std::optional<dispel_check::AuraSpell> {
-        const auto a = cache.find(id);
-        if (id == 0 || a == cache.end()) return std::nullopt;
-        dispel_check::AuraSpell s;
-        s.attributes = a->second.attr;
-        s.attributesEx = a->second.attrEx;
-        s.attributesEx4 = a->second.attrEx4;
-        s.dispel = a->second.dispelType;
-        s.mechanic = a->second.mechanic;
-        for (size_t k = 0; k < 3; ++k) {
-            s.effect[k] = a->second.effectIds[k];
-            s.effectMechanic[k] = a->second.effectMechanic[k];
-        }
-        return s;
-    };
+    const auto auraSpellOf = [&](uint32_t id) { return dispelAuraSpell(cache, id); };
     return dispel_check::refusal(effects, e.attrEx4, units.size(), [&](size_t u, size_t i) -> std::optional<bool> {
         const uint64_t guid = units[u];
         const auto unit = em.getEntity(guid);
@@ -2767,9 +2783,7 @@ uint8_t SpellHandler::removalRefusal(uint32_t spellId, uint64_t target) const {
             for (const auto& a : *slots) auras.push_back({a.flags, auraSpellOf(a.spellId)});
         }
         const uint32_t misc = e.effectMiscValues[i];
-        // SpellDispelType.dbc gives a Mask only to type 7 (all: magic, curse,
-        // disease and poison, 30); every other type is its own bit.
-        const uint32_t dbcMask = misc == 7 ? 30u : 0u;
+        const uint32_t dbcMask = dispel_check::spellDispelTypeMask(misc);
         return dispel_check::unitHasRemovable(auras, misc, side, effects[i] == dispel_check::kEffectDispelMechanic,
                                               effects[i] == dispel_check::kEffectStealBuff, charmed, dbcMask);
     });
@@ -6913,6 +6927,8 @@ spell_book::Row bookRow(const Entry& e) {
     row.attrEx4 = e.attrEx4;
     row.effect0 = e.effectIds[0];
     row.misc0 = static_cast<int32_t>(e.effectMiscValues[0]);
+    row.targetA0 = e.implicitTargetsA[0];
+    row.dispelMask0 = dispel_check::spellDispelTypeMask(static_cast<uint32_t>(e.effectMiscValues[0]));
     return row;
 }
 template <class Entry>

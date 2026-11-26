@@ -1,6 +1,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "game/dispel_check.hpp"
+#include "game/spell_book_records.hpp"
 
 #include <vector>
 
@@ -91,4 +92,58 @@ TEST_CASE("the refusal is nothing to dispel or nothing to steal", "[dispel_check
     REQUIRE(refusal(mixed, 0, 1, none) == 0);
     // ...unless AttributesEx4 0x20000000 << effect makes the removal required.
     REQUIRE(refusal(mixed, 0x20000000u, 1, none) == kNothingToDispel);
+}
+
+// 0x0053d680: UnitAura's isStealable against the book's steal mask, which
+// 0x00542030 sets from a learned spellsteal (0x00be5d68).
+TEST_CASE("an aura is stealable by the book's steal mask", "[dispel_check]") {
+    using wowee::game::spell_book::Records;
+    using wowee::game::spell_book::Row;
+    Records book;
+    Row other;
+    other.effect0 = 126;
+    other.targetA0 = 1;  // not at an enemy
+    other.misc0 = 1;
+    book.learned(1, other);
+    REQUIRE(book.stealMask == 0u);
+    Row steal;
+    steal.effect0 = 126;
+    steal.targetA0 = 6;
+    steal.misc0 = 1;
+    book.learned(30449, steal);
+    REQUIRE(book.stealMask == 2u);
+    // A row's mask where SpellDispelType has one.
+    Row all = steal;
+    all.misc0 = 7;
+    all.dispelMask0 = spellDispelTypeMask(7);
+    Records allBook;
+    allBook.learned(2, all);
+    REQUIRE(allBook.stealMask == 30u);
+    // Forgetting leaves it; the book's end clears it.
+    book.removed(30449);
+    REQUIRE(book.stealMask == 2u);
+    book.clear();
+    REQUIRE(book.stealMask == 0u);
+
+    AuraSpell s;
+    s.dispel = kMagic;
+    s.effect = {6, 0, 0};
+    REQUIRE(auraStealable(2u, true, 0x01, s));
+    REQUIRE_FALSE(auraStealable(0u, true, 0x01, s));
+    REQUIRE_FALSE(auraStealable(2u, false, 0x01, s));
+    REQUIRE_FALSE(auraStealable(2u, true, 0x81, s));  // harmful
+    REQUIRE_FALSE(auraStealable(4u, true, 0x01, s));  // curses only
+    AuraSpell area = s;
+    area.effect = {0x23, 0, 0};  // party area aura
+    REQUIRE_FALSE(auraStealable(2u, true, 0x01, area));
+    REQUIRE(auraStealable(2u, true, 0x02, area));  // its area effect not applied
+    AuraSpell passive = s;
+    passive.attributes = 0x40;
+    REQUIRE_FALSE(auraStealable(2u, true, 0x01, passive));
+    AuraSpell channel = s;
+    channel.attributesEx = 0x40;
+    REQUIRE_FALSE(auraStealable(2u, true, 0x01, channel));
+    AuraSpell unstealable = s;
+    unstealable.attributesEx4 = 0x40;
+    REQUIRE_FALSE(auraStealable(2u, true, 0x01, unstealable));
 }

@@ -40,6 +40,11 @@ inline constexpr uint32_t kEffectStealBuff = 126;       // 0x7e
     return dbcMask != 0 ? dbcMask : (dispelType < 32 ? 1u << dispelType : 0u);
 }
 
+/// SpellDispelType.dbc's Mask (+8) for a type: the 3.3.5a table gives one
+/// only to type 7 (all: magic, curse, disease and poison, 30); every other
+/// type has none and stands for its own bit.
+[[nodiscard]] constexpr uint32_t spellDispelTypeMask(uint32_t dispelType) { return dispelType == 7 ? 30u : 0u; }
+
 /// Which auras of the unit count: 0x00803500 asks with -1 for AttributesEx
 /// 0x10000, else 1 for a unit the caster may attack (0x00729740), 0 for one
 /// it may assist (0x007293d0).
@@ -111,6 +116,22 @@ template <typename Auras>
         }
     }
     return false;
+}
+
+/// 0x0053d680, UnitAura's ninth value: whether the player's spellsteal could
+/// take this aura. `stealMask` is the book's (0x00be5d68; 0 without a
+/// spellsteal learned), `playerMayAttack` the player's 0x00729740 against
+/// the unit. A helpful aura, not passive, not held from an area aura
+/// effect, not channelled (AttributesEx 0x4, 0x40) nor unstealable
+/// (AttributesEx4 0x40), whose dispel type is in the mask.
+[[nodiscard]] constexpr bool auraStealable(uint32_t stealMask, bool playerMayAttack, uint8_t flags,
+                                           const AuraSpell& s) {
+    if (stealMask == 0 || !playerMayAttack || (flags & 0x80u) != 0) return false;
+    if ((s.attributes & 0x40u) != 0) return false;
+    for (int i = 0; i < 3; ++i)
+        if ((flags & (1u << i)) != 0 && isAreaAuraEffect(s.effect[static_cast<size_t>(i)])) return false;
+    if ((s.attributesEx & 0x44u) != 0 || (s.attributesEx4 & 0x40u) != 0) return false;
+    return ((1u << (s.dispel & 31u)) & stealMask) != 0;
 }
 
 /// 0x00803500's last test over the cast's units (the caster where an

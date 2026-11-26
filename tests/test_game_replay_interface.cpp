@@ -2024,6 +2024,77 @@ TEST_CASE("a buff the spell marks for it is to be consolidated", "[replay][inter
     CHECK(ui.is("select(11, UnitAura('player', 'Power Word: Shield')) == 17"));
 }
 
+// UnitAura's ninth value (0x0053d680): a buff on a unit the player may attack
+// that the player's spellsteal could take. The dispel types come from the
+// last spell learned whose first effect is STEAL_BENEFICIAL_BUFF (126) at
+// an enemy (target 6): its SpellDispelType row's mask, else the type's bit
+// (0x00542030, 0x00be5d68). It was nil always, so the target frame's
+// stealable buffs were never lit.
+TEST_CASE("a buff the player's spellsteal could take is stealable", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80},
+                   {UF::UNIT_FIELD_FLAGS, 0x8}});
+    auto& gh = s.handler();
+    constexpr uint64_t kMammoth = 0xF130005D7C000001ull;
+    s.receive(UpdateObject().create(kMammoth, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100},
+                                     {UF::UNIT_FIELD_MAXHEALTH, 100},
+                                     {UF::UNIT_FIELD_FACTIONTEMPLATE, 14}}));
+    REQUIRE(gh.unitMayAttack(Session::kPlayerGuid, kMammoth));
+    constexpr uint32_t kSpellsteal = 30449, kWild = 1126, kChannel = 12051, kCurse = 1714, kRegrowth = 8936;
+    auto& cache = gh.spellNameCacheRef();
+    cache[kSpellsteal].name = "Spellsteal";
+    cache[kSpellsteal].effectIds[0] = 126;
+    cache[kSpellsteal].implicitTargetsA[0] = 6;
+    cache[kSpellsteal].effectMiscValues[0] = 1;  // magic
+    cache[kWild].name = "Mark of the Wild";
+    cache[kWild].dispelType = 1;
+    cache[kChannel].name = "Evocation";
+    cache[kChannel].dispelType = 1;
+    cache[kChannel].attrEx = 0x4;  // channelled
+    cache[kCurse].name = "Curse of Tongues";
+    cache[kCurse].dispelType = 2;
+    cache[kRegrowth].name = "Regrowth";
+    cache[kRegrowth].dispelType = 1;
+    Interface ui(s);
+    gh.setTarget(kMammoth);
+    const auto aura = [&](uint8_t slot, uint32_t spell, uint8_t flags) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+        p.writePackedGuid(kMammoth);
+        p.writeUInt8(slot);
+        p.writeUInt32(spell);
+        p.writeUInt8(flags);
+        p.writeUInt8(80);
+        p.writeUInt8(0);
+        s.receive(p);
+    };
+    aura(0, kWild, 0x10 | 0x08 | 0x01);
+    aura(1, kChannel, 0x10 | 0x08 | 0x01);
+    aura(2, kCurse, 0x10 | 0x08 | 0x01);
+    aura(3, kRegrowth, 0x80 | 0x08 | 0x01);  // a harmful one
+    // No spellsteal known: nothing is stealable.
+    CHECK(ui.is("select(9, UnitAura('target', 'Mark of the Wild')) == nil"));
+    wowee::network::Packet learn(wowee::game::wireOpcode(Opcode::SMSG_LEARNED_SPELL));
+    learn.writeUInt32(kSpellsteal);
+    learn.writeUInt16(0);
+    s.receive(learn);
+    CHECK(ui.is("select(9, UnitAura('target', 'Mark of the Wild')) == 1"));
+    CHECK(ui.is("select(9, UnitAura('target', 'Evocation')) == nil"));
+    CHECK(ui.is("select(9, UnitAura('target', 'Curse of Tongues')) == nil"));
+    CHECK(ui.is("select(9, UnitAura('target', 'Regrowth', nil, 'HARMFUL')) == nil"));
+    CHECK(ui.is("select(11, UnitAura('target', 'Mark of the Wild')) == 1126"));
+    // The player's own buff: not on a unit the player may attack.
+    wowee::network::Packet own(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+    own.writePackedGuid(Session::kPlayerGuid);
+    own.writeUInt8(0);
+    own.writeUInt32(kWild);
+    own.writeUInt8(0x10 | 0x08 | 0x01);
+    own.writeUInt8(80);
+    own.writeUInt8(0);
+    s.receive(own);
+    CHECK(ui.is("select(9, UnitAura('player', 'Mark of the Wild')) == nil"));
+}
+
 // T339 (c): the video panel's "full screen glow" box writes ffxGlow, which the
 // client asks before the glow is drawn (0x008c1270); it reached no setting,
 // so the box moved and the glow stayed. It is the screen glow's row now.

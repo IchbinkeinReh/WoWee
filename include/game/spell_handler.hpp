@@ -268,6 +268,9 @@ public:
     /// (0x00542030, 0x0053fad0, 0x0053ec40): the ranged attack (0x00be5d84),
     /// the skinning spells (0x00be5d6c..0x00be5d7c).
     [[nodiscard]] const spell_book::Records& spellBookRecords() const;
+    /// UnitAura's isStealable (0x0053d680): the unit's aura of that spell,
+    /// with its slot's flags, is one the player's spellsteal could take.
+    [[nodiscard]] bool auraIsStealable(uint64_t unit, uint32_t spellId, uint8_t flags) const;
     /// The stance bar's spells in bar order (0x00be8e2c).
     [[nodiscard]] std::vector<uint32_t> stanceBarSpells() const;
 
