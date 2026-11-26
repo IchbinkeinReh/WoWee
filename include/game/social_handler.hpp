@@ -1225,6 +1225,10 @@ private:
     bool lfgBootInProgress_ = false;
     bool lfgBootDidVote_    = false;
     bool lfgBootMyVote_     = false;
+    // SetLFGBootVote's throttle (0x00554960): past the third press, one more
+    // only when ten seconds have gone since the last time it let one through.
+    uint32_t lfgBootVotePresses_ = 0;
+    double lfgBootVoteLetAt_ = -1.0e9;
     std::string lfgBootTargetName_;
     std::string lfgBootReason_;
 };

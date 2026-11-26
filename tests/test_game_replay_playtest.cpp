@@ -2547,3 +2547,44 @@ TEST_CASE("the auction house's lists are asked for as they may have changed", "[
     told(0);   // won
     CHECK(inv->getAuctionBrowseResults().auctions.empty());
 }
+
+// SetLFGBootVote (0x00554960): sent only while a vote runs; past the third
+// press one more only when ten seconds have gone since the last let through;
+// the player's vote is taken at once.
+TEST_CASE("a kick vote is sent while one runs, and not more than the client lets", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    const auto sent = [&] { return s.sent().of(Opcode::CMSG_LFG_SET_BOOT_VOTE).size(); };
+    gh.lfgSetBootVote(true);   // no vote runs
+    CHECK(sent() == 0);
+
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_LFG_BOOT_PROPOSAL_UPDATE));
+    p.writeUInt8(1);                     // in progress
+    p.writeUInt8(0);                     // not voted
+    p.writeUInt8(0);
+    p.writeUInt64(0x0000000000000777ull);
+    for (uint32_t v : {5u, 1u, 60u, 3u}) p.writeUInt32(v);
+    p.writeString("afk");
+    s.receive(p);
+    REQUIRE(gh.isLfgBootInProgress());
+
+    gh.lfgSetBootVote(true);
+    CHECK(sent() == 1);
+    CHECK(gh.getLfgBootMyVote());
+    gh.lfgSetBootVote(false);
+    CHECK(sent() == 2);
+    CHECK_FALSE(gh.getLfgBootMyVote());
+    gh.lfgSetBootVote(true);   // the third: the first window's start
+    CHECK(sent() == 3);
+    gh.lfgSetBootVote(false);
+    gh.lfgSetBootVote(true);
+    CHECK(sent() == 5);
+    gh.lfgSetBootVote(false);  // the sixth within ten seconds of the third
+    CHECK(sent() == 5);
+    CHECK(gh.getLfgBootMyVote());
+    wowee::core::advanceTestClock(10.5);
+    gh.lfgSetBootVote(false);
+    CHECK(sent() == 6);
+    CHECK_FALSE(gh.getLfgBootMyVote());
+}

@@ -1,3 +1,4 @@
+#include "core/app_clock.hpp"
 #include "core/crt_round.hpp"
 #include "game/lfg_roles.hpp"
 #include "game/group_defines.hpp"
@@ -6120,7 +6121,18 @@ void SocialHandler::lfgTeleport(bool toLfgDungeon) {
     owner_.getSocket()->send(pkt);
 }
 
+// SetLFGBootVote (0x00554960): nothing while no vote runs; past the third
+// press within ten seconds nothing either. The vote is the player's at once
+// (0x00bea860, which GetLFGBootProposal answers), before the realm's tally.
 void SocialHandler::lfgSetBootVote(bool vote) {
+    if (!lfgBootInProgress_) return;
+    if (++lfgBootVotePresses_ > 2) {
+        const double now = core::appTimeSeconds();
+        if (now - lfgBootVoteLetAt_ < 10.0) return;
+        lfgBootVoteLetAt_ = now;
+        lfgBootVotePresses_ = 0;
+    }
+    lfgBootMyVote_ = vote;
     if (!owner_.getSocket()) return;
     uint16_t wireOp = wireOpcode(Opcode::CMSG_LFG_SET_BOOT_VOTE);
     if (wireOp == 0xFFFF) return;
