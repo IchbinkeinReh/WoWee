@@ -1804,3 +1804,75 @@ TEST_CASE("the tracking that runs is drawn with its active icon", "[replay][inte
     CHECK(ui.is("GetTrackingTexture() == 'spell2580'"));
     CHECK(ui.is("select(2, GetTrackingInfo(1)) == 'spell2383'"));
 }
+
+// T335, T336: what the companion tab lists and which one is out, as 12340 asks
+// them. 0x008009b0: a first effect SUMMON whose first EffectMiscValueB's
+// SummonProperties row has Slot 5 is a critter - row 41 or any other of that
+// slot (the argent squire's 1341) - a first aura MOUNTED a mount. 0x00802cb0:
+// a critter is out when the player's UNIT_FIELD_CRITTER carries its entry
+// (a summon leaves no aura), and DismissCompanion (0x0053e6b0 -> 0x00802f80)
+// sends it away with CMSG_DISMISS_CRITTER.
+TEST_CASE("a companion is filed, shown out and sent away as 12340 does", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    constexpr uint32_t kSquire = 62609, kCub = 69536, kGuardian = 4073, kWolf = 6654, kSecondAura = 7001;
+    constexpr uint32_t kSquireEntry = 33238, kCubEntry = 36909;
+    struct Row {
+        uint32_t id;
+        const char* name;
+        uint32_t effects[3], auras[3], misc0, miscB0, slot0;
+    };
+    const Row rows[] = {
+        {kSquire, "Argent Squire", {28, 0, 0}, {0, 0, 0}, kSquireEntry, 1341, 5},
+        {kCub, "Wind Rider Cub", {28, 0, 0}, {0, 0, 0}, kCubEntry, 41, 5},
+        {kGuardian, "Mechanical Dragonling", {28, 0, 0}, {0, 0, 0}, 2671, 64, 0},
+        {kWolf, "Brown Wolf", {6, 6, 0}, {78, 32, 0}, 14334, 0, 0},
+        {kSecondAura, "Not a mount", {6, 6, 0}, {4, 78, 0}, 0, 0, 0},
+    };
+    for (const Row& r : rows) {
+        auto& e = s.handler().spellNameCacheRef()[r.id];
+        e.name = r.name;
+        for (int k = 0; k < 3; ++k) {
+            e.effectIds[k] = r.effects[k];
+            e.effectAuraIds[k] = r.auras[k];
+        }
+        e.effectMiscValues[0] = r.misc0;
+        e.effectMiscValuesB[0] = r.miscB0;
+        e.summonSlot0 = r.slot0;
+    }
+    wowee::network::Packet known(wowee::game::wireOpcode(Opcode::SMSG_INITIAL_SPELLS));
+    known.writeUInt8(0);
+    known.writeUInt16(static_cast<uint16_t>(std::size(rows)));
+    for (const Row& r : rows) {
+        known.writeUInt32(r.id);
+        known.writeUInt16(0);
+    }
+    known.writeUInt16(0);
+    s.receive(known);
+
+    CHECK(ui.is("GetNumCompanions('CRITTER') == 2"));
+    CHECK(ui.is("GetNumCompanions('MOUNT') == 1"));
+    // By name: the squire first.
+    CHECK(ui.is("select(3, GetCompanionInfo('CRITTER', 1)) == 62609 and select(1, GetCompanionInfo('CRITTER', 1)) == 33238"));
+    CHECK(ui.is("select(3, GetCompanionInfo('MOUNT', 1)) == 6654"));
+    CHECK(ui.is("not select(5, GetCompanionInfo('CRITTER', 1)) and not select(5, GetCompanionInfo('CRITTER', 2))"));
+
+    ui.run("heard = {} local f = CreateFrame('Frame') f:RegisterEvent('COMPANION_UPDATE') "
+           "f:SetScript('OnEvent', function(self, event, kind) heard[#heard + 1] = kind end)");
+    constexpr uint64_t kSquireGuid = 0xF130000000000000ull | (uint64_t{kSquireEntry} << 24) | 0x1234u;
+    const auto critter = static_cast<uint16_t>(wowee::game::fieldIndex(UF::UNIT_FIELD_CRITTER));
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{critter, static_cast<uint32_t>(kSquireGuid)},
+                                                             {static_cast<uint16_t>(critter + 1),
+                                                              static_cast<uint32_t>(kSquireGuid >> 32)}}));
+    CHECK(ui.is("select(5, GetCompanionInfo('CRITTER', 1)) == 1 and not select(5, GetCompanionInfo('CRITTER', 2))"));
+    CHECK(ui.is("#heard == 1 and heard[1] == 'CRITTER'"));
+
+    ui.run("DismissCompanion('MOUNT')");
+    CHECK(s.sent().of(Opcode::CMSG_DISMISS_CRITTER).empty());
+    ui.run("DismissCompanion('CRITTER')");
+    const auto away = s.sent().of(Opcode::CMSG_DISMISS_CRITTER);
+    REQUIRE(away.size() == 1);
+    wowee::network::Packet p = away[0];
+    CHECK(p.readUInt64() == kSquireGuid);
+}

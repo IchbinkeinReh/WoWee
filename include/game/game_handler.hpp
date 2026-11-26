@@ -3788,6 +3788,9 @@ public:
     /// 0x00802cb0 for the player: whether a spell is in effect - a form, an
     /// aura or a presence, the mount ridden, the companion out.
     bool formSpellInEffect(uint32_t spellId) const;
+    /// 0x00802cb0 for the player on a companion's spell: the critter out (by
+    /// UNIT_FIELD_CRITTER's entry) or the mount ridden.
+    [[nodiscard]] bool companionInEffect(uint32_t spellId) const;
     /// The stance bar's spells, in bar order (0x00be8e2c): what
     /// GetNumShapeshiftForms counts and every index of the bar means.
     std::vector<uint32_t> stanceBarSpells() const;
@@ -6411,6 +6414,10 @@ public:
         uint32_t effectMiscValues[3] = {0, 0, 0};
         /// Spell.dbc EffectMiscValueB: a summon's SummonProperties row.
         uint32_t effectMiscValuesB[3] = {0, 0, 0};
+        /// The Slot (+0x10) of the SummonProperties row the first
+        /// EffectMiscValueB names, 0 without one: 5 is a companion's
+        /// (0x008009b0, 0x00802cb0 read it so).
+        uint32_t summonSlot0 = 0;
         /// Spell.dbc EffectSpellClassMask, three words an effect (+0x1e8):
         /// the spells an effect's aura reaches (0x007fdec0).
         uint32_t effectClassMask[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};

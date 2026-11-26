@@ -3832,6 +3832,7 @@ void EntityController::trackActiveCritter(const UpdateBlock& block) {
                             : static_cast<uint32_t>(owner_.getActiveCritterGuid() >> 32);
     const uint64_t critterGuid = (static_cast<uint64_t>(hi) << 32) | lo;
     if (critterGuid == owner_.getActiveCritterGuid()) return;
+    critterChanged_ = true;
 
     if (critterGuid == 0) {
         LOG_INFO("Companion dismissed: was guid=0x", std::hex,
@@ -4351,6 +4352,10 @@ void EntityController::handleMovementUpdate(const UpdateBlock& block) {
 
 void EntityController::finalizeUpdateObjectBatch(bool newItemCreated) {
     owner_.tabCycleStaleRef() = true;
+    if (critterChanged_) {
+        critterChanged_ = false;
+        owner_.announceCompanionChange();
+    }
     // Entity count logging disabled
 
     // Deferred rebuild: if new item objects were created in this packet, rebuild

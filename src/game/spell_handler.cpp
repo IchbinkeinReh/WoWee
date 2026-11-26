@@ -7501,6 +7501,17 @@ void SpellHandler::loadSpellNameCache() const {
             }
         }
     }
+    // SummonProperties.dbc's Slot (+0x10, field 4) of the first
+    // EffectMiscValueB's row, which tells a companion from other summons
+    // (0x008009b0).
+    if (auto props = am->loadDBCOptional("SummonProperties.dbc"); props && props->getFieldCount() > 4) {
+        std::unordered_map<uint32_t, uint32_t> slots;
+        for (uint32_t r = 0; r < props->getRecordCount(); ++r) slots[props->getUInt32(r, 0)] = props->getUInt32(r, 4);
+        for (auto& [sid, entry] : owner_.spellNameCacheRef()) {
+            const auto it = slots.find(entry.effectMiscValuesB[0]);
+            entry.summonSlot0 = it != slots.end() ? it->second : 0u;
+        }
+    }
     LOG_INFO("Trainer: Loaded ", owner_.spellNameCacheRef().size(), " spell names from Spell.dbc");
 }
 

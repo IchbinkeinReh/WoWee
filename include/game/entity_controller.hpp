@@ -385,6 +385,10 @@ private:
         void clear() { events.clear(); }
     };
     PendingEvents pendingEvents_;
+    /// The player's critter changed in the update being applied: whether
+    /// one is out is read from that field, so the companion tab hears of it
+    /// (COMPANION_UPDATE) once the batch's fields are in.
+    bool critterChanged_ = false;
     void flushPendingEvents();
 
     // The player's UNIT_DYNFLAG_DEAD is Feign Death, not a death.

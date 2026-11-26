@@ -9316,15 +9316,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 lua_pushnil(L);
             lua_pushnumber(L, c.spellId);
             lua_pushstring(L, gh->getSpellIconPath(c.spellId).c_str());
-            // Whether it is out. A mount is an aura on the player; a critter is
-            // the pet that is following, and neither is tracked per companion -
-            // so this reads from what is actually active rather than from a
-            // flag nobody sets.
-            bool active = false;
-            for (const auto& a : gh->getPlayerAuras()) {
-                if (a.spellId == c.spellId) { active = true; break; }
-            }
-            luaPushOneOrNil(L, active ? 1 : 0);
+            // Whether it is out (0x00802cb0): a critter by the entry of the
+            // player's UNIT_FIELD_CRITTER - a summon leaves no aura - a mount
+            // by its aura.
+            luaPushOneOrNil(L, gh->companionInEffect(c.spellId) ? 1 : 0);
             return 5;
         }},
                 // Counts, and the count is the whole point: each of these is

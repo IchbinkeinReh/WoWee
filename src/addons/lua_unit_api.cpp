@@ -4708,22 +4708,22 @@ void registerUnitLuaAPI(lua_State* L) {
                 gh->castSpell(list[static_cast<size_t>(std::rand()) % list.size()].spellId, 0);
             return 0;
         }},
-                // Putting one away is cancelling its aura, which is the same
-                // thing right-clicking the buff does.
                 // DismissCompanion(type) (0x0053e6b0): the usage line for a type
-                // that is neither CRITTER nor MOUNT.
+                // that is neither CRITTER nor MOUNT. Every companion of the
+                // type in effect (0x00802cb0) is taken off (0x00802f80): a
+                // critter by CMSG_DISMISS_CRITTER with the player's critter -
+                // a summon has no aura to cancel - a mount by its aura.
                 {"DismissCompanion", [](lua_State* L) -> int {
             const int type = companionTypeArg(L, 1);
             if (type < 0) return luaL_error(L, "Usage: DismissCompanion(type)");
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const auto& list = gh->getCompanions(type == 1);
-            for (const auto& c : list) {
-                for (const auto& a : gh->getPlayerAuras()) {
-                    if (a.spellId != c.spellId) continue;
-                    gh->cancelAura(c.spellId);
-                    return 0;
-                }
+            std::vector<uint32_t> out;
+            for (const auto& c : gh->getCompanions(type == 1))
+                if (gh->companionInEffect(c.spellId)) out.push_back(c.spellId);
+            for (uint32_t spell : out) {
+                if (type == 1) gh->cancelAura(spell);
+                else gh->dismissCritter();
             }
             return 0;
         }},

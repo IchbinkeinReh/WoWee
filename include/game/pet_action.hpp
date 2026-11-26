@@ -119,6 +119,19 @@ inline constexpr uint32_t kEffectSummon = 28;
 inline constexpr uint32_t kAuraMounted = 78;
 inline constexpr uint32_t kSummonSlotCritter = 5;
 
+/// What the companion tab files a known spell as. 0x008009b0: a companion
+/// when its first effect is SUMMON (28) and the SummonProperties row of its
+/// first EffectMiscValueB has Slot (+0x10) 5, or its first aura is MOUNTED
+/// (78); the lists' builders (0x00542030 adding, 0x0053fad0 taking off) then
+/// file a first effect SUMMON as a critter, any other as a mount. Only the
+/// first effect is asked.
+enum class CompanionKind { None, Critter, Mount };
+[[nodiscard]] constexpr CompanionKind companionKind(uint32_t effect0, uint32_t slotOfMiscB0, uint32_t aura0) {
+    const bool companion = (effect0 == kEffectSummon && slotOfMiscB0 == kSummonSlotCritter) || aura0 == kAuraMounted;
+    if (!companion) return CompanionKind::None;
+    return effect0 == kEffectSummon ? CompanionKind::Critter : CompanionKind::Mount;
+}
+
 /// 0x00802cb0: whether a spell is in effect on a unit, so that its button
 /// takes it off rather than casting it. Only a spell with an ActiveIconID,
 /// or one that summons a companion - its first effect SUMMON (28) whose

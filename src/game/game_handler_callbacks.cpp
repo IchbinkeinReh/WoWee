@@ -3339,12 +3339,10 @@ bool GameHandler::unitSpellInEffect(uint64_t guid, uint32_t spell, const std::ve
             unit.vehicleMadeByPlayer = guidFieldOf(*v, UF::UNIT_FIELD_CREATEDBY) == playerGuid;
         }
     }
-    const auto slotOf = [&](uint32_t row) -> uint32_t {
-        auto* am = services_.assetManager;
-        auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
-        const int32_t r = props && props->getFieldCount() > 4 ? props->findRecordById(row) : -1;
-        return r >= 0 ? props->getUInt32(static_cast<uint32_t>(r), 4) : 0u;
-    };
+    // Only the first EffectMiscValueB's row is asked (0x00802cb0), and the
+    // cache holds its Slot.
+    const uint32_t slot0 = it->second.summonSlot0;
+    const auto slotOf = [slot0](uint32_t) -> uint32_t { return slot0; };
     const auto mountOf = [&](uint32_t auraSpell) -> std::pair<uint32_t, uint32_t> {
         const auto m = spellNameCache_.find(auraSpell);
         if (m == spellNameCache_.end()) return {0u, 0u};

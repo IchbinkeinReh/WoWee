@@ -464,3 +464,14 @@ TEST_CASE("a pet has a bar while it lives and is let", "[pet]") {
     imp.huntersPet = true;
     CHECK(gp::petHasActions(imp));
 }
+
+// T336: 0x008009b0 and the list builders file a companion by its first
+// effect and aura only, a critter by its SummonProperties row's Slot 5 -
+// any row of that slot, not row 41 alone.
+TEST_CASE("a companion is filed by its first effect and its summon slot", "[pet_action]") {
+    CHECK(companionKind(28, 5, 0) == CompanionKind::Critter);   // row 41 or 1341 alike
+    CHECK(companionKind(28, 0, 0) == CompanionKind::None);      // a guardian's row
+    CHECK(companionKind(6, 0, 78) == CompanionKind::Mount);
+    CHECK(companionKind(6, 5, 4) == CompanionKind::None);       // a slot without a summon
+    CHECK(companionKind(28, 0, 78) == CompanionKind::Critter);  // filed by its first effect
+}

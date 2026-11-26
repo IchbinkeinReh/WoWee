@@ -1,4 +1,5 @@
 #include "game/game_object_use.hpp"
+#include "game/pet_action.hpp"
 #include "game/reputation_tree.hpp"
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
@@ -3956,93 +3957,41 @@ uint32_t GameHandler::lfgGroupOrder(uint32_t groupId) const {
 // ---------------------------------------------------------------------------
 // Mounts and critters
 //
-// The pet tab lists both, and both are spells the player knows. What separates
-// them is what the spell does, which is in Spell.dbc:
-//
-//   a mount   applies aura 78 (SPELL_AURA_MOUNTED)
-//   a critter uses effect 28 (SPELL_EFFECT_SUMMON) with EffectMiscValueB 41,
-//             which is the critter SummonProperties row
-//
-// Both checked against the file rather than assumed: aura 78 picks out Brown
-// Horse, Gray Wolf and White Stallion, and effect 28 with miscB 41 picks out
-// Mechanical Squirrel, Cockroach and Worg Pup. EffectMiscValue beside it is the
-// creature, which is what GetCompanionInfo reports first.
+// The pet tab lists both, and both are spells the player knows, told apart as
+// 12340 does (0x008009b0 with the list builders 0x00542030 / 0x0053fad0, see
+// pet::companionKind): a first effect SUMMON (28) whose first EffectMiscValueB
+// names a SummonProperties row with Slot 5 is a critter, a first aura MOUNTED
+// (78) a mount. The row number is not the test: Slot 5 has rows 41, 307, 668
+// and 1341, and the argent squire, the Kirin Tor familiar and five more summon
+// by the others. The first EffectMiscValue is the creature, which is what
+// GetCompanionInfo reports first.
 // ---------------------------------------------------------------------------
 void GameHandler::rebuildCompanions() const {
     const auto& known = getKnownSpells();
     // Only the spellbook changing can change the answer, and it changes rarely.
     if (companionsBuiltFromSpellCount_ == known.size()) return;
+    loadSpellNameCache();
+    // Nothing to tell them apart by yet: asked again once the file is read.
+    if (spellNameCache_.empty()) return;
     companionsBuiltFromSpellCount_ = known.size();
     mountSpells_.clear();
     critterSpells_.clear();
 
-    auto* am = services_.assetManager;
-    if (!am || !am->isInitialized()) return;
-    auto dbc = am->loadDBC("Spell.dbc");
-    if (!dbc || !dbc->isLoaded()) return;
-
-    const auto* layout = pipeline::getActiveDBCLayout()
-        ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
-    if (!layout) return;
-    const uint32_t idField = (*layout)["ID"];
-
-    // Built once per rebuild rather than searched per spell: the file is fifty
-    // thousand rows and the spellbook is a few hundred.
-    std::unordered_map<uint32_t, uint32_t> rowOfSpell;
-    rowOfSpell.reserve(dbc->getRecordCount());
-    for (uint32_t row = 0; row < dbc->getRecordCount(); ++row) {
-        rowOfSpell[dbc->getUInt32(row, idField)] = row;
-    }
-
-    constexpr uint32_t kAuraMounted = 78;
-    constexpr uint32_t kEffectSummon = 28;
-    constexpr uint32_t kCritterSummonProperties = 41;
-
     for (uint32_t spellId : known) {
-        auto it = rowOfSpell.find(spellId);
-        if (it == rowOfSpell.end()) continue;
-        const uint32_t row = it->second;
-
+        const auto it = spellNameCache_.find(spellId);
+        if (it == spellNameCache_.end() || it->second.name.empty()) continue;
+        const auto& e = it->second;
+        const auto kind = pet::companionKind(e.effectIds[0], e.summonSlot0, e.effectAuraIds[0]);
+        if (kind == pet::CompanionKind::None) continue;
         Companion c;
         c.spellId = spellId;
-        c.name = getSpellName(spellId);
-        if (c.name.empty()) continue;
-
-        bool mount = false, critter = false;
-        for (int i = 0; i < 3 && !mount && !critter; ++i) {
-            const std::string idx = std::to_string(i);
-            if (dbc->getUInt32(row, (*layout)["EffectApplyAuraName" + idx]) == kAuraMounted) {
-                mount = true;
-                // SPELL_AURA_MOUNTED's misc value is a creature *entry*, the
-                // same number space a summon's is. AuraEffect::HandleAuraMounted
-                // opens with `uint32 creatureEntry = GetMiscValue();` and then
-                // picks the model with ChooseDisplayId on that entry's
-                // template - it is not handed to Player::Mount as a display id,
-                // which is what the comment here used to say. Stored as the
-                // entry and resolved by the reader, exactly like a critter's.
-                c.creatureId = dbc->getUInt32(row, (*layout)["EffectMiscValue" + idx]);
-            } else if (dbc->getUInt32(row, (*layout)["Effect" + idx]) == kEffectSummon &&
-                       dbc->getUInt32(row, (*layout)["EffectMiscValueB" + idx]) ==
-                           kCritterSummonProperties) {
-                critter = true;
-                // A summon's misc value is a creature *entry*, not a display
-                // id, and the model frame takes a display id. Left as the entry
-                // and resolved in GetCompanionInfo, which is the only reader.
-                // Both kinds are entries, so it no longer matters there which
-                // kind was asked for.
-                //
-                // It used to resolve here when the cache happened to be warm
-                // and leave the entry when it did not, on the reading that a
-                // later rebuild would catch it - but nothing rebuilds on a
-                // query answer and nothing sent the query, so the field meant a
-                // display id or an entry depending on what had been near the
-                // player. One number space, decided in one place.
-                c.creatureId = dbc->getUInt32(row, (*layout)["EffectMiscValue" + idx]);
-            }
-        }
-        if (!mount && !critter) continue;
-        c.isMount = mount;
-        (mount ? mountSpells_ : critterSpells_).push_back(std::move(c));
+        c.name = e.name;
+        // A summon's and a mount aura's misc value alike are a creature
+        // *entry*, not a display id; GetCompanionInfo, the only reader,
+        // reports it as the creature and resolves its look from there.
+        c.creatureId = e.effectMiscValues[0];
+        c.isMount = kind == pet::CompanionKind::Mount;
+        (c.isMount ? mountSpells_ : critterSpells_).push_back(std::move(c));
     }
 
     auto byName = [](const Companion& a, const Companion& b) { return a.name < b.name; };
@@ -4050,6 +3999,13 @@ void GameHandler::rebuildCompanions() const {
     std::sort(critterSpells_.begin(), critterSpells_.end(), byName);
     LOG_INFO("Companions: ", mountSpells_.size(), " mounts, ",
              critterSpells_.size(), " critters from ", known.size(), " known spells");
+}
+
+bool GameHandler::companionInEffect(uint32_t spellId) const {
+    // 0x00802cb0 for the player, as GetCompanionInfo (0x0053e2c0) and
+    // DismissCompanion (0x0053e6b0) ask it: a critter by the entry the
+    // player's UNIT_FIELD_CRITTER guid carries, a mount by its aura.
+    return unitSpellInEffect(playerGuid, spellId, getPlayerAuras());
 }
 
 const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
@@ -4731,10 +4687,7 @@ void GameHandler::announceCompanionChange() {
     for (bool mounts : {true, false}) {
         uint32_t active = 0;
         for (const auto& c : getCompanions(mounts)) {
-            for (const auto& a : getPlayerAuras()) {
-                if (a.spellId == c.spellId) { active = c.spellId; break; }
-            }
-            if (active) break;
+            if (companionInEffect(c.spellId)) { active = c.spellId; break; }
         }
         uint32_t& remembered = mounts ? activeMountSpell_ : activeCritterSpell_;
         if (remembered == active) continue;
