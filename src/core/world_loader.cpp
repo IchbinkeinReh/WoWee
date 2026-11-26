@@ -278,9 +278,11 @@ public:
                 float from, float to)
         : screen_(screen) {
         if (screen_) screen_->setMayRebuild(false);
-        rendering::setPipelineBuiltHook([&show, from, to, made = 0,
+        // Counted on every thread: the renderers' pipelines are made beside
+        // the loading screen, which this thread draws while it waits.
+        rendering::setPipelineBuiltHook([&show, from, to, first = rendering::pipelinesBuilt(),
                                          last = std::chrono::steady_clock::now()]() mutable {
-            ++made;
+            const uint64_t made = rendering::pipelinesBuilt() - first;
             const auto now = std::chrono::steady_clock::now();
             if (now - last < std::chrono::milliseconds(50)) return;
             const float part = static_cast<float>(made) / static_cast<float>(made + 60);

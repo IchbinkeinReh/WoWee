@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -16,6 +17,11 @@ namespace rendering {
 /// first world entry makes some hundred of them, for many seconds, and the loading screen
 /// draws its bar between them.
 void setPipelineBuiltHook(std::function<void()> hook);
+/// How many graphics pipelines were made so far, on any thread.
+[[nodiscard]] uint64_t pipelinesBuilt();
+/// Calls this thread's hook as a pipeline made would, without one: the thread that waits
+/// for pipelines made on others keeps the loading screen going so.
+void pulsePipelineBuiltHook();
 
 // Builder pattern for VkGraphicsPipeline creation.
 // Usage:

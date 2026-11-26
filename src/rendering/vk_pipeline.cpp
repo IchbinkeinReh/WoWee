@@ -1,5 +1,6 @@
 #include "rendering/vk_pipeline.hpp"
 #include "core/logger.hpp"
+#include <atomic>
 #include <utility>
 
 namespace wowee {
@@ -8,9 +9,20 @@ namespace rendering {
 namespace {
 thread_local std::function<void()> pipelineBuiltHook;
 thread_local bool inPipelineBuiltHook = false;
+std::atomic<uint64_t> pipelinesBuiltCount{0};
+
+void runPipelineBuiltHook() {
+    if (pipelineBuiltHook && !inPipelineBuiltHook) {
+        inPipelineBuiltHook = true;
+        pipelineBuiltHook();
+        inPipelineBuiltHook = false;
+    }
+}
 }  // namespace
 
 void setPipelineBuiltHook(std::function<void()> hook) { pipelineBuiltHook = std::move(hook); }
+uint64_t pipelinesBuilt() { return pipelinesBuiltCount.load(std::memory_order_relaxed); }
+void pulsePipelineBuiltHook() { runPipelineBuiltHook(); }
 
 PipelineBuilder::PipelineBuilder() {
     // Default: one blend attachment with blending disabled
@@ -295,12 +307,9 @@ VkPipeline PipelineBuilder::build(VkDevice device, VkPipelineCache cache) const 
         LOG_ERROR("Failed to create graphics pipeline");
         return VK_NULL_HANDLE;
     }
+    pipelinesBuiltCount.fetch_add(1, std::memory_order_relaxed);
     // Not for the pipelines of what it draws itself.
-    if (pipelineBuiltHook && !inPipelineBuiltHook) {
-        inPipelineBuiltHook = true;
-        pipelineBuiltHook();
-        inPipelineBuiltHook = false;
-    }
+    runPipelineBuiltHook();
 
     return pipeline;
 }

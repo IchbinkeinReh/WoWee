@@ -40,6 +40,16 @@ public:
         return future_.get();
     }
 
+    /// The thing, waited for: `pump` is called each `step` it is not there
+    /// yet - a loading screen's frame, so that a wait of seconds is not a
+    /// window that stops answering. nullptr where it was never begun or failed.
+    template <typename Pump>
+    [[nodiscard]] std::unique_ptr<T> takeWaiting(Pump&& pump,
+                                                 std::chrono::milliseconds step = std::chrono::milliseconds(10)) {
+        while (future_.valid() && future_.wait_for(step) != std::future_status::ready) pump();
+        return take(true);
+    }
+
 private:
     std::future<std::unique_ptr<T>> future_;
 };

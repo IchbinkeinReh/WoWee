@@ -50,6 +50,7 @@
 #include "core/profiler.hpp"
 #include "core/frame_profiler.hpp"
 #include "core/thread_pool.hpp"
+#include "rendering/built_beside.hpp"
 #include "rendering/sky_system.hpp"
 #include "rendering/swim_effects.hpp"
 #include "rendering/mount_dust.hpp"
@@ -5918,47 +5919,42 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         }
     }
 
-    // Create M2, WMO, and Character renderers
-    if (!m2Renderer) {
-        m2Renderer = std::make_unique<M2Renderer>();
-        if (!m2Renderer->initialize(vkCtx, perFrameSetLayout, assetManager))
-            LOG_ERROR("M2Renderer initialization failed");
-        m2Renderer->setRtScene(rtScene_.get());
-        if (groundClutterDistance_ >= 0.0f) m2Renderer->setGroundDetailDistance(groundClutterDistance_);
-        if (swimEffects) {
-            swimEffects->setM2Renderer(m2Renderer.get());
-        }
-        // Initialize SpellVisualSystem once M2Renderer is available (§4.4)
-        if (!spellVisualSystem_) {
-            spellVisualSystem_ = std::make_unique<SpellVisualSystem>();
-            spellVisualSystem_->initialize(m2Renderer.get(), this);
-        }
-    }
-
-    // The original client's skies are camera-centered M2 models selected
-    // through LightParams and LightSkybox, on every map that names one - not
-    // Outland alone, which is where this was built and where it stayed. The
-    // lookup was opened to all maps and this was not, so it went on doing
-    // nothing anywhere else: without the renderer there is nothing to draw
-    // into.
+    // Create M2, WMO, and Character renderers.
     //
-    // It keeps its own no-depth renderer so the sky draws behind terrain and
-    // never enters world collision.
-    if (!skyboxModelRenderer_) {
-        skyboxModelRenderer_ = std::make_unique<M2Renderer>();
-        skyboxModelRenderer_->setSkyMode(true);
-        if (!skyboxModelRenderer_->initialize(vkCtx, perFrameSetLayout, assetManager)) {
-            LOG_WARNING("Sky M2 renderer initialization failed");
-            skyboxModelRenderer_.reset();
-        }
-    }
-    if (!starsModelRenderer_) {
-        starsModelRenderer_ = std::make_unique<M2Renderer>();
-        starsModelRenderer_->setSkyMode(true);
-        if (!starsModelRenderer_->initialize(vkCtx, perFrameSetLayout, assetManager)) {
-            LOG_WARNING("Stars M2 renderer initialization failed");
-            starsModelRenderer_.reset();
-        }
+    // The M2 renderers' and the character renderer's pipelines are the
+    // driver's work of many seconds with its cache empty - the world's M2
+    // renderer alone some hundred and fifty, 17 s on a cold cache, one of them
+    // over 1.5 s - and 12340 compiles nothing while its loading screen shows
+    // (D3D9 takes its shaders compiled). They are made beside (BuiltBeside),
+    // the world's M2 renderer and the character renderer at once, while this
+    // thread makes the WMO renderer and then waits with the loading screen
+    // going (pulsePipelineBuiltHook).
+    BuiltBeside<M2Renderer> m2Building, skyBuilding, starsBuilding;
+    BuiltBeside<CharacterRenderer> characterBuilding;
+    const auto makeM2 = [ctx = vkCtx, layout = perFrameSetLayout, assetManager](bool sky) {
+        return [ctx, layout, assetManager, sky]() -> std::unique_ptr<M2Renderer> {
+            auto made = std::make_unique<M2Renderer>();
+            if (sky) made->setSkyMode(true);
+            if (!made->initialize(ctx, layout, assetManager)) {
+                if (sky) {
+                    LOG_WARNING("Sky M2 renderer initialization failed");
+                    return nullptr;
+                }
+                // Kept, as it always was: the rest asks it and finds nothing.
+                LOG_ERROR("M2Renderer initialization failed");
+            }
+            return made;
+        };
+    };
+    if (!m2Renderer) m2Building.begin(makeM2(false));
+    if (!characterRenderer) {
+        characterBuilding.begin([ctx = vkCtx, layout = perFrameSetLayout,
+                                 assetManager]() -> std::unique_ptr<CharacterRenderer> {
+            auto made = std::make_unique<CharacterRenderer>();
+            if (!made->initialize(ctx, layout, assetManager))
+                LOG_ERROR("CharacterRenderer initialization failed");
+            return made;
+        });
     }
 
     // HiZ occlusion culling disabled - the pyramid build + blocking fence was
@@ -5977,6 +5973,35 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         }
     }
 
+    const auto pump = [] { pulsePipelineBuiltHook(); };
+    if (m2Building.started()) {
+        m2Renderer = m2Building.takeWaiting(pump);
+        m2Renderer->setRtScene(rtScene_.get());
+        if (groundClutterDistance_ >= 0.0f) m2Renderer->setGroundDetailDistance(groundClutterDistance_);
+        if (swimEffects) {
+            swimEffects->setM2Renderer(m2Renderer.get());
+        }
+        // Initialize SpellVisualSystem once M2Renderer is available (§4.4)
+        if (!spellVisualSystem_) {
+            spellVisualSystem_ = std::make_unique<SpellVisualSystem>();
+            spellVisualSystem_->initialize(m2Renderer.get(), this);
+        }
+    }
+    // The original client's skies are camera-centered M2 models selected
+    // through LightParams and LightSkybox, on every map that names one - not
+    // Outland alone, which is where this was built and where it stayed. The
+    // lookup was opened to all maps and this was not, so it went on doing
+    // nothing anywhere else: without the renderer there is nothing to draw
+    // into.
+    //
+    // It keeps its own no-depth renderer so the sky draws behind terrain and
+    // never enters world collision. Begun once the world's is made: nearly
+    // all of their pipelines are its, from the driver's cache by then.
+    if (!skyboxModelRenderer_) skyBuilding.begin(makeM2(true));
+    if (!starsModelRenderer_) starsBuilding.begin(makeM2(true));
+    if (skyBuilding.started()) skyboxModelRenderer_ = skyBuilding.takeWaiting(pump);
+    if (starsBuilding.started()) starsModelRenderer_ = starsBuilding.takeWaiting(pump);
+
     // Renderer components can be recreated during map transitions. Restore the
     // configured view distance instead of falling back to their defaults.
     setViewDistance(viewDistance_);
@@ -5987,10 +6012,8 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (!m2Renderer->initializeShadow(shadowRenderPass))
             LOG_WARNING("M2 shadow pipeline initialization failed");
     }
-    if (!characterRenderer) {
-        characterRenderer = std::make_unique<CharacterRenderer>();
-        if (!characterRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
-            LOG_ERROR("CharacterRenderer initialization failed");
+    if (characterBuilding.started()) {
+        characterRenderer = characterBuilding.takeWaiting(pump);
         characterRenderer->setRtScene(rtScene_.get());
         characterRenderer->setTextureCompression(textureCompression_);
         if (shadowRenderPass != VK_NULL_HANDLE) {

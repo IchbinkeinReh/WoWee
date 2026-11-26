@@ -47,6 +47,34 @@ TEST_CASE("a thing that could not be made is taken as none", "[built_beside]") {
     CHECK_FALSE(built.started());
 }
 
+// The loading screen's wait: the thread that needs the thing draws a frame
+// each step it is not there, and has it the moment it is.
+TEST_CASE("a thing waited for keeps the screen going meanwhile", "[built_beside]") {
+    std::promise<void> gate;
+    std::shared_future<void> open = gate.get_future().share();
+    BuiltBeside<int> built;
+    built.begin([open]() {
+        open.wait();
+        return std::make_unique<int>(7);
+    });
+    int frames = 0;
+    const auto got = built.takeWaiting(
+        [&] {
+            // The thing is made only after the screen has had frames.
+            if (++frames == 3) gate.set_value();
+        },
+        std::chrono::milliseconds(1));
+    REQUIRE(got != nullptr);
+    CHECK(*got == 7);
+    CHECK(frames >= 3);
+    CHECK_FALSE(built.started());
+    // Never begun: none, and no frame.
+    BuiltBeside<int> none;
+    int idle = 0;
+    CHECK(none.takeWaiting([&] { ++idle; }) == nullptr);
+    CHECK(idle == 0);
+}
+
 TEST_CASE("one not taken is waited for when its holder goes", "[built_beside]") {
     std::promise<void> gate;
     std::shared_future<void> open = gate.get_future().share();
@@ -115,4 +143,28 @@ TEST_CASE("no screen waits for a figure's renderer", "[built_beside]") {
         CHECK(text.find("->initializeDone()") != std::string::npos);
         CHECK(text.find("preview_->initialize(") == std::string::npos);
     }
+}
+
+// The first world entry's renderers: the world's M2 renderer (some hundred and
+// fifty pipelines, 17 s on a cold driver cache, one over 1.5 s), the sky's
+// two and the character renderer are made beside the loading screen, which
+// this thread keeps drawing while it waits; none is initialized on it.
+TEST_CASE("the world's renderers are made beside the loading screen", "[built_beside]") {
+    const std::string renderer = sourceText("src/rendering/renderer.cpp");
+    REQUIRE_FALSE(renderer.empty());
+    for (const char* begun : {"m2Building.begin(", "skyBuilding.begin(", "starsBuilding.begin(",
+                              "characterBuilding.begin("}) {
+        INFO(begun);
+        CHECK(renderer.find(begun) != std::string::npos);
+    }
+    for (const char* onThread : {"m2Renderer->initialize(", "skyboxModelRenderer_->initialize(",
+                                 "starsModelRenderer_->initialize(", "characterRenderer->initialize("}) {
+        INFO(onThread);
+        CHECK(renderer.find(onThread) == std::string::npos);
+    }
+    CHECK(renderer.find("takeWaiting(pump)") != std::string::npos);
+    // The loading screen's bar counts the pipelines made on every thread.
+    const std::string loader = sourceText("src/core/world_loader.cpp");
+    REQUIRE_FALSE(loader.empty());
+    CHECK(loader.find("rendering::pipelinesBuilt()") != std::string::npos);
 }
