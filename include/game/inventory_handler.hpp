@@ -380,6 +380,8 @@ public:
     /// and going back through lootItem with the slot would raise the prompt
     /// again, which is a loop rather than a confirmation.
     void confirmPendingLoot();
+    /// The server slot of the loot item whose bind prompt is waiting, -1 for none (0x00acee24).
+    [[nodiscard]] int pendingLootSlot() const { return pendingLootActive_ ? pendingLootSlot_ : -1; }
 
     /// Send the use that was held back by the bind-on-use prompt. USE_BIND
     /// carries no slot at all - FrameXML shows it and calls this with nothing -

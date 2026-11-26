@@ -4724,42 +4724,58 @@ static int lua_CloseQuest(lua_State* L) {
 // type is "choice" for the rewards a player picks between and "reward" for the
 // ones always given.
 static int lua_GetQuestItemInfo(lua_State* L) {
-    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
-        return luaL_error(L, "Invalid quest item in GetQuestItemInfo(\"type\", index)");   // 0x0058d980
+    // 0x0058d980 -> 0x0058d190: the type, compared without case ("reward",
+    // "choice", "required"), and a 1-based index into the frame's seven slots
+    // of each list. Any other type, or an index outside 1..7, is the Lua
+    // error. A slot in range always answers five values: an empty slot (or an
+    // item not in the cache) its name "", the icon of the slot's display
+    // (INV_Misc_QuestionMark for none, 0x0070a910), its count, quality 0 and
+    // usable 1; a cached item its name, quality -1 where it is no equipment
+    // (InventoryType 0, +0x28) and usable by CanUseItem (0x006dc3f0).
+    constexpr const char* kInvalid = "Invalid quest item in GetQuestItemInfo(\"type\", index)";
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, kInvalid);
     auto* gh = getGameHandler(L);
-    const char* type = luaL_optstring(L, 1, "reward");
-    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+    std::string want = lua_tostring(L, 1);
+    toLowerInPlace(want);
+    const double number = lua_tonumber(L, 2);
+    const long long index = std::llround(number) - 1;
+    if (index < 0 || index > 6 || (want != "reward" && want != "choice" && want != "required"))
+        return luaL_error(L, kInvalid);
     const QuestSource s = currentQuestSource(gh);
 
     // Three lists, not two. "required" is what the *progress* page asks for -
-    // the items a quest wants handed in - and it was falling through to the
-    // reward list, so turning in a quest showed what it would pay rather than
-    // what it wanted.
-    const std::string want(type);
+    // the items a quest wants handed in.
     const std::vector<game::QuestRewardItem>* list = nullptr;
     if (want == "choice")        list = s.choices;
     else if (want == "required") list = gh ? &gh->getQuestRequestItems().requiredItems : nullptr;
     else                         list = s.rewards;
-    if (!gh || !list || index < 1) { return luaReturnNil(L); }
 
-    int seen = 0;
-    for (const auto& r : *list) {
-        if (r.itemId == 0) continue;
-        if (++seen != index) continue;
-        const auto* info = gh->getItemInfo(r.itemId);
-        if (!info) {
-            gh->queryItemInfo(r.itemId, 0);
-            if (auto* quests = gh->getQuestHandler()) quests->awaitQuestItem(r.itemId);
+    const game::QuestRewardItem* slot = nullptr;
+    if (list) {
+        long long seen = 0;
+        for (const auto& r : *list) {
+            if (r.itemId == 0) continue;
+            if (seen++ == index) { slot = &r; break; }
         }
-        lua_pushstring(L, info ? info->name.c_str() : "");
-        lua_pushstring(L, gh->getItemIconPath(
-            info && info->displayInfoId ? info->displayInfoId : r.displayInfoId).c_str());
-        lua_pushnumber(L, r.count);
-        lua_pushnumber(L, info ? info->quality : 1);
-        luaPushOneOrNil(L, rewardUsable(*gh, info));
-        return 5;
     }
-    return luaReturnNil(L);
+    const game::ItemQueryResponseData* info = nullptr;
+    if (gh && slot) {
+        info = gh->getItemInfo(slot->itemId);
+        if (info && !info->valid) info = nullptr;
+        if (!info) {
+            gh->queryItemInfo(slot->itemId, 0);
+            if (auto* quests = gh->getQuestHandler()) quests->awaitQuestItem(slot->itemId);
+        }
+    }
+    std::string icon = gh && slot && slot->displayInfoId != 0 ? gh->getItemIconPath(slot->displayInfoId)
+                                                              : std::string();
+    if (icon.empty()) icon = "Interface\\Icons\\INV_Misc_QuestionMark";
+    lua_pushstring(L, info ? info->name.c_str() : "");
+    lua_pushstring(L, icon.c_str());
+    lua_pushnumber(L, slot ? static_cast<double>(slot->count) : 0.0);
+    lua_pushnumber(L, info ? (info->inventoryType == 0 ? -1.0 : static_cast<double>(info->quality)) : 0.0);
+    luaPushOneOrNil(L, !info || !gh || rewardUsable(*gh, info));
+    return 5;
 }
 
 // GetQuestItemLink(type, index) → the reward as a link, for shift-clicking it

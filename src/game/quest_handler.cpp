@@ -1339,9 +1339,13 @@ void QuestHandler::acceptQuest() {
     // the accept and lets the frame go (QUEST_FINISHED); a full log is the
     // realm's SMSG_QUESTLOG_FULL to say (ERR_QUEST_LOG_FULL, rolled back
     // there). Refused here, the detail frame stayed open with nothing sent.
+    // 0x0058cd20 -> 0x006d4ca0: addressed to the details' second guid (the
+    // one 0x0058c5a0 keeps at 0xc0d650, a sharer) where there is one, else
+    // to the giver.
+    const uint64_t acceptTo = currentQuestDetails_.informUnit != 0 ? currentQuestDetails_.informUnit : npcGuid;
     network::Packet packet = owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildAcceptQuestPacket(npcGuid, questId)
-        : QuestgiverAcceptQuestPacket::build(npcGuid, questId);
+        ? owner_.getPacketParsers()->buildAcceptQuestPacket(acceptTo, questId)
+        : QuestgiverAcceptQuestPacket::build(acceptTo, questId);
     owner_.getSocket()->send(packet);
     pendingQuestAcceptTimeouts_[questId] = 5.0f;
     pendingQuestAcceptNpcGuids_[questId] = npcGuid;

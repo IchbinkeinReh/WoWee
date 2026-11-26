@@ -2858,6 +2858,8 @@ TEST_CASE("a trade asked for opens without a popup and says why it failed (0x005
         more(p);
         s.receive(p);
     };
+    s.receive(UpdateObject().create(0x42, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
     status(1, [](wowee::network::Packet& p) { p.writeUInt64(0x0000000000000042ull); });
     CHECK(s.sent().of(Opcode::CMSG_BEGIN_TRADE).size() == 1);
     CHECK(ui.is("#seen == 0"));
@@ -2876,6 +2878,74 @@ TEST_CASE("a trade asked for opens without a popup and says why it failed (0x005
         p.writeUInt32(0);
     });
     CHECK(ui.is("errors[1] ~= nil and seen[4] == 'TRADE_CLOSED'"));
+}
+
+// FIXER R (trade rest): 0x005873e0 case 1 answers busy for a dead asker, needs
+// the asker known; case 12 result 0x1c is said only for this side and 0x54 names
+// the item's limit category (0x00586520); cases 22/23 empty the refused slot of
+// this half (0x00586410); an offer raises no TRADE_UPDATE (only 0x00586080).
+TEST_CASE("a refused trade slot is emptied, an offer raises no TRADE_UPDATE (0x005873e0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("seen = {} errors = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'TRADE_UPDATE', 'TRADE_PLAYER_ITEM_CHANGED', 'TRADE_TARGET_ITEM_CHANGED', "
+           "'PLAYER_TRADE_MONEY', 'TRADE_SHOW'}) do f:RegisterEvent(e) end "
+           "f:RegisterEvent('UI_ERROR_MESSAGE') "
+           "f:SetScript('OnEvent', function(self, event, a) "
+           "if event == 'UI_ERROR_MESSAGE' then errors[#errors + 1] = a else seen[#seen + 1] = event .. (a or '') end end)");
+    const auto status = [&](uint32_t code, auto&& more) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_TRADE_STATUS));
+        p.writeUInt32(code);
+        more(p);
+        s.receive(p);
+    };
+    // Nobody known by that guid: no answer at all.
+    status(1, [](wowee::network::Packet& p) { p.writeUInt64(0x43); });
+    CHECK(s.sent().of(Opcode::CMSG_BEGIN_TRADE).empty());
+    CHECK(s.sent().of(Opcode::CMSG_BUSY_TRADE).empty());
+    // A dead asker: busy.
+    s.receive(UpdateObject().create(0x43, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 0}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    status(1, [](wowee::network::Packet& p) { p.writeUInt64(0x43); });
+    CHECK(s.sent().of(Opcode::CMSG_BEGIN_TRADE).empty());
+    CHECK(s.sent().of(Opcode::CMSG_BUSY_TRADE).size() == 1);
+    // A living one: taken.
+    s.receive(UpdateObject().create(0x44, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    status(1, [](wowee::network::Packet& p) { p.writeUInt64(0x44); });
+    CHECK(s.sent().of(Opcode::CMSG_BEGIN_TRADE).size() == 1);
+    status(2, [](wowee::network::Packet& p) { p.writeUInt32(0); });
+    // This player's offer with an item in slot 2 (index 1).
+    wowee::network::Packet ext(wowee::game::wireOpcode(Opcode::SMSG_TRADE_STATUS_EXTENDED));
+    ext.writeUInt8(0);
+    ext.writeUInt32(0);
+    ext.writeUInt32(7);
+    ext.writeUInt32(7);
+    ext.writeUInt32(0);
+    ext.writeUInt32(0);
+    for (uint8_t slot = 0; slot < 7; ++slot) {
+        ext.writeUInt8(slot);
+        ext.writeUInt32(slot == 1 ? 6948u : 0u);
+        for (int i = 0; i < 3; ++i) ext.writeUInt32(slot == 1 ? 1u : 0u);
+        ext.writeUInt64(0);
+        for (int i = 0; i < 4; ++i) ext.writeUInt32(0);
+        ext.writeUInt64(0);
+        for (int i = 0; i < 6; ++i) ext.writeUInt32(0);
+    }
+    s.receive(ext);
+    CHECK(ui.is("seen[1] == 'TRADE_SHOW' and seen[2] == 'TRADE_PLAYER_ITEM_CHANGED2' and #seen == 2"));
+    // The realm refuses slot index 1: the error, and the slot is emptied.
+    status(23, [](wowee::network::Packet& p) { p.writeUInt8(1); });
+    CHECK(ui.is("#errors == 1 and seen[3] == 'TRADE_PLAYER_ITEM_CHANGED2'"));
+    CHECK(s.handler().getMyTradeSlots()[1].itemId == 0);
+    status(23, [](wowee::network::Packet& p) { p.writeUInt8(0xff); });
+    CHECK(ui.is("seen[4] == 'PLAYER_TRADE_MONEY'"));
+    // Failed with 0x1c: said for this side only.
+    status(12, [](wowee::network::Packet& p) { p.writeUInt32(0x1c); p.writeUInt8(1); p.writeUInt32(0); });
+    CHECK(ui.is("#errors == 2"));
+    status(12, [](wowee::network::Packet& p) { p.writeUInt32(0x1c); p.writeUInt8(0); p.writeUInt32(0); });
+    CHECK(ui.is("#errors == 3 and errors[3] ~= errors[1]"));
 }
 
 // FIXER Q (talent review): GetTalentInfo's empty answer (0x005c7800,
@@ -2919,6 +2989,96 @@ TEST_CASE("a greeting title past the end is nil (0x0058be30)", "[replay][interfa
     Session s;
     Interface ui(s);
     CHECK(ui.is("GetAvailableTitle(5) == nil and GetActiveTitle(5) == nil"));
+}
+
+// FIXER R (Q's quest #6): GetQuestItemInfo (0x0058d980 -> 0x0058d190) raises
+// its error for a type other than reward/choice/required (any case) and for an
+// index outside 1..7; an empty slot in range answers five values.
+TEST_CASE("GetQuestItemInfo of an empty slot answers five values (0x0058d190)", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    CHECK(ui.is("not pcall(GetQuestItemInfo, 'bogus', 1)"));
+    CHECK(ui.is("not pcall(GetQuestItemInfo, 'reward', 0)"));
+    CHECK(ui.is("not pcall(GetQuestItemInfo, 'choice', 8)"));
+    CHECK(ui.is("select('#', GetQuestItemInfo('REWARD', 7)) == 5"));
+    ui.run("n, t, c, q, u = GetQuestItemInfo('required', 1)");
+    CHECK(ui.is("n == '' and t == 'Interface\\\\Icons\\\\INV_Misc_QuestionMark' and c == 0 and q == 0 and u == 1"));
+}
+
+// FIXER R (Q's loot shapes): GetLootSlotInfo (0x00588570) answers five values
+// for every slot - quality -1 for an item not in the cache, nil/""/0/0/nil past
+// the table; LootSlot on the coin empties it at once (0x00589140: money -1,
+// LOOT_SLOT_CLEARED 1); an uncached item is not taken; ConfirmLootSlot acts
+// only for the slot that asked (0x00589300).
+TEST_CASE("a loot slot answers five values and the coin goes at once (0x00588570)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("cleared = {} local f = CreateFrame('Frame') f:RegisterEvent('LOOT_SLOT_CLEARED') "
+           "f:SetScript('OnEvent', function(self, event, a) cleared[#cleared + 1] = a end)");
+    wowee::network::Packet loot(wowee::game::wireOpcode(Opcode::SMSG_LOOT_RESPONSE));
+    loot.writeUInt64(0xF130000BEC001510ull);
+    loot.writeUInt8(1);
+    loot.writeUInt32(25);   // coin
+    loot.writeUInt8(1);
+    loot.writeUInt8(0);
+    for (uint32_t v : {55555u, 2u, 1234u, 0u, 0u}) loot.writeUInt32(v);
+    loot.writeUInt8(0);
+    s.receive(loot);
+    REQUIRE(s.handler().isLootWindowOpen());
+    CHECK(ui.is("GetNumLootItems() == 2"));
+    // The item, not in the cache: name "", quality -1.
+    ui.run("t, n, c, q, l = GetLootSlotInfo(2)");
+    CHECK(ui.is("t ~= nil and n == '' and c == 2 and q == -1 and l == nil"));
+    CHECK(ui.is("select('#', GetLootSlotInfo(3)) == 5"));
+    ui.run("t, n, c, q, l = GetLootSlotInfo(3)");
+    CHECK(ui.is("t == nil and n == '' and c == 0 and q == -1 and l == nil"));
+    ui.run("t, n, c, q, l = GetLootSlotInfo(40)");
+    CHECK(ui.is("t == nil and n == '' and c == 0 and q == 0 and l == nil"));
+    // Not in the cache: LootSlot takes nothing.
+    ui.run("LootSlot(2)");
+    CHECK(s.sent().of(Opcode::CMSG_AUTOSTORE_LOOT_ITEM).empty());
+    // A confirmation with nothing asked takes nothing either.
+    ui.run("ConfirmLootSlot(2)");
+    CHECK(s.sent().of(Opcode::CMSG_AUTOSTORE_LOOT_ITEM).empty());
+    // The coin: sent, and empty at once.
+    ui.run("LootSlot(1)");
+    CHECK(s.sent().of(Opcode::CMSG_LOOT_MONEY).size() == 1);
+    CHECK(ui.is("cleared[1] == 1 and LootSlotIsCoin(1) == nil and GetLootSlotInfo(1) == nil"));
+    CHECK(ui.is("select('#', GetLootSlotInfo(1)) == 5 and GetNumLootItems() == 2"));
+    ui.run("LootSlot(1)");
+    CHECK(s.sent().of(Opcode::CMSG_LOOT_MONEY).size() == 1);
+}
+
+// FIXER R (re-read of 0x0058cd20): AcceptQuest sends CMSG_QUESTGIVER_ACCEPT_QUEST
+// (0x006d4ca0) to the details' second guid (0xc0d650, a sharer) where there is
+// one, else to the giver.
+TEST_CASE("a shared quest is accepted from the one who shared it (0x0058cd20)", "[replay][interface]") {
+    constexpr uint64_t kGiver = 0xF130000BEC00150Eull;
+    constexpr uint64_t kSharer = 0x0000000000000077ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto details = [&](uint64_t inform) {
+        wowee::network::Packet offer(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_DETAILS));
+        offer.writeUInt64(kGiver);
+        offer.writeUInt64(inform);
+        offer.writeUInt32(861);
+        for (const char* text : {"The Way", "Details.", "Objectives."}) offer.writeString(text);
+        offer.writeUInt8(0);
+        for (int i = 0; i < 2; ++i) offer.writeUInt32(0);
+        offer.writeUInt8(0);
+        for (int i = 0; i < 2; ++i) offer.writeUInt32(0);
+        for (int i = 0; i < 3; ++i) offer.writeUInt32(0);
+        offer.writeFloat(0.0f);
+        for (int i = 0; i < 22; ++i) offer.writeUInt32(0);
+        s.receive(offer);
+    };
+    details(kSharer);
+    ui.run("AcceptQuest()");
+    auto sent = s.sent().of(Opcode::CMSG_QUESTGIVER_ACCEPT_QUEST);
+    REQUIRE(sent.size() == 1);
+    CHECK(sent.back().readUInt64() == kSharer);
 }
 
 // T382: GetAuctionItemInfo's level is the required level but 1 where there is

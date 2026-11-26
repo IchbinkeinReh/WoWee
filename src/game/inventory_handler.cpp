@@ -1304,6 +1304,10 @@ void InventoryHandler::lootMoney() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = LootMoneyPacket::build();
     owner_.getSocket()->send(packet);
+    // 0x00589140 empties the coin slot at once (money -1, LOOT_SLOT_CLEARED,
+    // the loot closed when nothing is left); SMSG_LOOT_CLEAR_MONEY then finds
+    // nothing to clear.
+    clearLootMoney();
 }
 
 void InventoryHandler::cancelTempEnchantment(uint8_t handIndex) {
@@ -6001,6 +6005,31 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
                 resetTradeState();
                 break;
             }
+            // 0x005873e0 case 1 then needs the one asking as a player it
+            // knows (0x004d4db0, type 0x10) - without one it says nothing at
+            // all - and answers busy (CMSG_BUSY_TRADE, 0x00703e70) when that
+            // player is dead or a ghost (vtable +0x128), a cinematic is playing
+            // (0x00bd07fc), this player has lost control (0x00bcfb8c, the flag
+            // behind PLAYER_CONTROL_LOST) or an auction house is open
+            // (0x00c0f3e8, the auctioneer).
+            {
+                const auto asker = owner_.getEntityManager().getEntity(tradePeerGuid_);
+                if (!asker || asker->getType() != ObjectType::PLAYER) {
+                    resetTradeState();
+                    break;
+                }
+                const uint16_t pf = fieldIndex(UF::PLAYER_FLAGS);
+                const bool askerDead = static_cast<const Unit&>(*asker).getHealth() == 0 ||
+                                       (pf != 0xFFFF && (asker->getField(pf) & 0x10u) != 0);
+                if (askerDead || owner_.inCinematic() || !owner_.isServerMovementAllowed() || auctionOpen_) {
+                    if (owner_.getSocket()) {
+                        network::Packet busy(wireOpcode(Opcode::CMSG_BUSY_TRADE));
+                        owner_.getSocket()->send(busy);
+                    }
+                    resetTradeState();
+                    break;
+                }
+            }
             tradeStatus_ = TradeStatus::PendingIncoming;
             // Resolve name
             auto nit = owner_.getPlayerNameCache().find(tradePeerGuid_);
@@ -6142,9 +6171,35 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             // a trade that failed on full bags without a word.
             const uint32_t result = packet.hasRemaining(4) ? packet.readUInt32() : 0;
             const bool targets = packet.hasRemaining(1) && packet.readUInt8() != 0;
+            // The third word, which 0x005873e0 looks up in the item cache
+            // (0x0067ca30, no query) for its limit category (+0x1ec).
+            const uint32_t itemEntry = packet.hasRemaining(4) ? packet.readUInt32() : 0;
             const bool wasOpen = isTradeOpen();
             resetTradeState();
-            if (result == 4) {
+            if (result == 0x1c) {
+                // 0x00586520: own side ERR_SPELL_FAILED_REAGENTS_GENERIC (0xe2);
+                // the partner's is 0xe2 + 0x1f8 = 0x2da, past the table's end,
+                // which 0x005216f0 shows nothing for.
+                if (!targets) error("ERR_SPELL_FAILED_REAGENTS_GENERIC", "Missing reagent");
+            } else if (result == 0x54) {
+                // 0x272 / 0x273 with the category's quantity and name - only
+                // for an item in the cache whose category has a row; else no
+                // line at all. Without an item the bare text (no arguments).
+                const char* key = targets ? "ERR_TRADE_TARGET_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED_IS"
+                                          : "ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED_IS";
+                const char* enUS = targets ? "Your trade partner can only carry %d %s"
+                                           : "You can only carry %d %s";
+                if (itemEntry == 0) {
+                    error(key, enUS);
+                } else if (const auto* info = owner_.getItemInfo(itemEntry);
+                           info && info->valid && info->itemLimitCategory != 0) {
+                    if (const auto [name, quantity] = itemLimitCategory(owner_, info->itemLimitCategory);
+                        !name.empty()) {
+                        owner_.addUIError(interfaceFormat(key, enUS, {std::to_string(quantity), name}));
+                        owner_.playGameErrorSound(key);
+                    }
+                }
+            } else if (result == 4) {
                 if (targets) error("ERR_TRADE_BAG_FULL", "Trade failed, you don't have enough space.");
                 else error("ERR_TRADE_TARGET_BAG_FULL", "Trade failed, target doesn't have enough space.");
             } else if (result == 0x11) {
@@ -6190,11 +6245,32 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             error("ERR_RESTRICTED_ACCOUNT", "Starter Edition accounts can't perform that action");
             break;
         case 22:  // WRONG_REALM
-            error("ERR_TRADE_WRONG_REALM", "You can only trade conjured items to players from other realms.");
+        case 23: { // NOT_ON_TAPLIST
+            // 0x007044a0 reads the slot byte that was refused; 0x005873e0
+            // shows the error and empties that slot of this player's half
+            // (0x00586410): 0xff is the gold (0xca0b74 zeroed, then
+            // PLAYER_TRADE_MONEY and PLAYER_MONEY), a slot its item and
+            // TRADE_PLAYER_ITEM_CHANGED with slot+1.
+            const uint8_t slot = packet.hasRemaining(1) ? packet.readUInt8() : 0;
+            if (status == 22)
+                error("ERR_TRADE_WRONG_REALM", "You can only trade conjured items to players from other realms.");
+            else
+                error("ERR_TRADE_NOT_ON_TAPLIST", "You may only trade bound items to players that were originally eligible to loot them.");
+            if (slot == 0xff) {
+                myTradeGold_ = 0;
+                if (owner_.addonEventCallbackRef()) {
+                    owner_.addonEventCallbackRef()("PLAYER_TRADE_MONEY", {});
+                    owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
+                }
+            } else if (slot < TRADE_SLOT_COUNT) {
+                myTradeSlots_[slot] = {};
+                myTradeItemGuids_[slot] = 0;
+                shownTradeSlots_[0][slot] = {};
+                if (owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()("TRADE_PLAYER_ITEM_CHANGED", {std::to_string(slot + 1)});
+            }
             break;
-        case 23:  // NOT_ON_TAPLIST
-            error("ERR_TRADE_NOT_ON_TAPLIST", "You may only trade bound items to players that were originally eligible to loot them.");
-            break;
+        }
         default:
             LOG_DEBUG("Unhandled SMSG_TRADE_STATUS: ", status);
             break;
@@ -6271,6 +6347,7 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     // was not told about - a core that writes only the filled slots takes an
     // item off the table by leaving it out, and kept here it stayed on show.
     std::array<bool, TRADE_SLOT_COUNT> mentioned{};
+    const auto rowsBefore = slots;
     for (uint32_t i = 0; i < count; ++i) {
         if (!packet.hasRemaining(kSlotBytes)) { packet.skipAll(); break; }
         const uint8_t slotNum = packet.readUInt8();
@@ -6326,8 +6403,18 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     const bool goldChanged = (side != gold);
     side = gold;
 
+    // A row of this player's half that held an item and that the realm now
+    // empties lets its item go (0x00704680 -> 0x00586410: the guid kept for
+    // the slot cleared).
+    if (ownSide) {
+        for (size_t slot = 0; slot < TRADE_SLOT_COUNT; ++slot)
+            if (rowsBefore[slot].itemId != 0 && slots[slot].itemId == 0) myTradeItemGuids_[slot] = 0;
+    }
+
     if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("TRADE_UPDATE", {});
+        // No TRADE_UPDATE here: 12340 raises it only from the item cache's
+        // answer (0x00586080), never for an offer (0x00704680/0x00586dc0
+        // name the changed slots and the gold).
         // A slot whose offer moved is named to the window on its own.
         //
         // The partner's half is decided by comparison: 0x00586dc0 holds a copy

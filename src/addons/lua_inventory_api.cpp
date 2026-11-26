@@ -5832,17 +5832,31 @@ static int lua_GetNumLootItems(lua_State* L) {
 }
 
 // GetLootSlotInfo(slot) → texture, name, quantity, quality, locked
+//
+// 0x00588570 always answers five values: the slot's icon (0x00588380, nil for
+// none), its name (0x00588430, "" for none), the count, the quality
+// (0x00588310) and 1 where the slot is locked (type 3). A slot of the table
+// with no item - taken, or past the last - has quality -1 (the item cache
+// answers nothing for entry 0), as has an item not in the cache, whose name is
+// "" (0x00706d70); past the table's 18 rows, or with no loot, the quality is 0.
+// The coin slot, once taken (money -1), is nil, "", 0, 0, nil.
 static int lua_GetLootSlotInfo(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLootSlotInfo(slot)");   // 0x00588570
     auto* gh = getGameHandler(L);
-    int slot = static_cast<int>(luaL_checknumber(L, 1)); // 1-indexed
-    if (!gh || !gh->isLootWindowOpen()) {
-        return luaReturnNil(L);
-    }
+    const long long slot = std::llround(lua_tonumber(L, 1)); // 1-indexed
+    const auto none = [L](double quality) {
+        lua_pushnil(L);
+        lua_pushstring(L, "");
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, quality);
+        lua_pushnil(L);
+        return 5;
+    };
+    if (!gh || !gh->isLootWindowOpen()) return none(0);
     const auto& loot = gh->getCurrentLoot();
     if (lootHasCoin(gh) && slot == 1) {
-        // Taken: the slot stays, empty, as an item's does.
-        if (loot.goldLooted) return luaReturnNil(L);
+        // Taken: the slot stays, empty (0x00589140 sets the money to -1).
+        if (loot.goldLooted) return none(0);
         // The coin slot describes itself (0x00588570): an icon by the amount
         // (0x007e7cc0), the amount as the name, one unit to a line
         // (0x007e7d80 with "\n"), and quantity and quality both zero - the
@@ -5855,30 +5869,32 @@ static int lua_GetLootSlotInfo(lua_State* L) {
         luaPushOneOrNil(L, 0);
         return 5;
     }
-    const auto* itemPtr = lootItemAtSlot(gh, slot);
-    if (!itemPtr) { return luaReturnNil(L); }
+    const long long row = slot - (lootHasCoin(gh) ? 2 : 1);
+    if (row < 0 || row >= 18) return none(0);
+    const auto* itemPtr = lootItemAtSlot(gh, static_cast<int>(slot));
+    if (!itemPtr) return none(-1);
     const auto& item = *itemPtr;
     const auto* info = gh->getItemInfo(item.itemId);
+    if (info && !info->valid) info = nullptr;
 
-    // texture (icon path from ItemDisplayInfo.dbc)
-    std::string icon;
-    if (info && info->displayInfoId != 0) {
-        icon = gh->getItemIconPath(info->displayInfoId);
-    }
-    if (!icon.empty()) lua_pushstring(L, icon.c_str());
-    else lua_pushnil(L);
+    // texture - the icon of the slot's own display id (0x00588380 reads the
+    // row's, not the cache's), INV_Misc_QuestionMark where it has none.
+    std::string icon = item.displayInfoId != 0 ? gh->getItemIconPath(item.displayInfoId) : std::string();
+    if (icon.empty() && info && info->displayInfoId != 0) icon = gh->getItemIconPath(info->displayInfoId);
+    if (icon.empty()) icon = "Interface\\Icons\\INV_Misc_QuestionMark";
+    lua_pushstring(L, icon.c_str());
 
     // name - with what the item rolled: 0x00588430 names it by 0x00706d70
     // with the slot's random property (SMSG_LOOT_RESPONSE's fifth dword), so a
-    // green 'of the Bear' reads so in the loot window.
+    // green 'of the Bear' reads so in the loot window. "" while not cached.
     if (info && !info->name.empty())
         lua_pushstring(L, gh->itemNameWithProperty(info->name, static_cast<int32_t>(item.randomPropertyId)).c_str());
-    else lua_pushstring(L, ("Item #" + std::to_string(item.itemId)).c_str());
+    else lua_pushstring(L, "");
 
     lua_pushnumber(L, item.count);                           // quantity
-    lua_pushnumber(L, info ? info->quality : 1);             // quality
+    lua_pushnumber(L, info ? static_cast<double>(info->quality) : -1.0);   // quality
     // locked - the row the loot window draws in red. SMSG_LOOT_RESPONSE's slot
-    // type is stored raw (0x006d4304), and 0x00588570 answers 1 for LOCKED (3)
+    // type is stored raw, and 0x00588570 answers 1 for LOCKED (3)
     // alone. A roll still running (1) and a master looter's item (2) draw as
     // ordinary loot; LootSlot answers those with their own line or the
     // candidate menu.
@@ -5919,6 +5935,9 @@ static int lua_LootSlot(lua_State* L) {
     int slot = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || !gh->isLootWindowOpen()) return 0;
     if (lootHasCoin(gh) && slot == 1) {
+        // 0x00589140: CMSG_LOOT_MONEY, and the money is -1 at once - the
+        // coin slot empty, LOOT_SLOT_CLEARED 1, the loot closed when nothing
+        // is left - without waiting for SMSG_LOOT_CLEAR_MONEY.
         if (gh->getCurrentLoot().goldLeft()) gh->lootMoney();
         return 0;
     }
@@ -5943,6 +5962,9 @@ static int lua_LootSlot(lua_State* L) {
                 return 0;
             default: break;
         }
+        // An item the cache does not know is not taken (0x00589140: no
+        // template, nothing sent).
+        if (const auto* info = gh->getItemInfo(item->itemId); !info || !info->valid) return 0;
         // The server's own slot number, not the position on screen.
         gh->lootItem(item->slotIndex);
     }
@@ -6823,7 +6845,15 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // is not read - only one can be waiting.
                 {"ConfirmLootSlot", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: LootSlot(slot)");   // 0x00589590
-            if (auto* gh = getGameHandler(L)) gh->confirmPendingLoot();
+            // 0x00589300: only for the slot that asked (0x00acee24), the
+            // coin slot counted, and only while its item is still there.
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->isLootWindowOpen()) return 0;
+            const int slot = static_cast<int>(std::llround(lua_tonumber(L, 1)));
+            const auto* item = lootItemAtSlot(gh, slot);
+            if (!item || (lootHasCoin(gh) && slot == 1)) return 0;
+            if (auto* inv = gh->getInventoryHandler(); inv && inv->pendingLootSlot() == item->slotIndex)
+                gh->confirmPendingLoot();
             return 0;
         }},
                 // The answer to "this item will bind to you".
