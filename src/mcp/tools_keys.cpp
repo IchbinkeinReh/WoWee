@@ -7,6 +7,7 @@
 #include <string>
 
 #include "core/application.hpp"
+#include "core/window.hpp"
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
 #include "mcp/game_view.hpp"
@@ -54,8 +55,26 @@ void key(ToolContext& context, const json& args, Script& script) {
     if (!parseChord(chord, code, mods)) return failNow(script, "no such key: " + chord);
     if (code == SDL_SCANCODE_F4 && (mods & SDL_KMOD_LALT)) return failNow(script, "the quit tool ends the client");
     const int times = args.value("times", 1);
+    // A key that writes a character writes it as a hand's would: SDL's text
+    // event after the key's down, while text input is on - an edit box with
+    // the focus, or a frame that has asked for the keyboard (OnChar). Not
+    // with control or alt held.
+    const char typed = [&]() -> char {
+        if (mods & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) return 0;
+        const SDL_Keycode k = SDL_GetKeyFromScancode(code, static_cast<SDL_Keymod>(mods & SDL_KMOD_SHIFT), false);
+        return k >= 0x20 && k < 0x7f ? static_cast<char>(k) : 0;
+    }();
     for (int i = 0; i < times; ++i) {
-        for (auto& fn : pressKey(context, code, mods, args.value("seconds", 0.05))) script.then(std::move(fn));
+        Steps steps = pressKey(context, code, mods, args.value("seconds", 0.05));
+        if (typed != 0) {
+            steps.insert(steps.begin() + 1, [&context, typed](Script&) {
+                auto* window = context.app.getWindow();
+                SDL_Window* sdl = window ? window->getSDLWindow() : nullptr;
+                if (sdl && SDL_TextInputActive(sdl)) context.input.type(std::string(1, typed));
+                return Script::Step::Next;
+            });
+        }
+        for (auto& fn : steps) script.then(std::move(fn));
     }
     script.then(Script::seconds(args.value("settle", 0.25)));
     script.then(finishWith(context, after, [&context] { return windowsNow(context); }));
@@ -398,7 +417,8 @@ void addKeyTools(Toolbox& box) {
     using namespace schema;
     Tool k = handsTool("key",
                        "Press a key, by the key bindings' names: W, SPACE, ESCAPE, ENTER, TAB, F1, NUMPAD1, "
-                       "CTRL-SHIFT-A ...",
+                       "CTRL-SHIFT-A ... A key that writes a character also types it (OnChar of a frame "
+                       "that takes the keyboard, or the focused edit box), as a hand's would.",
                        object({required("key", text("the key, with ALT-, CTRL-, SHIFT- before it", 32)),
                                optional("seconds", number("held, 0.05 by default", 0.02, 20)),
                                optional("times", integer("how often", 1, 20)),

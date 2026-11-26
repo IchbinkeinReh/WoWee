@@ -22,7 +22,9 @@
 #include "mcp/object_kind.hpp"
 #include "mcp/tool_context.hpp"
 #include "mcp/world_probe.hpp"
+#include "core/entity_spawner.hpp"
 #include "rendering/camera.hpp"
+#include "rendering/character_renderer.hpp"
 #include "rendering/renderer.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/scene_pick.hpp"
@@ -349,6 +351,21 @@ json entityJson(ToolContext& context, const game::Entity& entity, bool detail) {
                               {"left", rounded(cast->timeRemaining, 1)}};
         }
         if (u.getMountDisplayId() != 0) out["mounted"] = true;
+        // What its model plays (0x00717260: the upper body's own animation,
+        // else the body's), by AnimationData.dbc id (tester's wish).
+        if (auto* renderer = context.app.getRenderer()) {
+            auto* cr = renderer->getCharacterRenderer();
+            auto* spawner = context.app.getEntitySpawner();
+            uint32_t instance = 0;
+            if (self) instance = renderer->getCharacterInstanceId();
+            else if (spawner) {
+                instance = spawner->getCreatureInstanceId(entity.getGuid());
+                if (instance == 0) instance = spawner->getPlayerInstanceId(entity.getGuid());
+            }
+            if (cr && instance != 0) {
+                if (const int32_t playing = cr->unitPlaying(instance); playing >= 0) out["animation"] = playing;
+            }
+        }
         if (detail) {
             out["entry"] = u.getEntry();
             out["display"] = u.getDisplayId();

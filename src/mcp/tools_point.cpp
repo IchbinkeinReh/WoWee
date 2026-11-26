@@ -412,12 +412,29 @@ void interact(ToolContext& context, const json& args, Script& script) {
                 return [&context, here, walked, within, left](Script& s) {
                     const auto at = here();
                     if (!at) return s.fail("it is gone");
-                    if (glm::length(*at - playerAt(context)) <= within || left <= 0) return Script::Step::Next;
+                    const float away = glm::length(*at - playerAt(context));
+                    if (away <= within || left <= 0) return Script::Step::Next;
+                    // A walk that found no way, or got no nearer, is not
+                    // tried again: the call ends at once rather than after
+                    // two minutes of walking into a wall (tester's wish).
+                    if (walked->is_object() && walked->contains("arrived") && !(*walked)["arrived"].get<bool>()) {
+                        const std::string why = walked->value("why", std::string());
+                        const double before = walked->value("yards_before", 0.0);
+                        if (why == "no way there was found" || before - away < 2.0) {
+                            return s.fail("it cannot be reached (" + why + ", " +
+                                          std::to_string(static_cast<int>(away)) + " yards left)");
+                        }
+                    }
                     WalkOptions options;
                     options.stopWithin = std::max(1.0f, within - 1.0f);
-                    options.timeout = 45.0;
+                    // As long as a run there takes, twice over, from 10 to 45 seconds.
+                    options.timeout = std::clamp(10.0 + 2.0 * away / 7.0, 10.0, 45.0);
                     *walked = json::object();
                     Steps steps = walkTo(context, here, options, walked);
+                    steps.push_back([walked, away](Script&) {
+                        if (walked->is_object()) (*walked)["yards_before"] = away;
+                        return Script::Step::Next;
+                    });
                     // Where it was walked to is where it was thought to be.
                     steps.push_back(Script::seconds(0.3));
                     steps.push_back(make(context, here, walked, within, left - 1));

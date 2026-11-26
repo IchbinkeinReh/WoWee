@@ -1,4 +1,5 @@
 #include "mcp/hands.hpp"
+#include "mcp/event_args.hpp"
 
 #include <algorithm>
 #include <array>
@@ -69,29 +70,52 @@ bool Aftermath::heard(ToolContext& context, std::initializer_list<const char*> n
 
 json Aftermath::report(ToolContext& context) const {
     json out = json::object();
-    // Each event once, with how often and what it last said.
+    // Each event once, with how often and all its arguments - for one
+    // repeated with different ones, each different list (tester's wish:
+    // a repeated event showed only its last first argument).
+    struct Seen {
+        int count = 0;
+        std::vector<std::string> argLists;  // distinct, in order, at most 6
+        bool more = false;
+    };
     std::vector<std::string> order;
-    std::map<std::string, std::pair<int, std::string>> seen;
+    std::map<std::string, Seen> seen;
     json errors = json::array();
     for (const auto& e : context.events.after(events, 400, [](const EventLine& l) { return !isNoise(l.name); })) {
-        std::string first = e.value.args.empty() ? std::string() : e.value.args[0];
-        if (first.size() > 80) first = first.substr(0, 80) + "...";
         if (e.value.name == "UI_ERROR_MESSAGE" || e.value.name == "UI_INFO_MESSAGE") {
+            std::string first = e.value.args.empty() ? std::string() : e.value.args[0];
+            if (first.size() > 80) first = first.substr(0, 80) + "...";
             if (errors.size() < 5) errors.push_back(first);
             continue;
         }
-        auto [it, fresh] = seen.try_emplace(e.value.name, 0, first);
+        std::string joined;
+        for (const auto& a : shownArgs(e.value.args)) {
+            if (!joined.empty()) joined += ", ";
+            joined += a.size() > 80 ? a.substr(0, 80) + "..." : a;
+        }
+        if (joined.size() > 240) joined = joined.substr(0, 240) + "...";
+        auto [it, fresh] = seen.try_emplace(e.value.name);
         if (fresh) order.push_back(e.value.name);
-        ++it->second.first;
-        it->second.second = first;
+        Seen& s = it->second;
+        ++s.count;
+        if (std::find(s.argLists.begin(), s.argLists.end(), joined) == s.argLists.end()) {
+            if (s.argLists.size() < 6) s.argLists.push_back(joined);
+            else s.more = true;
+        }
     }
     json list = json::array();
     for (const auto& name : order) {
         if (list.size() >= 14) break;
-        const auto& [count, first] = seen[name];
+        const Seen& s = seen[name];
         std::string text = name;
-        if (!first.empty()) text += "(" + first + ")";
-        if (count > 1) text += " x" + std::to_string(count);
+        if (s.argLists.size() == 1) {
+            if (!s.argLists[0].empty()) text += "(" + s.argLists[0] + ")";
+            if (s.count > 1) text += " x" + std::to_string(s.count);
+        } else {
+            text += " x" + std::to_string(s.count) + ":";
+            for (const auto& a : s.argLists) text += " (" + a + ")";
+            if (s.more) text += " ...";
+        }
         list.push_back(std::move(text));
     }
     if (!list.empty()) out["events"] = std::move(list);
