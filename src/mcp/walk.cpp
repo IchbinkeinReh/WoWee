@@ -238,6 +238,8 @@ private:
             out["stuck_at"] = std::move(at);
         }
         if (jumps_ > 0) out["jumps"] = jumps_;
+        // What held the character's keys as it ended, where anything did (T402).
+        if (!arrived && !context_.app.movementHolds().empty()) out["held_by"] = context_.app.movementHolds();
         if (told_) *told_ = std::move(out);
         return Script::Step::Next;
     }

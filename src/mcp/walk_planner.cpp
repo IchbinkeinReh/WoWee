@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <queue>
 
 namespace wowee::mcp {
@@ -182,6 +183,49 @@ std::string FacetIndex::blockedBy(const glm::vec3& feet, const glm::vec3& to, fl
         }
     }
     return {};
+}
+
+std::vector<probe::Facet> gatherInPieces(const FacetGather& gather, const glm::vec3& lo, const glm::vec3& hi,
+                                         float piece) {
+    std::vector<probe::Facet> out;
+    if (!gather || !(piece > 0.0f)) return out;
+    const auto count = [piece](float a, float b) { return std::max(1, static_cast<int>(std::ceil((b - a) / piece))); };
+    const int nx = count(lo.x, hi.x);
+    const int ny = count(lo.y, hi.y);
+    const float sx = (hi.x - lo.x) / static_cast<float>(nx);
+    const float sy = (hi.y - lo.y) / static_cast<float>(ny);
+    // A face over the seam of two pieces comes in both: kept once.
+    std::unordered_map<uint64_t, std::vector<size_t>> seen;
+    const auto hashOf = [](const probe::Facet& f) {
+        uint64_t h = 1469598103934665603ULL;
+        for (const auto& v : f.v)
+            for (int i = 0; i < 3; ++i) {
+                uint32_t bits = 0;
+                std::memcpy(&bits, &v[i], sizeof bits);
+                h = (h ^ bits) * 1099511628211ULL;
+            }
+        return h ^ (static_cast<uint64_t>(f.owner) << 8) ^ static_cast<uint64_t>(f.kind);
+    };
+    const auto same = [](const probe::Facet& a, const probe::Facet& b) {
+        return a.kind == b.kind && a.owner == b.owner && a.v[0] == b.v[0] && a.v[1] == b.v[1] && a.v[2] == b.v[2];
+    };
+    for (int ix = 0; ix < nx; ++ix) {
+        for (int iy = 0; iy < ny; ++iy) {
+            const glm::vec3 a(lo.x + sx * static_cast<float>(ix), lo.y + sy * static_cast<float>(iy), lo.z);
+            const glm::vec3 b(ix + 1 == nx ? hi.x : a.x + sx, iy + 1 == ny ? hi.y : a.y + sy, hi.z);
+            const auto got = gather(a, b);
+            if (!got) continue;
+            for (const auto& f : *got) {
+                auto& bucket = seen[hashOf(f)];
+                bool dup = false;
+                for (const size_t i : bucket) dup = dup || same(out[i], f);
+                if (dup) continue;
+                bucket.push_back(out.size());
+                out.push_back(f);
+            }
+        }
+    }
+    return out;
 }
 
 std::string whyNoStep(const FacetIndex& world, const glm::vec3& a, const glm::vec2& b, const WalkLimits& limits) {

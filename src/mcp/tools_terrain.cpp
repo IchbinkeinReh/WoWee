@@ -27,9 +27,9 @@ std::vector<probe::Facet> facetsAround(ToolContext& context, const glm::vec3& mi
     auto* cc = renderer ? renderer->getCameraController() : nullptr;
     if (!cc) return {};
     const glm::vec3 reach(radius, radius, 0.0f);
-    const auto facets = cc->gatherWorldFacets(middle - reach - glm::vec3(0.0f, 0.0f, below),
-                                              middle + reach + glm::vec3(0.0f, 0.0f, above));
-    return facets ? *facets : std::vector<probe::Facet>{};
+    // A piece at a time: one query stops at 0x2000 building faces (V511).
+    return gatherInPieces([cc](const glm::vec3& lo, const glm::vec3& hi) { return cc->gatherWorldFacets(lo, hi); },
+                          middle - reach - glm::vec3(0.0f, 0.0f, below), middle + reach + glm::vec3(0.0f, 0.0f, above));
 }
 
 std::vector<probe::Facet> facetsForWalk(ToolContext& context, const glm::vec3& from, const glm::vec3& to) {

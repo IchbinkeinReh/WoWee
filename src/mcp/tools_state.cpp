@@ -229,6 +229,8 @@ json stateOf(ToolContext& context, const json& args) {
         movement["airborne_s"] = rounded(cc->airborneSeconds(), 2);
         movement["autorun"] = cc->isAutoRunning();
         movement["sitting"] = cc->isSitting();
+        // What holds the keys - none, or each gate by name (T402).
+        movement["held_by"] = app.movementHolds();
         const auto pose = cc->currentViewPose();
         out["camera"] = {{"distance", rounded(pose.distance, 2)},
                          {"pitch", rounded(pose.pitch, 1)},

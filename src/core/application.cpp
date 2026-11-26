@@ -4948,6 +4948,7 @@ void Application::performLeaveWorld(LeaveTo to) {
 // overrides. The camera owns the movement, so this is where the server's word
 // about it lands.
 void Application::applyServerMovementState(float deltaTime) {
+    movementHolds_.clear();
     if (renderer && gameHandler && renderer->getCameraController()) {
         // The active mover's speeds: the player's, or a driven vehicle's own.
         const game::MovementSpeeds speeds = gameHandler->moverSpeeds();
@@ -4966,6 +4967,7 @@ void Application::applyServerMovementState(float deltaTime) {
         const auto* moverUnit =
             moverEntity && moverEntity->isUnit() ? static_cast<const game::Unit*>(moverEntity.get()) : nullptr;
         bool keysMove = true, keysTurn = true, mouseTurns = true;
+        uint32_t moverAnimation = 0;
         if (moverUnit) {
             uint32_t animation = 0;
             float timeMs = 0.0f, durationMs = 0.0f;
@@ -4980,10 +4982,32 @@ void Application::applyServerMovementState(float deltaTime) {
             uint8_t stand = moverUnit->getStandState();
             if (moverUnit->getGuid() == gameHandler->getPlayerGuid() && gameHandler->getStandState() != kStandDead)
                 stand = renderer->getCameraController()->isSitting() ? kSits : 0;
+            moverAnimation = animation;
             keysMove = game::keysMayMove(health, stand, animation);
             // Stunned it does not turn either, nor does the mouse turn it sitting.
             keysTurn = game::keysMayTurn(health, moverUnit->getUnitFlags(), animation);
             mouseTurns = game::mouseMayTurn(health, moverUnit->getUnitFlags(), stand, animation);
+        }
+        if (!keysMove || !keysTurn) {
+            std::string why = std::string(!keysMove ? "keys may not move" : "") +
+                              (!keysMove && !keysTurn ? ", " : "") + (!keysTurn ? "keys may not turn" : "");
+            if (moverUnit) {
+                why += " (health " + std::to_string(moverUnit->getHealth()) + ", stand " +
+                       std::to_string(moverUnit->getStandState()) + ", unit flags 0x";
+                char hex[16];
+                std::snprintf(hex, sizeof(hex), "%x", moverUnit->getUnitFlags());
+                why += std::string(hex) + ", animation " + std::to_string(moverAnimation) + ")";
+            }
+            movementHolds_.push_back(std::move(why));
+        }
+        if (gameHandler->isPlayerRooted()) movementHolds_.emplace_back("rooted");
+        if (gameHandler->moverHeldBySeat()) movementHolds_.emplace_back("held for a seat (0x0074ba40)");
+        if (!gameHandler->isServerMovementAllowed()) movementHolds_.emplace_back("no control from the server");
+        if (gameHandler->activeMover() != gameHandler->getPlayerGuid()) {
+            char hex[48];
+            std::snprintf(hex, sizeof(hex), "active mover 0x%llx",
+                          static_cast<unsigned long long>(gameHandler->activeMover()));
+            movementHolds_.emplace_back(hex);
         }
         renderer->getCameraController()->setMovementRooted(gameHandler->isPlayerRooted());
         renderer->getCameraController()->setMoverKeysMove(keysMove);
@@ -5263,6 +5287,32 @@ void Application::applyServerMovementState(float deltaTime) {
         // the camera on foot.
         if (!vehiclePassenger && drivenUnit == 0 && entitySpawner_ && !entitySpawner_->seatCameraCuePending()) {
             cc->releaseVehicleCameraOffsets();
+        }
+    }
+    {
+        // Each reason the camera follows the character instead of moving it.
+        const auto hold = [this](bool on, const char* what) {
+            if (on) movementHolds_.emplace_back(what);
+        };
+        if (onTaxi)
+            hold(true, gameHandler->isOnTaxiFlight()       ? "taxi flight"
+                       : gameHandler->isTaxiMountActive() ? "taxi mount"
+                                                          : "taxi activation pending");
+        hold(worldEntryCallbacks_ && worldEntryCallbacks_->getWorldEntryMovementGraceTimer() > 0.0f,
+             "world entry grace (keys cleared)");
+        hold(splineCarried, "carried by a server spline");
+        hold(landingClampActive, "taxi landing clamp");
+        hold(hearthFreeze, "unstuck hearth waits for terrain");
+        hold(transportTransferFreeze, "transport world transfer pending");
+        hold(deckFloorPending_, "ship deck floor pending");
+        hold(vehiclePassenger && drivenUnit == 0, "vehicle passenger");
+        hold(noMover, "no active mover");
+        std::string joined;
+        for (const auto& h : movementHolds_) joined += (joined.empty() ? "" : "; ") + h;
+        if (joined != movementHoldsLogged_) {
+            if (joined.empty()) LOG_INFO("Movement holds: none");
+            else LOG_INFO("Movement holds: ", joined);
+            movementHoldsLogged_ = std::move(joined);
         }
     }
     renderer->getCameraController()->setExternalFollow(

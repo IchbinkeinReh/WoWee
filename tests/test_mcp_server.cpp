@@ -670,3 +670,36 @@ TEST_CASE("a step the planner does not take says why", "[mcp][walk]") {
     stuckBefore.avoid.push_back({1, 0, 0});
     CHECK(whyNoStep(index, {0.5f, 0, 0}, {1, 0}, stuckBefore) == "a place stuck at before");
 }
+
+// V511 (Warsong flag room): one query of the world stops at 0x2000 building
+// faces (0x007cb7b0); a walk's box of ninety yards was filled with other
+// rooms' faces first and the floor under the character was left out - every
+// first step 'no ground'. Asked a piece at a time, each piece has room for it.
+TEST_CASE("a walk's faces are gathered a piece at a time (V511)", "[mcp][walk]") {
+    // Small floor tiles at the start, then many walls far off listed first,
+    // and a query that keeps only the first 40 faces it meets.
+    std::vector<Facet> world;
+    for (int i = 0; i < 30; ++i) {
+        const float x = -39.0f + 14.0f * static_cast<float>(i % 6), y = -39.0f + 14.0f * static_cast<float>(i / 6);
+        quad(world, {x, y, 0}, {x, y, 3}, {x, y + 0.5f, 3}, {x, y + 0.5f, 0}, Facet::Kind::Building);
+    }
+    quad(world, {-2, -2, 0}, {2, -2, 0}, {2, 2, 0}, {-2, 2, 0}, Facet::Kind::Building);
+    const auto capped = [&world](const glm::vec3& lo, const glm::vec3& hi) {
+        std::vector<Facet> out;
+        for (const auto& f : world) {
+            glm::vec3 a = glm::min(glm::min(f.v[0], f.v[1]), f.v[2]);
+            glm::vec3 b = glm::max(glm::max(f.v[0], f.v[1]), f.v[2]);
+            if (b.x < lo.x || a.x > hi.x || b.y < lo.y || a.y > hi.y || b.z < lo.z || a.z > hi.z) continue;
+            out.push_back(f);
+            if (out.size() >= 40) break;
+        }
+        return std::optional<std::vector<Facet>>(out);
+    };
+    const glm::vec3 lo(-45, -45, -45), hi(45, 45, 45);
+    // The whole box at once: the floor is not among the first forty.
+    CHECK_FALSE(FacetIndex(*capped(lo, hi)).groundAt(0, 0, 0.5f, 1.1f));
+    const auto pieces = gatherInPieces(capped, lo, hi);
+    CHECK(FacetIndex(pieces).groundAt(0, 0, 0.5f, 1.1f));
+    // Each face once, though the floor reaches over the seam at 0.
+    CHECK(pieces.size() == world.size());
+}

@@ -185,6 +185,9 @@ public:
     /// A loading screen is drawn over the world: the entry's, until the world
     /// settles behind it, or a difficulty change's.
     [[nodiscard]] bool loadingScreenUp() const { return settleScreen_ || difficultyLoadingScreen_; }
+    /// What held the character's keys in the last frame (T402: a ghost that
+    /// neither moved nor turned): each gate by name, empty when none did.
+    [[nodiscard]] const std::vector<std::string>& movementHolds() const { return movementHolds_; }
     /// The world is being loaded, or settles behind its loading screen.
     [[nodiscard]] bool worldComing() const;
     /// Where a world ray first meets the triangles a unit's model draws
@@ -579,6 +582,10 @@ private:
     // until this exact transport instance's deck floor exists, instead of letting gravity
     // fold into the attachment and drop the rider through the hull.
     bool deckFloorPending_ = false;
+    /// movementHolds(), rebuilt by applyServerMovementState each frame, and
+    /// what of it was last written to the log (once per change).
+    std::vector<std::string> movementHolds_;
+    std::string movementHoldsLogged_;
     /// The local player's passenger state last frame, and the camera
     /// distance a seat's zoom put away (CGCamera +0x2d0, 0x005fe920).
     int localSeatStateLastFrame_ = 0;

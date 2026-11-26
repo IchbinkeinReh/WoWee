@@ -77,6 +77,17 @@ WalkPlan planWalk(const FacetIndex& world, const glm::vec3& from, const glm::vec
 std::string whyNoStep(const FacetIndex& world, const glm::vec3& a, const glm::vec2& b,
                       const WalkLimits& limits = {});
 
+/// The faces of a box, asked a piece at a time (V511): one query of the
+/// world stops at 0x2000 building faces (0x007cb7b0), as the mover's own
+/// small boxes want, and a walk's box of ninety yards over a flag room of
+/// Warsong filled it with other rooms' faces before the floor under the
+/// character - every first step had 'no ground'. Pieces of at most `piece`
+/// yards a side, each face once; a piece the world does not answer (not
+/// loaded) is left out.
+using FacetGather = std::function<std::optional<std::vector<probe::Facet>>(const glm::vec3&, const glm::vec3&)>;
+std::vector<probe::Facet> gatherInPieces(const FacetGather& gather, const glm::vec3& lo, const glm::vec3& hi,
+                                         float piece = 16.0f);
+
 /// From tools_terrain.cpp, on the game's thread: the faces in reach gathered
 /// and the way planned, and the faces in a box round a place.
 std::vector<probe::Facet> facetsForWalk(ToolContext& context, const glm::vec3& from, const glm::vec3& to);
