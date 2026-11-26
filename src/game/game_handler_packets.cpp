@@ -2198,9 +2198,10 @@ void GameHandler::registerCoreOpcodes() {
             // error line; anything else says nothing. This printed English
             // ("Hairstyle changed.") to chat, and to the error line as well.
             if (result == 0) {
+                // Only the event: the shop stays open with the player in the
+                // chair (BARBER_SHOP_CLOSE is 0x0052e9f0's, on Abbrechen or
+                // standing up), and the window redraws on it.
                 fireAddonEvent("BARBER_SHOP_SUCCESS", {});
-                barberShopOpen_ = false;
-                fireAddonEvent("BARBER_SHOP_CLOSE", {});
             } else if (result == 1 || result == 3) {
                 addUIError(interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
                 playGameErrorSound("ERR_NOT_ENOUGH_MONEY");

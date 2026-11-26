@@ -1754,7 +1754,16 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 // Byte 0 (bits 0-7): facial hair / piercings
                 uint8_t facialHair = static_cast<uint8_t>(val & 0xFF);
                 for (auto& ch : owner_.charactersRef()) {
-                    if (ch.guid == owner_.getPlayerGuid()) { ch.facialFeatures = facialHair; break; }
+                    if (ch.guid == owner_.getPlayerGuid()) {
+                        // The player's appearance bytes each have a watcher
+                        // that raises BARBER_SHOP_APPEARANCE_APPLIED when it
+                        // changes (0x006df620, 0x006da7f0, 0x006da870 ->
+                        // 0x0052e4d0): the barber's window redraws its choices.
+                        if (ch.facialFeatures != facialHair)
+                            pendingEvents_.emit("BARBER_SHOP_APPEARANCE_APPLIED", {});
+                        ch.facialFeatures = facialHair;
+                        break;
+                    }
                 }
                 LOG_DEBUG("PLAYER_BYTES_2 (VALUES): raw=0x", std::hex, val, std::dec,
                            " bankBagSlots=", static_cast<int>(bankBagSlots),
@@ -1774,7 +1783,14 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
         else if (!isCreate && pfi.pBytes != 0xFFFF && key == pfi.pBytes) {
             // PLAYER_BYTES changed (barber shop, polymorph, etc.)
             for (auto& ch : owner_.charactersRef()) {
-                if (ch.guid == owner_.getPlayerGuid()) { ch.appearanceBytes = val; break; }
+                if (ch.guid == owner_.getPlayerGuid()) {
+                    // Skin, face, hair style and colour: the same watchers as
+                    // the facial hair above.
+                    if (ch.appearanceBytes != val)
+                        pendingEvents_.emit("BARBER_SHOP_APPEARANCE_APPLIED", {});
+                    ch.appearanceBytes = val;
+                    break;
+                }
             }
             if (owner_.appearanceChangedCallbackRef())
                 owner_.appearanceChangedCallbackRef()();

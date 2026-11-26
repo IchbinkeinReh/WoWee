@@ -2667,6 +2667,29 @@ TEST_CASE("RegisterAllEvents does not take in this client's own notices", "[repl
     CHECK(ui.is("seen.WOWEE_ITEM_INFO_RECEIVED == nil"));
 }
 
+// 0x0052e5b0: a haircut paid for is BARBER_SHOP_SUCCESS and nothing more -
+// the shop stays open (BARBER_SHOP_CLOSE is 0x0052e9f0's, Abbrechen or
+// standing up); the changed appearance bytes then raise
+// BARBER_SHOP_APPEARANCE_APPLIED (0x006da7f0 and its siblings -> 0x0052e4d0).
+TEST_CASE("a haircut leaves the barber's window open", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    wowee::game::GameHandlerTestAccess::setCharacter(s.handler(), "A", "Locki", Session::kPlayerGuid);
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>&) {
+        if (name.rfind("BARBER_SHOP_", 0) == 0) events.push_back(name);
+    });
+    wowee::network::Packet ok(wowee::game::wireOpcode(Opcode::SMSG_BARBER_SHOP_RESULT));
+    ok.writeUInt32(0);
+    s.receive(ok);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0] == "BARBER_SHOP_SUCCESS");
+    events.clear();
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x01020304}}));
+    CHECK(std::count(events.begin(), events.end(), "BARBER_SHOP_APPEARANCE_APPLIED") == 1);
+    s.handler().setAddonEventCallback(nullptr);
+}
+
 // T364: PickupInventoryItem takes the bank's slots (40-67) and its bags'
 // slots (68-74) while a banker is open (0x005e7c00, 0x005e85d0 refuses them
 // only with none open). It did nothing for any slot past 23.
