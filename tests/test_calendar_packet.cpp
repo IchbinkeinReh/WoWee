@@ -1508,3 +1508,36 @@ TEST_CASE("A day's row names its texture, never a number", "[calendar]") {
     CHECK(calendarRowTexture(calendar_flag::kRaidLockout, 214, "x", dungeon).empty());
     CHECK(calendarRowTexture(calendar_flag::kSystem, 214, "x", dungeon).empty());
 }
+
+TEST_CASE("A holiday flagged as the realm's is moved by the realm's zone", "[calendar]") {
+    // Holidays.dbc Flags bit 0: the date walk hands each date to 0x0076cba0,
+    // which moves it by the realm's zone plus the machine's UTC offset
+    // (DAT_00cac11c) - nothing while the realm names no zone. A date at 23:00
+    // on 11 August moved by two hours is 01:00 on the 12th; the year left open
+    // stays open.
+    CalendarData cal;
+    CalendarHoliday h;
+    h.id = 341;
+    h.flags = 1;
+    h.dates[0] = (0x1Fu << 24) | (7u << 20) | (10u << 14) | (0x7u << 11) | (23u << 6);
+    h.durations[0] = 1;
+    h.calendarFlags[0] = 3;
+    cal.holidays = {h};
+    CalendarView view;
+    view.month = 8;
+    view.year = 2026;
+    CHECK(calendarEntriesForDay(cal, 8, 11, 2026, {}, view).size() == 1);
+    view.holidayZoneShift = 2 * 3600;
+    CHECK(calendarEntriesForDay(cal, 8, 11, 2026, {}, view).empty());
+    CHECK(calendarEntriesForDay(cal, 8, 12, 2026, {}, view).size() == 1);
+    // Without the flag the date is the machine's already.
+    cal.holidays[0].flags = 0;
+    CHECK(calendarEntriesForDay(cal, 8, 11, 2026, {}, view).size() == 1);
+
+    // The flag is the table's even where the server's record is used.
+    CalendarHoliday server = h;
+    server.flags = 0;
+    const auto merged = calendarMergedHolidays({h}, {server});
+    REQUIRE(merged.size() == 1);
+    CHECK(merged[0].flags == 1);
+}

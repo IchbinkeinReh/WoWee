@@ -680,6 +680,8 @@ void GameHandler::handleLoginSetTimeSpeed(network::Packet& packet) {
 
     const WowDate now = unpackWowPackedTime(packet.readUInt32());
     float timeScale = packet.readFloat();
+    // 0x007e28e0: a third field, the realm's zone, kept as the clock's +0x1c.
+    if (packet.hasRemaining(4)) realmZoneHours_ = static_cast<int32_t>(packet.readUInt32());
 
     // Hours since midnight, which is what GetGameTime already assumed and what
     // the sky wants. One meaning for this field, written down here.
@@ -6612,6 +6614,7 @@ const std::vector<CalendarHoliday>& GameHandler::holidayTable() {
         h.textureFilename = rows->getString(i, 51);
         h.priority = rows->getUInt32(i, 52);
         h.calendarFilterType = rows->getUInt32(i, 53);
+        if (rows->getFieldCount() > 54) h.flags = rows->getUInt32(i, 54);
         holidayTable_.push_back(std::move(h));
     }
     return holidayTable_;

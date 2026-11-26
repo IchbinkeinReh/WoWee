@@ -190,6 +190,7 @@ static wowee::game::CalendarView calendarView(const wowee::game::GameHandler& gh
     view.teamMask = team == 1 ? 1u : team == 0 ? 2u : 0u;
     if (const auto now = gh.getGameDate()) view.now = *now;
     view.player = gh.getPlayerGuid();
+    view.holidayZoneShift = gh.holidayZoneShift();
     return view;
 }
 

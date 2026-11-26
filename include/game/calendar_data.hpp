@@ -108,6 +108,10 @@ struct CalendarHoliday {
     /// Per stage, who sees it on the calendar: 1 the Alliance, 2 the Horde.
     uint32_t calendarFlags[kNumFlags] = {};
     std::string textureFilename;
+    /// Holidays.dbc's Flags (field 54), always the table's: bit 0 says its
+    /// dates are the realm's and are moved into the machine's own time
+    /// (0x005b4xxx's date walk -> 0x0076cba0).
+    uint32_t flags = 0;
 };
 
 /// A month as the calendar shows it and who looks (0x005c23c0).
@@ -117,6 +121,10 @@ struct CalendarView {
     uint32_t teamMask = 3;  ///< CalendarHoliday::calendarFlags' bits (0x006d6e90)
     WowDate now;            ///< what a date leaves open is taken from
     uint64_t player = 0;
+    /// Seconds a holiday date with Flags bit 0 is moved by (0x0076cba0's
+    /// DAT_00cac11c: the realm's zone hours x 3600 plus the machine's UTC
+    /// offset); 0 while the realm names no zone, as every date then stays.
+    int64_t holidayZoneShift = 0;
 };
 
 /// One showing of a holiday: a stage of it, from its start to its end, in

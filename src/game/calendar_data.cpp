@@ -213,7 +213,10 @@ std::vector<CalendarHoliday> calendarMergedHolidays(const std::vector<CalendarHo
     for (const CalendarHoliday& row : table) {
         const auto it = std::find_if(server.begin(), server.end(),
                                      [&](const CalendarHoliday& h) { return h.id == row.id; });
-        const CalendarHoliday& holiday = it != server.end() ? *it : row;
+        CalendarHoliday holiday = it != server.end() ? *it : row;
+        // The server's row brings dates and durations; the flags are always
+        // the table's (the date walk reads its own row's +0x36).
+        holiday.flags = row.flags;
         if (holiday.region == 0) out.push_back(holiday);
     }
     return out;
@@ -246,10 +249,32 @@ std::vector<CalendarHolidayRun> calendarHolidayRuns(const CalendarHoliday& h, in
             const auto open = [](uint32_t v, uint32_t ones) { return v == ones ? -1 : static_cast<int>(v); };
             int minute = open(packed & 0x3F, 0x3F);
             int hour = open((packed >> 6) & 0x1F, 0x1F);
-            const int weekday = open((packed >> 11) & 0x7, 0x7);
+            int weekday = open((packed >> 11) & 0x7, 0x7);
             int day = open((packed >> 14) & 0x3F, 0x3F);
             int mon = open((packed >> 20) & 0xF, 0xF);
             int yr = open((packed >> 24) & 0x1F, 0x1F);
+            // Flags bit 0: the date is the realm's, moved by the zone's shift
+            // (0x0076cba0): the fields taken as a local time (mktime; open
+            // ones are -1 and normalised - day 0 the month before's last, year
+            // 1999), plus the shift, back to fields (localtime); the weekday
+            // open, a year of 1999 open again.
+            if ((h.flags & 1u) != 0 && view.holidayZoneShift != 0) {
+                const int64_t yearsBy = (mon >= 0 ? mon : mon - 11) / 12;
+                const int y = static_cast<int>(2000 + yr + yearsBy);
+                const int m = static_cast<int>(mon - yearsBy * 12);
+                const int64_t secs = ((dayNumber(y, m + 1, 1) + day) * 1440 + hour * 60 + minute) * 60 +
+                                     view.holidayZoneShift;
+                int64_t days = secs / 86400, rest = secs % 86400;
+                if (rest < 0) { rest += 86400; --days; }
+                int cy = 0, cm = 0, cd = 0;
+                civilFromDays(days, cy, cm, cd);
+                minute = static_cast<int>(rest / 60 % 60);
+                hour = static_cast<int>(rest / 3600);
+                day = cd - 1;
+                mon = cm - 1;
+                yr = cy - 2000;
+                weekday = -1;
+            }
             // A weekday alone: every week, from the one the weeks shown begin
             // with. What else is open is the game's date, the year the one
             // shown - the one before for a December seen from January.

@@ -1122,6 +1122,8 @@ void GameHandler::registerCoreOpcodes() {
                             static_cast<float>(t.minute) / 60.0f;
                 gameTimeSetAt_ = std::chrono::steady_clock::now();
                 gameDateSet_ = t;
+                // 0x007e2b40 / 0x007e29c0: the realm's zone follows the time.
+                if (packet.hasRemaining(4)) realmZoneHours_ = static_cast<int32_t>(packet.readUInt32());
                 // Said out loud, because this is where realm time actually
                 // comes from on servers that never send SMSG_LOGIN_SETTIMESPEED
                 // - which logged its arrival and so looked like the only

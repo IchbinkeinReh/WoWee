@@ -2498,3 +2498,26 @@ TEST_CASE("SpellTargetItem gives the waiting spell the named item", "[replay][in
     // Without a spell waiting nothing is checked or done.
     CHECK(ui.is("pcall(SpellTargetItem, {})"));
 }
+
+// Holidays Flags bit 0: SMSG_LOGIN_SETTIMESPEED's third field (0x007e28e0)
+// and SMSG_GAMETIME_SET's second (0x007e2b40) are the realm's zone, the game
+// clock's +0x1c that 0x0076cba0 moves such a holiday's dates by. It was not
+// read.
+TEST_CASE("the realm's time zone comes with its time", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    auto& gh = s.handler();
+    wowee::network::Packet speed(wowee::game::wireOpcode(Opcode::SMSG_LOGIN_SETTIMESPEED));
+    speed.writeUInt32((26u << 24) | (10u << 20) | (25u << 14) | (12u << 6));
+    speed.writeFloat(1.0f / 60.0f);
+    speed.writeUInt32(3);
+    s.receive(speed);
+    CHECK(gh.realmZoneHours() == 3);
+    CHECK(gh.holidayZoneShift() != 0);
+    wowee::network::Packet set(wowee::game::wireOpcode(Opcode::SMSG_GAMETIME_SET));
+    set.writeUInt32((26u << 24) | (10u << 20) | (25u << 14) | (13u << 6));
+    set.writeUInt32(0);
+    s.receive(set);
+    CHECK(gh.realmZoneHours() == 0);
+    CHECK(gh.holidayZoneShift() == 0);
+}

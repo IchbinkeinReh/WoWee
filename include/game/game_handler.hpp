@@ -1248,6 +1248,15 @@ public:
     /// The game clock's date (0x00d37f98), run on from the server's time;
     /// none before the server has given one.
     std::optional<WowDate> getGameDate() const;
+    /// The realm's time zone in hours, the last field of SMSG_LOGIN_SETTIMESPEED,
+    /// SMSG_GAMETIME_SET and SMSG_GAMETIME_UPDATE (the game clock's +0x1c,
+    /// DAT_00d37fb4); 0 when the realm names none.
+    int32_t realmZoneHours() const { return realmZoneHours_; }
+    /// What a holiday date with Holidays.dbc Flags bit 0 is moved by, in
+    /// seconds (0x0076cba0): 0 while the zone is 0; else, worked out once for
+    /// the run (DAT_00cac11c), the zone's hours plus the machine's offset
+    /// from UTC.
+    int64_t holidayZoneShift() const;
     /// Answer an invitation. Status is a CalendarInviteStatus.
     void respondToCalendarInvite(uint64_t eventId, uint64_t inviteId,
                                  uint32_t status);
@@ -7899,6 +7908,7 @@ private:
     std::chrono::steady_clock::time_point gameTimeSetAt_{};
     /// The whole date the server last gave with gameTime_, for getGameDate.
     std::optional<WowDate> gameDateSet_;
+    int32_t realmZoneHours_ = 0;
     /// Game minutes per real second (default 1/60: a game day per real day).
     float timeSpeed_ = kDefaultGameTimeSpeed;
     void handleLoginSetTimeSpeed(network::Packet& packet);

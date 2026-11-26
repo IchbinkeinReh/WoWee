@@ -60,6 +60,7 @@
 #include <cmath>
 #include <cctype>
 #include <ctime>
+#include "core/local_time.hpp"
 #include <random>
 #include <zlib.h>
 #include <chrono>
@@ -5060,6 +5061,22 @@ std::optional<WowDate> GameHandler::getGameDate() const {
         std::chrono::steady_clock::now() - gameTimeSetAt_).count();
     const double minutes = std::max(0.0, elapsed) * static_cast<double>(clampGameTimeSpeed(timeSpeed_));
     return addMinutes(*gameDateSet_, static_cast<int64_t>(minutes));
+}
+
+int64_t GameHandler::holidayZoneShift() const {
+    // 0x0076cba0: nothing while the clock's zone (+0x1c) is 0; the shift is
+    // worked out the first time and kept for the run (DAT_00cac11c): the
+    // zone's hours, less mktime(gmtime(now)), plus now - so the zone plus the
+    // machine's own offset from UTC.
+    if (realmZoneHours_ == 0) return 0;
+    static int64_t shift = 0;
+    if (shift == 0) {
+        const std::time_t now = std::time(nullptr);
+        std::tm utc = core::utcTime(now);
+        shift = static_cast<int64_t>(realmZoneHours_) * 3600 - static_cast<int64_t>(std::mktime(&utc)) +
+                static_cast<int64_t>(now);
+    }
+    return shift;
 }
 
 // Each request below is one the client sends only while no other is pending,
