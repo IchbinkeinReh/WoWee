@@ -1135,15 +1135,16 @@ void GameHandler::registerCoreOpcodes() {
             packet.skipAll();
         };
     }
+    // 0x007e2840: one float, the clock's new speed (0x0076cfa0 clamps it);
+    // the time of day is not in it and stays where it was, so the clock
+    // runs on from its last base at the new speed (0x0076cff0). It read a
+    // packed time first, so the 4-byte packet set nothing and a longer one
+    // moved the time.
     dispatchTable_[Opcode::SMSG_GAMESPEED_SET] = [this](network::Packet& packet) {
-        if (packet.hasRemaining(8)) {
-            const WowDate t = unpackWowPackedTime(packet.readUInt32());
-            float timeSpeed = packet.readFloat();
-            gameTime_ = static_cast<float>(t.hour) +
-                        static_cast<float>(t.minute) / 60.0f;
-            gameTimeSetAt_ = std::chrono::steady_clock::now();
-            gameDateSet_ = t;
-            timeSpeed_ = clampGameTimeSpeed(timeSpeed);
+        if (packet.hasRemaining(4)) {
+            const float before = timeSpeed_;
+            timeSpeed_ = clampGameTimeSpeed(packet.readFloat());
+            LOG_INFO("Gamespeed set from ", before, " to ", timeSpeed_);
         }
         packet.skipAll();
     };

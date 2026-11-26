@@ -2522,6 +2522,34 @@ TEST_CASE("the realm's time zone comes with its time", "[replay][interface]") {
     CHECK(gh.holidayZoneShift() == 0);
 }
 
+// SMSG_GAMESPEED_SET (0x007e2840) is one float, the clock's speed
+// (0x0076cfa0); the time of day stays. It was read as a packed time and a
+// float, so the realm's 4-byte packet changed nothing.
+TEST_CASE("SMSG_GAMESPEED_SET sets the clock's speed only", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    auto& gh = s.handler();
+    wowee::network::Packet login(wowee::game::wireOpcode(Opcode::SMSG_LOGIN_SETTIMESPEED));
+    login.writeUInt32((26u << 24) | (10u << 20) | (25u << 14) | (12u << 6));
+    login.writeFloat(1.0f / 60.0f);
+    login.writeUInt32(0);
+    s.receive(login);
+    const auto date = gh.getGameDate();
+    REQUIRE(date.has_value());
+    wowee::network::Packet speed(wowee::game::wireOpcode(Opcode::SMSG_GAMESPEED_SET));
+    speed.writeFloat(0.5f);
+    s.receive(speed);
+    CHECK(gh.getTimeSpeed() == 0.5f);
+    CHECK(gh.getGameTime() >= 12.0f);
+    CHECK(gh.getGameTime() < 12.1f);
+    REQUIRE(gh.getGameDate().has_value());
+    CHECK(gh.getGameDate()->hour == date->hour);
+    wowee::network::Packet fast(wowee::game::wireOpcode(Opcode::SMSG_GAMESPEED_SET));
+    fast.writeFloat(100.0f);
+    s.receive(fast);
+    CHECK(gh.getTimeSpeed() == 60.0f);
+}
+
 // T357: AutoEquipCursorItem (0x006dfc40) wears the item ON the cursor (its bag
 // and slot, 0x00513680): a bind-on-equip one not yet bound is parked and
 // AUTOEQUIP_BIND_CONFIRM asked with the item kept in the hand, else
