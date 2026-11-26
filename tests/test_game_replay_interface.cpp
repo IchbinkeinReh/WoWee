@@ -2549,3 +2549,25 @@ TEST_CASE("AutoEquipCursorItem wears the held item", "[replay][interface]") {
     CHECK(s.sent().of(Opcode::CMSG_USE_ITEM).empty());
     CHECK(ui.is("not CursorHasItem()"));
 }
+
+// T359: the bank's slots and its bags' contents were filled from the item's
+// template alone, so a bound item there showed the template's bind line
+// (0x006277f0 reads the instance's ITEM_FIELD_FLAGS wherever it is held).
+TEST_CASE("an item in the bank keeps its own bound flag", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    constexpr uint64_t kItem = 0x4000000000000931ull;
+    s.receive(UpdateObject().create(kItem, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 50966}, {UF::ITEM_FIELD_STACK_COUNT, 1}}));
+    const uint16_t bank = wowee::game::fieldIndex(UF::PLAYER_FIELD_BANK_SLOT_1);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid,
+                                      {{bank, static_cast<uint32_t>(kItem)},
+                                       {static_cast<uint16_t>(bank + 1), static_cast<uint32_t>(kItem >> 32)}}));
+    // ITEM_FIELD_FLAGS, seven fields after the stack count: bound.
+    const uint16_t flags = static_cast<uint16_t>(wowee::game::fieldIndex(UF::ITEM_FIELD_STACK_COUNT) + 7);
+    s.receive(UpdateObject().valuesAt(kItem, {{flags, 1}}));
+    const auto& slot = s.handler().getInventory().getBankSlot(0);
+    REQUIRE(slot.item.itemId == 50966);
+    CHECK(slot.item.soulbound);
+    CHECK(slot.item.guid == kItem);
+}

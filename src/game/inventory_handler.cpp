@@ -7315,44 +7315,15 @@ void InventoryHandler::rebuildOnlineInventory() {
         auto itemIt = owner_.onlineItemsRef().find(guid);
         if (itemIt == owner_.onlineItemsRef().end()) { owner_.inventoryRef().clearBankSlot(i); continue; }
 
-        ItemDef def;
-        def.itemId = itemIt->second.entry;
-        def.stackCount = itemIt->second.stackCount;
-        def.curDurability = itemIt->second.curDurability;
-        def.maxDurability = itemIt->second.maxDurability;
-        def.maxStack = 1;
-
-        auto infoIt = owner_.itemInfoCacheRef().find(itemIt->second.entry);
-        if (infoIt != owner_.itemInfoCacheRef().end()) {
-            def.name = infoIt->second.name;
-            def.quality = static_cast<ItemQuality>(infoIt->second.quality);
-            def.inventoryType = infoIt->second.inventoryType;
-            def.maxStack = std::max(1, infoIt->second.maxStack);
-            def.displayInfoId = infoIt->second.displayInfoId;
-            def.subclassName = infoIt->second.subclassName;
-            def.damageMin = infoIt->second.damageMin;
-            def.damageMax = infoIt->second.damageMax;
-            def.delayMs = infoIt->second.delayMs;
-            def.armor = infoIt->second.armor;
-            def.stamina = infoIt->second.stamina;
-            def.strength = infoIt->second.strength;
-            def.agility = infoIt->second.agility;
-            def.intellect = infoIt->second.intellect;
-            def.spirit = infoIt->second.spirit;
-            def.itemLevel = infoIt->second.itemLevel;
-            def.requiredLevel = infoIt->second.requiredLevel;
-            def.bindType = infoIt->second.bindType;
-            def.description = infoIt->second.description;
-            def.startQuestId = infoIt->second.startQuestId;
-            def.extraStats.clear();
-            for (const auto& es : infoIt->second.extraStats)
-                def.extraStats.push_back({.statType = es.statType, .statValue = es.statValue});
-            def.sellPrice = infoIt->second.sellPrice;
+        // Through buildItemDef as the carried ones are, so the item's own fields
+        // - its soulbound flag above all - reach its tooltip (T359: a bound item
+        // in the bank showed its template's bind line; 0x006277f0 reads the
+        // instance wherever it is held).
+        ItemDef def = buildItemDef(itemIt->second.entry, itemIt->second.stackCount, itemIt->second.curDurability,
+                                   itemIt->second.maxDurability, guid, itemIt->second.flags,
+                                   itemIt->second.randomPropertyId, itemIt->second.suffixFactor);
+        if (const auto infoIt = owner_.itemInfoCacheRef().find(def.itemId); infoIt != owner_.itemInfoCacheRef().end())
             def.bagSlots = infoIt->second.containerSlots;
-        } else {
-            def.name = "Item " + std::to_string(def.itemId);
-            queryItemInfo(def.itemId, guid);
-        }
 
         owner_.inventoryRef().setBankSlot(i, def);
     }
@@ -7381,6 +7352,10 @@ void InventoryHandler::rebuildOnlineInventory() {
             bagDef.itemId = bagItemIt->second.entry;
             bagDef.stackCount = 1;
             bagDef.inventoryType = 18; // bag
+            // The bag's own guid and bound flag, as for the bank's slots (T359).
+            bagDef.guid = bagGuid;
+            bagDef.soulbound = (bagItemIt->second.flags & 0x1u) != 0;
+            bagDef.wrapped = (bagItemIt->second.flags & 0x8u) != 0;
             auto bagInfoIt = owner_.itemInfoCacheRef().find(bagItemIt->second.entry);
             if (bagInfoIt != owner_.itemInfoCacheRef().end()) {
                 bagDef.name = bagInfoIt->second.name;
@@ -7406,44 +7381,15 @@ void InventoryHandler::rebuildOnlineInventory() {
             auto itemIt = owner_.onlineItemsRef().find(itemGuid);
             if (itemIt == owner_.onlineItemsRef().end()) continue;
 
-            ItemDef def;
-            def.itemId = itemIt->second.entry;
-            def.stackCount = itemIt->second.stackCount;
-        def.curDurability = itemIt->second.curDurability;
-        def.maxDurability = itemIt->second.maxDurability;
-            def.maxStack = 1;
-
-            auto infoIt = owner_.itemInfoCacheRef().find(itemIt->second.entry);
-            if (infoIt != owner_.itemInfoCacheRef().end()) {
-                def.name = infoIt->second.name;
-                def.quality = static_cast<ItemQuality>(infoIt->second.quality);
-                def.inventoryType = infoIt->second.inventoryType;
-                def.maxStack = std::max(1, infoIt->second.maxStack);
-                def.displayInfoId = infoIt->second.displayInfoId;
-                def.subclassName = infoIt->second.subclassName;
-                def.damageMin = infoIt->second.damageMin;
-                def.damageMax = infoIt->second.damageMax;
-                def.delayMs = infoIt->second.delayMs;
-                def.armor = infoIt->second.armor;
-                def.stamina = infoIt->second.stamina;
-                def.strength = infoIt->second.strength;
-                def.agility = infoIt->second.agility;
-                def.intellect = infoIt->second.intellect;
-                def.spirit = infoIt->second.spirit;
-                def.itemLevel = infoIt->second.itemLevel;
-                def.requiredLevel = infoIt->second.requiredLevel;
-                def.sellPrice = infoIt->second.sellPrice;
-                def.bindType = infoIt->second.bindType;
-                def.description = infoIt->second.description;
-                def.startQuestId = infoIt->second.startQuestId;
-                def.extraStats.clear();
-                for (const auto& es : infoIt->second.extraStats)
-                    def.extraStats.push_back({.statType = es.statType, .statValue = es.statValue});
+            // Through buildItemDef as the carried ones are, so the item's own fields
+            // - its soulbound flag above all - reach its tooltip (T359: a bound item
+            // in the bank showed its template's bind line; 0x006277f0 reads the
+            // instance wherever it is held).
+            ItemDef def = buildItemDef(itemIt->second.entry, itemIt->second.stackCount, itemIt->second.curDurability,
+                                       itemIt->second.maxDurability, itemGuid, itemIt->second.flags,
+                                       itemIt->second.randomPropertyId, itemIt->second.suffixFactor);
+            if (const auto infoIt = owner_.itemInfoCacheRef().find(def.itemId); infoIt != owner_.itemInfoCacheRef().end())
                 def.bagSlots = infoIt->second.containerSlots;
-            } else {
-                def.name = "Item " + std::to_string(def.itemId);
-                queryItemInfo(def.itemId, itemGuid);
-            }
 
             owner_.inventoryRef().setBankBagSlot(bagIdx, s, def);
         }
