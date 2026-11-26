@@ -1752,3 +1752,55 @@ TEST_CASE("the barber's chair and window go together", "[replay][interface]") {
     CHECK(stood() == 1);
     CHECK(gh.takeBarberLeft());
 }
+
+// 0x0057f1b0 / 0x0057f4f0: a tracking spell that runs is shown by its
+// ActiveIconID, where it has one; one that does not run by its SpellIconID.
+TEST_CASE("the tracking that runs is drawn with its active icon", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    auto& gh = s.handler();
+    constexpr uint32_t kHerbs = 2383, kMinerals = 2580;
+    for (uint32_t id : {kHerbs, kMinerals}) {
+        auto& e = gh.spellNameCacheRef()[id];
+        e.name = id == kHerbs ? "Find Herbs" : "Find Minerals";
+        e.effectIds[0] = 6;
+        e.effectAuraIds[0] = 45;
+        e.activeIconId = id == kHerbs ? 900 : 0;
+    }
+    gh.setSpellIconPathResolver([](uint32_t id) { return "spell" + std::to_string(id); });
+    gh.setIconPathResolver([](uint32_t id) { return "icon" + std::to_string(id); });
+    Interface ui(s);
+    {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_INITIAL_SPELLS));
+        p.writeUInt8(0);
+        p.writeUInt16(2);
+        for (uint32_t id : {kHerbs, kMinerals}) {
+            p.writeUInt32(id);
+            p.writeUInt16(0);
+        }
+        p.writeUInt16(0);
+        s.receive(p);
+    }
+    const auto aura = [&](uint8_t slot, uint32_t spell) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt8(slot);
+        p.writeUInt32(spell);
+        if (spell != 0) {
+            p.writeUInt8(0x10 | 0x08 | 0x01);
+            p.writeUInt8(80);
+            p.writeUInt8(0);
+        }
+        s.receive(p);
+    };
+    // By name: Find Herbs first.
+    CHECK(ui.is("select(2, GetTrackingInfo(1)) == 'spell2383' and not select(3, GetTrackingInfo(1))"));
+    aura(3, kHerbs);
+    CHECK(ui.is("select(2, GetTrackingInfo(1)) == 'icon900' and select(3, GetTrackingInfo(1)) == 1"));
+    CHECK(ui.is("GetTrackingTexture() == 'icon900'"));
+    CHECK(ui.is("select(2, GetTrackingInfo(2)) == 'spell2580'"));
+    aura(3, 0);
+    aura(4, kMinerals);   // no active icon of its own
+    CHECK(ui.is("GetTrackingTexture() == 'spell2580'"));
+    CHECK(ui.is("select(2, GetTrackingInfo(1)) == 'spell2383'"));
+}

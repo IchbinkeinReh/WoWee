@@ -3772,6 +3772,18 @@ static bool trackingActive(game::GameHandler* gh, uint32_t spellId) {
     return false;
 }
 
+/// The picture of a tracking spell (0x0057f1b0, 0x0057f4f0): while it runs its
+/// ActiveIconID's, where it has one (Spell.dbc +0x218), else its SpellIconID's.
+static std::string trackingIcon(game::GameHandler* gh, uint32_t spellId, bool active) {
+    if (!gh) return {};
+    if (active) {
+        const auto it = gh->spellNameCacheRef().find(spellId);
+        if (it != gh->spellNameCacheRef().end() && it->second.activeIconId != 0)
+            return gh->getIconPath(it->second.activeIconId);
+    }
+    return gh->getSpellIconPath(spellId);
+}
+
 // The menu's own entries after the spells (0x00a11c50, offered by class by
 // 0x0057eb00): the town services, the mailbox and low-level quests. 3.x's;
 // the earlier menus are the spells alone.
@@ -3825,7 +3837,7 @@ static int lua_GetTrackingTexture(lua_State* L) {
     }
     for (uint32_t sid : trackingSpells(gh)) {
         if (!trackingActive(gh, sid)) continue;
-        const std::string icon = gh->getSpellIconPath(sid);
+        const std::string icon = trackingIcon(gh, sid, true);
         if (!icon.empty()) { lua_pushstring(L, icon.c_str()); return 1; }
     }
     // Nothing tracked, and what a stock client shows for that is not the same
@@ -3871,9 +3883,10 @@ static int lua_GetTrackingInfo(lua_State* L) {
     const auto spells = trackingSpells(gh);
     if (index >= 1 && index <= static_cast<int>(spells.size())) {
         const uint32_t sid = spells[static_cast<size_t>(index - 1)];
+        const bool active = trackingActive(gh, sid);
         lua_pushstring(L, gh->getSpellName(sid).c_str());
-        lua_pushstring(L, gh->getSpellIconPath(sid).c_str());
-        luaPushOneOrNil(L, trackingActive(gh, sid) ? 1 : 0);
+        lua_pushstring(L, trackingIcon(gh, sid, active).c_str());
+        luaPushOneOrNil(L, active ? 1 : 0);
         lua_pushstring(L, "spell");
         return 4;
     }
