@@ -35,7 +35,9 @@ class VkContext;
  * texel per cell of pixels, and the copy is redrawn under the exposure let
  * go toward one round those cells (eye_adaptation::exposeFrame): the
  * burnt-out sky stays white, its glare falls off softly, and everywhere else
- * it is the multiply it was.
+ * it is the multiply it was. Only the sky's white is marked, by the scene's
+ * depth: a surface drawn white - a floor under a fire's light and the glow -
+ * is exposed as the rest of the world.
  *
  * With the lighting off nothing is recorded or drawn, and the picture is
  * exactly what it was.
@@ -61,12 +63,24 @@ public:
     /// exposure of one, when nothing is copied or drawn.
     [[nodiscard]] bool wantsComposite() const;
 
+    /// The scene's depth, as its last pass left it (as SunShafts::FrameInputs
+    /// has it): what tells the sky from what is drawn. Without an image every
+    /// clipped pixel counts.
+    struct SceneDepth {
+        VkImage image = VK_NULL_HANDLE;
+        bool multisampled = false;
+        VkImageLayout layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        /// Changes whenever the scene's targets are made again.
+        uint64_t generation = 0;
+    };
+
     /// Copy the frame as it stands - the overlay pass that drew the shafts
-    /// over it ended, the image in PRESENT_SRC - for composite() to read.
-    /// Outside any render pass; leaves the image in PRESENT_SRC. False when
-    /// there is nothing to draw or the copy cannot be made.
+    /// over it ended, the image in PRESENT_SRC - for composite() to read, and
+    /// mark its clipped sky by `depth`. Outside any render pass; leaves the
+    /// image in PRESENT_SRC and the depth in its layout. False when there is
+    /// nothing to draw or the copy cannot be made.
     [[nodiscard]] bool prepareComposite(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainImage,
-                                        VkExtent2D extent);
+                                        VkExtent2D extent, const SceneDepth& depth);
 
     /// Redraw the picture from that copy under the exposure. Inside the
     /// overlay pass, viewport set, before the interface; only after
@@ -87,6 +101,8 @@ private:
 
     bool ensureCompositePipeline();
     bool ensureCopies(VkExtent2D extent);
+    /// The view of this frame's depth image, made anew when it changes.
+    VkImageView depthViewFor(VkImage image, uint64_t generation);
     void destroyCopies();
     void forget();
 
@@ -124,7 +140,18 @@ private:
     VkDescriptorSet maskSets_[MAX_FRAMES] = {};
     VkDescriptorSet blurSets_[MAX_FRAMES] = {};
     VkPipelineLayout maskLayout_ = VK_NULL_HANDLE;
-    VkPipeline maskPipeline_ = VK_NULL_HANDLE;
+    VkPipeline maskPipeline_ = VK_NULL_HANDLE;    // single-sampled depth, or none
+    VkPipeline maskPipelineMs_ = VK_NULL_HANDLE;  // multisampled depth
+    /// The depth view, and what each slot's mask and blur sets were last
+    /// given for binding 2: the serial of the depth view, or 0 for the
+    /// frame's copy standing in where there is no depth.
+    VkImage depthImage_ = VK_NULL_HANDLE;
+    uint64_t depthGeneration_ = 0;
+    VkImageView depthView_ = VK_NULL_HANDLE;
+    uint64_t depthViewSerial_ = 0;
+    uint64_t depthSetSerial_[MAX_FRAMES] = {};
+    bool depthSetWritten_[MAX_FRAMES] = {};
+    bool depthSampleable_ = false;
 
     VkPipelineLayout compositeLayout_ = VK_NULL_HANDLE;
     VkPipeline compositePipeline_ = VK_NULL_HANDLE;

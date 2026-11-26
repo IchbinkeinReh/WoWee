@@ -346,3 +346,40 @@ TEST_CASE("the glare round a burnt-out sun has no lattice of the mask's cells", 
         CHECK(atCentre < 2.0 * between + 1e-6);
     }
 }
+
+TEST_CASE("a surface burnt white is exposed as the rest; only the sky's white is let go", "[eye]") {
+    // Undercity's bank with the traced fire light and the screen glow over
+    // it (V430): a dim room, a floor patch clipped white with a glow round it
+    // - drawn geometry, not sky. The eye takes the glaring view down; before,
+    // the patch and a wide field round it were let go to one, a white blob
+    // over a third of the screen while the rest was at 0.57.
+    const float e = 0.57f;
+    Frame f;
+    for (uint32_t y = 0; y < Frame::H; ++y) {
+        for (uint32_t x = 0; x < Frame::W; ++x) {
+            float* p = f.at(x, y);
+            p[0] = 0.35f; p[1] = 0.4f; p[2] = 0.3f;
+            const float d = std::hypot(float(x) - 200.0f, float(y) - 110.0f);
+            if (d < 30.0f) { p[0] = p[1] = p[2] = 1.0f; }
+            else if (d < 70.0f) {
+                const float g = 0.99f * (1.0f - (d - 30.0f) / 40.0f);
+                for (int c = 0; c < 3; ++c) p[c] = std::max(p[c], g);
+            }
+        }
+    }
+    const Frame orig = f;
+    const std::vector<float> ground(size_t(Frame::W) * Frame::H, 0.0f);
+    exposeFrame(f.px.data(), Frame::W, Frame::H, e, ground.data());
+    // Every pixel, the burnt-out patch and its glow too, times the exposure.
+    for (size_t i = 0; i < f.px.size(); ++i) CHECK(f.px[i] == Catch::Approx(orig.px[i] * e).margin(1e-5));
+
+    // The same white where the depth holds the sky: let go, as the sun's.
+    Frame s = orig;
+    const std::vector<float> sky(size_t(Frame::W) * Frame::H, 1.0f);
+    exposeFrame(s.px.data(), Frame::W, Frame::H, e, sky.data());
+    CHECK(s.at(200, 110)[1] > 0.97f);
+    // Without a depth to read every pixel counts, as it did.
+    Frame n = orig;
+    exposeFrame(n.px.data(), Frame::W, Frame::H, e);
+    CHECK(n.at(200, 110)[1] > 0.97f);
+}

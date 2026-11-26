@@ -2116,9 +2116,22 @@ void Renderer::endFrame() {
         if (eyeAdaptation_ && eyeAdaptation_->wantsComposite()) {
             const auto& images = vkCtx->getSwapchainImages();
             vkCmdEndRenderPass(currentCmd);
+            // The scene's depth tells it the sky, whose clipped white alone
+            // is let go (eye_adaptation.hpp) - as the sun shafts read it.
+            EyeAdaptationPass::SceneDepth depth;
+            if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
+                depth.image = postProcessPipeline_->getSceneDepthImage();
+                depth.multisampled = postProcessPipeline_->sceneDepthIsMsaa();
+                depth.layout = postProcessPipeline_->sceneDepthLayout();
+            } else {
+                depth.image = vkCtx->getDepthCopySourceImage();
+                depth.multisampled = vkCtx->isDepthCopySourceMsaa();
+            }
+            depth.generation = (vkCtx->swapchainGeneration() << 32) ^
+                               (postProcessPipeline_ ? postProcessPipeline_->targetsGeneration() : 0);
             const bool copied = eyeAdaptation_->prepareComposite(
                 currentCmd, vkCtx->getCurrentFrame(),
-                currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE, ext);
+                currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE, ext, depth);
             vkCmdBeginRenderPass(currentCmd, &overlayRp, VK_SUBPASS_CONTENTS_INLINE);
             vkCmdSetViewport(currentCmd, 0, 1, &vp);
             vkCmdSetScissor(currentCmd, 0, 1, &sc);

@@ -32,6 +32,8 @@ struct MaskPush {
     int32_t cell;
     /// 0: the clip mask from the frame; 1: the mask blurred (eye_highlight_mask.comp.glsl).
     int32_t mode;
+    /// 1: binding 2 is the scene's depth, only its sky counts; 0: none, every pixel counts.
+    int32_t depth;
 };
 
 struct CompositePush {
@@ -132,12 +134,15 @@ bool EyeAdaptationPass::initialize(VkContext* ctx) {
                                            .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT};
     VkDescriptorSetLayoutBinding maskOut{.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                                          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT};
-    maskSetLayout_ = createDescriptorSetLayout(device, {maskFrame, maskOut});
+    // The scene's depth, which tells the sky (eye_highlight_mask.comp.glsl).
+    VkDescriptorSetLayoutBinding maskDepth{.binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                           .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT};
+    maskSetLayout_ = createDescriptorSetLayout(device, {maskFrame, maskOut, maskDepth});
     VkDescriptorPoolSize poolSizes[2] = {
         // A slot's composite reads the frame and the blurred mask, its mask
-        // pass the frame and its blur pass the mask; the two passes each
-        // write one image.
-        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES * (2 + 1 + 1)},
+        // pass the frame and the depth, its blur pass the mask and (bound,
+        // unread) the depth; the two passes each write one image.
+        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES * (2 + 2 + 2)},
         {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = MAX_FRAMES * (1 + 1)},
     };
     VkDescriptorPoolCreateInfo poolCI{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -164,23 +169,29 @@ bool EyeAdaptationPass::initialize(VkContext* ctx) {
                                        .size = sizeof(MaskPush)};
     maskLayout_ = createPipelineLayout(device, {maskSetLayout_}, {maskPush});
     if (maskLayout_ == VK_NULL_HANDLE) return false;
-    {
+    const auto maskPipeline = [&](const char* path, VkPipeline& out) {
         VkShaderModule module;
-        if (!module.loadFromFile(device, "assets/shaders/eye_highlight_mask.comp.spv")) {
-            LOG_ERROR("EyeAdaptation: failed to load the clip mask shader");
+        if (!module.loadFromFile(device, path)) {
+            LOG_ERROR("EyeAdaptation: failed to load the clip mask shader ", path);
             return false;
         }
         VkComputePipelineCreateInfo cpCI{.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
         cpCI.stage = module.stageInfo(VK_SHADER_STAGE_COMPUTE_BIT);
         cpCI.layout = maskLayout_;
-        const bool ok = vkCreateComputePipelines(device, ctx_->getPipelineCache(), 1, &cpCI, nullptr,
-                                                 &maskPipeline_) == VK_SUCCESS;
+        const bool ok =
+            vkCreateComputePipelines(device, ctx_->getPipelineCache(), 1, &cpCI, nullptr, &out) == VK_SUCCESS;
         module.destroy();
-        if (!ok) {
-            LOG_ERROR("EyeAdaptation: failed to create the clip mask pipeline");
-            return false;
-        }
+        if (!ok) LOG_ERROR("EyeAdaptation: failed to create the clip mask pipeline ", path);
+        return ok;
+    };
+    if (!maskPipeline("assets/shaders/eye_highlight_mask.comp.spv", maskPipeline_) ||
+        !maskPipeline("assets/shaders/eye_highlight_mask_ms.comp.spv", maskPipelineMs_)) {
+        return false;
     }
+    // Without a sampled depth every clipped pixel counts, sky or not.
+    VkFormatProperties depthProps{};
+    vkGetPhysicalDeviceFormatProperties(ctx_->getPhysicalDevice(), ctx_->getDepthFormat(), &depthProps);
+    depthSampleable_ = (depthProps.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
 
     const VkPushConstantRange push{.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0,
                                    .size = sizeof(CompositePush)};
@@ -363,6 +374,34 @@ void EyeAdaptationPass::destroyCopies() {
     copyExtent_ = {};
     maskExtent_ = {};
     cell_ = 0;
+    // The frame's copy may have stood in for the depth in a slot's sets.
+    for (bool& w : depthSetWritten_) w = false;
+}
+
+VkImageView EyeAdaptationPass::depthViewFor(VkImage image, uint64_t generation) {
+    if (image == depthImage_ && generation == depthGeneration_ && depthView_ != VK_NULL_HANDLE) return depthView_;
+    VkDevice device = ctx_->getDevice();
+    if (depthView_ != VK_NULL_HANDLE) {
+        // A slot's sets may still name it in a frame in flight.
+        VkImageView old = depthView_;
+        ctx_->deferAfterAllFrameFences([device, old]() { vkDestroyImageView(device, old, nullptr); });
+        depthView_ = VK_NULL_HANDLE;
+    }
+    depthImage_ = image;
+    depthGeneration_ = generation;
+    VkImageViewCreateInfo vi{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = ctx_->getDepthFormat();
+    vi.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1,
+                           .baseArrayLayer = 0, .layerCount = 1};
+    if (vkCreateImageView(device, &vi, nullptr, &depthView_) != VK_SUCCESS) {
+        depthView_ = VK_NULL_HANDLE;
+        depthImage_ = VK_NULL_HANDLE;
+        return VK_NULL_HANDLE;
+    }
+    ++depthViewSerial_;
+    return depthView_;
 }
 
 bool EyeAdaptationPass::ensureCopies(VkExtent2D extent) {
@@ -436,7 +475,7 @@ bool EyeAdaptationPass::ensureCopies(VkExtent2D extent) {
 }
 
 bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainImage,
-                                         VkExtent2D extent) {
+                                         VkExtent2D extent, const SceneDepth& depth) {
     if (frame >= MAX_FRAMES || cmd == VK_NULL_HANDLE || swapchainImage == VK_NULL_HANDLE || !wantsComposite() ||
         compositeSets_[frame] == VK_NULL_HANDLE || maskSets_[frame] == VK_NULL_HANDLE ||
         blurSets_[frame] == VK_NULL_HANDLE ||
@@ -488,16 +527,71 @@ bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, Vk
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-    // Where the copy is clipped white, one texel a cell. The mask's last
-    // contents were read by this slot's composite two frames ago; all of it
-    // is written again.
+    // The scene's depth for binding 2, which tells the sky; where there is
+    // none to read, the frame's copy stands in, unread. This slot's sets
+    // were last bound two frames ago, which has finished.
+    const VkImageView depthView =
+        depthSampleable_ && depth.image != VK_NULL_HANDLE ? depthViewFor(depth.image, depth.generation)
+                                                          : VK_NULL_HANDLE;
+    const bool haveDepth = depthView != VK_NULL_HANDLE;
+    const uint64_t depthSerial = haveDepth ? depthViewSerial_ : 0;
+    if (!depthSetWritten_[frame] || depthSetSerial_[frame] != depthSerial) {
+        VkDescriptorImageInfo depthIn{.sampler = sampler_, .imageView = haveDepth ? depthView : frameCopy_[frame].view,
+                                      .imageLayout = haveDepth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                                               : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w[2]{};
+        for (uint32_t i = 0; i < 2; i++) {
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = i == 0 ? maskSets_[frame] : blurSets_[frame];
+            w[i].dstBinding = 2;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[i].pImageInfo = &depthIn;
+        }
+        vkUpdateDescriptorSets(ctx_->getDevice(), 2, w, 0, nullptr);
+        depthSetSerial_[frame] = depthSerial;
+        depthSetWritten_[frame] = true;
+    }
+    const VkPipeline pipeline = haveDepth && depth.multisampled ? maskPipelineMs_ : maskPipeline_;
+    // The depth from wherever the scene's last pass left it, to be sampled
+    // through both passes - and back afterwards, so whatever comes next
+    // finds it as it was.
+    const auto depthBarrier = [&](VkImageLayout from, VkImageLayout to, bool toRead) {
+        const VkPipelineStageFlags2 tests =
+            VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        const VkPipelineStageFlags2 readers = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        VkImageMemoryBarrier2 b{.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask = toRead ? (tests | readers) : readers;
+        b.srcAccessMask = toRead ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0;
+        b.dstStageMask = toRead ? readers : (tests | readers);
+        b.dstAccessMask = toRead ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+                                 : (VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        b.oldLayout = from;
+        b.newLayout = to;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = depth.image;
+        b.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1,
+                              .baseArrayLayer = 0, .layerCount = 1};
+        VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &b;
+        cmdPipelineBarrier2(cmd, dep);
+    };
+    if (haveDepth) depthBarrier(depth.layout, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, true);
+
+    // Where the copy's sky is clipped white, one texel a cell. The mask's
+    // last contents were read by this slot's composite two frames ago; all
+    // of it is written again.
     barrier(mask_[frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     MaskPush maskPush{.frameWidth = static_cast<int32_t>(extent.width),
                       .frameHeight = static_cast<int32_t>(extent.height),
-                      .cell = static_cast<int32_t>(cell_), .mode = 0};
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, maskPipeline_);
+                      .cell = static_cast<int32_t>(cell_), .mode = 0, .depth = haveDepth ? 1 : 0};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, maskLayout_, 0, 1, &maskSets_[frame], 0, nullptr);
     vkCmdPushConstants(cmd, maskLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(maskPush), &maskPush);
     vkCmdDispatch(cmd, (maskExtent_.width + 7) / 8, (maskExtent_.height + 7) / 8, 1);
@@ -515,6 +609,7 @@ bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, Vk
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, maskLayout_, 0, 1, &blurSets_[frame], 0, nullptr);
     vkCmdPushConstants(cmd, maskLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(maskPush), &maskPush);
     vkCmdDispatch(cmd, (maskExtent_.width + 7) / 8, (maskExtent_.height + 7) / 8, 1);
+    if (haveDepth) depthBarrier(VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, depth.layout, false);
     barrier(blur_[frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
@@ -553,6 +648,11 @@ void EyeAdaptationPass::shutdown() {
     destroy(device, compositeLayout_);
     destroy(device, compositeSetLayout_);
     destroy(device, maskPipeline_);
+    destroy(device, maskPipelineMs_);
+    if (depthView_ != VK_NULL_HANDLE) vkDestroyImageView(device, depthView_, nullptr);
+    depthView_ = VK_NULL_HANDLE;
+    depthImage_ = VK_NULL_HANDLE;
+    for (bool& w : depthSetWritten_) w = false;
     destroy(device, maskLayout_);
     destroy(device, maskSetLayout_);
     sampler_ = VK_NULL_HANDLE;

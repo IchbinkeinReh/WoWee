@@ -130,8 +130,17 @@ inline float initialAdaptation(float measuredLog2, const Params& p = {}) {
 /// go toward one: the burnt-out sky stays white, as it is without the traced
 /// lighting, and the glare falls off softly into the exposed sky round it.
 ///
+/// Only the sky's clipped white counts: the pixels the scene's depth holds
+/// nothing in front of the far plane at (the sky, its clouds, the sun and
+/// the moon write none). A surface the world draws is no glare - a floor
+/// burnt white by a fire's traced light and the screen glow over it
+/// (Undercity's bank, V430) was let go to one with a wide patch round it
+/// while the rest of the view was taken down to 0.57, a white blob the size
+/// of a third of the screen: the sun's white applied to a fire. Such a
+/// surface takes the exposure as everything else drawn does.
+///
 /// Per cell of the frame (eye_highlight_mask.comp.glsl) the share of pixels
-/// clipped white (clipShare); that blurred wide - a 5 x 5 Gaussian over the
+/// clipped white (clipShare) and sky; that blurred wide - a 5 x 5 Gaussian over the
 /// cells, kGlareSpread cells apart (blurMask) - gives the glare weight (glareWeight,
 /// with a tighter blur for a small core on its own),
 /// and the pixel's colour is scaled by the exposure mixed toward one by it
@@ -211,9 +220,12 @@ inline std::vector<float> blurMask(const std::vector<float>& mask, uint32_t mw, 
 }
 
 /// The whole of it on the CPU, for the tests: `rgb` is `width` x `height`
-/// pixels, three floats each, 0..1, exposed in place. The mask texels and
-/// the composite's filtered taps as the shaders have them.
-inline void exposeFrame(float* rgb, uint32_t width, uint32_t height, float exposure) {
+/// pixels, three floats each, 0..1, exposed in place. `sky`, one per pixel
+/// where given, is 1 where the depth holds the sky and 0 where something is
+/// drawn; without it (no depth to read) every pixel counts. The mask texels
+/// and the composite's filtered taps as the shaders have them.
+inline void exposeFrame(float* rgb, uint32_t width, uint32_t height, float exposure,
+                        const float* sky = nullptr) {
     if (!rgb || width == 0 || height == 0) return;
     const uint32_t cell = glareCell(height);
     const uint32_t mw = (width + cell - 1) / cell, mh = (height + cell - 1) / cell;
@@ -224,7 +236,7 @@ inline void exposeFrame(float* rgb, uint32_t width, uint32_t height, float expos
             for (uint32_t y = my * cell; y < std::min(height, (my + 1) * cell); ++y) {
                 for (uint32_t x = mx * cell; x < std::min(width, (mx + 1) * cell); ++x) {
                     const float* p = rgb + (size_t(y) * width + x) * 3;
-                    sum += clipShare(p[0], p[1], p[2]);
+                    sum += clipShare(p[0], p[1], p[2]) * (sky ? sky[size_t(y) * width + x] : 1.0f);
                     count += 1.0f;
                 }
             }
