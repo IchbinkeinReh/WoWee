@@ -2920,3 +2920,31 @@ TEST_CASE("a greeting title past the end is nil (0x0058be30)", "[replay][interfa
     Interface ui(s);
     CHECK(ui.is("GetAvailableTitle(5) == nil and GetActiveTitle(5) == nil"));
 }
+
+// T382: GetAuctionItemInfo's level is the required level but 1 where there is
+// none (0x0059d5e0); canUse asks CanUseItem (0x006dc3f0) - an item not known
+// yet is not refused.
+TEST_CASE("an auction row without a required level says level 1 (0x0059d5e0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.handler().getInventoryHandler()->openAuctionHouse(0x77);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_LIST_RESULT));
+    p.writeUInt32(1);
+    p.writeUInt32(9);
+    p.writeUInt32(10940);
+    for (int i = 0; i < 21; ++i) p.writeUInt32(0);
+    for (int i = 0; i < 2; ++i) p.writeUInt32(0);
+    p.writeUInt32(2);
+    for (int i = 0; i < 2; ++i) p.writeUInt32(0);
+    p.writeUInt64(0x1001);
+    for (uint32_t v : {150u, 0u, 300u, 60000u}) p.writeUInt32(v);
+    p.writeUInt64(0);
+    p.writeUInt32(0);
+    p.writeUInt32(1);
+    p.writeUInt32(300);
+    s.receive(p);
+    REQUIRE(ui.is("GetNumAuctionItems('list') == 1"));
+    CHECK(ui.is("select(6, GetAuctionItemInfo('list', 1)) == 1"));
+    CHECK(ui.is("select(5, GetAuctionItemInfo('list', 1)) == 1"));
+}

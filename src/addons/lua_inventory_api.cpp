@@ -7849,7 +7849,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushnumber(L, inStack);
             lua_pushnumber(L, info && info->valid ? info->quality
                                   : static_cast<uint32_t>(s.item.quality));
-            luaPushOneOrNil(L, 1);
+            // 0x0059f760: canUse by CanUseItem (0x006dc3f0), as above (T382).
+            luaPushOneOrNil(L, !(info && info->valid) || gh->judgeItemRequirements(*info).usable() ? 1 : 0);
             lua_pushnumber(L, static_cast<lua_Number>(unitPrice) * inStack);
             lua_pushnumber(L, unitPrice);
             lua_pushnumber(L, (info && info->valid && info->maxStack > 0)
@@ -8167,8 +8168,11 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushstring(L, icon.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str()); // texture
             lua_pushnumber(L, a.stackCount);        // count
             lua_pushnumber(L, quality);             // quality
-            luaPushOneOrNil(L, 1);                  // canUse
-            lua_pushnumber(L, info ? info->requiredLevel : 0); // level
+            // canUse: 0x0059d5e0 asks CanUseItem (0x006dc3f0) - nil for an
+            // item the player cannot use, whose icon the browse list draws
+            // red (T382). The level is the required level, 1 where it is 0.
+            luaPushOneOrNil(L, !info || gh->judgeItemRequirements(*info).usable() ? 1 : 0);
+            lua_pushnumber(L, info && info->requiredLevel > 0 ? info->requiredLevel : 1); // level
             lua_pushnumber(L, a.startBid);          // minBid
             lua_pushnumber(L, a.minBidIncrement);   // minIncrement
             lua_pushnumber(L, a.buyoutPrice);       // buyoutPrice
