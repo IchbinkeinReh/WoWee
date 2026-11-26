@@ -56,9 +56,9 @@ constexpr SettingDesc kSchema[] = {
     {"rtlightreach", "RT light distance (%)", SettingKind::Int, 1, 100, 1,
      "Graphics", "View",
      "How far away lamps, fires, torches and glows still light the\n"
-     "scene, as a share of the view distance. Lights farther off fade\n"
-     "out over the last stretch and are dropped. Never beyond 120\n"
-     "yards; 100 is as before. Less costs less tracing time.\n"
+     "scene, as a share of the view distance: 100 is the whole view\n"
+     "distance. Lights farther off fade out over the last 15 % and\n"
+     "are dropped. Less costs less tracing time.\n"
      "Not in the original client.", "", 100, "raytracedlighting"},
     // It used to be left out, deferred to the Effects panel of the game's own
     // Video options - as were ground clutter, its radius, brightness,

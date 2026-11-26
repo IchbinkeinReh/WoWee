@@ -7396,7 +7396,7 @@ void Renderer::recordRtLighting() {
         // what reaches into the view and to the most the pass traces.
         WOWEE_PROFILE_SCOPE("rt: point lights", Cpu);
         // The Ray Tracing page's light distance: a share of the view
-        // distance, at most the 120 yards they were always gathered to.
+        // distance, 100 % the whole of it (U18).
         const float kLightRange = rtLightReach(rtLightReachPercent_, farClip_);
         // Main thread only; kept to keep its capacity.
         static std::vector<rt_lights::PointLight> lightScratch;
@@ -7410,8 +7410,8 @@ void Renderer::recordRtLighting() {
         rt_lights::keepOneLightPerPlace(lightScratch);
         // The Debug Graphics settings' strength and reach per kind of light.
         for (rt_lights::PointLight& l : lightScratch) {
-            // Below the cap a light fades out by where it stands, to none at
-            // the distance (selectLights then drops it as too faint).
+            // A light fades out by where it stands over the last 15 % of the
+            // distance, to none at it (selectLights then drops it as too faint).
             l.color *= rtLightReachShare(glm::length(l.position - in.cameraPos), kLightRange);
             const size_t k = std::min(static_cast<size_t>(l.source), rt_lights::kSourceCount - 1);
             l.color *= std::max(lightingTune_.sourceIntensity[k], 0.0f);
