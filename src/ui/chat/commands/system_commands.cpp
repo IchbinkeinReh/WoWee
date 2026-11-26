@@ -820,7 +820,9 @@ public:
 class VersionCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
-        sayConsole(ctx, std::string("Wowee [Release] ") + core::kVersionString);
+        // With the commit, which names the running build (T369: the version
+        // alone is the last tag's and stayed the same build after build).
+        sayConsole(ctx, std::string("Wowee [Release] ") + core::kVersionString + " Commit " + core::kCommit);
         return {};
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"ver"}; }

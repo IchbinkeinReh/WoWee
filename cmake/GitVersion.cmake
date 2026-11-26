@@ -55,6 +55,23 @@ elseif(GIT_FOUND)
     endif()
 endif()
 
+# The commit itself, whatever the version: /ver names the running build by it
+# (T369, the user's wish), as the deployed builds are named p-<commit>.
+set(WOWEE_GIT_COMMIT "unknown")
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short=9 HEAD
+        WORKING_DIRECTORY ${SRC_DIR}
+        OUTPUT_VARIABLE _git_commit
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _commit_result
+    )
+    if(_commit_result EQUAL 0 AND _git_commit)
+        set(WOWEE_GIT_COMMIT "${_git_commit}")
+    endif()
+endif()
+
 # Date only, no clock time: a timestamp would differ on every build and force a
 # recompile of everything including this header.
 string(TIMESTAMP WOWEE_BUILD_DATE "%Y-%m-%d" UTC)
