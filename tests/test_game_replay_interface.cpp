@@ -2418,3 +2418,34 @@ TEST_CASE("an item or a game object a token names is called by its name", "[repl
     REQUIRE(ui.is("UnitGUID('questnpc') ~= nil"));
     CHECK(ui.is("UnitName('questnpc') == 'Geschundene Daemonenhaut'"));
 }
+
+// T355: SMSG_CANCEL_AUTO_REPEAT (0x0072d130) stops the player's own repeat
+// only when the guid it names is the player's, and 0x00807560 fires
+// STOP_AUTOREPEAT_SPELL only while a repeat runs: the realm's answer to a stop
+// the client made itself fires nothing, and another unit's cancel leaves the
+// player shooting. It fired the event for any guid and twice per stop.
+TEST_CASE("an auto-repeat stops once and only for the player's own cancel", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    ui.run("stops = 0 local f = CreateFrame('Frame') f:RegisterEvent('STOP_AUTOREPEAT_SPELL') "
+           "f:SetScript('OnEvent', function() stops = stops + 1 end)");
+    auto cancel = [&](uint64_t guid) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CANCEL_AUTO_REPEAT));
+        p.writePackedGuid(guid);
+        s.receive(p);
+    };
+    s.handler().startAutoRepeat(5019);
+    cancel(0xF130000000000101ull);
+    CHECK(s.handler().isAutoRepeating());
+    CHECK(ui.is("stops == 0"));
+    s.handler().stopAutoRepeat(true);
+    CHECK(ui.is("stops == 1"));
+    cancel(Session::kPlayerGuid);
+    CHECK(ui.is("stops == 1"));
+    s.handler().startAutoRepeat(5019);
+    cancel(Session::kPlayerGuid);
+    CHECK_FALSE(s.handler().isAutoRepeating());
+    CHECK(ui.is("stops == 2"));
+}
