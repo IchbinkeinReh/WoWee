@@ -16,6 +16,7 @@ namespace wowee::rendering { class ModelFrameView; }
 #include "core/entity_spawner.hpp"
 #include "core/appearance_composer.hpp"
 #include "core/world_loader.hpp"
+#include "game/car_ride.hpp"
 #include "game/character.hpp"
 #include "game/game_services.hpp"
 #include "pipeline/asset_inventory.hpp"
@@ -564,8 +565,7 @@ private:
     // on top of the fixed ride offset instead of either fully locking movement or
     // recomputing the offset from an absolute position (see application.cpp's "M2
     // transport riding" block for why the latter is a no-op identity).
-    glm::vec3 lastM2RideLockedCanonical_ = glm::vec3(0.0f);
-    bool hasM2RideLock_ = false;
+    game::car_ride::Lock m2RideLock_;
     glm::vec3 lastWMORideLockedRender_ = glm::vec3(0.0f);
     bool hasWMORideLock_ = false;
     uint64_t lastWMORideTransportGuid_ = 0;

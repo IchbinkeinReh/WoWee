@@ -134,3 +134,31 @@ TEST_CASE("boarding a car a step above its floor puts the rider on it", "[car_ri
     step.grounded = false;
     CHECK(place(step, floorAt).at.z == Catch::Approx(10.6f));
 }
+
+// T323: a relog onto the Deeprun Tram's car while it set off during the load
+// put the rider 2.75 yards along the car and 0.4 higher than the realm had
+// them. The place the last session had put the rider on the car was kept, and
+// the first step in the new world measured the rider's own walk from it.
+TEST_CASE("a ride's place from the world left is no step in the next (0x00403b70)", "[car_ride]") {
+    using namespace wowee::game::car_ride;
+    const auto floorAt = [](const glm::vec3&) { return std::optional<float>(-11.59f); };
+    Lock lock;
+    // Where the last session put the rider, the car standing at the station.
+    lock.put({-8000.0f, 1100.0f, -11.59f});
+    lock.worldEntered();
+    CHECK_FALSE(lock.held());
+    // The new world: the car has moved on, the load left the character pushed
+    // along by its wall and off its floor; the server's offset carries it.
+    const glm::vec3 carried{-8010.0f, 1100.0f, -11.59f};
+    const glm::vec3 walked{-8002.75f, 1100.0f, -11.15f};
+    const Step step = lock.step(carried, walked, false, false, false);
+    CHECK(step.boarding);
+    CHECK(step.own == glm::vec3(0.0f));
+    CHECK(place(step, floorAt).at == carried);
+    // In one world, a rider put last frame walks from there.
+    lock.put(carried);
+    const Step next = lock.step(carried, carried + glm::vec3(0.5f, 0.0f, 0.0f), true, false, true);
+    CHECK_FALSE(next.boarding);
+    CHECK(next.own.x == Catch::Approx(0.5f));
+    CHECK(place(next, floorAt).at.x == Catch::Approx(carried.x + 0.5f));
+}

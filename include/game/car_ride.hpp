@@ -29,6 +29,44 @@ struct Place {
     bool onFloor = false;  ///< The car's floor holds it there.
 };
 
+/// Where the rider was put on the car last frame, which this frame's own step
+/// is measured from.
+///
+/// It belongs to the world it was put in. Leaving a world takes the player
+/// away with every other object (0x00403b70), and the one the next world
+/// creates is on its transport at the offset its movement block gives
+/// (0x004f47b0 takes a passenger's place from the offset alone); nothing of
+/// the last ride is left. Kept over a relog, the first step on the car took
+/// the way from where the rider stood at the logout to wherever the load had
+/// left the character as walked, and when the car had set off during the
+/// load its walls had pushed the character along: the rider woke 2.75 yards
+/// along the car and higher than the realm had them (T323).
+struct Lock {
+    std::optional<glm::vec3> at;
+
+    [[nodiscard]] bool held() const { return at.has_value(); }
+    void put(const glm::vec3& where) { at = where; }
+    void drop() { at.reset(); }
+    /// A world is being entered: whatever was put before is of another.
+    void worldEntered() { at.reset(); }
+
+    /// This frame's step: carried by the car to `carried`, and, once put
+    /// before, what the rider has done since then to stand at `now`.
+    [[nodiscard]] Step step(const glm::vec3& carried, const glm::vec3& now, bool grounded, bool rising,
+                            bool moving) const {
+        Step s;
+        s.carried = carried;
+        s.boarding = !held();
+        s.grounded = grounded;
+        s.rising = rising;
+        if (held()) {
+            s.own = now - *at;
+            s.moves = moving || !grounded;
+        }
+        return s;
+    }
+};
+
 /// `floorAt` is the height of the car's floor under a place, from a step above
 /// it. A rider that does not move is left where it is (0x00762e00 moves a unit
 /// that moves); one sunk into the floor stands on it, and so does one that

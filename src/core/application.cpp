@@ -4323,7 +4323,7 @@ void Application::connectWorldHooks() {
         // descent as one, nor while one carries the player to another map:
         // it is off the transport only until the transport is known there.
         state.fallBegan = [this](uint32_t sinceMs) {
-            if (!gameHandler || gameHandler->isOnTransport() || gameHandler->isOnTaxiFlight() || hasM2RideLock_ ||
+            if (!gameHandler || gameHandler->isOnTransport() || gameHandler->isOnTaxiFlight() || m2RideLock_.held() ||
                 gameHandler->hasPendingPlayerTransportWorldTransfer())
                 return;
             if (auto* mh = gameHandler->getMovementHandler()) mh->startFall(sinceMs);
@@ -5454,7 +5454,13 @@ void Application::applyServerMovementState(float deltaTime) {
     // put the character there on the new map - whatever lay at those
     // coordinates - for as long as the load took.
     const bool enteringWorld = worldLoader_ && worldLoader_->isWorldEntryUnderway();
-    if (enteringWorld) lastSentCanonicalYaw_ = kFacingFromServer;
+    if (enteringWorld) {
+        lastSentCanonicalYaw_ = kFacingFromServer;
+        // The rider's last place on a transport was in the world left; the
+        // new one starts from the offset the server gives (car_ride::Lock).
+        m2RideLock_.worldEntered();
+        hasWMORideLock_ = false;
+    }
     // Whether what the camera looks at is on a flight path (0x00606f90 asks
     // the unit it looks at; with none it is not run).
     if (renderer && renderer->getCameraController() && gameHandler && !enteringWorld) {
@@ -5776,17 +5782,10 @@ void Application::applyServerMovementState(float deltaTime) {
                 // a lift's car then went nowhere - the car held its rider
                 // at the middle while the character ran on the spot.
                 auto* rider = renderer->getCameraController();
-                game::car_ride::Step step;
-                step.carried = carriedCanonical;
-                step.boarding = !hasM2RideLock_;
-                if (rider) {
-                    step.grounded = rider->isGrounded();
-                    step.rising = rider->isJumping();
-                    if (hasM2RideLock_) {
-                        step.own = core::coords::renderToCanonical(renderPos) - lastM2RideLockedCanonical_;
-                        step.moves = rider->isMoving() || rider->getLocomotionSpeed() > 0.0f || !step.grounded;
-                    }
-                }
+                const game::car_ride::Step step = m2RideLock_.step(
+                    carriedCanonical, core::coords::renderToCanonical(renderPos),
+                    rider ? rider->isGrounded() : true, rider && rider->isJumping(),
+                    rider && (rider->isMoving() || rider->getLocomotionSpeed() > 0.0f));
                 const game::car_ride::Place place = game::car_ride::place(
                     step, [&](const glm::vec3& at) { return transports->m2DeckFloorHeight(rideGuid, at); });
                 const glm::vec3 riderCanonical = place.at;
@@ -5806,11 +5805,10 @@ void Application::applyServerMovementState(float deltaTime) {
                 glm::vec3 lockedCanonical = transports->getPlayerWorldPosition(rideGuid, localOffset);
                 renderPos = core::coords::canonicalToRender(lockedCanonical);
                 renderer->getCharacterPosition() = renderPos;
-                lastM2RideLockedCanonical_ = lockedCanonical;
-                hasM2RideLock_ = true;
+                m2RideLock_.put(lockedCanonical);
             }
         } else {
-            hasM2RideLock_ = false;
+            m2RideLock_.drop();
         }
 
         // Model-Z reversal probe: the floor-selection log stays
@@ -6038,7 +6036,7 @@ float Application::playerCollisionHeight() {
 // isFallingFar), which the fall's animation and its landing go by.
 bool Application::playerFallsFar() const {
     const auto* cc = renderer ? renderer->getCameraController() : nullptr;
-    return cc && cc->isFallingFar() && !hasM2RideLock_;
+    return cc && cc->isFallingFar() && !m2RideLock_.held();
 }
 
 // The player's unit, onto its instance each frame, and its base animation
