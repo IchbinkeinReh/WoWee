@@ -261,6 +261,7 @@ void EntitySpawner::processAsyncNpcCompositeResults(bool unlimited) {
         if (info.hasComposite) {
             // Composite with face/underwear/equipment regions on top of base skin
             rendering::VkTexture* compositeTex = nullptr;
+            for (const auto& [path, lower] : info.faceLayers) charRenderer->setFaceRegionLayer(path, lower);
             if (!info.regionLayers.empty()) {
                 compositeTex = charRenderer->compositeWithRegions(info.basePath,
                     info.overlayPaths, info.regionLayers);
@@ -480,6 +481,7 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
                                 who.faceId = he.faceId;
                                 who.hairStyleId = he.hairStyleId;
                                 who.hairColorId = he.hairColorId;
+                                who.facialHairId = he.facialHairId;
                                 // With the same existence check the spawn uses:
                                 // the underwear rows name art that was never
                                 // shipped - every Broken male torso among it -
@@ -494,6 +496,8 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
                                     am);
                                 for (const std::string* path : {&sections.bodySkin, &sections.skinExtra,
                                                                 &sections.faceLower, &sections.faceUpper,
+                                                                &sections.facialLower, &sections.facialUpper,
+                                                                &sections.scalpLower, &sections.scalpUpper,
                                                                 &sections.hair}) {
                                     if (path->empty()) continue;
                                     // The hair row keeps its name whether or

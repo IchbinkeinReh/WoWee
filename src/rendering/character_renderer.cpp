@@ -1409,6 +1409,16 @@ std::string lowerPath(const std::string& s) {
     return out;
 }
 
+/// A layer's region: the head's where a caller has said so (a section of the
+/// face: facial hair and scalp art are named for neither face region), else by
+/// its name. Both composites place by this.
+AtlasRegion256 layerRegionOf(const std::unordered_map<std::string, bool>& faceLayers, const std::string& path) {
+    const std::string lower = lowerPath(path);
+    if (auto it = faceLayers.find(lower); it != faceLayers.end())
+        return regionFor(it->second ? "facelower" : "faceupper");
+    return regionFor(lower);
+}
+
 /// The atlas scale a layer of this size implies for its region. A face authored
 /// at 512x256 belongs in a 128x64 region, so it is asking for a 1024 atlas.
 int impliedScale(const AtlasRegion256& region, int overlayWidth) {
@@ -1427,13 +1437,7 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
     if (layerPaths.empty() || !assetManager || !assetManager->isInitialized()) {
         return whiteTexture_.get();
     }
-    // A layer's region: the head's where a caller has said so, else by name.
-    auto layerRegion = [this](const std::string& path) {
-        const std::string lower = lowerPath(path);
-        if (auto it = faceRegionLayers_.find(lower); it != faceRegionLayers_.end())
-            return regionFor(it->second ? "facelower" : "faceupper");
-        return regionFor(lower);
-    };
+    auto layerRegion = [this](const std::string& path) { return layerRegionOf(faceRegionLayers_, path); };
 
     // Composite key is deterministic from layer set; if we've already built it,
     // reuse the existing GPU texture to keep live instance pointers valid.
@@ -1889,34 +1893,19 @@ VkTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath,
         if (overlay.width == width && overlay.height == height) {
             blitOverlay(composite, width, height, overlay, 0, 0);
         } else {
-            // WoW 256-scale atlas coordinates (from CharComponentTextureSections)
+            // WoW 256-scale atlas coordinates (from CharComponentTextureSections):
+            // the same regions compositeTextures places by, the face's sections
+            // (beards, scalp art) on the face where a caller said so.
             int dstX = 0, dstY = 0;
-            std::string pathLower = ul;
-            for (auto& c : pathLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
             // Scale factor from 256-base coordinates to actual canvas size
             int coordScale = width / 256;
             if (coordScale < 1) coordScale = 1;
             bool useScale = true;
 
-            if (pathLower.find("faceupper") != std::string::npos) {
-                dstX = 0; dstY = 160;
-            } else if (pathLower.find("facelower") != std::string::npos) {
-                dstX = 0; dstY = 192;
-            } else if (pathLower.find("pelvis") != std::string::npos) {
-                dstX = 128; dstY = 96;
-            } else if (pathLower.find("torso") != std::string::npos) {
-                dstX = 128; dstY = 0;
-            } else if (pathLower.find("armupper") != std::string::npos) {
-                dstX = 0; dstY = 0;
-            } else if (pathLower.find("armlower") != std::string::npos) {
-                dstX = 0; dstY = 64;
-            } else if (pathLower.find("hand") != std::string::npos) {
-                dstX = 0; dstY = 128;
-            } else if (pathLower.find("foot") != std::string::npos || pathLower.find("feet") != std::string::npos) {
-                dstX = 128; dstY = 224;
-            } else if (pathLower.find("legupper") != std::string::npos || pathLower.find("leg") != std::string::npos) {
-                dstX = 128; dstY = 160;
+            if (const AtlasRegion256 region = layerRegionOf(faceRegionLayers_, ul); region.known) {
+                dstX = region.x;
+                dstY = region.y;
             } else {
                 // Fallback: center overlay on canvas (already in canvas coords)
                 dstX = (width - overlay.width) / 2;

@@ -2625,7 +2625,6 @@ void EntitySpawner::applyCreatureDisplayTextures(uint32_t displayId, uint32_t mo
                             uint32_t npcSex = static_cast<uint32_t>(extraCopy.sexId);
                             uint32_t npcSkin = static_cast<uint32_t>(extraCopy.skinId);
                             uint32_t npcFace = static_cast<uint32_t>(extraCopy.faceId);
-                            std::string npcFaceLower, npcFaceUpper;
                             std::vector<std::string> npcUnderwear;
 
                             // The one reader, in pipeline/char_sections.hpp.
@@ -2642,6 +2641,9 @@ void EntitySpawner::applyCreatureDisplayTextures(uint32_t displayId, uint32_t mo
                             who.faceId = static_cast<uint8_t>(npcFace);
                             who.hairStyleId = extraCopy.hairStyleId;
                             who.hairColorId = extraCopy.hairColorId;
+                            // CreatureDisplayInfoExtra's FacialHairID, as a
+                            // player's: its beard and scalp art are on the face.
+                            who.facialHairId = extraCopy.facialHairId;
 
                             const auto sections = pipeline::resolveCharacterSections(
                                 csDbc.get(), csF, who,
@@ -2651,14 +2653,16 @@ void EntitySpawner::applyCreatureDisplayTextures(uint32_t displayId, uint32_t mo
                                 am);
 
                             def.basePath = sections.bodySkin;
-                            npcFaceLower = sections.faceLower;
-                            npcFaceUpper = sections.faceUpper;
                             npcUnderwear = sections.underwear;
 
                             if (!def.basePath.empty()) {
                                 allPaths.push_back(def.basePath);
-                                if (!npcFaceLower.empty()) { def.overlayPaths.push_back(npcFaceLower); allPaths.push_back(npcFaceLower); }
-                                if (!npcFaceUpper.empty()) { def.overlayPaths.push_back(npcFaceUpper); allPaths.push_back(npcFaceUpper); }
+                                // The head's layers - face, facial hair, scalp - on its two regions.
+                                for (const auto& fl : pipeline::faceRegionLayers(sections)) {
+                                    def.overlayPaths.push_back(fl.path);
+                                    def.faceLayers.emplace_back(fl.path, fl.lower);
+                                    allPaths.push_back(fl.path);
+                                }
                                 for (const auto& uw : npcUnderwear) { def.overlayPaths.push_back(uw); allPaths.push_back(uw); }
                             }
                         }

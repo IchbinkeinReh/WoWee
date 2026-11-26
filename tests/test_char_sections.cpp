@@ -10,6 +10,8 @@
 #include "pipeline/dbc_layout.hpp"
 #include "pipeline/dbc_loader.hpp"
 
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -130,4 +132,36 @@ TEST_CASE("head layers the data does not carry are dropped, as the client skips 
 
     // Without a way to ask, every name is kept.
     CHECK(resolveCharacterSections(&dbc, f, who).facialLower == "FacialLowerHair00_00.blp");
+}
+
+namespace {
+std::string sourceText(const char* path) {
+    std::ifstream in(std::string(WOWEE_SOURCE_DIR) + "/" + path, std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+size_t occurrences(const std::string& text, const std::string& what) {
+    size_t n = 0;
+    for (size_t at = text.find(what); at != std::string::npos; at = text.find(what, at + 1)) ++n;
+    return n;
+}
+}  // namespace
+
+// T333: the composite with gear placed its base layers by a name table of its
+// own, which knows no beard or scalp file and put them in the middle of the
+// body. Both composites place by the one table, which asks the head's layers
+// first; and a creature's extra (CreatureDisplayInfoExtra) brings its facial
+// hair as a player does.
+TEST_CASE("every composite places the head's layers on the face", "[char_sections]") {
+    const std::string renderer = sourceText("src/rendering/character_renderer.cpp");
+    REQUIRE_FALSE(renderer.empty());
+    CHECK(occurrences(renderer, "find(\"faceupper\")") == 1);   // regionFor alone
+    CHECK(occurrences(renderer, "layerRegionOf(faceRegionLayers_,") == 2);
+    const std::string spawner = sourceText("src/core/entity_spawner.cpp");
+    REQUIRE_FALSE(spawner.empty());
+    CHECK(spawner.find("who.facialHairId = extraCopy.facialHairId") != std::string::npos);
+    CHECK(spawner.find("pipeline::faceRegionLayers(sections)") != std::string::npos);
+    const std::string processing = sourceText("src/core/entity_spawner_processing.cpp");
+    CHECK(processing.find("charRenderer->setFaceRegionLayer(path, lower)") != std::string::npos);
 }

@@ -1308,6 +1308,9 @@ private:
         uint32_t displayId;
         std::string basePath;
         std::vector<std::string> overlayPaths;
+        /// The head's layers among them - face, facial hair, scalp - and
+        /// whether each is on FaceLower (else FaceUpper).
+        std::vector<std::pair<std::string, bool>> faceLayers;
         std::vector<std::pair<int, std::string>> regionLayers;
         std::vector<uint32_t> skinTextureSlots;
         bool hasComposite = false;

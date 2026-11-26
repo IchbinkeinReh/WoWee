@@ -3795,6 +3795,8 @@ wowee_add_test(test_char_sections
             ${CMAKE_SOURCE_DIR}/src/pipeline/char_sections.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_layout.cpp)
+target_compile_definitions(test_char_sections PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_spell_kit ───────────────────────────────────
 # A spell visual kit on a unit: its models' attachments, a model-attach row's
