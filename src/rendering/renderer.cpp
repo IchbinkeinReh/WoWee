@@ -7739,9 +7739,13 @@ std::vector<std::string> Renderer::memoryReport(const std::vector<MemoryEntry>& 
     const auto pm = core::MemoryMonitor::processMemory();
     const auto& mon = core::MemoryMonitor::getInstance();
     std::snprintf(buf, sizeof(buf),
-                  "Process: resident %.0f MB (its own %.0f, pages of mapped files %.0f), private %.0f MB; system %.0f "
-                  "of %.0f MB available",
+                  "Process: resident %.0f MB (its own %.0f, pages of mapped files %.0f), private %.0f MB; %s %.0f "
+                  "of %.0f MB",
                   mb(pm.residentBytes), mb(pm.residentPrivateBytes), mb(pm.residentSharedBytes), mb(pm.privateBytes),
+                  // iOS answers the app's own headroom before it is ended
+                  // (os_proc_available_memory, which counts its GPU memory),
+                  // not the system's free memory.
+                  memorySnapshot().ramIsAppHeadroom ? "app's headroom" : "system available",
                   mb(mon.getAvailableRAM()), mb(mon.getTotalRAM()));
     lines.emplace_back(buf);
     if (const auto heap = core::MemoryMonitor::heapUse(); heap.heaps != 0) {
@@ -7795,26 +7799,34 @@ std::vector<std::string> Renderer::memoryReport(const std::vector<MemoryEntry>& 
     lines.emplace_back(buf);
     // What the private bytes hold that no line above names. GPU memory in a
     // host heap counts toward private bytes too on most drivers, so it is
-    // taken off as well.
+    // taken off as well - and where the GPU's memory is the system's (an
+    // integrated GPU, every phone), the device-local blocks are the process's
+    // own pages: on an iPhone they were most of what /mem called "not named"
+    // (U10: 1118 of 1640 MB resident, beside 1400 MB of blocks).
     uint64_t hostHeap = 0;
+    uint64_t sharedGpuBlocks = 0;
     if (vkCtx && vkCtx->getAllocator()) {
         const VkPhysicalDeviceMemoryProperties* props = nullptr;
         vmaGetMemoryProperties(vkCtx->getAllocator(), &props);
         VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
         vmaGetHeapBudgets(vkCtx->getAllocator(), budgets);
+        const bool unified = memorySnapshot().unified;
         for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h) {
             if ((props->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0) {
                 hostHeap += budgets[h].statistics.blockBytes;
+            } else if (unified) {
+                sharedGpuBlocks += budgets[h].statistics.blockBytes;
             }
         }
     }
-    const uint64_t named = worldCpu + cpuSum + hostHeap;
+    const uint64_t named = worldCpu + cpuSum + hostHeap + sharedGpuBlocks;
     // Resident is the fairer measure: on Windows the driver charges part of
     // the device-local memory to the process's private bytes as well.
     std::snprintf(buf, sizeof(buf),
-                  "Not named above: resident %.0f MB, private %.0f MB (host heap blocks %.0f MB taken off)",
+                  "Not named above: resident %.0f MB, private %.0f MB (host heap blocks %.0f MB, GPU blocks in "
+                  "shared memory %.0f MB taken off)",
                   pm.residentBytes > named ? mb(pm.residentBytes - named) : 0.0,
-                  pm.privateBytes > named ? mb(pm.privateBytes - named) : 0.0, mb(hostHeap));
+                  pm.privateBytes > named ? mb(pm.privateBytes - named) : 0.0, mb(hostHeap), mb(sharedGpuBlocks));
     lines.emplace_back(buf);
     return lines;
 }
