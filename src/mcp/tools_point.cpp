@@ -289,7 +289,20 @@ Steps pointAtEntity(ToolContext& context, uint64_t guid) {
             return [&context, guid, hunt](Script& s) {
                 const auto at = clickPointOf(context, guid, &hunt->instead);
                 if (!at) {
-                    if (++hunt->tries <= 15) return Script::Step::Again;
+                    // Out of the player's sight - a roof or a floor between -
+                    // no view of it will pick it either: said at once, not
+                    // after three rounds of looking (tester, V506 d).
+                    if (++hunt->tries >= 3) {
+                        auto* gh = context.app.getGameHandler();
+                        const auto e = gh ? gh->getEntityManager().getEntity(guid) : nullptr;
+                        if (e && !inLineOfSight(context, *e)) {
+                            const auto place = placeOf(context, guid);
+                            const int yards = place ? static_cast<int>(glm::length(*place - playerAt(context))) : 0;
+                            return s.fail("it cannot be reached (not in line of sight, " + std::to_string(yards) +
+                                          " yards)");
+                        }
+                    }
+                    if (hunt->tries <= 15) return Script::Step::Again;
                     return lost(context, guid, hunt, s, "no point of the window picks it");
                 }
                 context.input.moveTo(*at);

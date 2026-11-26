@@ -42,7 +42,9 @@ public:
         auto* renderer = context_.app.getRenderer();
         auto* cc = renderer ? renderer->getCameraController() : nullptr;
         if (!gh || !cc || !inWorld(context_)) return over(s, "left the world", false);
-        if (gh->isPlayerDead()) return over(s, "the character died", false);
+        // A ghost walks (to its corpse, a spirit healer); only a body lying
+        // dead ends the walk.
+        if (gh->isPlayerDead() && !gh->isPlayerGhost()) return over(s, "the character died", false);
         if (gh->getCurrentMapId() != map_) return over(s, "the map changed", false);
         const auto goal = goal_();
         if (!goal) return over(s, "what was walked to is gone", false);
