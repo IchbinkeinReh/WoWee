@@ -524,6 +524,10 @@ static int lua_Frame_RegisterAllEvents(lua_State* L) {
 /// everything is registered for `eventName` as it first fires, unless it has
 /// unregistered it since.
 void registerAllEventFrames(lua_State* L, const char* eventName) {
+    // This client's own notices (WOWEE_ITEM_INFO_RECEIVED, ...) are not among
+    // the events 12340 has (its table at 0x00c24eb0), so "every event" does
+    // not take them in.
+    if (std::strncmp(eventName, "WOWEE_", 6) == 0) return;
     lua_getglobal(L, "__WoweeAllEventFrames");
     if (!lua_istable(L, -1) || lua_objlen(L, -1) == 0) { lua_pop(L, 1); return; }
     taint::Quiet quiet;

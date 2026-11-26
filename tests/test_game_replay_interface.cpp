@@ -2652,6 +2652,21 @@ TEST_CASE("packets 12340 does not handle do nothing", "[replay][interface]") {
     CHECK(s.handler().getCombatText().size() == texts);
 }
 
+// RegisterAllEvents (0x0049f0e0 -> 0x0081b470) is every event of 12340's
+// table; this client's WOWEE_* notices are not among them and reached such a
+// frame all the same.
+TEST_CASE("RegisterAllEvents does not take in this client's own notices", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("seen = {} local f = CreateFrame('Frame') f:RegisterAllEvents() "
+           "f:SetScript('OnEvent', function(self, event) seen[event] = true end)");
+    s.handler().fireAddonEvent("WOWEE_ITEM_INFO_RECEIVED", {"2589"});
+    s.handler().fireAddonEvent("BAG_UPDATE", {"0"});
+    CHECK(ui.is("seen.BAG_UPDATE == true"));
+    CHECK(ui.is("seen.WOWEE_ITEM_INFO_RECEIVED == nil"));
+}
+
 // T364: PickupInventoryItem takes the bank's slots (40-67) and its bags'
 // slots (68-74) while a banker is open (0x005e7c00, 0x005e85d0 refuses them
 // only with none open). It did nothing for any slot past 23.
