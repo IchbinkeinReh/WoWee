@@ -105,6 +105,13 @@ TEST_CASE("a building group's liquid takes the fog its group is drawn in (T375)"
     const std::string water = test::slurp("src/rendering/water_renderer.cpp");
     REQUIRE_FALSE(water.empty());
     CHECK(water.find("push.scroll.z = client_liquid::liquidTakesCameraFog(") != std::string::npos);
+    // The procedural water too (psLiquidProcWater): its own push constant.
+    const std::string proc = test::slurp("assets/shaders/liquid_proc.frag.glsl");
+    const std::string procBlock = test::slurp("assets/shaders/liquid_proc.glsli");
+    REQUIRE_FALSE(proc.empty());
+    CHECK(procBlock.find("vec4 cameraFogColor;") != std::string::npos);
+    CHECK(proc.find("procPush.fog.x > 0.5 ? cameraFogColor.rgb : fogColor.rgb") != std::string::npos);
+    CHECK(water.find("const glm::vec4 procFog(client_liquid::liquidTakesCameraFog(") != std::string::npos);
 
     const std::string renderer = test::slurp("src/rendering/renderer.cpp");
     REQUIRE_FALSE(renderer.empty());

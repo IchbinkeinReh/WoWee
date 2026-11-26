@@ -30,6 +30,11 @@ layout(set = 2, binding = 0) uniform LiquidRamps {
     vec4 ramps[192];
 };
 
+// x 1: the camera's fog (client_liquid::liquidTakesCameraFog).
+layout(push_constant) uniform ProcPush {
+    vec4 fog;
+} procPush;
+
 layout(location = 0) in vec4 vTex0;
 layout(location = 1) in vec4 vTex1;
 layout(location = 2) in vec4 vTex2;
@@ -110,5 +115,10 @@ void main() {
     float alpha = f * pw.c11.x + base.a;
     if (clamp(alpha, 0.0, 1.0) * 255.0 < 1.0) discard;
 
-    outColor = vec4(liquidAir(mix(fogColor.rgb, clamp(color, 0.0, 1.0), vFog), vWorld), clamp(alpha, 0.0, 1.0));
+    // The fog its group is drawn in (0x007d4f40, by the group's 0x8000 in
+    // 0x007964a0): the camera's - its interior's MFOG blended in - for a
+    // building group in the camera's interior pass, the zone's otherwise
+    // (client_liquid::liquidTakesCameraFog), as liquid.frag (T375).
+    vec3 distanceFog = procPush.fog.x > 0.5 ? cameraFogColor.rgb : fogColor.rgb;
+    outColor = vec4(liquidAir(mix(distanceFog, clamp(color, 0.0, 1.0), vFog), vWorld), clamp(alpha, 0.0, 1.0));
 }

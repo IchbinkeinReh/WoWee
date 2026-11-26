@@ -3283,7 +3283,12 @@ bool WaterRenderer::initProcWater(VkDescriptorSetLayout perFrameLayout) {
     bindings.push_back(ubo);
     procSetLayout_ = createDescriptorSetLayout(device, bindings);
     if (!procSetLayout_) return false;
-    procPipelineLayout_ = createPipelineLayout(device, {perFrameLayout, procSetLayout_, clientRampSetLayout_}, {});
+    // x 1: the camera's fog, as liquid.frag's scroll.z (T375).
+    VkPushConstantRange procPush{};
+    procPush.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    procPush.offset = 0;
+    procPush.size = sizeof(glm::vec4);
+    procPipelineLayout_ = createPipelineLayout(device, {perFrameLayout, procSetLayout_, clientRampSetLayout_}, {procPush});
     if (!procPipelineLayout_) return false;
 
     const VkDescriptorPoolSize sizes[2] = {
@@ -3565,6 +3570,14 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
                 }
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, procPipelineLayout_,
                                         1, 1, &set, 0, nullptr);
+                // The fog its group is drawn in, as the other liquids' (T375).
+                const glm::vec4 procFog(client_liquid::liquidTakesCameraFog(
+                                            surface.wmoId != 0,
+                                            interiorPassQuery_ && interiorPassQuery_(surface.wmoId, surface.wmoGroup))
+                                            ? 1.0f : 0.0f,
+                                        0.0f, 0.0f, 0.0f);
+                vkCmdPushConstants(cmd, procPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(glm::vec4), &procFog);
                 VkDeviceSize offset = 0;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &surface.clientVertexBuffer, &offset);
                 vkCmdBindIndexBuffer(cmd, surface.indexBuffer, 0, VK_INDEX_TYPE_UINT32);

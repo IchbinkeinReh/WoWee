@@ -17,6 +17,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerPos;
     vec4 playerWake;
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
+    vec4 rtParams;
+    vec4 cameraFogColor;    // the camera's fog, its interior's blended in
 };
 
 layout(set = 1, binding = 6) uniform ProcWater {
