@@ -2704,23 +2704,6 @@ static const game::GameHandler::TalentEntry* petTalentAt(game::GameHandler* gh, 
     return index <= static_cast<int>(talents.size()) ? talents[static_cast<size_t>(index - 1)] : nullptr;
 }
 
-/// Every prerequisite of a pet talent learned, or with the pet's staged
-/// points counted as well.
-static bool petPrereqsMet(game::GameHandler* gh, const game::GameHandler::TalentEntry* talent, bool withPreview) {
-    if (!gh || !talent) return false;
-    for (int p = 0; p < 3; ++p) {
-        const uint32_t prereqId = talent->prereqTalent[p];
-        if (prereqId == 0) continue;
-        int have = gh->getPetTalentRank(prereqId);
-        if (withPreview) {
-            const auto it = petPreviewPoints().find(prereqId);
-            if (it != petPreviewPoints().end()) have += it->second;
-        }
-        if (have < static_cast<int>(talent->prereqRank[p]) + 1) return false;
-    }
-    return true;
-}
-
 static int lua_GetNumTalentTabs(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (wantsPetTalents(L, 2)) {
@@ -2897,31 +2880,6 @@ const game::TalentEntry* talentAt(game::GameHandler* gh,
 }
 
 
-/// Whether every prerequisite of a talent is satisfied, optionally counting
-/// points staged in the preview but not yet learned.
-static bool talentPrereqsMet(game::GameHandler* gh,
-                             const game::GameHandler::TalentEntry* talent,
-                             bool withPreview,
-                             bool inspect, int group) {
-    if (!gh || !talent) return false;
-    for (int p = 0; p < 3; ++p) {
-        const uint32_t prereqId = talent->prereqTalent[p];
-        if (prereqId == 0) continue;
-        // Counted from zero in the DBC, so the rank asked for is one more.
-        const int needed = static_cast<int>(talent->prereqRank[p]) + 1;
-        // Out of the group that was asked about: a talent of the other spec
-        // deep in a chain of that spec's own talents is satisfied on its own
-        // terms, not on the ones the player happens to be standing in.
-        int have = talentRankFor(gh, inspect, prereqId, group);
-        if (withPreview && previewApplies(gh, inspect, group)) {
-            const auto staged = previewPoints().find(prereqId);
-            if (staged != previewPoints().end()) have += staged->second;
-        }
-        if (have < needed) return false;
-    }
-    return true;
-}
-
 TalentTooltipFacts talentLinkFacts(game::GameHandler* gh, uint32_t talentId, int rank) {
     TalentTooltipFacts f;
     const auto* t = gh ? gh->getTalentEntry(talentId) : nullptr;
@@ -3065,24 +3023,42 @@ TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int t
 // (+0x1c and +0x20). A group with no record answers 0 and 0 - the -1 and
 // 0xffffffff it starts each of them at, pushed one-based - which is what the
 // client itself says for a spec that has no list.
+// No such talent (0x005c7800, LAB_005c7c49): nil, nil, 1, 1, 0, 0, 0, nil, 0,
+// nil - not ten nils.
+static int pushNoTalent(lua_State* L) {
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushnumber(L, 1);
+    lua_pushnumber(L, 1);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnil(L);
+    lua_pushnumber(L, 0);
+    lua_pushnil(L);
+    return 10;
+}
+
 static int lua_GetTalentInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetTalentInfo(tabIndex, talentIndex[, isInspect[, isPet[, groupIndex]]])");
     auto* gh = getGameHandler(L);
     const int tabIndex = static_cast<int>(luaL_checknumber(L, 1));
     const int talentIndex = static_cast<int>(luaL_checknumber(L, 2));
     const bool inspect = lua_toboolean(L, 3) != 0;
     if (wantsPetTalents(L, 4)) {
         const auto* talent = petTalentAt(gh, inspect, tabIndex, talentIndex);
-        if (!talent) {
-            for (int i = 0; i < 10; i++) lua_pushnil(L);
-            return 10;
-        }
+        if (!talent) return pushNoTalent(L);
         const int rank = gh->getPetTalentRank(talent->talentId);
         const auto stagedIt = petPreviewPoints().find(talent->talentId);
         const int previewRank = rank + (stagedIt != petPreviewPoints().end() ? stagedIt->second : 0);
         std::string name = gh->getSpellName(talent->rankSpells[0]);
         if (name.empty()) name = "Talent " + std::to_string(talent->talentId);
         const std::string icon = gh->getSpellIconPath(talent->rankSpells[0]);
-        const bool met = petPrereqsMet(gh, talent, /*withPreview=*/false);
+        // 0x005c7800: a pet's talent is 'available' (8th and 10th) whatever
+        // its prerequisites - those are GetTalentPrereqs' - and an inspected
+        // pet's never is.
+        const bool met = !inspect;
         lua_pushstring(L, name.c_str());
         if (icon.empty()) lua_pushnil(L);
         else lua_pushstring(L, icon.c_str());
@@ -3093,7 +3069,7 @@ static int lua_GetTalentInfo(lua_State* L) {
         luaPushOneOrNil(L, (talent->flags & 0x1) != 0);
         luaPushOneOrNil(L, met ? 1 : 0);
         lua_pushnumber(L, previewRank);
-        luaPushOneOrNil(L, petPrereqsMet(gh, talent, /*withPreview=*/true) ? 1 : 0);
+        luaPushOneOrNil(L, met ? 1 : 0);
         return 10;
     }
     const int group = talentGroupArg(L, 5, gh);
@@ -3102,10 +3078,7 @@ static int lua_GetTalentInfo(lua_State* L) {
     // displays and then compares it against maxRank - as nil that is an error
     // rather than a blank, and it happens the moment points are staged, which
     // is how talents are spent at all.
-    if (!talent) {
-        for (int i = 0; i < 10; i++) lua_pushnil(L);
-        return 10;
-    }
+    if (!talent) return pushNoTalent(L);
     const int rank = talentRankFor(gh, inspect, talent->talentId, group);
     const auto staged = previewPoints().find(talent->talentId);
     const int previewRank = rank
@@ -3126,11 +3099,19 @@ static int lua_GetTalentInfo(lua_State* L) {
     lua_pushnumber(L, rank);                   // 5: rank
     lua_pushnumber(L, talent->maxRank);        // 6: maxRank
     luaPushOneOrNil(L, (talent->flags & 0x1) != 0);  // 7: isExceptional
-    // Was hardcoded true, which drew every talent as learnable however deep in
-    // a chain it sat.
-    luaPushOneOrNil(L, talentPrereqsMet(gh, talent, /*withPreview=*/false, inspect, group) ? 1 : 0);
+    // 8 and 10, meetsPrereq and meetsPreviewPrereq, are not the talent's
+    // prerequisites - FrameXML asks GetTalentPrereqs for those - but
+    // (0x005c7800): the own tree's talent is available unless it names a
+    // spell (Talent.dbc RequiredSpellId, +0x50) the player does not know; an
+    // inspected player's only where the talent is learned (8th) or has a
+    // preview rank (10th). Answered by the prerequisites, an inspected
+    // player's unlearned talents drew green.
+    bool available = true;
+    if (inspect) available = rank > 0;
+    else if (talent->requiredSpell != 0) available = gh->getKnownSpells().count(talent->requiredSpell) != 0;
+    luaPushOneOrNil(L, available ? 1 : 0);
     lua_pushnumber(L, previewRank);            // 9: previewRank
-    luaPushOneOrNil(L, talentPrereqsMet(gh, talent, /*withPreview=*/true, inspect, group) ? 1 : 0);
+    luaPushOneOrNil(L, (inspect ? previewRank > 0 : available) ? 1 : 0);
     return 10;
 }
 
@@ -4112,6 +4093,15 @@ static int lua_GetUnspentTalentPoints(lua_State* L) {
     const int group = static_cast<int>(luaL_optnumber(L, 3, 0));
     const uint8_t spec = (group >= 1 && group <= 2) ? static_cast<uint8_t>(group - 1)
                                                    : gh->getActiveTalentSpec();
+    if (lua_toboolean(L, 1) != 0) {
+        // The inspected player's (0x005c6310: the inspect record of the group
+        // - the own active one unless named - and 0 past its group count).
+        // This answered the viewer's own points on the inspect tab.
+        const auto* inspected = gh->getInspectResult();
+        const int g = lua_isnumber(L, 3) ? group - 1 : static_cast<int>(gh->getActiveTalentSpec());
+        lua_pushnumber(L, inspected && g >= 0 && g < inspected->talentGroups ? inspected->unspentTalents : 0);
+        return 1;
+    }
     // The raw unspent total, before any staged preview points.
     //
     // The frame subtracts the preview itself: TalentFrame_UpdateTalentPoints is
@@ -4702,6 +4692,9 @@ static int lua_CloseQuest(lua_State* L) {
     // - it runs from QuestFrame_OnHide - and answering with QUEST_FINISHED,
     // which is the event that hides QuestFrame, closes it a second time from
     // inside its own closing.
+    // 0x0058d350 is 0x0058ca70(0, quest, 1): a player's quest page closed
+    // tells the one who shared it (MSG_QUEST_PUSH_RESULT, 3).
+    if (auto* quests = gh->getQuestHandler()) quests->tellQuestSharerDeclined();
     if (gh->isQuestOfferRewardOpen())       gh->closeQuestOfferReward(false);
     else if (gh->isQuestRequestItemsOpen()) gh->closeQuestRequestItems(false);
     else                                    gh->declineQuest(false);
@@ -4764,7 +4757,14 @@ static int lua_GetQuestItemLink(lua_State* L) {
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
     const QuestSource s = currentQuestSource(gh);
 
-    const auto* list = (std::string(type) == "choice") ? s.choices : s.rewards;
+    // The same three lists GetQuestItemInfo reads (0x0058c2b0 -> 0x0058bbc0):
+    // "required" is the progress page's - shift-clicking a required item
+    // linked nothing.
+    const std::string want(type);
+    const std::vector<game::QuestRewardItem>* list = nullptr;
+    if (want == "choice")        list = s.choices;
+    else if (want == "required") list = gh ? &gh->getQuestRequestItems().requiredItems : nullptr;
+    else                         list = s.rewards;
     if (!gh || !list || index < 1) { return luaReturnNil(L); }
 
     int seen = 0;

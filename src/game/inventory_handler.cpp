@@ -481,24 +481,27 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         uint32_t amount = packet.readUInt32();
         bool soleLooter = true;
         if (packet.hasRemaining(1)) soleLooter = packet.readUInt8() != 0;
-        owner_.playerMoneyCopperRef() += amount;
+        // 0x006ceca0: the line and nothing else - every notify, a share as
+        // much as a whole purse. The money itself comes with the coinage
+        // field (PLAYER_MONEY from its watcher), the coin slot goes with
+        // SMSG_LOOT_CLEAR_MONEY. This added the amount to the money itself,
+        // raised a PLAYER_MONEY of its own, cleared the coin of whatever loot
+        // was open when the amount matched, and printed one line per loot -
+        // a party member's share arriving over the player's own taken corpse
+        // was swallowed.
+        // (Kept for the coinage field's index detection only.)
         owner_.pendingMoneyDeltaRef() = amount;
         owner_.pendingMoneyDeltaTimerRef() = 2.0f;
-        uint64_t notifyGuid = pendingLootMoneyGuid_ != 0 ? pendingLootMoneyGuid_ : currentLoot_.lootGuid;
+        // The fallback line for a realm that sends no notify is not wanted
+        // now: this is the line.
+        const uint64_t notifyGuid = pendingLootMoneyGuid_ != 0 ? pendingLootMoneyGuid_ : currentLoot_.lootGuid;
         pendingLootMoneyGuid_ = 0;
         pendingLootMoneyAmount_ = 0;
         pendingLootMoneyNotifyTimer_ = 0.0f;
-        announceLootMoney(notifyGuid, amount, soleLooter);
-        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
-        // Both packets report the same thing and a server may send either, so
-        // the coin goes on whichever arrives first.
-        //
-        // Only for an amount that is this corpse's whole purse, though: in a
-        // group this notify carries one player's share and reaches everyone,
-        // including someone standing over a different corpse of their own.
-        // SMSG_LOOT_CLEAR_MONEY is the one that names the loot itself, and it
-        // is what clears the coin in that case.
-        if (amount == currentLoot_.gold) clearLootMoney();
+        if (amount == 0) return;
+        if (auto it = localLootState_.find(notifyGuid); it != localLootState_.end()) it->second.moneyTaken = true;
+        owner_.addLocalChatLine(ChatType::MONEY, interface_text::lootMoneyLine(amount, soleLooter, uiText));
+        if (notifyGuid != 0) recentLootMoneyAnnounceCooldowns_[notifyGuid] = 1.5f;
     };
     table[Opcode::SMSG_LOOT_CLEAR_MONEY] = [this](network::Packet& /*packet*/) {
         clearLootMoney();
@@ -631,17 +634,12 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         const uint64_t passedGuid = packet.readUInt64();
         const uint32_t passedSlot = packet.readUInt32();
         uint32_t itemId     = packet.readUInt32();
-        /*uint32_t randSuffix =*/ packet.readUInt32();
-        (void)packet.readUInt32(); // random property
-        owner_.ensureItemInfo(itemId);
-        auto* allPassInfo = owner_.getItemInfo(itemId);
-        std::string allPassName = (allPassInfo && !allPassInfo->name.empty())
-            ? allPassInfo->name : ("Item #" + std::to_string(itemId));
-        uint32_t allPassQuality = allPassInfo ? allPassInfo->quality : 1u;
-        // LOOT_ROLL_ALL_PASSED as CHAT_MSG_LOOT (0x006fb470).
+        const uint32_t randSuffix = packet.readUInt32();
+        const int32_t randProp = static_cast<int32_t>(packet.readUInt32());
+        // LOOT_ROLL_ALL_PASSED as CHAT_MSG_LOOT (0x006fb470), its link with
+        // the item's random property and seed (0x0061e360).
         owner_.addLocalChatLine(ChatType::LOOT, interfaceFormat("LOOT_ROLL_ALL_PASSED", "Everyone passed on: %s",
-            {buildItemLink(itemId, allPassQuality, allPassName,
-                           owner_.getPlayerLevel())}));
+            {rollItemLink(itemId, randProp, randSuffix)}));
         endLootRoll(passedGuid, passedSlot);
     };
 
@@ -1456,7 +1454,10 @@ void InventoryHandler::autoTakeLoot() {
         return;
     }
     if (currentLoot_.goldLeft()) {
-        bool suppressFallback = false;
+        // A realm of 12340 always tells the money taken (SMSG_LOOT_MONEY_NOTIFY,
+        // the only line 0x006ceca0 prints); the stand-in line is for the older
+        // realms that may not.
+        bool suppressFallback = !isPreWotlk();
         auto cooldownIt = recentLootMoneyAnnounceCooldowns_.find(currentLoot_.lootGuid);
         if (cooldownIt != recentLootMoneyAnnounceCooldowns_.end() && cooldownIt->second > 0.0f)
             suppressFallback = true;
@@ -1632,8 +1633,18 @@ void InventoryHandler::endLootRoll(uint64_t objectGuid, uint32_t slot) {
     for (auto it = lootRolls_.begin(); it != lootRolls_.end(); ++it) {
         if (it->objectGuid != objectGuid || it->slot != slot) continue;
         const int rollId = it->rollId;
-        const bool started = it->started;
+        // An answered roll's window went down with the answer (0x006fb470
+        // skips the cancel and the frame count when +0x42 is set).
+        const bool started = it->started && !it->answered;
+        const bool answered = it->answered;
         lootRolls_.erase(it);
+        if (answered) {
+            for (auto& next : lootRolls_) {
+                if (lootRollFramesUp_ >= 4) break;
+                if (next.queued) openLootRollFrame(next.rollId);
+            }
+            return;
+        }
         // Named, so the window that closes is the one this roll opened. It was
         // the slot plus one here as well, which closed a different roll's
         // window whenever two were up. Only for a roll whose start was
@@ -1656,14 +1667,29 @@ void InventoryHandler::endLootRoll(uint64_t objectGuid, uint32_t slot) {
 
 void InventoryHandler::sendLootRoll(uint64_t objectGuid, uint32_t slot, uint8_t rollType) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    LootRollEntry* roll = findLootRoll(objectGuid, slot);
+    // 0x006fbc70: once per roll (+0x42), and only a choice the realm offered
+    // - the vote mask of SMSG_LOOT_START_ROLL (+0x48) has the type's bit;
+    // anything else is dropped without a word and the window stays.
+    if (!roll || roll->answered || rollType > 7 || (roll->voteMask & (1u << rollType)) == 0) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_LOOT_ROLL));
     pkt.writeUInt64(objectGuid);
     pkt.writeUInt32(slot);
     pkt.writeUInt8(rollType);
     owner_.getSocket()->send(pkt);
-    // Once we've sent any choice (pass/need/greed/disenchant), close the dialog
-    // - this roll's, and only this roll's.
-    endLootRoll(objectGuid, slot);
+    // Its window comes down (CANCEL_LOOT_ROLL, one frame less, the next
+    // queued roll up - 0x006fb180), but the roll stays until it is decided.
+    roll->answered = true;
+    const int rollId = roll->rollId;
+    if (roll->started && !roll->queued) {
+        if (owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("CANCEL_LOOT_ROLL", {std::to_string(rollId)});
+        if (lootRollFramesUp_ > 0) --lootRollFramesUp_;
+    }
+    for (auto& next : lootRolls_) {
+        if (lootRollFramesUp_ >= 4) break;
+        if (next.queued) openLootRollFrame(next.rollId);
+    }
 }
 
 void InventoryHandler::passLootRollsForWorldport() {
@@ -1675,6 +1701,7 @@ void InventoryHandler::passLootRollsForWorldport() {
     lootRolls_.clear();
     lootRollFramesUp_ = 0;
     for (const LootRollEntry& roll : rolls) {
+        if (roll.answered) continue;
         if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
             network::Packet pkt(wireOpcode(Opcode::CMSG_LOOT_ROLL));
             pkt.writeUInt64(roll.objectGuid);
@@ -1698,7 +1725,7 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
     uint32_t lootSlot   = packet.readUInt32();
     uint64_t playerGuid = packet.readUInt64();
     uint32_t itemId     = packet.readUInt32();
-    /*uint32_t randSuffix =*/ packet.readUInt32();
+    const uint32_t randSuffix = packet.readUInt32();
     const int32_t randProp = static_cast<int32_t>(packet.readUInt32());
     uint8_t rollNumber  = packet.readUInt8();
     uint8_t rollType    = packet.readUInt8();
@@ -1740,9 +1767,9 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
     // 0x006fb700 only when both have answered): either one not known yet is
     // asked for and the line waits on it. An answer that found nothing lets
     // the line go.
-    const auto print = [this, r, itemId, randProp](const std::string& name) {
+    const auto print = [this, r, itemId, randProp, randSuffix](const std::string& name) {
         owner_.addLocalChatLine(ChatType::LOOT,
-                                interface_text::lootRollLine(r, rollItemLink(itemId, randProp), name, uiText));
+                                interface_text::lootRollLine(r, rollItemLink(itemId, randProp, randSuffix), name, uiText));
     };
     const std::string key = "loot roll " + std::to_string(objectGuid) + ":" + std::to_string(lootSlot) +
                             ":" + std::to_string(playerGuid) + ":" + std::to_string(rollType) +
@@ -1765,7 +1792,7 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
     }
 }
 
-std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp) {
+std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp, uint32_t seed) {
     owner_.ensureItemInfo(itemId);
     auto* info = owner_.getItemInfo(itemId);
     // The link's own text, so through the client's name builder rather than a
@@ -1775,7 +1802,14 @@ std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp) 
     std::string itemName = owner_.itemNameWithProperty(
         (info && !info->name.empty()) ? info->name : ("Item #" + std::to_string(itemId)),
         randomProp);
-    return buildItemLink(itemId, info ? info->quality : 1u, itemName, owner_.getPlayerLevel());
+    // The link itself carries the property and its seed (0x006fb700 and
+    // 0x006fb470 hand both to 0x0061e360), so its tooltip is the item that
+    // dropped rather than the bare template.
+    ItemLinkInstance rolled;
+    rolled.randomPropertyId = randomProp;
+    rolled.seed = seed;
+    const uint32_t quality = info ? info->quality : 1u;
+    return itemChatLink(itemId, quality < 8 ? quality : 1u, itemName, rolled, owner_.getPlayerLevel());
 }
 
 void InventoryHandler::handleLootRollWon(network::Packet& packet) {
@@ -1784,7 +1818,7 @@ void InventoryHandler::handleLootRollWon(network::Packet& packet) {
     const uint64_t wonGuid = packet.readUInt64();
     const uint32_t wonSlot = packet.readUInt32();
     uint32_t itemId     = packet.readUInt32();
-    /*uint32_t randSuffix =*/ packet.readUInt32();
+    const uint32_t wonRandSuffix = packet.readUInt32();
     int32_t wonRandProp = static_cast<int32_t>(packet.readUInt32());
     uint64_t winnerGuid = packet.readUInt64();
     uint8_t rollNumber  = packet.readUInt8();
@@ -1798,9 +1832,9 @@ void InventoryHandler::handleLootRollWon(network::Packet& packet) {
     // (0x006fae40: 0x006facd0's callbacks before 0x006fb700).
     const bool self = winnerGuid == owner_.getPlayerGuid();
     const bool spam = addons::storedCVarValue("showLootSpam", "1") != "0";
-    const auto print = [this, self, rollNumber, rollType, spam, itemId, wonRandProp](const std::string& name) {
+    const auto print = [this, self, rollNumber, rollType, spam, itemId, wonRandProp, wonRandSuffix](const std::string& name) {
         owner_.addLocalChatLine(ChatType::LOOT, interface_text::lootRollWonLine(
-            self, rollNumber, rollType, spam, rollItemLink(itemId, wonRandProp), name, uiText));
+            self, rollNumber, rollType, spam, rollItemLink(itemId, wonRandProp, wonRandSuffix), name, uiText));
     };
     const std::string key = "loot won " + std::to_string(wonGuid) + ":" + std::to_string(wonSlot);
     const auto withName = [this, winnerGuid, print, key]() {
@@ -5976,13 +6010,23 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             // request opened a window whatever it said. Refused before the
             // window, and said in chat as the real client says it -
             // ERR_TRADE_BLOCKED_S (0x005873e0).
+            // Refused as busy (CMSG_BUSY_TRADE, 0x00703e70), not cancelled:
+            // the one asking hears that this player is busy.
             if (addons::storedCVarValue("blockTrades", "0") != "0") {
                 owner_.addSystemChatMessage(interfaceFormat("ERR_TRADE_BLOCKED_S",
                     "%s has requested to trade. You have refused.", {tradePeerName_}));
-                declineTradeRequest();
+                if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+                    network::Packet busy(wireOpcode(Opcode::CMSG_BUSY_TRADE));
+                    owner_.getSocket()->send(busy);
+                }
+                resetTradeState();
                 break;
             }
-            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_REQUEST", {tradePeerName_});
+            // Otherwise 12340 takes the trade at once: 0x005873e0 case 1
+            // sends CMSG_BEGIN_TRADE itself (0x00703e00) and raises nothing -
+            // no TRADE_REQUEST, so FrameXML's "wants to trade" popup never
+            // asks; the window opens on the realm's OPEN_WINDOW (status 2).
+            acceptTradeRequest();
             break;
         }
         case 2:   // OPEN_WINDOW
@@ -6042,8 +6086,11 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
         }
         case 4:   // TRADE_ACCEPT - the other side pressed accept
             tradeStatus_ = TradeStatus::Accepted;
-            tradePartnerAccepted_ = true;
-            fireTradeAcceptUpdate();
+            // 0x00586390(1): TRADE_ACCEPT_UPDATE only when the flag changes.
+            if (!tradePartnerAccepted_) {
+                tradePartnerAccepted_ = true;
+                fireTradeAcceptUpdate();
+            }
             break;
         case 6:   // NO_TARGET
             resetTradeState();
@@ -6069,9 +6116,15 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             }
             owner_.addUIInfoMessage(uiText("ERR_TRADE_COMPLETE", "Trade complete."));
             break;
-        case 9:   // TRADE_REJECTED
-            resetTradeState();
-            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
+        case 9:   // the partner's acceptance taken back
+            // 0x005873e0 case 9 -> 0x00586390(0): the partner's accept flag
+            // cleared, TRADE_ACCEPT_UPDATE only if it changed; the window
+            // stays open. This closed the trade.
+            if (tradePartnerAccepted_) {
+                tradePartnerAccepted_ = false;
+                if (tradeStatus_ == TradeStatus::Accepted) tradeStatus_ = TradeStatus::Open;
+                fireTradeAcceptUpdate();
+            }
             break;
         case 10:  // TARGET_TO_FAR
             resetTradeState();
@@ -6081,10 +6134,30 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             resetTradeState();
             error("ERR_PLAYER_WRONG_FACTION", "Target is unfriendly.");
             break;
-        case 12:  // CLOSE_WINDOW
+        case 12: { // CLOSE_WINDOW - the trade failed
+            // 0x007044a0 reads the inventory result, whether it is the
+            // target's, and an item limit category; 0x005873e0 case 0xc shows
+            // the error 0x00586520 picks for them and closes the window
+            // (0x005870a0: TRADE_CLOSED only for a window open). This closed
+            // a trade that failed on full bags without a word.
+            const uint32_t result = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+            const bool targets = packet.hasRemaining(1) && packet.readUInt8() != 0;
+            const bool wasOpen = isTradeOpen();
             resetTradeState();
-            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
+            if (result == 4) {
+                if (targets) error("ERR_TRADE_BAG_FULL", "Trade failed, you don't have enough space.");
+                else error("ERR_TRADE_TARGET_BAG_FULL", "Trade failed, target doesn't have enough space.");
+            } else if (result == 0x11) {
+                if (targets) error("ERR_TRADE_TARGET_MAX_COUNT_EXCEEDED", "Your trade partner has too many of a unique item.");
+                else error("ERR_TRADE_MAX_COUNT_EXCEEDED", "You have too many of a unique item.");
+            } else if (result != 0) {
+                // The rest as any inventory failure says it (0x00753bb0).
+                if (const GameErrorText err = inventoryChangeError(static_cast<uint8_t>(result)); err.key)
+                    error(err.key, err.enUS);
+            }
+            if (wasOpen && owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
             break;
+        }
         case 14:  // IGNORE_YOU
             // ERR_IGNORING_YOU_S in system chat, naming whom - when known.
             if (const std::string& who = tradePeerName_.empty() ? tradeRequestName() : tradePeerName_;

@@ -725,6 +725,10 @@ struct Widget {
     struct Message {
         std::string text;
         float color[4];
+        /// The alpha the line holds until its fade starts: a plain message
+        /// frame's AddMessage takes one at argument 6 (0x00960420); the fade
+        /// then writes its own over it (0x00968a60), not a product with it.
+        float holdAlpha = 1.0f;
         float age = 0.0f;
         /// The display lines it wraps to, as the last draw measured it, and
         /// at what width; arrived while the frame was scrolled back, so the

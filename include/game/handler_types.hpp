@@ -602,6 +602,10 @@ struct LootRollEntry {
     bool started = false;
     /// Waiting for a frame: four rolls are up already (+0x41).
     bool queued = false;
+    /// The player's choice went out (+0x42, 0x006fbc70): its window is down,
+    /// but the roll is kept - the Lua getters still answer for it - until
+    /// the realm says who won or that all passed (0x006fb470).
+    bool answered = false;
 
     struct PlayerRollResult {
         std::string playerName;

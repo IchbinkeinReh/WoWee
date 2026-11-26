@@ -6000,7 +6000,12 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
                 LOG_INFO("Talent learned: id=", talentId, " rank=", (int)newRank,
                          " (spell ", spellId, ") in spec ", (int)activeTalentSpec_);
                 isTalentSpell = true;
-                if (owner_.addonEventCallbackRef()) {
+                // 12340 raises nothing for the spell: the talent's own
+                // SMSG_TALENTS_INFO says PLAYER_TALENT_UPDATE (0x005c9e50) and
+                // the points field CHARACTER_POINTS_CHANGED (entity_controller).
+                // Only the older clients, which have no talents packet, are
+                // told here.
+                if (isPreWotlk() && owner_.addonEventCallbackRef()) {
                     owner_.addonEventCallbackRef()("CHARACTER_POINTS_CHANGED", {"0", "0"});
                     owner_.addonEventCallbackRef()("PLAYER_TALENT_UPDATE", {});
                 }
@@ -6319,11 +6324,9 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
              " learned=", learnedTalents_[activeTalentGroup].size());
 
     if (owner_.addonEventCallbackRef()) {
-        // Two arguments, both zero: the interface reads the second as a count
-        // of skill points just gained and compares it against zero, which is an
-        // error against nothing. These fire on a full refresh rather than an
-        // increment, so nothing was gained and nothing is announced.
-        owner_.addonEventCallbackRef()("CHARACTER_POINTS_CHANGED", {"0", "0"});
+        // No CHARACTER_POINTS_CHANGED here: its only raise in 12340 is the
+        // watcher of the points field (entity_controller.cpp), not the
+        // talents packet (0x006cd770 -> 0x005c9e50).
         // 0x005c9e50: PLAYER_TALENT_UPDATE, then - only when the active group
         // moved - ACTIVE_TALENT_GROUP_CHANGED with the new and old groups
         // counted from one (0 where there were none).

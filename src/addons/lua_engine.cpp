@@ -2967,9 +2967,30 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
     const int after = coloured ? 6 : 3;
     for (int c = 0; c < 3; ++c) {
         m.color[c] = coloured ? std::clamp(static_cast<float>(lua_tonumber(L, 3 + c)), 0.0f, 1.0f)
-                              : w->color[c];
+                   : scrolling ? w->color[c]
+                               : 1.0f;
     }
     m.color[3] = 1.0f;
+    if (!scrolling) {
+        // A plain MessageFrame (0x009747c0) is another call: its line's font
+        // string is coloured white unless r, g, b are all numbers, and then
+        // an alpha follows at 6 when it is a number (0x00960420, held to
+        // 0..1). That colour replaces the font's own (0x00968210 ->
+        // 0x00487a10, the one colour a font string has), so ErrorFont's
+        // yellow never shows on a line added without one. Nothing after it
+        // is read - no typeID, backFill, accessID or extraData.
+        if (coloured && lua_isnumber(L, 6))
+            m.color[3] = std::clamp(static_cast<float>(lua_tonumber(L, 6)), 0.0f, 1.0f);
+        m.holdAlpha = m.color[3];
+        w->isMessageFrame = true;
+        if (w->messagesInsertTop) w->messages.push_front(std::move(m));
+        else                      w->messages.push_back(std::move(m));
+        while (w->messages.size() > w->maxMessages) {
+            if (w->messagesInsertTop) w->messages.pop_back();
+            else                      w->messages.pop_front();
+        }
+        return 0;
+    }
     // The three the chat history hangs off a line. FrameXML hands them over on
     // the way in and reads them back with GetMessageInfo when it moves a
     // conversation into a window of its own; dropping them here meant the copy
@@ -19928,15 +19949,20 @@ void LuaEngine::expireMessages(float elapsed) {
         auto* w = widgets_.get(static_cast<uint32_t>(id));
         if (!w || !w->isMessageFrame || !w->messageFading || w->messageDuration <= 0.0f) continue;
         const bool readingBack = w->messageScroll > 0;
-        const float life = w->messageDuration;
+        // A line is held for the display time and fades over the fade time
+        // after it - the two are counted one after the other, not the fade
+        // inside the display time (0x00968a60 plain, 0x00969e60 scrolling:
+        // the hold counter runs down first, then the fade counter). UIErrorsFrame
+        // (displayDuration 5, fade 3) shows an error for 8 s.
         const float fade = w->messageFadeDuration > 0.0f ? w->messageFadeDuration : 0.0f;
+        const float life = w->messageDuration + fade;
         for (auto& m : w->messages) {
             m.age += elapsed;
-            if (readingBack) { m.color[3] = 1.0f; continue; }
+            if (readingBack) { m.color[3] = m.holdAlpha; continue; }
             const float left = life - m.age;
             m.color[3] = (left <= 0.0f) ? 0.0f
                        : (fade > 0.0f && left < fade) ? (left / fade)
-                       : 1.0f;
+                       : m.holdAlpha;
         }
     }
 }

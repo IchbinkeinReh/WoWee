@@ -518,3 +518,44 @@ TEST_CASE("the quest log's selection is a quest, wherever its row goes", "[repla
     gh.selectQuestLogRow(99);
     CHECK(gh.getSelectedQuest() == nullptr);
 }
+
+// FIXER Q (quest review): GetQuestReward (0x0058cfa0) only sends the choice;
+// the realm's QUEST_COMPLETE closes the frame (0x006d0e10 -> 0x0058ca70), and a
+// refused step closes it as well (0x006cd7c0). QUEST_FINISHED came twice per
+// turn-in, and a refusal left the frame up with an empty page.
+TEST_CASE("the quest frame closes once, when the realm says so", "[replay][quest]") {
+    Session s;
+    s.setConnected(true);
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    int finished = 0;
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>&) {
+        finished += name == "QUEST_FINISHED";
+    });
+    const auto offer = [&] {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_OFFER_REWARD));
+        p.writeUInt64(0xF130000BEC00150Eull);
+        p.writeUInt32(9387);
+        p.writeString("Title");
+        p.writeString("Text");
+        p.writeUInt8(0);
+        for (int i = 0; i < 60; ++i) p.writeUInt32(0);
+        s.receive(p);
+        REQUIRE(s.handler().isQuestOfferRewardOpen());
+    };
+    offer();
+    s.handler().chooseQuestReward(0);
+    CHECK(s.sent().of(Opcode::CMSG_QUESTGIVER_CHOOSE_REWARD).size() == 1);
+    CHECK(finished == 0);
+    wowee::network::Packet done(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_COMPLETE));
+    for (uint32_t v : {9387u, 0u, 0u, 0u, 0u, 0u, 0u}) done.writeUInt32(v);
+    s.receive(done);
+    CHECK(finished == 1);
+    // Refused: the frame goes too.
+    offer();
+    wowee::network::Packet refused(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_INVALID));
+    refused.writeUInt32(1);
+    s.receive(refused);
+    CHECK(finished == 2);
+    CHECK_FALSE(s.handler().isQuestOfferRewardOpen());
+    s.handler().setAddonEventCallback(nullptr);
+}

@@ -943,7 +943,7 @@ private:
     void handleLootRoll(network::Packet& packet);
     void handleLootRollWon(network::Packet& packet);
     /// A rolled item's chat link, its random suffix in the name.
-    std::string rollItemLink(uint32_t itemId, int32_t randomProp);
+    std::string rollItemLink(uint32_t itemId, int32_t randomProp, uint32_t seed);
 
     /// Tell the interface a roll is over, by the id it was opened with.
     ///

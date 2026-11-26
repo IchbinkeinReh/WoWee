@@ -5821,7 +5821,13 @@ static int lua_GetNumLootItems(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh || !gh->isLootWindowOpen()) { return luaReturnZero(L); }
     // Coin counts as a slot, which is what the loot frame iterates over.
-    lua_pushnumber(L, gh->getCurrentLoot().items.size() + (lootHasCoin(gh) ? 1 : 0));
+    // The items up to the last one still there (0x00588190: the highest
+    // slot holding an item, plus one) - taking the last items lowers it.
+    const auto& items = gh->getCurrentLoot().items;
+    size_t last = 0;
+    for (size_t i = 0; i < items.size(); ++i)
+        if (!items[i].looted) last = i + 1;
+    lua_pushnumber(L, static_cast<lua_Number>(last + (lootHasCoin(gh) ? 1 : 0)));
     return 1;
 }
 
@@ -5862,8 +5868,11 @@ static int lua_GetLootSlotInfo(lua_State* L) {
     if (!icon.empty()) lua_pushstring(L, icon.c_str());
     else lua_pushnil(L);
 
-    // name
-    if (info && !info->name.empty()) lua_pushstring(L, info->name.c_str());
+    // name - with what the item rolled: 0x00588430 names it by 0x00706d70
+    // with the slot's random property (SMSG_LOOT_RESPONSE's fifth dword), so a
+    // green 'of the Bear' reads so in the loot window.
+    if (info && !info->name.empty())
+        lua_pushstring(L, gh->itemNameWithProperty(info->name, static_cast<int32_t>(item.randomPropertyId)).c_str());
     else lua_pushstring(L, ("Item #" + std::to_string(item.itemId)).c_str());
 
     lua_pushnumber(L, item.count);                           // quantity
@@ -5891,7 +5900,14 @@ static int lua_GetLootSlotLink(lua_State* L) {
     if (!info || info->name.empty()) { return luaReturnNil(L); }
 
     uint32_t qi = info->quality < 8 ? info->quality : 1u;
-    const std::string link = game::itemChatLink(item.itemId, qi, info->name, {}, gh->getPlayerLevel());
+    // 0x005884a0: the link carries the slot's random property and its seed
+    // (the fifth and fourth dwords of the slot in SMSG_LOOT_RESPONSE) - its
+    // tooltip is the item that dropped, not the bare template.
+    game::ItemLinkInstance rolled;
+    rolled.randomPropertyId = static_cast<int32_t>(item.randomPropertyId);
+    rolled.seed = item.randomSuffix;
+    const std::string link = game::itemChatLink(
+        item.itemId, qi, gh->itemNameWithProperty(info->name, rolled.randomPropertyId), rolled, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -6060,7 +6076,8 @@ static int lua_RollOnLoot(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int rollId = static_cast<int>(luaL_optnumber(L, 1, 0));
     const auto* roll = rollFor(gh, rollId);
-    if (!roll) return 0;
+    // A roll already answered takes no second answer (0x006fbc70: +0x42).
+    if (!roll || roll->answered) return 0;
     const int type = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (type < 0 || type > 3) return 0;
 

@@ -49,6 +49,14 @@ std::unordered_map<uint32_t, std::string>& questEndTexts() {
     return texts;
 }
 
+/// NextQuestInChain of each quest the realm described (the quest cache's
+/// +0x2c): a turn-in of one with a next quest leaves the quest frame up for
+/// that quest's details (0x006d0e10 -> 0x0058ca70).
+std::unordered_map<uint32_t, uint32_t>& questNextInChain() {
+    static std::unordered_map<uint32_t, uint32_t> next;
+    return next;
+}
+
 /// The on-screen line for one kill or use credit (questCreditLine): the slot's
 /// text is that of the objective the entry is, a game object's with its high bit.
 std::string questKillCreditText(const GameHandler& owner, const QuestHandler::QuestLogEntry& quest, uint32_t rawEntry,
@@ -614,6 +622,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     owner_.playGameErrorSound("ERR_QUEST_FAILED_S");
                 }
             }
+            // 0x006cda70 ends with 0x0058ca70(0, quest, 0): the quest frame
+            // is let go (QUEST_FINISHED).
+            endQuestFrameByRealm();
         }
     };
 
@@ -679,6 +690,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 : interfaceFormat("ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I",
                                   "You have already completed %d daily quests today", {"25"}));
             owner_.playGameErrorSound(key ? key : "ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I");
+            // 0x006cd7c0 ends with 0x0058ca70(0, 0, 0): the quest frame is let
+            // go. This left it up with an empty page and dead buttons.
+            endQuestFrameByRealm();
         }
     };
 
@@ -772,10 +786,16 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     // is the whole of what this announces; the client raises it
                     // at 00580000.c:9690 and :9816, as the turn-in state is
                     // cleared once the quest is out of the log.
-                    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_FINISHED", {});
                     break;
                 }
             }
+            // QUEST_FINISHED for the turn-in, whether or not the log still
+            // held the quest - and only for a quest with no next one in its
+            // chain: 0x006d0e10 ends with 0x0058ca70(next != 0, ...), which
+            // keeps the frame up for the next quest's details.
+            const auto next = questNextInChain().find(questId);
+            if ((next == questNextInChain().end() || next->second == 0) && owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("QUEST_FINISHED", {});
         }
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
@@ -1022,6 +1042,11 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             }
         }
 
+        // NextQuestInChain, the twelfth dword on WotLK (Quest::BuildQuestData,
+        // quest_query_layout.hpp; the cache record's +0x2c).
+        uint32_t nextQuestInChain = 0;
+        if (questLogStride >= 5 && packet.getData().size() >= 12 * 4)
+            nextQuestInChain = network::wire::loadLE32(packet.getData(), 11 * 4);
         const QuestQueryTexts texts = questQueryTexts(packet.getData(), questLogStride);
         const QuestQueryObjectives objs = extractQuestQueryObjectives(packet.getData(), questLogStride);
         // Named here because a blank log panel is either a short answer or an
@@ -1032,6 +1057,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                   "ch objParse valid=", objs.valid);
         const QuestQueryRewardsData rwds = QuestQueryRewardsParser::parse(packet.getData(), questLogStride);
         if (!texts.endText.empty()) questEndTexts()[questId] = texts.endText;
+        questNextInChain()[questId] = nextQuestInChain;
         const auto put = [&](QuestLogEntry& q) {
             if (questLevel != 0) q.level = questLevel;
             if (zoneOrSort != 0) q.zoneOrSort = zoneOrSort;
@@ -1309,19 +1335,10 @@ void QuestHandler::acceptQuest() {
         std::erase_if(questLog_, [&](const QuestLogEntry& q) { return q.questId == questId; });
     }
 
-    // The server caps the quest log (20 slots in Vanilla, 25 in TBC/WotLK).
-    // Accepting past the cap only earns SMSG_QUESTLOG_FULL, so stop it here
-    // with a clearer message and no optimistic local entry to roll back.
-    const int maxSlots = maxQuestLogSlots();
-    if (static_cast<int>(questLog_.size()) >= maxSlots) {
-        // The ERR_QUEST_LOG_FULL the server would answer with, on screen only
-        // (0x006d7f10, case 0x195) - the original has no check of its own here
-        // and lets the server refuse. This was an English line in chat too.
-        owner_.addUIError(interfaceString("ERR_QUEST_LOG_FULL", "Your quest log is full."));
-        owner_.playGameErrorSound("ERR_QUEST_LOG_FULL");
-        return;
-    }
-
+    // No check of the log's room here: AcceptQuest (0x0058cd20) always sends
+    // the accept and lets the frame go (QUEST_FINISHED); a full log is the
+    // realm's SMSG_QUESTLOG_FULL to say (ERR_QUEST_LOG_FULL, rolled back
+    // there). Refused here, the detail frame stayed open with nothing sent.
     network::Packet packet = owner_.getPacketParsers()
         ? owner_.getPacketParsers()->buildAcceptQuestPacket(npcGuid, questId)
         : QuestgiverAcceptQuestPacket::build(npcGuid, questId);
@@ -1387,6 +1404,8 @@ void QuestHandler::leaveQuestPage() {
     // could be asked.
     if (!gossips && (!object || object->getType() == ObjectType::PLAYER ||
                      (details && currentQuestDetails_.informUnit != 0))) {
+        // 0x0058ce00 -> 0x0058ca70(0, quest, 1): a player's quest is answered.
+        tellQuestSharerDeclined();
         close();
         return;
     }
@@ -1500,12 +1519,50 @@ void QuestHandler::chooseQuestReward(uint32_t rewardIndex) {
         npcGuid, currentQuestOfferReward_.questId, rewardIndex);
     owner_.getSocket()->send(packet);
     pendingTurnInQuestId_ = 0;
-    // Announced, which is what closes the dialog. Taking the reward put the
-    // three fields back and told nothing: this client's own window reads the
-    // flag and closed, and the interface's quest frame hides on QUEST_FINISHED
-    // and nothing else, so it stayed on screen over the world after the quest
-    // had been handed in.
-    closeQuestOfferReward(true);
+    // Not announced: GetQuestReward (0x0058cfa0) sends the choice, marks it
+    // made (0xc0d6ac) and raises nothing. The realm's QUEST_COMPLETE closes
+    // the frame (QUEST_FINISHED) - or, with a next quest in the chain, leaves
+    // it up for that quest's details (0x006d0e10). Announced here as well,
+    // QUEST_FINISHED came twice per turn-in and a chain's frame closed and
+    // opened again between its quests.
+    closeQuestOfferReward(false);
+}
+
+void QuestHandler::tellQuestSharerDeclined() {
+    // 0x0058ca70 with its third argument set: where the quest page is a
+    // player's (type mask 0x10), MSG_QUEST_PUSH_RESULT to the one who shared
+    // it - else the player - with the quest and 3 (declined). Declining or
+    // closing a shared quest told the sharer nothing.
+    const bool details = questDetailsOpen_;
+    if (!details && !questRequestItemsOpen_ && !questOfferRewardOpen_) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const uint64_t giver = details                 ? currentQuestDetails_.npcGuid
+                           : questRequestItemsOpen_ ? currentQuestRequestItems_.npcGuid
+                                                    : currentQuestOfferReward_.npcGuid;
+    const uint32_t questId = details                 ? currentQuestDetails_.questId
+                             : questRequestItemsOpen_ ? currentQuestRequestItems_.questId
+                                                      : currentQuestOfferReward_.questId;
+    const auto object = giver ? owner_.getEntityManager().getEntity(giver) : nullptr;
+    if (!object || object->getType() != ObjectType::PLAYER) return;
+    const uint64_t sharer = details ? currentQuestDetails_.informUnit : 0;
+    network::Packet packet(wireOpcode(Opcode::MSG_QUEST_PUSH_RESULT));
+    packet.writeUInt64(sharer ? sharer : giver);
+    packet.writeUInt32(questId);
+    packet.writeUInt8(3);
+    owner_.getSocket()->send(packet);
+}
+
+void QuestHandler::endQuestFrameByRealm() {
+    // 0x0058ca70 with nothing to follow: only where a quest page is held -
+    // shown, or asked of the realm by CompleteQuest / GetQuestReward.
+    const bool held = questDetailsOpen_ || questRequestItemsOpen_ || questOfferRewardOpen_ ||
+                      pendingTurnInQuestId_ != 0;
+    if (!held) return;
+    questDetailsOpen_ = false;
+    questRequestItemsOpen_ = false;
+    questOfferRewardOpen_ = false;
+    pendingTurnInQuestId_ = 0;
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_FINISHED", {});
 }
 
 void QuestHandler::closeQuestOfferReward(bool announce) {

@@ -230,6 +230,42 @@ TEST_CASE("a letter's attachment is named and read with what it rolled", "[repla
     REQUIRE(ui.is("rollId ~= nil"));
     CHECK(ui.is("strfind(GetLootRollItemLink(rollId), ':%-24:35:.*Gorilla') ~= nil"));
     CHECK(ui.is("select(2, GetLootRollItemInfo(rollId)) == 'Spectral Necklace of the Gorilla'"));
+    // FIXER Q: the vote mask (0x07: pass, need, greed) gates the answer
+    // (0x006fbc70): disenchant goes nowhere and the window stays.
+    ui.run("cancelled = nil looted = {} local g = CreateFrame('Frame') g:RegisterEvent('CANCEL_LOOT_ROLL') "
+           "g:RegisterEvent('CHAT_MSG_LOOT') g:SetScript('OnEvent', function(self, event, a) "
+           "if event == 'CANCEL_LOOT_ROLL' then cancelled = tonumber(a) else looted[#looted + 1] = a end end)");
+    ui.run("RollOnLoot(rollId, 3)");
+    CHECK(s.sent().of(Opcode::CMSG_LOOT_ROLL).empty());
+    CHECK(ui.is("cancelled == nil"));
+    // Passed: sent once, the window down, but the roll still answers until it is decided.
+    ui.run("RollOnLoot(rollId, 0)");
+    CHECK(s.sent().of(Opcode::CMSG_LOOT_ROLL).size() == 1);
+    CHECK(ui.is("cancelled == rollId"));
+    CHECK(ui.is("select(2, GetLootRollItemInfo(rollId)) == 'Spectral Necklace of the Gorilla'"));
+    ui.run("RollOnLoot(rollId, 0)");
+    CHECK(s.sent().of(Opcode::CMSG_LOOT_ROLL).size() == 1);
+    // All passed: the line's link carries the property and the seed (0x006fb470), and the roll is gone.
+    wowee::network::Packet passed(wowee::game::wireOpcode(Opcode::SMSG_LOOT_ALL_PASSED));
+    passed.writeUInt64(0xF130000BEC00150Eull);
+    for (uint32_t v : {0u, 12047u, 35u, static_cast<uint32_t>(-24)}) passed.writeUInt32(v);
+    s.receive(passed);
+    CHECK(ui.is("#looted == 1 and strfind(looted[1], 'item:12047:0:0:0:0:0:%-24:35:') ~= nil "
+                "and strfind(looted[1], 'Gorilla') ~= nil"));
+    CHECK(ui.is("GetLootRollItemInfo(rollId) == nil"));
+    // And in a loot window: named and linked with what it rolled (0x00588430, 0x005884a0).
+    wowee::network::Packet loot(wowee::game::wireOpcode(Opcode::SMSG_LOOT_RESPONSE));
+    loot.writeUInt64(0xF130000BEC00150Full);
+    loot.writeUInt8(1);
+    loot.writeUInt32(0);
+    loot.writeUInt8(1);
+    loot.writeUInt8(0);
+    for (uint32_t v : {12047u, 1u, 0u, 35u, static_cast<uint32_t>(-24)}) loot.writeUInt32(v);
+    loot.writeUInt8(0);
+    s.receive(loot);
+    REQUIRE(ui.is("GetNumLootItems() == 1"));
+    CHECK(ui.is("select(2, GetLootSlotInfo(1)) == 'Spectral Necklace of the Gorilla'"));
+    CHECK(ui.is("strfind(GetLootSlotLink(1), 'item:12047:0:0:0:0:0:%-24:35:.*Gorilla') ~= nil"));
 }
 
 // P54: GetCompanionInfo answers the creature (0x0053e2c0), and SetCreature
@@ -2762,4 +2798,97 @@ TEST_CASE("a back-filled line goes above the ones there (0x0096a9f0)", "[replay]
     // Without all three of r, g, b the rest move up: typeID, backFill, accessID.
     ui.run("c:Clear() c:AddMessage('A') c:AddMessage('B', 5, true, 7)");
     CHECK(ui.is("line(1) == 'B' and select(2, c:GetMessageInfo(1)) == 7 and select(3, c:GetMessageInfo(1)) == 5"));
+}
+
+// P's note (FIXER Q): a plain MessageFrame's AddMessage (0x009747c0) colours the
+// line white unless r, g, b are all numbers, reads an alpha at 6 (0x00960420),
+// and that colour is the line's font string's one colour (0x00968210 ->
+// 0x00487a10) - the frame's font colour (ErrorFont's yellow on UIErrorsFrame)
+// does not show. The alpha holds until the fade writes its own (0x00968a60).
+TEST_CASE("a plain message frame's line is white unless coloured, alpha at 6 (0x009747c0)",
+          "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("m = CreateFrame('MessageFrame', 'QPlainMessages') m:SetTextColor(1, 0.82, 0) "
+           "m:SetTimeVisible(5) m:SetFadeDuration(2) "
+           "m:AddMessage('A') m:AddMessage('B', 1, 0.1, 0.1, 0.5) m:AddMessage('C', 1, 0, 0, 'x')");
+    const auto* w = ui.engine.widgets().findByName("QPlainMessages");
+    REQUIRE(w);
+    REQUIRE(w->messages.size() == 3);
+    const auto& a = w->messages[0];
+    const auto& b = w->messages[1];
+    const auto& c = w->messages[2];
+    CHECK(a.text == "A");
+    CHECK(a.color[0] == 1.0f);
+    CHECK(a.color[1] == 1.0f);
+    CHECK(a.color[2] == 1.0f);
+    CHECK(a.color[3] == 1.0f);
+    CHECK(b.color[1] == Catch::Approx(0.1f));
+    CHECK(b.color[3] == Catch::Approx(0.5f));
+    CHECK(c.color[3] == 1.0f);
+    // Held through the whole display time (5 s), then the fade's own alpha
+    // over the 2 s after it (0x00968a60: hold counter, then fade counter).
+    ui.engine.expireMessages(4.5f);
+    CHECK(w->messages[0].color[3] == 1.0f);
+    CHECK(w->messages[1].color[3] == Catch::Approx(0.5f));
+    ui.engine.expireMessages(1.0f);   // 5.5 s: 1.5 of the 2 fade seconds left
+    CHECK(w->messages[0].color[3] == Catch::Approx(0.75f));
+    CHECK(w->messages[1].color[3] == Catch::Approx(0.75f));
+    ui.engine.expireMessages(2.0f);   // 7.5 s: gone
+    CHECK(w->messages[0].color[3] == 0.0f);
+}
+
+// FIXER Q (trade review): 0x005873e0 case 1 takes a trade at once
+// (CMSG_BEGIN_TRADE, 0x00703e00) without TRADE_REQUEST; case 9 only clears the
+// partner's accept (0x00586390(0)); case 12 says why the trade failed
+// (0x00586520: result 4 with the target flag -> ERR_TRADE_BAG_FULL).
+TEST_CASE("a trade asked for opens without a popup and says why it failed (0x005873e0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("seen = {} errors = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'TRADE_REQUEST', 'TRADE_SHOW', 'TRADE_CLOSED', 'TRADE_ACCEPT_UPDATE'}) do f:RegisterEvent(e) end "
+           "f:RegisterEvent('UI_ERROR_MESSAGE') "
+           "f:SetScript('OnEvent', function(self, event, a, b) "
+           "if event == 'UI_ERROR_MESSAGE' then errors[#errors + 1] = a else seen[#seen + 1] = event .. (a or '') .. (b or '') end end) "
+           "ERR_TRADE_BAG_FULL = 'BAG_FULL' ERR_TRADE_TARGET_BAG_FULL = 'TARGET_BAG_FULL'");
+    const auto status = [&](uint32_t code, auto&& more) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_TRADE_STATUS));
+        p.writeUInt32(code);
+        more(p);
+        s.receive(p);
+    };
+    status(1, [](wowee::network::Packet& p) { p.writeUInt64(0x0000000000000042ull); });
+    CHECK(s.sent().of(Opcode::CMSG_BEGIN_TRADE).size() == 1);
+    CHECK(ui.is("#seen == 0"));
+    status(2, [](wowee::network::Packet& p) { p.writeUInt32(0); });
+    CHECK(ui.is("seen[1] == 'TRADE_SHOW'"));
+    status(4, [](wowee::network::Packet&) {});
+    status(4, [](wowee::network::Packet&) {});
+    CHECK(ui.is("#seen == 2 and seen[2] == 'TRADE_ACCEPT_UPDATE01'"));
+    // Taken back: the window stays.
+    status(9, [](wowee::network::Packet&) {});
+    CHECK(ui.is("#seen == 3 and seen[3] == 'TRADE_ACCEPT_UPDATE00'"));
+    CHECK(s.handler().isTradeOpen());
+    status(12, [](wowee::network::Packet& p) {
+        p.writeUInt32(4);
+        p.writeUInt8(1);
+        p.writeUInt32(0);
+    });
+    CHECK(ui.is("errors[1] ~= nil and seen[4] == 'TRADE_CLOSED'"));
+}
+
+// FIXER Q (talent review): GetTalentInfo's empty answer (0x005c7800,
+// LAB_005c7c49) and its usage line; GetUnspentTalentPoints of an inspect that
+// has no record is 0, not the player's own (0x005c6310).
+TEST_CASE("GetTalentInfo answers no talent as 12340 does (0x005c7800)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("a, b, c, d, e, f, g, h, i, j = GetTalentInfo(99, 99)");
+    CHECK(ui.is("a == nil and b == nil and c == 1 and d == 1 and e == 0 and f == 0 and g == 0 "
+                "and h == nil and i == 0 and j == nil"));
+    CHECK(ui.is("select('#', GetTalentInfo(99, 99)) == 10"));
+    CHECK(ui.is("not pcall(GetTalentInfo, 'x', 1)"));
+    CHECK(ui.is("GetUnspentTalentPoints(true) == 0"));
 }

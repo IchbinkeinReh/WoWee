@@ -132,6 +132,12 @@ public:
     [[nodiscard]] bool isQuestOfferRewardOpen() const { return questOfferRewardOpen_; }
     [[nodiscard]] const QuestOfferRewardData& getQuestOfferReward() const { return currentQuestOfferReward_; }
     void chooseQuestReward(uint32_t rewardIndex);
+    /// The realm refused the quest step (QUEST_INVALID, QUEST_FAILED): the quest
+    /// frame is let go as 0x0058ca70(0, ...) does - QUEST_FINISHED.
+    void endQuestFrameByRealm();
+    /// Declining or closing a player's quest page: MSG_QUEST_PUSH_RESULT 3 to
+    /// the sharer (0x0058ca70 with its third argument).
+    void tellQuestSharerDeclined();
     void closeQuestOfferReward(bool announce = true);
 
     // Quest log
