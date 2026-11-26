@@ -2,6 +2,7 @@
 
 #include "pipeline/m2_loader.hpp"
 #include "rendering/rt_glow.hpp"
+#include "rendering/m2_particle_motion.hpp"
 #include "rendering/rt_point_lights.hpp"
 
 #include <algorithm>
@@ -89,6 +90,46 @@ struct FlameColor {
     const glm::vec3 c = glm::mix(own, *flames, t * t * (3.0f - 2.0f * t));
     const float most = std::max(c.r, std::max(c.g, c.b));
     return most > 1e-6f ? c / most : own;
+}
+
+/// How much of a fire's flames is drawn this moment, 0..1: of its live particles - its flame
+/// emitters' where it has any alive (isFlameEmitter), else all - each by its alpha and its
+/// area over its life, the share the twinkle leaves (0x0097be80: drawn at its size times
+/// the twinkle's, or not at all while it hides it). A fire light is that much of a fire's
+/// (the user's answer to V417, 2026-11-26): a fire whose flames are never twinkled is
+/// whole, one whose flames are mostly small - Undercity's UndeadFireLarge, twinkle 0..1 -
+/// a third of it. Over its live particles at once, it flickers as its flames do and no
+/// more. 1 where nothing is alive (a fire of cards alone; whether it burns is emission's).
+/// `Particle` has emitterIndex, life, maxLife, sizeVary and twinkleSeed (M2Particle).
+template <typename Particle>
+[[nodiscard]] float visibleFlameShare(const std::vector<pipeline::M2ParticleEmitter>& emitters,
+                                      const std::vector<Particle>& particles) {
+    bool anyFlame = false;
+    for (const Particle& p : particles) {
+        if (p.emitterIndex >= 0 && static_cast<size_t>(p.emitterIndex) < emitters.size() &&
+            isFlameEmitter(emitters[static_cast<size_t>(p.emitterIndex)])) {
+            anyFlame = true;
+            break;
+        }
+    }
+    float drawn = 0.0f, whole = 0.0f;
+    for (const Particle& p : particles) {
+        if (p.emitterIndex < 0 || static_cast<size_t>(p.emitterIndex) >= emitters.size()) continue;
+        const pipeline::M2ParticleEmitter& e = emitters[static_cast<size_t>(p.emitterIndex)];
+        if (anyFlame && !isFlameEmitter(e)) continue;
+        const float share = p.life / std::max(p.maxLife, 0.001f);
+        const float size = overLife(e.particleScale.timestamps, e.particleScale.floatValues, share, 1.0f) * p.sizeVary;
+        const float alpha =
+            std::clamp(overLife(e.particleAlpha.timestamps, e.particleAlpha.floatValues, share, 1.0f), 0.0f, 1.0f);
+        const float w = alpha * size * size;
+        if (!(w > 0.0f) || !std::isfinite(w)) continue;
+        whole += w;
+        const m2_particle::Twinkle t = m2_particle::twinkle(e.twinkleSpeed, e.twinklePercent, e.twinkleScaleMin,
+                                                            e.twinkleScaleMax, p.twinkleSeed, p.life);
+        if (t.shown) drawn += w * t.size * t.size;
+    }
+    if (!(whole > 0.0f)) return 1.0f;
+    return std::clamp(drawn / whole, 0.0f, 1.0f);
 }
 
 }  // namespace wowee::rendering::rt_lights

@@ -3081,8 +3081,10 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
                                                            inst.globalSequenceTime,
                                                            static_cast<float>(inst.id % 97u), rtFireFlickerStrength_);
-            // In the colour of its own flames (rt_fire_color.hpp), as strong as it was.
-            l.color *= fireTint(*model);
+            // In the colour of its own flames (rt_fire_color.hpp), as strong as
+            // what of them is drawn this moment (visibleFlameShare: the
+            // twinkle's sizes; the user's answer to V417).
+            l.color *= fireTint(*model) * rt_lights::visibleFlameShare(model->particleEmitters, inst.particles);
             // At its flames where it has any (rt_lights::flameCentre).
             if (const auto flame = rt_lights::flameCentre(
                     model->particleEmitters,

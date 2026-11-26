@@ -3,7 +3,9 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/rt_fire_color.hpp"
+#include "test_support.hpp"
 
+#include <string>
 #include <vector>
 
 using wowee::pipeline::M2ParticleEmitter;
@@ -156,4 +158,65 @@ TEST_CASE("a particle's value over its life", "[rt][fire]") {
     CHECK(overLife<float>({0.0f, 0.5f, 1.0f}, {0.0f, 1.0f, 5.0f}, 0.75f, 7.0f) == 3.0f);
     CHECK(overLife<float>({0.0f, 0.5f, 1.0f}, {0.0f, 1.0f, 5.0f}, 2.0f, 7.0f) == 5.0f);
     CHECK(overLife<float>({0.0f, 0.5f, 1.0f}, {0.0f, 1.0f, 5.0f}, -1.0f, 7.0f) == 0.0f);
+}
+
+namespace {
+struct Spark {
+    int emitterIndex = 0;
+    float life = 0.0f, maxLife = 1.0f, sizeVary = 1.0f;
+    uint8_t twinkleSeed = 0;
+};
+// A fire's pool: n particles of the emitter, their ages and their places in the
+// twinkle's table spread as a running emitter's are.
+std::vector<Spark> pool(int emitter, int n) {
+    std::vector<Spark> out;
+    for (int i = 0; i < n; ++i)
+        out.push_back({.emitterIndex = emitter, .life = (static_cast<float>(i) + 0.5f) / static_cast<float>(n),
+                       .maxLife = 1.0f, .sizeVary = 1.0f, .twinkleSeed = static_cast<uint8_t>((i * 37) & 0x7f)});
+    return out;
+}
+M2ParticleEmitter flame(int blend, float percent, float scaleMin, float scaleMax) {
+    M2ParticleEmitter e{};
+    e.blendingType = static_cast<uint8_t>(blend);
+    e.particleScale.timestamps = {0.0f, 0.5f, 1.0f};
+    e.particleScale.floatValues = {0.28f, 1.11f, 0.19f};
+    e.particleAlpha.timestamps = {0.0f, 0.5f, 1.0f};
+    e.particleAlpha.floatValues = {0.24f, 0.27f, 0.04f};
+    e.twinkleSpeed = 0.1f;
+    e.twinklePercent = percent;
+    e.twinkleScaleMin = scaleMin;
+    e.twinkleScaleMax = scaleMax;
+    return e;
+}
+}  // namespace
+
+// The user's answer to V417: a fire light is as strong as what of its flames is drawn.
+TEST_CASE("a fire light is as much of a fire as its flames drawn", "[rt][fire]") {
+    // Flames the twinkle leaves whole (1/1/1, nearly every fire): the whole light.
+    CHECK(visibleFlameShare({flame(4, 1.0f, 1.0f, 1.0f)}, pool(0, 200)) == 1.0f);
+    // UndeadFireLarge's 0..1: on the mean a third of the area.
+    const float undead = visibleFlameShare({flame(4, 1.0f, 0.0f, 1.0f)}, pool(0, 230));
+    CHECK(undead > 0.25f);
+    CHECK(undead < 0.42f);
+    // Half of them hidden (percent 0.5), the rest whole.
+    const float half = visibleFlameShare({flame(4, 0.5f, 1.0f, 1.0f)}, pool(0, 230));
+    CHECK(half > 0.38f);
+    CHECK(half < 0.62f);
+    // The smoke over the flames counts for nothing beside them.
+    std::vector<Spark> both = pool(0, 200);
+    for (Spark s : pool(1, 200)) both.push_back(s);
+    CHECK(visibleFlameShare({flame(4, 1.0f, 1.0f, 1.0f), flame(2, 0.0f, 1.0f, 1.0f)}, both) == 1.0f);
+    // Nothing alive: emission decides whether it burns.
+    CHECK(visibleFlameShare({flame(4, 1.0f, 0.0f, 1.0f)}, std::vector<Spark>{}) == 1.0f);
+}
+
+TEST_CASE("the fire light of a fire without a light of its own follows its flames", "[rt][fire]") {
+    const std::string renderer = wowee::test::slurp("src/rendering/m2_renderer.cpp");
+    REQUIRE_FALSE(renderer.empty());
+    const size_t fire = renderer.find("// A fire with no light of its own (rt_lights::fireLight), while");
+    REQUIRE(fire != std::string::npos);
+    const size_t pushed = renderer.find("pushAlongParticles(l, *model, inst, out);", fire);
+    REQUIRE(pushed != std::string::npos);
+    CHECK(renderer.substr(fire, pushed - fire).find("visibleFlameShare(model->particleEmitters, inst.particles)") !=
+          std::string::npos);
 }
