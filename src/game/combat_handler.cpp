@@ -1995,6 +1995,8 @@ std::shared_ptr<Entity> CombatHandler::getTarget() const {
 }
 
 void CombatHandler::setFocus(uint64_t guid) {
+    // 0x0051ff20: nothing at all when it is the focus already (T387).
+    if (owner_.focusGuidRef() == guid) return;
     owner_.focusGuidRef() = guid;
     owner_.fireAddonEvent("PLAYER_FOCUS_CHANGED", {});
     if (guid != 0) {
@@ -2014,10 +2016,10 @@ void CombatHandler::setFocus(uint64_t guid) {
 }
 
 void CombatHandler::clearFocus() {
-    // No line: ClearFocus (0x005225e0) says nothing.
-    if (owner_.focusGuidRef() != 0) {
-        LOG_INFO("Focus cleared");
-    }
+    // No line: ClearFocus (0x005225e0) says nothing; with no focus it does
+    // nothing at all (0x0051ff20 compares first, T387).
+    if (owner_.focusGuidRef() == 0) return;
+    LOG_INFO("Focus cleared");
     owner_.focusGuidRef() = 0;
     owner_.fireAddonEvent("PLAYER_FOCUS_CHANGED", {});
 }

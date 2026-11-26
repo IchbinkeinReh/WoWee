@@ -58,6 +58,7 @@ uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name) 
 // offered to it (0x0080bc80); no unit by that name is
 // SPELL_FAILED_OUT_OF_RANGE. Nothing is returned.
 static int lua_SpellTargetUnit(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SpellTargetUnit(\"unit\")");   // 0x0080dc00
     std::string token = luaL_checkstring(L, 1);
     if (!taint::allowed(L, 2)) return 0;   // 0x0080dc33
     auto* gh = getGameHandler(L);
@@ -890,6 +891,7 @@ static int lua_UnitChannelInfo(lua_State* L) {
 }
 
 static int lua_CastSpellByName(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: CastSpellByName(name[, target])");   // 0x00540310
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const char* name = luaL_checkstring(L, 1);
@@ -1744,6 +1746,7 @@ static int lua_CancelUnitBuff(lua_State* L) {
 
 // CastSpellByID(spellId) - cast spell by numeric ID
 static int lua_CastSpellByID(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CastSpellByID(spellID[, target])");   // 0x0053e060
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
@@ -1803,6 +1806,12 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellStopCasting", [](lua_State* L) -> int {
             if (!taint::allowed(L, 2)) return 0;   // 0x00809ea0
             auto* gh = getGameHandler(L);
+            // Charmed (the player's UNIT_FIELD_CHARMEDBY set), nothing is
+            // stopped and the answer is nil (0x00809ea0's first test).
+            if (gh) {
+                const auto me = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+                if (me && unitGuidField(*me, game::UF::UNIT_FIELD_CHARMEDBY) != 0) return luaReturnNil(L);
+            }
             // 1 when a cast was stopped, nil when there was none - the next
             // step of ToggleGameMenu runs only on nil.
             // A channel is none (0x007ffde0 reads the cast's spell, +0xa60).

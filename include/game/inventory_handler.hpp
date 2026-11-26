@@ -1330,7 +1330,12 @@ private:
     uint32_t bidderListOffset_ = 0;        ///< 0xc0f438
     uint32_t auctionBidSent_ = 0;          ///< 0xc0f43c
     void requestPendingSales();
+public:
     void forgetAuction(uint32_t auctionId);
+    /// What is left of a row's time, in ms (its expiry +0x8c less the
+    /// clock): below 0 once it has run out.
+    [[nodiscard]] int64_t auctionMsLeft(const AuctionEntry& e) const;
+private:
     /// A bid the realm tells of, in the search's and the bid on's rows.
     void auctionBidIs(uint32_t auctionId, uint32_t bid, uint32_t increment, uint64_t bidder, bool inSearch);
     /// The auctions the player was outbid on, their house and number (0xc0f478),

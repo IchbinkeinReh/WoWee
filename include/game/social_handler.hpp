@@ -26,6 +26,10 @@ class GameHandler;
 
 class SocialHandler {
 public:
+    /// The roster's events once more for an interface built after the login's
+    /// group list arrived (T388): 12340's interface exists before the world's
+    /// packets are handled and hears them; this one is loaded later.
+    void replayGroupEventsForInterface();
     using PacketHandler = std::function<void(network::Packet&)>;
     using DispatchTable = std::unordered_map<LogicalOpcode, PacketHandler>;
 
@@ -823,6 +827,7 @@ private:
     /// definition gives each one's site, and why none of them is the
     /// GROUP_ROSTER_UPDATE that these sites used to fire instead.
     void firePartyClearedEvents(bool wasRaid);
+
     void handlePartyCommandResult(network::Packet& packet);
     void handlePartyMemberStats(network::Packet& packet, bool isFull);
     void handleGuildInfo(network::Packet& packet);

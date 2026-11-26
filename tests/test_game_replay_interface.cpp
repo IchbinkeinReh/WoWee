@@ -3178,3 +3178,309 @@ TEST_CASE("an auction row without a required level says level 1 (0x0059d5e0)", "
     // An unknown seller is nil, not "" (0x0067d770 without a name).
     CHECK(ui.is("select(12, GetAuctionItemInfo('list', 1)) == nil"));
 }
+
+namespace {
+// An item of `entry` in backpack slot `slot` (from 0), its template known and
+// its object held, for the auction house's sell box.
+void carryForAuction(Session& s, int slot, uint64_t guid, uint32_t entry, uint32_t count,
+                     uint32_t templateFlags = 0, uint32_t fieldFlags = 0) {
+    auto& gh = s.handler();
+    auto& info = gh.itemInfoCacheRef()[entry];
+    info.entry = entry;
+    info.valid = true;
+    info.name = "Item " + std::to_string(entry);
+    info.itemFlags = templateFlags;
+    info.maxStack = 20;
+    wowee::game::ItemDef def;
+    def.itemId = entry;
+    def.name = info.name;
+    def.guid = guid;
+    def.stackCount = count;
+    REQUIRE(gh.inventoryRef().setBackpackSlot(slot, def));
+    gh.backpackSlotGuidsRef()[static_cast<size_t>(slot)] = guid;
+    auto& held = gh.onlineItemsRef()[guid];
+    held.entry = entry;
+    held.stackCount = count;
+    held.flags = fieldFlags;
+}
+}  // namespace
+
+// FIXER S: ClickAuctionSellItemButton (0x0059d410) asks 0x0059d0b0 first - a
+// conjured item is refused with ERR_AUCTION_CONJURED_ITEM and stays in the
+// hand; an item offered while the box holds another takes the box and the old
+// one comes up onto the cursor; a click with nothing carried lifts the boxed
+// item out.
+TEST_CASE("the auction sell box refuses and swaps as 0x0059d410", "[replay][interface][auction]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    s.handler().getInventoryHandler()->openAuctionHouse(0x77);
+    ui.run("ClearCursor()");
+    carryForAuction(s, 0, 0x4000000000000A01ull, 5512, 1, 0x2);   // conjured
+    carryForAuction(s, 1, 0x4000000000000A02ull, 2589, 5);
+    carryForAuction(s, 2, 0x4000000000000A03ull, 2592, 3);
+    ui.run("PickupContainerItem(0, 1) ClickAuctionSellItemButton()");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    CHECK(ui.is("GetAuctionSellItemInfo() == nil"));
+    ui.run("ClearCursor() PickupContainerItem(0, 2) ClickAuctionSellItemButton()");
+    CHECK(ui.is("not CursorHasItem()"));
+    CHECK(ui.is("GetAuctionSellItemInfo() == 'Item 2589'"));
+    ui.run("PickupContainerItem(0, 3) ClickAuctionSellItemButton()");
+    CHECK(ui.is("GetAuctionSellItemInfo() == 'Item 2592'"));
+    CHECK(ui.is("select(2, GetCursorInfo()) == 2589"));
+    ui.run("ClearCursor() ClickAuctionSellItemButton()");
+    CHECK(ui.is("select(2, GetCursorInfo()) == 2592"));
+    CHECK(ui.is("GetAuctionSellItemInfo() == nil"));
+    ui.run("ClearCursor()");
+}
+
+// FIXER S: StartAuction (0x0059f990) - the first three arguments are required;
+// a buyout under the bid is raised to it; a runTime outside 1..3 is 24 hours;
+// one auction the boxed stack covers goes out from that stack alone.
+TEST_CASE("StartAuction posts one stack from the boxed item (0x0059f990)", "[replay][interface][auction]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    s.handler().getInventoryHandler()->openAuctionHouse(0x77);
+    constexpr uint64_t kBoxed = 0x4000000000000B01ull;
+    carryForAuction(s, 0, kBoxed, 2589, 20);
+    carryForAuction(s, 1, 0x4000000000000B02ull, 2589, 20);
+    // The cursor is the bindings' static state: start with an empty hand.
+    ui.run("ClearCursor() PickupContainerItem(0, 1) ClickAuctionSellItemButton()");
+    REQUIRE(ui.is("GetAuctionSellItemInfo() == 'Item 2589'"));
+    CHECK(ui.is("not pcall(StartAuction, 100, 50)"));
+    ui.run("StartAuction(100, 50, 7, 5)");
+    auto sells = s.sent().of(Opcode::CMSG_AUCTION_SELL_ITEM);
+    REQUIRE(sells.size() == 1);
+    auto& p = sells.back();
+    CHECK(p.readUInt64() == 0x77);
+    CHECK(p.readUInt32() == 1);
+    CHECK(p.readUInt64() == kBoxed);
+    CHECK(p.readUInt32() == 5);
+    CHECK(p.readUInt32() == 100);
+    CHECK(p.readUInt32() == 100);
+    CHECK(p.readUInt32() == 1440);
+    CHECK(ui.is("GetAuctionSellItemInfo() == nil"));
+}
+
+// FIXER S: GetAuctionItemTimeLeft (0x0059fd60) answers 0 for no such row and
+// counts a row down from when it came; a waiting sale at its end is dropped
+// (0x0059f2f0). GetNumAuctionItems wants its type (0x0059c1a0); a search goes
+// only once the last one's wait is over (0x0059bcf0).
+TEST_CASE("auction rows count down and searches wait (0x0059fd60, 0x0059bcf0)", "[replay][interface][auction]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    s.handler().getInventoryHandler()->openAuctionHouse(0x77);
+    CHECK(ui.is("not pcall(GetNumAuctionItems)"));
+    ui.run("QueryAuctionItems('a') QueryAuctionItems('b')");
+    CHECK(s.sent().of(Opcode::CMSG_AUCTION_LIST_ITEMS).size() == 1);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_LIST_RESULT));
+    p.writeUInt32(1);
+    p.writeUInt32(9);
+    p.writeUInt32(10940);
+    for (int i = 0; i < 21; ++i) p.writeUInt32(0);
+    for (int i = 0; i < 2; ++i) p.writeUInt32(0);
+    p.writeUInt32(2);
+    for (int i = 0; i < 2; ++i) p.writeUInt32(0);
+    p.writeUInt64(0x1001);
+    for (uint32_t v : {150u, 0u, 300u, 3u * 3600000u}) p.writeUInt32(v);
+    p.writeUInt64(0);
+    p.writeUInt32(0);
+    p.writeUInt32(1);
+    p.writeUInt32(300);
+    s.receive(p);
+    REQUIRE(ui.is("GetNumAuctionItems('list') == 1"));
+    CHECK(ui.is("GetAuctionItemTimeLeft('list', 1) == 3"));
+    CHECK(ui.is("GetAuctionItemTimeLeft('LIST', 1) == 3"));
+    CHECK(ui.is("GetAuctionItemTimeLeft('list', 2) == 0"));
+    // A sale waiting to pay out whose time is up: 1, and gone.
+    wowee::network::Packet pending(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_LIST_PENDING_SALES));
+    pending.writeUInt32(1);
+    pending.writeString("10940:0:2:19");
+    pending.writeString("0000000000000002:150:300:0:0");
+    pending.writeUInt32(0);
+    pending.writeUInt32(0);
+    pending.writeFloat(0.0f);
+    s.receive(pending);
+    REQUIRE(ui.is("GetNumAuctionItems('owner') == 1"));
+    CHECK(ui.is("GetAuctionItemTimeLeft('owner', 1) == 1"));
+    CHECK(ui.is("GetNumAuctionItems('owner') == 0"));
+}
+
+// FIXER S: SMSG_SEND_MAIL_RESULT (0x005717b0) asks for no new list - the inbox
+// is brought up to date by the answer itself.
+TEST_CASE("a mail answer asks for no list (0x005717b0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    wowee::network::Packet box(wowee::game::wireOpcode(Opcode::SMSG_SHOW_MAILBOX));
+    box.writeUInt64(0xF1100000000000AAull);
+    s.receive(box);
+    const size_t asked = s.sent().of(Opcode::CMSG_GET_MAIL_LIST).size();
+    for (uint32_t action : {0u, 1u, 4u}) {
+        wowee::network::Packet r(wowee::game::wireOpcode(Opcode::SMSG_SEND_MAIL_RESULT));
+        r.writeUInt32(7);
+        r.writeUInt32(action);
+        r.writeUInt32(0);
+        s.receive(r);
+    }
+    CHECK(s.sent().of(Opcode::CMSG_GET_MAIL_LIST).size() == asked);
+}
+
+// FIXER S (decompile review): the unit, container and cast bindings answer a
+// missing argument with 12340's usage line (0x0060cc30, 0x0060d280,
+// 0x0060d330, 0x0060d690, 0x0060d730, 0x0060f680, 0x00610860, 0x00610a00,
+// 0x00610b60, 0x0060e310, 0x005d7d90, 0x005d7ff0, 0x005d8650, 0x0053e060,
+// 0x00540310, 0x0080dc00, 0x005d65c0) - UnitIsEnemy has no one-argument form.
+// SplitContainerItem (0x005d84f0) takes nothing for more than the stack.
+TEST_CASE("bindings without their arguments give 12340's usage lines", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto usage = [&](const std::string& call, const std::string& line) {
+        INFO(call);
+        CHECK(ui.is("select(2, pcall(" + call + ")):find('" + line + "', 1, true) ~= nil"));
+    };
+    usage("UnitIsAFK", "Usage: UnitIsAFK(\"unit\")");
+    usage("UnitIsDeadOrGhost", "Usage: UnitIsDeadOrGhost(\"unit\")");
+    usage("UnitDamage", "Usage: UnitDamage(\"unit\")");
+    usage("UnitAttackSpeed", "Usage: UnitAttackSpeed(\"unit\")");
+    usage("UnitAttackPower", "Usage: UnitAttackPower(\"unit\")");
+    usage("UnitIsEnemy, 'target'", "Usage: UnitIsEnemy(\"unit\", \"otherUnit\")");
+    usage("UnitReaction, 'target'", "Usage: UnitReaction(\"unit\", \"otherUnit\")");
+    usage("UnitCanAttack, 'player'", "Usage: UnitCanAttack(\"unit\", \"otherUnit\")");
+    usage("UnitCanAssist, 'player'", "Usage: UnitCanAssist(\"unit\", \"otherUnit\")");
+    usage("GetSpellBonusDamage, 9", "Usage: GetSpellBonusDamage(school)");
+    usage("GetContainerItemCooldown, 0", "Usage: GetContainerItemCooldown(index, slot)");
+    usage("PickupContainerItem, 0", "Usage: PickupContainerItem(index, slot)");
+    usage("UseContainerItem, 0", "Usage: UseContainerItem(index, slot[, target])");
+    usage("CastSpellByID", "Usage: CastSpellByID(spellID[, target])");
+    usage("CastSpellByName", "Usage: CastSpellByName(name[, target])");
+    usage("SpellTargetUnit", "Usage: SpellTargetUnit(\"unit\")");
+    usage("PickupPetAction", "Usage: PickupPetAction(index)");
+    CHECK(ui.is("UnitIsAFK('player') == nil and UnitIsEnemy('player', 'player') == nil"));
+    // UnitPowerType's index past the first: 0 and "" (0x0060f100).
+    CHECK(ui.is("select(1, UnitPowerType('player', 2)) == 0 and select(2, UnitPowerType('player', 2)) == ''"));
+    carryForAuction(s, 0, 0x4000000000000C01ull, 2589, 5);
+    ui.run("ClearCursor() SplitContainerItem(0, 1, 6)");
+    CHECK(ui.is("not CursorHasItem()"));
+    ui.run("SplitContainerItem(0, 1, 2)");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("ClearCursor()");
+}
+
+// T385: the answer that ends a ready check is still readable at its
+// READY_CHECK_CONFIRM - 0x005744f0 ends the check (deadline into the past)
+// only after its member loop raised the event.
+TEST_CASE("the last ready check answer has its status at the confirm (0x005744f0)", "[replay][interface]") {
+    constexpr uint64_t kMember = 0x1001;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+    g.writeUInt8(0);
+    for (int i = 0; i < 3; ++i) g.writeUInt8(0);
+    g.writeUInt64(0x1234);
+    g.writeUInt32(1);
+    g.writeUInt32(1);
+    g.writeString("Achiles");
+    g.writeUInt64(kMember);
+    g.writeUInt8(1);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt64(Session::kPlayerGuid);
+    for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+    s.receive(g);
+    REQUIRE(ui.is("UnitExists('party1')"));
+    ui.run("seenStatus = 'none' local f = CreateFrame('Frame') f:RegisterEvent('READY_CHECK_CONFIRM') "
+           "f:SetScript('OnEvent', function(self, event, unit) if unit == 'party1' then seenStatus = GetReadyCheckStatus('party1') end end)");
+    wowee::network::Packet start(wowee::game::wireOpcode(Opcode::MSG_RAID_READY_CHECK));
+    start.writeUInt64(Session::kPlayerGuid);
+    s.receive(start);
+    REQUIRE(ui.is("GetReadyCheckStatus('party1') == 'waiting'"));
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::MSG_RAID_READY_CHECK_CONFIRM));
+    answer.writeUInt64(kMember);
+    answer.writeUInt8(0);
+    s.receive(answer);
+    CHECK(ui.is("seenStatus == 'notready'"));
+}
+
+// T387: ClearFocus with no focus, or a focus set to what it is, raises no
+// PLAYER_FOCUS_CHANGED (0x0051ff20 compares first).
+TEST_CASE("an unchanged focus raises nothing (0x0051ff20)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("focusEvents = 0 local f = CreateFrame('Frame') f:RegisterEvent('PLAYER_FOCUS_CHANGED') "
+           "f:SetScript('OnEvent', function() focusEvents = focusEvents + 1 end)");
+    ui.run("ClearFocus()");
+    CHECK(ui.is("focusEvents == 0"));
+    s.handler().setFocus(Session::kPlayerGuid);
+    s.handler().setFocus(Session::kPlayerGuid);
+    CHECK(ui.is("focusEvents == 1"));
+    s.handler().clearFocus();
+    s.handler().clearFocus();
+    CHECK(ui.is("focusEvents == 2"));
+}
+
+// T384: CompleteQuest (0x0058cf40) sends once from the progress page and marks
+// it sent; the page keeps its title and items until the realm answers.
+TEST_CASE("the progress page keeps its data after CompleteQuest (0x0058cf40)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_REQUEST_ITEMS));
+    p.writeUInt64(0xF130000C3E000001ull);
+    p.writeUInt32(789);
+    p.writeString("Stich des Skorpiden");
+    p.writeString("Text");
+    s.receive(p);
+    REQUIRE(ui.is("GetTitleText() == 'Stich des Skorpiden'"));
+    ui.run("CompleteQuest() CompleteQuest()");
+    CHECK(s.sent().of(Opcode::CMSG_QUESTGIVER_REQUEST_REWARD).size() == 1);
+    CHECK(ui.is("GetTitleText() == 'Stich des Skorpiden'"));
+}
+
+// T388: the login's roster arrives before this client's interface is built;
+// once it is, the roster's events are raised for it.
+TEST_CASE("an interface built after the roster hears the group (T388)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+    g.writeUInt8(2);
+    for (int i = 0; i < 3; ++i) g.writeUInt8(0);
+    g.writeUInt64(0x1234);
+    g.writeUInt32(1);
+    g.writeUInt32(1);
+    g.writeString("Achiles");
+    g.writeUInt64(0x1001);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt64(Session::kPlayerGuid);
+    for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+    s.receive(g);
+    ui.run("groupEvents = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'PARTY_MEMBERS_CHANGED', 'RAID_ROSTER_UPDATE', 'PARTY_LEADER_CHANGED'}) do f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(self, e) groupEvents[e] = (groupEvents[e] or 0) + 1 end)");
+    s.handler().setInterfaceLoaded(true);
+    CHECK(ui.is("groupEvents.PARTY_MEMBERS_CHANGED == 1 and groupEvents.RAID_ROSTER_UPDATE == 1"));
+    CHECK(ui.is("groupEvents.PARTY_LEADER_CHANGED == 1"));
+    // T386: a member in sight answers its own level (0x00573690), whatever
+    // the roster's stats say.
+    s.receive(UpdateObject().create(0x1001, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                                     {UF::UNIT_FIELD_LEVEL, 80}}));
+    ui.run("achilesLevel = nil for i = 1, GetNumRaidMembers() do local n, _, _, l = GetRaidRosterInfo(i) "
+           "if n == 'Achiles' then achilesLevel = l end end");
+    CHECK(ui.is("achilesLevel == 80"));
+}

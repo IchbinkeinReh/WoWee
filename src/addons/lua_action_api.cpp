@@ -2126,8 +2126,9 @@ static int lua_CastPetAction(lua_State* L) {
 }
 
 static int lua_PickupPetAction(lua_State* L) {
-    // 0x005d65c0, slots counted from 1.
-    const int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    // 0x005d65c0, slots counted from 1, the index rounded.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupPetAction(index)");
+    const int slot = static_cast<int>(std::nearbyint(lua_tonumber(L, 1))) - 1;
     if (slot < 0 || slot > 10) return luaL_error(L, "Invalid slot in PickupPetAction");
     if (!taint::allowed(L, 0xe)) return 0;
     auto* gh = getGameHandler(L);
@@ -2351,6 +2352,7 @@ static int lua_PickupItem(lua_State* L) {
 }
 
 static int lua_PickupContainerItem(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: PickupContainerItem(index, slot)");   // 0x005d7ff0
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     int bag = static_cast<int>(luaL_checknumber(L, 1));

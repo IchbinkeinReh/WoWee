@@ -4652,9 +4652,8 @@ void InventoryHandler::handleShowMailbox(network::Packet& packet) {
 void InventoryHandler::handleMailListResult(network::Packet& packet) {
     inboxCheckPending_ = false;
     // The list resets the mail store and the waiting take with it
-    // (0x00571590). The auto-loot's letter is kept: this client asks for the
-    // list again after every answer, which the client does not, and a reset
-    // here would end the auto-loot after its second item.
+    // (0x00571590). The auto-loot's letter is kept, so a list that comes
+    // while it runs does not end it.
     mailTakePending_ = false;
     if (!owner_.getPacketParsers()->parseMailList(packet, mailInbox_)) return;
     mailTotalCount_ = owner_.getPacketParsers()->mailListTotal();
@@ -4828,7 +4827,9 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
     // without arguments (0x005717b0: event 0x293 or 0x1c4).
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()(error == 0 ? "MAIL_SUCCESS" : "MAIL_FAILED", {});
-    refreshMailList();
+    // No CMSG_GET_MAIL_LIST after an answer: 0x005717b0 asks for nothing, the
+    // inbox is brought up to date above as its helpers do (0x0056f770,
+    // 0x0056f8d0, 0x0056dc20, 0x0056dc70).
 }
 
 void InventoryHandler::handleReceivedMail(network::Packet& packet) {
@@ -5317,6 +5318,19 @@ uint64_t steadyMs() {
 }
 }  // namespace
 
+int64_t InventoryHandler::auctionMsLeft(const AuctionEntry& e) const {
+    const uint64_t given = e.timeLeftGivenMs ? e.timeLeftGivenMs : steadyMs();
+    return static_cast<int64_t>(e.timeLeftMs) - static_cast<int64_t>(steadyMs() - given);
+}
+
+namespace {
+/// A row's time given now (its expiry +0x8c set from the clock).
+void stampAuction(AuctionEntry& e, uint32_t msLeft) {
+    e.timeLeftMs = msLeft;
+    e.timeLeftGivenMs = steadyMs();
+}
+}  // namespace
+
 bool InventoryHandler::auctionGetAllAllowed() const {
     const auto now = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -5563,7 +5577,7 @@ void InventoryHandler::auctionBidIs(uint32_t auctionId, uint32_t bid, uint32_t i
             e.currentBid = bid;
             e.minBidIncrement = increment;
             e.bidderGuid = bidder;
-            e.timeLeftMs = std::max(e.timeLeftMs, 90000u);
+            stampAuction(e, static_cast<uint32_t>(std::max<int64_t>(auctionMsLeft(e), 90000)));
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()(event, {});
             return;
         }
@@ -5595,6 +5609,7 @@ void InventoryHandler::replaceOwnerRows(std::vector<AuctionEntry> rows, bool pen
     std::erase_if(list, [pending](const AuctionEntry& e) { return e.pendingSale == pending; });
     for (auto& row : rows) {
         owner_.ensureItemInfo(row.itemEntry);
+        if (row.timeLeftGivenMs == 0) stampAuction(row, row.timeLeftMs);
         list.push_back(std::move(row));
     }
     if (ownerListAnswersDue_ < 1 && owner_.addonEventCallbackRef())
@@ -5677,6 +5692,7 @@ void InventoryHandler::takeAuctionList(network::Packet& packet, AuctionResultTar
     // WotLK 7 (PRISMATIC_ENCHANTMENT_SLOT joined the inspected range in 3.x).
     const int enchantSlots = isClassicLikeExpansion() ? 1 : (isPreWotlk() ? 6 : 7);
     if (!AuctionListResultParser::parse(packet, result, enchantSlots)) return;
+    for (auto& e : result.auctions) stampAuction(e, e.timeLeftMs);
 
     // How long before another search may be sent - the server's own figure,
     // which every list result carries and which was parsed and then dropped.
@@ -5763,7 +5779,7 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
                 e.currentBid = auctionBidSent_;
                 e.minBidIncrement = increment;
                 e.bidderGuid = owner_.getPlayerGuid();
-                e.timeLeftMs = std::max(e.timeLeftMs, 90000u);
+                stampAuction(e, static_cast<uint32_t>(std::max<int64_t>(auctionMsLeft(e), 90000)));
                 if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_ITEM_LIST_UPDATE", {});
                 break;
             }

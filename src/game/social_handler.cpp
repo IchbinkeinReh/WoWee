@@ -667,21 +667,9 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         uint64_t respGuid = packet.readUInt64();
         uint8_t  isReady  = packet.readUInt8();
         if (isReady) ++readyCheckReadyCount_; else ++readyCheckNotReadyCount_;
-        // The member's answer, and with no online member left waiting the
-        // check ends at once: its deadline goes a moment into the past
-        // (0x005744f0).
+        // The member's answer (0x005744f0).
         if (auto it = readyCheckAnswers_.find(respGuid); it != readyCheckAnswers_.end())
             it->second = {false, isReady != 0};
-        if (readyCheckRunning()) {
-            bool anyWaiting = false;
-            for (const auto& member : partyData.members) {
-                auto it = readyCheckAnswers_.find(member.guid);
-                if (member.isOnline && it != readyCheckAnswers_.end() && it->second.waiting)
-                    anyWaiting = true;
-            }
-            if (!anyWaiting)
-                readyCheckDeadline_ = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
-        }
         auto nit = owner_.getPlayerNameCache().find(respGuid);
         std::string rname;
         if (nit != owner_.getPlayerNameCache().end()) rname = nit->second;
@@ -716,6 +704,20 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         if (member) {
             for (const auto& unit : owner_.unitTokensForGuid(respGuid))
                 owner_.fireAddonEvent("READY_CHECK_CONFIRM", {unit, eventBool(isReady != 0)});
+        }
+        // Only after its member loop (LAB_005747a6), with no online member
+        // left waiting, the check ends at once: its deadline goes a moment
+        // into the past - so at READY_CHECK_CONFIRM the last answer is still
+        // readable through GetReadyCheckStatus (T385).
+        if (readyCheckRunning()) {
+            bool anyWaiting = false;
+            for (const auto& member : partyData.members) {
+                auto it = readyCheckAnswers_.find(member.guid);
+                if (member.isOnline && it != readyCheckAnswers_.end() && it->second.waiting)
+                    anyWaiting = true;
+            }
+            if (!anyWaiting)
+                readyCheckDeadline_ = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
         }
     };
     table[Opcode::MSG_RAID_READY_CHECK_FINISHED] = [this](network::Packet& /*packet*/) {
@@ -2902,6 +2904,14 @@ void SocialHandler::firePartyClearedEvents(bool wasRaid) {
     owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
     owner_.addonEventCallbackRef()("PLAYER_ROLES_ASSIGNED", {});
     if (wasRaid) owner_.addonEventCallbackRef()("RAID_ROSTER_UPDATE", {});
+}
+
+void SocialHandler::replayGroupEventsForInterface() {
+    if (partyData.isEmpty() || partyData.leaderGuid == 0) return;
+    owner_.fireAddonEvent("PARTY_LEADER_CHANGED", {});
+    owner_.fireAddonEvent("PARTY_MEMBERS_CHANGED", {});
+    owner_.fireAddonEvent("PLAYER_ROLES_ASSIGNED", {});
+    if (groupIsRaid(partyData.groupType)) owner_.fireAddonEvent("RAID_ROSTER_UPDATE", {});
 }
 
 void SocialHandler::handleGroupList(network::Packet& packet) {

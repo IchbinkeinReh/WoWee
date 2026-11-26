@@ -4131,6 +4131,9 @@ struct AuctionEntry {
     uint32_t minBidIncrement = 0;
     uint32_t buyoutPrice = 0;
     uint32_t timeLeftMs = 0;
+    /// When timeLeftMs was given, on the client's steady clock in ms (the
+    /// row's expiry +0x8c is that plus timeLeftMs); 0 for not yet stamped.
+    uint64_t timeLeftGivenMs = 0;
     uint64_t bidderGuid = 0;
     uint32_t currentBid = 0;
     /// A sale waiting to pay out, from SMSG_AUCTION_LIST_PENDING_SALES

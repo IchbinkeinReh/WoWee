@@ -441,7 +441,10 @@ static int lua_UnitClassBase(lua_State* L) { return pushUnitClass(L, true); }
 static int lua_UnitIsGhost(lua_State* L) { return pushDeathState(L, false, true); }
 
 // UnitIsDeadOrGhost(unit)
-static int lua_UnitIsDeadOrGhost(lua_State* L) { return pushDeathState(L, true, true); }
+static int lua_UnitIsDeadOrGhost(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsDeadOrGhost(\"unit\")");   // 0x0060f680
+    return pushDeathState(L, true, true);
+}
 
 // UnitIsAFK(unit), UnitIsDND(unit)
 /// A unit predicate answered from one bit of PLAYER_FLAGS.
@@ -477,6 +480,7 @@ static int pushPlayerFlagPredicate(lua_State* L, uint32_t bit) {
 // as busy. The client's own away test reads 0x2 (0x0060cc30), and its chat
 // path for the busy notices reads 0x4 (0x006dc640).
 static int lua_UnitIsAFK(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsAFK(\"unit\")");   // 0x0060cc30
     return pushPlayerFlagPredicate(L, 0x02);
 }
 
@@ -714,6 +718,8 @@ static int lua_UnitGroupRolesAssigned(lua_State* L) {
 
 // UnitCanAttack(unit, otherUnit) → boolean
 static int lua_UnitCanAttack(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: UnitCanAttack(\"unit\", \"otherUnit\")");   // 0x0060d730
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     const char* uid1 = luaL_checkstring(L, 1);
@@ -1195,10 +1201,9 @@ static int lua_GetCombatRating(lua_State* L) {
 // six magic schools, clamped at zero, whatever school was asked for - which is
 // the same number for every row of the sheet's spell damage list.
 static int lua_GetSpellBonusDamage(lua_State* L) {
-    const int school = static_cast<int>(luaL_checkinteger(L, 1));
-    if (school < 1 || school > 7)
-        return luaL_error(L, "bad argument #1 to 'GetSpellBonusDamage' (number expected, got %s)",
-                          lua_typename(L, lua_type(L, 1)));
+    // 0x0060e310: the school truncated, 1..7, else its usage line.
+    const int school = static_cast<int>(lua_tonumber(L, 1));
+    if (school < 1 || school > 7) return luaL_error(L, "Usage: GetSpellBonusDamage(school)");
     const uint16_t posIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_POS);
     const uint16_t negIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_NEG);
     const auto player = localPlayerObject(L, posIndex, negIndex);
@@ -1348,6 +1353,13 @@ static int lua_UnitPowerType(lua_State* L) {
                 return 5;
             }
         }
+        // Any index but the first that the vehicle's display does not answer
+        // is 0 and "" (0x0060f100).
+        if (index != 0) {
+            lua_pushnumber(L, 0);
+            lua_pushstring(L, "");
+            return 2;
+        }
         lua_pushnumber(L, pt);
         lua_pushstring(L, (pt < 7) ? kLuaPowerNames[pt] : "MANA");
         return 2;
@@ -1358,7 +1370,7 @@ static int lua_UnitPowerType(lua_State* L) {
     toLowerInPlace(uidStr);
     uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
     const auto* pm = findPartyMember(gh, guid);
-    if (pm) {
+    if (pm && index == 0) {
         uint8_t pt = pm->powerType;
         lua_pushnumber(L, pt);
         lua_pushstring(L, (pt < 7) ? kLuaPowerNames[pt] : "MANA");
@@ -2218,6 +2230,7 @@ static int pushAttackPower(lua_State* L, const AttackPowerAnswer& a) {
 /// number and the handler's cached pet figure, and the cache is left here as
 /// the answer for a pet whose entity this cannot reach.
 static int lua_UnitAttackPower(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitAttackPower(\"unit\")");   // 0x00610b60
     auto* gh = getGameHandler(L);
     std::string who(luaL_optstring(L, 1, "player"));
     toLowerInPlace(who);
@@ -2331,6 +2344,7 @@ static int lua_UnitDefense(lua_State* L) {
 /// do not place this pair in their tables, and a 0.0 there would divide every
 /// damage-per-second figure on the sheet by nothing.
 static int lua_UnitAttackSpeed(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitAttackSpeed(\"unit\")");   // 0x00610a00
     auto* gh = getGameHandler(L);
     const char* uid = luaL_optstring(L, 1, "player");
     auto* unit = resolveUnit(L, uid);
@@ -2407,6 +2421,7 @@ static double fieldAsFloat(game::Unit* unit, game::UF field) {
 /// player is a tooltip breakdown line, not the range itself, since the range
 /// already carries whatever the realm folded in.
 static int lua_UnitDamage(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitDamage(\"unit\")");   // 0x00610860
     auto* gh = getGameHandler(L);
     std::string who(luaL_optstring(L, 1, "player"));
     toLowerInPlace(who);
@@ -3254,9 +3269,15 @@ static int lua_GetRaidRosterInfo(lua_State* L) {
     lua_pushstring(L, m.name.c_str());       // name
     lua_pushnumber(L, m.guid == pd.leaderGuid ? 2 : (m.flags & 0x01 ? 1 : 0)); // rank (0=member, 1=assist, 2=leader)
     lua_pushnumber(L, m.subGroup + 1);       // subgroup (1-indexed)
-    lua_pushnumber(L, m.isOnline ? m.level : 0);  // level: 0 for one offline and unseen
-    // Class, localized and as its token; nil and nil while not known.
+    // 0x00573690: a member whose unit is known answers from it - its
+    // UNIT_FIELD_LEVEL, the player's own zone, online, dead by its health -
+    // and only one out of sight from the roster's stats (T386).
     auto entity = gh->getEntityManager().getEntity(m.guid);
+    const bool seen = entity && (entity->getType() == game::ObjectType::UNIT ||
+                                 entity->getType() == game::ObjectType::PLAYER);
+    if (seen) lua_pushnumber(L, entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_LEVEL)));
+    else lua_pushnumber(L, m.isOnline ? m.level : 0);  // level: 0 for one offline and unseen
+    // Class, localized and as its token; nil and nil while not known.
     uint8_t classId = 0;
     uint32_t bytes0 = 0;
     if (entity) {
@@ -3271,8 +3292,13 @@ static int lua_GetRaidRosterInfo(lua_State* L) {
         lua_pushnil(L);
     }
     // zone and online: the area the member is in, or PLAYER_OFFLINE and nil.
-    if (m.isOnline) {
-        const std::string zone = m.zoneId ? gh->getWhoAreaName(m.zoneId) : std::string();
+    if (seen || m.isOnline) {
+        uint32_t zoneId = m.zoneId;
+        if (seen) {
+            auto* svc = getLuaServices(L);
+            zoneId = svc && svc->getLiveZoneId ? svc->getLiveZoneId() : 0;
+        }
+        const std::string zone = zoneId ? gh->getWhoAreaName(zoneId) : std::string();
         if (zone.empty()) lua_pushnil(L);
         else lua_pushstring(L, zone.c_str());
         luaPushOneOrNil(L, true);
@@ -3282,7 +3308,8 @@ static int lua_GetRaidRosterInfo(lua_State* L) {
     }
     // isDead: the roster's dead bit (0x04) on one online, or no health left.
     constexpr uint16_t kMemberDead = 0x04;
-    const bool dead = m.isOnline && ((m.onlineStatus & kMemberDead) != 0 || (m.hasPartyStats && m.curHealth == 0));
+    const bool dead = seen ? entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_HEALTH)) == 0
+                           : m.isOnline && (m.onlineStatus & kMemberDead) != 0;
     luaPushOneOrNil(L, dead);
     // role: the member flags' main tank (0x02) or main assist (0x04).
     constexpr uint8_t kMainTank = 0x02, kMainAssist = 0x04;
@@ -3382,10 +3409,12 @@ static int lua_UnitIsFriend(lua_State* L) {
 /// UnitIsFriend above, and it was wrong the same way: asked about the player it
 /// answered false for every enemy.
 static int lua_UnitIsEnemy(lua_State* L) {
-    // 0x0060d330: unit1's reaction to unit2 below 2, which is hostile or worse.
-    const char* a = luaL_optstring(L, 1, "player");
-    const char* b = luaL_optstring(L, 2, nullptr);
-    if (!b) { b = a; a = "player"; }
+    // 0x0060d330: unit1's reaction to unit2 below 2, which is hostile or worse;
+    // both units are required.
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: UnitIsEnemy(\"unit\", \"otherUnit\")");   // 0x0060d330
+    const char* a = lua_tostring(L, 1);
+    const char* b = lua_tostring(L, 2);
     const int reaction = reactionBetween(L, a, b);
     luaPushOneOrNil(L, reaction != 0 && reaction <= 2);
     return 1;
@@ -3569,6 +3598,8 @@ static int lua_GetComboPoints(lua_State* L) {
 // UnitReaction(unit, otherUnit) → 1-8 (hostile to exalted)
 // Simplified: hostile=2, neutral=4, friendly=5
 static int lua_UnitReaction(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: UnitReaction(\"unit\", \"otherUnit\")");   // 0x0060d280
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     const char* uid1 = luaL_checkstring(L, 1);
@@ -4063,6 +4094,8 @@ void registerUnitLuaAPI(lua_State* L) {
                 // Whether the first unit may help the second: 0x0060d690
                 // asks 0x007293d0 of unit1, its last argument 0.
                 {"UnitCanAssist", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: UnitCanAssist(\"unit\", \"otherUnit\")");   // 0x0060d690
             auto* gh = getGameHandler(L);
             std::string u1(luaL_optstring(L, 1, "player")), u2(luaL_optstring(L, 2, "target"));
             toLowerInPlace(u1);

@@ -444,6 +444,9 @@ private:
 
     // Quest turn-in
     bool questRequestItemsOpen_ = false;
+    /// CompleteQuest sent from the progress page shown (0xc0d6ac): no
+    /// second request until a new page comes.
+    bool questRewardRequested_ = false;
     QuestRequestItemsData currentQuestRequestItems_;
     uint32_t pendingTurnInQuestId_ = 0;
     /// The reward item GetQuestReward chose, said at the turn-in (0xc0d66c).

@@ -3180,6 +3180,8 @@ void GameHandler::requestEntryQueueStatus() {
 void GameHandler::setInterfaceLoaded(bool loaded) {
     interfaceLoaded_ = loaded;
     if (loaded && entryQueueStatusPending_ && state == WorldState::IN_WORLD) requestEntryQueueStatus();
+    // The login's roster came before this interface existed (T388).
+    if (loaded && socialHandler_) socialHandler_->replayGroupEventsForInterface();
 }
 
 void GameHandler::triggerEntryTutorials() {

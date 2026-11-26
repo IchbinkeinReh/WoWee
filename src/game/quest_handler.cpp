@@ -1479,7 +1479,10 @@ void QuestHandler::offerQuestFromItem(uint64_t itemGuid, uint32_t questId) {
 }
 
 void QuestHandler::completeQuest() {
-    if (!questRequestItemsOpen_ || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // 0x0058cf40: only from the progress page, and once (0xc0d6ac).
+    if (!questRequestItemsOpen_ || questRewardRequested_ || owner_.getState() != WorldState::IN_WORLD ||
+        !owner_.getSocket())
+        return;
     pendingTurnInQuestId_ = currentQuestRequestItems_.questId;
 
     LOG_DEBUG("completeQuest: questId=", currentQuestRequestItems_.questId,
@@ -1492,8 +1495,9 @@ void QuestHandler::completeQuest() {
     auto packet = QuestgiverRequestRewardPacket::build(
         currentQuestRequestItems_.npcGuid, currentQuestRequestItems_.questId);
     owner_.getSocket()->send(packet);
-    questRequestItemsOpen_ = false;
-    currentQuestRequestItems_ = QuestRequestItemsData{};
+    // The page stays up with its data (title, items, links) until the
+    // realm's answer replaces it or the frame closes (T384).
+    questRewardRequested_ = true;
 }
 
 void QuestHandler::closeQuestRequestItems(bool announce) {
@@ -2758,6 +2762,7 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     currentQuestRequestItems_ = data;
     questFrameFlags_ = data.questFlags;
     questRequestItemsOpen_ = true;
+    questRewardRequested_ = false;
     questPageLeft_ = false;
     gossipWindowOpen_ = false;
     questDetailsOpen_ = false;

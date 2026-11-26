@@ -239,13 +239,11 @@ inline constexpr int kNumAuctionSlots = 21;
 /// without a word.
 inline constexpr uint32_t kAuctionDurationMinutes[3] = {720, 1440, 2880};
 
-/// Minutes for a duration written either way: the dropdown's 1..3, or minutes
-/// already. Anything else falls to twelve hours, which is the shortest the
-/// server will take and so the least costly guess.
+/// Minutes for StartAuction's runTime (0x0059f990): 1, 2 and 3 are the
+/// table's (0x00a15248), anything else twenty-four hours (0x5a0).
 inline constexpr uint32_t auctionDurationMinutes(uint32_t d) {
     if (d >= 1 && d <= 3) return kAuctionDurationMinutes[d - 1];
-    for (uint32_t m : kAuctionDurationMinutes) if (d == m) return d;
-    return kAuctionDurationMinutes[0];
+    return 1440;
 }
 
 } // namespace game

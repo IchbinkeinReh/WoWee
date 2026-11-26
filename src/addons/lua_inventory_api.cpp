@@ -222,6 +222,7 @@ static int lua_GetNumBankSlots(lua_State* L) {
 /// (0x005d7d90): the item there as its use spell cast from it (0x008090c0),
 /// 0, 0, 1 without one; no item, 0, 0, 0.
 static int lua_GetContainerItemCooldown(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetContainerItemCooldown(index, slot)");   // 0x005d7d90
     auto* gh = getGameHandler(L);
     const int bag = static_cast<int>(luaL_optnumber(L, 1, -1));
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -1925,7 +1926,13 @@ static int lua_SplitContainerItem(lua_State* L) {
     //
     // The guild bank already worked this way: the amount rides on the cursor
     // and the drop names the destination.
-    pickupSplitFromContainer(L, gh, bag, slot, count);
+    //
+    // 0x005d84f0: only an amount from one to the whole stack; the hand is
+    // emptied first, and the whole stack is taken as a plain pickup.
+    const int stack = static_cast<int>(from->item.stackCount ? from->item.stackCount : 1);
+    if (count > stack) return 0;
+    clearCursor(L);
+    pickupSplitFromContainer(L, gh, bag, slot, count == stack ? 0 : count);
     return 0;
 }
 
@@ -3239,6 +3246,7 @@ static int lua_CloseBankFrame(lua_State* L) {
 
 // UseContainerItem(bag, slot) - use/equip an item from a bag
 static int lua_UseContainerItem(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: UseContainerItem(index, slot[, target])");   // 0x005d8650
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     int bag = static_cast<int>(luaL_checknumber(L, 1));
@@ -5022,27 +5030,27 @@ static void fireAuctionSellUpdate(game::GameHandler* gh) {
 
 /// The item a wire (container, slot) pair names, and its guid. Null when the
 /// pair names nothing this client is holding.
-// StartAuction (0x0059f990): an item whose template's first spell carries
-// charges is not put up once any are spent - its ITEM_FIELD_SPELL_CHARGES no
-// longer the template's - and says ERR_AUCTION_USED_CHARGES.
-static bool auctionChargesIntact(game::GameHandler* gh, uint32_t itemId, uint64_t guid) {
-    const auto* info = gh->getItemInfo(itemId);
-    if (!info || info->spells[0].spellId == 0) return true;
-    if (gh->getItemSpellCharges(guid) == info->spells[0].charges) return true;
-    gh->playGameErrorSound("ERR_AUCTION_USED_CHARGES");
-    gh->addUIError(game::interfaceString("ERR_AUCTION_USED_CHARGES", "You cannot auction an item with used charges."));
-    return false;
+/// One of the auction house's refusals, as a row of the game error table.
+struct AuctionRefusal {
+    const char* key;
+    const char* enUS;
+};
+
+static void sayAuctionRefusal(game::GameHandler* gh, const AuctionRefusal& r) {
+    gh->playGameErrorSound(r.key);
+    gh->addUIError(game::interfaceString(r.key, r.enUS));
 }
 
-/// StartAuction's first refusal (0x0059f990): a worn item that is not gift
-/// wrapped (ITEM_FIELD_FLAGS 0x8) is repaired before it is sold - its
-/// durability (0x00584ac0) short of its maximum (0x00584ae0) is refused.
-static bool auctionItemRepaired(game::GameHandler* gh, const game::ItemSlot& slot, uint64_t guid) {
+/// A worn item that is not gift wrapped (ITEM_FIELD_FLAGS 0x8) is repaired
+/// before it is sold: its durability (+0xd8 of the item object's descriptor)
+/// short of its maximum (+0xdc) is refused.
+static bool auctionItemWorn(game::GameHandler* gh, const game::ItemSlot& slot, uint64_t guid,
+                            bool wrappedExempt = true) {
     constexpr uint32_t kItemWrapped = 0x8;
-    if (gh->getItemFieldFlags(guid) & kItemWrapped) return true;
-    // Read off the item object itself (+0xd8/+0xdc of its descriptor, as
-    // 0x0059d0b0 does), not the bag's copy, which can lag behind a values
-    // update (lead 3 of tester session 15: 'must repair' once for a whole item).
+    if (wrappedExempt && (gh->getItemFieldFlags(guid) & kItemWrapped)) return false;
+    // Read off the item object itself, not the bag's copy, which can lag
+    // behind a values update (lead 3 of tester session 15: 'must repair' once
+    // for a whole item).
     uint32_t cur = slot.item.curDurability;
     uint32_t max = slot.item.maxDurability;
     if (const auto obj = guid ? gh->getEntityManager().getEntity(guid) : nullptr) {
@@ -5053,10 +5061,65 @@ static bool auctionItemRepaired(game::GameHandler* gh, const game::ItemSlot& slo
             max = obj->getField(maxIdx);
         }
     }
-    if (max == 0 || cur >= max) return true;
-    gh->playGameErrorSound("ERR_AUCTION_REPAIR_ITEM");
-    gh->addUIError(game::interfaceString("ERR_AUCTION_REPAIR_ITEM", "You must repair that item before you can auction it."));
-    return false;
+    return max != 0 && cur < max;
+}
+
+/// An item whose template's first spell is set (+0x100) and whose
+/// ITEM_FIELD_SPELL_CHARGES is no longer that spell's charges (+0x128).
+static bool auctionChargesUsed(game::GameHandler* gh, const game::ItemQueryResponseData& info, uint64_t guid) {
+    return info.spells[0].spellId != 0 && gh->getItemSpellCharges(guid) != info.spells[0].charges;
+}
+
+constexpr AuctionRefusal kAuctionRepairItem{"ERR_AUCTION_REPAIR_ITEM", "You must repair that item before you can auction it."};
+constexpr AuctionRefusal kAuctionUsedCharges{"ERR_AUCTION_USED_CHARGES", "You cannot auction an item with used charges."};
+
+/// Whether an item may go up for auction (0x0059d0b0), and if not the row it
+/// is refused with, in the reference's order: no template (0x19), worn (400),
+/// used charges (0x191), bound - by ITEM_FIELD_FLAGS 0x1 or, unless the
+/// template carries 0x2000, by an enchant whose SpellItemEnchantment Flags
+/// has 1 (0x00708520, 0x007073e0) - which is a quest item's refusal (0x184)
+/// for bond 4 (+0x178) and a bound one's (0x185) otherwise, conjured
+/// (template 0x2, 0x186), of limited duration (template 0x10000 with a
+/// duration +0x1e8, a holiday +0x1f0, or ITEM_FIELD_DURATION; 0x187), tied to
+/// an area or a map (+0x1b0, +0x1b4; 0x186 again), a bag with something in it
+/// (0x18a), gift wrapped (ITEM_FIELD_FLAGS 0x8; 0x188) and one that holds loot
+/// (template 0x4; 0x189). Null when it may.
+static const AuctionRefusal* auctionRefusal(game::GameHandler* gh, const game::ItemSlot& slot, uint64_t guid) {
+    static constexpr AuctionRefusal kNotFound{"ERR_ITEM_NOT_FOUND", "The item was not found."};
+    static constexpr AuctionRefusal kQuest{"ERR_AUCTION_QUEST_ITEM", "You cannot auction a quest item."};
+    static constexpr AuctionRefusal kBound{"ERR_AUCTION_BOUND_ITEM", "You cannot auction a soulbound item."};
+    static constexpr AuctionRefusal kConjured{"ERR_AUCTION_CONJURED_ITEM", "You cannot auction a conjured item."};
+    static constexpr AuctionRefusal kLimited{"ERR_AUCTION_LIMITED_DURATION_ITEM",
+                                             "You cannot auction an item with a limited duration."};
+    static constexpr AuctionRefusal kWrapped{"ERR_AUCTION_WRAPPED_ITEM", "You cannot auction a wrapped item."};
+    static constexpr AuctionRefusal kLoot{"ERR_AUCTION_LOOT_ITEM", "You can't auction an item that contains loot."};
+    const auto* info = gh->getItemInfo(slot.item.itemId);
+    if (!info || !info->valid) {
+        // The template lookup (0x0067ca30) asks the realm for one it lacks.
+        gh->ensureItemInfo(slot.item.itemId);
+        return &kNotFound;
+    }
+    const uint32_t fieldFlags = gh->getItemFieldFlags(guid);
+    if (auctionItemWorn(gh, slot, guid)) return &kAuctionRepairItem;
+    if (auctionChargesUsed(gh, *info, guid)) return &kAuctionUsedCharges;
+    bool bound = (fieldFlags & 0x1u) != 0;
+    if (!bound && (info->itemFlags & 0x2000u) == 0) {
+        const auto& online = gh->onlineItemsRef();
+        if (const auto it = online.find(guid); it != online.end())
+            for (uint32_t enchant : it->second.enchantIds)
+                if (enchant != 0 && gh->enchantSoulbinds(enchant)) bound = true;
+    }
+    if (bound) return info->bindType == 4 ? &kQuest : &kBound;
+    if (info->itemFlags & 0x2u) return &kConjured;
+    if (((info->itemFlags & 0x10000u) && info->itemDuration > 0) || info->holidayId != 0) return &kLimited;
+    if (gh->getItemDurationByGuid(guid) != 0) return &kLimited;
+    if (info->limitArea != 0 || info->limitMap != 0) return &kConjured;
+    // A bag with something in it (0x005125b0, ERR_AUCTION_BAG) is one worn in a bag slot, and
+    // the sell box takes nothing from there; the backpack's and the bags'
+    // own squares never hold a bag that holds anything.
+    if (fieldFlags & 0x8u) return &kWrapped;
+    if (info->itemFlags & 0x4u) return &kLoot;
+    return nullptr;
 }
 
 static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
@@ -5138,6 +5201,8 @@ static std::vector<AuctionSource> auctionSources(game::GameHandler* gh, uint32_t
     auto take = [&](const game::ItemSlot& s, uint64_t guid) {
         if (total >= needed || out.size() >= 200) return;
         if (s.empty() || s.item.itemId != itemId || guid == 0) return;
+        // Only what may be sold counts (0x0059d0b0, said nothing).
+        if (auctionRefusal(gh, s, guid)) return;
         const uint32_t count = s.item.stackCount ? s.item.stackCount : 1;
         out.push_back({guid, count});
         total += count;
@@ -7611,6 +7676,10 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"QueryAuctionItems", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
+            // Any query, not a getAll alone (0x0059bcf0): with an auctioneer,
+            // no search answer still due and the realm's wait since the last
+            // one passed - otherwise nothing goes and nothing is said.
+            if (!gh->auctionListMayBeAsked(0)) return 0;
             const char* name = luaL_optstring(L, 1, "");
             // Every argument here is a widget's own output, handed over
             // untouched by AuctionFrameBrowse_SearchHelper - so the level
@@ -7740,45 +7809,54 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // StartAuction(minBid, buyout, duration, stackSize, numStacks)
                 {"StartAuction", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const uint32_t bid = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            const uint32_t buy = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-            // The dropdown's 1, 2 and 3 mean twelve, twenty-four and forty-eight
-            // hours; the wire field is minutes. Sent as they came, they asked
-            // for one, two or three minutes, and AzerothCore accepts only 1, 2
-            // or 4 times MIN_AUCTION_TIME and returns without answering - so
-            // posting an auction from FrameXML did nothing at all, silently.
-            const uint32_t dur = game::auctionDurationMinutes(
-                static_cast<uint32_t>(luaL_optnumber(L, 3, 1)));
+            // 0x0059f990: the first three must be numbers.
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: StartAuction(minBid, buyoutPrice, runTime, count)");
+            // Each read rounded and taken as an unsigned word, as its fistp does.
+            const auto word = [L](int i) {
+                return static_cast<uint32_t>(static_cast<int64_t>(std::nearbyint(lua_tonumber(L, i))));
+            };
+            if (!gh) return 0;
             uint64_t guid = 0;
             const auto* item = auctionSellItemSlot(gh, &guid);
             if (!item || guid == 0) return 0;
-            if (!auctionItemRepaired(gh, *item, guid)) return 0;
-            if (!auctionChargesIntact(gh, item->item.itemId, guid)) {
-                LOG_WARNING("StartAuction: item ", item->item.itemId, " has used charges; not posted");
+            // No template, nothing posted and nothing said.
+            const auto* itemInfo = gh->getItemInfo(item->item.itemId);
+            if (!itemInfo || !itemInfo->valid) return 0;
+            // Its own two refusals, said (rows 400 and 0x191); the worn test
+            // here has no exemption for a wrapped item.
+            if (auctionItemWorn(gh, *item, guid, false)) {
+                sayAuctionRefusal(gh, kAuctionRepairItem);
                 return 0;
             }
+            if (auctionChargesUsed(gh, *itemInfo, guid)) {
+                sayAuctionRefusal(gh, kAuctionUsedCharges);
+                return 0;
+            }
+            const uint32_t bid = word(1);
+            uint32_t buy = word(2);
+            // A buyout under the bid is raised to it; none stays none.
+            if (buy != 0 && buy < bid) buy = bid;
+            // runTime 1, 2 and 3 are twelve, twenty-four and forty-eight hours
+            // (0x00a15248); anything else is twenty-four (0x5a0 minutes).
+            const uint32_t dur = game::auctionDurationMinutes(
+                static_cast<uint32_t>(static_cast<int64_t>(std::nearbyint(lua_tonumber(L, 3) - 1.0))) + 1u);
             // The fourth argument is the size of one stack and the fifth is how
-            // many such stacks to post - and this used to read the fifth and
-            // send one, on the assumption that posting several would need a
-            // several-item request. The reference client's own StartAuction
-            // (0x0059f990, the handler the method table hangs after the name)
-            // says otherwise: it reads a fifth with a default of 1, refuses with
-            // ERR_AUCTION_ENOUGH_ITEMS when the total does not fit the item, and
-            // otherwise raises AUCTION_MULTISELL_START with the count and posts
-            // one ordinary CMSG_AUCTION_SELL_ITEM per stack, walking a
-            // stacks-left counter (FUN_0059ba80). There is no multisell opcode
-            // on its wire at all, which is why the opcode map names none. Each
-            // request names its sources: the bag objects, out of every one
-            // carried of that item, that make up that one auction's count.
-            // An absent fourth is 0 there - it writes the zero into the request
-            // and lets the realm answer for it - while this client's send path
-            // has always turned a zero count into one; an absent fifth is 1 and
-            // a written 0 is 0, which takes the one-auction branch either way.
-            uint32_t stack = static_cast<uint32_t>(
-                luaL_optnumber(L, 4, item->item.stackCount ? item->item.stackCount : 1));
-            uint32_t stacks = static_cast<uint32_t>(luaL_optnumber(L, 5, 1));
-            if (stack == 0) stack = 1;
-            if (stacks == 0) stacks = 1;
+            // many such stacks to post: there is no multisell opcode, each
+            // auction is an ordinary CMSG_AUCTION_SELL_ITEM naming its sources.
+            // An absent fourth is 0, written into the request as it is; an
+            // absent fifth is 1.
+            const uint32_t stack = lua_isnumber(L, 4) ? word(4) : 0u;
+            const uint32_t stacks = lua_isnumber(L, 5) ? word(5) : 1u;
+            // One auction the held item covers goes out from that item alone,
+            // whatever else of it is carried.
+            const uint32_t held = item->item.stackCount ? item->item.stackCount : 1;
+            if (stack <= held && stacks < 2) {
+                gh->auctionSellItems({{guid, stack}}, bid, buy, dur);
+                auctionSellSlot() = AuctionSellSlot{};
+                fireAuctionSellUpdate(gh);
+                return 0;
+            }
             // The sources: every stack of that item the player carries, not the
             // one in the slot - five stacks of twenty herbs post as five
             // auctions of twenty, each drawn from whichever bags hold them.
@@ -7786,7 +7864,8 @@ void registerInventoryLuaAPI(lua_State* L) {
                 auctionSources(gh, item->item.itemId, uint64_t(stack) * stacks);
             uint64_t carried = 0;
             for (const auto& s : sources) carried += s.count;
-            if (uint64_t(stack) * stacks > carried) {
+            // Asked for nothing, the walk (0x0059f5a0) never reaches its count.
+            if (uint64_t(stack) * stacks == 0 || uint64_t(stack) * stacks > carried) {
                 // Row 0x2d4, said before any of them go out - the reference
                 // (0x0059f640) asks whether the source items cover
                 // stacks*stackSize and posts nothing when they do not. What it
@@ -7847,30 +7926,55 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // because it is the panel's own state until StartAuction sends
                 // it.
                 {"ClickAuctionSellItemButton", [](lua_State* L) -> int {
-            // The slot had state and StartAuction read it, but nothing ever
-            // set it: this was a no-op, so no item could be put up for auction
-            // at all. What it needed was a drop target, and the cursor bridge
-            // is one - the item the player is carrying is exactly what a click
-            // on this button is offering.
-            //
-            uint8_t bag = 0, slot = 0;
-            if (!wowee::ui::frameXmlCursorWireSlot(bag, slot)) {
-                // Nothing carried: a click takes the item back out.
-                auctionSellSlot() = AuctionSellSlot{};
-                fireAuctionSellUpdate(getGameHandler(L));
-                return 0;
-            }
+            // 0x0059d410: the item carried is offered. One that may not be
+            // sold is refused with its reason said (0x0059d0b0) and stays in
+            // the hand; the item already in the box put down again where it
+            // came from; anything else takes the box, and what the box held
+            // comes up onto the cursor in its place - with nothing carried,
+            // a click lifts the boxed item out. NEW_AUCTION_UPDATE when the
+            // box changed.
             auto* gh = getGameHandler(L);
-            AuctionSellSlot candidate{.held = true, .bag = bag, .slot = slot};
-            AuctionSellSlot previous = auctionSellSlot();
-            auctionSellSlot() = candidate;
-            // Only if it names something. Equipment and the bank produce wire
-            // pairs too, and neither can be auctioned from here.
-            if (!auctionSellItemSlot(gh)) {
+            if (!gh) return 0;
+            AuctionSellSlot candidate{};
+            if (uint8_t bag = 0, slot = 0; wowee::ui::frameXmlCursorWireSlot(bag, slot)) {
+                candidate = {.held = true, .bag = bag, .slot = slot};
+                const AuctionSellSlot previous = auctionSellSlot();
+                auctionSellSlot() = candidate;
+                uint64_t guid = 0;
+                const auto* offered = auctionSellItemSlot(gh, &guid);
                 auctionSellSlot() = previous;
+                // Equipment and the bank produce wire pairs too, and neither
+                // can be auctioned from here.
+                if (!offered || guid == 0) return 0;
+                if (const auto* refusal = auctionRefusal(gh, *offered, guid)) {
+                    sayAuctionRefusal(gh, *refusal);
+                    return 0;
+                }
+            }
+            const AuctionSellSlot previous = auctionSellSlot();
+            const bool previousHeld = auctionSellItemSlot(gh) != nullptr;
+            if (candidate.held == previousHeld &&
+                (!candidate.held || (candidate.bag == previous.bag && candidate.slot == previous.slot))) {
+                clearCursor(L);
                 return 0;
             }
-            wowee::ui::frameXmlPutCursorDown();
+            auctionSellSlot() = candidate;
+            clearCursor(L);
+            if (previousHeld) {
+                // The wire pair back to the interface's (bag, slot).
+                int bag = -1, slot = 0;
+                if (previous.bag == 0xFF) {
+                    bag = 0;
+                    slot = static_cast<int>(previous.slot) - game::slots::backpackWireSlot(0) + 1;
+                } else {
+                    for (int b = 0; b < game::Inventory::NUM_BAG_SLOTS; ++b)
+                        if (previous.bag == static_cast<uint8_t>(game::slots::wornBagContainer(b))) {
+                            bag = b + 1;
+                            slot = previous.slot + 1;
+                        }
+                }
+                if (bag >= 0) pickupSplitFromContainer(L, gh, bag, slot, 0);
+            }
             fireAuctionSellUpdate(gh);
             return 0;
         }},
@@ -8195,18 +8299,19 @@ void registerInventoryLuaAPI(lua_State* L) {
             return game::kNumAuctionInvTypes * 2;
         }},
                 {"GetNumAuctionItems", [](lua_State* L) -> int {
+            // 0x0059c1a0: the type is required, named as in the other
+            // auction calls (case does not matter).
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetNumAuctionItems(\"type\")");
             auto* gh = getGameHandler(L);
-            const char* listType = luaL_optstring(L, 1, "list");
-            if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
-            std::string t(listType);
-            const game::AuctionListResult* r = nullptr;
-            if (t == "list" || t == "browse") r = &gh->getAuctionBrowseResults();
-            else if (t == "owner") r = &gh->getAuctionOwnerResults();
-            else if (t == "bidder") r = &gh->getAuctionBidderResults();
+            const int list = auctionListIndex(lua_tostring(L, 1));
+            const game::AuctionListResult* r = !gh ? nullptr
+                                             : list == 0 ? &gh->getAuctionBrowseResults()
+                                             : list == 1 ? &gh->getAuctionOwnerResults()
+                                             : list == 2 ? &gh->getAuctionBidderResults() : nullptr;
             lua_pushnumber(L, r ? r->auctions.size() : 0);
             // The owner's list answers its own rows twice, the pending sales
-            // among them (0x0059c1a0).
-            if (t == "owner") lua_pushnumber(L, r ? r->auctions.size() : 0);
+            // among them.
+            if (list == 1) lua_pushnumber(L, r ? r->auctions.size() : 0);
             else lua_pushnumber(L, r ? r->totalCount : 0);
             return 2;
         }},
@@ -8308,19 +8413,39 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 {"GetAuctionItemTimeLeft", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetAuctionItemTimeLeft(\"type\", index)");   // 0x0059fd60
+            // 0x0059fd60: counted down from when the row came (its expiry
+            // +0x8c against the clock) - 1 short, 2 medium, 3 long, 4 very
+            // long by 30 min / 2 h / 12 h (0x00a15238); a sale waiting to pay
+            // out says its seconds. A row run out says 1, and one 10 s past
+            // its end, or a waiting sale at its end, is dropped from the lists
+            // (0x0059f2f0). No such row: 0.
             auto* gh = getGameHandler(L);
-            const char* listType = luaL_checkstring(L, 1);
-            int index = static_cast<int>(luaL_checknumber(L, 2));
-            if (!gh || index < 1) { lua_pushnumber(L, 4); return 1; }
-            std::string t(listType);
-            const game::AuctionListResult* r = nullptr;
-            if (t == "list") r = &gh->getAuctionBrowseResults();
-            else if (t == "owner") r = &gh->getAuctionOwnerResults();
-            else if (t == "bidder") r = &gh->getAuctionBidderResults();
-            if (!r || index > static_cast<int>(r->auctions.size())) { lua_pushnumber(L, 4); return 1; }
-            // Return 1=short(<30m), 2=medium(<2h), 3=long(<12h), 4=very long(>12h)
-            uint32_t ms = r->auctions[index - 1].timeLeftMs;
-            int cat = (ms < 1800000) ? 1 : (ms < 7200000) ? 2 : (ms < 43200000) ? 3 : 4;
+            const int list = auctionListIndex(lua_tostring(L, 1));
+            const int index = static_cast<int>(std::nearbyint(lua_tonumber(L, 2)));
+            auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            const game::AuctionListResult* r = !gh ? nullptr
+                                             : list == 0 ? &gh->getAuctionBrowseResults()
+                                             : list == 1 ? &gh->getAuctionOwnerResults()
+                                             : list == 2 ? &gh->getAuctionBidderResults() : nullptr;
+            if (!inv || !r || index < 1 || index > static_cast<int>(r->auctions.size())) {
+                lua_pushnumber(L, 0);
+                return 1;
+            }
+            const auto& row = r->auctions[static_cast<size_t>(index - 1)];
+            const int64_t left = inv->auctionMsLeft(row);
+            if (left <= 0) {
+                lua_pushnumber(L, 1);
+                if (row.pendingSale || -left >= 10001) inv->forgetAuction(row.auctionId);
+                return 1;
+            }
+            if (row.pendingSale) {
+                lua_pushnumber(L, static_cast<lua_Number>(left / 1000));
+                return 1;
+            }
+            static constexpr int64_t kBounds[3] = {1800000, 7200000, 43200000};
+            int cat = 4;
+            for (int i = 0; i < 3; ++i)
+                if (left < kBounds[i]) { cat = i + 1; break; }
             lua_pushnumber(L, cat);
             return 1;
         }},
