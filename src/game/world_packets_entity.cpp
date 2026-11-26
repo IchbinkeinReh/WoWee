@@ -1241,17 +1241,11 @@ bool InitialSpellsParser::parse(network::Packet& packet, InitialSpellsData& data
     }
 
     data.talentSpec = packet.readUInt8();
-    uint16_t spellCount = packet.readUInt16();
-
-    // Cap spell count to prevent excessive iteration.
-    // WotLK characters with all ranks, mounts, professions, and racials can
-    // know 400-600 spells; 1024 covers all practical cases with headroom.
-    constexpr uint16_t kMaxSpells = 1024;
-    if (spellCount > kMaxSpells) {
-        LOG_WARNING("SMSG_INITIAL_SPELLS: spellCount=", spellCount, " exceeds max ", kMaxSpells,
-                    ", capping");
-        spellCount = kMaxSpells;
-    }
+    // Every spell the count says, as 12340 reads them (0x006df050 grows its
+    // array to the count): a cap left the rest of the list to be read as the
+    // cooldowns. A 16-bit count bounds the loop, and each entry is checked
+    // against what the packet holds.
+    const uint16_t spellCount = packet.readUInt16();
 
     LOG_DEBUG("SMSG_INITIAL_SPELLS: spellCount=", spellCount,
               vanillaFormat ? " (uint16 spell format)" : " (uint32 spell format)");
@@ -1286,17 +1280,8 @@ bool InitialSpellsParser::parse(network::Packet& packet, InitialSpellsData& data
         return true;  // Have spells; cooldowns are optional
     }
 
-    uint16_t cooldownCount = packet.readUInt16();
-
-    // Cap cooldown count to prevent excessive iteration.
-    // Some servers include entries for all spells (even with zero remaining time)
-    // to communicate category cooldown data, so the count can be high.
-    constexpr uint16_t kMaxCooldowns = 1024;
-    if (cooldownCount > kMaxCooldowns) {
-        LOG_WARNING("SMSG_INITIAL_SPELLS: cooldownCount=", cooldownCount, " exceeds max ", kMaxCooldowns,
-                    ", capping");
-        cooldownCount = kMaxCooldowns;
-    }
+    // All of them as well (0x006df050 has no cap).
+    const uint16_t cooldownCount = packet.readUInt16();
 
     data.cooldowns.reserve(cooldownCount);
     for (uint16_t i = 0; i < cooldownCount; ++i) {

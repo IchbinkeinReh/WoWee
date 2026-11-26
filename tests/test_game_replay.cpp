@@ -5,6 +5,7 @@
 #include "game/entity.hpp"
 #include "game/game_utils.hpp"
 #include "game/packed_time.hpp"
+#include "game/world_packets.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -321,4 +322,32 @@ TEST_CASE("a level gained reaches PLAYER_LEVEL_UP with the stats after the power
     REQUIRE(levelUps.size() == 1);
     CHECK(levelUps[0] == std::vector<std::string>{"42", "150", "80", "1", "1", "2", "3", "4", "5"});
     s.handler().setAddonEventCallback({});
+}
+
+// T337: 12340 reads every spell and cooldown SMSG_INITIAL_SPELLS counts
+// (0x006df050); a cap at 1024 dropped the rest of a collector's spells and
+// read the rest of the list as cooldowns.
+TEST_CASE("every spell of a long first spell list is known", "[replay]") {
+    wowee::network::Packet p(wowee::game::wireOpcode(wowee::game::Opcode::SMSG_INITIAL_SPELLS));
+    constexpr uint16_t kSpells = 1300;
+    p.writeUInt8(0);
+    p.writeUInt16(kSpells);
+    for (uint32_t i = 0; i < kSpells; ++i) {
+        p.writeUInt32(10000 + i);
+        p.writeUInt16(0);
+    }
+    p.writeUInt16(1);
+    p.writeUInt32(10000 + kSpells - 1);
+    p.writeUInt16(0);
+    p.writeUInt16(0);
+    p.writeUInt32(4000);
+    p.writeUInt32(0x80000000u);
+    wowee::game::InitialSpellsData data;
+    REQUIRE(wowee::game::InitialSpellsParser::parse(p, data));
+    REQUIRE(data.spellIds.size() == kSpells);
+    CHECK(data.spellIds.back() == 10000u + kSpells - 1);
+    REQUIRE(data.cooldowns.size() == 1);
+    CHECK(data.cooldowns[0].spellId == 10000u + kSpells - 1);
+    CHECK(data.cooldowns[0].cooldownMs == 4000u);
+    CHECK(data.cooldowns[0].categoryCooldownMs == 0x80000000u);
 }
