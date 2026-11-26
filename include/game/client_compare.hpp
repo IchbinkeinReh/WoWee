@@ -61,6 +61,20 @@ inline bool same(const std::string& a, size_t& i, char32_t ca, const std::string
 
 }  // namespace client_compare
 
+/// 0x0076ea40 answering 0: the same text but for case - each character's
+/// capital (0x0076e8d0) alike, accents kept apart. The macro options compare
+/// a pet's or a channelled spell's name with this.
+inline bool equalsCapitals(const std::string& a, const std::string& b) {
+    size_t i = 0, j = 0;
+    while (i < a.size() || j < b.size()) {
+        char32_t ca = 0, cb = 0;
+        client_compare::next(a, i, ca);
+        client_compare::next(b, j, cb);
+        if (ca != cb) return false;
+    }
+    return true;
+}
+
 /// 0x0076ec80: two strings in order without case or accents, a difference in
 /// those alone deciding only when nothing else does. Negative, 0 or positive.
 /// The client sorts names this way wherever a list is ordered by name -

@@ -165,3 +165,20 @@ TEST_CASE("An unknown option is reported and holds", "[macro]") {
     CHECK(run("[] A", st).result == "A");
     CHECK(run("[,] A", st).result == "A");
 }
+
+// Found by Y in code: [pet:...] (0x005efbd0) and [channeling:...] (0x005efeb0)
+// compare their names with 0x0076ea40, which folds case (0x0076e8d0) - not
+// accents.
+TEST_CASE("Pet and channel names compare without case", "[macro]") {
+    FakeState st;
+    CHECK(run("[pet:wolf] Bite; Growl", st).result == "Bite");
+    CHECK(run("[pet:FLUFFY] Bite; Growl", st).result == "Bite");
+    st.channel = "Ritual der Seelen";
+    CHECK(run("[channeling:ritual der seelen] Stop; Go", st).result == "Stop");
+    CHECK(run("[channeling] Stop; Go", st).result == "Stop");
+    st.channel = "Gedankenschinden";
+    CHECK(run("[channeling:Ritual der Seelen] Stop; Go", st).result == "Go");
+    st.petName = "\xC3\xA4rger";   // "ärger"
+    CHECK(run("[pet:\xC3\x84RGER] Bite; Growl", st).result == "Bite");
+    CHECK(run("[pet:arger] Bite; Growl", st).result == "Growl");
+}

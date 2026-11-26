@@ -1,4 +1,5 @@
 #include "game/macro_options.hpp"
+#include "game/client_compare.hpp"
 
 #include <cctype>
 #include <cstring>
@@ -180,7 +181,8 @@ bool answer(const Condition& c, uint64_t unit, State& st) {
             if (!st.hasPlayer() || !st.pet(name, family)) return false;
             if (c.args.empty()) return true;
             for (auto it = c.args.rbegin(); it != c.args.rend(); ++it)
-                if (*it == name || *it == family) return true;
+                // 0x005efbd0: case-blind (0x0076ea40) against the name and the family.
+                if (game::equalsCapitals(*it, name) || game::equalsCapitals(*it, family)) return true;
             return false;
         }
         case kModifier:
@@ -210,8 +212,9 @@ bool answer(const Condition& c, uint64_t unit, State& st) {
             std::string spell;
             if (!st.hasPlayer() || !st.channeling(spell)) return false;
             if (c.args.empty()) return true;
+            // 0x005efeb0: the channelled spell's name, case-blind (0x0076ea40).
             for (auto it = c.args.rbegin(); it != c.args.rend(); ++it)
-                if (*it == spell) return true;
+                if (game::equalsCapitals(*it, spell)) return true;
             return false;
         }
         case kSpec: return anyNumber(c, st.activeSpec());
