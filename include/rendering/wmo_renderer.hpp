@@ -217,6 +217,14 @@ public:
      * @param localTransform Local transform relative to WMO origin
      */
     void addDoodadToInstance(uint32_t instanceId, uint32_t m2InstanceId, const glm::mat4& localTransform);
+    /// A doodad (MODD index `doodadIndex`) the building placed as its own M2
+    /// instance: one of its rooms alone (MODR) is drawn only where such a
+    /// room is seen (updateRoomDoodads). Others are left as they are.
+    void addRoomDoodad(uint32_t instanceId, uint32_t m2InstanceId, uint32_t doodadIndex);
+    /// Once a frame, before the M2s are drawn: shows or hides each room's
+    /// doodad by whether its room is seen from the camera (U14,
+    /// wmo_portal_walk::groupsSeen / doodadSeen).
+    void updateRoomDoodads(const Camera& camera);
 
     // Forward declare DoodadTemplate for public API
     struct DoodadTemplate {
@@ -951,6 +959,8 @@ private:
         /// Every group's flags as the portal walk reads them, by the group's
         /// own number: MOGI's, and 0x10000 from the group itself.
         std::vector<uint32_t> portalWalkFlags;
+        /// By MODD index: the groups whose MODR lists the doodad.
+        std::vector<std::vector<uint32_t>> doodadGroups;
         [[nodiscard]] wmo_portal_walk::Building portalWalk() const {
             return {portalVertices, portals, portalRefs, groupPortalRefs, portalWalkFlags};
         }
@@ -1024,6 +1034,14 @@ private:
             glm::mat4 localTransform;    // Local transform relative to WMO origin
         };
         std::vector<DoodadInfo> doodads;
+        /// Its rooms' doodads (addRoomDoodad): the M2 instance and its MODD
+        /// index, and whether it was last hidden.
+        struct RoomDoodad {
+            uint32_t m2InstanceId = 0;
+            uint32_t doodadIndex = 0;
+            bool hidden = false;
+        };
+        std::vector<RoomDoodad> roomDoodads;
 
         // A moving transport (ship hull, elevator). It keeps ordinary collision -
         // a rider gets exact deck height from getInstanceFloorHeight, but everyone

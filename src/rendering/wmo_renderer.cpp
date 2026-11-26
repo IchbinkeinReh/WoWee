@@ -947,6 +947,13 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             }
         }
     }
+    // Which groups list each doodad (MODR), by the group's own number.
+    modelData.doodadGroups.assign(model.doodads.size(), {});
+    for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+        for (uint16_t ref : model.groups[gi].doodadRefs) {
+            if (ref < modelData.doodadGroups.size()) modelData.doodadGroups[ref].push_back(static_cast<uint32_t>(gi));
+        }
+    }
     modelData.portalWalkFlags.resize(model.groups.size());
     for (size_t gi = 0; gi < model.groups.size(); ++gi) {
         modelData.portalWalkFlags[gi] = modelData.minimapGroups[gi].flags |
@@ -1307,6 +1314,115 @@ void WMORenderer::addDoodadToInstance(uint32_t instanceId, uint32_t m2InstanceId
     }
 }
 
+void WMORenderer::addRoomDoodad(uint32_t instanceId, uint32_t m2InstanceId, uint32_t doodadIndex) {
+    const auto idx = instanceIndexById.find(instanceId);
+    if (idx == instanceIndexById.end() || idx->second >= instances.size()) return;
+    WMOInstance& inst = instances[idx->second];
+    const auto mdl = loadedModels.find(inst.modelId);
+    if (mdl == loadedModels.end() || doodadIndex >= mdl->second.doodadGroups.size()) return;
+    // Only a doodad of rooms alone: the outside's are drawn with the outside.
+    const auto& groups = mdl->second.doodadGroups[doodadIndex];
+    if (groups.empty()) return;
+    const auto& flags = mdl->second.portalWalkFlags;
+    for (uint32_t g : groups) {
+        if (g >= flags.size() || (flags[g] & wmo_portal_walk::kShowsOutside) != 0) return;
+    }
+    inst.roomDoodads.push_back({m2InstanceId, doodadIndex, false});
+}
+
+void WMORenderer::updateRoomDoodads(const Camera& camera) {
+    if (!m2Renderer_) return;
+    WOWEE_PROFILE_SCOPE("wmo: room doodads", Cpu);
+    const glm::mat4 viewProj = camera.getProjectionMatrix() * camera.getViewMatrix();
+    const glm::vec3 camPos = camera.getPosition();
+    Frustum frustum;
+    frustum.extractFromMatrix(viewProj);
+    std::vector<CameraRoom> rooms;
+    bool roomsKnown = false;
+    std::vector<uint32_t> starts;
+    for (size_t ii = 0; ii < instances.size(); ++ii) {
+        WMOInstance& inst = instances[ii];
+        if (inst.roomDoodads.empty()) continue;
+        const auto mdl = loadedModels.find(inst.modelId);
+        const ModelData* model = mdl != loadedModels.end() ? &mdl->second : nullptr;
+        std::vector<std::optional<wmo_portal_walk::Rect>> seen;
+        // One without portals has no way in to walk: drawn as before.
+        bool cull = model && !model->portals.empty();
+        // A building out of view has none of its groups drawn (0x007ad350 is
+        // walked for the ones in view only).
+        if (cull && !inst.hidden && frustum.intersectsAABB(inst.worldBoundsMin, inst.worldBoundsMax)) {
+            if (!roomsKnown) {
+                rooms = cameraRooms(camPos, viewProj);
+                roomsKnown = true;
+            }
+            starts.clear();
+            const CameraRoom* room = nullptr;
+            for (const CameraRoom& r : rooms) {
+                if (r.instance == ii) room = &r;
+            }
+            const glm::vec3 localEye = glm::vec3(inst.invModelMatrix * glm::vec4(camPos, 1.0f));
+            if (room) {
+                // From the camera's rooms (0x007ad1f0).
+                starts = room->groups;
+            } else {
+                // A camera in a room's box and in no box of the outside, with
+                // no room found under it, is taken for inside somewhere the
+                // walk cannot start from: its doodads all drawn, as before,
+                // rather than a room emptied around the camera.
+                bool inRoomBox = false, inOutsideBox = false;
+                for (const auto& g : model->groups) {
+                    if (localEye.x < g.boundingBoxMin.x || localEye.x > g.boundingBoxMax.x ||
+                        localEye.y < g.boundingBoxMin.y || localEye.y > g.boundingBoxMax.y ||
+                        localEye.z < g.boundingBoxMin.z || localEye.z > g.boundingBoxMax.z)
+                        continue;
+                    const uint32_t f = g.groupIndex < model->portalWalkFlags.size()
+                                           ? model->portalWalkFlags[g.groupIndex] : 0u;
+                    ((f & wmo_portal_walk::kExterior) != 0 ? inOutsideBox : inRoomBox) = true;
+                }
+                if (inRoomBox && !inOutsideBox) cull = false;
+                // From outside: in from each of its outside's groups in view.
+                for (size_t gi = 0; gi < model->groups.size(); ++gi) {
+                    const uint32_t number = model->groups[gi].groupIndex;
+                    if (number >= model->portalWalkFlags.size() ||
+                        (model->portalWalkFlags[number] & wmo_portal_walk::kExterior) == 0)
+                        continue;
+                    if (gi < inst.worldGroupBounds.size() &&
+                        !frustum.intersectsAABB(inst.worldGroupBounds[gi].first, inst.worldGroupBounds[gi].second))
+                        continue;
+                    starts.push_back(number);
+                }
+            }
+            if (cull) seen = wmo_portal_walk::groupsSeen(model->portalWalk(), starts, localEye,
+                                               viewProj * inst.modelMatrix);
+        }
+        // Each room's part of the screen as a frustum, made as first asked.
+        std::vector<std::optional<Frustum>> through(seen.size());
+        for (auto& rd : inst.roomDoodads) {
+            bool shown = !cull;
+            if (cull && model && !seen.empty() && rd.doodadIndex < model->doodadGroups.size()) {
+                glm::vec3 center(0.0f);
+                float radius = 0.0f;
+                const bool known = m2Renderer_->instanceCullSphere(rd.m2InstanceId, center, radius);
+                shown = wmo_portal_walk::doodadSeen(
+                    model->doodadGroups[rd.doodadIndex], model->portalWalkFlags, seen,
+                    [&](uint32_t g, const wmo_portal_walk::Rect& r) {
+                        if (!known || radius <= 0.0f) return true;
+                        auto& f = through[g];
+                        if (!f) {
+                            f.emplace();
+                            f->extractFromMatrix(wmo_portal_walk::throughRect(r, viewProj));
+                        }
+                        return f->intersectsSphere(center, radius);
+                    });
+            }
+            if (rd.hidden != !shown) {
+                rd.hidden = !shown;
+                m2Renderer_->setInstanceRoomHidden(rd.m2InstanceId, rd.hidden);
+            }
+        }
+    }
+}
+
 size_t WMORenderer::instanceDoodadCount(uint32_t instanceId) const {
     const auto it = instanceIndexById.find(instanceId);
     return it != instanceIndexById.end() && it->second < instances.size() ? instances[it->second].doodads.size() : 0;
@@ -1379,6 +1495,13 @@ void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
         noteChangedBounds(inst.worldBoundsMin, inst.worldBoundsMax);
         for (const auto& doodad : inst.doodads) {
             doodadIds.push_back(doodad.m2InstanceId);
+        }
+        // Its room doodads are its tile's M2s; should one outlive it, it is
+        // drawn as before rather than left hidden.
+        if (m2Renderer_) {
+            for (const auto& rd : inst.roomDoodads) {
+                if (rd.hidden) m2Renderer_->setInstanceRoomHidden(rd.m2InstanceId, false);
+            }
         }
     }
     if (m2Renderer_) {

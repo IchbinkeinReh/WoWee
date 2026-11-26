@@ -4923,6 +4923,10 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                                          : VkContext::kNoGpuMark);
     }
 
+    // A building's room doodads only where their rooms are seen (U14):
+    // set before any M2 pass reads them, on this thread.
+    if (wmoRenderer && m2Renderer && camera) wmoRenderer->updateRoomDoodads(*camera);
+
     // ── Multithreaded secondary command buffer recording ──
     // Terrain, WMO, and M2 record on worker threads while main thread handles
     // sky, characters, water, and effects.  prepareRender() on main thread first

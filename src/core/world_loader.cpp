@@ -537,6 +537,8 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                                         m2Renderer->setInstanceInteriorLight(doodadInstId, light.ambient,
                                                                              light.direct);
                                     }
+                                    // Drawn with its rooms (U14).
+                                    wmoRenderer->addRoomDoodad(instanceId, doodadInstId, doodadIdx);
                                 }
                                 loadedDoodads++;
                             }

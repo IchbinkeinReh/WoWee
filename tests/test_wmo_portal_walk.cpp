@@ -316,3 +316,42 @@ TEST_CASE("the view through a rectangle is that part of the screen", "[wmo_porta
         CHECK(c.y / c.w == Catch::Approx((a.y / a.w - r.y) / (r.w - r.y) * 2.0f - 1.0f).margin(1e-4));
     }
 }
+
+// U14: a building's doodad is drawn with its groups (MODR), and a room is seen
+// from outside only through the portals in sight (0x007ad350 from the outside's
+// groups, 0x007ad1f0 from the camera's rooms). Undercity's chandelier in the
+// throne-room shaft hung its chain up through the ruins' courtyard.
+TEST_CASE("from the porch the inn's rooms behind the door are seen, the bedrooms not", "[wmo_portal]") {
+    const Data inn = goldshireInn();
+    const std::vector<uint32_t> outside{11};
+    const glm::vec3 eye(30.0f, -2.6f, 2.2f);
+    const auto seen = walk::groupsSeen(inn.building(), outside, eye, camera(eye, glm::radians(180.0f)));
+    REQUIRE(seen.size() == inn.flags.size());
+    CHECK(seen[11]);
+    CHECK(seen[0]);
+    CHECK(seen[1]);
+    CHECK_FALSE(seen[6]);
+    CHECK_FALSE(seen[7]);
+    // Turned away from the door: no room.
+    const auto away = walk::groupsSeen(inn.building(), outside, eye, camera(eye, 0.0f));
+    CHECK_FALSE(away[0]);
+    CHECK_FALSE(away[1]);
+}
+
+TEST_CASE("a doodad is drawn with a group of its own that is seen", "[wmo_portal]") {
+    const Data inn = goldshireInn();
+    std::vector<std::optional<walk::Rect>> seen(inn.flags.size());
+    seen[0] = walk::Rect(-0.2f, -0.3f, 0.2f, 0.3f);
+    auto anywhere = [](uint32_t, const walk::Rect&) { return true; };
+    auto nowhere = [](uint32_t, const walk::Rect&) { return false; };
+    const std::vector<uint32_t> room0{0}, bedroom{6}, shell{4}, none{}, both{6, 0}, unknown{40};
+    CHECK(walk::doodadSeen(room0, inn.flags, seen, anywhere));
+    CHECK_FALSE(walk::doodadSeen(room0, inn.flags, seen, nowhere));  // outside the door's part of the screen
+    CHECK_FALSE(walk::doodadSeen(bedroom, inn.flags, seen, anywhere));
+    CHECK(walk::doodadSeen(both, inn.flags, seen, anywhere));
+    // The outside's and the always-drawn groups' doodads as before; one no
+    // group lists, or of a group the file does not have, too.
+    CHECK(walk::doodadSeen(shell, inn.flags, seen, nowhere));
+    CHECK(walk::doodadSeen(none, inn.flags, seen, nowhere));
+    CHECK(walk::doodadSeen(unknown, inn.flags, seen, nowhere));
+}

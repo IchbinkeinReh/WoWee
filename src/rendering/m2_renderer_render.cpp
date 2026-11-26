@@ -1176,6 +1176,8 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
             const auto& instance = instances[i];
             // Ground cover drawn by its chunk (renderClutterChunks).
             if (instance.clutterChunk != 0) continue;
+            // A building's room doodad whose rooms are not seen (U14).
+            if (instance.roomHidden && !forceNoCull_) continue;
             float distSq;
             float effectiveMaxDistSq;
 

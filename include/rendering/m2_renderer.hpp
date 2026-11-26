@@ -415,6 +415,8 @@ struct M2Instance {
     /// the zone's light on a transition face, with the direct light's
     /// direction turned toward the sun's by interiorTowardSun.
     bool interiorLit = false;
+    /// A building's room doodad whose rooms are not seen (setInstanceRoomHidden).
+    bool roomHidden = false;
     /// Ground cover placed on a chunk (setInstanceDetailShade).
     bool detailDoodad = false;
     glm::vec4 detailColor{1.0f};
@@ -876,6 +878,12 @@ public:
     /// display id, a spell effect's (0x006f94c0), with 1 when it is on the
     /// active player, or a map doodad's (0x007becd0, 0x007bef40), with 0.
     void setInstanceEventOwner(uint32_t instanceId, m2_event::Owner owner, uint32_t ownerArg);
+    /// A building's room doodad whose rooms are not seen (WMORenderer::
+    /// updateRoomDoodads): not drawn in the view. Shadows and the traced
+    /// scene keep it, as every opaque thing casts its shadow.
+    void setInstanceRoomHidden(uint32_t instanceId, bool hidden);
+    /// The instance's cull sphere; false for an unknown one.
+    bool instanceCullSphere(uint32_t instanceId, glm::vec3& center, float& radius) const;
     /// An event an owned instance's animation passed (0x00830fb0), where it
     /// is in the world: its position on its bone (0x004c21b0).
     struct FiredEvent {

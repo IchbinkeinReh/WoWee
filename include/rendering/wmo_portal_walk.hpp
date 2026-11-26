@@ -198,6 +198,9 @@ struct Walk {
     std::vector<std::optional<std::optional<Rect>>> rects;
     std::optional<Rect> outside;
     int budget = 4096;
+    /// Where given, every group the walk reaches and the part of the screen
+    /// it is reached in, the rectangles a group is reached through joined.
+    std::vector<std::optional<Rect>>* reached = nullptr;
 
     void addOutside(const Rect& r) {
         outside = outside ? Rect(std::min(outside->x, r.x), std::min(outside->y, r.y), std::max(outside->z, r.z),
@@ -221,7 +224,13 @@ struct Walk {
     }
 
     void from(uint32_t group, uint32_t parent, const Rect& view, int depth) {
-        if (depth > kMaxDepth || group >= b.groupRefs.size() || (b.flags[group] & kAlways) != 0) return;
+        if (depth > kMaxDepth || group >= b.groupRefs.size()) return;
+        if (reached && group < reached->size()) {
+            auto& r = (*reached)[group];
+            r = r ? Rect(std::min(r->x, view.x), std::min(r->y, view.y), std::max(r->z, view.z), std::max(r->w, view.w))
+                  : view;
+        }
+        if ((b.flags[group] & kAlways) != 0) return;
         const auto [first, count] = b.groupRefs[group];
         for (uint32_t r = first; r < static_cast<uint32_t>(first) + count && r < b.refs.size(); ++r) {
             const Ref& ref = b.refs[r];
@@ -258,6 +267,42 @@ inline std::optional<Rect> outsideRect(const Building& b, std::span<const uint32
         walk.from(g, 0xffffffffu, kWholeScreen, 0);
     }
     return walk.outside;
+}
+
+/// The groups a camera at `eye` (model space) sees, walking from `starts`,
+/// each with the part of the screen it is seen in, none for one not seen.
+/// From the camera's rooms (0x007ad1f0), or, for a camera outside the
+/// building, from its exterior groups in view (0x007ad350 walks in from
+/// each): a room is seen only through portals in sight.
+inline std::vector<std::optional<Rect>> groupsSeen(const Building& b, std::span<const uint32_t> starts,
+                                                   const glm::vec3& eye, const glm::mat4& modelViewProj) {
+    std::vector<std::optional<Rect>> seen(b.flags.size());
+    detail::Walk walk{b, eye, modelViewProj, {}, {}};
+    walk.rects.resize(b.portals.size());
+    walk.reached = &seen;
+    for (uint32_t g : starts) {
+        if (g >= b.flags.size()) continue;
+        walk.from(g, 0xffffffffu, kWholeScreen, 0);
+    }
+    return seen;
+}
+
+/// Whether a building's doodad is drawn: the client draws a doodad with the
+/// groups whose MODR lists it (0x007ac060 walks a group, its doodads with
+/// it), so a room's doodad only where that room is seen and, within the
+/// part of the screen the room is seen in (`inRect(group, rect)`), only there. The
+/// outside's groups (0x8) and the always drawn ones (0x10000) are drawn as
+/// the outside is; a doodad no group lists, or one of a group the file
+/// does not have, is drawn as before.
+template <class InRect>
+bool doodadSeen(std::span<const uint32_t> groups, std::span<const uint32_t> flags,
+                const std::vector<std::optional<Rect>>& seen, InRect&& inRect) {
+    if (groups.empty()) return true;
+    for (uint32_t g : groups) {
+        if (g >= flags.size() || (flags[g] & kShowsOutside) != 0) return true;
+        if (g < seen.size() && seen[g] && inRect(g, *seen[g])) return true;
+    }
+    return false;
 }
 
 /// The view-projection that sees `r` of the screen and nothing past it

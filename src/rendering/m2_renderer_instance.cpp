@@ -162,6 +162,21 @@ void M2Renderer::setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& 
     inst.interiorDirect = direct;
 }
 
+void M2Renderer::setInstanceRoomHidden(uint32_t instanceId, bool hidden) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    instances[idxIt->second].roomHidden = hidden;
+}
+
+bool M2Renderer::instanceCullSphere(uint32_t instanceId, glm::vec3& center, float& radius) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return false;
+    const auto& inst = instances[idxIt->second];
+    center = inst.cachedCullCenter;
+    radius = inst.cachedPaddedRadius;
+    return true;
+}
+
 void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
                                          uint64_t passGeneration, const glm::vec3& zoneAmbient,
                                          const glm::vec3& zoneDirect, float seconds, uint64_t floorGeneration,

@@ -149,6 +149,10 @@ struct PendingTile {
         bool interiorLit = false;
         glm::vec3 interiorAmbient{0.0f};
         glm::vec3 interiorDirect{0.0f};
+        /// Its building (an index into wmoModels) and its MODD index, so the
+        /// building can show it with its rooms alone (WMORenderer::addRoomDoodad).
+        size_t wmoIndex = 0;
+        uint32_t doodadIndex = 0;
     };
     std::vector<WMODoodadReady> wmoDoodads;
 
@@ -207,6 +211,8 @@ struct FinalizingTile {
     std::vector<uint32_t> tileUniqueIds;
     std::vector<uint32_t> tileWmoUniqueIds;
     std::unordered_set<uint32_t> uploadedM2ModelIds;
+    /// By index into pending->wmoModels: the instance made of it, 0 if none.
+    std::vector<uint32_t> wmoInstanceByModel;
 };
 
 /**

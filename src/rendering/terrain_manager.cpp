@@ -848,6 +848,8 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                         doodadReady.modelId = doodadModelId;
                         doodadReady.worldPosition = worldPos;
                         doodadReady.modelMatrix = worldMatrix;
+                        doodadReady.wmoIndex = pending->wmoModels.size();  // pushed after the loop
+                        doodadReady.doodadIndex = doodadIdx;
                         if (doodadIdx < interiorDoodads.size() && interiorDoodads[doodadIdx]) {
                             const auto light = pipeline::wmo_doodad_light::doodadLight(doodad.color);
                             doodadReady.interiorLit = true;
@@ -1352,6 +1354,9 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                         continue;
                     }
                     ft.wmoInstanceIds.push_back(wmoInstId);
+                    if (ft.wmoInstanceByModel.size() < pending->wmoModels.size())
+                        ft.wmoInstanceByModel.resize(pending->wmoModels.size(), 0);
+                    ft.wmoInstanceByModel[ft.wmoInstanceIndex] = wmoInstId;
                     wmoRenderer->setInstanceNameSet(wmoInstId, wmoReady.nameSet);
                     if (wmoReady.uniqueId != 0) {
                         placedWmoIds.insert(wmoReady.uniqueId);
@@ -1420,6 +1425,12 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                     if (doodad.interiorLit) {
                         m2Renderer->setInstanceInteriorLight(wmoDoodadInstId, doodad.interiorAmbient,
                                                              doodad.interiorDirect);
+                    }
+                    // Drawn with its rooms (U14).
+                    if (wmoRenderer && doodad.wmoIndex < ft.wmoInstanceByModel.size() &&
+                        ft.wmoInstanceByModel[doodad.wmoIndex] != 0) {
+                        wmoRenderer->addRoomDoodad(ft.wmoInstanceByModel[doodad.wmoIndex], wmoDoodadInstId,
+                                                   doodad.doodadIndex);
                     }
                     ft.m2InstanceIds.push_back(wmoDoodadInstId);
                 }
