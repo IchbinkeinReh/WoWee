@@ -3062,6 +3062,58 @@ static int lua_UseItemByName(lua_State* L) {
     return 0;
 }
 
+// SpellTargetItem(item) (0x008007e0): while a spell waits for an item target
+// (0x005191c0(2) - the taint check - first, then a pending spell whose target
+// flags take an item, DAT_00d3f4e0 & 0x4010) the player's own item the
+// argument names is handed to it as a click on that item would be
+// (0x005210d0). A number is an id (0x00754a20: the item's entry), a string a
+// link (0x00754af0 -> 0x007545d0: the link's enchant, gems, suffix, seed) or a
+// name (0x00753b20: compared case-blind over the argument's characters, so a
+// name's beginning names it). Worn items count (0x007546f0's walk with
+// 0x247), the bank does not. Anything else raises the usage error; it answers
+// nothing, matched or not (T356: it answered false and did nothing).
+static int lua_SpellTargetItem(lua_State* L) {
+    if (!taint::allowed(L, 2)) return 0;
+    auto* gh = getGameHandler(L);
+    if (!gh || !gh->isAwaitingItemTarget()) return 0;
+    const bool byNumber = lua_isnumber(L, 1) != 0;
+    if (!byNumber && !lua_isstring(L, 1))
+        return luaL_error(L, "Usage: SpellTargetItem(itemID|\"name\"|\"itemlink\")");
+    const std::string text = byNumber ? std::string() : std::string(lua_tostring(L, 1));
+    const uint32_t wantId = byNumber ? static_cast<uint32_t>(lua_tonumber(L, 1)) : 0;
+    LinkedInstance link;
+    const bool isLink = !byNumber && text.find("item:") != std::string::npos && linkedInstance(text, link);
+    const uint32_t linkId = isLink ? static_cast<uint32_t>(std::strtoul(text.c_str() + text.find("item:") + 5, nullptr, 10)) : 0;
+    auto fold = [](std::string v) {
+        for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return v;
+    };
+    const std::string wantName = fold(text);
+    auto matches = [&](const game::ItemSlot& sl) {
+        if (sl.empty() || sl.item.itemId == 0) return false;
+        if (byNumber) return sl.item.itemId == wantId;
+        if (isLink) return sl.item.itemId == linkId && itemAnswersLink(gh, sl.item.guid, link);
+        if (wantName.empty()) return false;
+        const auto* info = gh->getItemInfo(sl.item.itemId);
+        return info && fold(info->name).compare(0, wantName.size(), wantName) == 0;
+    };
+    const auto& inv = gh->getInventory();
+    uint64_t guid = 0;
+    for (int i = 0; i < inv.getBackpackSize() && guid == 0; ++i)
+        if (matches(inv.getBackpackSlot(i))) guid = inv.getBackpackSlot(i).item.guid;
+    for (int b = 0; b < game::Inventory::NUM_BAG_SLOTS && guid == 0; ++b)
+        for (int i = 0; i < inv.getBagSize(b) && guid == 0; ++i)
+            if (matches(inv.getBagSlot(b, i))) guid = inv.getBagSlot(b, i).item.guid;
+    for (int e = 0; e < game::Inventory::NUM_EQUIP_SLOTS && guid == 0; ++e) {
+        const auto& sl = inv.getEquipSlot(static_cast<game::EquipSlot>(e));
+        if (matches(sl)) guid = sl.item.guid;
+    }
+    for (int i = 0; i < inv.getKeyringSize() && guid == 0; ++i)
+        if (matches(inv.getKeyringSlot(i))) guid = inv.getKeyringSlot(i).item.guid;
+    if (guid != 0) gh->completeItemUseOnItem(guid);
+    return 0;
+}
+
 // EquipItemByName(item) - what /equip does
 /// EquipItemByName(item [, slot]) - wear it, optionally in a named slot.
 ///
@@ -6903,6 +6955,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"UseInventoryItem",    lua_UseInventoryItem},
                 {"GetInventoryItemDurability", lua_GetInventoryItemDurability},
                 {"UseItemByName",       lua_UseItemByName},
+                {"SpellTargetItem",     lua_SpellTargetItem},
                 {"EquipItemByName",     lua_EquipItemByName},
                 {"IsEquippableItem",    lua_IsEquippableItem},
                 {"IsEquippedItem",      lua_IsEquippedItem},

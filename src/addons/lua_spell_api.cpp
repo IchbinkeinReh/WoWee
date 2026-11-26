@@ -77,15 +77,7 @@ static int lua_SpellCanTargetUnit(lua_State* L) {
     else lua_pushnil(L);
     return 1;
 }
-// Only spells waiting for a unit are held for a click; an item cursor is
-// finished by the bag click instead, so this answers false.
-// Asked of the taint check first (0x008007e0, kind 2) like the rest of the
-// targeting family.
-static int lua_SpellTargetItem(lua_State* L) {
-    if (!taint::allowed(L, 2)) return 0;
-    lua_pushboolean(L, 0);
-    return 1;
-}
+// SpellTargetItem: lua_inventory_api.cpp, beside the item lookups it shares.
 
 
 // SetMultiCastSpell(slot, spellID) (0x005ab8a0): one of the totem bar's
@@ -1907,7 +1899,6 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"GetSpellName",      lua_GetSpellName},
                 {"SpellTargetUnit",   lua_SpellTargetUnit},
                 {"SpellCanTargetUnit", lua_SpellCanTargetUnit},
-                {"SpellTargetItem",   lua_SpellTargetItem},
                 {"SetMultiCastSpell", lua_SetMultiCastSpell},
                 {"GetMultiCastTotemSpells", lua_GetMultiCastTotemSpells},
                 {"CastSpell",         lua_CastSpell},

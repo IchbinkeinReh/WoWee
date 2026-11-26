@@ -2449,3 +2449,52 @@ TEST_CASE("an auto-repeat stops once and only for the player's own cancel", "[re
     CHECK_FALSE(s.handler().isAutoRepeating());
     CHECK(ui.is("stops == 2"));
 }
+
+// T356: SpellTargetItem (0x008007e0) hands the player's own item - by id
+// (0x00754a20), link (0x00754af0) or a name's beginning, case-blind
+// (0x00753b20) - worn ones included, to the spell waiting for an item, as a
+// click on it would (0x005210d0), and answers nothing; an argument that is
+// neither raises its usage error. It answered false and did nothing.
+TEST_CASE("SpellTargetItem gives the waiting spell the named item", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    auto& gh = s.handler();
+    carry(s, 34336, 13, 0, 0x4000000000000901ull);
+    {
+        auto& info = gh.itemInfoCacheRef()[2000];
+        info.entry = 2000;
+        info.valid = true;
+        info.name = "Mace 2000";
+        info.inventoryType = 13;
+        wowee::game::ItemDef def;
+        def.itemId = 2000;
+        def.name = info.name;
+        def.inventoryType = 13;
+        def.guid = 0x4000000000000902ull;
+        REQUIRE(gh.inventoryRef().setEquipSlot(wowee::game::EquipSlot::MAIN_HAND, def));
+    }
+    constexpr uint32_t kStone = 999001;
+    gh.spellNameCacheRef()[kStone].name = "Stone";
+    gh.spellNameCacheRef()[kStone].effectIds[0] = 54;
+    const auto casts = [&] { return s.sent().of(Opcode::CMSG_CAST_SPELL).size(); };
+
+    gh.beginSpellItemTargeting(kStone, "spell");
+    REQUIRE(gh.isAwaitingItemTarget());
+    CHECK(ui.is("select('#', SpellTargetItem('no such thing')) == 0"));
+    CHECK(gh.isAwaitingItemTarget());
+    CHECK(casts() == 0);
+    CHECK(ui.is("not pcall(SpellTargetItem, {})"));
+    ui.run("SpellTargetItem(2000)");
+    CHECK_FALSE(gh.isAwaitingItemTarget());
+    CHECK(casts() == 1);
+
+    gh.beginSpellItemTargeting(kStone, "spell");
+    ui.run("SpellTargetItem('ITEM 343')");
+    CHECK_FALSE(gh.isAwaitingItemTarget());
+    CHECK(casts() == 2);
+
+    // Without a spell waiting nothing is checked or done.
+    CHECK(ui.is("pcall(SpellTargetItem, {})"));
+}
