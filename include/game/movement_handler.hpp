@@ -106,6 +106,13 @@ public:
     /// 0x00717c50 at world entry: the player again, and no other unit
     /// controlled.
     void resetActiveMover();
+    /// 0x006e7f50 -> 0x00513880 -> 0x00717c50, as the active player's object
+    /// is made (each world load): control back (0x00bcfb8c = 1), the player
+    /// the mover again and CMSG_SET_ACTIVE_MOVER - unless the world-entry
+    /// handler has just said so for this load (T409).
+    void onActivePlayerMade();
+    /// handleLoginVerifyWorld sent CMSG_SET_ACTIVE_MOVER for the load.
+    void noteMoverAnnounced() { moverAnnouncedForLoad_ = true; }
     /// 0x00729010: the old mover's movement stopped - the player's said with
     /// CMSG_MOVE_NOT_ACTIVE_MOVER - then CMSG_SET_ACTIVE_MOVER for the new
     /// one, whose movement movementInfo takes over.
@@ -510,6 +517,7 @@ private:
     std::chrono::steady_clock::time_point movementClockStart_ = core::steadyNow();
     float timeSkipCarryMs_ = 0.0f;  ///< a frame's part of a millisecond, carried
     uint32_t lastMovementTimestampMs_ = 0;
+    bool moverAnnouncedForLoad_ = false;
     bool serverMovementAllowed_ = true;
     uint32_t monsterMovePacketsThisTick_ = 0;
     uint32_t monsterMovePacketsDroppedThisTick_ = 0;

@@ -801,6 +801,8 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         auto activeMoverPacket = SetActiveMoverPacket::build(playerGuid);
         socket->send(activeMoverPacket);
         LOG_INFO("Sent CMSG_SET_ACTIVE_MOVER for player 0x", std::hex, playerGuid, std::dec);
+        // Said for this load: the player object made next does not say it again.
+        if (movementHandler_) movementHandler_->noteMoverAnnounced();
         // A new mover: VEHICLE_UPDATE and its aim (0x00747f40).
         fireAddonEvent("VEHICLE_UPDATE", {});
         announceVehicleAim();

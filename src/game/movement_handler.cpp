@@ -3217,6 +3217,8 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     movementInfo.flags = 0;
     movementInfo.flags2 = 0;
     serverMovementAllowed_ = true;
+    // A new load: the player object it brings says who moves (0x006e7f50).
+    moverAnnouncedForLoad_ = false;
     owner_.resurrectPendingRef() = false;
     owner_.resurrectRequestPendingRef() = false;
     // A flight on the map left behind is over here; one that goes on has its
@@ -5039,6 +5041,24 @@ void MovementHandler::resetActiveMover() {
     pitchStartSent_ = false;
     heldTurnStart_.reset();
     turnStartSent_ = false;
+}
+
+void MovementHandler::onActivePlayerMade() {
+    if (moverAnnouncedForLoad_) {
+        moverAnnouncedForLoad_ = false;
+        return;
+    }
+    // A battleground's end takes the control (SMSG_CLIENT_CONTROL_UPDATE 0
+    // leaves no mover at all) and its port home is a far teleport: without
+    // this the player stood without a mover on the new map until a relog.
+    serverMovementAllowed_ = true;
+    resetActiveMover();
+    const uint64_t player = owner_.getPlayerGuid();
+    if (player == 0 || !owner_.getSocket()) return;
+    owner_.getSocket()->send(SetActiveMoverPacket::build(player));
+    LOG_INFO("Sent CMSG_SET_ACTIVE_MOVER for player 0x", std::hex, player, std::dec, " (player object made)");
+    owner_.fireAddonEvent("VEHICLE_UPDATE", {});
+    owner_.announceVehicleAim();
 }
 
 void MovementHandler::setActiveMover(uint64_t guid) {

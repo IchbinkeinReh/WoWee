@@ -4095,6 +4095,13 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
             for (const auto& uid : owner_.unitTokensForGuid(who)) pendingEvents_.emit("UNIT_PET", {uid});
     }
 
+    // The active player's object made anew - every world load, the far
+    // teleport home from a battleground among them (0x006e7f50): the player
+    // moves itself again (T409).
+    if (block.guid == owner_.getPlayerGuid() && !before && block.objectType == ObjectType::PLAYER) {
+        if (auto* movement = owner_.getMovementHandler()) movement->onActivePlayerMade();
+    }
+
     // A control update that waited for the unit (0x007402b0 -> 0x0072cca0).
     if (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) {
         if (auto* movement = owner_.getMovementHandler()) movement->onUnitCreated(block.guid);

@@ -2711,3 +2711,30 @@ TEST_CASE("a kick vote is sent while one runs, and not more than the client lets
     CHECK(sent() == 6);
     CHECK_FALSE(gh.getLfgBootMyVote());
 }
+
+// T409 (FIXER Y): a battleground's end takes the control (no mover at all)
+// and ports the player home by SMSG_NEW_WORLD; the player object made on the
+// new map is the mover again and says so (0x006e7f50 -> 0x00513880 ->
+// 0x00717c50: 0x00bcfb8c = 1, CMSG_SET_ACTIVE_MOVER).
+TEST_CASE("the player moves itself again after a far teleport without control (T409)", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    wowee::network::Packet control(wowee::game::wireOpcode(Opcode::SMSG_CLIENT_CONTROL_UPDATE));
+    control.writePackedGuid(Session::kPlayerGuid);
+    control.writeUInt8(0);
+    s.receive(control);
+    REQUIRE(gh.activeMover() != Session::kPlayerGuid);
+    const size_t before = s.sent().of(Opcode::CMSG_SET_ACTIVE_MOVER).size();
+
+    gh.setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    for (const float v : {-1431.29f, -68.57f, 156.87f, 0.4f}) world.writeFloat(v);
+    s.receive(world);
+    gh.setWorldEntryCallback({});
+    spawnPlayer(s);   // the realm makes the player's object on the new map
+    CHECK(gh.activeMover() == Session::kPlayerGuid);
+    CHECK(s.sent().of(Opcode::CMSG_SET_ACTIVE_MOVER).size() == before + 1);
+    CHECK(gh.isServerMovementAllowed());
+}
