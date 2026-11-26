@@ -75,6 +75,10 @@ private:
 
     // 3D model preview
     std::unique_ptr<rendering::CharacterPreview> preview_;
+    /// Whether the preview's renderer, made beside the frames, is there and
+    /// the preview registered: taken when it is, dropped where it failed.
+    bool previewReady();
+    bool previewRegistered_ = false;
     /// Released by releasePreview, to be built again by restorePreview.
     bool previewReleased_ = false;
     pipeline::AssetManager* assetManager_ = nullptr;

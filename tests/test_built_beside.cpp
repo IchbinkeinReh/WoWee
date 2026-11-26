@@ -86,3 +86,31 @@ TEST_CASE("the character selection's view is made beside the frames", "[built_be
     CHECK(screen.find("preview_->initializeDone()") != std::string::npos);
     CHECK(screen.find("preview_->initialize(") == std::string::npos);
 }
+
+// And the interface's model frames (PlayerModel, DressUpModel, any Model):
+// their M2 renderer is made beside the frames too, and taken before the
+// target its pipelines are for goes.
+TEST_CASE("a model frame's renderer is made beside the frames", "[built_beside]") {
+    const std::string view = sourceText("src/rendering/model_frame_view.cpp");
+    REQUIRE_FALSE(view.empty());
+    CHECK(view.find("m2Building_.begin(") != std::string::npos);
+    CHECK(view.find("m2_->initialize(") == std::string::npos);
+    const size_t taken = view.find("m2_ = m2Building_.take(true);");
+    const size_t destroyed = view.find("destroyTarget();");
+    REQUIRE(taken != std::string::npos);
+    REQUIRE(destroyed != std::string::npos);
+    CHECK(taken < destroyed);
+}
+
+// Every other view of a figure: the creation screen's and the units'
+// portraits begin it and take it when it is there; nothing waits on a frame.
+TEST_CASE("no screen waits for a figure's renderer", "[built_beside]") {
+    for (const char* path : {"src/ui/character_create_screen.cpp", "src/ui/unit_portrait.cpp"}) {
+        const std::string text = sourceText(path);
+        INFO(path);
+        REQUIRE_FALSE(text.empty());
+        CHECK(text.find("->beginInitialize(") != std::string::npos);
+        CHECK(text.find("->initializeDone()") != std::string::npos);
+        CHECK(text.find("preview_->initialize(") == std::string::npos);
+    }
+}

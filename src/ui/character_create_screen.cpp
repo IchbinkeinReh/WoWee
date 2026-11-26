@@ -180,20 +180,36 @@ void CharacterCreateScreen::initializePreview(pipeline::AssetManager* am) {
     assetManager_ = am;
     if (!preview_) {
         preview_ = std::make_unique<rendering::CharacterPreview>();
-        if (preview_->initialize(am)) {
-            auto* renderer = core::Application::getInstance().getRenderer();
-            if (renderer) renderer->registerPreview(preview_.get());
-        }
+        // Its renderer made beside the frames (CharacterPreview::
+        // beginInitialize); registered once it is there (previewReady).
+        if (!preview_->beginInitialize(am)) preview_.reset();
+        previewRegistered_ = false;
+    } else if (previewRegistered_) {
+        preview_->resetView();
     }
-    if (preview_) preview_->resetView();
     // Force model reload
     prevRaceIndex_ = -1;
+}
+
+bool CharacterCreateScreen::previewReady() {
+    if (!preview_) return false;
+    if (previewRegistered_) return true;
+    if (!preview_->initializeDone()) {
+        if (preview_->initializeFailed()) preview_.reset();
+        return false;
+    }
+    if (auto* renderer = core::Application::getInstance().getRenderer()) renderer->registerPreview(preview_.get());
+    previewRegistered_ = true;
+    preview_->resetView();
+    prevRaceIndex_ = -1;
+    return true;
 }
 
 void CharacterCreateScreen::releasePreview() {
     if (!preview_) return;
     // Unregisters itself from the renderer on the way out.
     preview_.reset();
+    previewRegistered_ = false;
     previewReleased_ = true;
 }
 
@@ -206,7 +222,7 @@ void CharacterCreateScreen::restorePreview() {
 }
 
 void CharacterCreateScreen::update(float deltaTime) {
-    if (preview_) {
+    if (previewReady()) {
         preview_->update(deltaTime);
     }
     // Timeout waiting for server response
@@ -247,7 +263,7 @@ void CharacterCreateScreen::updateAvailableClasses() {
 }
 
 void CharacterCreateScreen::updatePreviewIfNeeded() {
-    if (!preview_) return;
+    if (!previewReady()) return;
 
     bool changed = (raceIndex != prevRaceIndex_ ||
                     genderIndex != prevGenderIndex_ ||
@@ -435,12 +451,12 @@ void CharacterCreateScreen::render(game::GameHandler& /*gameHandler*/) {
     updateAppearanceRanges();
 
     // Render the preview to FBO before the ImGui frame
-    if (preview_) {
+    if (previewReady()) {
         updatePreviewIfNeeded();
         preview_->render();
         preview_->requestComposite();
     }
-    const bool hasPreview = (preview_ && preview_->getTextureId() != nullptr &&
+    const bool hasPreview = (previewReady() && preview_->getTextureId() != nullptr &&
                              preview_->getWidth() > 0 && preview_->getHeight() > 0);
 
     const ImVec2 screen = ImGui::GetIO().DisplaySize;

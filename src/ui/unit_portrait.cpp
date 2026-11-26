@@ -21,14 +21,25 @@ bool UnitPortrait::show(const UnitLook& look, pipeline::AssetManager* assets, re
     if (!preview_) {
         preview_ = std::make_unique<rendering::CharacterPreview>();
         // Small: this is drawn into a circle a few dozen pixels across, and the
-        // cost of the pass scales with the target.
-        if (!preview_->initialize(assets, targetWidth_, targetHeight_)) {
+        // cost of the pass scales with the target. Its renderer is made beside
+        // the frames (CharacterPreview::beginInitialize); the portrait is the
+        // flat one till then.
+        if (!preview_->beginInitialize(assets, targetWidth_, targetHeight_)) {
             LOG_WARNING("UnitPortrait: could not build the offscreen view");
             preview_.reset();
             return false;
         }
         builtWidth_ = targetWidth_;
         builtHeight_ = targetHeight_;
+    }
+    if (!registered_) {
+        if (!preview_->initializeDone()) {
+            if (preview_->initializeFailed()) {
+                LOG_WARNING("UnitPortrait: could not build the offscreen view");
+                preview_.reset();
+            }
+            return false;
+        }
         renderer->registerPreview(preview_.get());
         registered_ = true;
         loaded_ = {};

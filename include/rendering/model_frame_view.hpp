@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "pipeline/m2_loader.hpp"
+#include "rendering/built_beside.hpp"
 #include "rendering/model_lights.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
@@ -185,6 +186,11 @@ private:
     int width_ = 0, height_ = 0;
     std::unique_ptr<VkRenderTarget> target_;
     std::unique_ptr<M2Renderer> m2_;
+    /// m2_ while it is made, on a thread of its own: some hundred pipelines,
+    /// seconds with the driver's cache empty (BuiltBeside). Not again once
+    /// it failed.
+    BuiltBeside<M2Renderer> m2Building_;
+    bool m2Failed_ = false;
     std::unique_ptr<Camera> camera_;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     std::array<VkBuffer, kFrames> ubo_{};

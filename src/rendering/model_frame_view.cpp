@@ -40,6 +40,8 @@ bool ModelFrameView::ensureSize(pipeline::AssetManager* assets, int width, int h
     vkCtx_ = renderer ? renderer->getVkContext() : nullptr;
     if (!vkCtx_ || !renderer->getPerFrameSetLayout()) return false;
     if (target_) {
+        // A renderer being made was given the target's pass: taken first.
+        if (m2Building_.started() && !m2_) m2_ = m2Building_.take(true);
         ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
         destroyTarget();
     }
@@ -47,14 +49,29 @@ bool ModelFrameView::ensureSize(pipeline::AssetManager* assets, int width, int h
     width_ = width;
     height_ = height;
     if (!m2_) {
-        m2_ = std::make_unique<M2Renderer>();
-        m2_->setRenderPassOverride(target_->getRenderPass(), target_->getSampleCount());
-        m2_->setOverNothing(true);
-        if (!m2_->initialize(vkCtx_, renderer->getPerFrameSetLayout(), assets)) {
+        // Made beside the frames (BuiltBeside); the frame shows nothing till
+        // it is there and asks again each frame.
+        if (m2Failed_) return false;
+        if (!m2Building_.started()) {
+            m2Building_.begin([ctx = vkCtx_, perFrameLayout = renderer->getPerFrameSetLayout(), assets,
+                               pass = target_->getRenderPass(),
+                               samples = target_->getSampleCount()]() -> std::unique_ptr<M2Renderer> {
+                auto made = std::make_unique<M2Renderer>();
+                made->setRenderPassOverride(pass, samples);
+                made->setOverNothing(true);
+                if (!made->initialize(ctx, perFrameLayout, assets)) return nullptr;
+                return made;
+            });
+        }
+        if (m2Building_.pending()) return false;
+        m2_ = m2Building_.take();
+        if (!m2_) {
             LOG_ERROR("ModelFrameView: M2 renderer would not initialize");
-            m2_.reset();
+            m2Failed_ = true;
             return false;
         }
+    }
+    if (!camera_) {
         // Nothing of a UI model is culled: the frame shows all of it.
         m2_->setForceNoCull(true);
         camera_ = std::make_unique<Camera>();
@@ -377,6 +394,8 @@ void ModelFrameView::shutdown() {
         if (auto* renderer = core::Application::getInstance().getRenderer()) renderer->unregisterModelFrame(this);
         registered_ = false;
     }
+    if (!m2_) m2_ = m2Building_.take(true);
+    m2Failed_ = false;
     if (vkCtx_ && (m2_ || target_)) ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
     if (m2_) {
         m2_->shutdown();
