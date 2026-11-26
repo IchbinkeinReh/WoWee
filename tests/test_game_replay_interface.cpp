@@ -4291,3 +4291,32 @@ TEST_CASE("a bag's inventory count is no stack (T406)", "[replay][interface]") {
     CHECK(ui.is("GetInventoryItemCount('player', 21) == 1"));    // nothing there
     CHECK(ui.is("GetInventoryItemCount('player', 11) == 7"));
 }
+
+// FIXER X (found in code): the action predicates read what the slot casts or
+// uses (0x005a8c30, 0x005a8070), not only a bare spell or item slot.
+// IsAttackAction (0x005a96d0) is Effect[0] 78 of that spell; IsConsumableAction
+// (0x005a9360) also a spell paid in reagents, and GetActionCount (DAT_00c1e118
+// via 0x007ffa30) then how many casts the carried reagents pay for - a summon
+// paid in shards showed no number.
+TEST_CASE("the action predicates read the slot's spell (0x005a96d0/0x005a9360)", "[replay][interface]") {
+    using wowee::game::ActionBarSlot;
+    constexpr uint32_t kSummon = 697, kShard = 6265, kSwing = 9999;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    auto& summon = gh.spellNameCacheRef()[kSummon];
+    summon.name = "Summon";
+    summon.reagents[0] = {kShard, 1};
+    auto& swing = gh.spellNameCacheRef()[kSwing];
+    swing.name = "Swing";
+    swing.effectIds[0] = 78;
+    carryForAuction(s, 0, 0x4000000000000C31ull, kShard, 3);
+    gh.setActionBarSlot(0, ActionBarSlot::SPELL, kSummon);
+    gh.setActionBarSlot(1, ActionBarSlot::SPELL, kSwing);
+    CHECK(ui.is("IsConsumableAction(1) == 1"));
+    CHECK(ui.is("GetActionCount(1) == 3"));
+    CHECK(ui.is("IsConsumableAction(2) == nil"));
+    CHECK(ui.is("IsAttackAction(2) == 1"));
+    CHECK(ui.is("IsAttackAction(1) == nil"));
+}

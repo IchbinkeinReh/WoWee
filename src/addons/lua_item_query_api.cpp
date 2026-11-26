@@ -390,13 +390,7 @@ int isConsumableSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
     const SpellArgs args = spellArgs(L, gh);
     if (!args.named) return 0;
-    const uint32_t spell = args.spell;
-    bool yes = false;
-    if (spellKnownToClient(gh, spell)) {
-        for (const auto& r : gh->spellNameCacheRef().at(spell).reagents)
-            if (r.itemId != 0 && static_cast<int32_t>(r.count) > 0) yes = true;
-    }
-    if (yes) lua_pushnumber(L, 1); else lua_pushnil(L);
+    if (spellHasReagents(gh, args.spell)) lua_pushnumber(L, 1); else lua_pushnil(L);
     return 1;
 }
 
@@ -406,16 +400,7 @@ int getSpellCount(lua_State* L) {
     auto* gh = getGameHandler(L);
     const SpellArgs args = spellArgs(L, gh);
     if (!args.named) return 0;
-    const uint32_t spell = args.spell;
-    int32_t casts = 0x7fffffff;
-    if (spellKnownToClient(gh, spell) && gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
-        for (const auto& r : gh->spellNameCacheRef().at(spell).reagents) {
-            const auto need = static_cast<int32_t>(r.count);
-            if (r.itemId == 0 || r.itemId == 0xFFFFFFFEu || need <= 0) continue;
-            casts = std::min(casts, static_cast<int32_t>(gh->getInventory().countCarried(r.itemId)) / need);
-        }
-    }
-    lua_pushnumber(L, casts == 0x7fffffff ? 0 : casts);
+    lua_pushnumber(L, spellReagentCasts(gh, args.spell));
     return 1;
 }
 
@@ -809,6 +794,25 @@ int getItemUniqueness(lua_State* L) {
 
 UsableState itemUsableState(game::GameHandler* gh, uint32_t itemId) {
     return itemUsable(gh, itemId);
+}
+
+bool spellHasReagents(game::GameHandler* gh, uint32_t spell) {
+    if (!spellKnownToClient(gh, spell)) return false;
+    for (const auto& r : gh->spellNameCacheRef().at(spell).reagents)
+        if (r.itemId != 0 && static_cast<int32_t>(r.count) > 0) return true;
+    return false;
+}
+
+int32_t spellReagentCasts(game::GameHandler* gh, uint32_t spell) {
+    int32_t casts = 0x7fffffff;
+    if (spellKnownToClient(gh, spell) && gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+        for (const auto& r : gh->spellNameCacheRef().at(spell).reagents) {
+            const auto need = static_cast<int32_t>(r.count);
+            if (r.itemId == 0 || r.itemId == 0xFFFFFFFEu || need <= 0) continue;
+            casts = std::min(casts, static_cast<int32_t>(gh->getInventory().countCarried(r.itemId)) / need);
+        }
+    }
+    return casts == 0x7fffffff ? 0 : casts;
 }
 
 UsableState playerSpellUsableState(game::GameHandler* gh, uint32_t spellId) {

@@ -1341,6 +1341,21 @@ static uint32_t actionSpell(lua_State* L, game::GameHandler* gh, int slot) {
     return spell;
 }
 
+uint32_t actionSlotSpell(lua_State* L, game::GameHandler* gh, int slot) {
+    return actionSpell(L, gh, slot);
+}
+
+uint32_t actionSlotItem(lua_State* L, game::GameHandler* gh, int slot) {
+    if (!gh || slot < 0 || slot >= 0x90 || petActionRef(gh, slot)) return 0;
+    const auto& bar = gh->getActionBar();
+    if (slot >= static_cast<int>(bar.size())) return 0;
+    const auto& action = bar[static_cast<size_t>(slot)];
+    if (action.type == game::ActionBarSlot::ITEM) return action.id;
+    if (action.type == game::ActionBarSlot::MACRO && gh->macroExists(action.id))
+        if (const MacroShown* m = macroShown(L, gh, action.id)) return m->result.item;
+    return 0;
+}
+
 /// 0x005a95e0: the slot's spell and whether SpellRange gives it a range.
 static bool actionHasRange(lua_State* L, int slot) {
     auto* gh = getGameHandler(L);
@@ -1457,9 +1472,14 @@ static int lua_GetActionCount(lua_State* L) {
         lua_pushnumber(L, 0);
         return 1;
     }
-    const auto& action = bar[slot];
-    if (action.type == game::ActionBarSlot::ITEM && action.id != 0) {
-        lua_pushnumber(L, gh->getInventory().countItem(action.id));
+    // DAT_00c1e118, written by 0x005aa5c0 / 0x005aa920: the item's count
+    // for a slot using an item (its own or its macro's), else how many casts
+    // the carried reagents pay for (0x007ffa30) - a spell with a shard as its
+    // reagent shows the shards left.
+    if (const uint32_t item = actionSlotItem(L, gh, slot)) {
+        lua_pushnumber(L, gh->getInventory().countItem(item));
+    } else if (const uint32_t spell = actionSlotSpell(L, gh, slot)) {
+        lua_pushnumber(L, spellReagentCasts(gh, spell));
     } else {
         lua_pushnumber(L, 0);
     }

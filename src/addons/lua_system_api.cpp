@@ -9716,34 +9716,48 @@ void registerSystemLuaAPI(lua_State* L) {
                 // IsStackableAction(action) )`, and GetActionCount underneath
                 // it has been counting across every bag the whole time.
                 {"IsAttackAction", [](lua_State* L) -> int {
-            // 0x005a9ba0
+            // 0x005a9ba0 -> 0x005a96d0: the spell the slot casts (0x005a8c30 -
+            // its own, an item's, a macro's) has Effect[0] 78, the attack -
+            // so a macro showing Auto Attack flashes as the spell does.
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: IsAttackAction(slot)");
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
-            if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
-            const auto& bar = gh->getActionBar();
-            // 6603 is Auto Attack, the one action that flashes the button red
-            // for as long as the swing keeps going.
-            constexpr uint32_t kAutoAttack = game::SPELL_ID_ATTACK;
-            luaPushOneOrNil(L, slot < static_cast<int>(bar.size()) &&
-                               bar[slot].type == game::ActionBarSlot::SPELL &&
-                               bar[slot].id == kAutoAttack);
+            bool attack = false;
+            if (gh && slot >= 0 && slot < 0x90) {
+                if (const uint32_t spell = actionSlotSpell(L, gh, slot)) {
+                    gh->getSpellName(spell);
+                    const auto it = gh->spellNameCacheRef().find(spell);
+                    attack = it != gh->spellNameCacheRef().end() ? it->second.effectIds[0] == 78
+                                                                 : spell == game::SPELL_ID_ATTACK;
+                }
+            }
+            luaPushOneOrNil(L, attack);
             return 1;
         }},
                 {"IsConsumableAction", [](lua_State* L) -> int {
-            // 0x005a9c80
+            // 0x005a9c80 -> 0x005a9360: the slot's item (its own or its
+            // macro's) is ammunition or thrown (InventoryType 24, 25) or its
+            // first use spell is spent with it (charges under 0); else the
+            // spell the slot casts takes reagents - a spell paid in shards
+            // counts too, and GetActionCount then shows how many.
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: IsConsumableAction(slot)");
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
-            if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
-            const auto& bar = gh->getActionBar();
             bool consumable = false;
-            if (slot < static_cast<int>(bar.size()) &&
-                bar[slot].type == game::ActionBarSlot::ITEM) {
-                const auto* info = gh->getItemInfo(bar[slot].id);
-                consumable = info && info->valid && info->itemClass == 0;  // Consumable
+            if (gh && slot >= 0 && slot < 0x90) {
+                const uint32_t item = actionSlotItem(L, gh, slot);
+                const auto* info = item ? gh->getItemInfo(item) : nullptr;
+                if (info && info->valid) {
+                    if (info->inventoryType == 24 || info->inventoryType == 25) consumable = true;
+                    for (const auto& sp : info->spells) {
+                        if (sp.spellId == 0 || sp.spellTrigger != 0) continue;
+                        if (sp.charges < 0) consumable = true;
+                        break;
+                    }
+                }
+                if (!consumable) consumable = spellHasReagents(gh, actionSlotSpell(L, gh, slot));
             }
             luaPushOneOrNil(L, consumable);
             return 1;
@@ -9757,29 +9771,30 @@ void registerSystemLuaAPI(lua_State* L) {
             if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
             const auto& bar = gh->getActionBar();
             bool worn = false;
-            if (slot < static_cast<int>(bar.size()) &&
-                bar[slot].type == game::ActionBarSlot::ITEM) {
+            // 0x005a88b0: the slot's item (0x005a8070 - its own or the one its
+            // macro shows) is worn.
+            const uint32_t item = slot < static_cast<int>(bar.size()) ? actionSlotItem(L, gh, slot) : 0u;
+            if (item != 0) {
                 const auto& inv = gh->getInventory();
                 for (int e = 0; e < game::Inventory::NUM_EQUIP_SLOTS && !worn; ++e) {
                     const auto& s = inv.getEquipSlot(static_cast<game::EquipSlot>(e));
-                    worn = !s.empty() && s.item.itemId == bar[slot].id;
+                    worn = !s.empty() && s.item.itemId == item;
                 }
             }
             luaPushOneOrNil(L, worn);
             return 1;
         }},
                 {"IsStackableAction", [](lua_State* L) -> int {
-            // 0x005a8720
+            // 0x005a8720 -> 0x005a8470: the slot's item (0x005a8070, its own
+            // or its macro's) stacks (record +0x5c over 1).
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: IsStackableAction(slot)");
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
-            if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
-            const auto& bar = gh->getActionBar();
             bool stackable = false;
-            if (slot < static_cast<int>(bar.size()) &&
-                bar[slot].type == game::ActionBarSlot::ITEM) {
-                const auto* info = gh->getItemInfo(bar[slot].id);
+            if (gh && slot >= 0 && slot < 0x90) {
+                const uint32_t item = actionSlotItem(L, gh, slot);
+                const auto* info = item ? gh->getItemInfo(item) : nullptr;
                 stackable = info && info->valid && info->maxStack > 1;
             }
             luaPushOneOrNil(L, stackable);

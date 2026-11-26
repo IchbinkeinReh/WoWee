@@ -90,6 +90,17 @@ namespace wowee::addons {
 /// Rewrites the bars' 144 IsUsableAction answers and says whether any
 /// changed since the last time (0x005aa470; lua_action_api.cpp).
 bool rescanActionUsability(lua_State* L);
+/// What an action slot casts (0x005a8c30): its spell, a pet slot's, an
+/// item's use spell, or what a macro shows; 0 for nothing (lua_action_api.cpp).
+uint32_t actionSlotSpell(lua_State* L, game::GameHandler* gh, int slot);
+/// The item an action slot uses (0x005a8070): its own, or the one its macro
+/// shows; 0 for none (lua_action_api.cpp).
+uint32_t actionSlotItem(lua_State* L, game::GameHandler* gh, int slot);
+/// A spell's reagents (Reagent[8] with a count over 0) - IsConsumableSpell's
+/// test - and how many casts the carried ones pay for (0x007ffa30, 0 with
+/// none) (lua_item_query_api.cpp).
+bool spellHasReagents(game::GameHandler* gh, uint32_t spell);
+int32_t spellReagentCasts(game::GameHandler* gh, uint32_t spell);
 
 /// A PowerDisplay.dbc row: ActualType, GlobalStringBaseTag and its colour,
 /// three bytes after the strings (0x0065c290's record +4, +8, +0xc..+0xe).
