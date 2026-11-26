@@ -178,11 +178,19 @@ Steps pressKey(ToolContext& context, SDL_Scancode key, SDL_Keymod mods, double s
     // At least a frame it is seen down in.
     out.push_back(Script::frames(1));
     out.push_back(Script::seconds(seconds));
-    out.push_back([&context, key, mods](Script&) {
+    out.push_back([&context, key](Script&) {
         context.input.keyUp(key);
-        if (mods != SDL_KMOD_NONE) context.input.modifiers(mods, false);
         return Script::Step::Next;
     });
+    // The modifier a frame after the key, as fingers let go: the key's release
+    // is still seen with its chord held (tester's wish, session 14).
+    if (mods != SDL_KMOD_NONE) {
+        out.push_back(Script::frames(1));
+        out.push_back([&context, mods](Script&) {
+            context.input.modifiers(mods, false);
+            return Script::Step::Next;
+        });
+    }
     out.push_back(Script::frames(2));
     return out;
 }

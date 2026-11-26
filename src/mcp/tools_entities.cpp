@@ -9,6 +9,7 @@
 #include "core/application.hpp"
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
+#include "game/transport_manager.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/schema.hpp"
 #include "mcp/tool_context.hpp"
@@ -74,7 +75,14 @@ json entities(ToolContext& context, const json& args) {
     size_t total = 0;
     for (const auto& [guid, entity] : gh->getEntityManager().getEntities()) {
         if (!entity || guid == gh->getPlayerGuid()) continue;
-        if (!kindWanted(entity->getType(), kind)) continue;
+        if (kind == "transports") {
+            // The game objects the transport manager moves: lifts, ships,
+            // zeppelins, the tram (tester's wish, session 14).
+            auto* manager = gh->getTransportManager();
+            if (entity->getType() != game::ObjectType::GAMEOBJECT || !manager || !manager->getTransport(guid)) continue;
+        } else if (!kindWanted(entity->getType(), kind)) {
+            continue;
+        }
         const float d = glm::length(entityAt(context, *entity) - me);
         if (d > radius) continue;
         if (!name.empty() && lower(entityName(context, *entity)).find(name) == std::string::npos) continue;
@@ -115,7 +123,7 @@ void addEntityTools(Toolbox& box) {
         "What the client has round the player, nearest first: guid, name, distance in yards, bearing in degrees "
         "clockwise from the facing (0 ahead, 90 right), level, health, reaction, npc roles, quest mark (! or ?), "
         "lootable, usable.",
-        object({optional("kind", choice("which kind", {"all", "units", "players", "objects", "corpses", "dynamic"})),
+        object({optional("kind", choice("which kind", {"all", "units", "players", "objects", "corpses", "dynamic", "transports"})),
                 optional("radius", number("yards, 60 by default", 1, 500)),
                 optional("limit", integer("how many, 20 by default", 1, 500)),
                 optional("name", text("only names with this in them", 64)),

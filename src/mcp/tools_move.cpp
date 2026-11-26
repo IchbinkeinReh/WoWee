@@ -207,8 +207,15 @@ void turn(ToolContext& context, const json& args, Script& script) {
     }));
 }
 
-void walk(ToolContext& context, const json& args, Script& script) {
+void walk(ToolContext& context, const json& argsIn, Script& script) {
     const Aftermath after(context);
+    // x, y (and z) as separate numbers mean the same as "to" (tester's wish).
+    json args = argsIn;
+    if (!args.contains("to") && args.contains("x") && args.contains("y")) {
+        json to = json::array({args["x"], args["y"]});
+        if (args.contains("z")) to.push_back(args["z"]);
+        args["to"] = std::move(to);
+    }
     std::string bad;
     const auto goal = placeMeant(context, args, bad);
     script.then([bad](Script& s) { return bad.empty() ? Script::Step::Next : s.fail(bad); });
@@ -311,7 +318,9 @@ void addMoveTools(Toolbox& box) {
         "walk_to",
         "Walk (or swim) to a place or an entity with the movement keys, round what is in the way. Says how far it got "
         "and where it was stuck.",
-        object({optional("to", place), optional("guid", guid("0x...")),
+        object({optional("to", place), optional("x", number("instead of to: .gps x", -100000, 100000)),
+                optional("y", number(".gps y", -100000, 100000)), optional("z", number(".gps z", -100000, 100000)),
+                optional("guid", guid("0x...")),
                 optional("name", text("the nearest with this in its name", 64)),
                 optional("unit", text("target, pet, ...", 16)),
                 optional("stop_within", number("yards; 1 for a place, 3 for an entity by default", 0.3, 50)),

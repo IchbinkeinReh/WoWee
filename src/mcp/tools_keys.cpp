@@ -265,8 +265,17 @@ void useAction(ToolContext& context, const json& args, Script& script) {
     if (!args.contains("slot") && !args.contains("button") && !args.contains("spell")) {
         return failNow(script, "a slot, a button or a spell is wanted");
     }
-    const json found = actionButton(context, args);
+    json found = actionButton(context, args);
     const bool byKey = args.value("method", std::string("key")) == "key";
+    // A button on a bar that is not shown cannot be pressed: its bar's key is
+    // the shown bar's button's (BonusActionButton1 and ActionButton1 share
+    // ACTIONBUTTON1), and a click finds nothing. By name it is typed as a
+    // spell instead; asked by slot or button it is refused (T380).
+    if (found.is_object() && !found.value("shown", true)) {
+        if (!args.contains("spell"))
+            return failNow(script, found.value("button", std::string("that button")) + " is not on a shown bar");
+        found = json();
+    }
     if (!found.is_object()) {
         if (!args.contains("spell")) return failNow(script, "nothing is on that button");
         // Not on a bar: by name, as it is typed.
