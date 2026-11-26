@@ -2171,8 +2171,27 @@ void pickupMerchantItem(lua_State* L, int index) {
     // stuck to the pointer. ShowContainerSellCursor beside this is the other
     // half of the same path and is a no-op for a reason - it only changes the
     // cursor art - which is what made this one look deliberate too.
-    if (index < 1) {
-        soldHeldItem(L);
+    //
+    // 0x005853a0 asks what the hand holds before it looks at the index: an
+    // item held is sold to the open merchant (0x006d2d40) and the cursor put
+    // down, whatever index came - which is what a drop on the item list does,
+    // MerchantItemButton_OnReceiveDrag -> MerchantItemButton_OnClick ->
+    // PickupMerchantItem(n). Taking item n up instead returned the held item
+    // to its bag unsold (T353).
+    if (index < 1 || s_cursorType == CursorType::ITEM) {
+        if (s_cursorType == CursorType::ITEM) {
+            soldHeldItem(L);
+            return;
+        }
+        // No index and no item: the cursor put down (0x00519280(1, 1)).
+        clearCursorItem(L);
+        return;
+    }
+    // Not one of the merchant's items, or the one already held: put down.
+    auto* merchant = getGameHandler(L);
+    const int listed = merchant ? static_cast<int>(merchant->getVendorItems().items.size()) : 0;
+    if (index > listed || (s_cursorType == CursorType::MERCHANT && s_cursorId == static_cast<uint32_t>(index))) {
+        clearCursorItem(L);
         return;
     }
     setCursorType(L, CursorType::MERCHANT);

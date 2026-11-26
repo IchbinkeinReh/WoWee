@@ -2333,3 +2333,30 @@ TEST_CASE("a bind-on-equip piece is held while its question is open", "[replay][
     CHECK(ui.is("not CursorHasItem()"));
 }
 
+// T353: PickupMerchantItem (0x005853a0) asks what the hand holds before the
+// index: an item held is sold to the open merchant and the cursor put down,
+// whatever index came - a drop on the item list arrives as
+// PickupMerchantItem(n) through MerchantItemButton_OnReceiveDrag. Item n was
+// taken up instead and the held one went back to its bag unsold.
+TEST_CASE("an item dropped on a merchant's item is sold", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    constexpr uint64_t kVendor = 0xF130000000000101ull;
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_LIST_INVENTORY));
+    list.writeUInt64(kVendor);
+    list.writeUInt8(1);
+    for (uint32_t v : {1u, 2901u, 100u, 0xFFFFFFFFu, 10u, 0u, 1u, 0u}) list.writeUInt32(v);
+    s.receive(list);
+    REQUIRE(s.handler().getVendorItems().items.size() == 1);
+    carry(s, 15213, 13, 0, 0x4000000000000777ull, 100);
+    ui.run("PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    ui.run("PickupMerchantItem(1)");
+    CHECK(s.sent().of(Opcode::CMSG_SELL_ITEM).size() == 1);
+    CHECK(ui.is("GetCursorInfo() == nil"));
+    // With nothing held the same click takes the merchant's item up.
+    ui.run("PickupMerchantItem(1)");
+    CHECK(ui.is("GetCursorInfo() == 'merchant'"));
+}
+
