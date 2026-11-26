@@ -128,6 +128,10 @@ GameHandler::GameHandler(GameServices& services)
 
 GameHandler::~GameHandler() {
     disconnect();
+    // The global table pointer must not outlive the table it points at: a
+    // later wireOpcode() read it after this handler was gone (ASan,
+    // heap-use-after-free in the replay tests).
+    if (getActiveOpcodeTable() == &opcodeTable_) setActiveOpcodeTable(nullptr);
     for (const auto& row : packetReads_.odd()) {
         const auto logical = opcodeTable_.fromWire(row.opcode);
         LOG_INFO("Packets: ", logical ? OpcodeTable::logicalToName(*logical) : "?", " (0x", std::hex, row.opcode,

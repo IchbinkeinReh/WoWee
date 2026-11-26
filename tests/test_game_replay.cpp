@@ -328,6 +328,7 @@ TEST_CASE("a level gained reaches PLAYER_LEVEL_UP with the stats after the power
 // (0x006df050); a cap at 1024 dropped the rest of a collector's spells and
 // read the rest of the list as cooldowns.
 TEST_CASE("every spell of a long first spell list is known", "[replay]") {
+    Session s;   // the opcode table wireOpcode reads lives in its handler
     wowee::network::Packet p(wowee::game::wireOpcode(wowee::game::Opcode::SMSG_INITIAL_SPELLS));
     constexpr uint16_t kSpells = 1300;
     p.writeUInt8(0);
@@ -350,4 +351,12 @@ TEST_CASE("every spell of a long first spell list is known", "[replay]") {
     CHECK(data.cooldowns[0].spellId == 10000u + kSpells - 1);
     CHECK(data.cooldowns[0].cooldownMs == 4000u);
     CHECK(data.cooldowns[0].categoryCooldownMs == 0x80000000u);
+}
+
+// ASan (Security workflow): the active opcode table pointer outlived the
+// GameHandler that owned it, and the next wireOpcode() read freed memory.
+TEST_CASE("a gone handler leaves no opcode table behind", "[replay]") {
+    { Session s; REQUIRE(wowee::game::getActiveOpcodeTable() != nullptr); }
+    CHECK(wowee::game::getActiveOpcodeTable() == nullptr);
+    CHECK(wowee::game::wireOpcode(wowee::game::Opcode::SMSG_INITIAL_SPELLS) == 0xFFFF);
 }

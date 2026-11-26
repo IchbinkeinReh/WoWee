@@ -2017,17 +2017,13 @@ static int lua_UnitXP(lua_State* L) {
 
 static int lua_UnitXPMax(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitXPMax(\"unit\")");   // 0x0060eae0
-    const char* uid = luaL_optstring(L, 1, "player");
+    // The active player's PLAYER_NEXT_LEVEL_XP as it is (0 at the cap), 0 for
+    // any other unit (0x0060a600) - T389.
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushnumber(L, 1); return 1; }
-    std::string u(uid);
+    std::string u(lua_tostring(L, 1));
     toLowerInPlace(u);
-    if (u == "player") {
-        uint32_t nlxp = gh->getPlayerNextLevelXp();
-        lua_pushnumber(L, nlxp > 0 ? nlxp : 1);
-    } else {
-        lua_pushnumber(L, 1);
-    }
+    const bool me = gh && gh->getPlayerGuid() != 0 && resolveUnitGuid(gh, u) == gh->getPlayerGuid();
+    lua_pushnumber(L, me ? gh->getPlayerNextLevelXp() : 0);
     return 1;
 }
 

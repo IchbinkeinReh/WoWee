@@ -3484,3 +3484,13 @@ TEST_CASE("an interface built after the roster hears the group (T388)", "[replay
            "if n == 'Achiles' then achilesLevel = l end end");
     CHECK(ui.is("achilesLevel == 80"));
 }
+
+// T389: UnitXPMax (0x0060eae0 -> 0x0060a600) is the player's field as it is,
+// 0 at the cap, and 0 for any other unit.
+TEST_CASE("UnitXPMax is 0 at the cap and for others (0x0060eae0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("UnitXPMax('player') == 0"));
+    CHECK(ui.is("UnitXPMax('target') == 0"));
+}
