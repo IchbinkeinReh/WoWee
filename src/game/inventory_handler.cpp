@@ -4128,6 +4128,9 @@ void InventoryHandler::closeMailbox() {
     // A paper's item that never answered is asked for again at the next mailbox.
     stationeryItemsQueried_.clear();
     clearMailAttachments();
+    sendMailMoney_ = 0;
+    sendMailCOD_ = 0;
+    mailSendPending_ = false;
     inboxCheckPending_ = false;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_CLOSED", {});
     // A look for mail held over while it was open goes out now, with nothing
@@ -4244,12 +4247,9 @@ void InventoryHandler::refuseSend(const std::string& reason, const char* logLine
     //
     // The reason goes to the log and nowhere else: SendMail (0x00570910)
     // refuses these without a word, and they were English in chat.
+    // No event either: 0x00570910 raises nothing for a letter it does not
+    // send (MAIL_FAILED is the realm's answer only, 0x005717b0).
     LOG_WARNING("sendMail: ", logLine, " (", reason, ")");
-    if (owner_.addonEventCallbackRef()) {
-        // Zero is "internal error" in the server's own table, which is the
-        // honest answer for a refusal that never reached it.
-        owner_.addonEventCallbackRef()("MAIL_FAILED", {"0"});
-    }
 }
 
 void InventoryHandler::sendMail(const std::string& recipient, const std::string& subject,
@@ -4266,17 +4266,37 @@ void InventoryHandler::sendMail(const std::string& recipient, const std::string&
         refuseSend("You are not at a mailbox.", "mailboxGuid_ is 0 (mailbox closed?)");
         return;
     }
-    if (recipient.empty()) {
-        refuseSend("Enter a recipient.", "no recipient");
+    // 0x00570910: nothing while a mail request is out or a letter is
+    // waiting for its answer, and nothing without a recipient, a subject and
+    // a paper - all without a word.
+    if (mailBusy() || mailSendPending_) {
+        LOG_WARNING("sendMail: a mail request is still unanswered");
         return;
     }
-    // Collect attached item GUIDs
-    std::vector<uint64_t> itemGuids;
-    for (const auto& att : mailAttachments_) {
-        if (att.occupied()) {
-            itemGuids.push_back(att.itemGuid);
-        }
+    if (recipient.empty() || subject.empty() || selectedStationery_ == 0) {
+        LOG_WARNING("sendMail: no recipient, subject or paper");
+        return;
     }
+    // Collect attached item GUIDs. An attachment the player no longer owns
+    // is said as the inventory's 'item not found', its row dropped and the
+    // compose frame told (0x00753bb0(0x17), 0x0056d8a0, 0x196).
+    std::vector<uint64_t> itemGuids;
+    for (auto& att : mailAttachments_) {
+        if (!att.occupied()) continue;
+        if (owner_.onlineItemsRef().find(att.itemGuid) == owner_.onlineItemsRef().end()) {
+            if (const GameErrorText err = inventoryChangeError(23); err.key) {
+                owner_.addUIError(uiText(err.key, err.enUS));
+                owner_.playGameErrorSound(err.key);
+            }
+            att = MailAttachSlot{};
+            notifyMailComposeChanged();
+            return;
+        }
+        itemGuids.push_back(att.itemGuid);
+    }
+    // Money and COD together, or COD without an item, are not sent.
+    if (money != 0 && cod != 0) return;
+    if (money == 0 && cod != 0 && itemGuids.empty()) return;
     const int sendable = maxSendableMailAttachments();
     if (static_cast<int>(itemGuids.size()) > sendable) {
         // Should be unreachable now that attaching is capped, but dropping
@@ -4293,7 +4313,10 @@ void InventoryHandler::sendMail(const std::string& recipient, const std::string&
              " attachments=", itemGuids.size(), " stationery=", selectedStationery_,
              " mailboxGuid=", mailboxGuid_);
     owner_.getSocket()->send(packet);
-    clearMailAttachments();
+    // The letter stays as it is until the realm answers (0x005717b0 clears it
+    // on success only, 0x0056d4d0); a refused letter keeps its money and items.
+    mailSendPending_ = true;
+    mailTakePending_ = true;
 }
 
 int InventoryHandler::maxSendableMailAttachments() {
@@ -4443,6 +4466,20 @@ void InventoryHandler::clearMailAttachments() {
     notifyMailComposeChanged();
 }
 
+void InventoryHandler::clearSendMail(bool announce) {
+    for (auto& a : mailAttachments_) a = MailAttachSlot{};
+    sendMailMoney_ = 0;
+    sendMailCOD_ = 0;
+    mailSendPending_ = false;
+    selectedStationery_ = 0;
+    selectedPackage_ = 0;
+    if (announce && owner_.addonEventCallbackRef()) {
+        owner_.addonEventCallbackRef()("SEND_MAIL_MONEY_CHANGED", {});
+        owner_.addonEventCallbackRef()("SEND_MAIL_COD_CHANGED", {});
+        owner_.addonEventCallbackRef()("MAIL_SEND_SUCCESS", {});
+    }
+}
+
 void InventoryHandler::notifyMailComposeChanged() {
     // The send frame recomputes its slots, its postage and its Send button from
     // this and from nothing else - there is no poll behind it.
@@ -4462,12 +4499,14 @@ void InventoryHandler::mailTakeMoney(uint32_t mailId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailboxGuid_ == 0) return;
     auto packet = MailTakeMoneyPacket::build(mailboxGuid_, mailId);
     owner_.getSocket()->send(packet);
+    mailTakePending_ = true;   // 0x0056edf0: DAT_00beb1e4
 }
 
 void InventoryHandler::mailTakeItem(uint32_t mailId, uint32_t itemGuidLow) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailboxGuid_ == 0) return;
     auto packet = MailTakeItemPacket::build(mailboxGuid_, mailId, itemGuidLow);
     owner_.getSocket()->send(packet);
+    mailTakePending_ = true;   // 0x005711c0: DAT_00beb1e4
 }
 
 void InventoryHandler::autoLootMail(uint32_t mailId) {
@@ -4503,25 +4542,37 @@ void InventoryHandler::autoLootNextAttachment(uint32_t mailId) {
 
 void InventoryHandler::mailReturnToSender(uint32_t mailId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailboxGuid_ == 0) return;
+    // 0x0056f000: not while a request is out, not twice, only a player's
+    // letter (type 0) holding money or an item, and never one already sent
+    // back or COD-paid (flags 0x20a). Nothing is raised: OpenMail_ReturnMail
+    // hides the letter itself.
+    if (mailBusy() || mailDeleting_.count(mailId)) return;
+    const auto it = std::find_if(mailInbox_.begin(), mailInbox_.end(),
+        [mailId](const MailMessage& m) { return m.messageId == mailId; });
+    if (it == mailInbox_.end()) return;
+    if (it->messageType != 0 || (it->attachments.empty() && it->money == 0) || (it->flags & 0x20au) != 0) return;
     // With the letter's sender on WotLK, as ReturnInboxItem writes it.
-    uint64_t sender = 0;
-    for (const auto& mail : mailInbox_) {
-        if (mail.messageId == mailId) { sender = mail.senderGuid; break; }
-    }
-    auto packet = MailReturnToSenderPacket::build(mailboxGuid_, mailId, sender, !isPreWotlk());
+    auto packet = MailReturnToSenderPacket::build(mailboxGuid_, mailId, it->senderGuid, !isPreWotlk());
     owner_.getSocket()->send(packet);
-    // Same as deleting: the letter being read is this one, and the view over it
-    // hides when told which mail closed.
-    closeInboxItem(mailId);
+    mailDeleting_.insert(mailId);
+    mailTakePending_ = true;
 }
 
 void InventoryHandler::mailDelete(uint32_t mailId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailboxGuid_ == 0) return;
+    // 0x0056f140: not while a request is out, not twice, and only a letter
+    // sent back or COD-paid (flags 0x20a), not a player's, or one holding
+    // neither money nor an item. Nothing is raised: OpenMail_Delete hides
+    // the letter itself.
+    if (mailBusy() || mailDeleting_.count(mailId)) return;
+    const auto it = std::find_if(mailInbox_.begin(), mailInbox_.end(),
+        [mailId](const MailMessage& m) { return m.messageId == mailId; });
+    if (it == mailInbox_.end()) return;
+    if ((it->flags & 0x20au) == 0 && it->messageType == 0 && (!it->attachments.empty() || it->money != 0)) return;
     auto packet = MailDeletePacket::build(mailboxGuid_, mailId, 0);
     owner_.getSocket()->send(packet);
-    // The letter being read is this one, so the view over it has to go: the
-    // interface hides it when told which mail closed, and was never told.
-    closeInboxItem(mailId);
+    mailDeleting_.insert(mailId);
+    mailTakePending_ = true;
 }
 
 void InventoryHandler::closeInboxItem(uint32_t mailId) {
@@ -4668,7 +4719,7 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
     constexpr uint32_t MAIL_ITEM_TAKEN = 2;
     constexpr uint32_t MAIL_RETURNED_TO_SENDER = 3;
     constexpr uint32_t MAIL_DELETED = 4;
-    [[maybe_unused]] constexpr uint32_t MAIL_MADE_PERMANENT = 5;
+    constexpr uint32_t MAIL_MADE_PERMANENT = 5;
 
     auto mailIt = std::find_if(mailInbox_.begin(), mailInbox_.end(),
         [mailId](const MailMessage& mail) { return mail.messageId == mailId; });
@@ -4694,9 +4745,12 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
     }
 
     if (action == MAIL_SEND) {
+        // Answered: the next letter may go (0x005717b0, DAT_00beb1c4).
+        mailSendPending_ = false;
         if (error == 0) {
             owner_.addUIInfoMessage(uiText("ERR_MAIL_SENT", "Mail sent."));
-            clearMailAttachments();
+            // 0x0056d4d0(1): emptied only now, and said with its three events.
+            clearSendMail(true);
             // The frame stays where it is - WoW resets its fields and leaves it
             // open. This used to close this client's own compose window here,
             // and that flag now means "the interface's send tab is showing",
@@ -4706,15 +4760,12 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
             // The send frame waits on these before it will clear its fields and
             // re-enable the Send button. Without them a mail went out and the
             // frame sat there as though it had not.
-            if (owner_.addonEventCallbackRef()) {
-                owner_.addonEventCallbackRef()("MAIL_SEND_SUCCESS", {});
-                owner_.addonEventCallbackRef()("MAIL_SUCCESS", {});
-            }
-        } else {
-            // Carries the error so the frame can say which refusal it was.
-            if (owner_.addonEventCallbackRef()) {
-                owner_.addonEventCallbackRef()("MAIL_FAILED", {std::to_string(error)});
-            }
+        }
+    } else if (action == MAIL_MADE_PERMANENT && error == 0) {
+        // 0x0056dc20: flag 4 and MAIL_INBOX_UPDATE.
+        if (mailIt != mailInbox_.end()) {
+            mailIt->flags |= 4u;
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
         }
     } else if (action == MAIL_ITEM_TAKEN) {
         if (error == 0) {
@@ -4738,6 +4789,9 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
             if (mailIt != mailInbox_.end()) {
                 const int erasedIndex = static_cast<int>(std::distance(mailInbox_.begin(), mailIt));
                 mailInbox_.erase(mailIt);
+                mailIt = mailInbox_.end();
+                // 0x0056dc70: the mailbox's total one fewer.
+                if (mailTotalCount_ > 0) --mailTotalCount_;
                 if (selectedMailIndex_ == erasedIndex) selectedMailIndex_ = -1;
                 else if (selectedMailIndex_ > erasedIndex) --selectedMailIndex_;
             }
@@ -4770,6 +4824,10 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
     } else {
         mailTakePending_ = false;
     }
+    // Every answer ends with MAIL_SUCCESS or MAIL_FAILED, for every action and
+    // without arguments (0x005717b0: event 0x293 or 0x1c4).
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()(error == 0 ? "MAIL_SUCCESS" : "MAIL_FAILED", {});
     refreshMailList();
 }
 
@@ -5290,6 +5348,8 @@ void InventoryHandler::setAuctionSelectedRow(int list, int row) {
 }
 
 void InventoryHandler::closeAuctionHouse() {
+    // 0x0059f150: nothing without an auctioneer - no AUCTION_HOUSE_CLOSED.
+    if (auctioneerGuid_ == 0 && !auctionOpen_) return;
     auctionOpen_ = false;
     // 0x0059dfb0: the three selections go with the window.
     auctionSelectedIds_.fill(kNoAuctionSelected);

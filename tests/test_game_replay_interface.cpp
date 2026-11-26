@@ -3081,6 +3081,67 @@ TEST_CASE("a shared quest is accepted from the one who shared it (0x0058cd20)", 
     CHECK(sent.back().readUInt64() == kSharer);
 }
 
+// FIXER R (mail review): SetSendMailMoney takes only what the player has
+// (0x0056fda0), SetSendMailCOD only with an item attached (0x0056d610); a
+// letter is emptied only by the realm's success (0x005717b0 -> 0x0056d4d0),
+// and every answer ends with MAIL_SUCCESS or MAIL_FAILED without arguments.
+TEST_CASE("a refused letter keeps its money (0x005717b0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FIELD_COINAGE, 500}});
+    Interface ui(s);
+    ui.run("seen = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'MAIL_SUCCESS', 'MAIL_FAILED', 'MAIL_SEND_SUCCESS', 'SEND_MAIL_MONEY_CHANGED'}) do f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(self, event, a) seen[#seen + 1] = event .. (a or '') end)");
+    wowee::network::Packet box(wowee::game::wireOpcode(Opcode::SMSG_SHOW_MAILBOX));
+    box.writeUInt64(0xF1100000000000AAull);
+    s.receive(box);
+    CHECK(ui.is("SetSendMailMoney(600) == nil and GetSendMailMoney() == 0"));
+    CHECK(ui.is("SetSendMailMoney(100) == 1 and GetSendMailMoney() == 100"));
+    CHECK(ui.is("seen[1] == 'SEND_MAIL_MONEY_CHANGED'"));
+    ui.run("SetSendMailCOD(50)");
+    CHECK(ui.is("GetSendMailCOD() == 0"));
+    CHECK(ui.is("not pcall(SendMail)"));
+    const auto result = [&](uint32_t action, uint32_t error) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_SEND_MAIL_RESULT));
+        p.writeUInt32(0);
+        p.writeUInt32(action);
+        p.writeUInt32(error);
+        s.receive(p);
+    };
+    result(0, 3);
+    CHECK(ui.is("seen[2] == 'MAIL_FAILED' and GetSendMailMoney() == 100"));
+    result(0, 0);
+    CHECK(ui.is("GetSendMailMoney() == 0 and seen[#seen] == 'MAIL_SUCCESS'"));
+    CHECK(ui.is("seen[#seen - 1] == 'MAIL_SEND_SUCCESS'"));
+    // A take answered: MAIL_SUCCESS too.
+    result(1, 0);
+    CHECK(ui.is("seen[#seen] == 'MAIL_SUCCESS'"));
+}
+
+// T383: CloseQuest from Lua (0x0058d350 -> 0x0058ca70(0, quest, 1)) fires
+// QUEST_FINISHED once while a page is open; again with none open, nothing.
+TEST_CASE("CloseQuest from a macro closes the quest frame (0x0058ca70)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("finished = 0 local f = CreateFrame('Frame') f:RegisterEvent('QUEST_FINISHED') "
+           "f:SetScript('OnEvent', function() finished = finished + 1 end)");
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_OFFER_REWARD));
+    p.writeUInt64(0xF130000BEC00150Eull);
+    p.writeUInt32(3639);
+    p.writeString("Zeigt Eure Arbeit");
+    p.writeString("Text");
+    p.writeUInt8(0);
+    for (int i = 0; i < 60; ++i) p.writeUInt32(0);
+    s.receive(p);
+    REQUIRE(s.handler().isQuestOfferRewardOpen());
+    ui.run("CloseQuest()");
+    CHECK_FALSE(s.handler().isQuestOfferRewardOpen());
+    CHECK(ui.is("finished == 1"));
+    ui.run("CloseQuest()");
+    CHECK(ui.is("finished == 1"));
+}
+
 // T382: GetAuctionItemInfo's level is the required level but 1 where there is
 // none (0x0059d5e0); canUse asks CanUseItem (0x006dc3f0) - an item not known
 // yet is not refused.
@@ -3105,6 +3166,15 @@ TEST_CASE("an auction row without a required level says level 1 (0x0059d5e0)", "
     p.writeUInt32(300);
     s.receive(p);
     REQUIRE(ui.is("GetNumAuctionItems('list') == 1"));
+    // Not in the cache yet: the empty row (FIXER R, 0x0059d5e0's tail).
+    CHECK(ui.is("select('#', GetAuctionItemInfo('list', 1)) == 13 and GetAuctionItemInfo('list', 1) == nil"));
+    CHECK(ui.is("select(4, GetAuctionItemInfo('list', 1)) == -1 and select(6, GetAuctionItemInfo('list', 1)) == 0"));
+    auto& dust = s.handler().itemInfoCacheRef()[10940];
+    dust.entry = 10940;
+    dust.valid = true;
+    dust.name = "Seltsamer Staub";
     CHECK(ui.is("select(6, GetAuctionItemInfo('list', 1)) == 1"));
     CHECK(ui.is("select(5, GetAuctionItemInfo('list', 1)) == 1"));
+    // An unknown seller is nil, not "" (0x0067d770 without a name).
+    CHECK(ui.is("select(12, GetAuctionItemInfo('list', 1)) == nil"));
 }

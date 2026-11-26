@@ -4121,6 +4121,9 @@ struct AuctionEntry {
     uint32_t itemEntry = 0;
     uint32_t stackCount = 1;
     uint32_t enchantId = 0;
+    /// The three socket enchants (enchant slots 2..4), which the link carries
+    /// (0x0059c2d0 passes the row's +0x14 to 0x0061e290).
+    std::array<uint32_t, 3> gems{};
     uint32_t randomPropertyId = 0;
     uint32_t suffixFactor = 0;
     uint64_t ownerGuid = 0;

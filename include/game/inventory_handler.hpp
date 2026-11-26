@@ -620,6 +620,18 @@ public:
     bool attachItemFromBag(int bagIndex, int slotIndex, int attachIndex = -1);
     bool detachMailAttachment(int attachIndex);
     void clearMailAttachments();
+    /// 0x0056d4d0: the letter being written emptied - its attachments let go,
+    /// money, COD, the send waiting, the paper and the package cleared - and,
+    /// with `announce`, SEND_MAIL_MONEY_CHANGED, SEND_MAIL_COD_CHANGED and
+    /// MAIL_SEND_SUCCESS.
+    void clearSendMail(bool announce);
+    /// The money and COD put on the letter being written (0x00beb1bc, 0x00beb1c0).
+    uint32_t& sendMailMoneyRef() { return sendMailMoney_; }
+    uint32_t& sendMailCODRef() { return sendMailCOD_; }
+    /// A mail request out and unanswered (0x00beb1e4): TakeInboxItem,
+    /// TakeInboxMoney, DeleteInboxItem, ReturnInboxItem, SendMail and
+    /// CheckInbox send nothing meanwhile.
+    [[nodiscard]] bool mailBusy() const { return mailTakePending_ || inboxCheckPending_; }
 
     /// Tell the compose frame its attachments changed.
     ///
@@ -1230,6 +1242,10 @@ private:
     /// (MailInfo.cpp's DAT_00beb1cc).
     uint32_t selectedStationery_ = 0;
     uint32_t selectedPackage_ = 0;
+    uint32_t sendMailMoney_ = 0;
+    uint32_t sendMailCOD_ = 0;
+    /// A letter sent and not answered yet (0x00beb1c4).
+    bool mailSendPending_ = false;
     /// Kept as a member only so the bindings can read it through a reference;
     /// rebuilt on every read from the rows below.
     std::vector<StationeryOption> stationeryOptions_;

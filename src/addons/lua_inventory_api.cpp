@@ -2018,7 +2018,8 @@ static int lua_GetInboxItem(lua_State* L) {
     lua_pushstring(L, gh->itemNameWithProperty(info->name, static_cast<int32_t>(att->randomPropertyId)).c_str());
     lua_pushstring(L, gh->getItemIconPath(info->displayInfoId).c_str());
     lua_pushnumber(L, att->stackCount);
-    lua_pushnumber(L, info->quality);
+    // 0x00570f10: -1 for an item that is no equipment (cache +0x28, InventoryType 0).
+    lua_pushnumber(L, info->inventoryType == 0 ? -1.0 : static_cast<double>(info->quality));
     luaPushOneOrNil(L, gh->judgeItemRequirements(*info).usable() ? 1 : 0);   // 0x006dc3f0
     return 5;
 }
@@ -2058,6 +2059,8 @@ static int lua_TakeInboxItem(lua_State* L) {
         LOG_WARNING("TakeInboxItem: there is no letter ", lua_tostring(L, 1), " with an attachment at that place");
         return 0;
     }
+    // Nothing while a mail request is unanswered (0x005711c0: DAT_00beb1e4).
+    if (auto* inv = gh->getInventoryHandler(); inv && inv->mailBusy()) return 0;
     if (gh->getMoneyCopper() < mail->cod) {
         gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
         gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
@@ -2071,7 +2074,9 @@ static int lua_TakeInboxMoney(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TakeInboxMoney(index)");   // 0x0056edf0
     auto* gh = getGameHandler(L);
     const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-    if (gh && mail) gh->mailTakeMoney(mail->messageId);
+    // 0x0056edf0: only a letter with money, and not while a request is out.
+    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+    if (gh && mail && mail->money != 0 && inv && !inv->mailBusy()) gh->mailTakeMoney(mail->messageId);
     return 0;
 }
 
@@ -2133,10 +2138,11 @@ static int lua_GetSendMailItem(lua_State* L) {
         lua_pushnil(s);            // name
         lua_pushnil(s);            // texture
         lua_pushnumber(s, 0);      // stackCount, and it is compared unguarded
-        lua_pushnil(s);            // quality
+        lua_pushnumber(s, 0);      // quality: 0 (0x00570750's empty answer)
         return 4;
     };
-    const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
+    // No argument reads the first row (0x00570750: uVar5 = 0).
+    const int slot = lua_isnumber(L, 1) ? static_cast<int>(std::llround(lua_tonumber(L, 1))) : 1;
     if (!gh || slot < 1) { return emptySlot(L); }
     const auto& attachments = gh->getMailAttachments();
     if (slot > static_cast<int>(attachments.size())) { return emptySlot(L); }
@@ -2145,13 +2151,17 @@ static int lua_GetSendMailItem(lua_State* L) {
 
     const auto* info = gh->getItemInfo(att.item.itemId);
     // An item the cache does not hold is asked for, and its answer raises
-    // MAIL_SEND_INFO_UPDATE (0x0056d490).
-    if (!info || !info->valid) askItemForEvent(gh, att.item.itemId, "MAIL_SEND_INFO_UPDATE");
-    lua_pushstring(L, info ? info->name.c_str() : "");
+    // MAIL_SEND_INFO_UPDATE (0x0056d490); until then the empty answer.
+    if (!info || !info->valid) {
+        askItemForEvent(gh, att.item.itemId, "MAIL_SEND_INFO_UPDATE");
+        return emptySlot(L);
+    }
+    lua_pushstring(L, info->name.c_str());
     lua_pushstring(L, gh->getItemIconPath(
-        info && info->displayInfoId ? info->displayInfoId : att.item.displayInfoId).c_str());
+        info->displayInfoId ? info->displayInfoId : att.item.displayInfoId).c_str());
     lua_pushnumber(L, att.item.stackCount);
-    lua_pushnumber(L, info ? info->quality : 1);
+    // -1 for an item that is no equipment (cache +0x28, InventoryType 0).
+    lua_pushnumber(L, info->inventoryType == 0 ? -1.0 : static_cast<double>(info->quality));
     return 4;
 }
 
@@ -2282,8 +2292,23 @@ static int lua_CheckInbox(lua_State* L) {
 // cleared after a send and when the mailbox closes so that a figure typed and
 // then abandoned cannot attach itself to the next letter.
 namespace {
-uint32_t s_sendMailMoney = 0;
-uint32_t s_sendMailCOD   = 0;
+/// The letter's money and COD, kept with the rest of the letter in the
+/// inventory handler (0x00beb1bc, 0x00beb1c0): cleared only by a send the
+/// realm took, ClearSendMail or the mailbox closing (0x0056d4d0).
+uint32_t& sendMailMoney(lua_State* L) {
+    static uint32_t none = 0;
+    auto* gh = getGameHandler(L);
+    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+    if (!inv) { none = 0; return none; }
+    return inv->sendMailMoneyRef();
+}
+uint32_t& sendMailCOD(lua_State* L) {
+    static uint32_t none = 0;
+    auto* gh = getGameHandler(L);
+    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+    if (!inv) { none = 0; return none; }
+    return inv->sendMailCODRef();
+}
 
 /// Copper from Lua, refusing negatives rather than wrapping them into a huge
 /// unsigned amount.
@@ -2298,53 +2323,47 @@ uint32_t copperArg(lua_State* L, int index) {
 // emptied - its attachments let go, its money and charge cleared - and the
 // compose frame told all three ways.
 static int lua_ClearSendMail(lua_State* L) {
-    s_sendMailMoney = 0;
-    s_sendMailCOD = 0;
-    if (auto* gh = getGameHandler(L)) {
-        gh->clearMailAttachments();
-        gh->fireAddonEvent("SEND_MAIL_MONEY_CHANGED", {});
-        gh->fireAddonEvent("SEND_MAIL_COD_CHANGED", {});
-        gh->fireAddonEvent("MAIL_SEND_SUCCESS", {});
-    }
+    auto* gh = getGameHandler(L);
+    if (auto* inv = gh ? gh->getInventoryHandler() : nullptr) inv->clearSendMail(true);
     return 0;
 }
 
 static int lua_CloseMail(lua_State* L) {
-    s_sendMailMoney = 0;
-    s_sendMailCOD = 0;
     if (auto* gh = getGameHandler(L)) gh->closeMailbox();
     return 0;
 }
 
-/// SetSendMailMoney(copper) - and it answers whether it took the amount.
-///
-/// The answer is the whole of it. staticpopup.lua's SEND_MONEY dialog is
-///
-///     if ( SetSendMailMoney(MoneyInputFrame_GetCopper(SendMailMoney)) ) then
-///         SendMailFrame_SendMail();
-///     end
-///
-/// and attaching gold to a letter is the one path that goes through that
-/// dialog. Answering nothing made the test fail every time: the confirmation
-/// appeared, Accept closed it, and SendMailFrame_SendMail was never reached -
-/// so the letter was not sent and the gold and every attachment stayed where
-/// they were, with nothing said about why.
-///
-/// True once the amount is recorded, which is all this setter does. Whether the
-/// player can actually afford it is the server's to refuse, and it does; a
-/// client-side test that answered false here would put back the exact fault
-/// being fixed - a dialog whose Accept silently does nothing - for anyone whose
-/// money had not finished syncing.
+/// SetSendMailMoney(copper) (0x005706c0 -> 0x0056fda0): taken, with
+/// SEND_MAIL_MONEY_CHANGED, and 1 answered when the player has that much;
+/// otherwise ERR_NOT_ENOUGH_MONEY and nil (staticpopup.lua's SEND_MONEY then
+/// sends nothing).
 static int lua_SetSendMailMoney(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSendMailMoney(amount)");   // 0x005706c0
-    s_sendMailMoney = copperArg(L, 1);
-    luaPushOneOrNil(L, 1);
+    auto* gh = getGameHandler(L);
+    const uint32_t amount = static_cast<uint32_t>(static_cast<int64_t>(std::llround(lua_tonumber(L, 1))));
+    if (gh && amount <= gh->getMoneyCopper()) {
+        sendMailMoney(L) = amount;
+        gh->fireAddonEvent("SEND_MAIL_MONEY_CHANGED", {});
+        luaPushOneOrNil(L, 1);
+        return 1;
+    }
+    if (gh) {
+        gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+    }
+    lua_pushnil(L);
     return 1;
 }
 
+/// SetSendMailCOD(copper) (0x0056d610): kept only while something is
+/// attached (0x0056d3c0), then SEND_MAIL_COD_CHANGED.
 static int lua_SetSendMailCOD(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSendMailCOD(amount)");   // 0x0056d610
-    s_sendMailCOD = copperArg(L, 1);
+    auto* gh = getGameHandler(L);
+    if (gh && gh->getMailAttachmentCount() > 0) {
+        sendMailCOD(L) = static_cast<uint32_t>(static_cast<int64_t>(std::llround(lua_tonumber(L, 1))));
+        gh->fireAddonEvent("SEND_MAIL_COD_CHANGED", {});
+    }
     return 0;
 }
 
@@ -2355,10 +2374,10 @@ static int lua_SetSendMailCOD(lua_State* L) {
 // to, leaving dragged gold out of the letter without a word.
 static int lua_AddSendMailMoney(lua_State* L) {
     const uint32_t named = copperArg(L, 1);
-    if (named > 0) { s_sendMailMoney += named; return 0; }
+    if (named > 0) { sendMailMoney(L) += named; return 0; }
     const uint64_t held = cursorMoney();
     if (held == 0 || cursorMoneyFromGuildBank()) return 0;
-    s_sendMailMoney += static_cast<uint32_t>(held);
+    sendMailMoney(L) += static_cast<uint32_t>(held);
     setCursorMoney(L, 0);
     return 0;
 }
@@ -2366,15 +2385,15 @@ static int lua_AddSendMailMoney(lua_State* L) {
 /// Take the money back off the letter and onto the cursor.
 static int lua_PickupSendMailMoney(lua_State* L) {
     uint64_t take = static_cast<uint64_t>(luaL_optnumber(L, 1, 0));
-    if (s_sendMailMoney == 0) return 0;
-    if (take == 0 || take > s_sendMailMoney) take = s_sendMailMoney;
-    s_sendMailMoney -= static_cast<uint32_t>(take);
+    if (sendMailMoney(L) == 0) return 0;
+    if (take == 0 || take > sendMailMoney(L)) take = sendMailMoney(L);
+    sendMailMoney(L) -= static_cast<uint32_t>(take);
     setCursorMoney(L, take);
     return 0;
 }
 
 static int lua_AddSendMailCOD(lua_State* L) {
-    s_sendMailCOD += copperArg(L, 1);
+    sendMailCOD(L) += copperArg(L, 1);
     return 0;
 }
 
@@ -2475,32 +2494,32 @@ static int lua_GetSendMailPrice(lua_State* L) {
         }
     }
     const uint64_t postage = std::max<uint64_t>(30, uint64_t{attached} * 30) + paper;
-    lua_pushnumber(L, static_cast<double>(postage + s_sendMailMoney));
+    lua_pushnumber(L, static_cast<double>(postage + sendMailMoney(L)));
     return 1;
 }
 
 static int lua_GetSendMailMoney(lua_State* L) {
-    lua_pushnumber(L, static_cast<double>(s_sendMailMoney));
+    lua_pushnumber(L, static_cast<double>(sendMailMoney(L)));
     return 1;
 }
 
 static int lua_GetSendMailCOD(lua_State* L) {
-    lua_pushnumber(L, static_cast<double>(s_sendMailCOD));
+    lua_pushnumber(L, static_cast<double>(sendMailCOD(L)));
     return 1;
 }
 
 // SendMail(recipient, subject, body) - the money and the cash-on-delivery were
 // set separately by the interface before this was called.
+// 0x00570910: the target must be a string (else the usage error); a missing
+// subject or body is no subject or an empty body. The letter's money, COD
+// and items stay until the realm answers (0x005717b0).
 static int lua_SendMail(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SendMail(target, subject, body)");
     auto* gh = getGameHandler(L);
-    const char* to = luaL_optstring(L, 1, "");
-    const char* subject = luaL_optstring(L, 2, "");
-    const char* body = luaL_optstring(L, 3, "");
-    if (gh && to && *to) gh->sendMail(to, subject, body, s_sendMailMoney, s_sendMailCOD);
-    // Whether or not it went, the next letter starts empty. Leaving the amount
-    // set would attach it again to a letter nobody meant to put money in.
-    s_sendMailMoney = 0;
-    s_sendMailCOD = 0;
+    const char* to = lua_tostring(L, 1);
+    const char* subject = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+    const char* body = lua_isstring(L, 3) ? lua_tostring(L, 3) : "";
+    if (gh) gh->sendMail(to, subject, body, sendMailMoney(L), sendMailCOD(L));
     return 0;
 }
 
@@ -5038,6 +5057,9 @@ const game::ItemSlot* auctionSellHeldItem(game::GameHandler* gh) {
 static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
                                                  uint64_t* guidOut) {
     if (guidOut) *guidOut = 0;
+    // The sell box empties with the house (0x0059f150 -> 0x0059a560), however
+    // the house was closed.
+    if (gh && !gh->isAuctionHouseOpen() && auctionSellSlot().held) auctionSellSlot() = AuctionSellSlot{};
     const AuctionSellSlot& sel = auctionSellSlot();
     if (!gh || !sel.held) return nullptr;
     const auto& inv = gh->getInventory();
@@ -7668,13 +7690,26 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CancelAuction", [](lua_State* L) -> int {
+            // 0x0059ddf0 (its usage line names SetSelectedAuctionItem, as
+            // 12340's does): an owner row that is no pending sale (+0x9c);
+            // with a bid on it the player must have 5% of the bid
+            // (round(bid * 0.05)), else ERR_NOT_ENOUGH_MONEY.
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedAuctionItem(index)");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const int index = static_cast<int>(std::llround(lua_tonumber(L, 1)));
             if (!gh) return 0;
             if (!taint::allowed(L, 8)) return 0;   // 0x0059ddf0, as PlaceAuctionBid
             const auto& res = gh->getAuctionOwnerResults();
             if (index < 1 || index > static_cast<int>(res.auctions.size())) return 0;
-            gh->auctionCancelItem(res.auctions[index - 1].auctionId);
+            const auto& row = res.auctions[static_cast<size_t>(index - 1)];
+            if (row.pendingSale) return 0;
+            if (row.currentBid != 0 &&
+                gh->getMoneyCopper() < static_cast<uint64_t>(std::llround(static_cast<float>(row.currentBid) * 0.05f))) {
+                gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+                gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+                return 0;
+            }
+            gh->auctionCancelItem(row.auctionId);
             return 0;
         }},
                 {"CanCancelAuction", [](lua_State* L) -> int {
@@ -7889,7 +7924,16 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 9;
         }},
                 {"CloseAuctionHouse", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->closeAuctionHouse();
+            // 0x0059f750 -> 0x0059f150: AUCTION_HOUSE_CLOSED, then the sell box
+            // let go with NEW_AUCTION_UPDATE (0x0059a560) when it held an item.
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const bool held = auctionSellSlot().held && gh->isAuctionHouseOpen();
+            gh->closeAuctionHouse();
+            if (held) {
+                auctionSellSlot() = AuctionSellSlot{};
+                fireAuctionSellUpdate(gh);
+            }
             return 0;
         }},
                 // SetAuctionsTabShowing(showing) - a *boolean*, not a tab index.
@@ -8176,16 +8220,31 @@ void registerInventoryLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const char* listType = luaL_checkstring(L, 1);
             int index = static_cast<int>(luaL_checknumber(L, 2));
-            if (!gh || index < 1) { return luaReturnNil(L); }
+            // No such row, an unknown list or an item not in the cache: the
+            // thirteen values of an empty row (0x0059d5e0's tail).
+            const auto emptyRow = [L]() {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnumber(L, 1);
+                lua_pushnumber(L, -1);
+                lua_pushnil(L);
+                for (int i = 0; i < 5; ++i) lua_pushnumber(L, 0);
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnumber(L, 0);
+                return 13;
+            };
+            if (!gh || index < 1) return emptyRow();
             std::string t(listType);
             const game::AuctionListResult* r = nullptr;
             if (t == "list") r = &gh->getAuctionBrowseResults();
             else if (t == "owner") r = &gh->getAuctionOwnerResults();
             else if (t == "bidder") r = &gh->getAuctionBidderResults();
-            if (!r || index > static_cast<int>(r->auctions.size())) { return luaReturnNil(L); }
+            if (!r || index > static_cast<int>(r->auctions.size())) return emptyRow();
             const auto& a = r->auctions[index - 1];
             const auto* info = gh->getItemInfo(a.itemEntry);
-            std::string name = info ? info->name : "Item #" + std::to_string(a.itemEntry);
+            if (!info || !info->valid) return emptyRow();
+            std::string name = info->name;
             // With the suffix it rolled. The row was named from the item id
             // alone, and a suffixed item's id is its plain base - so a whole
             // page of "Ring" gave no way to tell one from another, and the
@@ -8211,9 +8270,17 @@ void registerInventoryLuaAPI(lua_State* L) {
             // question as whether anybody does. It answered the second, so
             // every row with a bid on it - most of them - was labelled "Your
             // Bid", printed over the price it sits in front of.
-            const bool isHighBidder =
-                a.bidderGuid != 0 && a.bidderGuid == gh->getPlayerGuid();
-            luaPushOneOrNil(L, isHighBidder ? 1 : 0); // highBidder
+            // On the owner list, for this player's own auction, the
+            // bidder's name instead (nil with no bidder or no name yet).
+            if (t == "owner" && a.ownerGuid == gh->getPlayerGuid()) {
+                const std::string bidder = a.bidderGuid ? gh->lookupName(a.bidderGuid) : std::string();
+                if (bidder.empty()) lua_pushnil(L);
+                else lua_pushstring(L, bidder.c_str());
+            } else {
+                const bool isHighBidder =
+                    a.bidderGuid != 0 && a.bidderGuid == gh->getPlayerGuid();
+                luaPushOneOrNil(L, isHighBidder ? 1 : 0); // highBidder
+            }
             // The seller column, which was two empty strings. The names are
             // asked for when the list arrives (handleAuctionListResult queries
             // every owner guid it does not know), so by the time a row is
@@ -8221,7 +8288,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             // is what an unknown seller looks like anyway.
             const std::string ownerName =
                 a.ownerGuid ? gh->lookupName(a.ownerGuid) : std::string();
-            lua_pushstring(L, ownerName.c_str());   // owner
+            if (ownerName.empty()) lua_pushnil(L);  // owner: nil until known (0x0067d770)
+            else lua_pushstring(L, ownerName.c_str());
             // 1 for a sale still to pay out (+0x9c, 0x0059d5e0).
             lua_pushnumber(L, a.pendingSale ? 1 : 0);  // saleStatus
             return 13;
@@ -8249,19 +8317,27 @@ void registerInventoryLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const char* listType = luaL_checkstring(L, 1);
             int index = static_cast<int>(luaL_checknumber(L, 2));
-            if (!gh || index < 1) { return luaReturnNil(L); }
+            // No values at all where there is no such row or the item is not
+            // cached; the link carries the row's enchant, its three sockets,
+            // its random property and seed (0x0059c2d0 -> 0x0061e290).
+            if (!gh || index < 1) return 0;
             std::string t(listType);
             const game::AuctionListResult* r = nullptr;
             if (t == "list") r = &gh->getAuctionBrowseResults();
             else if (t == "owner") r = &gh->getAuctionOwnerResults();
             else if (t == "bidder") r = &gh->getAuctionBidderResults();
-            if (!r || index > static_cast<int>(r->auctions.size())) { return luaReturnNil(L); }
-            uint32_t itemId = r->auctions[index - 1].itemEntry;
-            const auto* info = gh->getItemInfo(itemId);
-            if (!info) { return luaReturnNil(L); }
-        
-    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name,
-                                 {}, gh->getPlayerLevel());
+            if (!r || index > static_cast<int>(r->auctions.size())) return 0;
+            const auto& row = r->auctions[static_cast<size_t>(index - 1)];
+            const auto* info = gh->getItemInfo(row.itemEntry);
+            if (!info || !info->valid) return 0;
+            game::ItemLinkInstance inst;
+            inst.enchantId = row.enchantId;
+            inst.gems = row.gems;
+            inst.randomPropertyId = static_cast<int32_t>(row.randomPropertyId);
+            inst.seed = row.suffixFactor;
+            const std::string link = game::itemChatLink(row.itemEntry, static_cast<uint32_t>(info->quality),
+                                                        gh->itemNameWithProperty(info->name, inst.randomPropertyId),
+                                                        inst, gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());
             return 1;
         }},

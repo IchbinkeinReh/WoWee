@@ -4706,16 +4706,16 @@ static int lua_GetQuestReward(lua_State* L) {
 static int lua_CloseQuest(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    // Without announcing. This is QuestFrame telling the client it has closed
-    // - it runs from QuestFrame_OnHide - and answering with QUEST_FINISHED,
-    // which is the event that hides QuestFrame, closes it a second time from
-    // inside its own closing.
     // 0x0058d350 is 0x0058ca70(0, quest, 1): a player's quest page closed
     // tells the one who shared it (MSG_QUEST_PUSH_RESULT, 3).
     if (auto* quests = gh->getQuestHandler()) quests->tellQuestSharerDeclined();
-    if (gh->isQuestOfferRewardOpen())       gh->closeQuestOfferReward(false);
-    else if (gh->isQuestRequestItemsOpen()) gh->closeQuestRequestItems(false);
-    else                                    gh->declineQuest(false);
+    // T383: 0x0058ca70(0, quest, 1) clears the giver and fires QUEST_FINISHED
+    // (event 0x121) whenever a page was open - which hides QuestFrame; its
+    // OnHide calls CloseQuest again, finds nothing open and does nothing.
+    // Called by an addon or macro, the frame stayed up over a closed page.
+    if (gh->isQuestOfferRewardOpen())       gh->closeQuestOfferReward(true);
+    else if (gh->isQuestRequestItemsOpen()) gh->closeQuestRequestItems(true);
+    else if (gh->isQuestDetailsOpen())      gh->declineQuest(true);
     return 0;
 }
 

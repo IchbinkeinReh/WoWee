@@ -813,7 +813,8 @@ bool AuctionListResultParser::parse(network::Packet& packet, AuctionListResult& 
             packet.readUInt32(); // enchant1 duration
             packet.readUInt32(); // enchant1 charges
             for (int s = 1; s < numEnchantSlots; ++s) {
-                packet.readUInt32(); // enchant N id
+                const uint32_t id = packet.readUInt32(); // enchant N id
+                if (s >= 2 && s <= 4) e.gems[static_cast<size_t>(s - 2)] = id;
                 packet.readUInt32(); // enchant N duration
                 packet.readUInt32(); // enchant N charges
             }
