@@ -4,6 +4,7 @@
 #include "rendering/water_tessellation.hpp"
 #include "core/platform.hpp"
 #include "rendering/rt_min_brightness.hpp"
+#include "rendering/rt_light_reach.hpp"
 #include "rendering/rt_normal_blend.hpp"
 #include "game/group_defines.hpp"
 #include "game/difficulty_change.hpp"
@@ -1955,6 +1956,7 @@ void GameScreen::saveSettings() {
     out << "rt_unit_self_shadow=" << (settingsPanel_.pendingRtUnitSelfShadow ? 1 : 0) << "\n";
     out << "rt_unit_shadow_reach=" << settingsPanel_.pendingRtUnitShadowReach << "\n";
     out << "rt_min_brightness=" << settingsPanel_.pendingRtMinBrightness << "\n";
+    out << "rt_light_reach=" << settingsPanel_.pendingRtLightReach << "\n";
     out << "rt_water=" << (settingsPanel_.pendingRtWater ? 1 : 0) << "\n";
     out << "rt_swim_waves=" << (settingsPanel_.pendingRtSwimWaves ? 1 : 0) << "\n";
     out << "rt_room_sun=" << (settingsPanel_.pendingRtRoomSun ? 1 : 0) << "\n";
@@ -2335,6 +2337,9 @@ void GameScreen::loadSettings() {
             else if (key == "rt_min_brightness")
                 settingsPanel_.pendingRtMinBrightness =
                     std::clamp(std::stoi(val), 0, rendering::kRtMinBrightnessMaxPercent);
+            else if (key == "rt_light_reach")
+                settingsPanel_.pendingRtLightReach =
+                    std::clamp(std::stoi(val), rendering::kRtLightReachMinPercent, rendering::kRtLightReachMaxPercent);
             else if (key == "rt_eye_brighten") settingsPanel_.pendingRtEyeBrighten = std::clamp(std::stoi(val), 0, 100);
             else if (key == "rt_eye_seconds") settingsPanel_.pendingRtEyeSeconds = std::clamp(std::stof(val), 0.5f, 20.0f);
             else if (key == "rt_eye_sensitivity") settingsPanel_.pendingRtEyeSensitivity = std::clamp(std::stoi(val), 0, 100);

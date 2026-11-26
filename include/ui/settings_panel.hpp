@@ -90,6 +90,7 @@ public:
     void restoreDefaultResolution();
     int pendingRtUnitShadowReach = 5;  ///< a unit's lamp shadow's reach, yards (rtUnitShadowReach)
     int pendingRtMinBrightness = 0;   ///< the traced darkening's floor, % (rt_min_brightness.hpp)
+    int pendingRtLightReach = 100;    ///< how far the traced lights are shown, % of the view (rt_light_reach.hpp)
     bool pendingRtSwimWaves = true;   ///< the swimmer's waves (swim_wave.hpp)
     bool pendingRtRoomSun = true;     ///< the sun through a door (rt_apply.glsli)
     bool pendingRtWater = true;       ///< "Ray traced water" (water_rt.glsli)

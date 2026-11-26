@@ -988,7 +988,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "interactivewater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "watertessdensity", "shorewaves", "ridewaves", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtlightreach", "rtwater", "rtswimwaves", "interactivewater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "watertessdensity", "shorewaves", "ridewaves", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1230,6 +1230,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "rtunitselfshadow", .asBool = &SettingsPanel::pendingRtUnitSelfShadow},
     {.key = "rtunitshadowreach", .asInt = &SettingsPanel::pendingRtUnitShadowReach},
     {.key = "rtminbrightness", .asInt = &SettingsPanel::pendingRtMinBrightness},
+    {.key = "rtlightreach", .asInt = &SettingsPanel::pendingRtLightReach},
     {.key = "rtwater", .asBool = &SettingsPanel::pendingRtWater},
     {.key = "rtswimwaves", .asBool = &SettingsPanel::pendingRtSwimWaves},
     {.key = "interactivewater", .asBool = &SettingsPanel::pendingInteractiveWater},
@@ -1763,6 +1764,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtUnitShadowReach(static_cast<float>(pendingRtUnitShadowReach));
     } else if (key == "rtminbrightness") {
         if (renderer) renderer->setRtMinBrightness(pendingRtMinBrightness);
+    } else if (key == "rtlightreach") {
+        if (renderer) renderer->setRtLightReach(pendingRtLightReach);
     } else if (key == "rtwater") {
         if (renderer) renderer->setRtWater(pendingRtWater);
     } else if (key == "interactivewater") {

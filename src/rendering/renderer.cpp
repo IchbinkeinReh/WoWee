@@ -6,6 +6,7 @@
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
 #include "rendering/rt_min_brightness.hpp"
+#include "rendering/rt_light_reach.hpp"
 #include "rendering/rt_normal_blend.hpp"
 #include "rendering/rt_light_kinds.hpp"
 #include "rendering/depth_convention.hpp"
@@ -7390,7 +7391,9 @@ void Renderer::recordRtLighting() {
         // The frame's point lights: what carries one near the camera, cut to
         // what reaches into the view and to the most the pass traces.
         WOWEE_PROFILE_SCOPE("rt: point lights", Cpu);
-        constexpr float kLightRange = 120.0f;
+        // The Ray Tracing page's light distance: a share of the view
+        // distance, at most the 120 yards they were always gathered to.
+        const float kLightRange = rtLightReach(rtLightReachPercent_, farClip_);
         // Main thread only; kept to keep its capacity.
         static std::vector<rt_lights::PointLight> lightScratch;
         lightScratch.clear();
@@ -7403,6 +7406,9 @@ void Renderer::recordRtLighting() {
         rt_lights::keepOneLightPerPlace(lightScratch);
         // The Debug Graphics settings' strength and reach per kind of light.
         for (rt_lights::PointLight& l : lightScratch) {
+            // Below the cap a light fades out by where it stands, to none at
+            // the distance (selectLights then drops it as too faint).
+            l.color *= rtLightReachShare(glm::length(l.position - in.cameraPos), kLightRange);
             const size_t k = std::min(static_cast<size_t>(l.source), rt_lights::kSourceCount - 1);
             l.color *= std::max(lightingTune_.sourceIntensity[k], 0.0f);
             const float reach = std::max(lightingTune_.sourceReach[k], 0.0f);

@@ -49,6 +49,17 @@ constexpr SettingDesc kSchema[] = {
      "How far into the distance the world is drawn, in yards. The single\n"
      "largest cost in the picture: terrain, buildings and creatures are all\n"
      "drawn to this range.", "", 1277},
+    // How far the traced point lights are shown (rt_light_reach.hpp, U18):
+    // a share of the view distance, at most the 120 yards they always had.
+    // Under the view distance it is a share of: the Ray Tracing page and
+    // its Debug Lights page have no room left.
+    {"rtlightreach", "RT light distance (%)", SettingKind::Int, 1, 100, 1,
+     "Graphics", "View",
+     "How far away lamps, fires, torches and glows still light the\n"
+     "scene, as a share of the view distance. Lights farther off fade\n"
+     "out over the last stretch and are dropped. Never beyond 120\n"
+     "yards; 100 is as before. Less costs less tracing time.\n"
+     "Not in the original client.", "", 100, "raytracedlighting"},
     // It used to be left out, deferred to the Effects panel of the game's own
     // Video options - as were ground clutter, its radius, brightness,
     // particle and weather detail, environment detail and texture filtering.

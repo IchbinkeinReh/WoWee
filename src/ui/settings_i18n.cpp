@@ -299,6 +299,13 @@ constexpr SettingGerman kGerman[] = {
      "Orte bleiben unverändert; nur die fast schwarzen Ecken werden angehoben. 0 lässt sie ganz "
      "dunkel werden.",
      nullptr, nullptr, nullptr},
+    {"rtlightreach",
+     "RT-Lichtweite (%)",
+     "Wie weit entfernt Lampen, Feuer, Fackeln und Leuchten die Szene noch erhellen, als Anteil "
+     "der Sichtweite. Fernere Lichter blenden auf dem letzten Stück aus und entfallen. Nie weiter "
+     "als 120 Meter; 100 ist wie bisher. Weniger kostet weniger Zeit beim Raytracing. Nicht im "
+     "ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"rteyebrighten",
      "Aufhellung (%)",
      "Wie viel heller das Bild werden darf, wenn die Sicht dunkel ist, während sich das Auge "

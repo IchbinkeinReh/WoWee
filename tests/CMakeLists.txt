@@ -3594,6 +3594,13 @@ wowee_add_test(test_wmo_liquid_load
     SOURCES test_wmo_liquid_load.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_rt_light_reach ──
+# How far the traced point lights are shown: a share of the view distance,
+# at most the 120 yards they always had, fading out before the cut.
+wowee_add_test(test_rt_light_reach
+    SOURCES test_rt_light_reach.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_stream_times ────────────────────────────────────────
 # The length shown of a stream is not asked of the decoder the audio thread
 # reads. The audio library without a device.

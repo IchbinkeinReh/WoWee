@@ -986,6 +986,8 @@ public:
     void setRtParticleLights(int n);
     /// The Ray Tracing page's "Minimum brightness (%)" (rt_min_brightness.hpp).
     void setRtMinBrightness(int percent) { rtMinBrightnessPercent_ = percent; }
+    /// The Ray Tracing page's "RT light distance (%)" (rt_light_reach.hpp).
+    void setRtLightReach(int percent) { rtLightReachPercent_ = percent; }
     /// The Ray Tracing page's two "Normal blend" angles (rt_normal_blend.hpp).
     void setRtNormalBlend(int keepDegrees, int faceDegrees) {
         rtNormalKeepDeg_ = keepDegrees;
@@ -1538,6 +1540,7 @@ public:
     void setRideWaves(bool on) { rideWaves_ = on; }
 private:
     int rtMinBrightnessPercent_ = 0;
+    int rtLightReachPercent_ = 100;
     int rtNormalKeepDeg_ = kNormalBlendKeepDefault;
     int rtNormalFaceDeg_ = kNormalBlendFaceDefault;
     int eyeBrighteningPercent_ = 30;
