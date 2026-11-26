@@ -554,3 +554,69 @@ return out
     CHECK(result == "1 11 2 StatusBar Nameplate-Border FontString FontString - A - - - - O O - - - 128x32 TOP 100 40/60 10 9 "
                     "true false 0 20 true false true icon133 -4 2 false false false");
 }
+
+// The pet bar after a vehicle (kPetBarAfterVehicleLua), a deliberate departure
+// by the user's wish: left with the entry's "hide" slide by 12340's order of
+// events, the bar is put up once the vehicle's interface is gone and the main
+// bar has stopped - after a change of seats too, and for a pet that comes late.
+TEST_CASE("the pet bar comes back after a vehicle", "[addonlua]") {
+    const char* world = R"LUA(
+        PETACTIONBAR_XPOS, PETACTIONBAR_YPOS, PETACTIONBAR_SLIDETIME = 36, 97, 0.09
+        vehicleUI, hasBar = true, false
+        function UnitHasVehicleUI(u) return vehicleUI end
+        function PetHasActionBar() return hasBar end
+        function PetActionBar_UpdatePositionValues() end
+        function UIParent_ManageFramePositions() end
+        MainMenuBar = { busy = true }
+        local function frame()
+            local f = { scripts = {}, events = {}, shown = false }
+            function f:RegisterEvent(e) self.events[e] = true end
+            function f:SetScript(s, fn) self.scripts[s] = fn end
+            function f:Show() self.shown = true end
+            function f:Hide() self.shown = false end
+            function f:IsShown() return self.shown end
+            function f:SetPoint(...) self.point = { ... } end
+            function f:GetParent() return nil end
+            return f
+        end
+        function CreateFrame() watcher = frame() return watcher end
+        PetActionBarFrame = frame()
+        PetActionBarFrame.showgrid = 0
+        PetActionBarFrame.mode = "hide"
+        PetActionBarFrame.completed = 1
+        -- petactionbarframe.lua 195-212, 12340's.
+        function ShowPetActionBar(doNotSlide)
+            local b = PetActionBarFrame
+            if PetHasActionBar() and b.showgrid == 0 and b.mode ~= "show" and (not b.locked or doNotSlide) then
+                if MainMenuBar.busy or UnitHasVehicleUI("player") or doNotSlide then
+                    b:SetPoint("TOPLEFT", nil, "BOTTOMLEFT", PETACTIONBAR_XPOS, PETACTIONBAR_YPOS)
+                    b.state = "top"
+                    b:Show()
+                else
+                    b:Show()
+                    b.mode = "show"
+                end
+            end
+        end
+        function tick() watcher.scripts.OnUpdate(watcher, 0.02) end
+        function say(e, u) watcher.scripts.OnEvent(watcher, e, u) end
+    )LUA";
+    const std::string got = runChunks({
+        {world, "World"},
+        {wowee::addons::kPetBarAfterVehicleLua, "PetBarAfterVehicle"},
+        {R"LUA(
+            local b, out = PetActionBarFrame, ""
+            local function seen() out = out .. tostring(b.shown) .. "/" .. tostring(b.mode) .. " " end
+            -- A change of seats: out of one, into the next.
+            say("UNIT_EXITING_VEHICLE", "player") tick() seen()
+            say("UNIT_EXITED_VEHICLE", "target") tick() seen()
+            -- Out of the last: the main bar still slides, the pet not back yet.
+            say("UNIT_EXITED_VEHICLE", "player") vehicleUI = false tick() seen()
+            MainMenuBar.busy = false tick() seen()
+            hasBar = true tick() seen()
+            -- Hidden again by the game later: left alone, nothing pending.
+            b.shown = false tick() seen()
+            return out .. tostring(b.state) .. " " .. tostring(b.completed)
+        )LUA", "check"}});
+    CHECK(got == "false/hide false/hide false/hide false/hide true/show false/show top 1");
+}

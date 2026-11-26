@@ -892,6 +892,12 @@ void AddonManager::giveCoinAmountsClearance() {
     if (!luaEngine_.executeString(kWorldMapFitLua)) {
         LOG_WARNING("World map fit did not apply: ", luaEngine_.lastError());
     }
+
+    // The pet bar back after a vehicle: a deliberate departure from 12340, by
+    // the user's wish (kPetBarAfterVehicleLua).
+    if (!luaEngine_.executeString(kPetBarAfterVehicleLua)) {
+        LOG_WARNING("Pet bar after a vehicle did not apply: ", luaEngine_.lastError());
+    }
 }
 
 bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {

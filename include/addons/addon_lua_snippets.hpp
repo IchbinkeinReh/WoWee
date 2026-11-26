@@ -1260,6 +1260,44 @@ end
 end
 )LUA";
 
+// A DELIBERATE DEPARTURE from 12340, by the user's wish (2026-11-26; listed
+// with T339's in fixes.md): the pet bar is shown again as soon as a vehicle is
+// left. In 12340 the bar stays away after a vehicle on this realm (seen in the
+// original by the user; /reload brings it back): UNIT_EXITING_VEHICLE comes out
+// of the move's handler (0x0074b200) before the pet's SMSG_PET_SPELLS, so its
+// PET_BAR_UPDATE finds MainMenuBar busy, and PetActionBarFrame.mode stays the
+// "hide" of the entry's slide (petactionbarframe.lua 195-228). Here, once the
+// vehicle's interface is gone and the main bar has stopped sliding, a pet with
+// actions has its bar put up with a finished slide - after a change of seats
+// too, and for any later pet - waiting up to ten seconds for the pet to come.
+inline constexpr const char* kPetBarAfterVehicleLua = R"LUA(
+if PetActionBarFrame and CreateFrame then
+    local pending, waited = false, 0
+    local watcher = CreateFrame("Frame")
+    watcher:RegisterEvent("UNIT_EXITED_VEHICLE")
+    watcher:RegisterEvent("UNIT_EXITING_VEHICLE")
+    watcher:SetScript("OnEvent", function(self, event, unit)
+        if unit == "player" then pending, waited = true, 0 end
+    end)
+    watcher:SetScript("OnUpdate", function(self, elapsed)
+        if not pending then return end
+        waited = waited + (elapsed or 0)
+        if waited > 10 then pending = false return end
+        if UnitHasVehicleUI("player") or (MainMenuBar and MainMenuBar.busy) then return end
+        if not PetHasActionBar() then return end
+        local bar = PetActionBarFrame
+        if (bar.showgrid or 0) == 0 and not (bar:IsShown() and bar.mode == "show") then
+            bar.mode = nil
+            ShowPetActionBar(true)
+            bar.mode = "show"
+            bar.completed = 1
+            bar.slideTimer = bar.timeToSlide or PETACTIONBAR_SLIDETIME
+        end
+        pending = false
+    end)
+end
+)LUA";
+
 inline constexpr const char* kWorldMapFitLua = R"LUA(
 -- The full-size world map is laid out on WorldMapPositioningGuide, 1024 by 768
 -- units, and WorldMapFrame_OnShow scales it with SetupFullscreenScale - which
