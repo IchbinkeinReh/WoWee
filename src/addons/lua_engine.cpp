@@ -14522,6 +14522,12 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeEditSetText");
     lua_pushcfunction(L_, lua_EditBox_SetHistoryLines);
     lua_setglobal(L_, "__WoweeXmlSetHistoryLines");
+    // A message frame's own font's nonspacewrap from its XML (0x00497070
+    // keeps flag 0x1000 for a frame's font instance). Not a Lua method: a
+    // ScrollingMessageFrame has no SetNonSpaceWrap in 12340 (0x00b2cee0),
+    // and calling one broke every chat frame (T378).
+    lua_pushcfunction(L_, lua_FontString_SetNonSpaceWrap);
+    lua_setglobal(L_, "__WoweeXmlSetNonSpaceWrap");
     // The same call a font string's SetText makes, reachable from the frame
     // metatable. A SimpleHTML holds its text on the frame and nothing else
     // could put it there - see mt:SetText.

@@ -827,8 +827,13 @@ struct Emitter {
             // word too long for the window goes on in the next line instead of
             // ending the message, and the lines after a message's first are set
             // in (T372).
+            // Through the loader's own setter: the frame types that have a
+            // font instance (ScrollingMessageFrame, MessageFrame, ...) have no
+            // SetNonSpaceWrap method in 12340, and calling one built no chat
+            // frame at all (T378).
             if (node.attr("nonspacewrap"))
-                line(var + ":SetNonSpaceWrap(" + std::string(node.attrBool("nonspacewrap") ? "true" : "false") + ")");
+                line("__WoweeXmlSetNonSpaceWrap(" + var + ", " +
+                     std::string(node.attrBool("nonspacewrap") ? "true" : "false") + ")");
             if (node.attr("indented"))
                 line(var + ":SetIndentedWordWrap(" + std::string(node.attrBool("indented") ? "true" : "false") + ")");
         }

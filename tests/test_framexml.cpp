@@ -9,6 +9,10 @@ extern "C" {
 
 #include "ui/xml_parser.hpp"
 #include "ui/framexml_emitter.hpp"
+#include "addons/widget_types.hpp"
+#include <cctype>
+#include <set>
+#include <sstream>
 
 #include <fstream>
 #include <iterator>
@@ -1430,8 +1434,30 @@ TEST_CASE("a message frame's own font takes nonspacewrap and indented (T372)", "
         "<FontString inherits=\"ChatFontNormal\" justifyH=\"LEFT\" indented=\"true\" nonspacewrap=\"true\"/>"
         "</ScrollingMessageFrame></Ui>");
     const std::string lua = emitFrameXml(root).lua;
-    CHECK(has(lua, ":SetNonSpaceWrap(true)"));
+    // nonspacewrap through the loader's own setter: a ScrollingMessageFrame
+    // has no SetNonSpaceWrap method (0x00b2cee0), and calling one left every
+    // chat frame unbuilt (T378).
+    CHECK(has(lua, "__WoweeXmlSetNonSpaceWrap("));
+    CHECK_FALSE(has(lua, ":SetNonSpaceWrap("));
     CHECK(has(lua, ":SetIndentedWordWrap(true)"));
+    // Every method the emitted code calls is one a ScrollingMessageFrame has
+    // (its type's, Frame's, Region's, Object's - widget_types.hpp).
+    std::set<std::string> methods;
+    for (const char* type : {"ScrollingMessageFrame", "Frame", "Region", "Object"}) {
+        for (const auto& t : wowee::addons::kWidgetTypes) {
+            if (std::string(t.name) != type) continue;
+            std::istringstream words(t.methods);
+            for (std::string w; words >> w;) methods.insert(w);
+        }
+    }
+    for (size_t at = lua.find(':'); at != std::string::npos; at = lua.find(':', at + 1)) {
+        size_t end = at + 1;
+        while (end < lua.size() && (std::isalnum(static_cast<unsigned char>(lua[end])) || lua[end] == '_')) ++end;
+        if (end == at + 1 || end >= lua.size() || lua[end] != '(') continue;
+        const std::string name = lua.substr(at + 1, end - at - 1);
+        INFO(name);
+        CHECK(methods.count(name) == 1);
+    }
 }
 
 TEST_CASE("A TitleRegion is the frame's own title region", "[framexml][emit]") {
