@@ -4564,6 +4564,11 @@ int pushQuestText(lua_State* L, const std::string* s) {
 
 }  // namespace
 
+uint32_t questFrameRewardSpell(game::GameHandler* gh) {
+    const QuestSource s = currentQuestSource(gh);
+    return s.spell != 0 ? s.spell : s.spellCast;
+}
+
 // GetTitleText() → the quest's name, whichever panel is showing it
 static int lua_GetTitleText(lua_State* L) {
     return pushQuestText(L, currentQuestSource(getGameHandler(L)).title);
@@ -4659,8 +4664,21 @@ static int lua_GetQuestMoneyToGet(lua_State* L) {
 // IsQuestCompletable() → whether the turn-in button should work
 static int lua_IsQuestCompletable(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const bool ok = gh && gh->isQuestRequestItemsOpen() &&
-                    gh->getQuestRequestItems().isCompletable();
+    bool ok = gh && gh->isQuestRequestItemsOpen() &&
+              gh->getQuestRequestItems().isCompletable();
+    // 0x0058cbb0: and every item asked for is carried in the number asked
+    // (0x00754d00) - an item put in the bank after the page opened greys
+    // the button again.
+    if (ok) {
+        for (const auto& want : gh->getQuestRequestItems().requiredItems) {
+            if (want.itemId == 0) break;
+            uint32_t have = 0;
+            gh->getInventory().forEachCarried([&](const game::ItemDef& d) {
+                if (d.itemId == want.itemId) have += d.stackCount > 0 ? d.stackCount : 1;
+            });
+            if (have < want.count) { ok = false; break; }
+        }
+    }
     luaPushOneOrNil(L, ok ? 1 : 0);
     return 1;
 }

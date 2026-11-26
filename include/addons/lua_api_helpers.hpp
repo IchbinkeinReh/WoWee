@@ -1546,6 +1546,11 @@ TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int t
 /// index of the rank's spell, -1 for none.
 TalentTooltipFacts talentLinkFacts(game::GameHandler* gh, uint32_t talentId, int rank);
 
+/// The reward spell of the quest page shown (0x00c0d680, which SetQuestRewardSpell
+/// 0x006263e0 describes): the reward page's, the detail page's - the displayed
+/// spell, else the one cast. 0 for none.
+uint32_t questFrameRewardSpell(game::GameHandler* gh);
+
 /// The item id the cursor is carrying, or zero for anything else.
 ///
 /// The cursor state lives in lua_action_api.cpp, where everything that picks

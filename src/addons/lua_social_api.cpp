@@ -1535,7 +1535,10 @@ int countGossipQuests(lua_State* L, bool available) {
 int pushGossipQuestTitle(lua_State* L, bool available) {
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     const auto* q = gossipQuestAt(L, available, index);
-    lua_pushstring(L, q ? q->title.c_str() : "");
+    // Past the end the title is nil (0x0058be30 / 0x0058bed0 push a null
+    // string), not "".
+    if (q) lua_pushstring(L, q->title.c_str());
+    else lua_pushnil(L);
     if (available) return 1;
     lua_pushboolean(L, q && gossipQuestIsComplete(getGameHandler(L), *q) ? 1 : 0);
     return 2;

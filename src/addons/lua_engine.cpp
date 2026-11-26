@@ -5115,9 +5115,11 @@ static int lua_Tooltip_SetPossession(lua_State* L) {
 static int lua_Tooltip_SetQuestRewardSpell(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    if (w && gh && gh->getQuestDetails().rewardSpellId != 0) {
-        fillSpellTooltip(L, w, gh, gh->getQuestDetails().rewardSpellId);
-    }
+    // 0x006263e0: the quest frame's reward spell (0x00c0d680) - of the page
+    // shown, as GetRewardSpell answers it. This read the detail page's
+    // record, empty on the reward page (T381).
+    const uint32_t spell = gh ? questFrameRewardSpell(gh) : 0;
+    if (w && spell != 0) fillSpellTooltip(L, w, gh, spell);
     return 0;
 }
 

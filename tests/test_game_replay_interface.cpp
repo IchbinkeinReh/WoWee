@@ -2892,3 +2892,31 @@ TEST_CASE("GetTalentInfo answers no talent as 12340 does (0x005c7800)", "[replay
     CHECK(ui.is("not pcall(GetTalentInfo, 'x', 1)"));
     CHECK(ui.is("GetUnspentTalentPoints(true) == 0"));
 }
+
+// T381: SetQuestRewardSpell (0x006263e0) describes the quest frame's reward
+// spell (0x00c0d680) of the page shown; it read the detail page's record, empty
+// on the reward page.
+TEST_CASE("the reward page's spell is the one its tooltip describes (0x006263e0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_OFFER_REWARD));
+    p.writeUInt64(0xF130000BEC00150Eull);
+    p.writeUInt32(3639);
+    p.writeString("Zeigt Eure Arbeit");
+    p.writeString("Text");
+    p.writeUInt8(0);
+    for (int i = 0; i < 60; ++i) p.writeUInt32(i == 10 ? 20222u : 0u);
+    s.receive(p);
+    REQUIRE(s.handler().isQuestOfferRewardOpen());
+    CHECK(s.handler().getQuestDetails().rewardSpellId == 0);
+    CHECK(wowee::addons::questFrameRewardSpell(&s.handler()) == 20222);
+}
+
+// FIXER Q (quest review): past the end of the greeting's lists the title is
+// nil (0x0058be30, 0x0058bed0), not "".
+TEST_CASE("a greeting title past the end is nil (0x0058be30)", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    CHECK(ui.is("GetAvailableTitle(5) == nil and GetActiveTitle(5) == nil"));
+}
