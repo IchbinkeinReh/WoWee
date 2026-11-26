@@ -381,6 +381,21 @@ enum class Hand : uint8_t { None, Main, Off };
     return off.tempEnchant == enchant ? Hand::Off : Hand::None;
 }
 
+/// 0x005210d0, an item that waits for another to be used on: the one
+/// clicked is refused - SPELL_FAILED_BAD_TARGETS (0xc) through 0x00808200,
+/// and nothing is sent - when the spell has an EquippedItemSubClassMask and
+/// the item is not of EquippedItemClass with its subclass in it, or an
+/// EquippedItemInventoryType mask without the item's inventory type in it.
+/// (The client lets through an item of the class and subclass of an
+/// effect's own item, which no item-on-item spell at hand has.)
+[[nodiscard]] constexpr bool badItemTarget(int32_t equippedClass, uint32_t subClassMask, uint32_t inventoryTypeMask,
+                                           uint32_t itemClass, uint32_t subClass, uint32_t inventoryType) {
+    if (subClassMask != 0 &&
+        (static_cast<int32_t>(itemClass) != equippedClass || (subClassMask & (1u << (subClass & 31))) == 0))
+        return true;
+    return inventoryTypeMask != 0 && (inventoryTypeMask & (1u << (inventoryType & 31))) == 0;
+}
+
 /// What 0x0080c790 makes of the units for a spell (0x0080cce0 after it):
 /// cast at none, cast at a unit, a unit taken with more still wanted (left
 /// there), or no unit - the cursor or noUnitFailure's refusal.

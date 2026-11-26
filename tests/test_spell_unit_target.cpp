@@ -498,3 +498,22 @@ TEST_CASE("a cast asked at a token of nobody, and at none", "[spell]") {
     CHECK(askedNoUnit(kAskedNone));
     CHECK_FALSE(askedNoUnit(0));
 }
+
+// T342: 0x005210d0 refuses an item the spell's EquippedItemClass, subclass
+// mask or inventory type mask does not take, before anything is sent. A
+// firestone (weapons, every subclass) on a healthstone (class 0) or on
+// itself is a bad target; on a sword it goes.
+TEST_CASE("an item to be used on another is refused by the spell's item class", "[unit_target]") {
+    using wowee::game::unit_target::badItemTarget;
+    constexpr int32_t kWeapon = 2;
+    constexpr uint32_t kAnyWeapon = 0x1FFFFF;
+    CHECK(badItemTarget(kWeapon, kAnyWeapon, 0, 0, 0, 0));
+    CHECK_FALSE(badItemTarget(kWeapon, kAnyWeapon, 0, 2, 7, 13));
+    // Only one-handed swords (subclass 7).
+    CHECK(badItemTarget(kWeapon, 1u << 7, 0, 2, 8, 17));
+    // No subclass mask: the class is not asked.
+    CHECK_FALSE(badItemTarget(-1, 0, 0, 4, 1, 5));
+    // An inventory type mask: chest (5) and robe (20) only.
+    CHECK_FALSE(badItemTarget(-1, 0, (1u << 5) | (1u << 20), 4, 1, 20));
+    CHECK(badItemTarget(-1, 0, (1u << 5) | (1u << 20), 4, 1, 7));
+}

@@ -1,6 +1,7 @@
 #include "game/replace_enchant.hpp"
 #include "game/quest_handler.hpp"
 #include "game/inventory_handler.hpp"
+#include "game/spell_unit_target.hpp"
 #include "game/mail_ignore.hpp"
 #include "game/stationery.hpp"
 #include "game/text_tokens.hpp"
@@ -2837,7 +2838,7 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
 
     if (targetItemGuid == 0 || !owner_.getSocket()) {
         pendingItemTarget_.reset();
-        owner_.raiseUiError("That is not a valid target.");
+        owner_.raiseUiError(uiText("SPELL_FAILED_BAD_TARGETS", "Invalid target"));
         return;
     }
 
@@ -2853,6 +2854,23 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
         if (auto it = cache.find(pending.spellId); it != cache.end()) {
             destroysTarget = spellclass::destroysTargetItem(it->second.effectIds, 3);
             isDisenchant = spellclass::hasDisenchantEffect(it->second.effectIds, 3);
+        }
+    }
+
+    // The spell's item class and subclass, and its inventory types, before
+    // anything else (0x005210d0): an item outside them is a bad target,
+    // SPELL_FAILED_BAD_TARGETS through 0x00808200, the cursor still waiting
+    // and nothing sent (T342: a firestone on a healthstone went to the realm).
+    {
+        const auto& cache = owner_.spellNameCacheRef();
+        const uint32_t targetEntry = owner_.getItemEntryByGuid(targetItemGuid);
+        const auto* targetInfo = targetEntry ? owner_.getItemInfo(targetEntry) : nullptr;
+        if (const auto it = cache.find(pending.spellId); it != cache.end() && targetInfo && targetInfo->valid &&
+            unit_target::badItemTarget(it->second.equippedItemClass, it->second.equippedItemSubClassMask,
+                                       it->second.equippedItemInventoryTypes, targetInfo->itemClass,
+                                       targetInfo->subClass, targetInfo->inventoryType)) {
+            if (auto* spells = owner_.getSpellHandler()) spells->reportLocalCastFailure(pending.spellId, 0x0c);
+            return;
         }
     }
 
@@ -3014,12 +3032,6 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
                  std::hex, targetItemGuid, std::dec);
         return;
     }
-    // Applying to itself is never valid and the server would silently drop it.
-    if (targetItemGuid == pending.itemGuid) {
-        owner_.addSystemChatMessage("You cannot apply " + pending.itemName + " to itself.");
-        return;
-    }
-
     sendUseItem(pending.bag, pending.slot, pending.itemGuid, pending.spellId, 0, targetItemGuid);
 }
 
