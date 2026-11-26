@@ -10469,7 +10469,8 @@ int lua_MovieFrame_StopMovie(lua_State* L) {
 
 // EnableSubtitles(enable) (+0x2a8).
 int lua_MovieFrame_EnableSubtitles(lua_State* L) {
-    wowee::ui::movie::enableSubtitles(luaClientSwitchArg(L, 2, true));  // 0x00970770: (L,2,1)
+    const bool on = luaClientSwitchArg(L, 2, true);  // 0x00970770: (L,2,1)
+    wowee::ui::movie::enableSubtitles(on);
     return 0;
 }
 
