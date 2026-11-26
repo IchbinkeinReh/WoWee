@@ -4,7 +4,9 @@
 #include "test_support.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <string>
+#include <vector>
 
 using namespace wowee::rendering::rt_water;
 
@@ -197,4 +199,52 @@ TEST_CASE("RT water: the frame is reused for the bed only where it shows the bed
     const std::string waves = wowee::test::slurp("assets/shaders/water_waves.glsli");
     CHECK(has(waves, "return swSwashEnd(sum, seaHeight, bed.x);"));
     CHECK_FALSE(has(waves, "SceneDepth"));
+}
+
+// U12: without ray queries (MoltenVK, iOS, macOS) the water is traced by the
+// compute tracer's walk of its BVH (rt_trace_sw.glsli in water.frag); it
+// reaches as far as the ray queries do, so it looks the same.
+TEST_CASE("the traced water reaches as far without ray queries", "[rt_water]") {
+    using wowee::rendering::rt_water::reach;
+    CHECK(reach(false).reflect == reach(true).reflect);
+    CHECK(reach(false).refract == reach(true).refract);
+    CHECK(reach(true).reflect == 400.0f);
+    CHECK(reach(true).refract == 80.0f);
+}
+
+namespace {
+// The SPIR-V capabilities a module declares (OpCapability, opcode 17).
+std::vector<uint32_t> spirvCapabilities(const std::vector<uint8_t>& bytes) {
+    std::vector<uint32_t> caps;
+    if (bytes.size() < 20) return caps;
+    const auto word = [&](size_t i) { return wowee::test::readU32(bytes, i * 4); };
+    const size_t words = bytes.size() / 4;
+    for (size_t i = 5; i < words;) {
+        const uint32_t w = word(i);
+        const uint32_t count = w >> 16, op = w & 0xFFFFu;
+        if (count == 0) break;
+        if (op == 17 && i + 1 < words) caps.push_back(word(i + 1));
+        i += count;
+    }
+    return caps;
+}
+}  // namespace
+
+// U12: the water a device without ray queries draws is the module without
+// them - MoltenVK refuses one that asks for RayQueryKHR (4472) - and the one
+// with them is the other.
+TEST_CASE("the traced water without ray queries asks for none", "[rt_water]") {
+    const auto sw = wowee::test::readFile("assets/shaders/water.frag.spv");
+    const auto hw = wowee::test::readFile("assets/shaders/water_rt_hw.frag.spv");
+    REQUIRE_FALSE(sw.empty());
+    REQUIRE_FALSE(hw.empty());
+    const auto swCaps = spirvCapabilities(sw);
+    const auto hwCaps = spirvCapabilities(hw);
+    REQUIRE_FALSE(swCaps.empty());
+    constexpr uint32_t kRayQuery = 4472;
+    CHECK(std::find(swCaps.begin(), swCaps.end(), kRayQuery) == swCaps.end());
+    CHECK(std::find(hwCaps.begin(), hwCaps.end(), kRayQuery) != hwCaps.end());
+    // And it walks the scene's buffers: the compute tracer's BVH.
+    const std::string source = wowee::test::slurp("assets/shaders/water.frag.glsl");
+    CHECK(source.find("#include \"rt_trace_sw.glsli\"") != std::string::npos);
 }

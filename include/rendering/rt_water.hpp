@@ -125,4 +125,15 @@ inline constexpr float kGlintRiseTo = 0.04f;     ///< and where it is whole
     return a2 / (3.14159265f * d * d + 1e-7f);
 }
 
+/// How far the reflected and the refracted ray go, in yards. The same with
+/// ray queries and with the compute tracer's walk of its BVH in the water's
+/// shader (rt_trace_sw.glsli, where there are no ray queries: MoltenVK, iOS,
+/// macOS and older GPUs): the water looks the same on both. The walk was
+/// held to 150 and 40 yards, which cut a far shore out of the mirror.
+struct Reach {
+    float reflect = 400.0f;
+    float refract = 80.0f;
+};
+[[nodiscard]] constexpr Reach reach(bool /*rayQueries*/) { return Reach{}; }
+
 }  // namespace wowee::rendering::rt_water

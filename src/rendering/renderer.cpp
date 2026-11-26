@@ -772,8 +772,8 @@ void Renderer::updatePerFrameUBO() {
     }
     // The ray traced water this frame (water_rt.glsli): with the traced
     // lighting running and the setting on, through the scene the lighting
-    // traces. A software tracer goes less far: a big lake's every pixel
-    // walks the BVH twice, and the hardware's rays cost far less.
+    // traces - with ray queries, or without them by the compute tracer's walk
+    // of its BVH in the water's shader, as far either way (rt_water::reach).
     if (waterRenderer) {
         RtWaterFrame wf;
         if (rtScene_) rtScene_->refreshDescriptors();
@@ -811,8 +811,9 @@ void Renderer::updatePerFrameUBO() {
             wf.tessellation = waterTessellation_;
             wf.tessDensity = waterTessDensity_;
             wf.shoreWaves = shoreWaves_;
-            wf.reflectReach = hw ? 400.0f : 150.0f;
-            wf.refractReach = hw ? 80.0f : 40.0f;
+            const rt_water::Reach reach = rt_water::reach(hw);
+            wf.reflectReach = reach.reflect;
+            wf.refractReach = reach.refract;
             if (lightingManager) {
                 const auto& sky = lightingManager->getLightingParams();
                 wf.skyTop = sky.skyTopColor;
