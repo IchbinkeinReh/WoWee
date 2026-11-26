@@ -737,27 +737,50 @@ register_test_target(test_unit_aura_call)
 
 # ── framexml_compiles ───────────────────────────────────────
 # Not a unit test: it emits every real FrameXML file and asks Lua itself
-# whether the result compiles. The unit tests above check cases someone
-# thought of; this checks all 126, and a file that will not compile is lost
-# whole rather than degraded. Skipped when the game data is not present.
+# whether the result compiles, and whether every method the emitted code calls
+# on an element is one that element's type has (widget_types.hpp). The unit
+# tests above check cases someone thought of; this checks all of them, and a
+# file that will not compile is lost whole rather than degraded.
+#
+# The files come straight out of the original client's archives, as the game
+# reads them. This used to want an extracted Data/interface/framexml in the
+# source tree, which nobody here has, so it skipped on every run - and the
+# T378 blocker (an emitted SetNonSpaceWrap on a ScrollingMessageFrame, every
+# chat frame unbuilt) went out with a "passed" ctest. Skipped only when no
+# client is found: WOWEE_TEST_CLIENT_DATA, else the WOWEE_TEST_CLIENT_DATA
+# environment variable, else the test client's usual place.
+if(NOT WOWEE_TEST_CLIENT_DATA)
+    if(DEFINED ENV{WOWEE_TEST_CLIENT_DATA})
+        set(_wowee_client_data "$ENV{WOWEE_TEST_CLIENT_DATA}")
+    elseif(EXISTS "C:/World of Warcraft 3.3.5a.12340 deDE/Data")
+        set(_wowee_client_data "C:/World of Warcraft 3.3.5a.12340 deDE/Data")
+    else()
+        set(_wowee_client_data "")
+    endif()
+    set(WOWEE_TEST_CLIENT_DATA "${_wowee_client_data}" CACHE PATH
+        "An original 3.3.5a client's Data folder, for the tests that read its archives")
+endif()
 add_executable(framexml_compile_check
     ${CMAKE_SOURCE_DIR}/tools/framexml_compile_check.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/xml_parser.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/framexml_emitter.cpp
+    ${CMAKE_SOURCE_DIR}/src/pipeline/mpq_archive_set.cpp
+    ${TEST_COMMON_SOURCES}
 )
 target_include_directories(framexml_compile_check PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(framexml_compile_check SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
-target_link_libraries(framexml_compile_check PRIVATE lua51)
+target_link_libraries(framexml_compile_check PRIVATE lua51 ZLIB::ZLIB)
+target_compile_features(framexml_compile_check PRIVATE cxx_std_20)
 add_test(NAME framexml_compiles COMMAND framexml_compile_check
-         ${CMAKE_SOURCE_DIR}/Data/interface/framexml)
+         --mpq "${WOWEE_TEST_CLIENT_DATA}" "interface/framexml/")
 set_tests_properties(framexml_compiles PROPERTIES SKIP_RETURN_CODE 77)
 
 # The Blizzard addons go through the same emitter and were never checked by it.
 # Their XML is where the load-on-demand panels come from - a file that will not
 # compile takes its whole panel with it, and only when someone opens it.
 add_test(NAME addon_xml_compiles COMMAND framexml_compile_check
-         ${CMAKE_SOURCE_DIR}/Data/interface/addons)
+         --mpq "${WOWEE_TEST_CLIENT_DATA}" "interface/addons/")
 set_tests_properties(addon_xml_compiles PROPERTIES SKIP_RETURN_CODE 77)
 
 # ── test_quest_log_rows ─────────────────────────────────────
