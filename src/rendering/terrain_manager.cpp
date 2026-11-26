@@ -13,6 +13,7 @@
 #include "pipeline/wdt_loader.hpp"
 #include "pipeline/grass_profile.hpp"
 #include "rendering/terrain_renderer.hpp"
+#include "rendering/wmo_portal_walk.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/water_renderer.hpp"
 #include "rendering/wmo_liquid_load.hpp"
@@ -1360,6 +1361,7 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                     wmoRenderer->setInstanceNameSet(wmoInstId, wmoReady.nameSet);
                     if (wmoReady.uniqueId != 0) {
                         placedWmoIds.insert(wmoReady.uniqueId);
+                        placedWmoInstances_[wmoReady.uniqueId] = wmoInstId;
                         ft.tileWmoUniqueIds.push_back(wmoReady.uniqueId);
                     }
                 }
@@ -1427,10 +1429,16 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                                                              doodad.interiorDirect);
                     }
                     // Drawn with its rooms (U14).
-                    if (wmoRenderer && doodad.wmoIndex < ft.wmoInstanceByModel.size() &&
-                        ft.wmoInstanceByModel[doodad.wmoIndex] != 0) {
-                        wmoRenderer->addRoomDoodad(ft.wmoInstanceByModel[doodad.wmoIndex], wmoDoodadInstId,
-                                                   doodad.doodadIndex);
+                    // Of the building placed for its unique id, whichever
+                    // tile placed it (V468).
+                    if (wmoRenderer && doodad.wmoIndex < pending->wmoModels.size()) {
+                        const uint32_t building = wmo_portal_walk::doodadBuilding(
+                            doodad.wmoIndex < ft.wmoInstanceByModel.size() ? ft.wmoInstanceByModel[doodad.wmoIndex] : 0u,
+                            pending->wmoModels[doodad.wmoIndex].uniqueId, placedWmoInstances_);
+                        if (building != 0)
+                            wmoRenderer->addRoomDoodad(building, wmoDoodadInstId, doodad.doodadIndex);
+                        else
+                            ++ft.wmoDoodadsWithoutBuilding;
                     }
                     ft.m2InstanceIds.push_back(wmoDoodadInstId);
                 }
@@ -1439,6 +1447,9 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
             }
             m2Renderer->setPredecodedBLPCache(nullptr);
             if (ft.wmoDoodadIndex < pending->wmoDoodads.size()) return false;
+            if (ft.wmoDoodadsWithoutBuilding != 0)
+                LOG_WARNING("Tile [", x, ",", y, "]: ", ft.wmoDoodadsWithoutBuilding,
+                            " building doodads without their building (drawn from everywhere)");
         }
         ft.phase = FinalizationPhase::WATER;
         return false;
@@ -1837,6 +1848,7 @@ void TerrainManager::unloadTile(int x, int y) {
             for (uint32_t uid : fit->tileUniqueIds) placedDoodadIds.erase(uid);
             for (uint32_t uid : fit->tileWmoUniqueIds) {
                 placedWmoIds.erase(uid);
+                placedWmoInstances_.erase(uid);
                 std::lock_guard<std::mutex> lock(preparedWmoUniqueIdsMutex_);
                 preparedWmoUniqueIds_.erase(uid);
             }
@@ -1860,6 +1872,7 @@ void TerrainManager::unloadTile(int x, int y) {
     }
     for (uint32_t uid : tile->wmoUniqueIds) {
         placedWmoIds.erase(uid);
+        placedWmoInstances_.erase(uid);
         std::lock_guard<std::mutex> lock(preparedWmoUniqueIdsMutex_);
         preparedWmoUniqueIds_.erase(uid);
     }
@@ -1934,6 +1947,7 @@ void TerrainManager::softReset() {
     finalizingTiles_.clear();
     placedDoodadIds.clear();
     placedWmoIds.clear();
+    placedWmoInstances_.clear();
     modelClaims_->clear();
     {
         std::lock_guard<std::mutex> lock(preparedWmoUniqueIdsMutex_);

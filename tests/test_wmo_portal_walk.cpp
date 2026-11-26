@@ -382,3 +382,24 @@ TEST_CASE("the room doodads take a camera over a floor for outside (V457)", "[wm
     CHECK(body.find("insideUnwalkable(inRoomBox, inOutsideBox, anythingBelow)") != std::string::npos);
     CHECK(body.find("if (inRoomBox && !inOutsideBox) cull = false;") == std::string::npos);
 }
+
+TEST_CASE("a building's doodads belong to its one instance, whichever tile placed it (V468)", "[wmo_portal]") {
+    using wowee::rendering::wmo_portal_walk::doodadBuilding;
+    // UNDERCITY.WMO is listed by the tiles on both sides of x = 1600. One
+    // tile placed it (instance 77) before the other, whose worker had read
+    // its doodads, came to it: that tile skipped the placement (0 for it),
+    // and the doodads - the chandelier of group 96 among them - were drawn
+    // from everywhere, its chain over the Ruins of Lordaeron.
+    const std::unordered_map<uint32_t, uint32_t> placed{{0x1234u, 77u}};
+    CHECK(doodadBuilding(0, 0x1234u, placed) == 77u);
+    CHECK(doodadBuilding(12, 0x1234u, placed) == 12u);
+    CHECK(doodadBuilding(0, 0x9999u, placed) == 0u);
+    CHECK(doodadBuilding(0, 0, placed) == 0u);
+}
+
+TEST_CASE("the tiles hand a building's doodads to the instance placed for its unique id (V468)", "[wmo_portal]") {
+    const std::string tm = wowee::test::slurp("src/rendering/terrain_manager.cpp");
+    REQUIRE_FALSE(tm.empty());
+    CHECK(tm.find("placedWmoInstances_[wmoReady.uniqueId] = wmoInstId;") != std::string::npos);
+    CHECK(tm.find("wmo_portal_walk::doodadBuilding(") != std::string::npos);
+}

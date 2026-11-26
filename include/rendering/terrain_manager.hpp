@@ -213,6 +213,8 @@ struct FinalizingTile {
     std::unordered_set<uint32_t> uploadedM2ModelIds;
     /// By index into pending->wmoModels: the instance made of it, 0 if none.
     std::vector<uint32_t> wmoInstanceByModel;
+    /// Building doodads whose building had no instance (logged, V468).
+    uint32_t wmoDoodadsWithoutBuilding = 0;
 };
 
 /**
@@ -720,6 +722,8 @@ private:
 
     // MAIN-THREAD-ONLY: same contract as placedDoodadIds.
     std::unordered_set<uint32_t> placedWmoIds;
+    /// The instance made for each placed unique id (wmo_portal_walk::doodadBuilding).
+    std::unordered_map<uint32_t, uint32_t> placedWmoInstances_;
 
     // Tiles currently being incrementally finalized across frames
     std::deque<FinalizingTile> finalizingTiles_;

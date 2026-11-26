@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 #include <span>
 #include <utility>
 #include <vector>
@@ -300,6 +301,25 @@ inline std::vector<std::optional<Rect>> groupsSeen(const Building& b, std::span<
 /// chain up into the courtyard.
 inline bool insideUnwalkable(bool inRoomBox, bool inOutsideBox, bool anythingBelow) {
     return inRoomBox && !inOutsideBox && !anythingBelow;
+}
+
+/// The building a tile's doodad of a building belongs to, for drawing it
+/// with its rooms (WMORenderer::addRoomDoodad). A city listed by several
+/// tiles is placed once, by whichever tile gets there first, while its
+/// doodads come with whichever tile's worker read them first - not
+/// always the same tile. The doodads' own tile then had no instance of its
+/// own for the building (`byTile` 0, the placement skipped as placed), and
+/// they were left out of the room test and drawn from everywhere: V468,
+/// UNDERCITY.WMO spans the tiles at x = 1600, and the chandelier chain of its
+/// group 96 hung over the Ruins of Lordaeron. The instance placed for the
+/// same unique id (`placed`) is the one, as the client keeps one map object
+/// per unique id (0x007bef40). 0 for none.
+inline uint32_t doodadBuilding(uint32_t byTile, uint32_t uniqueId,
+                               const std::unordered_map<uint32_t, uint32_t>& placed) {
+    if (byTile != 0) return byTile;
+    if (uniqueId == 0) return 0;
+    const auto it = placed.find(uniqueId);
+    return it != placed.end() ? it->second : 0u;
 }
 
 /// Whether a building's doodad is drawn: the client draws a doodad with the
