@@ -1310,10 +1310,17 @@ void InventoryHandler::lootMoney() {
 void InventoryHandler::cancelTempEnchantment(uint8_t handIndex) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     if (handIndex > 1) return;      // only the two weapon hands carry one
+    // 0x008021d0 -> 0x006d7120: the hand's equipment slot, 15 the main hand
+    // and 16 the off hand, and only where a weapon there has a temporary
+    // enchant. The hand's 0 or 1 was the head's slot to the realm, which
+    // left the enchant on (T344).
+    const int slot = static_cast<int>(EquipSlot::MAIN_HAND) + handIndex;
+    const uint64_t guid = owner_.getEquipSlotGuid(slot);
+    if (guid == 0 || owner_.getItemEnchantIds(guid).second == 0) return;
     const uint16_t wireOp = wireOpcode(Opcode::CMSG_CANCEL_TEMP_ENCHANTMENT);
     if (wireOp == 0xFFFF) return;
     network::Packet packet(wireOp);
-    packet.writeUInt32(handIndex);
+    packet.writeUInt32(static_cast<uint32_t>(slot));
     owner_.getSocket()->send(packet);
 }
 

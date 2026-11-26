@@ -2045,3 +2045,32 @@ TEST_CASE("the full screen glow's box turns the glow", "[replay][interface]") {
     settings["screenglow"] = "1";
     CHECK(ui.is("GetCVar('ffxGlow') == '1'"));
 }
+
+// T344: CancelItemTempEnchantment(hand) asks for the hand's equipment slot
+// (0x008021d0 -> 0x006d7120: hand + 14, 15 the main hand, 16 the off hand),
+// and only where a weapon there has a temporary enchant. 0 and 1 went out,
+// the head's and the neck's slot, and the enchant stayed.
+TEST_CASE("a weapon's temporary enchant is cancelled by its slot", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    constexpr uint64_t kSword = 0x4000000000000101ull, kShield = 0x4000000000000102ull;
+    gh.equipSlotGuidsRef()[15] = kSword;
+    gh.equipSlotGuidsRef()[16] = kShield;
+    gh.onlineItemsRef()[kSword].entry = 25;
+    gh.onlineItemsRef()[kSword].temporaryEnchantId = 3609;
+    gh.onlineItemsRef()[kShield].entry = 2129;
+    ui.run("CancelItemTempEnchantment(1)");
+    auto sent = s.sent().of(Opcode::CMSG_CANCEL_TEMP_ENCHANTMENT);
+    REQUIRE(sent.size() == 1);
+    CHECK(sent.front().readUInt32() == 15);
+    // The off hand has none: nothing goes out.
+    ui.run("CancelItemTempEnchantment(2)");
+    CHECK(s.sent().of(Opcode::CMSG_CANCEL_TEMP_ENCHANTMENT).size() == 1);
+    gh.onlineItemsRef()[kShield].temporaryEnchantId = 3609;
+    ui.run("CancelItemTempEnchantment(2)");
+    sent = s.sent().of(Opcode::CMSG_CANCEL_TEMP_ENCHANTMENT);
+    REQUIRE(sent.size() == 2);
+    CHECK(sent.back().readUInt32() == 16);
+}
