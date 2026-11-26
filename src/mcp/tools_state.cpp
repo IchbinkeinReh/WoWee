@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "core/application.hpp"
+#include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "core/window.hpp"
 #include "game/character.hpp"
@@ -202,9 +203,11 @@ json stateOf(ToolContext& context, const json& args) {
                   playerFacing(context));
     place["go"] = go;
     if (mi.transportGuid != 0) {
-        json aboard = {{"guid", guidText(mi.transportGuid)},
-                       {"offset", json::array({rounded(mi.transportX, 2), rounded(mi.transportY, 2),
-                                               rounded(mi.transportZ, 2)})}};
+        // On .gps's axes, as "pos" is: the movement keeps the offset in its
+        // canonical order (north, west), the realm prints x and y the other way.
+        const glm::vec3 offset =
+            core::coords::canonicalToServer(glm::vec3(mi.transportX, mi.transportY, mi.transportZ));
+        json aboard = {{"guid", guidText(mi.transportGuid)}, {"offset", vec3Json(offset)}};
         if (const auto e = gh->getEntityManager().getEntity(mi.transportGuid)) {
             aboard["name"] = entityName(context, *e);
             aboard["pos"] = vec3Json(entityAt(context, *e));

@@ -586,6 +586,9 @@ private:
     /// until then the accepted request stands for it, for so long.
     bool taxiFlagSeen_ = false;
     std::optional<glm::vec3> knownPlace_;
+    /// The player was aboard a transport or on a flight when knownPlace_ was
+    /// noted, or flew since: the next place sent is not measured by it.
+    bool knownPlaceCarried_ = false;
     float taxiFlagWait_ = 0.0f;
     std::string taxiDestName_;
     // Set in activateTaxi(); used by finishClientTaxiFlight() to snap to the

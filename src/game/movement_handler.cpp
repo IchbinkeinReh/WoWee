@@ -1434,7 +1434,14 @@ bool MovementHandler::unitForForcedChange(uint64_t guid, const char* name) {
 void MovementHandler::noteOutgoingPlace(uint16_t wireOp, const MovementInfo& canonical) {
     const glm::vec3 at(canonical.x, canonical.y, canonical.z);
     constexpr float kFar = 300.0f;
-    if (wireOp != wireOpcode(Opcode::CMSG_MOVE_SPLINE_DONE) && knownPlace_ && glm::length(at - *knownPlace_) > kFar) {
+    // Aboard a transport or on a flight the world moves the player between
+    // packets - a tram or zeppelin rider standing still sends nothing for a
+    // whole ride - so a place far from the last one sent is no desync there.
+    const bool carried = canonical.transportGuid != 0 || owner_.isOnTransport() || isOnTaxiFlight();
+    const bool wasCarried = knownPlaceCarried_;
+    knownPlaceCarried_ = carried;
+    if (!carried && !wasCarried && wireOp != wireOpcode(Opcode::CMSG_MOVE_SPLINE_DONE) && knownPlace_ &&
+        glm::length(at - *knownPlace_) > kFar) {
         static core::LogBudget budget(20, "Outgoing place");
         if (budget.take()) {
             LOG_WARNING("Outgoing packet 0x", std::hex, wireOp, std::dec, " places the player ",
@@ -3803,6 +3810,9 @@ bool MovementHandler::isNearTaxiDestination(float maxDistance) const {
 }
 
 void MovementHandler::updateClientTaxi(float deltaTime) {
+    // Carried by a flight: the next place the player sends is wherever it
+    // landed, not a jump from where the last packet had them.
+    if (isOnTaxiFlight()) knownPlaceCarried_ = true;
     if (dismountGraceRemaining_ > 0.0f) {
         dismountGraceRemaining_ -= deltaTime;
     }

@@ -172,9 +172,10 @@ void gm(ToolContext& context, const json& args, Script& script) {
     script.then([&context, onSelf, selected](Script&) {
         auto* gh = context.app.getGameHandler();
         if (!onSelf || !gh || gh->getTargetGuid() == gh->getPlayerGuid()) return Script::Step::Next;
-        // With nothing selected - here and on the realm - it is the
-        // character's own anyway.
-        if (gh->getTargetGuid() == 0 && context.selectedOnRealm == 0) return Script::Step::Next;
+        // Also with nothing selected: the realm takes no selection as the
+        // character only for some commands - .die, .damage and the like say
+        // 'select a character or creature' - so the character is selected for
+        // the command and the selection cleared again after it.
         *selected = gh->getTargetGuid();
         // The realm is told before the command: the selection's packet goes
         // out here, the whisper's after it.
