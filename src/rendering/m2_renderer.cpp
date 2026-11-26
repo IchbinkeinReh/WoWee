@@ -1373,7 +1373,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
         // such as the demon crystal's eyes stayed turned to wherever the
         // camera was then - edge-on, and so invisible, from everywhere else.
         if (bone.translation.hasData() || bone.rotation.hasData() || bone.scale.hasData() ||
-            (bone.flags & kM2BoneSphericalBillboard) != 0) {
+            (bone.flags & kM2BoneAnyBillboard) != 0) {
             gpuModel.hasAnimation = true;
             break;
         }
@@ -1384,7 +1384,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
         bool any = false;
         for (size_t b = 0; b < model.bones.size(); ++b) {
             parents[b] = model.bones[b].parentBone;
-            billboard[b] = (model.bones[b].flags & kM2BoneSphericalBillboard) != 0;
+            billboard[b] = (model.bones[b].flags & kM2BoneAnyBillboard) != 0;
             any = any || billboard[b];
         }
         gpuModel.billboardOwner.clear();

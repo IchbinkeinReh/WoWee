@@ -3601,6 +3601,12 @@ wowee_add_test(test_rt_light_reach
     SOURCES test_rt_light_reach.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_m2_billboard ──
+# M2 billboard bones: the cylindrical ones turn about their own axis.
+wowee_add_test(test_m2_billboard
+    SOURCES test_m2_billboard.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_stream_times ────────────────────────────────────────
 # The length shown of a stream is not asked of the decoder the audio thread
 # reads. The audio library without a device.

@@ -268,6 +268,14 @@ inline void computeBoneMatrices(const M2ModelGPU& model, M2Instance& instance,
             const glm::vec3 camModel =
                 glm::vec3(instance.invModelMatrix * glm::vec4(*cameraPosWorld, 1.0f));
             local *= billboardFacing(camModel, bone.pivot) * glm::toMat4(rot);
+        } else if (cameraPosWorld && (bone.flags & kM2BoneAnyBillboard) != 0) {
+            // A cylindrical one (0x10/0x20/0x40) keeps its own axis and
+            // turns about it to the camera: the mage portals' starry plane
+            // (U15, MagePortal_Ogrimmar.m2 bone 0, 0x40).
+            const glm::vec3 camModel =
+                glm::vec3(instance.invModelMatrix * glm::vec4(*cameraPosWorld, 1.0f));
+            local *= glm::mat4(billboardCylinder(bone.flags & kM2BoneAnyBillboard, glm::mat3(glm::toMat4(rot)),
+                                                 camModel, bone.pivot));
         } else {
             local *= glm::toMat4(rot);
         }
