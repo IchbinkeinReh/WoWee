@@ -1082,6 +1082,9 @@ struct Widget {
     /// The inside step as it was saved, until the map first goes indoors and
     /// takes it; -1 once taken or when none was saved.
     int savedInsideZoom = -1;
+    /// The outside step as it was saved, until the map is outside and takes
+    /// it (minimap_zoom::syncFrame); -1 once taken or when none was saved.
+    int savedOutsideZoom = -1;
 
     /// Whether a link drawn in this frame answers a click. FCF_SetUninteractable
     /// turns it off for a chat window the player has made click-through, and the

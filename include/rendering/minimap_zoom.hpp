@@ -40,4 +40,38 @@ constexpr float radius(int level, bool indoors = false) {
     return indoors ? kIndoorRadius[i] : static_cast<float>(kOutdoorChunks[i]) * 0.5f * 33.333332f;
 }
 
+/// The Minimap frame's level against the map's (T368). The levels live in
+/// the engine, one outdoor and one indoor (0x00af4e4c, 0x00af4e50), and
+/// GetZoom answers the one in use (0x007f3b40); a /reload makes only the
+/// frame anew. So the frame takes the map's level when the map changes over
+/// - or when the frame does not know which map it is on, as one made anew
+/// does not - and the levels the CVars kept (read back at start, 0x007f4f60's
+/// area) go each to its own map once that map is in use; after that the
+/// frame's own SetZoom moves the map. `mapLevel` is the map's level in use,
+/// changed in place. True when MINIMAP_UPDATE_ZOOM is due (0x007f5ba0).
+struct FrameZoom {
+    int& level;          ///< the frame's level (GetZoom)
+    bool& indoors;       ///< which map that level is of
+    int& savedInside;    ///< minimapInsideZoom as read back, -1 once taken
+    int& savedOutside;   ///< minimapZoom as read back, -1 once taken
+};
+inline bool syncFrame(FrameZoom frame, bool& wasIndoors, bool mapIndoors, int& mapLevel) {
+    bool due = false;
+    if (mapIndoors != wasIndoors || mapIndoors != frame.indoors) {
+        wasIndoors = mapIndoors;
+        frame.indoors = mapIndoors;
+        frame.level = mapLevel;
+        due = true;
+    }
+    int& saved = mapIndoors ? frame.savedInside : frame.savedOutside;
+    if (saved >= 0) {
+        mapLevel = clampLevel(saved);
+        saved = -1;
+        frame.level = mapLevel;
+        due = true;
+    }
+    if (frame.level != mapLevel) mapLevel = clampLevel(frame.level);
+    return due;
+}
+
 }  // namespace wowee::rendering::minimap_zoom

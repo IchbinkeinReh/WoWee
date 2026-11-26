@@ -2424,12 +2424,10 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     if (restoreZoom && (key == "minimapzoom" || key == "wowee_minimapzoom")) {
         if (auto* tree = getWidgetTree(L)) {
             if (auto* mm = tree->findByName("Minimap")) {
-                const int z = std::atoi(value.c_str());
-                mm->zoomLevel = rendering::minimap_zoom::clampLevel(z);
-                lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
-                auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
-                lua_pop(L, 1);
-                if (engine) engine->fireEvent("MINIMAP_UPDATE_ZOOM", {});
+                // For the outdoor map, which takes it when it is the one in
+                // use (minimap_zoom::syncFrame, which fires the event): set
+                // on the frame while indoors it moved the indoor map (T368).
+                mm->savedOutsideZoom = rendering::minimap_zoom::clampLevel(std::atoi(value.c_str()));
             }
         }
     }

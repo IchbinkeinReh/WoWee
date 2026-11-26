@@ -7422,17 +7422,17 @@ void Application::render() {
                         // 0x007f3b40 answers GetZoom with the one in use) and
                         // fires MINIMAP_UPDATE_ZOOM when the map changes over
                         // (0x007f5ba0), so the frame takes the map's level then.
-                        if (map->isIndoors() != minimapWasIndoors_) {
-                            minimapWasIndoors_ = map->isIndoors();
-                            if (minimapWasIndoors_ && mm->savedInsideZoom >= 0) {
-                                map->setZoomLevel(mm->savedInsideZoom);
-                                mm->savedInsideZoom = -1;
-                            }
-                            mm->zoomLevel = map->getZoomLevel();
-                            mm->zoomIndoors = minimapWasIndoors_;
-                            if (gameHandler) gameHandler->fireAddonEvent("MINIMAP_UPDATE_ZOOM", {});
+                        //
+                        // A /reload makes the frame anew and the map keeps its
+                        // levels (T368): see minimap_zoom::syncFrame.
+                        {
+                            int level = map->getZoomLevel();
+                            const bool due = rendering::minimap_zoom::syncFrame(
+                                {mm->zoomLevel, mm->zoomIndoors, mm->savedInsideZoom, mm->savedOutsideZoom},
+                                minimapWasIndoors_, map->isIndoors(), level);
+                            if (level != map->getZoomLevel()) map->setZoomLevel(level);
+                            if (due && gameHandler) gameHandler->fireAddonEvent("MINIMAP_UPDATE_ZOOM", {});
                         }
-                        if (mm->zoomLevel != map->getZoomLevel()) map->setZoomLevel(mm->zoomLevel);
 
                         // Minimap:PingLocation, which is all Minimap_OnClick
                         // does. The offsets are minimap-local interface units
