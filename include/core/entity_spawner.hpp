@@ -557,6 +557,9 @@ public:
     /// it says so; and let go when it leaves the seat. Each frame, after the
     /// units are placed (entity_spawner_vehicle.cpp).
     void updateVehiclePassengers();
+    /// The unit's change of transport, as its packet comes (0x0074b200 -> 0x00749aa0): its state
+    /// and the events of it are there before the next packet's.
+    void vehicleSeatMoved(uint64_t guid);
     /// The local player's passenger state while it is in or on its way into
     /// or out of a seat (CGUnit_C +0xf60 +0x14), and where it is drawn.
     [[nodiscard]] std::optional<game::vehicle::SeatState> localPassengerState() const;
@@ -862,6 +865,10 @@ private:
     /// state, else the one it would (0x00748040, 0x0074c650).
     uint64_t seatRootOf(uint64_t guid) const;
     /// 0x007489c0: the passenger to a new state, at `nowMs`.
+    /// What the roster says now against the states kept: of one unit, or of all (0).
+    void followSeats(uint64_t only, uint32_t nowMs);
+    void changeSeat(uint64_t guid, SeatedPassenger& p, uint64_t vehicleGuid, uint8_t seatIndex, uint32_t seatId,
+                    uint32_t nowMs);
     void setSeatState(uint64_t guid, SeatedPassenger& p, game::vehicle::SeatState state, uint32_t nowMs);
     /// UNIT_ENTERING_VEHICLE, UNIT_ENTERED_VEHICLE, UNIT_EXITING_VEHICLE and
     /// UNIT_EXITED_VEHICLE for a change of state of the player or a group

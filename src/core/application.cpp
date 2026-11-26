@@ -1309,6 +1309,9 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         gameHandler->setVehicleMoveHoldCallback([this](uint64_t mover, uint64_t transport, uint8_t seat) {
             return entitySpawner_ && entitySpawner_->holdVehicleMove(mover, transport, seat);
         });
+        gameHandler->setVehicleSeatMovedCallback([this](uint64_t guid) {
+            if (entitySpawner_) entitySpawner_->vehicleSeatMoved(guid);
+        });
         // The player's placed fall (0x006eccf0), into the camera controller.
         // The camera off a vehicle's frame as it goes (0x00604a70(0, 0)).
         gameHandler->setCameraTransportClearedCallback([this](uint64_t transportGuid) {
