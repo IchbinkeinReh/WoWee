@@ -1,3 +1,4 @@
+#include "game/quest_link.hpp"
 #include "game/chat_handler.hpp"
 #include "game/chat_log.hpp"
 #include "game/combat_log.hpp"
@@ -122,6 +123,23 @@ bool isMonsterChatType(ChatType type) {
             return true;
         default:
             return false;
+    }
+}
+
+/// The lines whose $-tokens the client fills in (0x00509dd0 -> 0x00579590 with
+/// the message's target): the monster and boss kinds, the battleground
+/// announcements (0x24-0x26) and the achievement lines (0x30, 0x31). The
+/// battleground ones were left out, so a flag pickup read '$n hat ...' (T397).
+bool carriesTextTokens(ChatType type) {
+    switch (type) {
+        case ChatType::BG_SYSTEM_NEUTRAL:
+        case ChatType::BG_SYSTEM_ALLIANCE:
+        case ChatType::BG_SYSTEM_HORDE:
+        case ChatType::ACHIEVEMENT:
+        case ChatType::GUILD_ACHIEVEMENT:
+            return true;
+        default:
+            return isMonsterChatType(type);
     }
 }
 
@@ -1034,7 +1052,7 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
     // bystander read that they had done it themselves. A player receiver comes
     // as a guid alone, so a name nothing holds yet is asked for and the line
     // waits for it, as a player's own line does.
-    if (isMonsterChatType(data.type) && data.message.find('$') != std::string::npos &&
+    if (carriesTextTokens(data.type) && data.message.find('$') != std::string::npos &&
         isPlayerGuid(data.receiverGuid) && data.receiverGuid != owner_.getPlayerGuid() &&
         knownPlayerName(data.receiverGuid).empty()) {
         owner_.queryPlayerName(data.receiverGuid);
@@ -1199,9 +1217,14 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
     //
     // For whoever the line is written for, which is not always the reader:
     // see monsterLineSubject.
-    if (isMonsterChatType(data.type)) {
+    if (carriesTextTokens(data.type)) {
         data.message = resolveTextTokens(data.message, monsterLineSubject(data));
     }
+
+    // Quest links in the reader's colours (0x00509dd0): the colour code before
+    // each |Hquest: is the sender's; the client writes its own over it (T398).
+    if (data.message.find("|Hquest:") != std::string::npos)
+        data.message = recolourQuestLinks(data.message, static_cast<int>(owner_.getPlayerLevel()));
 
     // Add to chat history
     data.uid = ++chatUidCounter_;

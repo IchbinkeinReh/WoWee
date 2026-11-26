@@ -3670,6 +3670,12 @@ public:
 /** One queue slot's worth of SMSG_BATTLEFIELD_STATUS. */
 struct BattlefieldStatusData {
     uint32_t queueSlot = 0;
+    /// The eight bytes after the slot as they came (arena type, arena byte,
+    /// type id, 0x1F90): 0x0054ae40 keeps them whole at the slot's record
+    /// (0x00bea4b8 + slot * 0x40) and every answer about that slot -
+    /// AcceptBattlefieldPort 0x0054da10, LeaveBattlefield 0x0054c250 - writes
+    /// them back as one uint64. Zero for the empty record and pre-WotLK.
+    uint64_t header = 0;
     uint8_t  arenaType = 0;
     uint32_t bgTypeId = 0;
     uint8_t  minLevel = 0;

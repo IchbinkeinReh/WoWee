@@ -3304,7 +3304,7 @@ int lua_Tooltip_AddLine(lua_State* L) {
     tooltipLineColour(L, 3, line.rc);
     // AddLine(text, r, g, b, wrapText). The sixth argument was read off the
     // call and dropped, and FrameXML passes it on every line of prose.
-    line.wrap = lua_toboolean(L, 6) != 0;
+    line.wrap = luaClientSwitchArg(L, 6, false);
     w->isTooltip = true;
     w->tooltipLines.push_back(std::move(line));
     return 0;
@@ -3428,7 +3428,7 @@ int lua_Tooltip_AddDoubleLine(lua_State* L) {
     if (line.left.empty() && line.right.empty()) return 0;   // 0x0061fec0
     tooltipLineColour(L, 4, line.lc);
     tooltipLineColour(L, 7, line.rc);
-    line.wrap = lua_toboolean(L, 10) != 0;
+    line.wrap = luaClientSwitchArg(L, 10, false);
     w->isTooltip = true;
     w->tooltipLines.push_back(std::move(line));
     return 0;
@@ -5156,7 +5156,7 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
     // (id, isPet, showRank); the fifth is the brief form SetAction asks for.
-    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id, lua_toboolean(L, 5) != 0, lua_toboolean(L, 4) != 0) ? 1 : 0);
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id, lua_toboolean(L, 5) != 0, luaClientSwitchArg(L, 4, false)) ? 1 : 0);
     return 1;
 }
 
@@ -5470,11 +5470,11 @@ int lua_Tooltip_SetTalent(lua_State* L) {
     if (!w || !gh) return 0;
     const int tabIndex = static_cast<int>(luaL_optnumber(L, 2, 0));
     const int talentIndex = static_cast<int>(luaL_optnumber(L, 3, 0));
-    const bool inspect = lua_toboolean(L, 4) != 0;
-    const bool pet = lua_toboolean(L, 5) != 0;
+    const bool inspect = luaClientSwitchArg(L, 4, false);
+    const bool pet = luaClientSwitchArg(L, 5, false);
     const int group = lua_isnumber(L, 6) ? static_cast<int>(lua_tonumber(L, 6)) - 1
                                          : static_cast<int>(gh->getActiveTalentSpec());
-    const bool preview = lua_toboolean(L, 7) != 0;
+    const bool preview = luaClientSwitchArg(L, 7, false);
     (void)fillTalentTooltip(L, w, gh, wowee::addons::talentTooltipFacts(gh, tabIndex, talentIndex, inspect, pet, group, preview));
     return 0;
 }
@@ -7184,7 +7184,7 @@ int lua_Tooltip_SetExistingSocketGem(lua_State* L) {
     if (!widgetOf(L, 1) || !gh || index < 0 || index > 2) { lua_pushboolean(L, 0); return 1; }
     const auto enchants = gh->getItemSocketEnchantIds(gh->getSocketItemGuid());
     const uint32_t gemId = gh->getEnchantGemItem(enchants[static_cast<size_t>(index)]);
-    const bool destroys = lua_type(L, 3) == LUA_TNUMBER ? lua_tonumber(L, 3) != 0 : lua_toboolean(L, 3) != 0;
+    const bool destroys = lua_type(L, 3) == LUA_TNUMBER ? lua_tonumber(L, 3) != 0 : luaClientSwitchArg(L, 3, false);
     const auto header = [L](bool on) {
         if (on) lua_pushboolean(L, 1);
         else lua_pushnil(L);
@@ -8239,7 +8239,7 @@ int lua_Region_SetDrawLayer(lua_State* L) {
 /// five that do, both of them explaining in a tooltip why they are greyed.
 int lua_Frame_SetMotionScriptsWhileDisabled(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
-        w->motionScriptsWhileDisabled = lua_isnone(L, 2) ? true : (lua_toboolean(L, 2) != 0);
+        w->motionScriptsWhileDisabled = luaClientSwitchArg(L, 2, false);  // 0x009783b0: 0x00815500(L,2,0)
     }
     return 0;
 }
@@ -8250,7 +8250,7 @@ int lua_Frame_GetMotionScriptsWhileDisabled(lua_State* L) {
 }
 int lua_Frame_SetHyperlinksEnabled(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
-        w->hyperlinksEnabled = lua_isnone(L, 2) ? true : (lua_toboolean(L, 2) != 0);
+        w->hyperlinksEnabled = luaClientSwitchArg(L, 2, true);  // 0x00973c40 / 0x009751e0
     }
     return 0;
 }
@@ -10168,7 +10168,7 @@ int lua_EditBox_ClearHistory(lua_State* L) {
 /// SetCountInvisibleLetters(flag) - charge the markup against the limit.
 int lua_EditBox_SetCountInvisibleLetters(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
-        w->countInvisibleLetters = lua_isnone(L, 2) ? true : (lua_toboolean(L, 2) != 0);
+        w->countInvisibleLetters = luaClientSwitchArg(L, 2, true);  // 0x00975a80
     }
     return 0;
 }
@@ -10199,7 +10199,7 @@ int lua_EditBox_IsInIMECompositionMode(lua_State* L) {
 }
 int lua_EditBox_SetIgnoreArrows(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (w) w->editIgnoreArrows = lua_toboolean(L, 2) != 0;
+    if (w) w->editIgnoreArrows = luaClientSwitchArg(L, 2, true);  // 0x00976890
     return 0;
 }
 
@@ -10328,16 +10328,16 @@ int lua_EditBox_GetMaxBytes(lua_State* L) {
     return 1;
 }
 int lua_EditBox_SetNumeric(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->editNumeric = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->editNumeric = luaClientSwitchArg(L, 2, true);  // 0x00975be0
     return 0;
 }
 int lua_EditBox_SetAutoFocus(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->editAutoFocus = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->editAutoFocus = luaClientSwitchArg(L, 2, true);  // 0x009759d0
     return 0;
 }
 
 int lua_EditBox_SetMultiLine(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->editMultiLine = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->editMultiLine = luaClientSwitchArg(L, 2, true);  // 0x00975b30
     return 0;
 }
 /// HighlightText([start, stop]) - select a run, or all of it.
@@ -10469,7 +10469,7 @@ int lua_MovieFrame_StopMovie(lua_State* L) {
 
 // EnableSubtitles(enable) (+0x2a8).
 int lua_MovieFrame_EnableSubtitles(lua_State* L) {
-    wowee::ui::movie::enableSubtitles(lua_toboolean(L, 2) != 0);
+    wowee::ui::movie::enableSubtitles(luaClientSwitchArg(L, 2, true));  // 0x00970770: (L,2,1)
     return 0;
 }
 
@@ -10630,7 +10630,7 @@ int lua_Slider_SetThumbTexture(lua_State* L) {
 
 /// SetRotatesTexture(flag) and GetRotatesTexture() (0x009719d0, 0x00971970).
 int lua_StatusBar_SetRotatesTexture(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->barRotatesTexture = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->barRotatesTexture = luaClientSwitchArg(L, 2, false);
     return 0;
 }
 int lua_StatusBar_GetRotatesTexture(lua_State* L) {
@@ -10763,7 +10763,7 @@ int lua_EditBox_IsCountInvisibleLetters(lua_State* L) {
 }
 /// SetPassword(on) (0x00975c90).
 int lua_EditBox_SetPassword(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->editPassword = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->editPassword = luaClientSwitchArg(L, 2, true);  // 0x00975c90
     return 0;
 }
 /// GetBlinkSpeed / SetBlinkSpeed(speed) (0x00975dc0, 0x00975d40).
@@ -10850,7 +10850,7 @@ int lua_MessageFrame_GetMaxLines(lua_State* L) {
     return 1;
 }
 int lua_MessageFrame_SetFading(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->messageFading = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->messageFading = luaClientSwitchArg(L, 2, true);  // 0x00973880 / 0x00974570
     return 0;
 }
 int lua_MessageFrame_GetFading(lua_State* L) {

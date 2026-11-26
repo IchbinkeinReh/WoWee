@@ -1957,7 +1957,8 @@ bool BattlefieldStatusPacket::parse(network::Packet& packet, BattlefieldStatusDa
     // queue was never cleared.
     if (wotlkFormat && packet.hasRemaining(8)) {
         const size_t at = packet.getReadPos();
-        if (packet.readUInt64() == 0) {
+        data.header = packet.readUInt64();
+        if (data.header == 0) {
             data.statusId = 0;
             return true;
         }

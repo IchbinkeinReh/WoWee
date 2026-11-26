@@ -1880,8 +1880,8 @@ static int lua_GetItemCount(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnZero(L); }
     const uint32_t itemId = itemIdFromArg(L, 1);
-    const bool bank = lua_toboolean(L, 2) != 0;
-    const bool withBroken = lua_toboolean(L, 3) != 0;
+    const bool bank = luaClientSwitchArg(L, 2, false);
+    const bool withBroken = luaClientSwitchArg(L, 3, false);
     uint32_t count = 0;
     const auto add = [&](const game::ItemDef& d) {
         if (d.itemId != itemId) return;
@@ -6080,7 +6080,7 @@ static int lua_CloseLoot(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const bool noUI = lua_type(L, 1) == LUA_TNUMBER ? lua_tonumber(L, 1) != 0
-                                                    : lua_toboolean(L, 1) != 0;
+                                                    : luaClientSwitchArg(L, 1, false);
     if (noUI && gh->isLootWindowOpen()) {
         gh->playGameErrorSound("ERR_LOOT_NO_UI");
         gh->addUIError(game::interfaceString("ERR_LOOT_NO_UI", "You can't loot right now."));
@@ -7037,7 +7037,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: RespondMailLockSendItem(slot, keepItem)");   // 0x0056f410
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const bool keep = lua_toboolean(L, 2) != 0;
+            const bool keep = luaClientSwitchArg(L, 2, false);
             if (!gh) return 0;
             if (!keep && slot >= 1) gh->detachMailAttachment(slot - 1);
             gh->fireAddonEvent("MAIL_UNLOCK_SEND_ITEMS", {});
@@ -7150,7 +7150,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"RepairAllItems", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (gh && gh->getVendorItems().canRepair) {
-                bool useGuildBank = lua_toboolean(L, 1) != 0;
+                bool useGuildBank = luaClientSwitchArg(L, 1, false);
                 gh->repairAll(gh->getVendorGuid(), useGuildBank);
             }
             return 0;

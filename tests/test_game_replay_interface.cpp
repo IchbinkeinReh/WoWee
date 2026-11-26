@@ -10,6 +10,7 @@
 #include "game/dressing_room.hpp"
 #include "game/inventory_handler.hpp"
 #include "game/player_display_flags.hpp"
+#include "game/quest_link.hpp"
 #include "game_replay.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "ui/framexml_emitter.hpp"
@@ -33,7 +34,7 @@ using wowee::game::UF;
 namespace {
 
 struct Interface {
-    explicit Interface(Session& s) {
+    explicit Interface(Session& s) : session(s) {
         REQUIRE(engine.initialize());
         engine.setGameHandler(&s.handler());
         s.handler().setAddonEventCallback(
@@ -47,6 +48,13 @@ struct Interface {
     }
     bool is(const std::string& expression) { return engine.evaluateBoolean(expression); }
     void layout() { engine.widgets().layout(1024.0f, 768.0f); }
+    // The session outlives this and still fires events on its way out
+    // (MIRROR_TIMER_STOP and others from onLeaveWorld): they must not reach
+    // this engine once it is gone (ASan, stack-use-after-scope).
+    ~Interface() { session.handler().setAddonEventCallback({}); }
+    Interface(const Interface&) = delete;
+    Interface& operator=(const Interface&) = delete;
+    Session& session;
     wowee::addons::LuaEngine engine;
 };
 
@@ -1187,7 +1195,6 @@ TEST_CASE("a letter emptied of all it held is deleted", "[replay][interface]") {
     const Letter letter = GENERATE(Letter{0, "", 0, true}, Letter{0, "Hello", 0, false}, Letter{0, "", 500, false},
                                    Letter{3, "", 0, true});
     Session s;
-    s.setConnected(true);
     s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
     Interface ui(s);
     ui.run("f = CreateFrame('Frame') f:RegisterEvent('CLOSE_INBOX_ITEM') f:SetScript('OnEvent', function(self, e, a) closed = a end)");
@@ -3493,4 +3500,233 @@ TEST_CASE("UnitXPMax is 0 at the cap and for others (0x0060eae0)", "[replay][int
     Interface ui(s);
     CHECK(ui.is("UnitXPMax('player') == 0"));
     CHECK(ui.is("UnitXPMax('target') == 0"));
+}
+
+namespace {
+// SMSG_BATTLEFIELD_STATUS for WotLK: the slot, its eight-byte record, the
+// levels, instance, rated byte, status and the status' own tail.
+wowee::network::Packet bgStatus(uint32_t slot, uint64_t record, uint32_t status, uint32_t map) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_BATTLEFIELD_STATUS));
+    p.writeUInt32(slot);
+    p.writeUInt64(record);
+    p.writeUInt8(10); p.writeUInt8(19); p.writeUInt32(1); p.writeUInt8(0);
+    p.writeUInt32(status);
+    if (status == 2) { p.writeUInt32(map); p.writeUInt64(0); p.writeUInt32(80000); }
+    if (status == 3) { p.writeUInt32(map); p.writeUInt64(0); p.writeUInt32(0); p.writeUInt32(1000); p.writeUInt8(0); }
+    return p;
+}
+// Warsong Gulch: arena type 0, arena byte 0, type 2, 0x1F90.
+constexpr uint64_t kWarsongRecord = (0x1F90ull << 48) | (2ull << 16);
+
+uint64_t firstQword(wowee::network::Packet p) {
+    p.setReadPos(0);
+    return p.readUInt64();
+}
+}  // namespace
+
+// T392: LeaveBattlefield 0x0054c250 writes the running slot's record as one
+// uint64 (eight zeros without a battle); the opcode alone was dropped by the
+// realm.
+TEST_CASE("LeaveBattlefield carries the running slot's record (0x0054c250)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("LeaveBattlefield()");
+    REQUIRE(s.sent().of(Opcode::CMSG_LEAVE_BATTLEFIELD).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_LEAVE_BATTLEFIELD)[0].getSize() == 8);
+    CHECK(firstQword(s.sent().of(Opcode::CMSG_LEAVE_BATTLEFIELD)[0]) == 0);
+    s.receive(bgStatus(0, kWarsongRecord, 3, 489));
+    ui.run("LeaveBattlefield()");
+    REQUIRE(s.sent().of(Opcode::CMSG_LEAVE_BATTLEFIELD).size() == 2);
+    CHECK(s.sent().of(Opcode::CMSG_LEAVE_BATTLEFIELD)[1].getSize() == 8);
+    CHECK(firstQword(s.sent().of(Opcode::CMSG_LEAVE_BATTLEFIELD)[1]) == kWarsongRecord);
+}
+
+// T393: AcceptBattlefieldPort reads its answer by 0x00815500 (0x0054da10), so
+// StaticPopup's AcceptBattlefieldPort(data, 0) declines.
+TEST_CASE("AcceptBattlefieldPort(i, 0) declines (0x0054da10)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto answer = [&](size_t i) -> int {
+        auto p = s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT)[i];
+        REQUIRE(p.getSize() == 9);
+        CHECK(firstQword(p) == kWarsongRecord);
+        return p.getData()[8];
+    };
+    s.receive(bgStatus(0, kWarsongRecord, 2, 489));
+    ui.run("AcceptBattlefieldPort(1, 0)");
+    REQUIRE(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).size() == 1);
+    CHECK(answer(0) == 0);
+    s.receive(bgStatus(0, kWarsongRecord, 2, 489));
+    ui.run("AcceptBattlefieldPort(1, 'false')");
+    REQUIRE(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).size() == 2);
+    CHECK(answer(1) == 0);
+    s.receive(bgStatus(0, kWarsongRecord, 2, 489));
+    ui.run("portAnswer = AcceptBattlefieldPort(1, 1)");
+    REQUIRE(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).size() == 3);
+    CHECK(answer(2) == 1);
+    CHECK(ui.is("portAnswer == 1"));
+    // Only two slots: a third answers nil and sends nothing.
+    ui.run("portAnswer = AcceptBattlefieldPort(3, 1)");
+    CHECK(ui.is("portAnswer == nil"));
+    CHECK(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).size() == 3);
+}
+
+// T390: RequestBattlefieldScoreData (0x0054dcb0 -> 0x0054cf60) asks only in a
+// running battle and at most once in 5 s; the scoreboard calls it each frame.
+TEST_CASE("RequestBattlefieldScoreData asks once in 5 s and only in a battle (0x0054cf60)",
+          "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("for i = 1, 3 do RequestBattlefieldScoreData() end");
+    CHECK(s.sent().of(Opcode::MSG_PVP_LOG_DATA).empty());
+    s.receive(bgStatus(0, kWarsongRecord, 3, 489));
+    ui.run("for i = 1, 10 do RequestBattlefieldScoreData() end");
+    CHECK(s.sent().of(Opcode::MSG_PVP_LOG_DATA).size() == 1);
+    wowee::core::advanceTestClock(4.9);
+    ui.run("RequestBattlefieldScoreData()");
+    CHECK(s.sent().of(Opcode::MSG_PVP_LOG_DATA).size() == 1);
+    wowee::core::advanceTestClock(0.2);
+    ui.run("RequestBattlefieldScoreData() RequestBattlefieldScoreData()");
+    CHECK(s.sent().of(Opcode::MSG_PVP_LOG_DATA).size() == 2);
+}
+
+// T391: the scoreboard's columns are WorldStateUI.dbc's (0x0054ae40 at a
+// running status; 0x00549f20, 0x0054c170): the first unbroken run of type-2
+// rows of the battle's map or -1, with their text, icon and tooltip.
+TEST_CASE("battleground stat columns come from WorldStateUI (0x0054c170)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto row = [](uint32_t id, int32_t map, uint32_t type, const char* text, const char* icon,
+                        const char* tip) {
+        wowee::game::world_state_ui::Row r;
+        r.id = id; r.mapId = map; r.type = type; r.text = text; r.icon = icon; r.tooltip = tip;
+        return r;
+    };
+    s.handler().setWorldStateUiRows({row(1, 489, 1, "x", "", ""),
+                                     row(42, 489, 2, "Eroberte Flaggen", "IconCap", "TipCap"),
+                                     row(44, 489, 2, "Zurueckgebrachte Flaggen", "IconRet", "TipRet"),
+                                     row(50, 489, 1, "y", "", ""), row(51, 489, 2, "z", "", ""),
+                                     row(60, 30, 2, "Alterac", "", "")});
+    CHECK(ui.is("GetNumBattlefieldStats() == 0"));
+    CHECK(ui.is("select('#', GetBattlefieldStatInfo(1)) == 3 and GetBattlefieldStatInfo(1) == nil"));
+    s.receive(bgStatus(0, kWarsongRecord, 3, 489));
+    CHECK(ui.is("GetNumBattlefieldStats() == 2"));
+    CHECK(ui.is("select(1, GetBattlefieldStatInfo(1)) == 'Eroberte Flaggen' and "
+                "select(2, GetBattlefieldStatInfo(1)) == 'IconCap' and "
+                "select(3, GetBattlefieldStatInfo(1)) == 'TipCap'"));
+    CHECK(ui.is("GetBattlefieldStatInfo(2) == 'Zurueckgebrachte Flaggen'"));
+    CHECK(ui.is("GetBattlefieldStatInfo(3) == nil"));
+}
+
+// T394: flag arguments read as the client reads a switch (0x00815500): 0 and
+// 'false' are off, and each setter's own default for none.
+TEST_CASE("flag setters read 0 as off (0x00815500)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("eb = CreateFrame('EditBox') sm = CreateFrame('ScrollingMessageFrame') bt = CreateFrame('Button')");
+    ui.run("eb:SetMultiLine(1) eb:SetMultiLine(0) eb:SetNumeric(1) eb:SetNumeric('false') "
+           "eb:SetPassword(1) eb:SetPassword(0) eb:SetAutoFocus(0) eb:SetAltArrowKeyMode(0) "
+           "eb:SetCountInvisibleLetters(0) sm:SetFading(0) sm:SetHyperlinksEnabled(0)");
+    CHECK(ui.is("not eb:IsMultiLine() and not eb:IsNumeric() and not eb:IsPassword() and not eb:IsAutoFocus()"));
+    CHECK(ui.is("not eb:GetAltArrowKeyMode() and not eb:GetCountInvisibleLetters()"));
+    CHECK(ui.is("not sm:GetFading() and not sm:GetHyperlinksEnabled()"));
+    // No argument: on for these (0x00815500(L,2,1)) ...
+    ui.run("eb:SetMultiLine() eb:SetNumeric() sm:SetFading()");
+    CHECK(ui.is("eb:IsMultiLine() and eb:IsNumeric() and sm:GetFading()"));
+    // ... off for SetMotionScriptsWhileDisabled (0x009783b0: (L,2,0)).
+    ui.run("bt:SetMotionScriptsWhileDisabled(1) bt:SetMotionScriptsWhileDisabled(0)");
+    CHECK(ui.is("not bt:GetMotionScriptsWhileDisabled()"));
+    ui.run("bt:SetMotionScriptsWhileDisabled(1) bt:SetMotionScriptsWhileDisabled()");
+    CHECK(ui.is("not bt:GetMotionScriptsWhileDisabled()"));
+}
+
+// UnitIsAFK 0x0060cc30: the active player answers 1 while it has marked itself
+// away (0x00bcefec), before the realm's PLAYER_FLAGS bit comes back.
+TEST_CASE("UnitIsAFK answers the player's own away mark (0x0060cc30)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("UnitIsAFK('player') == nil and UnitIsDND('player') == nil"));
+    s.handler().afkStatusRef() = true;
+    CHECK(ui.is("UnitIsAFK('player') == 1"));
+    CHECK(ui.is("UnitIsDND('player') == nil"));
+    s.handler().afkStatusRef() = false;
+}
+
+// SpellStopCasting 0x00809ea0: a charmed player stops nothing and answers nil
+// (the first test, UNIT_FIELD_CHARMEDBY); free again, the cast is stopped.
+TEST_CASE("SpellStopCasting stops nothing while charmed (0x00809ea0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_CHARMEDBY, 0x77}});
+    s.setConnected(true);
+    Interface ui(s);
+    wowee::network::Packet start(wowee::game::wireOpcode(Opcode::SMSG_SPELL_START));
+    start.writePackedGuid(Session::kPlayerGuid);
+    start.writePackedGuid(Session::kPlayerGuid);
+    start.writeUInt8(1);
+    start.writeUInt32(133);
+    start.writeUInt32(0);
+    start.writeUInt32(3000);
+    start.writeUInt32(0);
+    s.receive(start);
+    REQUIRE(s.handler().getSpellHandler()->hasOwnCast());
+    CHECK(ui.is("SpellStopCasting() == nil"));
+    CHECK(s.sent().of(Opcode::CMSG_CANCEL_CAST).empty());
+    CHECK(s.handler().getSpellHandler()->hasOwnCast());
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_CHARMEDBY, 0}}));
+    CHECK(ui.is("SpellStopCasting() == 1"));
+    CHECK_FALSE(s.handler().getSpellHandler()->hasOwnCast());
+}
+
+// UnitIsPVP 0x0060ce20 / UnitIsPVPFreeForAll 0x0060cfb0: a unit's PvP byte of
+// UNIT_FIELD_BYTES_2 (0x01 flagged, 0x04 free-for-all), not UNIT_FIELD_FLAGS.
+TEST_CASE("UnitIsPVP reads the PvP byte of UNIT_FIELD_BYTES_2 (0x0060ce20)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_FLAGS, 0x1000}});
+    Interface ui(s);
+    CHECK(ui.is("UnitIsPVP('player') == nil and UnitIsPVPFreeForAll('player') == nil"));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_BYTES_2, 0x0100}}));
+    CHECK(ui.is("UnitIsPVP('player') == 1 and UnitIsPVPFreeForAll('player') == nil"));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_BYTES_2, 0x0400}}));
+    CHECK(ui.is("UnitIsPVP('player') == nil and UnitIsPVPFreeForAll('player') == 1"));
+}
+
+// T397: 0x00509dd0 fills the $-tokens of battleground announcements
+// (0x24-0x26) and achievement lines (0x30, 0x31) with the message's target,
+// as it does a monster's line.
+TEST_CASE("a battleground announcement names its target for $n (0x00509dd0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    wowee::game::GameHandlerTestAccess::setCharacter(s.handler(), "A", "Locki", Session::kPlayerGuid);
+    Interface ui(s);
+    ui.run("bgLine = nil local f = CreateFrame('Frame') f:RegisterEvent('CHAT_MSG_BG_SYSTEM_HORDE') "
+           "f:SetScript('OnEvent', function(self, e, msg) bgLine = msg end)");
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_MESSAGECHAT));
+    p.writeUInt8(0x26);
+    p.writeUInt32(0);
+    p.writeUInt64(0);
+    p.writeUInt32(0);
+    p.writeUInt64(Session::kPlayerGuid);
+    const std::string text = "$n hat die Flagge der Allianz aufgenommen!";
+    p.writeUInt32(static_cast<uint32_t>(text.size() + 1));
+    p.writeString(text);
+    p.writeUInt8(0);
+    s.receive(p);
+    CHECK(ui.is("bgLine == 'Locki hat die Flagge der Allianz aufgenommen!'"));
+}
+
+// T398: an incoming quest link is recoloured for the reader (0x00509dd0 with
+// 0x0061e540): a level-3 quest is grey at 80, -1 is the reader's own level,
+// an escaped '||Hquest:' is text.
+TEST_CASE("incoming quest links take the reader's colour (0x00509dd0)", "[replay][interface]") {
+    using wowee::game::recolourQuestLinks;
+    CHECK(recolourQuestLinks("Q |cffffff00|Hquest:789:3|h[Stich]|h|r", 80) == "Q |cff808080|Hquest:789:3|h[Stich]|h|r");
+    CHECK(recolourQuestLinks("|cff808080|Hquest:1:-1|h[a]|h|r", 80) == "|cffffff00|Hquest:1:-1|h[a]|h|r");
+    CHECK(recolourQuestLinks("|cff808080|Hquest:1:85|h[a]|h|r", 80) == "|cffff2020|Hquest:1:85|h[a]|h|r");
+    CHECK(recolourQuestLinks("abcdefghij||Hquest:1:3|h", 80) == "abcdefghij||Hquest:1:3|h");
 }

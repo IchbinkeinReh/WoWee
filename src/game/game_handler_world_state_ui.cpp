@@ -72,6 +72,20 @@ std::optional<std::vector<const world_state_ui::Row*>> GameHandler::worldStateUi
     return lines;
 }
 
+std::vector<const world_state_ui::Row*> GameHandler::battlefieldStatColumns() {
+    std::vector<const world_state_ui::Row*> columns;
+    // 0x00bea564, the running battle's map; nothing until a battle runs and
+    // again nothing once its slot's record is empty (0x00bea5ac zeroed).
+    const uint32_t map = battlefieldMapId();
+    if (map == 0) return columns;
+    loadWorldStateUi();
+    for (const auto& r : worldStateUiRows_) {
+        if ((r.mapId == static_cast<int32_t>(map) || r.mapId == -1) && r.type == 2) columns.push_back(&r);
+        else if (!columns.empty()) break;
+    }
+    return columns;
+}
+
 void GameHandler::setWorldStateUiRows(std::vector<world_state_ui::Row> rows) {
     worldStateUiLoaded_ = true;
     worldStateUiRows_ = std::move(rows);

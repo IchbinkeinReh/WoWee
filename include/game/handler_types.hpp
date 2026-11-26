@@ -200,6 +200,8 @@ struct WhoEntry {
 
 struct BgQueueSlot {
     uint32_t queueSlot = 0;
+    /// The slot's record as the status brought it (BattlefieldStatusData::header).
+    uint64_t header = 0;
     uint32_t bgTypeId = 0;
     uint8_t arenaType = 0;
     uint32_t statusId = 0;

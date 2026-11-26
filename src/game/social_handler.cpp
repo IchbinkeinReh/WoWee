@@ -4652,6 +4652,7 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
         bool wasInvite = (prevStatus == 2);
         statusChanged = (prevStatus != statusId) || (bgQueues_[queueSlot].bgTypeId != bgTypeId);
         bgQueues_[queueSlot].queueSlot = queueSlot;
+        bgQueues_[queueSlot].header = status.header;
         bgQueues_[queueSlot].bgTypeId = bgTypeId;
         bgQueues_[queueSlot].arenaType = arenaType;
         bgQueues_[queueSlot].statusId = statusId;
@@ -4834,6 +4835,16 @@ bool SocialHandler::hasPendingBgInvite() const {
     return false;
 }
 
+// A slot's record as the answers about it carry it: 0x0054da10 and 0x0054c250
+// write the eight bytes the status brought (0x0054ae40 keeps them whole) as
+// one uint64. A status that came without them (pre-WotLK) is rebuilt from its
+// parts with zeros where the realm's own bytes would be.
+static void writeBgSlotRecord(network::Packet& pkt, const BgQueueSlot& slot) {
+    if (slot.header != 0) { pkt.writeUInt64(slot.header); return; }
+    pkt.writeUInt8(slot.arenaType); pkt.writeUInt8(0x00); pkt.writeUInt32(slot.bgTypeId);
+    pkt.writeUInt16(0x0000);
+}
+
 void SocialHandler::acceptBattlefield(uint32_t queueSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     const BgQueueSlot* slot = nullptr;
@@ -4843,8 +4854,8 @@ void SocialHandler::acceptBattlefield(uint32_t queueSlot) {
     // for want of an invitation either. These were English lines.
     if (!slot) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_BATTLEFIELD_PORT));
-    pkt.writeUInt8(slot->arenaType); pkt.writeUInt8(0x00); pkt.writeUInt32(slot->bgTypeId);
-    pkt.writeUInt16(0x0000); pkt.writeUInt8(1);
+    writeBgSlotRecord(pkt, *slot);
+    pkt.writeUInt8(1);
     owner_.getSocket()->send(pkt);
     uint32_t clearSlot = slot->queueSlot;
     if (clearSlot < bgQueues_.size()) bgQueues_[clearSlot].statusId = 3;
@@ -4925,9 +4936,16 @@ void SocialHandler::reportPvpAfk(uint64_t playerGuid) {
     }
 }
 
+// LeaveBattlefield 0x0054c250: CMSG_LEAVE_BATTLEFIELD with the running
+// battle's slot record (0x00acd16c's, as one uint64), or eight zero bytes when
+// no battle runs. This sent the opcode alone; the realm reads the eight bytes
+// and drops a short packet, so 'Leave Battleground' did nothing (T392).
 void SocialHandler::leaveBattlefield() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_LEAVE_BATTLEFIELD));
+    const int32_t at = battlefieldInstanceSlot_;
+    if (at >= 0 && static_cast<size_t>(at) < bgQueues_.size()) writeBgSlotRecord(pkt, bgQueues_[at]);
+    else pkt.writeUInt64(0);
     owner_.getSocket()->send(pkt);
 }
 
@@ -4945,8 +4963,8 @@ void SocialHandler::declineBattlefield(uint32_t queueSlot) {
     // invitation declined." and "Left the queue for X.".
     if (!slot) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_BATTLEFIELD_PORT));
-    pkt.writeUInt8(slot->arenaType); pkt.writeUInt8(0x00); pkt.writeUInt32(slot->bgTypeId);
-    pkt.writeUInt16(0x0000); pkt.writeUInt8(0);
+    writeBgSlotRecord(pkt, *slot);
+    pkt.writeUInt8(0);
     owner_.getSocket()->send(pkt);
     uint32_t clearSlot = slot->queueSlot;
     if (clearSlot < bgQueues_.size()) bgQueues_[clearSlot] = BgQueueSlot{};
@@ -4956,10 +4974,19 @@ void SocialHandler::declineBattlefield(uint32_t queueSlot) {
         owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_STATUS", {std::to_string(clearSlot + 1)});
 }
 
+// RequestBattlefieldScoreData 0x0054dcb0 -> 0x0054cf60: MSG_PVP_LOG_DATA only
+// while a battle runs (0x00acd16c set and its slot's type word non-zero) and
+// at most once in 5000 ms (0x00bea5b4 = now + 5000). The scoreboard calls it
+// from OnUpdate, every frame; this sent each call, ~20 a second (T390).
 void SocialHandler::requestPvpLog() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const int32_t at = battlefieldInstanceSlot_;
+    if (at < 0 || static_cast<size_t>(at) >= bgQueues_.size() || bgQueues_[at].bgTypeId == 0) return;
+    const auto now = core::steadyNow();
+    if (pvpLogNextAllowed_ != std::chrono::steady_clock::time_point{} && now < pvpLogNextAllowed_) return;
     network::Packet pkt(wireOpcode(Opcode::MSG_PVP_LOG_DATA));
     owner_.getSocket()->send(pkt);
+    pvpLogNextAllowed_ = now + std::chrono::milliseconds(5000);
 }
 
 // ============================================================

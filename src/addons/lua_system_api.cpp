@@ -5324,7 +5324,7 @@ static int lua_SetChatColorNameByClass(lua_State* L) {
         return luaL_error(L, "Usage: SetChatColorNameByClass(chatType, colorNameByClass)");
     }
     const std::string type = lua_tostring(L, 1);
-    const bool on = lua_toboolean(L, 2) != 0;
+    const bool on = luaClientSwitchArg(L, 2, false);
     if (!chatColorTable().setNameByClass(type, on)) return 0;
     if (auto* gh = getGameHandler(L)) {
         gh->fireAddonEvent("UPDATE_CHAT_COLOR_NAME_BY_CLASS", {type, game::eventBool(on)});
@@ -7418,7 +7418,7 @@ static int pushHasCurrent(lua_State* L, bool has) {
 /// CombatLogGetNumEntries([ignoreFilter]) (0x0074fa70).
 static int lua_CombatLogGetNumEntries(lua_State* L) {
     auto* log = combatLogOf(L);
-    lua_pushnumber(L, log ? log->numEntries(lua_toboolean(L, 1) != 0) : 0);
+    lua_pushnumber(L, log ? log->numEntries(luaClientSwitchArg(L, 1, false)) : 0);  // 0x0074fa70
     return 1;
 }
 
@@ -7444,7 +7444,7 @@ static int lua_CombatLogGetCurrentEntry(lua_State* L) {
 static int lua_CombatLogSetCurrentEntry(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CombatLogSetCurrentEntry(index [,ignoreFilter])");
     auto* log = combatLogOf(L);
-    return pushHasCurrent(L, log && log->setCurrent(static_cast<int>(lua_tonumber(L, 1)), lua_toboolean(L, 2) != 0));
+    return pushHasCurrent(L, log && log->setCurrent(static_cast<int>(lua_tonumber(L, 1)), luaClientSwitchArg(L, 2, false)));
 }
 
 /// CombatLogAdvanceEntry(count [,ignoreFilter]) (0x0074fc20): on toward the
@@ -7452,7 +7452,7 @@ static int lua_CombatLogSetCurrentEntry(lua_State* L) {
 static int lua_CombatLogAdvanceEntry(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CombatLogAdvanceEntry(count [,ignoreFilter])");
     auto* log = combatLogOf(L);
-    return pushHasCurrent(L, log && log->advance(static_cast<int>(lua_tonumber(L, 1)), lua_toboolean(L, 2) != 0));
+    return pushHasCurrent(L, log && log->advance(static_cast<int>(lua_tonumber(L, 1)), luaClientSwitchArg(L, 2, false)));
 }
 
 /// CombatLogAddFilter(events, srcMaskOrGuid, dstMaskOrGuid [,spell])
@@ -7757,7 +7757,7 @@ static int lua_JoinBattlefield(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const bool asGroup = lua_toboolean(L, 2) != 0;
+    const bool asGroup = luaClientSwitchArg(L, 2, false);
 
     const auto& bgs = gh->getAvailableBgs();
     const uint32_t bgTypeId = currentBattlefieldType(gh);   // 0x00bea53c
@@ -9930,7 +9930,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"FillLocalizedClassList", [](lua_State* L) -> int {
             if (!lua_istable(L, 1))
                 return luaL_error(L, "Usage: FillLocalizedClassList(classTable[, isFemale])");
-            const bool female = lua_toboolean(L, 2) != 0;
+            const bool female = luaClientSwitchArg(L, 2, false);  // 0x0060a510
             auto* gh = getGameHandler(L);
             auto* am = gh ? gh->services().assetManager : nullptr;
             const auto* layouts = pipeline::getActiveDBCLayout();
@@ -11501,7 +11501,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CanInspect", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* uid = luaL_optstring(L, 1, "target");
-            const bool showError = lua_toboolean(L, 2) != 0;
+            const bool showError = luaClientSwitchArg(L, 2, false);
             if (!gh) { luaPushOneOrNil(L, 0); return 1; }
             const auto complain = [&](const server_notice::GameError& why) {
                 if (showError) gh->sayGameError(why);

@@ -859,7 +859,7 @@ static int lua_GetGuildInfoFunc(lua_State* L) {
 static int lua_GetNumGuildMembers(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnZero(L); }
-    if (lua_toboolean(L, 1)) lua_pushnumber(L, gh->getGuildRoster().members.size());
+    if (luaClientSwitchArg(L, 1, false)) lua_pushnumber(L, gh->getGuildRoster().members.size());
     else lua_pushnumber(L, guildRosterView(gh).size());
     return 1;
 }
@@ -3268,7 +3268,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 }
                 // Arg 3 is the exactMatch flag here too (0x00815500(L,3,0)),
                 // which the loot dropdown never passes and /loot does not either.
-                masterGuid = resolveGroupMember(gh, who, lua_toboolean(L, 3) != 0);
+                masterGuid = resolveGroupMember(gh, who, luaClientSwitchArg(L, 3, false));
                 // The resolver searched the group's list, but its token step can
                 // still name somebody outside it - "target" at a stranger - and
                 // the reference confirms membership afterwards (0x0052c680 for
@@ -3421,7 +3421,7 @@ void registerSocialLuaAPI(lua_State* L) {
             uint64_t guid = 0;
             if (lua_isstring(L, 2) || lua_isnumber(L, 2)) {
                 std::string who(lua_tostring(L, 2) ? lua_tostring(L, 2) : "");
-                guid = resolveGroupMember(gh, who, lua_toboolean(L, 3) != 0);
+                guid = resolveGroupMember(gh, who, luaClientSwitchArg(L, 3, false));
                 if (guid == 0) {
                     // "target", or nothing at all, is the other complaint - and
                     // compared case-blind, as it is in 0x0052e1b0 and 0x0052df40.
@@ -3685,9 +3685,10 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BattlefieldMgrQueueInviteResponse", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const auto battleId = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            gh->respondBfMgrQueueInvite(battleId ? battleId : gh->getBfMgrBattleId(),
-                                        lua_toboolean(L, 2) != 0);
+            // 0x0054e1c0: as the entry answer - the battle truncated, the
+            // answer by 0x00815500(L,2,0), so 0 declines.
+            gh->respondBfMgrQueueInvite(static_cast<uint32_t>(luaToClientInt(L, 1)),
+                                        luaClientSwitchArg(L, 2, false));
             return 0;
         }},
                 // BattlefieldMgrQueueRequest(battleId) (0x0054e1a0 ->
@@ -4160,7 +4161,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // as false rather than as a missing parameter.
                 {"ConfirmReadyCheck", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) {
-                gh->respondToReadyCheck(lua_toboolean(L, 1) != 0);
+                gh->respondToReadyCheck(luaClientSwitchArg(L, 1, false));
                 gh->dismissReadyCheck();
             }
             return 0;
@@ -4491,7 +4492,7 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto& opts = gh->getCurrentGossip().options;
             if (index > static_cast<int>(opts.size())) return 0;
             const auto& opt = opts[static_cast<size_t>(index - 1)];
-            const bool confirmed = lua_toboolean(L, 3) != 0;
+            const bool confirmed = luaClientSwitchArg(L, 3, false);
 
             // 0x0058af10, in its order: an option with a box asks first;
             // then a coded one with no code typed asks for it, answered or
@@ -4613,7 +4614,7 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!gh) return 0;
             std::string who(luaL_optstring(L, 1, ""));
             toLowerInPlace(who);
-            const bool exact = lua_toboolean(L, 2) != 0;
+            const bool exact = luaClientSwitchArg(L, 2, false);
             // An empty text and the word "target" are both answered by the
             // token half of the resolver - 0x0060abf0 with its third argument
             // set hands back the unit the client is looking at - and
@@ -4867,7 +4868,7 @@ void registerSocialLuaAPI(lua_State* L) {
             // that meant, so an empty argument asks for nothing.
             if (name.empty()) return 0;
             if (const uint64_t guid =
-                    resolveGroupMember(gh, name, lua_toboolean(L, 2) != 0))
+                    resolveGroupMember(gh, name, luaClientSwitchArg(L, 2, false)))
                 gh->promoteToLeader(guid);
             return 0;
         }},
@@ -5683,7 +5684,7 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!gh || !unit) return 0;
             std::string uid(unit);
             toLowerInPlace(uid);
-            const bool exact = lua_toboolean(L, 2) != 0;
+            const bool exact = luaClientSwitchArg(L, 2, false);
             uint64_t guid = resolveUnitGuid(gh, uid);
             if (!guid) guid = resolveNamedUnit(gh, uid, exact, true);
             if (guid) gh->proposeDuel(guid);

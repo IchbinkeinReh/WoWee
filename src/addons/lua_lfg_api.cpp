@@ -466,7 +466,7 @@ void registerLfgLuaAPI(lua_State* L) {
     {"SetLFGDungeonEnabled", [](lua_State* L) -> int {
         if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetLFGDungeonEnabled(dungeonID, isEnabled)");   // 0x00556b60
         const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
-        if (id > 0) putCVarId(kSelectedDungeons, static_cast<uint32_t>(id), lua_isnone(L, 2) || lua_toboolean(L, 2) != 0);
+        if (id > 0) putCVarId(kSelectedDungeons, static_cast<uint32_t>(id), luaClientSwitchArg(L, 2, true));  // (L,2,1)
         return 0;
     }},
     {"SetLFGHeaderCollapsed", [](lua_State* L) -> int {
@@ -477,7 +477,7 @@ void registerLfgLuaAPI(lua_State* L) {
         const uint32_t group = static_cast<uint32_t>(-id);
         for (const auto& [known, g] : gh->lfgGroups())
             if (known == group) {
-                putCVarId(kCollapsedHeaders, group, lua_toboolean(L, 2) != 0);
+                putCVarId(kCollapsedHeaders, group, luaClientSwitchArg(L, 2, false));
                 break;
             }
         return 0;
@@ -539,10 +539,10 @@ void registerLfgLuaAPI(lua_State* L) {
         if (!gh) return 0;
         // 0x00553d60: leader, tank, healer, damage as bits 1, 2, 4, 8.
         uint8_t roles = 0;
-        if (lua_toboolean(L, 1)) roles |= 0x01;
-        if (lua_toboolean(L, 2)) roles |= 0x02;
-        if (lua_toboolean(L, 3)) roles |= 0x04;
-        if (lua_toboolean(L, 4)) roles |= 0x08;
+        if (luaClientSwitchArg(L, 1, false)) roles |= 0x01;
+        if (luaClientSwitchArg(L, 2, false)) roles |= 0x02;
+        if (luaClientSwitchArg(L, 3, false)) roles |= 0x04;
+        if (luaClientSwitchArg(L, 4, false)) roles |= 0x08;
         gh->lfgSetRoles(roles);
         return 0;
     }},
@@ -566,7 +566,7 @@ void registerLfgLuaAPI(lua_State* L) {
     {"CompleteLFGRoleCheck", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
         if (!gh) return 0;
-        const int r = gh->lfgCompleteRoleCheck(lua_toboolean(L, 1) != 0);
+        const int r = gh->lfgCompleteRoleCheck(luaClientSwitchArg(L, 1, false));
         if (r < 0) return 0;
         lua_pushboolean(L, r);
         return 1;

@@ -3918,7 +3918,7 @@ static int lua_GetBindingAction(lua_State* L) {
     seedBindingDefaults();
     const std::string key = luaL_checkstring(L, 1);
     // checkOverride (0x00562490): the key's overrides answer first.
-    if (lua_toboolean(L, 2)) {
+    if (luaClientSwitchArg(L, 2, false)) {
         if (const auto over = overrideBindings().lookup(key)) {
             lua_pushstring(L, over->c_str());
             return 1;
@@ -4308,7 +4308,7 @@ static int lua_SetOverrideBinding(lua_State* L) {
     if (!overrideArgsOk(L))
         return luaL_error(L, "Usage: SetOverrideBinding(owner, isPriority, \"KEY\"[, \"COMMAND\"])");
     const char* command = lua_isstring(L, 4) ? lua_tostring(L, 4) : "";
-    putOverride(L, lua_toboolean(L, 2) != 0, command);
+    putOverride(L, luaClientSwitchArg(L, 2, false), command);
     return 0;
 }
 
@@ -4651,7 +4651,7 @@ void registerActionLuaAPI(lua_State* L) {
             if (!gh) return 0;
             const std::string name = lua_tostring(L, 1);
             if (name.empty()) return luaL_error(L, "CreateMacro() failed, no name specified");
-            const uint32_t id = game::macro_list::newId(gh->macroList(), lua_toboolean(L, 4) != 0);
+            const uint32_t id = game::macro_list::newId(gh->macroList(), luaClientSwitchArg(L, 4, false));
             if (id == 0) return luaL_error(L, "CreateMacro() failed, already have %d macros", 36);
             gh->setMacroText(id, lua_isstring(L, 3) ? lua_tostring(L, 3) : "");
             gh->setMacroMeta(id, name, macroIconArg(L, 2).value_or(std::string()));
@@ -4755,7 +4755,7 @@ void registerActionLuaAPI(lua_State* L) {
                 // SetUIVisibility(shown) (0x00517c20): what the world draws
                 // with the interface hidden - see GameHandler::isUiVisible.
                 {"SetUIVisibility",   [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->setUiVisible(lua_isnoneornil(L, 1) || lua_toboolean(L, 1) != 0);
+            if (auto* gh = getGameHandler(L)) gh->setUiVisible(luaClientSwitchArg(L, 1, true));  // 0x00517c20: (L,1,1), nil hides
             return 0;
         }},
                 // ConsoleAddMessage(string) (0x00512090): the usage line for

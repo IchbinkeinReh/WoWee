@@ -3719,6 +3719,11 @@ public:
     std::optional<std::vector<const world_state_ui::Row*>> worldStateUiLines();
     /// WorldStateUI.dbc's rows, for a test that has no files.
     void setWorldStateUiRows(std::vector<world_state_ui::Row> rows);
+    /// The scoreboard's battleground columns (0x0054ae40 at a running status,
+    /// read by GetNumBattlefieldStats 0x00549f20 / GetBattlefieldStatInfo
+    /// 0x0054c170): the first unbroken run of WorldStateUI.dbc rows, in file
+    /// order, whose map is the running battle's (or -1) and whose type is 2.
+    std::vector<const world_state_ui::Row*> battlefieldStatColumns();
     /// 0x005488f0, every frame of the world: WORLD_STATE_UI_TIMER_UPDATE (event 0x28b) once a
     /// second while a timed row is shown, and the server's time asked for every twenty.
     void tickWorldStateUi();

@@ -456,23 +456,61 @@ static int lua_UnitIsDeadOrGhost(lua_State* L) {
 ///
 /// PLAYER_FLAGS, not UNIT_FIELD_FLAGS: 0x01 there is UNIT_FLAG_SERVER_CONTROLLED
 /// and has nothing to do with being away.
-static int pushPlayerFlagPredicate(lua_State* L, uint32_t bit) {
+///
+/// 0x0060cc30 (away) and 0x0060cd50 (busy) look the unit up as a player
+/// object only. Without one, a group member's status byte answers (0x00513c30,
+/// +8: 0x40 away, 0x80 busy). With one, the away test first answers nil for a
+/// player the active player may attack (0x00729740), then 1 for the active
+/// player while it has marked itself away (0x00bcefec, set by /afk before
+/// the realm's flag comes back), and else PLAYER_FLAGS.
+static int pushPlayerFlagPredicate(lua_State* L, uint32_t bit, uint16_t memberBit, bool away) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnFalse(L); }
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid != 0) {
-        auto entity = gh->getEntityManager().getEntity(guid);
-        if (entity) {
-            uint32_t playerFlags = entity->getField(game::fieldIndex(game::UF::PLAYER_FLAGS));
-            if (playerFlags & bit) lua_pushnumber(L, 1); else lua_pushnil(L);
-            return 1;
+    const uint64_t guid = resolveUnitGuid(gh, uidStr);
+    if (guid == 0) { lua_pushnil(L); return 1; }
+    auto entity = gh->getEntityManager().getEntity(guid);
+    if (!entity || entity->getType() != game::ObjectType::PLAYER) {
+        for (const auto& m : gh->getPartyData().members) {
+            if (m.guid == guid) { luaPushOneOrNil(L, (m.onlineStatus & memberBit) != 0); return 1; }
         }
+        lua_pushnil(L);
+        return 1;
     }
-    lua_pushnil(L);
+    if (away) {
+        const uint64_t self = gh->getPlayerGuid();
+        if (!gh->getEntityManager().getEntity(self)) { lua_pushnil(L); return 1; }
+        if (gh->unitMayAttack(self, guid)) { lua_pushnil(L); return 1; }
+        if (guid == self && gh->isAfk()) { lua_pushnumber(L, 1); return 1; }
+    }
+    const uint32_t playerFlags = entity->getField(game::fieldIndex(game::UF::PLAYER_FLAGS));
+    luaPushOneOrNil(L, (playerFlags & bit) != 0);
     return 1;
+}
+
+static int pushPvpPredicate(lua_State* L, bool freeForAll) {
+    auto* gh = getGameHandler(L);
+    if (!gh) { return luaReturnNil(L); }
+    std::string uid(lua_tostring(L, 1));
+    toLowerInPlace(uid);
+    const uint64_t guid = resolveUnitGuid(gh, uid);
+    if (guid == 0) { return luaReturnNil(L); }
+    const auto entity = gh->getEntityManager().getEntity(guid);
+    if (entity && entity->isUnit()) {
+        const uint32_t bytes2 = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2));
+        luaPushOneOrNil(L, ((bytes2 >> 8) & (freeForAll ? 0x04u : 0x01u)) != 0);
+        return 1;
+    }
+    if (entity && !freeForAll && entity->getType() == game::ObjectType::CORPSE) {
+        luaPushOneOrNil(L, (entity->getField(game::fieldIndex(game::UF::CORPSE_FIELD_FLAGS)) & 0x04u) != 0);
+        return 1;
+    }
+    for (const auto& m : gh->getPartyData().members) {
+        if (m.guid == guid) { luaPushOneOrNil(L, (m.onlineStatus & (freeForAll ? 0x10u : 0x02u)) != 0); return 1; }
+    }
+    return luaReturnNil(L);
 }
 
 // PLAYER_FLAGS 0x1 is the group leader, 0x2 away and 0x4 busy. These read 0x1
@@ -481,12 +519,12 @@ static int pushPlayerFlagPredicate(lua_State* L, uint32_t bit) {
 // path for the busy notices reads 0x4 (0x006dc640).
 static int lua_UnitIsAFK(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsAFK(\"unit\")");   // 0x0060cc30
-    return pushPlayerFlagPredicate(L, 0x02);
+    return pushPlayerFlagPredicate(L, 0x02, 0x40, true);
 }
 
 static int lua_UnitIsDND(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsDND(\"unit\")");   // 0x0060cd50
-    return pushPlayerFlagPredicate(L, 0x04);
+    return pushPlayerFlagPredicate(L, 0x04, 0x80, false);
 }
 
 // UnitPlayerControlled(unit) - true for players and player-controlled pets
@@ -3982,34 +4020,20 @@ void registerUnitLuaAPI(lua_State* L) {
             luaPushOneOrNil(L, castable ? 1 : 0);
             return 4;
         }},
+                // UnitIsPVP 0x0060ce20 / UnitIsPVPFreeForAll 0x0060cfb0: a unit
+                // answers from UNIT_FIELD_BYTES_2's PvP byte (descriptor +0x1d1:
+                // 0x01 flagged, 0x04 free-for-all), a corpse (PvP only) from
+                // CORPSE_FIELD_FLAGS 0x04, and with no such object a group
+                // member's status byte (0x00513c30 +8: 0x02, 0x10). These read
+                // UNIT_FIELD_FLAGS 0x1000 and PLAYER_FLAGS 0x80, nothing for a
+                // member out of sight.
                 {"UnitIsPVP", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsPVP(\"unit\")");   // 0x0060ce20
-            auto* gh = getGameHandler(L);
-            const char* uid = luaL_optstring(L, 1, "player");
-            if (!gh) { return luaReturnNil(L); }
-            uint64_t guid = resolveUnitGuid(gh, std::string(uid));
-            if (guid == 0) { return luaReturnNil(L); }
-            auto entity = gh->getEntityManager().getEntity(guid);
-            if (!entity) { return luaReturnNil(L); }
-            // UNIT_FLAG_PVP = 0x00001000
-            uint32_t flags = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_FLAGS));
-            luaPushOneOrNil(L, (flags & 0x00001000) ? 1 : 0);
-            return 1;
+            return pushPvpPredicate(L, false);
         }},
                 {"UnitIsPVPFreeForAll", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsPVPFreeForAll(\"unit\")");   // 0x0060cfb0
-            auto* gh = getGameHandler(L);
-            const char* uid = luaL_optstring(L, 1, "player");
-            if (!gh) { return luaReturnNil(L); }
-            uint64_t guid = resolveUnitGuid(gh, std::string(uid));
-            if (guid == 0) { return luaReturnNil(L); }
-            auto entity = gh->getEntityManager().getEntity(guid);
-            if (!entity) { return luaReturnNil(L); }
-            // FFA PvP is PLAYER_FLAGS bit 0x80, NOT UNIT_FIELD_FLAGS bit 0x00080000
-            // (which is UNIT_FLAG_PACIFIED - would flag pacified mobs as FFA-PVP).
-            uint32_t pf = entity->getField(game::fieldIndex(game::UF::PLAYER_FLAGS));
-            luaPushOneOrNil(L, (pf & 0x00000080) ? 1 : 0);
-            return 1;
+            return pushPvpPredicate(L, true);
         }},
                 // The honour panel prints "(Rank N)" from the second return
                 // and concatenates it unguarded, so a missing one takes the
@@ -4339,43 +4363,31 @@ void registerUnitLuaAPI(lua_State* L) {
                 // - nothing read them, and GetNumBattlefieldStats answered zero
                 // from the counting stub, so the scoreboard drew the common
                 // columns and stopped.
+                // GetNumBattlefieldStats 0x00549f20 / GetBattlefieldStatInfo
+                // 0x0054c170: the battleground's own columns, which the client
+                // takes from WorldStateUI.dbc when the battle starts running -
+                // text (+0x14), icon (+0x10), tooltip (+0x18) in the client's
+                // language, three nils past the end. This counted the widest
+                // server row and answered an English label table with no icon
+                // (T391).
                 {"GetNumBattlefieldStats", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const auto* sb = gh ? gh->getBgScoreboard() : nullptr;
-            size_t columns = 0;
-            // The widest row rather than the first: a row that arrived short
-            // would otherwise decide the column count for the whole table.
-            if (sb) for (const auto& p : sb->players) columns = std::max(columns, p.bgStats.size());
-            lua_pushnumber(L, static_cast<double>(columns));
+            lua_pushnumber(L, gh ? static_cast<double>(gh->battlefieldStatColumns().size()) : 0.0);
             return 1;
         }},
-                // GetBattlefieldStatInfo(index) → text, icon, tooltip
-                //
-                // The icon is "" rather than nil on purpose: the frame tests it
-                // with ~= "" and then concatenates the faction onto it, so nil
-                // passes the test and dies on the concatenation. This client
-                // has no artwork per column, and "" is how the frame is told so.
                 {"GetBattlefieldStatInfo", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldStatInfo(index)");   // 0x0054c170
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_checknumber(L, 1));
-            const auto* sb = gh ? gh->getBgScoreboard() : nullptr;
-            if (!sb || index < 1) return luaReturnNil(L);
-            // The label is this client's to supply. BuildObjectivesBlock
-            // sends a count and that many bare numbers, so the name this used
-            // to read out of the row was never on the wire - it was bytes of
-            // the value before it, read as a string.
-            //
-            // Which column is which follows from the map: Warsong sends flags
-            // captured and returned, Alterac Valley five graveyard and tower
-            // counts, Eye of the Storm one. The table is beside the world-state
-            // one it belongs with.
-            const char* label = game::bgObjectiveLabel(
-                gh->getCurrentMapId(), static_cast<size_t>(index - 1));
-            if (!label) return luaReturnNil(L);
-            lua_pushstring(L, label);
-            lua_pushstring(L, "");
-            lua_pushstring(L, label);
+            const int64_t index = static_cast<int64_t>(std::llround(lua_tonumber(L, 1)));
+            const auto columns = gh ? gh->battlefieldStatColumns() : std::vector<const game::world_state_ui::Row*>{};
+            if (index < 1 || static_cast<size_t>(index) > columns.size()) {
+                lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+                return 3;
+            }
+            const auto* row = columns[static_cast<size_t>(index - 1)];
+            lua_pushstring(L, row->text.c_str());
+            lua_pushstring(L, row->icon.c_str());
+            lua_pushstring(L, row->tooltip.c_str());
             return 3;
         }},
                 // GetBattlefieldStatData(playerIndex, statIndex) → the value.
@@ -4457,14 +4469,20 @@ void registerUnitLuaAPI(lua_State* L) {
             // 0x0054da10 asks the taint check (kind 0x14: insecure code only
             // inside a hardware event) once it has its arguments.
             if (!taint::allowed(L, 0x14)) return 0;
-            const uint32_t slot = (idx >= 1 && idx <= 3) ? static_cast<uint32_t>(idx - 1)
-                                                         : 0xFFFFFFFFu;
-            int accept = lua_toboolean(L, 2);
+            // Only the two slots there are: any other index answers nil and
+            // sends nothing.
+            if (idx < 1 || idx > 2) { lua_pushnil(L); return 1; }
+            const uint32_t slot = static_cast<uint32_t>(idx - 1);
+            // The answer read as the client reads a switch (0x00815500(L,2,0)):
+            // StaticPopup's 'Abbrechen' passes 0, which lua_toboolean took for
+            // a yes and so ported the player in (T393).
+            const bool accept = luaClientSwitchArg(L, 2, false);
             if (gh) {
                 if (accept) gh->acceptBattlefield(slot);
                 else gh->declineBattlefield(slot);
             }
-            return 0;
+            lua_pushnumber(L, 1.0);  // 0x0054da10 answers 1 once it has sent
+            return 1;
         }},
                 {"UnitRace",          lua_UnitRace},
                 {"UnitPowerType",     lua_UnitPowerType},

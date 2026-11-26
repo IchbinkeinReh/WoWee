@@ -3,6 +3,7 @@
 #include "game/grey_triviality.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 
 namespace wowee::game {
@@ -24,6 +25,24 @@ namespace wowee::game {
                                                int playerLevel) {
     return std::string(questColour(questLevel == -1 ? playerLevel : questLevel, playerLevel)) + "|Hquest:" +
            std::to_string(questId) + ":" + std::to_string(questLevel) + "|h[" + title + "]|h|r";
+}
+
+/// 0x00509dd0 on an incoming chat line: every quest link not escaped ('||')
+/// gets the RECEIVER's colour for its level (-1 = the player's own) written
+/// over the ten characters before '|Hquest:' - the sender's colour code. A
+/// link without its two ':' or with no room for the code is left alone.
+[[nodiscard]] inline std::string recolourQuestLinks(std::string text, int playerLevel) {
+    static const std::string kTag = "|Hquest:";
+    for (size_t at = text.find(kTag); at != std::string::npos; at = text.find(kTag, at + kTag.size())) {
+        if (at == 0 || text[at - 1] == '|' || at < 10) continue;
+        const size_t c1 = text.find(':', at);
+        const size_t c2 = c1 == std::string::npos ? c1 : text.find(':', c1 + 1);
+        if (c2 == std::string::npos) continue;
+        int level = std::atoi(text.c_str() + c2 + 1);
+        if (level == -1) level = playerLevel;
+        text.replace(at - 10, 10, questColour(level, playerLevel));
+    }
+    return text;
 }
 
 }  // namespace wowee::game

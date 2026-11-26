@@ -2668,7 +2668,7 @@ static bool previewApplies(game::GameHandler* gh, bool inspect, int group) {
 /// SMSG_TALENTS_INFO (SpellHandler). Ignoring it once answered out of the
 /// player's trees, so a hunter's pet tab drew the hunter's own talents.
 static bool wantsPetTalents(lua_State* L, int index) {
-    return lua_toboolean(L, index) != 0;
+    return luaClientSwitchArg(L, index, false);  // 0x00815500(L, index, 0)
 }
 
 /// The pet's staged points and their total, defined below with the player's.
@@ -2707,12 +2707,12 @@ static const game::GameHandler::TalentEntry* petTalentAt(game::GameHandler* gh, 
 static int lua_GetNumTalentTabs(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (wantsPetTalents(L, 2)) {
-        lua_pushnumber(L, petTalentTab(gh, lua_toboolean(L, 1) != 0) ? 1 : 0);
+        lua_pushnumber(L, petTalentTab(gh, luaClientSwitchArg(L, 1, false)) ? 1 : 0);
         return 1;
     }
     if (!gh) { return luaReturnZero(L); }
     // Count tabs matching the class in question
-    uint8_t classId = talentClassId(gh, lua_toboolean(L, 1) != 0);
+    uint8_t classId = talentClassId(gh, luaClientSwitchArg(L, 1, false));
     uint32_t classMask = (classId > 0) ? (1u << (classId - 1)) : 0;
     int count = 0;
     for (const auto& [tabId, tab] : gh->getAllTalentTabs()) {
@@ -2755,7 +2755,7 @@ static int lua_GetTalentTabInfo(lua_State* L) {
     };
     if (!gh || tabIndex < 1) return none();
     if (wantsPetTalents(L, 3)) {
-        const auto* tab = tabIndex == 1 ? petTalentTab(gh, lua_toboolean(L, 2) != 0) : nullptr;
+        const auto* tab = tabIndex == 1 ? petTalentTab(gh, luaClientSwitchArg(L, 2, false)) : nullptr;
         if (!tab) return none();
         int spent = 0;
         for (const auto& [talentId, rank] : gh->getPetTalents()) {
@@ -2769,7 +2769,7 @@ static int lua_GetTalentTabInfo(lua_State* L) {
         lua_pushnumber(L, petPreviewTotal());
         return 5;
     }
-    const bool inspect = lua_toboolean(L, 2) != 0;
+    const bool inspect = luaClientSwitchArg(L, 2, false);
     const int group = talentGroupArg(L, 4, gh);
     uint8_t classId = talentClassId(gh, inspect);
     const auto classTabs = classTalentTabs(gh, classId);
@@ -2817,12 +2817,12 @@ static int lua_GetNumTalents(lua_State* L) {
     // missed with them: a pet tab whose talents all answer nil still asked how
     // many to lay out, and got the player's tree's count.
     if (wantsPetTalents(L, 3)) {
-        const auto* tab = tabIndex == 1 ? petTalentTab(gh, lua_toboolean(L, 2) != 0) : nullptr;
+        const auto* tab = tabIndex == 1 ? petTalentTab(gh, luaClientSwitchArg(L, 2, false)) : nullptr;
         lua_pushnumber(L, static_cast<lua_Number>(petTreeTalents(gh, tab).size()));
         return 1;
     }
     if (!gh || tabIndex < 1) { return luaReturnZero(L); }
-    uint8_t classId = talentClassId(gh, lua_toboolean(L, 2) != 0);
+    uint8_t classId = talentClassId(gh, luaClientSwitchArg(L, 2, false));
     const auto classTabs = classTalentTabs(gh, classId);
     if (tabIndex > static_cast<int>(classTabs.size())) {
         return luaReturnZero(L);
@@ -3045,7 +3045,7 @@ static int lua_GetTalentInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int tabIndex = static_cast<int>(luaL_checknumber(L, 1));
     const int talentIndex = static_cast<int>(luaL_checknumber(L, 2));
-    const bool inspect = lua_toboolean(L, 3) != 0;
+    const bool inspect = luaClientSwitchArg(L, 3, false);
     if (wantsPetTalents(L, 4)) {
         const auto* talent = petTalentAt(gh, inspect, tabIndex, talentIndex);
         if (!talent) return pushNoTalent(L);
@@ -3900,7 +3900,7 @@ static int lua_GetTalentPrereqs(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int tabIndex = static_cast<int>(luaL_checknumber(L, 1));
     const int talentIndex = static_cast<int>(luaL_checknumber(L, 2));
-    const bool inspect = lua_toboolean(L, 3) != 0;
+    const bool inspect = luaClientSwitchArg(L, 3, false);
     if (wantsPetTalents(L, 4)) {
         const auto* talent = petTalentAt(gh, inspect, tabIndex, talentIndex);
         if (!talent) return 0;
@@ -4085,15 +4085,15 @@ static int lua_LearnTalent(lua_State* L) {
 static int lua_GetUnspentTalentPoints(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushnumber(L, 0); return 1; }
-    if (lua_toboolean(L, 2) != 0) {
+    if (luaClientSwitchArg(L, 2, false)) {
         // The pet's, from its SMSG_TALENTS_INFO; an inspect has no pet.
-        lua_pushnumber(L, lua_toboolean(L, 1) != 0 ? 0 : gh->getPetUnspentTalentPoints());
+        lua_pushnumber(L, luaClientSwitchArg(L, 1, false) ? 0 : gh->getPetUnspentTalentPoints());
         return 1;
     }
     const int group = static_cast<int>(luaL_optnumber(L, 3, 0));
     const uint8_t spec = (group >= 1 && group <= 2) ? static_cast<uint8_t>(group - 1)
                                                    : gh->getActiveTalentSpec();
-    if (lua_toboolean(L, 1) != 0) {
+    if (luaClientSwitchArg(L, 1, false)) {
         // The inspected player's (0x005c6310: the inspect record of the group
         // - the own active one unless named - and 0 past its group count).
         // This answered the viewer's own points on the inspect tab.
@@ -4136,8 +4136,8 @@ static int lua_GetUnspentTalentPoints(lua_State* L) {
 // still a spec, and the panel draws a tab for it.
 static int lua_GetNumTalentGroups(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const bool inspect = lua_toboolean(L, 1) != 0;
-    const bool pet = lua_toboolean(L, 2) != 0;
+    const bool inspect = luaClientSwitchArg(L, 1, false);
+    const bool pet = luaClientSwitchArg(L, 2, false);
     int groups = 0;
     if (gh) {
         if (inspect) {
@@ -4198,7 +4198,7 @@ static int lua_SetActiveTalentGroup(lua_State* L) {
 // the sender had on screen is the one that was meant.
 static int lua_GetTalentLink(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const bool inspect = lua_toboolean(L, 3) != 0;
+    const bool inspect = luaClientSwitchArg(L, 3, false);
     if (wantsPetTalents(L, 4)) { lua_pushnil(L); return 1; }
     const int group = talentGroupArg(L, 5, gh);
     const auto* talent = talentAt(gh,
@@ -4235,12 +4235,12 @@ static int lua_GetActiveTalentGroup(lua_State* L) {
     // Which of the target's specs the talents just read belong to. The
     // inspect frame keeps this as its talentGroup and passes it back into
     // every other talent call.
-    if (gh && lua_toboolean(L, 1)) {
+    if (gh && luaClientSwitchArg(L, 1, false)) {
         const auto* r = gh->getInspectResult();
         lua_pushnumber(L, r ? (r->activeTalentGroup + 1) : 1);
         return 1;
     }
-    if (lua_toboolean(L, 2)) { lua_pushnumber(L, 1); return 1; }
+    if (luaClientSwitchArg(L, 2, false)) { lua_pushnumber(L, 1); return 1; }
     lua_pushnumber(L, gh ? (gh->getActiveTalentSpec() + 1) : 1);
     return 1;
 }

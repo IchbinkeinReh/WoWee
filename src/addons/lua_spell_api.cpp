@@ -1115,7 +1115,7 @@ static int lua_CastSpell(lua_State* L) {
     // any" but this player, target or no target; and over there the player is
     // named outright rather than spelled as a zero target, which is how some of
     // the self-casts here ask.
-    const bool selfCast = lua_toboolean(L, 3) != 0;
+    const bool selfCast = luaClientSwitchArg(L, 3, false);
     // 0x00541250 -> 0x0053bc40 -> 0x0080da80 -> 0x0080cce0, which asks the
     // taint check.
     if (id != 0 && spellCastAllowed(L, gh, id))
@@ -1268,7 +1268,7 @@ static int lua_TargetUnit(lua_State* L) {
     const char* uid = luaL_checkstring(L, 1);
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
-    const bool exact = lua_toboolean(L, 2) != 0;
+    const bool exact = luaClientSwitchArg(L, 2, false);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
     if (!guid) guid = resolveNamedUnit(gh, uidStr, exact, false);
     // 0x00525a30 -> 0x005259e0 -> 0x00524bf0, which refuses insecure code
@@ -1995,7 +1995,7 @@ void registerSpellLuaAPI(lua_State* L) {
             // not its form id. With a true argument, nothing while the form
             // field is clear.
             const uint8_t formField = gh->getShapeshiftFormId();
-            if (lua_toboolean(L, 1) && formField == 0) return luaReturnZero(L);
+            if (luaClientSwitchArg(L, 1, false) && formField == 0) return luaReturnZero(L);
             const auto forms = gh->stanceBarSpells();
             std::vector<bool> active;
             active.reserve(forms.size());

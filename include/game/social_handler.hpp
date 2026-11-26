@@ -1103,6 +1103,8 @@ private:
     std::chrono::steady_clock::time_point battlefieldInstanceExpiry_{};
     std::chrono::steady_clock::time_point battlefieldInstanceStart_{};
     int32_t battlefieldInstanceSlot_ = -1;
+    // 0x00bea5b4: when RequestBattlefieldScoreData may ask again.
+    std::chrono::steady_clock::time_point pvpLogNextAllowed_{};
     /// The running battle's map (0x00bea564): written by each status 3, gone
     /// only with the owning slot's empty record.
     uint32_t battlefieldMapId_ = 0;
