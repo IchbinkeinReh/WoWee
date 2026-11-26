@@ -3587,6 +3587,13 @@ wowee_add_test(test_liquid_place
     SOURCES test_liquid_place.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_wmo_liquid_load ──
+# A placed building's liquids, whoever placed it: a map that is one
+# building (Molten Core) gets its groups' liquids as a tile's building does.
+wowee_add_test(test_wmo_liquid_load
+    SOURCES test_wmo_liquid_load.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_stream_times ────────────────────────────────────────
 # The length shown of a stream is not asked of the decoder the audio thread
 # reads. The audio library without a device.

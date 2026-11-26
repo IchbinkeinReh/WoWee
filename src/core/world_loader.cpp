@@ -28,6 +28,8 @@
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/loading_screen.hpp"
 #include "rendering/vk_pipeline.hpp"
+#include "rendering/water_renderer.hpp"
+#include "rendering/wmo_liquid_load.hpp"
 #include "game/movement_handler.hpp"
 #include "game/world_packets.hpp"
 #include "addons/addon_manager.hpp"
@@ -444,6 +446,26 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                                           localPlayer.y >= wmoModel.boundingBoxMin.y && localPlayer.y <= wmoModel.boundingBoxMax.y &&
                                           localPlayer.z >= wmoModel.boundingBoxMin.z && localPlayer.z <= wmoModel.boundingBoxMax.z;
                             LOG_DEBUG("  Player inside MOHD bbox: ", inside ? "YES" : "NO");
+                        }
+
+                        // Its groups' liquids, as a tile's building gets them
+                        // (0x00793d20 draws a group's liquid with the group,
+                        // whoever placed it): Molten Core's lava was never
+                        // made (U17). The map change's softReset clears them.
+                        if (auto* water = renderer_->getWaterRenderer()) {
+                            glm::mat4 liquidMatrix(1.0f);
+                            liquidMatrix = glm::translate(liquidMatrix, wmoPos);
+                            liquidMatrix = glm::rotate(liquidMatrix, wmoRot.z, glm::vec3(0, 0, 1));
+                            liquidMatrix = glm::rotate(liquidMatrix, wmoRot.y, glm::vec3(0, 1, 0));
+                            liquidMatrix = glm::rotate(liquidMatrix, wmoRot.x, glm::vec3(1, 0, 0));
+                            size_t liquids = 0;
+                            rendering::wmo_liquid_load::placeGroupLiquids(
+                                wmoModel, 0, wmoModel.groups.size(),
+                                [&](const pipeline::WMOLiquid& liquid, uint32_t momtColor, uint32_t group) {
+                                    water->loadFromWMO(liquid, liquidMatrix, instanceId, momtColor, group);
+                                    ++liquids;
+                                });
+                            LOG_INFO("Instance WMO liquids: ", liquids, " groups");
                         }
 
                         // Load doodads from the specified doodad set

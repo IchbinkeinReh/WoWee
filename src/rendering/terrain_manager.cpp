@@ -15,6 +15,7 @@
 #include "rendering/terrain_renderer.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/water_renderer.hpp"
+#include "rendering/wmo_liquid_load.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/doodad_model_plan.hpp"
@@ -1366,19 +1367,12 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                     modelMatrix = glm::rotate(modelMatrix, wmoReady.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
                     modelMatrix = glm::rotate(modelMatrix, wmoReady.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
                     const auto& groups = wmoReady.model.groups;
-                    while (ft.wmoLiquidGroupIndex < groups.size() && liquidGroupsLoaded < kLiquidGroupsPerStep) {
-                        const auto& group = groups[ft.wmoLiquidGroupIndex];
-                        ft.wmoLiquidGroupIndex++;
-                        if (!group.liquid.hasLiquid()) continue;
-                        // The MOMT entry MLIQ names gives an interior liquid its
-                        // colour (0x00793d20 reads its diffuse colour, +0x1c).
-                        const auto& mats = wmoReady.model.materials;
-                        const uint32_t momtColor = group.liquid.momtIndex < mats.size()
-                            ? mats[group.liquid.momtIndex].color2 : 0xffffffffu;
-                        waterRenderer->loadFromWMO(group.liquid, modelMatrix, wmoInstId, momtColor,
-                                                   static_cast<uint32_t>(ft.wmoLiquidGroupIndex - 1));
-                        liquidGroupsLoaded++;
-                    }
+                    ft.wmoLiquidGroupIndex = wmo_liquid_load::placeGroupLiquids(
+                        wmoReady.model, ft.wmoLiquidGroupIndex, kLiquidGroupsPerStep - liquidGroupsLoaded,
+                        [&](const pipeline::WMOLiquid& liquid, uint32_t momtColor, uint32_t group) {
+                            waterRenderer->loadFromWMO(liquid, modelMatrix, wmoInstId, momtColor, group);
+                            liquidGroupsLoaded++;
+                        });
                     // More liquid groups remain on this WMO - yield
                     if (ft.wmoLiquidGroupIndex < groups.size()) {
                         return false;
