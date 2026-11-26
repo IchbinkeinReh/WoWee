@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace wowee::rendering::m2_particle {
@@ -223,6 +224,64 @@ inline float particleSpinAngle(float emitterSpin, float emitterSpinVary, float a
     if (!turns) return 0.0f;
     const float angle = age * rate + base;
     return flip ? -angle : angle;
+}
+
+/// The twinkle (0x0097be80), from the emitter's +0x13c speed, +0x140 percent
+/// and +0x144 / +0x148 the size's minimum and range (file 0x160..0x16C).
+/// The client keeps 128 randoms in 0..1 (0x00dce690, filled at start by
+/// 0x00810000's and 0x00980000's set-up); a particle reads the one at its own
+/// place in its pool (its address / 32) plus its age times the speed,
+/// rounded, the last seven bits. `seed` stands for the address: rolled once
+/// at the particle's birth, 0..127.
+struct TwinkleTable {
+    float v[128];
+};
+inline const TwinkleTable& twinkleTable() {
+    static const TwinkleTable table = [] {
+        TwinkleTable t{};
+        // Any even spread over 0..1 serves; the client's is rolled afresh
+        // every start. A fixed one keeps the drawing the same from run to run.
+        uint32_t x = 0x9e3779b9u;
+        for (float& f : t.v) {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            f = static_cast<float>(x >> 8) * (1.0f / 16777216.0f);
+        }
+        return t;
+    }();
+    return table;
+}
+inline uint32_t twinkleIndex(uint32_t seed, float speed, float age) {
+    return (seed + static_cast<uint32_t>(static_cast<int32_t>(std::nearbyint(speed * age)))) & 0x7fu;
+}
+struct Twinkle {
+    bool shown = true;  // false: this frame the particle is not drawn
+    float size = 1.0f;  // what its size is multiplied by
+};
+/// The client looks the value up only when the percent is under 1 or the
+/// range is not zero; otherwise it reads the table's first entry, which the
+/// zero range takes out, so the size is the minimum alone.
+inline Twinkle twinkle(float speed, float percent, float scaleMin, float scaleMax, uint32_t seed,
+                       float age) {
+    const float range = scaleMax - scaleMin;
+    const bool looked = percent < 1.0f || range != 0.0f;
+    const float r = twinkleTable().v[looked ? twinkleIndex(seed, speed, age) : 0u];
+    Twinkle t;
+    t.shown = !(percent < 1.0f && percent < r);
+    t.size = r * range + scaleMin;
+    return t;
+}
+
+/// What of a particle's area the twinkle leaves on the mean, its table taken
+/// as even over 0..1: the mean of the size's square over the values drawn,
+/// times the share of them drawn (those up to the percent, where it is under 1).
+inline float twinkleMeanArea(float percent, float scaleMin, float scaleMax) {
+    const float range = scaleMax - scaleMin;
+    const float upTo = percent < 1.0f ? std::max(percent, 0.0f) : 1.0f;
+    if (std::fabs(range) < 1e-6f) return upTo * scaleMin * scaleMin;
+    const float top = upTo * range + scaleMin;
+    return (top * top * top - scaleMin * scaleMin * scaleMin) / (3.0f * range);
 }
 
 }  // namespace wowee::rendering::m2_particle

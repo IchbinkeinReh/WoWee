@@ -309,6 +309,9 @@ struct M2Particle {
     int emitterIndex;  // which emitter spawned this
     float tileIndex = 0.0f; // texture atlas tile index
     float sizeVary = 1.0f;  // this particle's roll of the emitter's scale spread
+    // Its place in the twinkle's table (0x0097be80 takes the particle's
+    // address / 32): rolled at birth, 0..127.
+    uint8_t twinkleSeed = 0;
     // The quad's turn (0x0097a130): its start angle and its rate, rolled at
     // birth; turned the other way when the emitter's flag 0x200 picks it.
     float spinBase = 0.0f;

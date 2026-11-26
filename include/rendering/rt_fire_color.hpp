@@ -42,7 +42,9 @@ struct FlameColor {
 
     void addEmitter(const pipeline::M2ParticleEmitter& e, float perSecond, float life, const glm::vec3& texel) {
         const float weight = particleGlowWeight(e.blendingType, (e.flags & 0x1u) != 0);
-        const float many = std::max(perSecond, 0.0f) * std::max(life, 0.0f);
+        // The twinkle's share of the area (0x0097be80) among it.
+        const float many = std::max(perSecond, 0.0f) * std::max(life, 0.0f) *
+                           m2_particle::twinkleMeanArea(e.twinklePercent, e.twinkleScaleMin, e.twinkleScaleMax);
         if (!(weight * many > 0.0f)) return;
         glm::vec3& sum = isFlameEmitter(e) ? added : blended;
         constexpr int kSamples = 16;

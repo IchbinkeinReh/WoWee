@@ -362,6 +362,17 @@ struct M2ParticleEmitter {
     float drag = 0.0f;
     glm::vec3 windVector{0.0f};
     float windTime = 0.0f;
+    // WotLK 0x160-0x16C, the twinkle (the emitter's +0x13c..+0x148, read by
+    // 0x00832ea0 and 0x0097ac00; drawn by 0x0097be80): each particle draws a
+    // value of a 128-entry table of randoms in 0..1 by its own place in it
+    // plus the speed times its age; its size is that value times
+    // (max - min) plus min, and it is not drawn while the percent is under
+    // 1 and under that value. Not read from vanilla files (as their drag and
+    // wind are not): the client's defaults, which change nothing.
+    float twinkleSpeed = 10.0f;
+    float twinklePercent = 1.0f;
+    float twinkleScaleMin = 1.0f;
+    float twinkleScaleMax = 1.0f;
     // WotLK 0x178-0x184: the quad's turn - a start angle and its spread, a
     // rate in radians a second and its spread (the emitter's +0xc0..+0xcc,
     // rolled per particle by 0x0097a130).

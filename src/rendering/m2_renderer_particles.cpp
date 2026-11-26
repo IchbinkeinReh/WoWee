@@ -74,6 +74,7 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
     std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
     std::uniform_real_distribution<float> distN(-1.0f, 1.0f);
     std::uniform_int_distribution<int> distTile;
+    std::uniform_int_distribution<int> distSeed(0, 127);
 
     for (size_t ei = 0; ei < gpu.particleEmitters.size(); ei++) {
         const auto& em = gpu.particleEmitters[ei];
@@ -144,6 +145,7 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             // below a tenth of a thousandth.
             p.maxLife = std::max(life + distN(particleRng_) * em.lifespanVary, 0.001f);
             p.sizeVary = std::max(1.0f + distN(particleRng_) * em.scaleVary.x, 0.0001f);
+            p.twinkleSeed = static_cast<uint8_t>(distSeed(particleRng_));
             // Its turn (0x0097a130): the start angle and the rate, each its
             // value plus a roll of its spread where it has one. The flag 0x200
             // (the client's 0x10000) turns about half of them the other way;
@@ -670,7 +672,14 @@ void M2Renderer::prepareM2Particles() {
             // size, and no gain on an emitter, and drew every particle the same
             // whatever model it belongs to. Each of those was here to make a
             // point sprite that was too small, and a quad is the size it is.
-            const float scale = rawScale;
+            // Times the twinkle's value, and not drawn at all while the
+            // twinkle hides it (0x0097be80) - nor lit by, as a light
+            // follows only what is seen of its source.
+            const m2_particle::Twinkle twinkle =
+                m2_particle::twinkle(em.twinkleSpeed, em.twinklePercent, em.twinkleScaleMin,
+                                     em.twinkleScaleMax, p.twinkleSeed, p.life);
+            if (!twinkle.shown) continue;
+            const float scale = rawScale * twinkle.size;
             if (glowLights && emitterGlowWeight > 0.0f) {
                 rtEmitterGlowScratch_[static_cast<size_t>(p.emitterIndex)].add(
                     pWorld, color * emitterGlowTexel, alpha, scale * p.sizeVary * cachedModelScale, emitterGlowWeight);

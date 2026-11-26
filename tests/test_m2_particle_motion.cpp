@@ -134,3 +134,62 @@ TEST_CASE("Particle turn: none without a rate or its spread, else start plus age
     REQUIRE(turns);
     REQUIRE(particleSpinAngle(0.0f, 0.5f, 2.0f, 1.0f, 0.25f, true, turns) == Approx(-1.5f));
 }
+
+// The twinkle (0x0097be80): a value of the client's table of randoms by the
+// particle's place plus its age times the speed; the size that value times
+// the range plus the minimum; not drawn while the percent is under 1 and
+// under the value. Undercity's scale-4 UndeadFireLarge (min 0, max 1) drew
+// every flame at its whole size and burnt the screen white (playtest T340).
+TEST_CASE("Twinkle: the size is the table's value times the range plus the minimum") {
+    const auto& table = twinkleTable();
+    for (float v : table.v) {
+        REQUIRE(v >= 0.0f);
+        REQUIRE(v < 1.0f);
+    }
+    // UndeadFireLarge: speed 0.1, percent 1, 0..1. Over a life of a second
+    // the age moves no particle to another value.
+    double sumArea = 0.0;
+    for (uint32_t seed = 0; seed < 128; ++seed) {
+        const Twinkle young = twinkle(0.1f, 1.0f, 0.0f, 1.0f, seed, 0.0f);
+        const Twinkle old = twinkle(0.1f, 1.0f, 0.0f, 1.0f, seed, 0.9f);
+        REQUIRE(young.shown);
+        REQUIRE(young.size == Approx(table.v[seed]));
+        REQUIRE(old.size == Approx(young.size));
+        sumArea += static_cast<double>(young.size) * young.size;
+    }
+    // A third of the area on the mean, not all of it.
+    REQUIRE(sumArea / 128.0 == Approx(1.0 / 3.0).margin(0.08));
+    REQUIRE(twinkleMeanArea(1.0f, 0.0f, 1.0f) == Approx(1.0f / 3.0f));
+}
+
+TEST_CASE("Twinkle: the client's defaults change nothing; a size of 0..0 draws nothing") {
+    for (uint32_t seed = 0; seed < 128; seed += 17) {
+        const Twinkle t = twinkle(10.0f, 1.0f, 1.0f, 1.0f, seed, 0.37f);
+        REQUIRE(t.shown);
+        REQUIRE(t.size == 1.0f);
+    }
+    REQUIRE(twinkleMeanArea(1.0f, 1.0f, 1.0f) == Approx(1.0f));
+    // A fixed size other than one is that size (the table's first value,
+    // times no range).
+    REQUIRE(twinkle(10.0f, 1.0f, 1.625f, 1.625f, 5, 0.2f).size == Approx(1.625f));
+    REQUIRE(twinkle(0.3f, 1.0f, 0.0f, 0.0f, 9, 0.5f).size == 0.0f);
+    REQUIRE(twinkleMeanArea(1.0f, 0.0f, 0.0f) == 0.0f);
+}
+
+TEST_CASE("Twinkle: under a percent below 1 a particle shows only while its value is at or under it") {
+    const auto& table = twinkleTable();
+    int shown = 0;
+    for (uint32_t seed = 0; seed < 128; ++seed) {
+        const Twinkle t = twinkle(5.0f, 0.5f, 1.0f, 1.0f, seed, 0.0f);
+        REQUIRE(t.shown == !(table.v[seed] > 0.5f));
+        shown += t.shown ? 1 : 0;
+    }
+    REQUIRE(shown > 40);
+    REQUIRE(shown < 88);
+    // It changes with the age at the speed: 5 a second moves it one value
+    // in a fifth of a second, rounded to the nearest.
+    REQUIRE(twinkleIndex(3, 5.0f, 0.0f) == 3u);
+    REQUIRE(twinkleIndex(3, 5.0f, 0.21f) == 4u);
+    REQUIRE(twinkleIndex(127, 5.0f, 0.21f) == 0u);
+    REQUIRE(twinkleMeanArea(0.5f, 1.0f, 1.0f) == Approx(0.5f));
+}

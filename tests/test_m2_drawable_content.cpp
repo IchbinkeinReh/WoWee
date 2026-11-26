@@ -116,6 +116,23 @@ TEST_CASE("a model of emitters alone loads as any other does", "[m2]") {
     CHECK_FALSE(wowee::pipeline::loadM2WithSkin(assets, "Creature\\Missing.m2", none));
 }
 
+TEST_CASE("an emitter's twinkle is read from the file", "[m2]") {
+    // UndeadFireLarge's: speed 0.1, percent 1, size 0..1 (file 0x160-0x16C).
+    std::vector<uint8_t> bytes = emitterModel(1);
+    const auto putf = [&](size_t at, float v) { std::memcpy(bytes.data() + 0x138 + at, &v, 4); };
+    putf(0x160, 0.1f);
+    putf(0x164, 1.0f);
+    putf(0x168, 0.0f);
+    putf(0x16c, 1.0f);
+    const M2Model model = wowee::pipeline::M2Loader::load(bytes);
+    REQUIRE(model.particleEmitters.size() == 1);
+    const auto& em = model.particleEmitters[0];
+    CHECK(em.twinkleSpeed == 0.1f);
+    CHECK(em.twinklePercent == 1.0f);
+    CHECK(em.twinkleScaleMin == 0.0f);
+    CHECK(em.twinkleScaleMax == 1.0f);
+}
+
 TEST_CASE("nothing that draws a unit or its items asks for a vertex", "[m2]") {
     // The renderer of units and the worn and held models it attaches.
     const std::string renderer = source("src/rendering/character_renderer.cpp");

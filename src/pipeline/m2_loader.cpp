@@ -713,7 +713,11 @@ struct M2ParticleEmitterDisk {
     float scaleVary[2];             // 0x134
     FBlockDisk headCell;            // 0x13C
     FBlockDisk tailCell;            // 0x14C - not read
-    uint8_t notRead0[0x18];         // 0x15C - tail length, twinkle, burst
+    float tailLength;               // 0x15C - not read
+    float twinkleSpeed;             // 0x160 - emitter +0x13c (0x00832ea0)
+    float twinklePercent;           // 0x164 - emitter +0x140
+    float twinkleScale[2];          // 0x168 - min, max: emitter +0x144, +0x148 (0x0097ac00)
+    float burstMultiplier;          // 0x170 - not read
     float drag;                     // 0x174 - emitter +0x168 (0x00832ea0)
     float baseSpin;                 // 0x178 - emitter +0xc0
     float baseSpinVary;             // 0x17C - emitter +0xc4
@@ -733,6 +737,8 @@ static_assert(offsetof(M2ParticleEmitterDisk, lifespanVary) == 0xAC &&
               offsetof(M2ParticleEmitterDisk, color) == 0x104 &&
               offsetof(M2ParticleEmitterDisk, scaleVary) == 0x134 &&
               offsetof(M2ParticleEmitterDisk, headCell) == 0x13C &&
+              offsetof(M2ParticleEmitterDisk, twinkleSpeed) == 0x160 &&
+              offsetof(M2ParticleEmitterDisk, twinkleScale) == 0x168 &&
               offsetof(M2ParticleEmitterDisk, drag) == 0x174 &&
               offsetof(M2ParticleEmitterDisk, baseSpin) == 0x178 &&
               offsetof(M2ParticleEmitterDisk, spinVary) == 0x184 &&
@@ -2018,6 +2024,10 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 em.spinVary = disk.spinVary;
                 em.windVector = glm::vec3(disk.windVector[0], disk.windVector[1], disk.windVector[2]);
                 em.windTime = disk.windTime;
+                em.twinkleSpeed = disk.twinkleSpeed;
+                em.twinklePercent = disk.twinklePercent;
+                em.twinkleScaleMin = disk.twinkleScale[0];
+                em.twinkleScaleMax = disk.twinkleScale[1];
                 // A spline emitter's points; 0x00832ea0 hands them to the
                 // curve only for type 3.
                 if (em.emitterType == 3) {
