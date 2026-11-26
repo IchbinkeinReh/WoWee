@@ -2806,25 +2806,24 @@ static int lua_UseEquipmentSet(lua_State* L) {
     return 1;
 }
 
-// EquipmentSetContainsLockedItems(name) - nothing here locks an item
+// EquipmentSetContainsLockedItems(name)
 static int lua_EquipmentSetContainsLockedItems(lua_State* L) {
-    // 0x005af320 -> 0x005ad940: true when one of the set's items is locked,
-    // nothing otherwise. An item here is locked while it is on the cursor.
+    // 0x005af320 -> 0x005ad940: true when one of the set's items is locked -
+    // held on the cursor, or given to a trade, a letter, an auction or the
+    // socketing (+0x394 bit 0x1) - nothing otherwise.
     if (!lua_isstring(L, 1))
         return luaL_error(L, "Usage: EquipmentSetContainsLockedItems(\"setName\")");
     auto* gh = getGameHandler(L);
     const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
     const auto* guids = (gh && set) ? gh->getEquipmentSetItems(set->setId) : nullptr;
     if (!guids) return 0;
-    const auto& held = cursorItemSlot();
-    if (held.bag < 0 && !held.equipped) return 0;
-    const auto& inv = gh->getInventory();
-    const game::ItemSlot* s = held.equipped ? inventorySlotItem(inv, held.slot)
-                                            : containerItemSlot(inv, held.bag, held.slot);
-    const uint64_t guid = s ? s->item.guid : 0;
-    if (guid == 0 || std::find(guids->begin(), guids->end(), guid) == guids->end()) return 0;
-    lua_pushboolean(L, 1);
-    return 1;
+    for (const uint64_t guid : *guids) {
+        if (guid > 1 && itemObjectLocked(gh, guid)) {
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int lua_EquipmentManagerIgnoreSlotForSave(lua_State* L) {

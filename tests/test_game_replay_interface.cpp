@@ -4192,3 +4192,77 @@ TEST_CASE("the barber's skin row is nothing for a race without one (T404)", "[re
     skins = true;
     CHECK(ui.is("select('#', GetBarberShopStyleInfo(4)) == 4"));
 }
+
+// FIXER X (W's open item, 0x005a9e20): IsUsableAction's slot test lets a slot
+// that casts nothing (0x005a8c30 = 0) - a macro showing no spell, an item
+// without a use spell, an equipment set - be used only while the player has
+// control of itself (0x00bcfb8c); an equipment set also wants the manager on
+// (0x005ad6b0), its items unlocked (0x005ad940, 0x005ae040), and is usable on
+// a taxi as it stands. A macro the slot names that is gone is (nil, nil).
+// All of these were (1, nil) whatever the state.
+TEST_CASE("a slot casting nothing is usable only in control (0x005a9e20)", "[replay][interface]") {
+    using wowee::game::ActionBarSlot;
+    constexpr uint64_t kCloth = 0x4000000000000C21ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    carryForAuction(s, 0, kCloth, 2589, 5);
+    gh.setMacroMeta(1, "Hi", "");
+    gh.setMacroText(1, "/say hi");
+    gh.setActionBarSlot(0, ActionBarSlot::MACRO, 1);
+    gh.setActionBarSlot(1, ActionBarSlot::ITEM, 2589);
+    gh.setActionBarSlot(2, ActionBarSlot::MACRO, 7);   // no macro 7
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_EQUIPMENT_SET_LIST));
+    list.writeUInt32(1);
+    list.writePackedGuid(0x70);
+    list.writeUInt32(0);
+    list.writeString("Tank");
+    list.writeString("INV_Shield_06");
+    for (int slot = 0; slot < 19; ++slot) list.writePackedGuid(slot == 4 ? 1 : slot == 0 ? kCloth : 0);
+    s.receive(list);
+    gh.setActionBarSlot(3, ActionBarSlot::EQUIPMENT_SET, 0);
+    const auto control = [&](bool on) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CLIENT_CONTROL_UPDATE));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt8(on ? 1 : 0);
+        s.receive(p);
+    };
+    const auto usable = [&](int slot) {
+        return "select('#', IsUsableAction(" + std::to_string(slot) + ")) == 2 and IsUsableAction(" +
+               std::to_string(slot) + ") == 1";
+    };
+    const auto refused = [&](int slot) {
+        const std::string n = std::to_string(slot);
+        return "IsUsableAction(" + n + ") == nil and select(2, IsUsableAction(" + n + ")) == nil";
+    };
+    ui.run("SetCVar('equipmentManager', '0')");
+    CHECK(ui.is(usable(1)));
+    CHECK(ui.is(usable(2)));
+    CHECK(ui.is(refused(3)));
+    CHECK(ui.is(refused(4)));       // the manager is off
+    ui.run("SetCVar('equipmentManager', '1')");
+    CHECK(ui.is(usable(4)));
+    // A set's item held on the cursor is locked.
+    ui.run("ClearCursor() PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    CHECK(ui.is(refused(4)));
+    CHECK(ui.is("EquipmentSetContainsLockedItems('Tank') == true"));
+    ui.run("ClearCursor()");
+    CHECK(ui.is(usable(4)));
+    CHECK(ui.is("EquipmentSetContainsLockedItems('Tank') == nil"));
+    control(false);
+    REQUIRE_FALSE(gh.isServerMovementAllowed());
+    CHECK(ui.is(refused(1)));
+    CHECK(ui.is(refused(2)));
+    CHECK(ui.is(refused(4)));
+    // On a taxi the set is usable; the rest still wants the control.
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0x100000u}}));
+    CHECK(ui.is(usable(4)));
+    CHECK(ui.is(refused(1)));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0u}}));
+    control(true);
+    CHECK(ui.is(usable(1)));
+    CHECK(ui.is(usable(2)));
+    CHECK(ui.is(usable(4)));
+}

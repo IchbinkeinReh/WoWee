@@ -130,6 +130,10 @@ const game::ItemDef* heldItem(game::GameHandler* gh, uint64_t guid);
 /// and the gems put into them (0x005c4680). The cursor's is not among them.
 std::vector<uint64_t> lockedItems(game::GameHandler* gh);
 bool itemLocked(game::GameHandler* gh, uint64_t guid);
+/// An item object the client holds locked (+0x394 bit 0x1, 0x00706fe0): on
+/// the cursor, or in a trade, a letter, an auction or the socketing
+/// (lua_action_api.cpp).
+bool itemObjectLocked(game::GameHandler* gh, uint64_t guid);
 /// The pieces of an item's set that are not known yet.
 std::vector<uint32_t> missingSetPieces(game::GameHandler* gh, uint32_t itemId);
 

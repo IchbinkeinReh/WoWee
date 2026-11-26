@@ -1080,6 +1080,55 @@ static int lua_IsCurrentAction(lua_State* L) {
     return 1;
 }
 
+/// 0x005a8c30 as the range tests read it; defined below with them.
+static uint32_t actionSpell(lua_State* L, game::GameHandler* gh, int slot);
+
+/// The player rides a taxi (UNIT_FIELD_FLAGS 0x100000).
+static bool playerOnTaxi(game::GameHandler* gh) {
+    const auto self = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    return self && self->isUnit() &&
+           (static_cast<const game::Unit*>(self.get())->getUnitFlags() & 0x100000u) != 0;
+}
+
+/// The item object on the cursor, 0 for none: the client locks it while it
+/// is held (+0x394 bit 0x1, 0x00706fe0).
+static uint64_t cursorItemGuid(game::GameHandler* gh) {
+    if (!gh) return 0;
+    const auto& held = cursorItemSlot();
+    if (held.bag < 0 && !held.equipped) return 0;
+    const auto& inv = gh->getInventory();
+    const game::ItemSlot* s = held.equipped ? inventorySlotItem(inv, held.slot)
+                                            : containerItemSlot(inv, held.bag, held.slot);
+    return s ? s->item.guid : 0;
+}
+
+/// An item object locked as the client locks one (+0x394 bit 0x1): held on
+/// the cursor, or given to a trade, a letter, an auction or the socketing.
+bool itemObjectLocked(game::GameHandler* gh, uint64_t guid) {
+    return guid != 0 && (guid == cursorItemGuid(gh) || itemLocked(gh, guid));
+}
+
+/// 0x005a9e20's tests of an equipment set slot before the control: the
+/// manager on (0x005ad6b0), the set there (0x005ae5c0), none of its items
+/// locked (0x005ad940; one sold back does not count) and no locked item worn
+/// in a slot the set does not leave alone (0x005ae040, a set's slot of one).
+static bool equipmentSetUsable(game::GameHandler* gh, uint32_t setId) {
+    if (!gh || storedCVarValue("equipmentManager", "0") == "0") return false;
+    if (!equipmentSetById(gh, setId)) return false;
+    const auto* items = gh->getEquipmentSetItems(setId);
+    if (!items) return false;
+    const auto& inv = gh->getInventory();
+    for (int slot = 0; slot < 19; ++slot) {
+        const uint64_t guid = (*items)[static_cast<size_t>(slot)];
+        if (guid > 1 && itemObjectLocked(gh, guid)) return false;
+        if (guid != 1) {
+            const game::ItemSlot* worn = inventorySlotItem(inv, slot + 1);
+            if (worn && itemObjectLocked(gh, worn->item.guid)) return false;
+        }
+    }
+    return true;
+}
+
 // IsUsableAction(slot) → (1, nil) usable, (nil, 1) its power is short,
 // (nil, nil) everything else. Never a pair of no's - see the shapes below.
 static UsableState actionUsable(lua_State* L, game::GameHandler* gh, int slot) {
@@ -1148,25 +1197,64 @@ static UsableState actionUsable(lua_State* L, game::GameHandler* gh, int slot) {
         usable = u.usable;
         noPower = !u.usable && u.noMana;
     };
+    // The item the slot uses (0x005a8070): its own, or the one a macro shows.
+    bool isItem = false;
     if (action.type == game::ActionBarSlot::SPELL) {
         apply(playerSpellUsableState(gh, action.id));
     } else if (action.type == game::ActionBarSlot::ITEM) {
+        isItem = true;
         apply(itemUsableState(gh, action.id));
     } else if (action.type == game::ActionBarSlot::MACRO) {
+        // A macro the slot names that is not there any more casts nothing
+        // and is none of the kinds 0x005a9e20 lets through: (nil, nil).
+        if (!gh->macroExists(action.id)) return {};
         if (const MacroShown* m = macroShown(L, gh, action.id)) {
-            if (m->result.item != 0) apply(itemUsableState(gh, m->result.item));
-            else if (m->result.spell > 0 && !m->result.petSpell)
+            if (m->result.item != 0) {
+                isItem = true;
+                apply(itemUsableState(gh, m->result.item));
+            } else if (m->result.spell > 0 && !m->result.petSpell) {
                 apply(playerSpellUsableState(gh, static_cast<uint32_t>(m->result.spell)));
+            }
         }
+    } else if (action.type == game::ActionBarSlot::EQUIPMENT_SET) {
+        // 0x005a9e20's equipment set (0x20000000): the manager on
+        // (0x005ad6b0, the equipmentManager CVar), the set there (0x005ae5c0),
+        // none of its items locked (0x005ad940) nor a locked item worn where
+        // the set changes the slot (0x005ae040); on a taxi (UNIT_FIELD_FLAGS
+        // 0x100000) it is usable as it stands, else as the control says below.
+        if (!equipmentSetUsable(gh, action.id)) return {};
+        if (playerOnTaxi(gh)) return {true, false};
     }
-    // 0x005a9e20 under an override bar's row: an item only with its Flags
-    // 0x1, a macro only with 0x2, a spell only with 0x4 or in the row.
+    // What the slot casts (0x005a8c30): with nothing - a macro showing no
+    // spell, an item without a use spell, an equipment set - 0x005a9e20 lets
+    // it be used only while the player has control of itself (0x00bcfb8c);
+    // feared, charmed or stunned out of control it is (nil, nil). A spell has
+    // its own test of the control in 0x0080b5d0 (playerSpellUsableState).
+    const uint32_t spell = actionSpell(L, gh, slot);
+    if (spell == 0 && usable && !gh->playerInControl()) {
+        usable = false;
+        noPower = false;
+    }
+    // 0x005a9e20 under an override bar's row (OverrideSpellData, the low
+    // half of PLAYER_FIELD_BYTES2): an item only with its Flags 0x1, the
+    // auto attack or an auto-repeating ranged spell (0x005a96d0 Effect[0] 78,
+    // 0x005a9760 Attributes 0x2 with AttributesEx2 0x20) only with 0x2, any
+    // other spell only with 0x4 or in the row (0x007fe820). A slot casting
+    // nothing - a macro showing nothing, an equipment set - is not barred.
     if (const auto& row = gh->overrideSpellRow()) {
+        bool autoAttack = false;
+        if (spell != 0) {
+            gh->getSpellName(spell);
+            if (const auto it = gh->spellNameCacheRef().find(spell); it != gh->spellNameCacheRef().end()) {
+                const auto& e = it->second;
+                autoAttack = e.effectIds[0] == 78 || ((e.attr & 0x2u) != 0 && (e.attrEx2 & 0x20u) != 0);
+            }
+        }
         bool barred = false;
-        if (action.type == game::ActionBarSlot::ITEM) barred = (row->flags & 0x1u) == 0;
-        else if (action.type == game::ActionBarSlot::MACRO) barred = (row->flags & 0x2u) == 0;
-        else if (action.type == game::ActionBarSlot::SPELL)
-            barred = (row->flags & 0x4u) == 0 && !row->holds(action.id);
+        if (isItem && (row->flags & 0x1u) == 0) barred = true;
+        if (autoAttack && (row->flags & 0x2u) == 0) barred = true;
+        if (spell != 0 && !isItem && !autoAttack && (row->flags & 0x4u) == 0 && !row->holds(spell))
+            barred = true;
         if (barred) {
             usable = false;
             noPower = false;
