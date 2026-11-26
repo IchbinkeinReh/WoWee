@@ -123,6 +123,17 @@ std::optional<int> cursorStablePet() {
 
 void clearCursor(lua_State* L) { clearCursorItem(L); }
 
+size_t parkedEquipMoves(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+    return inv ? inv->pendingMoveCount() : 0;
+}
+
+void dropCursorAfterMove(lua_State* L, size_t parkedBefore) {
+    if (parkedEquipMoves(L) > parkedBefore) return;
+    clearCursorItem(L);
+}
+
 void dropCursorMoneyOnTrade(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint64_t held = cursorMoney();
@@ -2417,6 +2428,11 @@ static int lua_PickupContainerItem(lua_State* L) {
         // insecure code moves nothing in combat lockdown.
         if (!taint::allowed(L, 0x16)) return 0;
         const int wasBag = s_cursorBag, wasSlot = s_cursorSlot;
+        const bool wasWorn = cursorItemSlot().equipped;
+        // A worn piece dropped on a bind-on-equip one in a bag equips that
+        // one, and is parked for EQUIP_BIND: kept in the hand while the
+        // question is open (dropCursorAfterMove, T352).
+        const size_t parked = parkedEquipMoves(L);
         // Part of a stack moves as a split rather than a swap: a swap would
         // send the whole thing, which is not what was picked up.
         if (s_cursorSplit > 0) {
@@ -2425,9 +2441,16 @@ static int lua_PickupContainerItem(lua_State* L) {
         } else {
             gh->swapContainerItems(srcBag, srcSlot, dstBag, dstSlot);
         }
+        if (parkedEquipMoves(L) > parked) return 0;
         clearCursorItem(L);
-        gh->fireAddonEvent("ITEM_LOCK_CHANGED",
-                           {std::to_string(wasBag), std::to_string(wasSlot)});
+        // A worn slot is named by its slot alone, as 12340 names an inventory
+        // slot's lock (PaperDollItemSlotButton_OnEvent: `not arg2 and arg1 ==
+        // self:GetID()`); bag -1 is the bank's container to the interface.
+        if (wasWorn)
+            gh->fireAddonEvent("ITEM_LOCK_CHANGED", {std::to_string(wasSlot)});
+        else
+            gh->fireAddonEvent("ITEM_LOCK_CHANGED",
+                               {std::to_string(wasBag), std::to_string(wasSlot)});
         gh->fireAddonEvent("ITEM_LOCK_CHANGED",
                            {std::to_string(bag), std::to_string(slot)});
         return 0;
@@ -2649,6 +2672,7 @@ static int lua_PickupBagFromSlot(lua_State* L) {
         const int srcWorn = s_cursorSlot - kFirstWornBagInventorySlot;
         const bool fromWorn = s_cursorBag == -1 &&
                               srcWorn >= 0 && srcWorn < game::Inventory::NUM_BAG_SLOTS;
+        const size_t parked = parkedEquipMoves(L);
         if (fromWorn && isWorn) {
             // Both are worn bags, which has its own verb: it swaps the bags'
             // contents locally as well as sending the move, so the bags on
@@ -2658,7 +2682,8 @@ static int lua_PickupBagFromSlot(lua_State* L) {
             gh->swapContainerItems(srcBag, srcSlot, 0xFF,
                                    static_cast<uint8_t>(game::slots::toWireSlot(slot)));
         }
-        clearCursorItem(L);
+        // Held while a bind-on-equip bag's question is open (T351).
+        dropCursorAfterMove(L, parked);
         return 0;
     }
 
@@ -2728,6 +2753,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
             return 0;
         }
         if (s_cursorType == CursorType::ITEM) {
+            const size_t parked = parkedEquipMoves(L);
             if (s_cursorBag == 0) {
                 gh->autoEquipItemBySlot(s_cursorSlot - 1);
             } else if (s_cursorBag >= 1 && s_cursorBag <= game::Inventory::NUM_BAG_SLOTS) {
@@ -2735,7 +2761,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
             } else {
                 LOG_WARNING("PickupInventoryItem(0): the held item is not in a carried bag");
             }
-            clearCursorItem(L);
+            dropCursorAfterMove(L, parked);
             return 0;
         }
         if (s_cursorType != CursorType::NONE) {
@@ -2777,9 +2803,15 @@ static int lua_PickupInventoryItem(lua_State* L) {
     uint8_t srcBag = 0, srcSlot = 0;
     if (cursorWireSlot(srcBag, srcSlot)) {
         if (!taint::allowed(L, 0x16)) return 0;   // SwapItems, 0x006df890
+        // A bind-on-equip item onto its slot is parked for EQUIP_BIND, and
+        // stays in the hand while the question is open (0x006df890 returns
+        // before putting the cursor down). Put down at once, UIParent's
+        // CURSOR_UPDATE - no item held - hid the dialog the moment it opened,
+        // and its OnHide cancelled the equip (T352).
+        const size_t parked = parkedEquipMoves(L);
         gh->swapContainerItems(srcBag, srcSlot, 0xFF,
                                static_cast<uint8_t>(slot - 1));
-        clearCursorItem(L);
+        dropCursorAfterMove(L, parked);
         return 0;
     }
 
@@ -2858,10 +2890,13 @@ static int lua_AutoEquipCursorItem(lua_State* L) {
         !taint::allowed(L, 0x16)) {
         return 0;
     }
+    // Kept in the hand while a bind-on-equip item's question is open, as a
+    // drop on its slot (T352).
+    const size_t parked = parkedEquipMoves(L);
     if (gh && s_cursorType == CursorType::ITEM && s_cursorId != 0) {
         gh->useItemById(s_cursorId);
     }
-    clearCursorItem(L);
+    dropCursorAfterMove(L, parked);
     return 0;
 }
 
@@ -2964,8 +2999,9 @@ static int lua_EquipCursorItem(lua_State* L) {
         if (info && game::inventoryTypeFitsSlot(slot, info->inventoryType) &&
             cursorWireSlot(srcBag, srcSlot)) {
             if (!taint::allowed(L, 0x16)) return 0;   // SwapItems, 0x006df890
+            const size_t parked = parkedEquipMoves(L);
             gh->swapContainerItems(srcBag, srcSlot, 0xFF, static_cast<uint8_t>(slot - 1));
-            clearCursorItem(L);
+            dropCursorAfterMove(L, parked);   // T352
             return 0;
         }
         if (held.equipped) {

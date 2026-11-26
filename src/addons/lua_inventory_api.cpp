@@ -5616,8 +5616,10 @@ static int lua_PutItemInBag(lua_State* L) {
         if (fromIndex != bagIndex) {
             gh->swapBagSlots(fromIndex, bagIndex);
         }
-        cursorItemSlot() = {};
-        wowee::ui::frameXmlSetCursorItem(std::string());
+        // The whole cursor put down (0x00519280): GetCursorInfo and
+        // CursorHasItem read the cursor's kind, which clearing this slot
+        // alone left holding the item (T351).
+        clearCursor(L);
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -5632,10 +5634,12 @@ static int lua_PutItemInBag(lua_State* L) {
     // item into the worn-bag equipment slot, the same move PickupBagFromSlot's
     // own drop makes, with 0xFF for the equipment container.
     if (size == 0) {
+        // A bind-on-equip bag is parked for EQUIP_BIND and stays in the hand
+        // until the answer (dropCursorAfterMove); EquipPendingItem puts it down.
+        const size_t parked = parkedEquipMoves(L);
         gh->swapContainerItems(srcBag, srcSlot, 0xFF,
                                static_cast<uint8_t>(game::slots::toWireSlot(inventoryId)));
-        cursorItemSlot() = {};
-        wowee::ui::frameXmlSetCursorItem(std::string());
+        dropCursorAfterMove(L, parked);
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -5651,8 +5655,7 @@ static int lua_PutItemInBag(lua_State* L) {
         packet.writeUInt8(srcSlot);
         packet.writeUInt8(static_cast<uint8_t>(container));
         gh->sendInterfaceRequest(packet);
-        cursorItemSlot() = {};
-        wowee::ui::frameXmlSetCursorItem(std::string());
+        clearCursor(L);
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -5674,10 +5677,11 @@ static int lua_PutItemInBackpack(lua_State* L) {
     // 0x005ea7f0 -> 0x005e8d30 -> SwapItems (0x006df890, kind 0x16).
     if (free >= 0 && !taint::allowed(L, 0x16)) return 0;
     if (free >= 0) {
+        const size_t parked = parkedEquipMoves(L);
         gh->swapContainerItems(srcBag, srcSlot, 0xFF,
                                static_cast<uint8_t>(game::slots::backpackWireSlot(free)));
-        cursorItemSlot() = {};
-        wowee::ui::frameXmlSetCursorItem(std::string());
+        // The whole cursor, as PutItemInBag (T351).
+        dropCursorAfterMove(L, parked);
     }
     luaPushOneOrNil(L, 1);
     return 1;
@@ -6853,8 +6857,14 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"EquipPendingItem", [](lua_State* L) -> int {
             if (!taint::allowed(L, 0x16)) return 0;
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: EquipPendingItem(index)");
-            if (auto* gh = getGameHandler(L))
+            if (auto* gh = getGameHandler(L)) {
+                // The replayed move puts the cursor down as any made move does
+                // (0x006e01a0 -> 0x006df890 ... 0x00519280): the item held
+                // while the question was open is worn now (T351).
+                const size_t parked = parkedEquipMoves(L);
                 gh->equipPendingItem(static_cast<int>(std::lround(lua_tonumber(L, 1))));
+                if (parkedEquipMoves(L) < parked) clearCursor(L);
+            }
             return 0;
         }},
                 {"CancelPendingEquip", [](lua_State* L) -> int {

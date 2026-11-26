@@ -2266,3 +2266,70 @@ TEST_CASE("the latest achievements come by the time of day, then by their order"
     CHECK(ui.is("#latest == 4"));
     CHECK(ui.is("latest[1] == 545 and latest[2] == 2078 and latest[3] == 2097 and latest[4] == 868"));
 }
+
+namespace {
+// One item in the backpack's first slot, its template known.
+void carry(Session& s, uint32_t entry, uint8_t inventoryType, uint32_t bindType, uint64_t guid = 0,
+           uint32_t sellPrice = 0) {
+    auto& gh = s.handler();
+    auto& info = gh.itemInfoCacheRef()[entry];
+    info.entry = entry;
+    info.valid = true;
+    info.name = "Item " + std::to_string(entry);
+    info.inventoryType = inventoryType;
+    info.bindType = bindType;
+    wowee::game::ItemDef def;
+    def.itemId = entry;
+    def.name = info.name;
+    def.inventoryType = inventoryType;
+    def.bindType = bindType;
+    def.guid = guid;
+    def.sellPrice = sellPrice;
+    info.sellPrice = sellPrice;
+    REQUIRE(gh.inventoryRef().setBackpackSlot(0, def));
+}
+}  // namespace
+
+// T351: a drop on the backpack (or a bag button) moved the item but left the
+// cursor's kind holding it - GetCursorInfo and CursorHasItem still answered
+// the item, and the next click was taken as another drop. 0x006df890 puts the
+// cursor down (0x00519280) once the move is sent.
+TEST_CASE("an item put in the backpack leaves the hand", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    carry(s, 1251, 0, 0);
+    ui.run("PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    ui.run("PutItemInBackpack()");
+    CHECK(ui.is("not CursorHasItem()"));
+    CHECK(ui.is("GetCursorInfo() == nil"));
+}
+
+// T352 / T351: a bind-on-equip piece dropped on its slot is parked for the
+// EQUIP_BIND prompt and stays in the hand while the question is open
+// (0x006df890 returns before putting the cursor down) - put down at once, the
+// interface's CURSOR_UPDATE hid the prompt and its OnHide cancelled the equip.
+// Accepted (EquipPendingItem, 0x006e01a0), the move is made and the hand is
+// empty.
+TEST_CASE("a bind-on-equip piece is held while its question is open", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    carry(s, 10019, 10, 2);  // hands, bind on equip
+    ui.run("asked = nil local f = CreateFrame('Frame') f:RegisterEvent('EQUIP_BIND_CONFIRM') "
+           "f:SetScript('OnEvent', function(self, event, index) asked = index end)");
+    ui.run("PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    const size_t sent = s.sent().all().size();
+    ui.run("PickupInventoryItem(10)");
+    CHECK(ui.is("asked == 0"));
+    CHECK(ui.is("CursorHasItem() == 1"));
+    CHECK(s.sent().all().size() == sent);
+    ui.run("EquipPendingItem(0)");
+    CHECK(s.sent().all().size() > sent);
+    CHECK(ui.is("not CursorHasItem()"));
+}
+

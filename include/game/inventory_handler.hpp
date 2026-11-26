@@ -404,6 +404,14 @@ public:
     /// EquipPendingItem / CancelPendingEquip (0x006e01a0): the queue entry at
     /// `index`, replayed confirmed or let go, and then emptied.
     void equipPendingItem(int index);
+    /// How many moves wait on the bind prompt (the live entries of the queue
+    /// 0x006df850 hands out): one more after a move than before it, and that
+    /// move was parked rather than made.
+    [[nodiscard]] size_t pendingMoveCount() const {
+        size_t n = 0;
+        for (const PendingMove& m : pendingMoves_) n += m.active() ? 1 : 0;
+        return n;
+    }
     void cancelPendingEquip(int index);
     /// `unitTarget` names who the item is used on, and overrides the default
     /// the item's own class implies. Only the interface's /use handling passes

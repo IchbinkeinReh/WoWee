@@ -1579,6 +1579,13 @@ void pickupStablePetCursor(lua_State* L, int slot, const std::string& icon);
 std::optional<int> cursorStablePet();
 /// ClearCursor's own put-down (0x00519280), whatever is held.
 void clearCursor(lua_State* L);
+/// The moves waiting on the bind prompt, before a drop is made.
+size_t parkedEquipMoves(lua_State* L);
+/// After a drop made from the cursor: put the cursor down (0x00519280, as
+/// 0x006df890 does once the move is sent) - unless the move was parked for the
+/// bind prompt (one more waiting than `parkedBefore`), which returns before
+/// that and keeps the item in the hand until EquipPendingItem replays it.
+void dropCursorAfterMove(lua_State* L, size_t parkedBefore);
 /// TRADE_SHOW's own work before the interface hears it (0x005870a0): the
 /// item dropped on the player who was asked to trade goes into the trade.
 void onTradeShown(lua_State* L);
