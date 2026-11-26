@@ -669,24 +669,25 @@ static int lua_CheckInteractDistance(lua_State* L) {
 // second return says whether the question could be answered at all: a member
 // on another part of the map has no entity here, and dimming them for being
 // out of range would be a guess dressed as a measurement.
-// UnitInRange(unit) → 1 or nil (0x00612f10): a member of the player's group
-// less than forty yards away, measured in three dimensions.
+// UnitInRange(unit) → 1 or nil (0x00612f10): a unit this client has that is
+// the player, a member of the player's group or the pet of one (0x00512a30),
+// at most forty yards from the unit the client moves (0x00ca1238, the active
+// mover: the player, or what it controls), measured in three dimensions.
 static int lua_UnitInRange(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitInRange(\"unit\")");
     auto* gh = getGameHandler(L);
     if (!gh) return luaReturnNil(L);
-    std::string uidStr(luaL_optstring(L, 1, "player"));
+    std::string uidStr(lua_tostring(L, 1));
     toLowerInPlace(uidStr);
     const uint64_t guid = resolveUnitGuid(gh, uidStr);
-    const auto& members = gh->getPartyData().members;
-    const bool inGroup = guid != 0 && std::any_of(members.begin(), members.end(),
-                                                  [guid](const auto& m) { return m.guid == guid; });
-    auto other  = inGroup ? gh->getEntityManager().getEntity(guid) : nullptr;
-    auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-    if (!other || !player) return luaReturnNil(L);
-    const float dx = player->getX() - other->getX();
-    const float dy = player->getY() - other->getY();
-    const float dz = player->getZ() - other->getZ();
-    luaPushOneOrNil(L, (dx*dx + dy*dy + dz*dz) < (40.0f * 40.0f));
+    auto other = guid != 0 && isGroupMemberOrPet(gh, guid) ? gh->getEntityManager().getEntity(guid) : nullptr;
+    const uint64_t moverGuid = gh->activeMover() ? gh->activeMover() : gh->getPlayerGuid();
+    auto mover = gh->getEntityManager().getEntity(moverGuid);
+    if (!other || !other->isUnit() || !mover || !mover->isUnit()) return luaReturnNil(L);
+    const float dx = mover->getX() - other->getX();
+    const float dy = mover->getY() - other->getY();
+    const float dz = mover->getZ() - other->getZ();
+    luaPushOneOrNil(L, std::sqrt(dx * dx + dy * dy + dz * dz) <= 40.0f);
     return 1;
 }
 
@@ -3744,9 +3745,13 @@ static int lua_UnitIsConnected(lua_State* L) {
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
     if (guid == 0) { return luaReturnNil(L); }
-    // Player is always connected
+    // 0x0060f790: a unit this client has is connected (the player too);
+    // without one, a group member's status record says (+8 bit 1).
     if (guid == gh->getPlayerGuid()) { luaPushOneOrNil(L, 1); return 1; }
-    // Check party/raid member online status
+    if (auto entity = gh->getEntityManager().getEntity(guid); entity && entity->isUnit()) {
+        luaPushOneOrNil(L, 1);
+        return 1;
+    }
     const auto& pd = gh->getPartyData();
     for (const auto& m : pd.members) {
         if (m.guid == guid) {
@@ -3754,9 +3759,7 @@ static int lua_UnitIsConnected(lua_State* L) {
             return 1;
         }
     }
-    // Non-party entities that exist are considered connected
-    auto entity = gh->getEntityManager().getEntity(guid);
-    luaPushOneOrNil(L, entity ? 1 : 0);
+    luaPushOneOrNil(L, 0);
     return 1;
 }
 

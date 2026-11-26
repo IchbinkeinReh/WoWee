@@ -5155,8 +5155,8 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-    // (id, isPet, showRank); the fifth is the brief form SetAction asks for.
-    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id, lua_toboolean(L, 5) != 0, luaClientSwitchArg(L, 4, false)) ? 1 : 0);
+    // (id, isPet, showRank) - 0x00625b90 reads no fifth argument.
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id, false, luaClientSwitchArg(L, 4, false)) ? 1 : 0);
     return 1;
 }
 
@@ -8130,16 +8130,19 @@ int lua_Texture_SetBlendMode(lua_State* L) {
     return luaL_error(L, "Usage: %s:SetBlendMode(\"mode\")", w->name.empty() ? "<unnamed>" : w->name.c_str());
 }
 // SetDesaturated(flag): drawn as its own luminance (Desaturate.bls). Answers
-// whether the shader is there - always - which SetItemButtonDesaturated reads
-// to decide against greying the icon with SetVertexColor instead.
+// whether the shader is there - always, as the number 1 (0x0048c9a0) - which
+// SetItemButtonDesaturated reads to decide against greying the icon with
+// SetVertexColor instead.
 int lua_Texture_SetDesaturated(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) w->desaturated = luaClientSwitchArg(L, 2, true);
-    lua_pushboolean(L, 1);
+    lua_pushnumber(L, 1.0);
     return 1;
 }
+// IsDesaturated() (0x0048ca30): 1 while the desaturate shader is set, else nil.
 int lua_Texture_IsDesaturated(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, (w && w->desaturated) ? 1 : 0);
+    if (w && w->desaturated) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
     return 1;
 }
 int lua_Texture_GetBlendMode(lua_State* L) {
@@ -16017,8 +16020,8 @@ void LuaEngine::registerCoreAPI() {
         // thing it added: the id GetSpell answers with.
         "do\n"
         "    local fill = __WoweeTooltipSetSpellByID\n"
-        "    function __WoweeFrameMT:SetSpellByID(spellId, isPet, showRank, brief)\n"
-        "        local ok = fill(self, spellId, isPet, showRank, brief)\n"
+        "    function __WoweeFrameMT:SetSpellByID(spellId, isPet, showRank)\n"
+        "        local ok = fill(self, spellId, isPet, showRank)\n"
         "        self.__spellId = ok and spellId or nil\n"
         "        return ok\n"
         "    end\n"

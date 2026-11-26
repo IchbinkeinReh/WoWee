@@ -217,9 +217,12 @@ static bool petitionPurchaseAllowed(game::GameHandler* gh, int row) {
 
 /// Whether the player's guild rank holds one right. Shared by the nine Can*
 /// queries, which differ only in which bit they ask about.
+// The Can* guild right queries (CanGuildPromote 0x005cbcf0 and its
+// neighbours up to 0x005cc200): 1 when the player's rank has the bit, else nil.
 static int luaGuildRight(lua_State* L, uint32_t bit) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, (gh && (gh->getPlayerGuildRankRights() & bit)) ? 1 : 0);
+    if (gh && (gh->getPlayerGuildRankRights() & bit)) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
     return 1;
 }
 

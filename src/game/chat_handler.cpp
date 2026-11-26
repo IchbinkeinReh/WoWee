@@ -9,6 +9,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/chat_bubble_rule.hpp"
 #include "game/chat_filters.hpp"
+#include "game/chat_gesture.hpp"
 #include "game/chat_language.hpp"
 #include "game/chat_profanity.hpp"
 #include "game/chat_outgoing.hpp"
@@ -904,6 +905,33 @@ static std::string chatGuidArg(uint64_t guid) {
     return text;
 }
 
+void ChatHandler::gestureForLine(const MessageChatData& data) {
+    const auto type = static_cast<uint8_t>(data.type);
+    if (type != 1 && type != 6 && type != 2 && type != 0x33) return;
+    if (!owner_.emoteAnimCallbackRef() || data.senderGuid == 0) return;
+    auto entity = owner_.getEntityManager().getEntity(data.senderGuid);
+    const auto* unit = entity && entity->isUnit() ? static_cast<const Unit*>(entity.get()) : nullptr;
+    if (!unit) return;
+    if (const uint16_t f = fieldIndex(UF::UNIT_FIELD_FLAGS); f != 0xFFFF && (unit->getField(f) & 0x20000000u) != 0)
+        return;
+    // LAUGH_WORD1, 2, ... up to the first the interface does not have.
+    std::vector<std::string> laughWords;
+    for (int i = 1; i < 64; ++i) {
+        const std::string key = "LAUGH_WORD" + std::to_string(i);
+        std::string word = interfaceString(key.c_str(), nullptr);
+        if (word.empty()) break;
+        laughWords.push_back(std::move(word));
+    }
+    const ChatGesture kind = chatGestureFor(type, data.message, laughWords);
+    if (kind == ChatGesture::None) return;
+    if (data.senderGuid != owner_.getPlayerGuid() &&
+        (unit->getStandState() == 3 || (unit->getReportedMoveFlags() & 0x00200000u) != 0))
+        return;
+    const uint32_t emote = rendering::AnimationController::getChatGestureEmote(static_cast<int>(kind));
+    const uint32_t anim = emote ? rendering::AnimationController::getEmoteAnimByEmotesId(emote) : 0u;
+    if (anim != 0) owner_.emoteAnimCallbackRef()(data.senderGuid, anim, false);
+}
+
 void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& gmName) {
     LOG_DEBUG("Handling SMSG_MESSAGECHAT");
     if (chatPacketDiagEnabled()) {
@@ -1271,6 +1299,13 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
     // no event, no log. After the whisper's reply target is kept, as the client
     // keeps it (0x0050be70) before the line is shown.
     if (dropAsSpam(data)) return;
+
+    // The speaker's gesture (0x00509dd0 -> 0x0073ad70, T399): a say, yell,
+    // party or party-leader line from a unit this client has, not one with
+    // UNIT_FIELD_FLAGS 0x20000000, plays the Emotes.dbc row for its kind -
+    // not while it sleeps (stand state 3) or swims. The active player's
+    // other conditions (0x0073ab90) are the emote callback's.
+    gestureForLine(data);
 
     const bool fromAPlayer =
         data.type == ChatType::SAY || data.type == ChatType::YELL ||

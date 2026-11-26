@@ -208,8 +208,11 @@ void EmoteRegistry::loadFromDbc() {
         // EmoteFlags, column 3.
         uint32_t flagsField = emL ? (*emL)["EmoteFlags"] : 3;
         if (flagsField == 0xFFFFFFFF) flagsField = 3;
+        std::vector<std::pair<uint32_t, uint32_t>> gestureRows;
+        gestureRows.reserve(emotesDbc->getRecordCount());
         for (uint32_t r = 0; r < emotesDbc->getRecordCount(); ++r) {
             uint32_t emoteId = emotesDbc->getUInt32(r, emL ? (*emL)["ID"] : 0);
+            gestureRows.emplace_back(emoteId, emotesDbc->getUInt32(r, flagsField));
             uint32_t animId = emotesDbc->getUInt32(r, emL ? (*emL)["AnimID"] : 2);
             if (emotesDbc->getUInt32(r, specField) != 0) {
                 stateEmoteIds_.insert(emoteId);
@@ -221,6 +224,7 @@ void EmoteRegistry::loadFromDbc() {
                 animByEmotesId_[emoteId] = animId;
             }
         }
+        chatGestureEmotes_ = chatGestureRows(gestureRows);
         LOG_DEBUG("Emotes: loaded ", emoteIdToAnim.size(), " anim mappings from Emotes.dbc");
     } else {
         LOG_WARNING("Emotes: Emotes.dbc failed to load - all emotes will use fallback animations");
@@ -356,6 +360,26 @@ std::optional<EmoteRegistry::EmoteResult> EmoteRegistry::findEmote(const std::st
     if (info.animId == 0) return std::nullopt;
     return EmoteResult{.animId = info.animId, .loop = info.loop};
 }
+// 0x007165d0: the rows from the last to the first, each written into the
+// slot of the first of its flags 0x8, 0x10, 0x20, 0x40, 0x100 - so the first
+// row in the file with a flag holds that slot.
+std::array<uint32_t, 5> EmoteRegistry::chatGestureRows(const std::vector<std::pair<uint32_t, uint32_t>>& rows) {
+    std::array<uint32_t, 5> out{};
+    for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
+        const uint32_t flags = it->second;
+        if (flags & 0x8u) out[0] = it->first;
+        else if (flags & 0x10u) out[1] = it->first;
+        else if (flags & 0x20u) out[2] = it->first;
+        else if (flags & 0x40u) out[3] = it->first;
+        else if (flags & 0x100u) out[4] = it->first;
+    }
+    return out;
+}
+
+uint32_t EmoteRegistry::chatGestureEmote(int kind) const {
+    return kind >= 0 && kind < 5 ? chatGestureEmotes_[static_cast<size_t>(kind)] : 0u;
+}
+
 uint32_t EmoteRegistry::flagsByEmotesId(uint32_t emoteId) const {
     auto it = flagsByEmotesId_.find(emoteId);
     return it != flagsByEmotesId_.end() ? it->second : 0u;

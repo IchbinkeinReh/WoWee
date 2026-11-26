@@ -99,6 +99,12 @@ uint32_t AnimationController::getEmoteAnimByEmotesId(uint32_t emoteId) {
     return registry.animByEmotesId(emoteId);
 }
 
+uint32_t AnimationController::getChatGestureEmote(int kind) {
+    auto& registry = EmoteRegistry::instance();
+    registry.loadFromDbc();
+    return registry.chatGestureEmote(kind);
+}
+
 uint32_t AnimationController::getEmoteFlagsByEmotesId(uint32_t emoteId) {
     auto& registry = EmoteRegistry::instance();
     registry.loadFromDbc();

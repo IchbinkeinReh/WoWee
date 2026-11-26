@@ -10,9 +10,11 @@
 #include "game/dressing_room.hpp"
 #include "game/inventory_handler.hpp"
 #include "game/player_display_flags.hpp"
+#include "game/chat_gesture.hpp"
 #include "game/quest_link.hpp"
 #include "game_replay.hpp"
 #include "pipeline/dbc_loader.hpp"
+#include "rendering/animation/emote_registry.hpp"
 #include "ui/framexml_emitter.hpp"
 #include "ui/widget_tree.hpp"
 #include "ui/xml_parser.hpp"
@@ -3729,4 +3731,135 @@ TEST_CASE("incoming quest links take the reader's colour (0x00509dd0)", "[replay
     CHECK(recolourQuestLinks("|cff808080|Hquest:1:-1|h[a]|h|r", 80) == "|cffffff00|Hquest:1:-1|h[a]|h|r");
     CHECK(recolourQuestLinks("|cff808080|Hquest:1:85|h[a]|h|r", 80) == "|cffff2020|Hquest:1:85|h[a]|h|r");
     CHECK(recolourQuestLinks("abcdefghij||Hquest:1:3|h", 80) == "abcdefghij||Hquest:1:3|h");
+}
+
+// T400: answers as numbers/nil where 12340 pushes them - Texture IsDesaturated
+// 0x0048ca30 (1/nil) and SetDesaturated 0x0048c9a0 (1), the guild right
+// queries (CanGuildPromote 0x005cbcf0 ...: 1/nil), IsConnectedToServer
+// 0x004dda50 (1/nil); IsDebugBuild 0x0050fe80 pushes false; IsInLFGDungeon
+// 0x00555660 answers nothing at all outside a finder dungeon.
+TEST_CASE("number and nil answers as 12340 pushes them (T400)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("tx = UIParent:CreateTexture()");
+    CHECK(ui.is("tx:IsDesaturated() == nil"));
+    CHECK(ui.is("tx:SetDesaturated(1) == 1 and tx:IsDesaturated() == 1"));
+    CHECK(ui.is("tx:SetDesaturated(0) == 1 and tx:IsDesaturated() == nil"));
+    CHECK(ui.is("CanGuildPromote() == nil and CanGuildInvite() == nil and CanEditMOTD() == nil "
+                "and CanViewOfficerNote() == nil and CanEditGuildInfo() == nil"));
+    CHECK(ui.is("IsDebugBuild() == false"));
+    CHECK(ui.is("select('#', IsInLFGDungeon()) == 0"));
+    CHECK(ui.is("IsConnectedToServer() == nil"));
+    s.setConnected(true);
+    CHECK(ui.is("IsConnectedToServer() == 1"));
+}
+
+// T396: CalendarGetEventInfo 0x005bd8a0 answers the open event whatever its
+// id - a new one being made (0x005bbe50) too, with what CalendarEventSet*
+// wrote into it; the date not given yet reads 0/0/0/1999 -1:-1, the maker's
+// own row (0x005f2a20: confirmed, normal invite) gives status 4 and type 1.
+TEST_CASE("CalendarGetEventInfo answers the event being made (T396, 0x005bd8a0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    wowee::game::GameHandlerTestAccess::setCharacter(s.handler(), "A", "Locki", Session::kPlayerGuid);
+    Interface ui(s);
+    CHECK(ui.is("select(1, CalendarGetEventInfo()) == nil"));
+    ui.run("CalendarNewEvent() CalendarEventSetTitle('E2 Titel') CalendarEventSetType(2) "
+           "ev = {CalendarGetEventInfo()}");
+    CHECK(ui.is("ev[1] == 'E2 Titel' and ev[2] == '' and ev[4] == 2 and ev[5] == 1"));
+    CHECK(ui.is("ev[3] == 'Locki'"));
+    CHECK(ui.is("ev[8] == 0 and ev[9] == 0 and ev[10] == 0 and ev[11] == 1999 and ev[12] == -1 and ev[13] == -1"));
+    CHECK(ui.is("ev[20] == nil and ev[21] == nil and ev[23] == 4 and ev[24] == 1 and ev[25] == 'PLAYER'"));
+    ui.run("CalendarEventSetDate(12, 24, 2026) CalendarEventSetTime(20, 15) ev = {CalendarGetEventInfo()}");
+    CHECK(ui.is("ev[9] == 12 and ev[10] == 24 and ev[11] == 2026 and ev[12] == 20 and ev[13] == 15"));
+}
+
+// T399: the speaker's gesture (0x00509dd0): a whole-line LAUGH_WORD laughs
+// (party lines only then), a yell shouts, a say ends in '?' or '!' or talks;
+// the Emotes.dbc rows are chosen as 0x007165d0 does - the first row with each
+// of the flags 0x8/0x10/0x20/0x40/0x100, a row counted for its first flag.
+TEST_CASE("chat lines choose the speaker's gesture (T399, 0x00509dd0)", "[replay][interface]") {
+    using wowee::game::ChatGesture;
+    using wowee::game::chatGestureFor;
+    const std::vector<std::string> laugh{"lol", "haha"};
+    CHECK(chatGestureFor(1, "Hallo", laugh) == ChatGesture::Talk);
+    CHECK(chatGestureFor(1, "Wirklich?", laugh) == ChatGesture::Question);
+    CHECK(chatGestureFor(1, "Hallo!", laugh) == ChatGesture::Exclamation);
+    CHECK(chatGestureFor(6, "Hallo?", laugh) == ChatGesture::Shout);
+    CHECK(chatGestureFor(1, "lol", laugh) == ChatGesture::Laugh);
+    CHECK(chatGestureFor(1, "lol!", laugh) == ChatGesture::Exclamation);
+    CHECK(chatGestureFor(2, "haha", laugh) == ChatGesture::Laugh);
+    CHECK(chatGestureFor(0x33, "Hallo?", laugh) == ChatGesture::None);
+    CHECK(chatGestureFor(7, "Hallo", laugh) == ChatGesture::None);
+    const auto rows = wowee::rendering::EmoteRegistry::chatGestureRows(
+        {{1, 0x8}, {2, 0x8}, {6, 0x10}, {5, 0x28}, {7, 0x20}, {22, 0x40}, {11, 0x100}, {12, 0x110}});
+    CHECK(rows == std::array<uint32_t, 5>{1, 6, 7, 22, 11});
+}
+
+// T394 leftover: SetActionBarToggles reads its four flags by 0x00815500
+// (0x005a8290), so 0 and 'false' are off; CMSG_SET_ACTIONBAR_TOGGLES carries
+// them as bits 0-3.
+TEST_CASE("SetActionBarToggles reads 0 as off (0x005a8290)", "[replay][interface]") {
+    const int tag = 0;
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        ("wowee_bar_toggles_" + std::to_string(reinterpret_cast<std::uintptr_t>(&tag)));
+    std::filesystem::create_directories(root);
+    wowee::core::setEnvVar("WOWEE_CONFIG_ROOT", root.string().c_str());
+    {
+        Session s;
+        s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+        s.setConnected(true);
+        Interface ui(s);
+        ui.run("SetActionBarToggles(1, 0, 'false', 1)");
+        const auto sent = s.sent().of(Opcode::CMSG_SET_ACTIONBAR_TOGGLES);
+        REQUIRE(sent.size() == 1);
+        wowee::network::Packet p = sent.back();
+        p.setReadPos(0);
+        CHECK(p.readUInt8() == 0x9);
+    }
+    wowee::core::unsetEnvVar("WOWEE_CONFIG_ROOT");
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+// UnitIsConnected 0x0060f790: a unit this client has is connected; only
+// without one does the member's status record (+8 bit 1) answer (found by U
+// in code: a member in sight whose stats said offline answered nil).
+TEST_CASE("UnitIsConnected answers 1 for a member in sight (0x0060f790)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+    g.writeUInt8(0);
+    for (int i = 0; i < 3; ++i) g.writeUInt8(0);
+    g.writeUInt64(0x1234);
+    g.writeUInt32(1);
+    g.writeUInt32(1);
+    g.writeString("Achiles");
+    g.writeUInt64(0x1001);
+    g.writeUInt8(0);  // offline by the roster
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt64(Session::kPlayerGuid);
+    for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+    s.receive(g);
+    CHECK(ui.is("UnitIsConnected('party1') == nil"));
+    s.receive(UpdateObject().create(0x1001, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                                     {UF::UNIT_FIELD_LEVEL, 80}}));
+    CHECK(ui.is("UnitIsConnected('party1') == 1"));
+}
+
+// UnitInRange 0x00612f10: the player counts as of its group (0x00512a30) and
+// stands at its own place - 1, as for a member at forty yards exactly; a
+// stranger nil (found by U in code).
+TEST_CASE("UnitInRange counts the player and forty yards (0x00612f10)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("UnitInRange('player') == 1"));
+    CHECK(ui.is("UnitInRange('target') == nil"));
 }

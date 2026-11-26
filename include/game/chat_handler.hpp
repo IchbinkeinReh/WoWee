@@ -277,6 +277,8 @@ private:
     /// Whether a line is spam to be dropped (0x00509dd0 -> 0x00509bd0),
     /// reporting a spam whisper with CMSG_CHAT_FILTERED.
     bool dropAsSpam(const MessageChatData& data);
+    /// The speaker's talk gesture for a say, yell or party line (0x00509dd0, T399).
+    void gestureForLine(const MessageChatData& data);
     /// Whether the sender is on the ignore list, which is the client's own test
     /// and its own drop (0x0050be70), reporting an ignored whisper with
     /// CMSG_CHAT_IGNORED.

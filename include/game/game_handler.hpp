@@ -1166,6 +1166,9 @@ public:
     bool openCalendarNewEvent(CalendarNewKind kind);
     /// Whether an event is open (0x00c207ec): a new one, or the one last sent
     /// in full while its id stands.
+    /// A new event is being made (CalendarNewEvent and siblings, 0x005bbe50)
+    /// and not yet sent.
+    bool isCalendarDraftOpen() const { return calendarDraftOpen_; }
     bool isCalendarEventOpen() const {
         return calendarDraftOpen_ || calendarEventDetail_.eventId != 0;
     }
@@ -5076,12 +5079,7 @@ public:
     void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void sellItemInBag(int bagIndex, int slotIndex);
-    struct BuybackItem {
-        uint64_t itemGuid = 0;
-        ItemDef item;
-        uint32_t count = 1;
-        uint32_t wireSlot = 0;
-    };
+    using BuybackItem = game::BuybackItem;
     /// `row` is the row number the buyback tab used.
     void buyBackItem(uint32_t row);
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);

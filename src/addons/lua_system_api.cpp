@@ -417,17 +417,6 @@ static void pushGlobalText(lua_State* L, const char* key) {
     }
 }
 
-/// The player's own answer to an event, from the invite list that came with
-/// it. Zero is CALENDAR_INVITESTATUS_INVITED, which is what an event carries
-/// while it is unanswered.
-static double calendarInviteStatusFor(const wowee::game::CalendarData& cal,
-                                      uint64_t eventId) {
-    for (const auto& invite : cal.invites) {
-        if (invite.eventId == eventId) return static_cast<double>(invite.status);
-    }
-    return 0;
-}
-
 /// CombatLog_Object_IsA(unitFlags, mask) (0x0074d600): 1 when the flags
 /// have one of the mask's special bits, or something of it in each of the
 /// four categories - nil otherwise, not false.
@@ -9216,10 +9205,12 @@ void registerSystemLuaAPI(lua_State* L) {
                 // than mapping them onto a bar that is not theirs.
                 {"SetActionBarToggles", [](lua_State* L) -> int {
             auto& shown = actionBarToggles();
-            shown[0] = lua_toboolean(L, 1) != 0;   // Bottom Left
-            shown[1] = lua_toboolean(L, 2) != 0;   // Bottom Right
-            shown[2] = lua_toboolean(L, 3) != 0;   // Right
-            shown[3] = lua_toboolean(L, 4) != 0;   // Right 2
+            // Read as the client reads a flag (0x005a8290 -> 0x00815500 for
+            // arguments 1 to 4): 0 and '0'/'false' are off.
+            shown[0] = luaClientSwitchArg(L, 1, false);   // Bottom Left
+            shown[1] = luaClientSwitchArg(L, 2, false);   // Bottom Right
+            shown[2] = luaClientSwitchArg(L, 3, false);   // Right
+            shown[3] = luaClientSwitchArg(L, 4, false);   // Right 2
             // The fifth is ALWAYS_SHOW_MULTIBARS, which asks for the empty
             // slots of a shown bar to stay visible. This client draws its bars
             // whole, so there is nothing for it to change - read here so it is
@@ -10424,7 +10415,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // IsWindowsClient() (0x004dce40): 1. IsDebugBuild()
                 // (0x0050fe80): false.
                 {"IsWindowsClient", [](lua_State* L) -> int { lua_pushnumber(L, 1); return 1; }},
-                {"IsDebugBuild",             luaReturnNil},
+                {"IsDebugBuild", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 // GameMovieFinished() (0x0051d590 -> 0x00518870):
                 // CMSG_COMPLETE_MOVIE, only while the server's movie plays
                 // (0x00bd0800).
@@ -11105,9 +11096,11 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetExtendedItemInfo",      lua_compiledOutNothing},
                 {"QuestPOIUpdateTexture",    lua_compiledOutNothing},
                 {"GetTime",           lua_wow_gettime},
+                // IsConnectedToServer() (0x004dda50): 1 while connected, else nil.
                 {"IsConnectedToServer", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->isConnected() ? 1 : 0);
+            if (gh && gh->isConnected()) lua_pushnumber(L, 1.0);
+            else lua_pushnil(L);
             return 1;
         }},
                 // GetRealmName() - the realmName cvar (0x00510e00 ->
@@ -12077,21 +12070,33 @@ void registerSystemLuaAPI(lua_State* L) {
             };
             if (!gh || !gh->isCalendarEventOpen()) return none();
             const auto& ev = gh->getCalendarEventDetail();
-            if (ev.eventId == 0) return none();
-            lua_pushstring(L, ev.title.c_str());
-            lua_pushstring(L, ev.description.c_str());
+            // 0x005bd8a0 reads the one open event (0x00c207ec) whatever its
+            // id: a new one being made (0x005bbe50) answers too, and the
+            // CalendarEventSet* calls have written into it - here the draft
+            // they write holds those fields while the event is not yet sent.
+            const bool draftOpen = gh->isCalendarDraftOpen();
+            if (!draftOpen && ev.eventId == 0) return none();
+            const auto& d = calendarDraft();
+            const std::string& title = draftOpen ? d.title : ev.title;
+            const std::string& description = draftOpen ? d.description : ev.description;
+            const uint8_t type = draftOpen ? d.type : ev.type;
+            const uint8_t repeatOption = draftOpen ? d.repeatOption : ev.repeatOption;
+            const uint32_t maxInvites = draftOpen ? d.maxInvites : ev.maxInvites;
+            const int32_t dungeonId = draftOpen ? d.dungeonId : ev.dungeonId;
+            lua_pushstring(L, title.c_str());
+            lua_pushstring(L, description.c_str());
             lua_pushstring(L, gh->lookupName(ev.creatorGuid).c_str());
-            lua_pushnumber(L, ev.type + 1);          // wire counts from zero
-            lua_pushnumber(L, ev.repeatOption + 1);  // and so does this
-            lua_pushnumber(L, ev.maxInvites);
+            lua_pushnumber(L, type + 1);          // wire counts from zero
+            lua_pushnumber(L, repeatOption + 1);  // and so does this
+            lua_pushnumber(L, maxInvites);
             // textureIndex: the dungeon's 1-based place in the event type's
             // CalendarEventGetTextures list, 0 off it (0x005b9700 + 1).
             {
                 long place = 0;
-                if (ev.type <= 1) {
-                    const auto rows = gh->calendarEventTextures(ev.type == 0 ? 1 : 2);
+                if (type <= 1) {
+                    const auto rows = gh->calendarEventTextures(type == 0 ? 1 : 2);
                     for (size_t i = 0; i < rows.size(); ++i) {
-                        if (static_cast<int32_t>(rows[i].dungeonId) == ev.dungeonId) {
+                        if (static_cast<int32_t>(rows[i].dungeonId) == dungeonId) {
                             place = static_cast<long>(i) + 1;
                             break;
                         }
@@ -12099,33 +12104,50 @@ void registerSystemLuaAPI(lua_State* L) {
                 }
                 lua_pushnumber(L, static_cast<lua_Number>(place));
             }
-            lua_pushnumber(L, ev.eventTime.weekday + 1);
-            lua_pushnumber(L, ev.eventTime.month);
-            lua_pushnumber(L, ev.eventTime.day);
-            lua_pushnumber(L, ev.eventTime.fullYear());
-            lua_pushnumber(L, ev.eventTime.hour);
-            lua_pushnumber(L, ev.eventTime.minute);
-            // The lockout date, which only a raid-reset event carries. The
-            // same date rather than nothing: the frame formats it without
-            // guarding, so nil there raises where a repeated date only reads
-            // oddly on an event that has no lockout to show.
-            lua_pushnumber(L, ev.eventTime.weekday + 1);
-            lua_pushnumber(L, ev.eventTime.month);
-            lua_pushnumber(L, ev.eventTime.day);
-            lua_pushnumber(L, ev.eventTime.fullYear());
-            lua_pushnumber(L, ev.eventTime.hour);
-            lua_pushnumber(L, ev.eventTime.minute);
-            // CALENDAR_FLAG_INVITES_LOCKED is 0x10, the bit the calendar's
-            // own handlers test (0x005c29c0, 0x005bf590); 0x1000 was read here.
+            // A date part not given yet is -1 in the event (0x0076c190), so
+            // weekday, month and day answer 0, the year 1999, hour and
+            // minute -1.
+            const auto pushDate = [L](const wowee::game::WowDate& t, bool hasDate, bool hasTime) {
+                lua_pushnumber(L, hasDate ? t.weekday + 1 : 0);
+                lua_pushnumber(L, hasDate ? t.month : 0);
+                lua_pushnumber(L, hasDate ? t.day : 0);
+                lua_pushnumber(L, hasDate ? t.fullYear() : 1999);
+                lua_pushnumber(L, hasTime ? t.hour : -1);
+                lua_pushnumber(L, hasTime ? t.minute : -1);
+            };
+            if (draftOpen) {
+                pushDate(d.eventTime, d.hasDate, d.hasTime);
+                pushDate(d.lockoutTime, d.hasLockoutDate, d.hasLockoutTime);
+            } else {
+                pushDate(ev.eventTime, true, true);
+                // The lockout date, which only a raid-reset event carries. The
+                // same date rather than nothing: the frame formats it without
+                // guarding, so nil there raises where a repeated date only
+                // reads oddly on an event that has no lockout to show.
+                pushDate(ev.eventTime, true, true);
+            }
+            // locked 0x10, autoApprove 0x20 (0x005bd8a0, +0x4fc).
             luaPushOneOrNil(L, (ev.flags & wowee::game::calendar_flag::kInvitesLocked) ? 1 : 0);
-            luaPushOneOrNil(L, 0);              // autoApprove
+            luaPushOneOrNil(L, (ev.flags & 0x20u) ? 1 : 0);
             luaPushOneOrNil(L, 0);              // pendingInvite
-            lua_pushnumber(L, calendarInviteStatusFor(gh->getCalendarData(),
-                                                      ev.eventId) + 1);
-            // CALENDAR_INVITETYPE_NORMAL, which is 1 - the interface's range
-            // starts there, so zero is not "normal" but out of range.
-            lua_pushnumber(L, 1);
-            lua_pushstring(L, (ev.flags & 0x0400u) ? "GUILD_EVENT" : "PLAYER");
+            // The player's own row on the event's list (0x005b8d60): its
+            // status and invite type, each + 1; without one 8 and 2 for a
+            // guild event, else 0 and 0. A new event lists its maker
+            // (0x005f2a20).
+            const wowee::game::CalendarEventInvitee* mine = nullptr;
+            for (const auto& inv : ev.invitees)
+                if (inv.guid == gh->getPlayerGuid()) { mine = &inv; break; }
+            if (mine) {
+                lua_pushnumber(L, mine->status + 1);
+                lua_pushnumber(L, mine->isGuildMember ? 2 : 1);
+            } else if (ev.flags & wowee::game::calendar_flag::kGuildEvent) {
+                lua_pushnumber(L, 8);
+                lua_pushnumber(L, 2);
+            } else {
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
+            }
+            lua_pushstring(L, wowee::game::calendarTypeForFlags(ev.flags));
             return 25;
         }},
                 // CalendarCanSendInvite() - may an invitation go now
