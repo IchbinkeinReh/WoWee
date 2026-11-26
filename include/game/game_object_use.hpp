@@ -229,6 +229,27 @@ struct LockRow {
 /// SPELL_EFFECT_OPEN_LOCK.
 constexpr uint32_t kEffectOpenLock = 0x21;
 
+/// Which of the object's two cast bar captions a spell opening it reads
+/// (UnitCastingInfo 0x00611df0): for each OPEN_LOCK effect, the first lock
+/// slot of skill type (2) whose kind is the effect's misc value - Action 0 or
+/// 1 the first caption (+0xc, 0x0070ba70), 2 the second (+0x10, 0x0070ba90),
+/// any other nothing. A later effect's answer replaces an earlier one.
+/// 0 none, 1 the first, 2 the second.
+inline int openingCaption(const LockRow& lock, const uint32_t (&effects)[3], const uint32_t (&misc)[3]) {
+    int which = 0;
+    for (int k = 0; k < 3; ++k) {
+        if (effects[k] != kEffectOpenLock) continue;
+        for (int i = 0; i < 8; ++i) {
+            if (lock.type[i] != 2 || lock.index[i] != misc[k]) continue;
+            const int32_t action = static_cast<int32_t>(lock.action[i]);
+            if (action >= 0 && action < 2) which = 1;
+            else if (action == 2) which = 2;
+            break;
+        }
+    }
+    return which;
+}
+
 /// What the walk found.
 struct Opening {
     bool locked = false;    ///< some slot wanted something and nothing opened it

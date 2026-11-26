@@ -3312,16 +3312,34 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
     // The member's pet guid (0x006cf9b0, flag 0x400). The full packet starts
     // from an empty stats block, so one that does not carry it clears it;
     // partypetN and raidpetN read it while the member is out of range.
-    if (isFull) member->petGuid = 0;
+    const uint32_t prevPetHealth = member->petCurHealth;
+    const uint32_t prevPetMaxHealth = member->petMaxHealth;
+    const uint8_t prevPetPowerType = member->petPowerType;
+    const uint16_t prevPetPower = member->petCurPower;
+    const uint16_t prevPetMaxPower = member->petMaxPower;
+    if (isFull) {
+        member->petGuid = 0;
+        member->petName.clear();
+        member->petCurHealth = member->petMaxHealth = 0;
+        member->petPowerType = 0;
+        member->petCurPower = member->petMaxPower = 0;
+    }
     if (updateFlags & 0x0400) { if (remaining() >= 8) member->petGuid = packet.readUInt64(); }
-    // The other pet fields and the vehicle seat are not kept.
-    if (updateFlags & 0x0800) { if (remaining() > 0) packet.readString(); }
+    // The pet's own stats (0x006cf9b0 -> the pet record at +0x160), which
+    // the getters answer for the pet out of sight. Its model is not kept.
+    if (updateFlags & 0x0800) { if (remaining() > 0) member->petName = packet.readString(); }
     if (updateFlags & 0x1000) { if (remaining() >= 2) packet.readUInt16(); }
-    if (updateFlags & 0x2000) { if (isWotLK) { if (remaining() >= 4) packet.readUInt32(); } else { if (remaining() >= 2) packet.readUInt16(); } }
-    if (updateFlags & 0x4000) { if (isWotLK) { if (remaining() >= 4) packet.readUInt32(); } else { if (remaining() >= 2) packet.readUInt16(); } }
-    if (updateFlags & 0x8000) { if (remaining() >= 1) packet.readUInt8(); }
-    if (updateFlags & 0x10000) { if (remaining() >= 2) packet.readUInt16(); }
-    if (updateFlags & 0x20000) { if (remaining() >= 2) packet.readUInt16(); }
+    if (updateFlags & 0x2000) {
+        if (isWotLK) { if (remaining() >= 4) member->petCurHealth = packet.readUInt32(); }
+        else { if (remaining() >= 2) member->petCurHealth = packet.readUInt16(); }
+    }
+    if (updateFlags & 0x4000) {
+        if (isWotLK) { if (remaining() >= 4) member->petMaxHealth = packet.readUInt32(); }
+        else { if (remaining() >= 2) member->petMaxHealth = packet.readUInt16(); }
+    }
+    if (updateFlags & 0x8000) { if (remaining() >= 1) member->petPowerType = packet.readUInt8(); }
+    if (updateFlags & 0x10000) { if (remaining() >= 2) member->petCurPower = packet.readUInt16(); }
+    if (updateFlags & 0x20000) { if (remaining() >= 2) member->petMaxPower = packet.readUInt16(); }
     if (updateFlags & 0x40000) {
         if (remaining() >= 8) {
             uint64_t petAuraMask = packet.readUInt64();
@@ -3407,6 +3425,22 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
                 owner_.addonEventCallbackRef()("UNIT_AURA", {unitId});
                 // The 1.12 name, which carries no unit.
                 if (unitId == "player") owner_.addonEventCallbackRef()("PLAYER_AURAS_CHANGED", {});
+            }
+            // The pet's (0x006cf740, while the block names one): its health,
+            // maximum, shown power and the power of its own type.
+            if (member->petGuid != 0) {
+                const std::string petId = unitId.rfind("raid", 0) == 0 ? "raidpet" + unitId.substr(4)
+                                                                        : "partypet" + unitId.substr(5);
+                const auto fire = [&](const char* name) { owner_.addonEventCallbackRef()(name, {petId}); };
+                if (member->petCurHealth != prevPetHealth) fire("UNIT_HEALTH");
+                if (member->petMaxHealth != prevPetMaxHealth) fire("UNIT_MAXHEALTH");
+                if (member->petPowerType != prevPetPowerType) fire("UNIT_DISPLAYPOWER");
+                if (member->petPowerType < 7) {
+                    if (member->petCurPower != prevPetPower)
+                        if (const char* n = power_prediction::kPowerEvents[member->petPowerType]) fire(n);
+                    if (member->petMaxPower != prevPetMaxPower)
+                        if (const char* n = power_prediction::kMaxPowerEvents[member->petPowerType]) fire(n);
+                }
             }
         }
         // Fired without arguments, as the retail client does - the interface

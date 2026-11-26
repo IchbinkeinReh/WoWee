@@ -618,6 +618,9 @@ public:
     /// The item the running cast was cast from (SMSG_SPELL_START's caster
     /// where it is not the unit), 0 for none (0x00805fc0).
     [[nodiscard]] uint64_t currentCastItemGuid() const { return casting_ ? castItemGuid_ : 0; }
+    /// The target object SMSG_SPELL_START named for the player's cast
+    /// (+0xa70, 0x0072ab60), 0 without.
+    [[nodiscard]] uint64_t currentCastTargetGuid() const { return casting_ ? castTargetGuid_ : 0; }
     /// A unit's, the player's own among them: every token that names the
     /// player is the player (0x0060abf0).
     [[nodiscard]] const std::vector<AuraSlot>* getUnitAuras(uint64_t guid) const;
@@ -989,6 +992,7 @@ private:
     };
     UnitTarget unitTarget_;
     uint64_t castItemGuid_ = 0;
+    uint64_t castTargetGuid_ = 0;
     spell_history::History petHistory_;
     spell_history::History playerHistory_;
     /// Item casts whose template was not cached at SPELL_GO, by item entry

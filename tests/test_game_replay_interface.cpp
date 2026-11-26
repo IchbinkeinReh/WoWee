@@ -3775,6 +3775,46 @@ TEST_CASE("CalendarGetEventInfo answers the event being made (T396, 0x005bd8a0)"
     CHECK(ui.is("ev[9] == 12 and ev[10] == 24 and ev[11] == 2026 and ev[12] == 20 and ev[13] == 15"));
 }
 
+// Found by V in code: an opened (sent) event's lockout fields are its second
+// packed time (+0x4dc, 0x005f2c00), not the event's date again; a field of all
+// ones reads -1 (0x0076c970), so 0/0/0/1999 -1:-1 (0x005bd8a0).
+TEST_CASE("CalendarGetEventInfo answers an opened event's lockout (0x005bd8a0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto packed = [](uint32_t year, uint32_t month, uint32_t day, uint32_t weekday,
+                           uint32_t hour, uint32_t minute) {
+        return minute | (hour << 6) | (weekday << 11) | ((day - 1) << 14) | ((month - 1) << 20) |
+               ((year - 2000) << 24);
+    };
+    const auto sendEvent = [&](uint32_t lockout) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CALENDAR_SEND_EVENT));
+        p.writeUInt8(0);
+        p.writePackedGuid(0x070000000000ABCDull);
+        p.writeUInt64(4242);
+        p.writeString("Raid");
+        p.writeString("");
+        p.writeUInt8(1);
+        p.writeUInt8(0);
+        p.writeUInt32(25);
+        p.writeUInt32(static_cast<uint32_t>(-1));
+        p.writeUInt32(0);
+        p.writeUInt32(packed(2026, 12, 24, 4, 20, 15));  // Thursday 24 Dec 2026 20:15
+        p.writeUInt32(lockout);
+        p.writeUInt32(0);
+        p.writeUInt32(0);  // no invitees
+        s.receive(p);
+    };
+    sendEvent(packed(2026, 12, 30, 3, 3, 0));  // Wednesday 30 Dec 2026 03:00
+    ui.run("ev = {CalendarGetEventInfo()}");
+    REQUIRE(ui.is("ev[1] == 'Raid'"));
+    CHECK(ui.is("ev[8] == 5 and ev[9] == 12 and ev[10] == 24 and ev[11] == 2026 and ev[12] == 20 and ev[13] == 15"));
+    CHECK(ui.is("ev[14] == 4 and ev[15] == 12 and ev[16] == 30 and ev[17] == 2026 and ev[18] == 3 and ev[19] == 0"));
+    sendEvent(0x1FFFFFFFu);
+    ui.run("ev = {CalendarGetEventInfo()}");
+    CHECK(ui.is("ev[14] == 0 and ev[15] == 0 and ev[16] == 0 and ev[17] == 1999 and ev[18] == -1 and ev[19] == -1"));
+}
+
 // T399: the speaker's gesture (0x00509dd0): a whole-line LAUGH_WORD laughs
 // (party lines only then), a yell shouts, a say ends in '?' or '!' or talks;
 // the Emotes.dbc rows are chosen as 0x007165d0 does - the first row with each
@@ -3851,6 +3891,64 @@ TEST_CASE("UnitIsConnected answers 1 for a member in sight (0x0060f790)", "[repl
                                     {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
                                      {UF::UNIT_FIELD_LEVEL, 80}}));
     CHECK(ui.is("UnitIsConnected('party1') == 1"));
+}
+
+// UnitIsConnected 0x0060f790 for a member's pet out of sight: not a member,
+// so 0x00513cb0 -> 0x0052bf80 finds the pet record of an online member and
+// answers 1; an offline member's pet nil (found by V in code).
+TEST_CASE("UnitIsConnected answers a member's pet out of sight (0x0052bf80)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+    g.writeUInt8(0);
+    for (int i = 0; i < 3; ++i) g.writeUInt8(0);
+    g.writeUInt64(0x1234);
+    g.writeUInt32(1);
+    g.writeUInt32(1);
+    g.writeString("Achiles");
+    g.writeUInt64(0x1001);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt64(Session::kPlayerGuid);
+    for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+    s.receive(g);
+    const auto stats = [&](uint16_t status) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_PARTY_MEMBER_STATS));
+        p.writePackedGuid(0x1001);
+        p.writeUInt32(0x0001 | 0x0400 | 0x0800 | 0x2000 | 0x4000 | 0x8000 | 0x10000 | 0x20000);
+        p.writeUInt16(status);
+        p.writeUInt64(0xF140000100002001ull);
+        p.writeString("Wolfi");
+        p.writeUInt32(700);   // pet health
+        p.writeUInt32(900);   // pet maximum
+        p.writeUInt8(2);      // focus
+        p.writeUInt16(80);
+        p.writeUInt16(100);
+        s.receive(p);
+    };
+    ui.run("seen = {} local f = CreateFrame('Frame') f:RegisterEvent('UNIT_HEALTH') "
+           "f:SetScript('OnEvent', function(self, event, unit) seen[#seen + 1] = unit end)");
+    stats(1);
+    REQUIRE(ui.is("UnitGUID('partypet1') ~= nil"));
+    CHECK(ui.is("UnitIsConnected('partypet1') == 1"));
+    // The pet's own stats answer for it out of sight (0x0060eb60/ec60/ed40/
+    // ef40/f100 -> the pet record of 0x0052bf80), and its health moving is
+    // said for its token (0x006cf740).
+    CHECK(ui.is("UnitHealth('partypet1') == 700 and UnitHealthMax('partypet1') == 900"));
+    CHECK(ui.is("UnitPower('partypet1') == 80 and UnitPowerMax('partypet1') == 100 "
+                "and UnitPowerType('partypet1') == 2"));
+    CHECK(ui.is("UnitName('partypet1') == 'Wolfi'"));
+    CHECK(ui.is("(function() for _, u in ipairs(seen) do if u == 'partypet1' then return true end end end)()"));
+    // The pet in sight, its owner not: still of the group (0x0052d310 reads
+    // the stats' pet guid), so its feigned death shows as such.
+    s.receive(UpdateObject().create(0xF140000100002001ull, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                                     {UF::UNIT_DYNAMIC_FLAGS, 0x20}}));
+    stats(1);
+    CHECK(ui.is("UnitIsFeignDeath('partypet1') == 1 and UnitIsDead('partypet1') == nil"));
 }
 
 // UnitInRange 0x00612f10: the player counts as of its group (0x00512a30) and

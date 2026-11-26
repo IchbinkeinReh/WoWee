@@ -1636,6 +1636,11 @@ public:
     void cancelOpenStableAuras();
     /// A game object's lock's LockType CursorName and id; empty without.
     std::pair<std::string, uint32_t> lockCursor(const GameObject& go, const GameObjectQueryResponseData* info) const;
+    /// What a cast bar reads while the spell opens a game object (0x00611df0):
+    /// for each OPEN_LOCK effect, the object's lock slot of skill type (2) and
+    /// that kind - Action 0/1 the template's castBarCaption, 2 the string after
+    /// it. Empty when the target is no such object or names nothing.
+    std::string openingCastBarText(uint32_t spellId, uint64_t targetGuid) const;
     /// The picture of the cursor over a game object (0x0070ce10), empty for the
     /// pointer as it is.
     std::string gameObjectCursorArt(uint64_t guid);

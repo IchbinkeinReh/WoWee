@@ -12119,12 +12119,26 @@ void registerSystemLuaAPI(lua_State* L) {
                 pushDate(d.eventTime, d.hasDate, d.hasTime);
                 pushDate(d.lockoutTime, d.hasLockoutDate, d.hasLockoutTime);
             } else {
-                pushDate(ev.eventTime, true, true);
-                // The lockout date, which only a raid-reset event carries. The
-                // same date rather than nothing: the frame formats it without
-                // guarding, so nil there raises where a repeated date only
-                // reads oddly on an event that has no lockout to show.
-                pushDate(ev.eventTime, true, true);
+                // A sent event's two packed times as 0x005f2c00 / 0x005f14b0
+                // keep them (0x0076cab0 -> 0x0076c970): a field of all ones is
+                // -1, the year five bits wide; 0x005bd8a0 answers weekday,
+                // month and day + 1, the year + 2000, hour and minute as they
+                // are. The second is the lockout (+0x4dc), not the event's
+                // date again.
+                const auto pushPacked = [L](uint32_t p) {
+                    const auto field = [p](int shift, uint32_t mask) {
+                        const uint32_t v = (p >> shift) & mask;
+                        return v == mask ? -1 : static_cast<int>(v);
+                    };
+                    lua_pushnumber(L, field(11, 0x07) + 1);
+                    lua_pushnumber(L, field(20, 0x0F) + 1);
+                    lua_pushnumber(L, field(14, 0x3F) + 1);
+                    lua_pushnumber(L, field(24, 0x1F) + 2000);
+                    lua_pushnumber(L, field(6, 0x1F));
+                    lua_pushnumber(L, field(0, 0x3F));
+                };
+                pushPacked(ev.eventTimePacked);
+                pushPacked(ev.timeZoneTimePacked);
             }
             // locked 0x10, autoApprove 0x20 (0x005bd8a0, +0x4fc).
             luaPushOneOrNil(L, (ev.flags & wowee::game::calendar_flag::kInvitesLocked) ? 1 : 0);

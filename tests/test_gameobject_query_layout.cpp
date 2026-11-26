@@ -93,6 +93,10 @@ TEST_CASE("the WotLK gameobject query reads three strings before the data",
     // The first of the three is IconName, the cursor the object wears
     // (0x0070ce10).
     CHECK(data.iconName == "Attack");
+    // The other two are the cast bar captions UnitCastingInfo reads while
+    // the object is being opened (+0xc, +0x10 of the record, 0x0098d750).
+    CHECK(data.castBarCaption == "Collecting");
+    CHECK(data.castBarCaption2.empty());
     REQUIRE(data.hasData);
     // The whole point of the count: data[0] is the first field after the
     // strings, and one string too few or too many puts something else there.

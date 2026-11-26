@@ -309,6 +309,32 @@ std::optional<GameHandler::ItemLockShown> GameHandler::itemLockShown(uint32_t lo
     return out;
 }
 
+std::string GameHandler::openingCastBarText(uint32_t spellId, uint64_t targetGuid) const {
+    // 0x00611df0: the cast's target (+0xa70) a game object (type mask
+    // 0x20), its lock (0x0070ef30), and the caption go_use::openingCaption
+    // chooses; an empty one leaves the spell's own text.
+    if (targetGuid == 0) return {};
+    const auto go = std::dynamic_pointer_cast<GameObject>(getEntityManager().getEntity(targetGuid));
+    if (!go) return {};
+    const GameObjectQueryResponseData* info = getCachedGameObjectInfo(go->getEntry());
+    if (!info) return {};
+    const go_use::LockRow* lock = gameObjectLock(gameObjectFacts(*go, info));
+    if (!lock) return {};
+    loadSpellNameCache();
+    const auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return {};
+    uint32_t effects[3] = {}, misc[3] = {};
+    for (int k = 0; k < 3; ++k) {
+        effects[k] = it->second.effectIds[k];
+        misc[k] = it->second.effectMiscValues[k];
+    }
+    switch (go_use::openingCaption(*lock, effects, misc)) {
+    case 1: return info->castBarCaption;
+    case 2: return info->castBarCaption2;
+    default: return {};
+    }
+}
+
 std::optional<GameHandler::GameObjectTooltipFacts> GameHandler::gameObjectTooltipFacts(uint64_t guid) {
     const auto entity = getEntityManager().getEntity(guid);
     const auto go = std::dynamic_pointer_cast<GameObject>(entity);

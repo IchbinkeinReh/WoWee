@@ -1488,6 +1488,17 @@ inline const game::GroupMember* findPartyMember(game::GameHandler* gh, uint64_t 
     return nullptr;
 }
 
+/// The member whose pet this is, while the member is online - the record
+/// 0x00513cb0 (0x0052bf80) finds for a pet out of sight: slot taken, status
+/// +8 bit 1, the stats' pet guid (+0x160). Found by V in code.
+inline const game::GroupMember* findPartyMemberPet(game::GameHandler* gh, uint64_t guid) {
+    if (!gh || guid == 0) return nullptr;
+    for (const auto& m : gh->getPartyData().members) {
+        if (m.guid != 0 && m.isOnline && m.petGuid == guid) return &m;
+    }
+    return nullptr;
+}
+
 /// A group member by guid from the roster alone, stats or no stats.
 ///
 /// Who is in the group and what they are called come with SMSG_GROUP_LIST;

@@ -786,6 +786,7 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
     float timeTotal = 0.0f;
     float timeRemaining = 0.0f;
     uint64_t castGuid = 0;
+    uint64_t castTarget = 0;  // the cast's target object (+0xa70)
 
     if (uidStr == "player") {
         // Eating and drinking are auras, no channel: neither has a bar.
@@ -807,6 +808,7 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
         timeTotal = state->timeTotal;
         timeRemaining = state->timeRemaining;
         castGuid = guid;
+        castTarget = state->targetGuid;
     }
 
     // Nothing once its time is over (0x00611df0: now - +0xa7c < 0), though the
@@ -862,7 +864,13 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
             lua_pushstring(L, name.c_str());
         }
     } else {
-        lua_pushstring(L, (attrEx3 & 0x4u) ? "" : name.c_str());
+        // A cast opening a game object reads the object's own caption where
+        // its lock names one (0x00611df0, found by V in code).
+        const uint64_t target = uidStr == "player"
+            ? (gh->getSpellHandler() ? gh->getSpellHandler()->currentCastTargetGuid() : 0)
+            : castTarget;
+        const std::string caption = gh->openingCastBarText(spellId, target);
+        lua_pushstring(L, !caption.empty() ? caption.c_str() : (attrEx3 & 0x4u) ? "" : name.c_str());
     }
     lua_pushstring(L, iconPath.c_str());                        // texture, "" when none
     lua_pushnumber(L, startTimeMs);                              // startTime (ms)

@@ -191,3 +191,25 @@ TEST_CASE("go_use: the quest an object is kept for", "[go_use]") {
     CHECK(requiredQuestIndex(10) == 1);
     CHECK(requiredQuestIndex(19) == -1);
 }
+
+// Found by V in code: UnitCastingInfo 0x00611df0 labels a cast opening a game
+// object with the template's caption the lock slot of the spell's OPEN_LOCK
+// kind names - Action 0/1 the first (+0xc), 2 the second (+0x10).
+TEST_CASE("go_use: the cast bar caption of an opening", "[go_use]") {
+    LockRow lock;
+    lock.type[0] = 1;  lock.index[0] = 2;               // an item slot, ignored
+    lock.type[1] = 2;  lock.index[1] = 2; lock.action[1] = 1;  // herbalism
+    lock.type[2] = 2;  lock.index[2] = 3; lock.action[2] = 2;  // mining
+    lock.type[3] = 2;  lock.index[3] = 3; lock.action[3] = 0;  // not reached
+    lock.type[4] = 2;  lock.index[4] = 5; lock.action[4] = 7;  // no caption
+    const uint32_t herb[3] = {kEffectOpenLock, 0, 0}, herbMisc[3] = {2, 0, 0};
+    CHECK(openingCaption(lock, herb, herbMisc) == 1);
+    const uint32_t mine[3] = {0, kEffectOpenLock, 0}, mineMisc[3] = {0, 3, 0};
+    CHECK(openingCaption(lock, mine, mineMisc) == 2);
+    const uint32_t none[3] = {kEffectOpenLock, 6, 0}, noneMisc[3] = {5, 3, 0};
+    CHECK(openingCaption(lock, none, noneMisc) == 0);
+    const uint32_t later[3] = {kEffectOpenLock, kEffectOpenLock, 0}, laterMisc[3] = {2, 3, 0};
+    CHECK(openingCaption(lock, later, laterMisc) == 2);  // the later effect's answer
+    const uint32_t keep[3] = {kEffectOpenLock, kEffectOpenLock, 0}, keepMisc[3] = {2, 5, 0};
+    CHECK(openingCaption(lock, keep, keepMisc) == 1);    // action 7 leaves it
+}

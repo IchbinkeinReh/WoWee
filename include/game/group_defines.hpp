@@ -35,6 +35,16 @@ struct GroupMember {
     /// block +0x160 in 0x006cf9b0). A full stats packet starts from an empty
     /// block, so one without the flag clears it.
     uint64_t petGuid = 0;
+    /// The pet's own stats from the same packets (flags 0x800-0x20000, the
+    /// pet record at block +0x160: type +0x58, health +0x5c, maximum +0x60,
+    /// power +0x64, maximum +0x66), which UnitHealth, UnitPower and their
+    /// maxima answer for the pet out of sight (0x00513cb0 -> 0x0052bf80).
+    std::string petName;
+    uint32_t petCurHealth = 0;
+    uint32_t petMaxHealth = 0;
+    uint8_t petPowerType = 0;
+    uint16_t petCurPower = 0;
+    uint16_t petMaxPower = 0;
 };
 
 /// A group member's pet, the way 0x0052c6e0 (partypetN) and 0x00518ce0

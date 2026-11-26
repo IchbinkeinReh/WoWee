@@ -2053,6 +2053,12 @@ struct GameObjectQueryResponseData {
     /// The template's IconName (+8 of the client's cache record): the cursor
     /// the object wears (0x0070ce10). Empty on vanilla, which has none.
     std::string iconName;
+    /// The two strings after it (+0xc, +0x10 of the cache record, read by
+    /// 0x0098d750): what a cast bar opening the object reads, chosen by the
+    /// lock slot's Action (UnitCastingInfo 0x00611df0: 0/1 the first, 2 the
+    /// second). Empty before TBC.
+    std::string castBarCaption;
+    std::string castBarCaption2;
     uint32_t data[24] = {};  // Type-specific data fields (e.g. data[0]=taxiPathId for MO_TRANSPORT)
     bool hasData = false;    // Whether data[] was parsed
     /// The template's size, after the data fields (+0x74 in the client's

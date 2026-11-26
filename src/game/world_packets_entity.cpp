@@ -273,6 +273,8 @@ bool parseGameObjectQueryBody(network::Packet& packet,
     for (int i = 0; i < extraStrings; ++i) {
         std::string s = packet.readString();
         if (i == 0) data.iconName = std::move(s);
+        else if (i == 1) data.castBarCaption = std::move(s);
+        else if (i == 2) data.castBarCaption2 = std::move(s);
     }
 
     // Read 24 type-specific data fields

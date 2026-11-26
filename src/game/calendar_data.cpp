@@ -444,7 +444,8 @@ bool parseCalendarSendEvent(network::Packet& packet, CalendarEventDetail& out) {
     out.flags = packet.readUInt32();
     out.eventTimePacked = packet.readUInt32();
     out.eventTime = unpackWowPackedTime(out.eventTimePacked);
-    out.timeZoneTime = unpackWowPackedTime(packet.readUInt32());
+    out.timeZoneTimePacked = packet.readUInt32();
+    out.timeZoneTime = unpackWowPackedTime(out.timeZoneTimePacked);
     out.guildId = packet.readUInt32();
 
     if (!packet.hasRemaining(4)) return false;
@@ -1144,7 +1145,8 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             open.description = std::move(oDesc);
             open.repeatOption = packet.readUInt8();
             open.maxInvites = packet.readUInt32();
-            open.timeZoneTime = unpackWowPackedTime(packet.readUInt32());
+            open.timeZoneTimePacked = packet.readUInt32();
+            open.timeZoneTime = unpackWowPackedTime(open.timeZoneTimePacked);
             say(ctx, "CALENDAR_UPDATE_EVENT");
         } else {
             packet.skipAll();

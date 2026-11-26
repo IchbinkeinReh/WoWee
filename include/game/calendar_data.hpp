@@ -229,7 +229,11 @@ struct CalendarEventDetail {
     uint32_t flags = 0;
     WowDate eventTime;
     uint32_t eventTimePacked = 0;
+    /// The event's second packed time, which 12340 keeps as its lockout
+    /// date (+0x4dc, read by 0x005f2c00 and 0x005f14b0, answered by
+    /// CalendarGetEventInfo 0x005bd8a0). Raw, so an all-ones field stays -1.
     WowDate timeZoneTime;
+    uint32_t timeZoneTimePacked = 0;
     uint32_t guildId = 0;
     std::vector<CalendarEventInvitee> invitees;
     /// Invitees whose names are still being asked for, one per lookup the

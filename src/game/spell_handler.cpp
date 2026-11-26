@@ -5022,6 +5022,7 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
             s.timeTotal      = data.castTime / 1000.0f;
             s.timeRemaining  = s.timeTotal;
             s.castType       = castType;
+            s.targetGuid     = data.targetGuid;
         }
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(data.casterUnit, true, false, castType);
@@ -5036,6 +5037,7 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         currentCastSpellId_ = data.spellId;
         // Cast from an item, the caster SMSG_SPELL_START names is the item.
         castItemGuid_ = data.casterGuid != data.casterUnit ? data.casterGuid : 0;
+        castTargetGuid_ = data.targetGuid;
         castTimeTotal_ = data.castTime / 1000.0f;
         castTimeRemaining_ = castTimeTotal_;
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURRENT_SPELL_CAST_CHANGED", {});

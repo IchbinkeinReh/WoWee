@@ -69,6 +69,9 @@ struct UnitCastState {
     float         timeRemaining   = 0.0f;
     float         timeTotal       = 0.0f;
     SpellCastType castType        = SpellCastType::OMNI;
+    /// The cast's target object (+0xa70, 0x0072ab60): a unit or a game
+    /// object, 0 without.
+    uint64_t      targetGuid      = 0;
 };
 
 // How a unit's cast last ended, where a cast bar has to tell: a failure or an

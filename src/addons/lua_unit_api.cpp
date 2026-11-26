@@ -64,9 +64,14 @@ static int lua_UnitName(lua_State* L) {
     if (unit && !shown.empty()) {
         lua_pushstring(L, shown.c_str());
     } else {
-        // Fallback: party member name for out-of-range members
+        // Fallback: party member name for out-of-range members. A member's
+        // pet out of sight first: the name its owner's stats carried (pet
+        // record +8, 0x0060e740 -> 0x00513cb0).
         const auto* pm = findRosterMember(gh, guid);
-        if (pm && !pm->name.empty()) {
+        const auto* petOwner = unit ? nullptr : findPartyMemberPet(gh, guid);
+        if (petOwner && !petOwner->petName.empty()) {
+            lua_pushstring(L, petOwner->petName.c_str());
+        } else if (pm && !pm->name.empty()) {
             lua_pushstring(L, pm->name.c_str());
         } else if (gh && guid != 0) {
             // Try player name cache
@@ -158,7 +163,9 @@ static int lua_UnitHealth(lua_State* L) {
         toLowerInPlace(uidStr);
         uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
         const auto* pm = findPartyMember(gh, guid);
-        lua_pushnumber(L, pm ? pm->curHealth : 0);
+        // Not a member: a member's pet, from that member's stats (+0x5c).
+        const auto* owner = pm ? nullptr : findPartyMemberPet(gh, guid);
+        lua_pushnumber(L, pm ? pm->curHealth : owner ? owner->petCurHealth : 0);
     }
     return 1;
 }
@@ -175,7 +182,8 @@ static int lua_UnitHealthMax(lua_State* L) {
         toLowerInPlace(uidStr);
         uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
         const auto* pm = findPartyMember(gh, guid);
-        lua_pushnumber(L, pm ? pm->maxHealth : 0);
+        const auto* owner = pm ? nullptr : findPartyMemberPet(gh, guid);  // +0x60
+        lua_pushnumber(L, pm ? pm->maxHealth : owner ? owner->petMaxHealth : 0);
     }
     return 1;
 }
@@ -218,6 +226,12 @@ static int lua_UnitPower(lua_State* L) {
         const auto* pm = findPartyMember(gh, guid);
         // Party stats carry one power and say which it is, so a request for a
         // different one is answered with nothing rather than with that.
+        if (const auto* owner = pm ? nullptr : findPartyMemberPet(gh, guid)) {
+            // A member's pet: its type +0x58, power +0x64 (0x0060ed40).
+            const bool petSame = want == 7 || owner->petPowerType == want;
+            lua_pushnumber(L, petSame ? owner->petCurPower / powerDivisor(owner->petPowerType) : 0);
+            return 1;
+        }
         const bool same = pm && (want == 7 || pm->powerType == want);
         lua_pushnumber(L, same ? pm->curPower / powerDivisor(pm->powerType) : 0);
     }
@@ -245,6 +259,12 @@ static int lua_UnitPowerMax(lua_State* L) {
         toLowerInPlace(uidStr);
         uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
         const auto* pm = findPartyMember(gh, guid);
+        if (const auto* owner = pm ? nullptr : findPartyMemberPet(gh, guid)) {
+            // A member's pet: its type +0x58, maximum +0x66 (0x0060ef40).
+            const bool petSame = want == 7 || owner->petPowerType == want;
+            lua_pushnumber(L, petSame ? owner->petMaxPower / powerDivisor(owner->petPowerType) : 0);
+            return 1;
+        }
         const bool same = pm && (want == 7 || pm->powerType == want);
         lua_pushnumber(L, same ? pm->maxPower / powerDivisor(pm->powerType) : 0);
     }
@@ -1409,8 +1429,10 @@ static int lua_UnitPowerType(lua_State* L) {
     toLowerInPlace(uidStr);
     uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
     const auto* pm = findPartyMember(gh, guid);
-    if (pm && index == 0) {
-        uint8_t pt = pm->powerType;
+    // Not a member: a member's pet, its type at +0x58 of the record (0x0060f100).
+    const auto* owner = pm ? nullptr : findPartyMemberPet(gh, guid);
+    if ((pm || owner) && index == 0) {
+        uint8_t pt = pm ? pm->powerType : owner->petPowerType;
         lua_pushnumber(L, pt);
         lua_pushstring(L, (pt < 7) ? kLuaPowerNames[pt] : "MANA");
         return 2;
@@ -3759,6 +3781,16 @@ static int lua_UnitIsConnected(lua_State* L) {
             return 1;
         }
     }
+    // Not a member: the pet a member's stats named, while that member is
+    // online (0x00513cb0 -> 0x0052bf80: slot taken, +8 bit 1, pet guid at
+    // +0x160 of the record) - a member's pet out of sight is connected
+    // (found by V in code).
+    for (const auto& m : pd.members) {
+        if (m.guid != 0 && m.isOnline && m.petGuid != 0 && m.petGuid == guid) {
+            luaPushOneOrNil(L, 1);
+            return 1;
+        }
+    }
     luaPushOneOrNil(L, 0);
     return 1;
 }
@@ -3767,8 +3799,9 @@ static int lua_UnitIsConnected(lua_State* L) {
 
 /// 0x0052d310 / 0x00573200: the player, a party or raid member, or the pet
 /// or charm (UNIT_FIELD_CHARM, else UNIT_FIELD_SUMMON) of one of them. For a
-/// member out of view the client asks the pet guid its party stats carried;
-/// this client keeps none, so such a pet is not counted.
+/// member out of view the client asks the pet guid its party stats carried
+/// (+0x160 of the record, while the member is online: +8 bit 1) - found by V
+/// in code: this was left out, so a member's pet out of view did not count.
 static bool isGroupMemberOrPet(game::GameHandler* gh, uint64_t guid) {
     if (!gh || guid == 0) return false;
     const auto petOf = [gh](uint64_t owner) {
@@ -3780,7 +3813,11 @@ static bool isGroupMemberOrPet(game::GameHandler* gh, uint64_t guid) {
     for (const auto& m : gh->getPartyData().members) {
         if (m.guid == 0) continue;
         if (m.guid == guid) return true;
-        if (gh->getEntityManager().getEntity(m.guid) && petOf(m.guid) == guid) return true;
+        if (gh->getEntityManager().getEntity(m.guid)) {
+            if (petOf(m.guid) == guid) return true;
+        } else if (m.isOnline && m.petGuid != 0 && m.petGuid == guid) {
+            return true;
+        }
     }
     return false;
 }
