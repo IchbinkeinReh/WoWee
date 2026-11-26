@@ -2571,3 +2571,25 @@ TEST_CASE("an item in the bank keeps its own bound flag", "[replay][interface]")
     CHECK(slot.item.soulbound);
     CHECK(slot.item.guid == kItem);
 }
+
+// T358: names 12340's widgets do not have (later clients' SetShown, the
+// animation's Play/Stop/Reset, FrameXML's data fields OnUpdate/UpdateTooltip,
+// globals such as ShowUIPanel and SetBinding) answered on every frame and
+// region with a silent no-op, so an addon's `if frame.SetShown` took the
+// branch that does nothing. They are nil, as in 12340's method tables.
+TEST_CASE("a widget has no methods 12340's widgets do not have", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("wf = CreateFrame('Frame') wt = wf:CreateTexture() ws = wf:CreateFontString()");
+    for (const char* name : {"SetShown", "Play", "Stop", "Reset", "IsUnderMouse", "UpdateTooltip", "OnUpdate",
+                             "ShowUIPanel", "SetBinding", "RunAttribute"}) {
+        INFO(name);
+        const std::string n = name;
+        CHECK(ui.is("wf." + n + " == nil"));
+        CHECK(ui.is("wt." + n + " == nil"));
+        CHECK(ui.is("ws." + n + " == nil"));
+    }
+    // A real one still answers.
+    CHECK(ui.is("type(wf.Show) == 'function' and type(wt.SetTexture) == 'function'"));
+}
