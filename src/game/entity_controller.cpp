@@ -4675,13 +4675,11 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
             owner_.ignoreCacheRef()[data.name] = data.guid;
         }
 
-        owner_.noteUnitTooltip(data.guid);
-        // UNIT_NAME_UPDATE once for every token that names the unit
-        // (0x00512b00 -> 0x0060bf10): a party or raid member's frame, the
-        // pet's, mouseover and the arena and boss frames as well as target,
-        // focus and player.
-        for (const auto& unitId : owner_.unitTokensForGuid(data.guid))
-            owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
+        // The tooltip, and UNIT_NAME_UPDATE once for every token that names
+        // the unit (0x00512b00 -> 0x0060bf10): a party or raid member's frame,
+        // the pet's, the arena and boss frames as well as target, focus and
+        // player.
+        owner_.announceUnitName(data.guid);
     }
 
     // Asked only once the name is cached above: both read it from the cache.
@@ -4756,10 +4754,7 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
                     // 0x0072cde0: the name first (and its tooltip, 0x00512b00),
                     // then the classification, each to every token the unit
                     // has (0x0060bf10).
-                    owner_.noteUnitTooltip(guid);
-                    for (const auto& unitId : owner_.unitTokensForGuid(guid)) {
-                        owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
-                    }
+                    owner_.announceUnitName(guid);
                     for (const auto& unitId : owner_.unitTokensForGuid(guid)) {
                         owner_.fireAddonEvent("UNIT_CLASSIFICATION_CHANGED", {unitId});
                     }

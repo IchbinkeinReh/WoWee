@@ -47,6 +47,7 @@
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "game/interface_text.hpp"
+#include "game/unit_name_rules.hpp"
 #include "network/world_socket.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -891,13 +892,12 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
         if (!unit) return;
         unit->setName(name);
         LOG_INFO("Pet name: 0x", std::hex, guid, std::dec, " is '", name, "'");
-        // UNIT_NAME_UPDATE for every token the unit has (0x00728ca0 ->
-        // 0x00512b00 -> 0x0060bf10), whoever's pet it is: a chair that became
-        // the player's kept its old name on the target frame. A totem's slot
-        // is redrawn with the name (0x005139b0), and the pet bar from
-        // PET_UI_UPDATE.
-        for (const auto& unitId : owner_.unitTokensForGuid(guid))
-            owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
+        // Its tooltip filled again and UNIT_NAME_UPDATE for every token the
+        // unit has (0x00728ca0 -> 0x00512b00 -> 0x00512ab0, 0x0060bf10),
+        // whoever's pet it is: a chair that became the player's kept its old
+        // name on the target frame. A totem's slot is redrawn with the name
+        // (0x005139b0), and the pet bar from PET_UI_UPDATE.
+        owner_.announceUnitName(guid);
         for (int slot = 0; slot < GameHandler::NUM_TOTEM_SLOTS; ++slot) {
             if (owner_.getTotemSlot(slot).guid == guid)
                 owner_.fireAddonEvent("PLAYER_TOTEM_UPDATE", {std::to_string(slot + 1)});
@@ -5881,6 +5881,13 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
                     clientTriggers_.remove(data.guid, was);
                 if (is != 0 && runs && owner_.spellAppliesAura(is, kAuraPeriodicTriggerFromClient))
                     startClientTriggers(data.guid, is);
+                // Aura 279 (a Mirror Image's: the caster's name and look) taken
+                // off any unit (0x0071e930), or put on one the player is or
+                // controls (0x00724820, 0x00718b70): whose name it shows
+                // changes (0x00512b00).
+                if ((was != 0 && owner_.spellAppliesAura(was, unit_names::kAuraCloneCaster)) ||
+                    (is != 0 && runs && owner_.spellAppliesAura(is, unit_names::kAuraCloneCaster)))
+                    owner_.announceUnitName(data.guid);
                 // Aura 233 on the player (0x00724820, 0x0071e930 ->
                 // 0x006d73b0): the entry and flags it names, none once gone.
                 if (data.guid != owner_.getPlayerGuid()) continue;

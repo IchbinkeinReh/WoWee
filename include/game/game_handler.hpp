@@ -6257,6 +6257,11 @@ public:
     /// target, focus, npc - a unit event the client raises per unit goes once
     /// to each.
     std::vector<std::string> unitTokensForGuid(uint64_t guid) const;
+    /// A unit's name may have changed (0x00512b00): the tooltip that shows the
+    /// unit is filled again (0x00512ab0) and UNIT_NAME_UPDATE goes to every
+    /// token it has (0x0060bf10). A name query's, a creature query's and a pet
+    /// name's answer, and aura 279 (a Mirror Image's) set or taken off.
+    void announceUnitName(uint64_t guid);
     /// partypetN (0x00512a70 -> 0x0052c6e0), slot 1-4; zero when empty.
     uint64_t partyPetGuid(int slot) const;
     /// raidpetN (0x00518ce0), index 1-40; zero when empty.

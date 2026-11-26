@@ -2267,6 +2267,9 @@ TEST_CASE("a pet's name is told by every token it has", "[replay][playtest]") {
     gh.setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
         if (event == "UNIT_NAME_UPDATE") told.push_back(args.empty() ? "-" : args[0]);
     });
+    // And the tooltip that shows it is filled again (0x00728ca0 -> 0x00512b00 -> 0x00512ab0).
+    std::vector<uint64_t> tooltip;
+    gh.setUnitTooltipCallback([&](uint64_t guid) { tooltip.push_back(guid); });
     wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_PET_NAME_QUERY_RESPONSE));
     answer.writeUInt32(key);
     answer.writeString("The Cranberry Chair");
@@ -2276,7 +2279,65 @@ TEST_CASE("a pet's name is told by every token it has", "[replay][playtest]") {
     CHECK(std::count(told.begin(), told.end(), "target") == 1);
     CHECK(std::count(told.begin(), told.end(), "focus") == 1);
     CHECK(told.size() == 2);
+    CHECK(tooltip == std::vector<uint64_t>{kPet});
     gh.setAddonEventCallback({});
+    gh.setUnitTooltipCallback(nullptr);
+}
+
+// P60's rest: aura 279 (a Mirror Image's) names a unit as its caster; set on a
+// unit the player controls (0x00724820, 0x00718b70) or taken off any
+// (0x0071e930), it says so as a name's answer does (0x00512b00).
+TEST_CASE("a Mirror Image's aura coming and going is a change of name", "[replay][playtest]") {
+    constexpr uint64_t kImage = 0xF130007CC9000101ull, kOthers = 0xF130007CC9000102ull;
+    constexpr uint32_t kClone = 58836, kOther = 1243;
+    Session s;
+    spawnPlayer(s);
+    s.receive(UpdateObject().create(kImage, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                                     {UF::UNIT_FIELD_CREATEDBY, static_cast<uint32_t>(Session::kPlayerGuid)}}));
+    s.receive(UpdateObject().create(kOthers, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                                     {UF::UNIT_FIELD_CREATEDBY, 0x77}}));
+    auto& gh = s.handler();
+    gh.spellNameCacheRef()[kClone].name = "Clone Me!";
+    gh.spellNameCacheRef()[kClone].effectAuraIds[1] = 279;
+    gh.spellNameCacheRef()[kOther].name = "Other";
+    gh.spellNameCacheRef()[kOther].effectAuraIds[0] = 22;
+    gh.setTarget(kImage);
+    gh.setFocus(kOthers);
+    std::vector<std::string> told;
+    gh.setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event == "UNIT_NAME_UPDATE") told.push_back(args.empty() ? "-" : args[0]);
+    });
+    std::vector<uint64_t> tooltip;
+    gh.setUnitTooltipCallback([&](uint64_t guid) { tooltip.push_back(guid); });
+    const auto aura = [&](uint64_t unit, uint32_t spell) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+        p.writePackedGuid(unit);
+        p.writeUInt8(0);
+        p.writeUInt32(spell);
+        if (spell != 0) {
+            p.writeUInt8(0x02 | 0x08);
+            p.writeUInt8(80);
+            p.writeUInt8(0);
+        }
+        s.receive(p);
+    };
+    aura(kImage, kOther);
+    CHECK(told.empty());
+    aura(kImage, kClone);
+    CHECK(told == std::vector<std::string>{"target"});
+    CHECK(tooltip == std::vector<uint64_t>{kImage});
+    // Another's: not when it comes, but when it goes.
+    aura(kOthers, kClone);
+    CHECK(told.size() == 1);
+    aura(kOthers, 0);
+    CHECK(told == std::vector<std::string>{"target", "focus"});
+    aura(kImage, 0);
+    CHECK(told == std::vector<std::string>{"target", "focus", "target"});
+    CHECK(tooltip == std::vector<uint64_t>{kImage, kOthers, kImage});
+    gh.setAddonEventCallback({});
+    gh.setUnitTooltipCallback(nullptr);
 }
 
 // T271: 0x0072a000 asks the pet's number first; 0x0072cde0 overwrites nothing.

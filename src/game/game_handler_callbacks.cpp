@@ -4698,6 +4698,14 @@ Unit* GameHandler::getUnitByGuid(uint64_t guid) {
     return static_cast<Unit*>(entity.get());
 }
 
+// 0x00512b00: the tooltip only for a unit in view (0x004d4db0), the event
+// whether or not.
+void GameHandler::announceUnitName(uint64_t guid) {
+    if (guid == 0) return;
+    if (entityController_->getEntityManager().getEntity(guid)) noteUnitTooltip(guid);
+    for (const auto& unitId : unitTokensForGuid(guid)) fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
+}
+
 // 0x0060bb70, in its order: player, vehicle, pet, the first party slot,
 // the first raid slot, the first arena slot (opponent before its pet), the
 // first boss slot, target, focus and npc (the unit whose window is open,
