@@ -4614,8 +4614,23 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"IsInventoryItemLocked",   [](lua_State* L) -> int {
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
             auto* gh = getGameHandler(L);
-            luaPushOneOrNil(L, slot > 0 && (cursorEquipSlot() == slot ||
-                                            (gh && slot <= 19 && itemLocked(gh, gh->getEquipSlotGuid(slot - 1)))));
+            // The lock of the item in any of the player's inventory slots,
+            // the bank's 28 (40-67) and the backpack's (24-39) too, as
+            // GetContainerItemInfo answers for them (T371).
+            uint64_t guid = 0;
+            if (gh) {
+                if (slot >= 1 && slot <= 23) guid = gh->getEquipSlotGuid(slot - 1);
+                else if (slot >= 24 && slot <= 39) guid = gh->getBackpackItemGuid(slot - 24);
+                else if (slot >= 40 && slot <= 67) guid = gh->getBankSlotGuid(slot - 40);
+            }
+            // On the cursor from the bank or the backpack, as the container
+            // answer sees it (bag -1 or 0, its own slot).
+            const auto& held = cursorItemSlot();
+            const bool heldHere = !held.equipped &&
+                                  ((slot >= 40 && slot <= 67 && held.bag == -1 && held.slot == slot - 39) ||
+                                   (slot >= 24 && slot <= 39 && held.bag == 0 && held.slot == slot - 23));
+            luaPushOneOrNil(L, slot > 0 && (cursorEquipSlot() == slot || heldHere ||
+                                            (guid != 0 && itemLocked(gh, guid))));
             return 1;
         }},
                 // GetInventoryItemBroken(unit, slot) - worn out, so the

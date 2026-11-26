@@ -2714,7 +2714,11 @@ TEST_CASE("PickupInventoryItem takes up a bank slot while the bank is open", "[r
     s.receive(open);
     ui.run("PickupInventoryItem(41)");
     CHECK(ui.is("CursorHasItem() == 1"));
+    // T371: and the slot answers locked, as GetContainerItemInfo(-1, 2) does.
+    CHECK(ui.is("IsInventoryItemLocked(41) == 1"));
+    CHECK(ui.is("select(3, GetContainerItemInfo(-1, 2)) == 1"));
     ui.run("ClearCursor()");
+    CHECK(ui.is("IsInventoryItemLocked(41) == nil"));
 }
 
 // T358: names 12340's widgets do not have (later clients' SetShown, the
