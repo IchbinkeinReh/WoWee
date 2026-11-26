@@ -3,6 +3,7 @@
 /// The minimap's zoom levels as the client has them (Minimap.cpp).
 
 #include <array>
+#include <string>
 
 namespace wowee::rendering::minimap_zoom {
 
@@ -30,6 +31,25 @@ constexpr const char* cvarName(bool indoors) {
 
 constexpr int clampLevel(int level) {
     return static_cast<unsigned>(level) > 4u ? 5 : level;
+}
+
+/// The levels were kept under names of WoWee's own (wowee_minimapzoom,
+/// wowee_minimapinsidezoom) until they moved to the client's (T348). A config
+/// from before still put the old names' levels on the maps, while GetCVar
+/// answered the client's names' default "3" (V469: a config with 5 and 0 had
+/// the inn's map at 5 and Razor Hill's at 0 under minimapZoom "3"). So a store
+/// read back takes each old level under the client's name where that is not
+/// set; the old names stay and are passed over from then on. `store` maps
+/// lower-case names to values; `adopted(name, value)` is told each one taken.
+template <class Store, class Adopted>
+void adoptLegacyLevels(Store& store, Adopted&& adopted) {
+    for (const char* name : {"minimapzoom", "minimapinsidezoom"}) {
+        const auto legacy = store.find(std::string("wowee_") + name);
+        if (legacy == store.end() || store.find(name) != store.end()) continue;
+        const std::string value = legacy->second;
+        store[name] = value;
+        adopted(name, value);
+    }
 }
 
 /// 0x007f3b90: how far the map reaches from the player, in yards, at a

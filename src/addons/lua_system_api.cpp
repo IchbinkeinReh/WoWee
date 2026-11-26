@@ -902,6 +902,11 @@ static void loadStoredCVars() {
             cvarStartupValues().erase("mousespeed");
         }
     }
+    // The minimap's levels under the client's names, from the names WoWee
+    // kept them under before T348 (V469; see adoptLegacyLevels).
+    rendering::minimap_zoom::adoptLegacyLevels(cvarStore(), [](const char* name, const std::string& value) {
+        cvarStartupValues()[name] = value;
+    });
     LOG_INFO("CVars: loaded ", loaded, " from ", cvarStorePath());
     // Then WTF\RunOnce*.wtf, each file in name order, over everything else
     // (0x00406740: the files sorted by 0x00403300, each run by 0x00766530).

@@ -4,6 +4,10 @@
 
 #include "rendering/minimap_zoom.hpp"
 
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 namespace mz = wowee::rendering::minimap_zoom;
 
 TEST_CASE("six levels, starting at 3", "[minimap_zoom]") {
@@ -100,4 +104,23 @@ TEST_CASE("the frame takes the map's level, never the other way (V458)", "[minim
     CHECK(mz::syncFrame(f.zoom(), wasIndoors, false, outsideLevel));
     CHECK(f.level == 5);
     CHECK(outsideLevel == 5);
+}
+
+TEST_CASE("a config from before T348 gives its levels to the client's names (V469)", "[minimap_zoom]") {
+    // The tester's config held wowee_minimapinsidezoom=5 and
+    // wowee_minimapzoom=0: the maps opened at 5 and 0 while GetCVar answered
+    // "3" for both. Now the client's names take them.
+    std::unordered_map<std::string, std::string> store{
+        {"wowee_minimapinsidezoom", "5"}, {"wowee_minimapzoom", "0"}};
+    std::vector<std::string> told;
+    mz::adoptLegacyLevels(store, [&](const char* name, const std::string&) { told.push_back(name); });
+    CHECK(store["minimapinsidezoom"] == "5");
+    CHECK(store["minimapzoom"] == "0");
+    CHECK(told.size() == 2);
+    // A level already under the client's name is the one that counts.
+    std::unordered_map<std::string, std::string> both{
+        {"wowee_minimapzoom", "0"}, {"minimapzoom", "2"}};
+    mz::adoptLegacyLevels(both, [](const char*, const std::string&) {});
+    CHECK(both["minimapzoom"] == "2");
+    CHECK(both.count("minimapinsidezoom") == 0);
 }
