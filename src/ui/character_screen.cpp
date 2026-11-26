@@ -513,18 +513,25 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
     if (assetManager_ && assetManager_->isInitialized()) {
         if (!preview_) {
             preview_ = std::make_unique<rendering::CharacterPreview>();
-        }
-        if (!previewInitialized_) {
-            previewInitialized_ = preview_->initialize(assetManager_);
-            if (!previewInitialized_) {
+            // Its renderer is made beside the frames (BuiltBeside): the list
+            // is drawn and takes its keys while the driver compiles - with
+            // its cache empty, for seconds - and the figure comes after.
+            if (!preview_->beginInitialize(assetManager_)) {
                 LOG_WARNING("CharacterScreen: failed to init CharacterPreview");
                 preview_.reset();
-            } else {
-                auto* renderer = core::Application::getInstance().getRenderer();
-                if (renderer) renderer->registerPreview(preview_.get());
             }
         }
-        if (preview_) {
+        if (preview_ && !previewInitialized_) {
+            previewInitialized_ = preview_->initializeDone();
+            if (previewInitialized_) {
+                auto* renderer = core::Application::getInstance().getRenderer();
+                if (renderer) renderer->registerPreview(preview_.get());
+            } else if (preview_->initializeFailed()) {
+                LOG_WARNING("CharacterScreen: failed to init CharacterPreview");
+                preview_.reset();
+            }
+        }
+        if (preview_ && previewInitialized_) {
             const uint64_t equipHash = game::hashEquipmentAppearance(character.equipment);
             // The guild's tabard design, asked for and dressed again when it
             // comes (0x004e3cd0, 0x004e27c0).
@@ -587,7 +594,7 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
     const float factsH = px(kNameSize) * 1.1f + px(10) + bodySize * 1.35f * 4.0f +
                          ui_.lineHeight(smallSize) * 2.0f + px(16);
 
-    if (preview_ && preview_->getTextureId() && preview_->getWidth() > 0 &&
+    if (preview_ && previewInitialized_ && preview_->getTextureId() && preview_->getWidth() > 0 &&
         preview_->getHeight() > 0) {
         const float aspect = static_cast<float>(preview_->getHeight()) /
                              static_cast<float>(preview_->getWidth());

@@ -3791,6 +3791,14 @@ wowee_add_test(test_pass_ablation
 wowee_add_test(test_spell_missile
     SOURCES test_spell_missile.cpp)
 
+# ── test_built_beside ────────────────────────────────
+# What a frame takes from a thread of its own once it is there, and the
+# character selection's view made so.
+wowee_add_test(test_built_beside SOURCES test_built_beside.cpp)
+target_link_libraries(test_built_beside PRIVATE Threads::Threads)
+target_compile_definitions(test_built_beside PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # ── test_char_sections ───────────────────────────────
 # CharSections' head layers - face, facial hair, scalp - in the client's order.
 wowee_add_test(test_char_sections

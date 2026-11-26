@@ -115,6 +115,10 @@ std::unordered_set<uint16_t> CharacterPreview::lookGeosets(const core::Character
 }
 
 bool CharacterPreview::initialize(pipeline::AssetManager* am, int width, int height) {
+    return beginInitialize(am, width, height) && initializeDone(true);
+}
+
+bool CharacterPreview::beginInitialize(pipeline::AssetManager* am, int width, int height) {
     assetManager_ = am;
     // If already initialized with valid resources, reuse them.
     // This avoids destroying GPU resources that may still be referenced by
@@ -124,6 +128,9 @@ bool CharacterPreview::initialize(pipeline::AssetManager* am, int width, int hei
         modelLoaded_ = false;
         return true;
     }
+    // On its way already.
+    if (rendererBuilding_.started()) return true;
+    initializeFailed_ = false;
 
     // Only where the view is actually being built. The render target, the
     // camera's aspect ratio and the composite are all sized from these, so
@@ -148,11 +155,28 @@ bool CharacterPreview::initialize(pipeline::AssetManager* am, int width, int hei
         return false;
     }
 
-    // Initialize CharacterRenderer with our off-screen render pass
-    charRenderer_ = std::make_unique<CharacterRenderer>();
-    if (!charRenderer_->initialize(vkCtx_, perFrameLayout, am, renderTarget_->getRenderPass(),
-                                   renderTarget_->getSampleCount())) {
-        LOG_ERROR("CharacterPreview: failed to initialize CharacterRenderer");
+    // The CharacterRenderer with our off-screen render pass, on a thread of
+    // its own: its pipelines are the driver's work of seconds with its cache
+    // empty (BuiltBeside). Everything it is given outlives it: the target is
+    // destroyed only after shutdown has taken it.
+    rendererBuilding_.begin([ctx = vkCtx_, perFrameLayout, am, pass = renderTarget_->getRenderPass(),
+                             samples = renderTarget_->getSampleCount()]() -> std::unique_ptr<CharacterRenderer> {
+        auto renderer = std::make_unique<CharacterRenderer>();
+        if (!renderer->initialize(ctx, perFrameLayout, am, pass, samples)) {
+            LOG_ERROR("CharacterPreview: failed to initialize CharacterRenderer");
+            return nullptr;
+        }
+        return renderer;
+    });
+    return true;
+}
+
+bool CharacterPreview::initializeDone(bool wait) {
+    if (charRenderer_ && camera_) return true;
+    if (!rendererBuilding_.started() || (!wait && rendererBuilding_.pending())) return false;
+    charRenderer_ = rendererBuilding_.take(true);
+    if (!charRenderer_) {
+        initializeFailed_ = true;
         return false;
     }
 
@@ -178,6 +202,10 @@ void CharacterPreview::shutdown() {
     auto* appRenderer = core::Application::getInstance().getRenderer();
     if (appRenderer) appRenderer->unregisterPreview(this);
 
+    // What is still being made is taken first: it was given the target.
+    (void)rendererBuilding_.take(true);
+    if (!effects_) effects_ = effectsBuilding_.take(true);
+    effectsFailed_ = false;
     if (effects_) {
         effects_->shutdown();
         effects_.reset();
@@ -1282,20 +1310,35 @@ void CharacterPreview::update(float deltaTime) {
     }
 }
 
-bool CharacterPreview::makeEffects() {
-    if (effects_) return true;
-    auto* appRenderer = core::Application::getInstance().getRenderer();
-    if (!appRenderer || !renderTarget_ || !vkCtx_) return false;
-    effects_ = std::make_unique<M2Renderer>();
-    effects_->setRenderPassOverride(renderTarget_->getRenderPass(), renderTarget_->getSampleCount());
-    effects_->setOverNothing(true);
-    if (!effects_->initialize(vkCtx_, appRenderer->getPerFrameSetLayout(), assetManager_)) {
-        LOG_ERROR("CharacterPreview: no renderer for its particles");
-        effects_.reset();
-        return false;
+CharacterPreview::EffectsState CharacterPreview::makeEffects() {
+    if (effects_) return EffectsState::Ready;
+    if (effectsBuilding_.started()) {
+        if (effectsBuilding_.pending()) return EffectsState::Pending;
+        effects_ = effectsBuilding_.take();
+        if (!effects_) {
+            effectsFailed_ = true;
+            return EffectsState::Failed;
+        }
+        effects_->setForceNoCull(true);
+        return EffectsState::Ready;
     }
-    effects_->setForceNoCull(true);
-    return true;
+    if (effectsFailed_) return EffectsState::Failed;
+    auto* appRenderer = core::Application::getInstance().getRenderer();
+    if (!appRenderer || !renderTarget_ || !vkCtx_) return EffectsState::Failed;
+    // On a thread of its own (BuiltBeside): some hundred pipelines.
+    effectsBuilding_.begin([ctx = vkCtx_, perFrameLayout = appRenderer->getPerFrameSetLayout(), am = assetManager_,
+                            pass = renderTarget_->getRenderPass(),
+                            samples = renderTarget_->getSampleCount()]() -> std::unique_ptr<M2Renderer> {
+        auto effects = std::make_unique<M2Renderer>();
+        effects->setRenderPassOverride(pass, samples);
+        effects->setOverNothing(true);
+        if (!effects->initialize(ctx, perFrameLayout, am)) {
+            LOG_ERROR("CharacterPreview: no renderer for its particles");
+            return nullptr;
+        }
+        return effects;
+    });
+    return EffectsState::Pending;
 }
 
 void CharacterPreview::syncEffects(float deltaTime) {
@@ -1323,7 +1366,10 @@ void CharacterPreview::syncEffects(float deltaTime) {
         if (!data) continue;
         const bool any = !data->particleEmitters.empty() || !data->ribbonEmitters.empty();
         const uint32_t model = nextEffectModel_;
-        if (!any || !makeEffects() || !effects_->loadModel(*data, model)) {
+        const EffectsState effects = any ? makeEffects() : EffectsState::Failed;
+        // Asked again next frame while its renderer is made.
+        if (effects == EffectsState::Pending) continue;
+        if (effects == EffectsState::Failed || !effects_->loadModel(*data, model)) {
             effectless_.insert(a.instanceId);
             continue;
         }

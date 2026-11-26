@@ -7,6 +7,7 @@
 #include "rendering/m2_vertex_lights.hpp"
 #include "rendering/figure_camera.hpp"
 #include "rendering/model_frame_view.hpp"
+#include "rendering/built_beside.hpp"
 
 #include "game/character.hpp"
 #include <glm/glm.hpp>
@@ -43,6 +44,15 @@ public:
     /// drawn into a circle fifty pixels across. Defaults to the paperdoll's,
     /// which is what every caller wanted before there was a choice.
     bool initialize(pipeline::AssetManager* am, int width = 640, int height = 800);
+    /// The same, with the renderer (its pipelines, seconds of the driver's
+    /// work with its cache empty) made on a thread of its own: false where
+    /// the view cannot be begun. initializeDone says when it can be used.
+    bool beginInitialize(pipeline::AssetManager* am, int width = 640, int height = 800);
+    /// Whether the view is there to use - taken now if it is made, waited
+    /// for with `wait`; false while it is made, and where it failed
+    /// (initializeFailed).
+    bool initializeDone(bool wait = false);
+    [[nodiscard]] bool initializeFailed() const { return initializeFailed_; }
     void shutdown();
 
     bool loadCharacter(game::Race race, game::Gender gender,
@@ -205,8 +215,15 @@ private:
         uint32_t model = 0;
     };
     void syncEffects(float deltaTime);
-    bool makeEffects();
+    enum class EffectsState { Ready, Pending, Failed };
+    /// The renderer of the effects, made on a thread of its own the first
+    /// time one is wanted (BuiltBeside): pending till then.
+    EffectsState makeEffects();
     std::unique_ptr<M2Renderer> effects_;
+    BuiltBeside<M2Renderer> effectsBuilding_;
+    bool effectsFailed_ = false;
+    BuiltBeside<CharacterRenderer> rendererBuilding_;
+    bool initializeFailed_ = false;
     std::unordered_map<uint32_t, EffectTwin> effectTwins_;   ///< by charRenderer_'s instance
     std::unordered_set<uint32_t> effectless_;
     uint32_t nextEffectModel_ = 1;
