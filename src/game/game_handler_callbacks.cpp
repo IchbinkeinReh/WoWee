@@ -523,6 +523,8 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
         setWorldStateUiPlace(place);
     }
     arenaRoster_.clear();
+    // The battlefield's state starts afresh with the world (0x0054e720).
+    worldPvpQueue_.reset();
 
     LOG_INFO("========================================");
     LOG_INFO("   ENTERING WORLD");

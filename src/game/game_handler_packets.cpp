@@ -3557,8 +3557,12 @@ void GameHandler::registerRemainingOpcodes() {
         const uint32_t bfBattleId = packet.readUInt32();
         const uint32_t bfZoneId   = packet.readUInt32();
         const uint32_t expireTime = packet.readUInt32();
-        (void)expireTime;
         bfMgrBattleId_ = bfBattleId;
+        // The queue's state: an invitation ("confirm") to this zone until the
+        // server's time the packet names (0x0054b610 -> 0x00549500). The
+        // dialog counts down from what GetWorldPVPQueueStatus says is left;
+        // dropped, its text stayed empty (T341).
+        worldPvpQueue_.set(bfBattleId, world_pvp_queue::kConfirm, bfZoneId, expireTime);
         // Store the invitation so the UI can show a prompt
         bfMgrInvitePending_ = true;
         bfMgrZoneId_        = bfZoneId;
@@ -3584,6 +3588,8 @@ void GameHandler::registerRemainingOpcodes() {
             uint8_t onQueue = packet.readUInt8();
             bfMgrInvitePending_ = false;
             bfMgrActive_        = true;
+            // In the battle: the queue's state goes back to none (0x005498c0).
+            worldPvpQueue_.clear(bfBattleId);
             // 0x005498c0 says one thing: CLEARED_AFK, a system line, when the
             // third byte is set - the server clearing the player's away
             // status. This printed English "You have entered the
@@ -3648,6 +3654,10 @@ void GameHandler::registerRemainingOpcodes() {
         // against it. These are the two WoWee keeps.
         bfMgrBattleId_ = bfBattleId;
         bfMgrZoneId_   = bfAreaId;
+        // Queued where the realm took it, none where not (0x0054b680 ->
+        // 0x00549500 with the area and no time).
+        worldPvpQueue_.set(bfBattleId, accepted ? world_pvp_queue::kQueued : world_pvp_queue::kNone,
+                           bfAreaId, 0);
         // The client's fourth word is whether the area this answer names is the
         // one the player is in: the zone itself, or the zone's AreaTable parent
         // (:8856-8861, DAT_00bd080c and its record's +0x08).
@@ -3709,8 +3719,7 @@ void GameHandler::registerRemainingOpcodes() {
         // writes exactly that.
         //
         // This guarded seventeen and read a guid, two thirty-two-bit fields and
-        // a flag, so it never ran once - and the reason it treated as a small
-        // enum is a bit mask, which would have named the wrong thing if it had.
+        // a flag, so it never ran once.
         if (!packet.hasRemaining(7)) { packet.skipAll(); return; }
         const uint32_t battleId = packet.readUInt32();
         const uint8_t reason = packet.readUInt8();
@@ -3718,11 +3727,11 @@ void GameHandler::registerRemainingOpcodes() {
         const uint8_t relocated = packet.readUInt8();
         packet.skipAll();
 
-        constexpr uint8_t kClose = 0x01, kExited = 0x08, kLowLevel = 0x10;
-        const bool exited = (reason & kExited) != 0;
-        const bool lowLevel = (reason & kLowLevel) != 0;
-
-        (void)kClose;
+        // The reason is one of the realm's numbers (8 left, 10 too low), and
+        // the battle is on at a status of 2 (0x005499c0); read as a mask and
+        // any status, a player too low was told nothing of it.
+        const world_pvp_queue::EjectFlags flags = world_pvp_queue::ejectFlags(reason, battleStatus, relocated);
+        if (world_pvp_queue::ejectClears(reason)) worldPvpQueue_.clear(battleId);
         // The event alone (0x005499c0), whose dialog says why; this also
         // printed English ("The battlefield has closed.", "You are not high
         // enough level for this battlefield.").
@@ -3740,10 +3749,10 @@ void GameHandler::registerRemainingOpcodes() {
         // eventBool - a zero here would read as true and pick the wrong dialog.
         fireAddonEvent("BATTLEFIELD_MGR_EJECTED",
                        {std::to_string(battleId),
-                        eventBool(exited),
-                        eventBool(relocated != 0),
-                        eventBool(battleStatus != 0),
-                        eventBool(lowLevel)});
+                        eventBool(flags.exited),
+                        eventBool(flags.relocated),
+                        eventBool(flags.battleActive),
+                        eventBool(flags.lowLevel)});
     };
     // uint32 oldState + uint32 newState
     // States: 0=Waiting, 1=Starting, 2=InProgress, 3=Ending, 4=Cooldown

@@ -7242,19 +7242,23 @@ static int lua_HearthAndResurrectFromArea(lua_State* L) {
 // its tooltip: a queue tracker that was always there and never tracked
 // anything.
 //
-// There is no Wintergrasp queue in this client, so "none" is also the true
-// answer.
-//
 // The client's shape (0x0054c8a0): index 1 alone answers - status, the
 // zone's name (nil for none), the queue id and the seconds left to accept,
 // both numbers, both 0 with nothing queued.
 static int lua_GetWorldPVPQueueStatus(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetWorldPVPQueueStatus(index)");   // 0x0054c8a0
     if (static_cast<int>(luaL_checknumber(L, 1)) != 1) return 0;
-    lua_pushstring(L, "none");
-    lua_pushnil(L);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
+    // The battle the realm last told of (0x00bea4a8..): its status, its zone's
+    // name (nil without a zone), the battle id, and while an invitation is out the
+    // seconds left to accept it by the server's time - which StaticPopup's
+    // BFMGR_INVITED_TO_ENTER counts down in its text (T341).
+    auto* gh = getGameHandler(L);
+    const wowee::game::world_pvp_queue::State q = gh ? gh->worldPvpQueue() : wowee::game::world_pvp_queue::State{};
+    lua_pushstring(L, q.statusName());
+    const std::string zone = gh && q.zoneId != 0 ? gh->getAreaName(q.zoneId) : std::string{};
+    if (zone.empty()) lua_pushnil(L); else lua_pushstring(L, zone.c_str());
+    lua_pushnumber(L, static_cast<double>(q.battleId));
+    lua_pushnumber(L, static_cast<double>(q.secondsLeft(gh ? gh->worldStateNow() : 0)));
     return 4;
 }
 

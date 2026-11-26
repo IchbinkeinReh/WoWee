@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/world_pvp_queue.hpp"
 #include "game/item_book.hpp"
 #include "game/stat_tables.hpp"
 #include "game/reputation_tree.hpp"
@@ -1079,6 +1080,7 @@ public:
     bool isInBfMgrZone()   const { return bfMgrActive_; }
     uint32_t getBfMgrZoneId() const { return bfMgrZoneId_; }
     uint32_t getBfMgrBattleId() const { return bfMgrBattleId_; }
+    const world_pvp_queue::State& worldPvpQueue() const { return worldPvpQueue_; }
     void respondBfMgrEntryInvite(uint32_t battleId, bool accept);
     void respondBfMgrQueueInvite(uint32_t battleId, bool accept);
     void requestBfMgrExit(uint32_t battleId);
@@ -8129,6 +8131,8 @@ private:
     /// handler in the battlefield group opens `local battleID = ...` and passes
     /// it back when the player answers, so the two must not be confused.
     uint32_t    bfMgrBattleId_      = 0;
+    /// The world PvP queue GetWorldPVPQueueStatus answers from (0x00bea4a8..).
+    world_pvp_queue::State worldPvpQueue_;
     /// What the resurrect offer said about itself: whether accepting brings
     /// resurrection sickness, and whether a reclaim delay applies. Both decide
     /// which of the three dialogs the interface raises.

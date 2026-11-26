@@ -1934,3 +1934,61 @@ TEST_CASE("repairing all asks what is damaged of a merchant that repairs", "[rep
     count();
     CHECK(ui.is("n == 2 and damaged == 1"));
 }
+
+// T341: Wintergrasp's "join the battle?" dialog was empty - StaticPopup's
+// BFMGR_INVITED_TO_ENTER takes its countdown from GetWorldPVPQueueStatus(1),
+// which answered "none" whatever the realm had said. The client keeps the
+// battle, its status, zone and when the invitation runs out (0x00549500)
+// and answers from it (0x0054c8a0).
+TEST_CASE("the world PvP queue is what the realm told of", "[replay][interface][battlefield]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto packet = [&](Opcode op, std::initializer_list<uint32_t> words, std::initializer_list<uint8_t> bytes) {
+        wowee::network::Packet p(wowee::game::wireOpcode(op));
+        for (uint32_t w : words) p.writeUInt32(w);
+        for (uint8_t b : bytes) p.writeUInt8(b);
+        s.receive(p);
+    };
+    // The server's clock, a fixed time whatever the machine's.
+    packet(Opcode::SMSG_WORLD_STATE_UI_TIMER_UPDATE, {1000000u}, {});
+    ui.run("q = {GetWorldPVPQueueStatus(1)}");
+    CHECK(ui.is("q[1] == 'none' and q[2] == nil and q[3] == 0 and q[4] == 0"));
+    // Queued: the realm took the request for battle 1 in Wintergrasp (4197).
+    packet(Opcode::SMSG_BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE, {1u, 4197u}, {1, 0, 0});
+    ui.run("q = {GetWorldPVPQueueStatus(1)}");
+    CHECK(ui.is("q[1] == 'queued' and q[3] == 1 and q[4] == 0"));
+    // Invited to enter until twenty seconds on by the server's time.
+    packet(Opcode::SMSG_BATTLEFIELD_MGR_ENTRY_INVITE, {1u, 4197u, 1000020u}, {});
+    ui.run("q = {GetWorldPVPQueueStatus(1)}");
+    CHECK(ui.is("q[1] == 'confirm' and q[3] == 1 and q[4] >= 19 and q[4] <= 20"));
+    CHECK(ui.is("select('#', GetWorldPVPQueueStatus(2)) == 0"));
+    // In the battle: none again.
+    packet(Opcode::SMSG_BATTLEFIELD_MGR_ENTERED, {1u}, {1, 0, 0});
+    ui.run("q = {GetWorldPVPQueueStatus(1)}");
+    CHECK(ui.is("q[1] == 'none' and q[3] == 1 and q[4] == 0"));
+}
+
+// The eject's reason is one of the realm's numbers, read as 0x005499c0 does:
+// 8 the player left, 10 too low a level; the battle is on at a status of 2.
+TEST_CASE("an eject from the battlefield says why as the client reads it", "[replay][interface][battlefield]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("seen = {} local f = CreateFrame('Frame') f:RegisterEvent('BATTLEFIELD_MGR_EJECTED') "
+           "f:SetScript('OnEvent', function(self, event, ...) seen[#seen + 1] = {...} end)");
+    const auto eject = [&](uint8_t reason, uint8_t status, uint8_t relocated) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_BATTLEFIELD_MGR_EJECTED));
+        p.writeUInt32(1u);
+        p.writeUInt8(reason);
+        p.writeUInt8(status);
+        p.writeUInt8(relocated);
+        s.receive(p);
+    };
+    eject(10, 2, 0);
+    eject(8, 1, 1);
+    REQUIRE(ui.is("#seen == 2"));
+    // battleID, playerExited, relocated, battleActive, lowLevel.
+    CHECK(ui.is("not seen[1][2] and not seen[1][3] and seen[1][4] ~= nil and seen[1][5] ~= nil"));
+    CHECK(ui.is("seen[2][2] ~= nil and seen[2][3] ~= nil and not seen[2][4] and not seen[2][5]"));
+}
