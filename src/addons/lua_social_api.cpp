@@ -4717,9 +4717,28 @@ void registerSocialLuaAPI(lua_State* L) {
                 // client has tracked that all along - PET_RENAMEABLE is fired
                 // and this answered no regardless, so the unit menu never
                 // offered it.
+                // PetCanBeRenamed() (0x005d38c0): the pet (the first of the
+                // player's controlled units, 0x00c23500) summoned by the player
+                // (its UNIT_FIELD_SUMMONEDBY, +0x20 of its unit fields) with
+                // UNIT_CAN_BE_RENAMED - bit 0x01 of UNIT_FIELD_BYTES_2's third
+                // byte (+0x1d2) - set by the server. Not the one-shot
+                // SMSG_PET_RENAMEABLE note (T350): it was nil for a renameable
+                // pet after a relog and 1 for any pet once one was offered.
                 {"PetCanBeRenamed", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            luaPushOneOrNil(L, gh && gh->isPetRenameable() ? 1 : 0);
+            bool can = false;
+            if (gh && gh->getPetGuid() != 0) {
+                const auto pet = gh->getEntityManager().getEntity(gh->getPetGuid());
+                const uint16_t lo = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_LO);
+                const uint16_t hi = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_HI);
+                const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+                if (pet && pet->isUnit() && lo != 0xFFFF && hi != 0xFFFF && bytes2 != 0xFFFF) {
+                    const uint64_t summoner = static_cast<uint64_t>(pet->getField(lo)) |
+                                              (static_cast<uint64_t>(pet->getField(hi)) << 32);
+                    can = summoner == gh->getPlayerGuid() && ((pet->getField(bytes2) >> 16) & 0x01u) != 0;
+                }
+            }
+            luaPushOneOrNil(L, can ? 1 : 0);
             return 1;
         }},
                 // The other end: PETRENAMECONFIRM's accept calls this, so the

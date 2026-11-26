@@ -2360,3 +2360,30 @@ TEST_CASE("an item dropped on a merchant's item is sold", "[replay][interface]")
     CHECK(ui.is("GetCursorInfo() == 'merchant'"));
 }
 
+// T350: PetCanBeRenamed (0x005d38c0) reads the pet - the player's first
+// controlled unit, summoned by the player - and its UNIT_CAN_BE_RENAMED bit
+// (UNIT_FIELD_BYTES_2's third byte, 0x01), not a note SMSG_PET_RENAMEABLE
+// left: that was nil for a renameable pet after a relog and 1 for any pet
+// afterwards.
+TEST_CASE("a pet can be renamed while its own field says so", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    constexpr uint64_t kPet = 0xF140000000000042ull;
+    const auto summoner = static_cast<uint32_t>(Session::kPlayerGuid);
+    const auto summonerHi = static_cast<uint32_t>(Session::kPlayerGuid >> 32);
+    s.receive(UpdateObject().create(kPet, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 50},
+                                     {UF::UNIT_FIELD_MAXHEALTH, 50},
+                                     {UF::UNIT_FIELD_SUMMONEDBY_LO, summoner},
+                                     {UF::UNIT_FIELD_SUMMONEDBY_HI, summonerHi},
+                                     {UF::UNIT_FIELD_BYTES_2, 0x00010000u}}));
+    s.handler().setActivePet(kPet);
+    CHECK(ui.is("PetCanBeRenamed() == 1"));
+    s.receive(UpdateObject().values(kPet, {{UF::UNIT_FIELD_BYTES_2, 0u}}));
+    CHECK(ui.is("PetCanBeRenamed() == nil"));
+    // The packet that opens the naming dialog makes no pet renameable.
+    s.receive(wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_PET_RENAMEABLE)));
+    CHECK(ui.is("PetCanBeRenamed() == nil"));
+}
+
