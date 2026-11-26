@@ -2631,6 +2631,27 @@ TEST_CASE("an item in the bank keeps its own bound flag", "[replay][interface]")
     CHECK(slot.item.guid == kItem);
 }
 
+// 12340 has no handler for SMSG_PET_UNLEARN_CONFIRM (0x2f1) nor for
+// SMSG_SPELL_CHANCE_PROC_LOG (0x3aa): not among 0x006b0b80's opcodes, no
+// switch case. Ours opened a confirmation of its own and put up a PROC text.
+TEST_CASE("packets 12340 does not handle do nothing", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    wowee::network::Packet unlearn(wowee::game::wireOpcode(Opcode::SMSG_PET_UNLEARN_CONFIRM));
+    unlearn.writeUInt64(0xF140000001000001ull);
+    unlearn.writeUInt32(10000);
+    s.receive(unlearn);
+    CHECK_FALSE(s.handler().showPetUnlearnDialog());
+    const size_t texts = s.handler().getCombatText().size();
+    wowee::network::Packet proc(wowee::game::wireOpcode(Opcode::SMSG_SPELL_CHANCE_PROC_LOG));
+    proc.writePackedGuid(0xF130000C2E000010ull);
+    proc.writePackedGuid(Session::kPlayerGuid);
+    proc.writeUInt32(16870);
+    for (int i = 0; i < 4; ++i) proc.writeUInt32(0);
+    s.receive(proc);
+    CHECK(s.handler().getCombatText().size() == texts);
+}
+
 // T364: PickupInventoryItem takes the bank's slots (40-67) and its bags'
 // slots (68-74) while a banker is open (0x005e7c00, 0x005e85d0 refuses them
 // only with none open). It did nothing for any slot past 23.

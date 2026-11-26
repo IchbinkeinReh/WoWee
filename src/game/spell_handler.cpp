@@ -970,6 +970,12 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     // here for the same reason - this handler owns the pending-unlearn state.
     // The other pet opcodes have different formats and must NOT set unlearn state.
     table[Opcode::SMSG_PET_UNLEARN_CONFIRM] = [this](network::Packet& packet) {
+        // 12340 registers no handler for 0x2f1 (none of 0x006b0b80's opcodes,
+        // no switch case): the packet asks nothing there.
+        if (isActiveExpansion("wotlk")) {
+            packet.skipAll();
+            return;
+        }
         if (packet.hasRemaining(12)) {
             packet.readUInt64();   // the pet's guid; the cost is what is asked for
             petUnlearnCost_ = packet.readUInt32();
@@ -9248,6 +9254,11 @@ void SpellHandler::handleSpellStealLog(network::Packet& packet) {
 }
 
 void SpellHandler::handleSpellChanceProcLog(network::Packet& packet) {
+    // 12340 registers no handler for 0x3aa: no text, no log entry.
+    if (isActiveExpansion("wotlk")) {
+        packet.skipAll();
+        return;
+    }
     // WotLK/Classic/Turtle: packed_guid target + packed_guid caster + uint32 spellId + ...
     // TBC:                  uint64 target + uint64 caster + uint32 spellId + ...
     const bool procChanceUsesFullGuid = isActiveExpansion("tbc");
