@@ -835,6 +835,8 @@ struct Widget {
         enum Part : uint8_t { Title = 1, Enchants = 2, Stats = 4, All = 7 };
         uint32_t itemId = 0;
         uint32_t permanentEnchant = 0, temporaryEnchant = 0;
+        /// What is left of the temporary enchant, in ms; 0 for none told.
+        uint32_t temporaryEnchantMs = 0;
         int32_t randomPropertyId = 0;
         uint32_t suffixFactor = 0;
         uint8_t put = 0;   ///< the Parts that are in

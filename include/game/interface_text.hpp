@@ -221,6 +221,38 @@ inline std::string lootRollWonLine(bool self, int rollNumber, uint8_t rollType, 
     }
 }
 
+/// A time left as 0x0061a9e0 words it, `ms` milliseconds: under a minute
+/// <base>_SEC in whole seconds, down; under an hour <base>_MIN, under a day
+/// <base>_HOURS, else <base>_DAYS - those three rounded up where `roundUp`
+/// (the item tooltip's temporary enchant passes 1), and 60 minutes said as
+/// 1 hour, 24 hours as 1 day. Formatted with `name` first and the count
+/// second ("%1$s (%2$d Min.)"); |4 plurals are left for the text's reader.
+inline std::string timeLeftText(const std::string& base, const std::string& name, uint64_t ms, bool roundUp,
+                                const TextSource& text) {
+    constexpr uint64_t kMin = 60000, kHour = kMin * 60, kDay = kMin * 1440;
+    const auto divide = [&](uint64_t unit) { return roundUp && ms != 0 ? (ms - 1) / unit + 1 : ms / unit; };
+    const char* unit = "_DAYS";
+    uint64_t count = 0;
+    if (ms < kMin) {
+        unit = "_SEC";
+        count = ms / 1000;
+    } else if (ms < kHour) {
+        count = divide(kMin);
+        unit = count == 60 ? "_HOURS" : "_MIN";
+        if (count == 60) count = 1;
+    } else if (ms < kDay) {
+        count = divide(kHour);
+        unit = count == 24 ? "_DAYS" : "_HOURS";
+        if (count == 24) count = 1;
+    } else {
+        count = divide(kDay);
+    }
+    const std::string key = base + unit;
+    const char* enUS = unit[1] == 'S' ? "%s (%d sec)" : unit[1] == 'M' ? "%s (%d min)"
+                     : unit[1] == 'H' ? "%s (%d |4hour:hours;)" : "%s (%d |4day:days;)";
+    return chat_channels::luaFormat(text(key.c_str(), enUS), {name, std::to_string(count)});
+}
+
 }  // namespace interface_text
 }  // namespace game
 }  // namespace wowee

@@ -135,3 +135,31 @@ TEST_CASE("the winner's line is plain with showLootSpam and names the roll witho
           "Ihr gewinnt: " + kLink + " |cff818181(Gier - 42)|r");
     CHECK(it::lootRollWonLine(true, 0, 0, false, kLink, "Ich", deDE).empty());
 }
+
+// T343: a temporary enchant's line in an item's tooltip says how long it has
+// left (00620000.c 6011-6016 -> 0x0061a9e0, rounded up, milliseconds).
+TEST_CASE("a time left is worded as the item tooltip words it", "[interface_text]") {
+    const auto text = [](const char* key, const char* enUS) -> std::string {
+        static const std::map<std::string, std::string> de = {
+            {"ITEM_ENCHANT_TIME_LEFT_DAYS", "%s (%d |4Tag:Tage;)"},
+            {"ITEM_ENCHANT_TIME_LEFT_HOURS", "%s (%d |4Stunde:Stunden;)"},
+            {"ITEM_ENCHANT_TIME_LEFT_MIN", "%1$s (%2$d Min.)"},
+            {"ITEM_ENCHANT_TIME_LEFT_SEC", "%1$s (%2$d Sek.)"},
+        };
+        const auto f = de.find(key);
+        return f == de.end() ? std::string(enUS) : f->second;
+    };
+    const std::string stone = "Großartiger Feuerstein";
+    const auto left = [&](uint64_t ms) { return it::timeLeftText("ITEM_ENCHANT_TIME_LEFT", stone, ms, true, text); };
+    // GetWeaponEnchantInfo's 3599028 ms: 59.98 minutes, up to 60 - an hour.
+    CHECK(left(3599028) == stone + " (1 |4Stunde:Stunden;)");
+    CHECK(left(3540000) == stone + " (59 Min.)");
+    CHECK(left(3540001) == stone + " (1 |4Stunde:Stunden;)");
+    CHECK(left(60000) == stone + " (1 Min.)");
+    CHECK(left(59999) == stone + " (59 Sek.)");
+    CHECK(left(2 * 3600000 + 1) == stone + " (3 |4Stunde:Stunden;)");
+    CHECK(left(86400000) == stone + " (1 |4Tag:Tage;)");
+    CHECK(left(23 * 3600000 + 1) == stone + " (1 |4Tag:Tage;)");
+    // Not rounded: the count down.
+    CHECK(it::timeLeftText("ITEM_ENCHANT_TIME_LEFT", stone, 3599028, false, text) == stone + " (59 Min.)");
+}

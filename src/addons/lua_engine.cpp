@@ -4567,10 +4567,18 @@ int lua_Tooltip_SetAction(lua_State* L) {
 /// equipped or bagged item, whose enchant is looked up from its instance, and
 /// a link, which carries the id in its own text.
 static void appendEnchantLineById(wowee::ui::Widget* w, game::GameHandler* gh,
-                                  uint32_t enchantId) {
+                                  uint32_t enchantId, uint32_t msLeft = 0) {
     if (!w || !gh || enchantId == 0) return;
     std::string name = gh->getEnchantName(enchantId);
     if (name.empty()) return;
+    // An enchant that runs out says how long it has (00620000.c 6011-6016:
+    // 0x0061a9e0 with ITEM_ENCHANT_TIME_LEFT, rounded up): "Großartiger
+    // Feuerstein (59 Min.)" rather than the name alone (T343).
+    if (msLeft != 0) {
+        name = wowee::ui::resolvePluralEscapes(game::interface_text::timeLeftText(
+            "ITEM_ENCHANT_TIME_LEFT", name, msLeft, true,
+            [](const char* key, const char* enUS) { return game::interfaceString(key, enUS); }));
+    }
     wowee::ui::Widget::TooltipLine line;
     line.left = std::move(name);
     line.lc[0] = 0.0f; line.lc[1] = 1.0f; line.lc[2] = 0.0f; line.lc[3] = 1.0f;
@@ -6882,6 +6890,7 @@ static wowee::ui::Widget::TooltipRoll rollOf(game::GameHandler* gh, const game::
     // A charter's first enchant is its petition.
     if (const auto* info = gh->getItemInfo(item.itemId); info && (info->itemFlags & 0x2000u) != 0) return roll;
     std::tie(roll.permanentEnchant, roll.temporaryEnchant) = gh->getItemEnchantIds(itemGuid);
+    if (roll.temporaryEnchant != 0) roll.temporaryEnchantMs = gh->getItemTempEnchantTime(itemGuid).first;
     return roll;
 }
 
@@ -6905,7 +6914,7 @@ static void putTooltipRoll(wowee::ui::Widget* w, game::GameHandler* gh, uint8_t 
     if (now & Roll::Enchants) {
         // Green, the permanent, then the temporary, before the sockets.
         appendEnchantLineById(w, gh, roll.permanentEnchant);
-        appendEnchantLineById(w, gh, roll.temporaryEnchant);
+        appendEnchantLineById(w, gh, roll.temporaryEnchant, roll.temporaryEnchantMs);
     }
     if (now & Roll::Stats) appendRandomStats(w, gh, roll);
 }
@@ -7063,7 +7072,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
         // It has named the suffix and has its stats itself.
         fillItemTooltip(w, s.item, gh);
         appendEnchantLineById(w, gh, roll.permanentEnchant);
-        appendEnchantLineById(w, gh, roll.temporaryEnchant);
+        appendEnchantLineById(w, gh, roll.temporaryEnchant, roll.temporaryEnchantMs);
         noteTooltipItem(L, s.item.itemId);
         fireTooltipSetItem(L);
         // Durability lives on the instance. The Lua builder puts it in its
