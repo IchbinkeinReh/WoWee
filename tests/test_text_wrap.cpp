@@ -159,6 +159,33 @@ TEST_CASE("a break between two runs does not merge their styles",
     REQUIRE(out[0][1].hasColor);
 }
 
+TEST_CASE("a colour code inside a word is no break point (T370)", "[text_wrap]") {
+    // "... für 2 |cffff0000Schattenschaden|r.(1510 Schaden)": the coloured
+    // school word and the ".(1510" after its |r are one word (0x006c1d40 breaks
+    // only at a space), so they go to the next line together.
+    WrapRun head;
+    head.text = "xxxxxxxx 2 ";
+    WrapRun school;
+    school.text = "Schatten";
+    school.hasColor = true;
+    school.rgba[0] = 1.0f; school.rgba[1] = 0.0f; school.rgba[2] = 0.0f;
+    WrapRun tail;
+    tail.text = ".(15 Schaden)";
+    // 11 + 8 = 19 fits a width of 21, ".(15" does not.
+    const auto out = wrapText({head, school, tail}, 21.0f, false, charWidth);
+    REQUIRE(out.size() == 2);
+    CHECK(joined(out[0]) == "xxxxxxxx 2 ");
+    CHECK(joined(out[1]) == "Schatten.(15 Schaden)");
+    REQUIRE(out[1].size() == 2);
+    CHECK(out[1][0].hasColor);
+    CHECK_FALSE(out[1][1].hasColor);
+    // With room for the whole word it stays on the first line.
+    const auto wide = wrapText({head, school, tail}, 23.0f, false, charWidth);
+    REQUIRE(wide.size() == 2);
+    CHECK(joined(wide[0]) == "xxxxxxxx 2 Schatten.(15 ");
+    CHECK(joined(wide[1]) == "Schaden)");
+}
+
 TEST_CASE("a newline breaks the line even with no wrapping", "[text_wrap]") {
     // |n is WoW's spelling of one and the markup parser turns it into this, so
     // a label with an explicit break gets one whether or not anything wraps.

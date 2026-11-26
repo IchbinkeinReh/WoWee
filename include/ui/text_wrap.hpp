@@ -114,7 +114,30 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
         }
     };
 
-    for (const WrapRun& run : runs) {
+    // How wide the text is that the next runs glue on to the end of run `ri`:
+    // a colour code or a link's edge is no break point (0x006c1d40 steps
+    // over the escapes 0x006bd5a0 reads - |c, |r, |H, |h - with no width and
+    // breaks only at a space), so "|cff..Schattenschaden|r.(1510" is one word
+    // and goes to the next line whole (T370). Up to the next space, newline
+    // or picture.
+    const auto glueAfter = [&](size_t ri) {
+        float glue = 0.0f;
+        for (size_t j = ri + 1; j < runs.size(); ++j) {
+            const WrapRun& next = runs[j];
+            if (!next.texture.empty()) break;
+            const size_t cut = next.text.find_first_of(" \n");
+            if (cut == std::string::npos) {
+                glue += measure(next.text);
+                continue;
+            }
+            if (cut > 0) glue += measure(next.text.substr(0, cut));
+            break;
+        }
+        return glue;
+    };
+
+    for (size_t ri = 0; ri < runs.size(); ++ri) {
+        const WrapRun& run = runs[ri];
         // A picture is one indivisible piece. It carries no text, so the loop
         // below would skip it entirely and the coin beside a price would be
         // dropped between the parser and the screen.
@@ -175,7 +198,11 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
             };
             float w = measure(word);
             float needs = bare();
-            if (x > 0.0f && x + needs > widthNow()) {
+            // The word goes on in the next run when it reaches this run's end
+            // with no space: what it needs to stay whole on the line.
+            const float glued = (at == run.text.size() && !word.empty() && word.back() != ' ')
+                                    ? glueAfter(ri) : 0.0f;
+            if (x > 0.0f && x + needs + glued > widthNow()) {
                 lines.emplace_back();
                 x = 0.0f;
                 // The break stands in for the space that separated them.
