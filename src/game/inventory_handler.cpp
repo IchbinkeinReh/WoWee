@@ -8379,11 +8379,10 @@ uint32_t InventoryHandler::estimateItemRepairCost(uint64_t itemGuid) const {
 }
 
 uint32_t InventoryHandler::estimateRepairAllCost() const {
-    uint32_t total = 0;
-    for (const auto& [guid, info] : owner_.onlineItemsRef()) {
-        total += estimateItemRepairCost(guid);
-    }
-    return total;
+    // What GetRepairAllCost says (0x00585990): the merchant's discount off,
+    // the bank not in it.
+    const auto all = owner_.repairAllCost();
+    return all ? all->cost : 0;
 }
 
 } // namespace game

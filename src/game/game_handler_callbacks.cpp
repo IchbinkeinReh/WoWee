@@ -5093,6 +5093,30 @@ int GameHandler::discountStanding(uint64_t npcGuid) const {
     return unitReaction(*npc, *player);
 }
 
+std::optional<GameHandler::RepairAllCost> GameHandler::repairAllCost() const {
+    if (!isVendorWindowOpen()) return std::nullopt;
+    const auto merchant =
+        std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(getVendorItems().vendorGuid));
+    if (!merchant || (merchant->getNpcFlags() & NPC_FLAG_REPAIR) == 0) return std::nullopt;
+    RepairAllCost all;
+    const auto add = [&](const ItemDef& item) {
+        if (item.itemId == 0 || item.guid == 0) return;
+        const auto it = onlineItems_.find(item.guid);
+        if (it == onlineItems_.end()) return;
+        const auto& held = it->second;
+        if ((held.flags & 0x8u) != 0 || held.maxDurability == 0) return;
+        all.cost += itemRepairCostShown(item.guid);
+        if (held.curDurability < held.maxDurability) all.damaged = true;
+    };
+    const Inventory& inv = inventory;
+    for (int slot = 0; slot <= static_cast<int>(EquipSlot::TABARD); ++slot)
+        add(inv.getEquipSlot(static_cast<EquipSlot>(slot)).item);
+    for (int i = 0; i < inv.getBackpackSize(); ++i) add(inv.getBackpackSlot(i).item);
+    for (int b = 0; b < Inventory::NUM_BAG_SLOTS; ++b)
+        for (int i = 0; i < inv.getBagSize(b); ++i) add(inv.getBagSlot(b, i).item);
+    return all;
+}
+
 uint32_t GameHandler::itemRepairCostShown(uint64_t itemGuid) const {
     if (!inventoryHandler_ || itemGuid == 0) return 0;
     const uint32_t cost = inventoryHandler_->estimateItemRepairCost(itemGuid);

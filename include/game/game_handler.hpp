@@ -5069,6 +5069,17 @@ public:
     /// a reputation - 5% friendly, 10% honored, 15% revered, 20% exalted, by
     /// how it regards the player (0x007279a0) - rounded.
     uint32_t itemRepairCostShown(uint64_t itemGuid) const;
+    /// GetRepairAllCost (0x00585990): with a merchant that repairs (its
+    /// UNIT_NPC_FLAGS 0x1000), the sum of itemRepairCostShown (0x00584b20:
+    /// each item's cost less the merchant's discount, rounded) over what is
+    /// worn (slots 0-18), the backpack and the bags' contents - not the bank,
+    /// the keyring or an item with ITEM_FIELD_FLAGS 0x8 - and whether any of
+    /// them is damaged. None without such a merchant.
+    struct RepairAllCost {
+        uint32_t cost = 0;
+        bool damaged = false;
+    };
+    [[nodiscard]] std::optional<RepairAllCost> repairAllCost() const;
     /// The money an item tooltip offers for one held item (0x006277f0 ->
     /// OnTooltipAddMoney): its SellPrice less its repair cost (0x00708540),
     /// 1 where the repair would cost as much or more, times the stack.

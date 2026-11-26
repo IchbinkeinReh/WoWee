@@ -1876,3 +1876,61 @@ TEST_CASE("a companion is filed, shown out and sent away as 12340 does", "[repla
     wowee::network::Packet p = away[0];
     CHECK(p.readUInt64() == kSquireGuid);
 }
+
+// T298: GetRepairAllCost as 0x00585990: 0 alone without a merchant that
+// repairs (UNIT_NPC_FLAGS 0x1000); with one, the cost and 1 where something
+// worn or carried - not in the bank, not flagged 0x8 - is damaged, nil where
+// nothing is (MerchantFrame greys the button by it), whatever the money.
+TEST_CASE("repairing all asks what is damaged of a merchant that repairs", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto count = [&] {
+        ui.run("n = select('#', GetRepairAllCost()) cost, damaged = GetRepairAllCost()");
+    };
+    count();
+    CHECK(ui.is("n == 1 and cost == 0"));
+
+    const auto openMerchant = [&](uint64_t guid, uint32_t npcFlags) {
+        s.receive(UpdateObject().create(guid, wowee::game::ObjectType::UNIT,
+                                        {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100},
+                                         {UF::UNIT_NPC_FLAGS, npcFlags}},
+                                        false));
+        wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_LIST_INVENTORY));
+        list.writeUInt64(guid);
+        list.writeUInt8(0);
+        list.writeUInt8(0);
+        s.receive(list);
+        REQUIRE(s.handler().isVendorWindowOpen());
+    };
+    // A vendor that does not repair: still 0 alone.
+    openMerchant(0xF130000C67000001ull, 0x80);
+    count();
+    CHECK(ui.is("n == 1 and cost == 0"));
+
+    openMerchant(0xF130000C67000002ull, 0x80 | 0x1000);
+    auto& items = s.handler().onlineItemsRef();
+    const auto carry = [&](uint64_t guid, int slot, uint32_t cur, uint32_t max, uint32_t flags) {
+        wowee::game::ItemDef item;
+        item.guid = guid;
+        item.itemId = 2000 + static_cast<uint32_t>(slot);
+        if (slot >= 0) s.handler().getInventory().setBackpackSlot(slot, item);
+        auto& held = items[guid];
+        held.entry = item.itemId;
+        held.curDurability = cur;
+        held.maxDurability = max;
+        held.flags = flags;
+    };
+    carry(0x4000000000000901ull, 0, 30, 30, 0);
+    count();
+    CHECK(ui.is("n == 2 and cost == 0 and damaged == nil"));
+    // Damaged, but flagged 0x8, or not carried (the bank's): nothing to repair.
+    carry(0x4000000000000902ull, 1, 10, 30, 0x8);
+    carry(0x4000000000000903ull, -1, 10, 30, 0);
+    count();
+    CHECK(ui.is("n == 2 and damaged == nil"));
+    // Damaged in the backpack: 1, whether or not it can be paid for.
+    carry(0x4000000000000904ull, 2, 10, 30, 0);
+    count();
+    CHECK(ui.is("n == 2 and damaged == 1"));
+}

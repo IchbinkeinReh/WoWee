@@ -415,13 +415,19 @@ static int lua_BuybackItem(lua_State* L) {
     return 0;
 }
 
-/// GetRepairAllCost() → cost, whether it can be afforded. Both are wanted
-/// together: the button greys itself out on the second.
+/// GetRepairAllCost() → cost, canRepair (0x00585990): without a merchant
+/// that repairs 0 alone; else the cost less the merchant's discount and 1
+/// where anything is damaged, nil where nothing is - not whether it can be
+/// afforded. MerchantFrame greys the button by the second.
 static int lua_GetRepairAllCost(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t cost = gh ? gh->estimateRepairAllCost() : 0;
-    lua_pushnumber(L, cost);
-    luaPushOneOrNil(L, gh && gh->getMoneyCopper() >= cost);
+    const auto all = gh ? gh->repairAllCost() : std::nullopt;
+    if (!all) {
+        lua_pushnumber(L, 0);
+        return 1;
+    }
+    lua_pushnumber(L, all->cost);
+    luaPushOneOrNil(L, all->damaged ? 1 : 0);
     return 2;
 }
 
