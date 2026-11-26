@@ -1911,6 +1911,9 @@ static int lua_SplitContainerItem(lua_State* L) {
     const int slot = static_cast<int>(luaL_checknumber(L, 2));
     const int count = static_cast<int>(luaL_optnumber(L, 3, 1));
     if (!gh || slot < 1 || count < 1) return 0;
+    // The player, in control or on a taxi (0x005d84f0: 0x00bcfb8c or
+    // UNIT_FIELD_FLAGS 0x100000), or nothing is split.
+    if (!gh->playerHandsFree()) return 0;
 
     // Every container the interface can name, through the one mapping.
     // bankframe splits from BANK_CONTAINER, which this could not name before.
@@ -3382,18 +3385,21 @@ static int lua_UseContainerItem(lua_State* L) {
     if (!readable && !openable && !itemUseAllowed(L, gh, itemSlot->item.itemId, false))
         return 0;
     const auto unit = unitUsedOn(L, gh, 3);
+    // Equipping wants the player in control or on a taxi, as the pickup does
+    // (0x005d8650 before AutoEquipItem 0x006dfee0: 0x00bcfb8c or 0x100000).
+    const bool handsFree = gh->playerHandsFree();
 
     // By slot rather than by item id: the id searches the bags for a match and
     // can find a different stack of the same thing than the one clicked.
     if (bag == 0) {
         const int idx = slot - 1;
         if (readable)         gh->readItemBySlot(idx);
-        else if (equippable)  gh->autoEquipItemBySlot(idx);
+        else if (equippable) { if (handsFree) gh->autoEquipItemBySlot(idx); }
         else if (openable)    gh->openItemBySlot(idx);
         else if (unit)        gh->useItemBySlot(idx, false, *unit);
     } else {
         if (readable)         gh->readItemInBag(bag - 1, slot - 1);
-        else if (equippable)  gh->autoEquipItemInBag(bag - 1, slot - 1);
+        else if (equippable) { if (handsFree) gh->autoEquipItemInBag(bag - 1, slot - 1); }
         else if (openable)    gh->openItemInBag(bag - 1, slot - 1);
         else if (unit)        gh->useItemInBag(bag - 1, slot - 1, false, *unit);
     }
@@ -4550,9 +4556,11 @@ static int lua_GetItemTooltipData(lua_State* L) {
 
 
 static int lua_GetContainerNumSlots(lua_State* L) {
+    // 0x005d74a0: a number or 12340's usage line; 0 without the player.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetContainerNumSlots(index)");
     auto* gh = getGameHandler(L);
     int container = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh) { return luaReturnZero(L); }
+    if (!gh || !gh->getEntityManager().getEntity(gh->getPlayerGuid())) { return luaReturnZero(L); }
     // Through containerSlotCount, which knows the keyring. Answering zero for
     // KEYRING_CONTAINER made GetKeyRingSize loop zero times, so the keyring
     // frame was generated with no slots and opened empty - while the keys were
@@ -5743,7 +5751,8 @@ static int lua_PutItemInBag(lua_State* L) {
     const int bankIndex = inventoryId - game::slots::firstBankBagInventorySlot();  // 0-6
     const bool isWorn = wornIndex >= 0 && wornIndex < game::Inventory::NUM_BAG_SLOTS;
     const bool isBank = bankIndex >= 0 && bankIndex < game::slots::bankBagCount();
-    if (!gh || (!isWorn && !isBank) || !heldWireSlot(srcBag, srcSlot)) {
+    // 0x005e8d30: the player in control (0x00bcfb8c; a taxi does not do).
+    if (!gh || !gh->playerInControl() || (!isWorn && !isBank) || !heldWireSlot(srcBag, srcSlot)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -5820,7 +5829,9 @@ static int lua_PutItemInBag(lua_State* L) {
 static int lua_PutItemInBackpack(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint8_t srcBag = 0, srcSlot = 0;
-    if (!gh || !heldWireSlot(srcBag, srcSlot)) {
+    // 0x005ea7f0 -> 0x005e8d30: the player in control (0x00bcfb8c; a taxi
+    // does not do), or nil.
+    if (!gh || !gh->playerInControl() || !heldWireSlot(srcBag, srcSlot)) {
         luaPushOneOrNil(L, 0);
         return 1;
     }
@@ -6874,6 +6885,8 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"PurchaseSlot", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
+            // 0x0057bbc0: the player there and in control (0x00bcfb8c).
+            if (!gh->playerInControl()) return 0;
             if (!gh->getEntityManager().getEntity(gh->getPlayerGuid()) || !gh->isBankOpen()) {
                 LOG_WARNING("PurchaseSlot: no bank open, ignored");
                 return 0;

@@ -1,5 +1,6 @@
 // lua_spell_api.cpp - Spell info, casting, auras, and targeting Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "game/pet_action.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/game_utils.hpp"
 #include "game/target_direction.hpp"
@@ -936,6 +937,9 @@ static int lua_IsSpellKnown(lua_State* L) {
     bool known = false;
     if (gh && luaClientSwitchArg(L, 2, false)) {
         for (const uint32_t s : gh->getPetSpells()) known = known || s == spellId;
+        // Not in the pet's book: a slot of its bar holding it (0x0053c3a0 ->
+        // 0x005d3560, states 1 and 8-0x11) does as well.
+        for (int i = 0; i < 10 && !known; ++i) known = game::pet::petSlotSpell(gh->getPetActionSlot(i)) == spellId;
     } else if (gh) {
         known = gh->getKnownSpells().count(spellId) != 0;
     }
@@ -1764,9 +1768,19 @@ static int lua_CastSpellByID(lua_State* L) {
     // unit off the button that was clicked. Ignoring it cast on whatever was
     // targeted instead, so healing a party member through their frame hit the
     // current target.
+    // Nothing without the player (0x0053e060).
+    if (!gh->getEntityManager().getEntity(gh->getPlayerGuid())) return 0;
     const auto target = unitAskedOrTarget(L, gh, 2);   // as CastSpellByName
-    // 0x0053e060 -> 0x0080da40 -> 0x0080cce0, which asks the taint check.
-    if (target && spellCastAllowed(L, gh, spellId)) gh->castSpell(spellId, *target);
+    if (!target) return 0;
+    // A spell of the player's own list (0x00be6d88): 0x0080da40 ->
+    // 0x0080cce0, which asks the taint check. Any other goes to the pet that
+    // has it, and a spell neither knows casts nothing (FIXER W; it was sent
+    // as the player's for any id).
+    if (gh->getKnownSpells().count(spellId) != 0) {
+        if (spellCastAllowed(L, gh, spellId)) gh->castSpell(spellId, *target);
+        return 0;
+    }
+    gh->castSpellByIdThroughPet(spellId, *target);
     return 0;
 }
 

@@ -5033,6 +5033,8 @@ void InventoryHandler::queryGuildBankTab(uint8_t tabId) {
 
 void InventoryHandler::buyGuildBankTab() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return;
+    // Only with the player in control of itself (0x005a5d30: 0x00bcfb8c).
+    if (!owner_.playerInControl()) return;
     // For less than it costs the bank and the buyer together hold it is not
     // asked for (0x005a5d30).
     if (guildBankTabCount_ < kGuildBankTabCost.size() &&

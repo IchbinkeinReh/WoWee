@@ -1,6 +1,7 @@
 // lua_unit_api.cpp - Unit query, stats, party/raid, and player state Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "ui/portrait_claims.hpp"
+#include "game/movement_handler.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/battleground_flag.hpp"
 #include "game/item_slot_rules.hpp"
@@ -1539,6 +1540,17 @@ static uint64_t resolveUnitArgGuid(lua_State* L, game::GameHandler* gh) {
     return gh ? resolveUnitGuid(gh, uid) : 0;
 }
 
+/// A unit out of view: its record's status (0x00513c30 -> 0x0052bee0, the
+/// party's stats, +8) says 0x200 while it sits in a vehicle - so 0x006133d0
+/// and 0x006134a0 answer 1 for a member far away (found by W in code; it
+/// answered nil for any unit out of view).
+static bool outOfViewInVehicle(game::GameHandler* gh, uint64_t guid) {
+    if (!gh || guid == 0 || gh->getEntityManager().getEntity(guid)) return false;
+    for (const auto& m : gh->getPartyData().members)
+        if (m.guid == guid) return (m.onlineStatus & 0x0200u) != 0;
+    return false;
+}
+
 /// UnitHasVehicleUI(unit): the seat's Flags 0x20000000 (0x00613740).
 static int lua_UnitHasVehicleUI(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -1691,7 +1703,8 @@ static int lua_EjectPassengerFromSeat(lua_State* L) {
 static int lua_UnitInVehicle(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint64_t guid = resolveUnitArgGuid(L, gh);
-    if (gh && guid && gh->vehicleRoster().seatState(guid) == 3) lua_pushnumber(L, 1.0);
+    if (gh && guid && (gh->vehicleRoster().seatState(guid) == 3 || outOfViewInVehicle(gh, guid)))
+        lua_pushnumber(L, 1.0);
     else lua_pushnil(L);
     return 1;
 }
@@ -3055,6 +3068,10 @@ static int lua_CanAlterSkin(lua_State* L) {
 static int lua_GetBarberShopStyleInfo(lua_State* L) {
     const int selector = static_cast<int>(luaL_optinteger(L, 1, 0));
     auto* svc = getLuaServices(L);
+    // The skin's 4 only where the race has skin styles to go through
+    // (0x0052e850: DAT_00bd19b4, as SetNextBarberShopStyle asks) - nothing
+    // otherwise (T404: a 'Current' row was answered for a blood elf).
+    if (selector == 4 && (!svc || !svc->barberCanAlterSkin || !svc->barberCanAlterSkin())) return 0;
     std::string name, description;
     uint32_t cost = 0;
     bool isCurrent = false;
@@ -3201,7 +3218,11 @@ static int lua_HasFullControl(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto me = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
     const auto* unit = me && me->isUnit() ? static_cast<const game::Unit*>(me.get()) : nullptr;
-    luaPushOneOrNil(L, unit && unit->getHealth() > 0 && gh->isServerMovementAllowed());
+    // Nor while it looks through another's eyes (+0x1858 0x1, set as it
+    // sends CMSG_FAR_SIGHT 1, 0x006e2880).
+    const auto* moves = gh ? gh->getMovementHandler() : nullptr;
+    const bool farSight = moves && moves->farSightAnnounced();
+    luaPushOneOrNil(L, unit && !farSight && unit->getHealth() > 0 && gh->isServerMovementAllowed());
     return 1;
 }
 
@@ -3965,7 +3986,8 @@ void registerUnitLuaAPI(lua_State* L) {
             // 1 while in any passenger state, else nil (0x006134a0).
             auto* gh = getGameHandler(L);
             const uint64_t guid = resolveUnitArgGuid(L, gh);
-            if (gh && guid && gh->vehicleRoster().seatState(guid) != 0) lua_pushnumber(L, 1.0);
+            if (gh && guid && (gh->vehicleRoster().seatState(guid) != 0 || outOfViewInVehicle(gh, guid)))
+                lua_pushnumber(L, 1.0);
             else lua_pushnil(L);
             return 1;
         }},

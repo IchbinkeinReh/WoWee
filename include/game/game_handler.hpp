@@ -1791,6 +1791,9 @@ public:
     /// The pet bar's slot used (0x005d4210) at a unit, or none for the
     /// target's place.
     void usePetSlot(uint32_t packed, uint64_t targetGuid);
+    /// CastSpellByID of a spell the player does not know (0x0053e060): the
+    /// pet's, where its bar or its book has it - nothing otherwise.
+    void castSpellByIdThroughPet(uint32_t spell, uint64_t targetGuid);
     /// A pet spell's autocast turned over by the spell (0x005d5e10): only
     /// one the pet may cast by itself, every bar slot holding it along, then
     /// CMSG_PET_SPELL_AUTOCAST and PET_BAR_UPDATE.
@@ -4202,6 +4205,12 @@ public:
     uint32_t getLastContactListMask() const { return lastContactListMask_; }
     uint32_t getLastContactListCount() const { return lastContactListCount_; }
     bool isServerMovementAllowed() const;
+    /// The player object is there and has control, or rides a taxi (0x00bcfb8c
+    /// with UNIT_FIELD_FLAGS 0x100000; game::handsFree).
+    [[nodiscard]] bool playerHandsFree() const;
+    /// The player object is there and has control - a taxi does not do here
+    /// (0x005e8c30 PickupBagFromSlot, 0x005e8d30 PutItemInBag/Backpack).
+    [[nodiscard]] bool playerInControl() const;
 
     // Quest giver status (! and ? markers)
     QuestGiverStatus getQuestGiverStatus(uint64_t guid) const;

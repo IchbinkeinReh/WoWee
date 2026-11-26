@@ -3961,3 +3961,234 @@ TEST_CASE("UnitInRange counts the player and forty yards (0x00612f10)", "[replay
     CHECK(ui.is("UnitInRange('player') == 1"));
     CHECK(ui.is("UnitInRange('target') == nil"));
 }
+
+// FIXER W (found by V in code): the item clicks do nothing while the player
+// has no control of itself - feared, charmed - unless it rides a taxi
+// (0x00bcfb8c or UNIT_FIELD_FLAGS 0x100000): PickupContainerItem 0x005d7ff0,
+// SplitContainerItem 0x005d84f0, PickupInventoryItem 0x005ea5f0 ->
+// 0x005e85d0; PickupBagFromSlot (0x005e8c30) and PutItemInBackpack
+// (0x005e8d30) want the control itself, a taxi does not do there.
+TEST_CASE("item clicks wait for the player's control or a taxi (0x00bcfb8c)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    carryForAuction(s, 0, 0x4000000000000C01ull, 2589, 5);
+    const auto control = [&](bool on) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CLIENT_CONTROL_UPDATE));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt8(on ? 1 : 0);
+        s.receive(p);
+    };
+    control(false);
+    REQUIRE_FALSE(s.handler().isServerMovementAllowed());
+    ui.run("ClearCursor() PickupContainerItem(0, 1)");
+    CHECK(ui.is("not CursorHasItem()"));
+    ui.run("ClearCursor() SplitContainerItem(0, 1, 2)");
+    CHECK(ui.is("not CursorHasItem()"));
+    // On a taxi the pickup and the split are let through.
+    s.receive(replay::UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0x100000u}}));
+    ui.run("ClearCursor() PickupContainerItem(0, 1)");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    // ... but not the drop into the backpack: 0x005e8d30 wants the control.
+    CHECK(ui.is("PutItemInBackpack() == nil"));
+    ui.run("ClearCursor() SplitContainerItem(0, 1, 2)");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("ClearCursor()");
+    s.receive(replay::UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0u}}));
+    control(true);
+    ui.run("ClearCursor() PickupContainerItem(0, 1)");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("ClearCursor()");
+    // GetContainerNumSlots (0x005d74a0): the usage line for no number.
+    CHECK(ui.is("select(2, pcall(GetContainerNumSlots)):find('Usage: GetContainerNumSlots(index)', 1, true) ~= nil"));
+    CHECK(ui.is("GetContainerNumSlots(0) == 16"));
+}
+
+// FIXER W (found by V in code): CastSpellByID (0x0053e060) casts a spell of
+// the player's own list as the player's; any other goes to the pet that has
+// it - the slot of its bar holding it (0x005d3560), else its book as state 1
+// (0x00be7d98) - by CMSG_PET_ACTION, and one known to neither casts nothing.
+// It sent CMSG_CAST_SPELL for any id.
+TEST_CASE("CastSpellByID casts the pet's spell through the pet (0x0053e060)", "[replay][interface]") {
+    constexpr uint64_t kImp = 0xCD;
+    constexpr uint32_t kOwn = 686, kBar = 3110, kBook = 7812, kNobody = 133;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    for (uint32_t id : {kOwn, kBar, kBook, kNobody}) s.handler().spellNameCacheRef()[id].name = "Spell";
+    wowee::network::Packet known(wowee::game::wireOpcode(Opcode::SMSG_INITIAL_SPELLS));
+    known.writeUInt8(0);
+    known.writeUInt16(1);
+    known.writeUInt32(kOwn);
+    known.writeUInt16(0);
+    known.writeUInt16(0);
+    s.receive(known);
+    s.receive(UpdateObject().create(kImp, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}}));
+    wowee::network::Packet bar(wowee::game::wireOpcode(Opcode::SMSG_PET_SPELLS));
+    bar.writeUInt64(kImp);
+    bar.writeUInt16(0);
+    bar.writeUInt32(0);
+    bar.writeUInt8(0);
+    bar.writeUInt8(0);
+    bar.writeUInt16(0);
+    for (int i = 0; i < 10; ++i) bar.writeUInt32(i == 3 ? (0xC1000000u | kBar) : 0u);
+    bar.writeUInt8(2);
+    bar.writeUInt32(0xC1000000u | kBar);
+    bar.writeUInt32(0x01000000u | kBook);
+    bar.writeUInt8(0);
+    s.receive(bar);
+    REQUIRE(s.handler().getPetGuid() == kImp);
+    const auto actions = [&] { return s.sent().of(Opcode::CMSG_PET_ACTION); };
+    const auto casts = [&] { return s.sent().of(Opcode::CMSG_CAST_SPELL).size(); };
+    const auto actionValue = [&](size_t i) {
+        auto p = actions().at(i);
+        p.setReadPos(8);
+        return p.readUInt32();
+    };
+    ui.run("CastSpellByID(" + std::to_string(kNobody) + ")");
+    CHECK(casts() == 0);
+    CHECK(actions().empty());
+    ui.run("CastSpellByID(" + std::to_string(kBar) + ")");
+    CHECK(casts() == 0);
+    REQUIRE(actions().size() == 1);
+    CHECK(actionValue(0) == (0xC1000000u | kBar));
+    INFO("book ids " << s.handler().getPetSpells().size());
+    ui.run("CastSpellByID(" + std::to_string(kBook) + ")");
+    REQUIRE(actions().size() == 2);
+    CHECK(actionValue(1) == (0x01000000u | kBook));
+    ui.run("CastSpellByID(" + std::to_string(kOwn) + ")");
+    CHECK(casts() == 1);
+    CHECK(actions().size() == 2);
+}
+
+// FIXER W (found in code): IsSpellKnown(id, isPet) also finds a spell on a
+// slot of the pet's bar that its book lacks (0x0053c3a0 -> 0x005d3560).
+TEST_CASE("IsSpellKnown of the pet sees its bar (0x0053c3a0)", "[replay][interface]") {
+    constexpr uint64_t kImp = 0xCD;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.receive(UpdateObject().create(kImp, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}}));
+    wowee::network::Packet bar(wowee::game::wireOpcode(Opcode::SMSG_PET_SPELLS));
+    bar.writeUInt64(kImp);
+    bar.writeUInt16(0);
+    bar.writeUInt32(0);
+    bar.writeUInt8(0);
+    bar.writeUInt8(0);
+    bar.writeUInt16(0);
+    for (int i = 0; i < 10; ++i) bar.writeUInt32(i == 0 ? 0x07000002u : i == 4 ? (0x81000000u | 3110u) : 0u);
+    bar.writeUInt8(0);
+    bar.writeUInt8(0);
+    s.receive(bar);
+    CHECK(ui.is("IsSpellKnown(3110, true) == true"));
+    CHECK(ui.is("IsSpellKnown(3110) == false"));
+    CHECK(ui.is("IsSpellKnown(2, true) == false"));
+}
+
+// FIXER W (found in code): HasFullControl (0x00611600) answers nil while the
+// player looks through another's eyes - the player's +0x1858 0x1, set as
+// CMSG_FAR_SIGHT 1 goes (0x006e2880).
+TEST_CASE("HasFullControl is nil while looking through another (0x00611600)", "[replay][interface]") {
+    constexpr uint64_t kEye = 0xAB;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("HasFullControl() == 1"));
+    s.receive(UpdateObject().create(kEye, wowee::game::ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100}}));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FARSIGHT, static_cast<uint32_t>(kEye)}}));
+    REQUIRE(s.sent().of(Opcode::CMSG_FAR_SIGHT).size() == 1);
+    CHECK(ui.is("HasFullControl() == nil"));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_FARSIGHT, 0u}}));
+    CHECK(ui.is("HasFullControl() == 1"));
+}
+
+// FIXER W (found in code): a member out of view is in a vehicle by its stats'
+// status 0x200 (0x006133d0 / 0x006134a0 -> 0x00513c30 -> 0x0052bee0, +8).
+TEST_CASE("UnitInVehicle answers a member out of view by its status (0x006133d0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+    g.writeUInt8(0);
+    for (int i = 0; i < 3; ++i) g.writeUInt8(0);
+    g.writeUInt64(0x1234);
+    g.writeUInt32(1);
+    g.writeUInt32(1);
+    g.writeString("Achiles");
+    g.writeUInt64(0x1001);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt64(Session::kPlayerGuid);
+    for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+    s.receive(g);
+    const auto status = [&](uint16_t flags) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_PARTY_MEMBER_STATS));
+        p.writePackedGuid(0x1001);
+        p.writeUInt32(0x0001);
+        p.writeUInt16(flags);
+        s.receive(p);
+    };
+    status(0x0001);
+    REQUIRE(ui.is("UnitGUID('party1') ~= nil"));
+    CHECK(ui.is("UnitInVehicle('party1') == nil and UnitUsingVehicle('party1') == nil"));
+    status(0x0001 | 0x0200);
+    CHECK(ui.is("UnitInVehicle('party1') == 1 and UnitUsingVehicle('party1') == 1"));
+}
+
+// T403: CHANNEL_ROSTER_UPDATE / CHANNEL_COUNT_UPDATE name the channel's row in
+// the pane, headers counted (0x00503990 -> 0x004ff4f0) - ChannelRoster_Update
+// reads GetChannelDisplayInfo(id) of it. They carried the channel's number.
+TEST_CASE("the roster events name the channel's row in the pane (T403)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto joined = [&](const std::string& name) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CHANNEL_NOTIFY));
+        p.writeUInt8(0x02);
+        p.writeString(name);
+        p.writeUInt8(0);
+        p.writeUInt32(0);
+        p.writeUInt32(0);
+        s.receive(p);
+    };
+    ui.run("JoinChannelByName('alpha') JoinChannelByName('beta')");
+    joined("alpha");
+    joined("beta");
+    ui.run("seen = {} local f = CreateFrame('Frame') f:RegisterEvent('CHANNEL_ROSTER_UPDATE') "
+           "f:RegisterEvent('CHANNEL_COUNT_UPDATE') "
+           "f:SetScript('OnEvent', function(self, event, id, count) seen[#seen + 1] = event .. ' ' .. tostring(id) end)");
+    REQUIRE(ui.is("GetChannelDisplayInfo(5) == 'beta'"));
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_CHANNEL_LIST));
+    list.writeUInt8(1);
+    list.writeString("beta");
+    list.writeUInt8(0);
+    list.writeUInt32(0);
+    s.receive(list);
+    CHECK(ui.is("#seen == 2 and seen[1] == 'CHANNEL_ROSTER_UPDATE 5' and seen[2] == 'CHANNEL_COUNT_UPDATE 5'"));
+}
+
+// T404: GetBarberShopStyleInfo(4) answers nothing for a race without skin
+// styles (0x0052e850: DAT_00bd19b4), as SetNextBarberShopStyle(4) does.
+TEST_CASE("the barber's skin row is nothing for a race without one (T404)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    bool skins = false;
+    wowee::addons::LuaServices services;
+    services.getBarberStyleInfo = [](int, std::string& name, std::string& description, uint32_t& cost,
+                                     bool& isCurrent) {
+        name = "Current";
+        description.clear();
+        cost = 111173;
+        isCurrent = true;
+        return true;
+    };
+    services.barberCanAlterSkin = [&] { return skins; };
+    ui.engine.setLuaServices(services);
+    CHECK(ui.is("select('#', GetBarberShopStyleInfo(4)) == 0"));
+    CHECK(ui.is("select('#', GetBarberShopStyleInfo(3)) == 4"));
+    skins = true;
+    CHECK(ui.is("select('#', GetBarberShopStyleInfo(4)) == 4"));
+}

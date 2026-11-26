@@ -18,7 +18,17 @@
 #include <string>
 #include <vector>
 
+namespace wowee::game {
+class GameHandler;
+}
+
 namespace wowee::game::chat_channels {
+
+/// 0x004ff4f0: a channel's place (one-based) among the rows of the channel
+/// pane, headers counted, 0 where no row shows it. The pane's rows live with
+/// the interface (lua_system_api.cpp), which sets this; without one, 0.
+using DisplayIndexHook = int (*)(GameHandler*, const std::string&);
+inline DisplayIndexHook displayIndexHook = nullptr;
 
 /// ChatChannels.dbc's Flags column, as the client tests them.
 constexpr uint32_t kFlagInitial          = 0x00001;  // joined by a character with no chat cache

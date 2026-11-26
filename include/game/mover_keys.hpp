@@ -30,4 +30,14 @@ namespace wowee::game {
     return keysMayTurn(health, unitFlags, animation) && standState == 0;
 }
 
+/// Whether the player's hands are free for its items (the 0x00bcfb8c gate of
+/// PickupContainerItem 0x005d7ff0, SplitContainerItem 0x005d84f0 and their
+/// kin): it has control of the character (0x00520fe0 sets it), or it rides a
+/// taxi (UNIT_FIELD_FLAGS 0x100000) - feared, charmed or stunned out of
+/// control, the item clicks do nothing.
+[[nodiscard]] constexpr bool handsFree(bool hasControl, uint32_t unitFlags) {
+    constexpr uint32_t kUnitFlagTaxiFlight = 0x100000;
+    return hasControl || (unitFlags & kUnitFlagTaxiFlight) != 0;
+}
+
 }  // namespace wowee::game

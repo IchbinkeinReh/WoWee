@@ -11,6 +11,7 @@
 #include "game/unit_combat.hpp"
 #include "game/soft_interact.hpp"
 #include "game/vehicle_mover.hpp"
+#include "game/mover_keys.hpp"
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
 #include "rendering/animation_controller.hpp"
@@ -1885,6 +1886,17 @@ bool GameHandler::isServerMovementAllowed() const {
     return movementHandler_ ? movementHandler_->isServerMovementAllowed() : true;
 }
 
+bool GameHandler::playerHandsFree() const {
+    const auto self = getEntityManager().getEntity(playerGuid);
+    if (!self || !self->isUnit()) return false;
+    return handsFree(isServerMovementAllowed(), static_cast<const Unit*>(self.get())->getUnitFlags());
+}
+
+bool GameHandler::playerInControl() const {
+    const auto self = getEntityManager().getEntity(playerGuid);
+    return self && self->isUnit() && isServerMovementAllowed();
+}
+
 uint32_t GameHandler::nextMovementTimestampMs() {
     if (movementHandler_) return movementHandler_->nextMovementTimestampMs();
     return 0;
@@ -3408,6 +3420,41 @@ void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
         if (spellHandler_) spellHandler_->notePetActionCast(spell, petGuid_);
     }
     sendPetAction(packed, targetGuid != 0 && !unit_target::askedNoUnit(targetGuid) ? targetGuid : petGuid_);
+}
+
+void GameHandler::castSpellByIdThroughPet(uint32_t spell, uint64_t targetGuid) {
+    // 0x0053e060 past the player's own list (0x00be6d88): with a pet
+    // (0x005d3e80), its action bar's slot holding the spell (0x005d3560:
+    // states 1 and 8-0x11), else its spell book (0x00be7d98) as state 1;
+    // a spell known to neither casts nothing.
+    if (spell == 0 || petGuid_ == 0) return;
+    uint32_t packed = 0;
+    for (const uint32_t slot : petActionSlots_) {
+        if (pet::petSlotSpell(slot) == spell) {
+            packed = slot;
+            break;
+        }
+    }
+    if (packed == 0) {
+        if (std::find(petSpellList_.begin(), petSpellList_.end(), spell) == petSpellList_.end()) return;
+        packed = spell | 0x1000000u;
+    }
+    // The pet in view (0x004d4db0), or nothing.
+    auto petUnit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(petGuid_));
+    if (!petUnit) return;
+    loadSpellNameCache();
+    const auto it = spellNameCache_.find(spell);
+    const uint32_t attrEx4 = it != spellNameCache_.end() ? it->second.attrEx4 : 0;
+    // AttributesEx4 0x20 (the record's +0x20 byte), or the pet the unit the
+    // player possesses (0x006dd060): cast as the player's are (0x0080cce0).
+    if (pet::petCastsItself(attrEx4, petGuid_ == possessedUnit())) {
+        if (spellHandler_) spellHandler_->castPetSpell(petGuid_, spell, targetGuid);
+        return;
+    }
+    // Else its global cooldown into the pet's history (0x00805d70) and
+    // CMSG_PET_ACTION (0x175): the pet, the slot's value, the unit asked.
+    if (spellHandler_) spellHandler_->notePetActionCast(spell, petGuid_);
+    sendPetAction(packed, targetGuid);
 }
 
 void GameHandler::dismissCritter() {

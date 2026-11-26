@@ -2596,7 +2596,11 @@ void ChatHandler::fireChannelRosterEvents(const std::string& chanName) {
     // called elsewhere with GetSelectedDisplayChannel(), which is an index. A
     // name built "ChannelButtonGeneral", which is nothing, so neither the
     // roster nor the count ever redrew.
-    const int displayIndex = getChannelIndex(chanName);
+    // That position is the row's in the pane, its headers counted (0x00503990
+    // -> 0x004ff4f0, T403): the channel's number named another row (number 4
+    // was the fourth row, a world channel).
+    const int displayIndex =
+        chat_channels::displayIndexHook ? chat_channels::displayIndexHook(&owner_, chanName) : 0;
     if (displayIndex <= 0) return;
     auto it = channelRosters_.find(chanName);
     const std::string idx = std::to_string(displayIndex);

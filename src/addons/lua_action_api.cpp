@@ -1989,6 +1989,9 @@ static int lua_SplitGuildBankItem(lua_State* L) {
     if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
         return luaL_error(L, "Usage: SplitGuildBankItem(tab, slot, amount)");
     const int amount = static_cast<int>(luaL_optnumber(L, 3, 0));
+    // The player in control or on a taxi (0x00bcfb8c or UNIT_FIELD_FLAGS
+    // 0x100000), or nothing is split.
+    if (auto* gh = getGameHandler(L); !gh || !gh->playerHandsFree()) return 0;
     lua_settop(L, 2);
     lua_PickupGuildBankItem(L);
     if (s_cursorType == CursorType::GUILDBANK && amount > 0)
@@ -2355,6 +2358,10 @@ static int lua_PickupContainerItem(lua_State* L) {
     if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: PickupContainerItem(index, slot)");   // 0x005d7ff0
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    // Without the player, or out of control of it off a taxi (feared,
+    // charmed), the click does nothing at all (0x005d7ff0: 0x00bcfb8c or
+    // UNIT_FIELD_FLAGS 0x100000) - before the wrap, the repair, the buy.
+    if (!gh->playerHandsFree()) return 0;
     int bag = static_cast<int>(luaL_checknumber(L, 1));
     int slot = static_cast<int>(luaL_checknumber(L, 2));
 
@@ -2674,6 +2681,9 @@ static constexpr int kFirstWornBagInventorySlot =
 static int lua_PickupBagFromSlot(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    // Only with the player in control - not on a taxi either (0x005ea840 ->
+    // 0x005e8c30: 0x00bcfb8c alone).
+    if (!gh->playerInControl()) return 0;
     const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
 
     const int bankIndex = slot - game::slots::firstBankBagInventorySlot();
@@ -2757,6 +2767,9 @@ static int lua_PickupBagFromSlot(lua_State* L) {
 static int lua_PickupInventoryItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    // The player in control or on a taxi, as a bag square's pickup
+    // (0x005ea5f0 -> 0x005e85d0: 0x00bcfb8c or UNIT_FIELD_FLAGS 0x100000).
+    if (!gh->playerHandsFree()) return 0;
     int slot = static_cast<int>(luaL_checknumber(L, 1));
 
     // The ammo slot, Lua slot 0 (0x005e85d0 with slot -1). The ammunition is a

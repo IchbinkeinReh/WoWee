@@ -4299,6 +4299,19 @@ static std::vector<ChannelDisplayRow> channelDisplayRows(game::GameHandler* gh) 
     return rows;
 }
 
+/// 0x004ff4f0 for the roster events: the channel row of that name (case
+/// aside), one-based among all rows, 0 for none shown.
+static int channelDisplayIndexOf(game::GameHandler* gh, const std::string& name) {
+    const auto rows = channelDisplayRows(gh);
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const auto& row = rows[i];
+        if (row.kind == ChannelDisplayRow::Kind::Channel && row.slot &&
+            game::chat_channels::sameName(row.slot->name, name))
+            return static_cast<int>(i) + 1;
+    }
+    return 0;
+}
+
 /// Expand/CollapseChannelHeader's shared half.
 static int setChannelHeader(lua_State* L, bool collapse) {
     if (!lua_isnumber(L, 1)) return 0;
@@ -8538,6 +8551,7 @@ static std::vector<uint32_t>& taxiRouteShown() {
 }
 
 void registerSystemLuaAPI(lua_State* L) {
+    game::chat_channels::displayIndexHook = &channelDisplayIndexOf;
     // Before any binding is registered, so the first GetCVar of the run - which
     // happens while a panel is being built - sees what the player last set.
     loadStoredCVars();
