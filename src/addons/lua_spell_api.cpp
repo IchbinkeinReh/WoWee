@@ -1,6 +1,8 @@
 // lua_spell_api.cpp - Spell info, casting, auras, and targeting Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/pet_action.hpp"
+#include "game/cast_times.hpp"
+#include <unordered_map>
 #include "game/shapeshift_forms.hpp"
 #include "game/game_utils.hpp"
 #include "game/target_direction.hpp"
@@ -824,9 +826,14 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
     const std::string& name = gh->getSpellName(spellId);
     std::string iconPath = gh->getSpellIconPath(spellId);
 
-    // Time values in milliseconds (WoW API convention)
-    double startTimeMs = (nowSec - (timeTotal - timeRemaining)) * 1000.0;
-    double endTimeMs   = (nowSec + timeRemaining) * 1000.0;
+    // Whole milliseconds, the same for the whole cast (T405): kept per unit
+    // as they were first taken, moved by a delay or a new cast only.
+    static std::unordered_map<uint64_t, game::CastTimes> kept;
+    if (kept.size() > 256) kept.clear();
+    auto& times = kept[castGuid];
+    times = game::castTimesNow(times, spellId, isChannel, timeTotal, timeRemaining, nowSec * 1000.0);
+    const double startTimeMs = times.start;
+    const double endTimeMs = times.end;
 
     // The real signatures, which are one wider than what this used to send:
     //

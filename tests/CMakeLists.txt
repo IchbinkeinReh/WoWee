@@ -3562,6 +3562,12 @@ wowee_add_test(test_swim_motion
     SOURCES test_swim_motion.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_cast_times ──────────────────────────────────────────
+# UnitCastingInfo's start and end, fixed for a cast (T405). Header-only.
+wowee_add_test(test_cast_times
+    SOURCES test_cast_times.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_mount_special ───────────────────────────────────────
 # What the jump key does on a mount: one that stands rears. Header-only.
 wowee_add_test(test_mount_special
