@@ -792,13 +792,16 @@ bool screenKeyboardShown(SDL_Window* sdlWindow) {
 
 Application* Application::instance = nullptr;
 
-Application::Application() {
+Application::Application() : previousInstance_(instance) {
     instance = this;
 }
 
 Application::~Application() {
     shutdown();
-    instance = nullptr;
+    // Give the global back to the one made before, when it is this one's:
+    // a test holding two sessions at once (each with its own Application)
+    // left the older one with a null instance once the newer was gone.
+    if (instance == this) instance = previousInstance_;
 }
 
 namespace {

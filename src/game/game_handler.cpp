@@ -132,6 +132,9 @@ GameHandler::~GameHandler() {
     // later wireOpcode() read it after this handler was gone (ASan,
     // heap-use-after-free in the replay tests).
     if (getActiveOpcodeTable() == &opcodeTable_) setActiveOpcodeTable(nullptr);
+    // The same for the update-field table (fieldIndex()), set in the
+    // constructor from this handler's member.
+    if (getActiveUpdateFieldTable() == &updateFieldTable_) setActiveUpdateFieldTable(nullptr);
     for (const auto& row : packetReads_.odd()) {
         const auto logical = opcodeTable_.fromWire(row.opcode);
         LOG_INFO("Packets: ", logical ? OpcodeTable::logicalToName(*logical) : "?", " (0x", std::hex, row.opcode,

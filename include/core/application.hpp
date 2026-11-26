@@ -408,6 +408,7 @@ private:
     void setupTestTransport();  // Test transport boat for development
 
     static Application* instance;
+    Application* previousInstance_ = nullptr;  // the instance before this one (nested test sessions)
 
 #ifndef WOWEE_MOBILE
     /// Null unless the client was started with --mcp.

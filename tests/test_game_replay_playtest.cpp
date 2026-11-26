@@ -1568,6 +1568,7 @@ TEST_CASE("the equipment manager hears of every change at once", "[replay][playt
     REQUIRE(used.size() == 1);
     wowee::network::Packet p = used[0];
     CHECK_FALSE(gh.useEquipmentSet("Mend", false));   // the first is not answered
+    gh.setAddonEventCallback({});  // `changed` goes before the session's teardown events
 }
 
 // A forced change answered while the player's own unit is not there yet went out
