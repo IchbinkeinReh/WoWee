@@ -1199,7 +1199,6 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // far left of the Sound panel - 32 channels and Low quality - which read
     // as a client running at its worst and was not a setting at all.
     //
-    // The controls are taken off the panels; see kRemovedControlsLua.
     // On by default (0x004d1600 registers it "1"): a spell effect's model
     // sound on the active player plays at the listener (M2EventSounds).
     else if (n == "sound_listeneratcharacter") lua_pushstring(L, "1");
@@ -2922,19 +2921,6 @@ void restoreCVarDefault(lua_State* L, const std::string& name) {
     if (auto it = cvarStartupValues().find(key); it != cvarStartupValues().end()) {
         writeCVarFromConsole(L, key, it->second);
     }
-}
-
-/// Report the controls kRemovedControlsLua could not find.
-///
-/// An entry there naming nothing is a bug in the list rather than a state of
-/// the interface - nine of them named CVars where frames were wanted and were
-/// skipped in silence, which is how the list came to be half decorative.
-static int lua_WoweeReportMissingFixedControls(lua_State* L) {
-    const char* names = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
-    if (names && *names) {
-        LOG_WARNING("Fixed controls: no such frame(s): ", names);
-    }
-    return 0;
 }
 
 static int lua_SetCVar(lua_State* L) {
@@ -8872,8 +8858,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetTerrainMip",            lua_GetTerrainMip},
                 {"SetTerrainMip",            lua_SetTerrainMip},
                 {"SetGamma",                 lua_SetGamma},
-                {"WoweeReportMissingFixedControls",
-                                             lua_WoweeReportMissingFixedControls},
                 {"GetVideoCaps",             lua_GetVideoCaps},
                 {"GetCVarMin",               lua_GetCVarMin},
                 {"GetCVarMax",               lua_GetCVarMax},

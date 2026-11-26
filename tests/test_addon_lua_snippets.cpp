@@ -81,87 +81,7 @@ std::string runChunks(std::initializer_list<std::pair<const char*, const char*>>
     return result;
 }
 
-/// The options machinery the removal snippet walks, cut down to what it calls.
-constexpr const char* kFakeOptionsPanelLua = R"LUA(
-local function frame(name, parent)
-    local f = {
-        _name = name, _parent = parent, _hidden = false, _hooks = {},
-        GetName = function(self) return self._name end,
-        GetParent = function(self) return self._parent end,
-        GetChildren = function(self) return unpack(self._children or {}) end,
-        Hide = function(self) self._hidden = true end,
-        HookScript = function(self, script, fn) self._hooks[script] = fn end,
-    }
-    _G[name] = f
-    if parent then
-        parent._children = parent._children or {}
-        table.insert(parent._children, f)
-    end
-    return f
-end
-
-local panel = frame("VideoOptionsResolutionPanel")
--- The retired checkbox, and one control that stays.
-local vsync = frame("VideoOptionsResolutionPanelVSync", panel)
-local scale = frame("VideoOptionsResolutionPanelUIScaleSlider", panel)
-panel.controls = { vsync, scale }
-
--- Both carry what BlizzardOptionsPanel_SetupControl would have left on them:
--- the cached value the Okay loops commit, and for the action bar boxes the
--- uvar naming a global FrameXML reads. A retired control has to lose the
--- first and keep the second.
-vsync.value = "0"
-vsync.uvar = "GX_VSYNC"
-scale.value = "1"
-
-local bars = frame("InterfaceOptionsActionBarsPanel")
-local bottomLeft = frame("InterfaceOptionsActionBarsPanelBottomLeft", bars)
-bottomLeft.value = "1"
-bottomLeft.uvar = "SHOW_MULTI_ACTIONBAR_1"
-bars.controls = { bottomLeft }
-)LUA";
-
 }  // namespace
-
-TEST_CASE("a retired control commits nothing and keeps its place", "[addonlua]") {
-    // Hiding a control is not retiring it. VideoOptionsPanel_Okay walks
-    // panel.controls and writes every entry's cached value back to its cvar,
-    // changed or not - so the hidden vertical-sync checkbox replayed the value
-    // it read at load over the Display page's own row, and pressing Okay on the
-    // video window turned vertical sync off again each time it was switched on.
-    //
-    // Both halves are asserted here because fixing the first by unregistering
-    // the control broke the second, and shipped: BlizzardOptionsPanel_SetupControl
-    // runs only over panel.controls, and it is what assigns the uvar globals, so
-    // the action bar checkboxes leaving the list left SHOW_MULTI_ACTIONBAR_1 nil
-    // and the player with no bottom action bar.
-    const std::string result = runChunks({
-        {kFakeOptionsPanelLua, "FakeOptionsPanel"},
-        {wowee::addons::kRemovedControlsLua, "RemovedControls"},
-        {R"LUA(
-            local vsync = VideoOptionsResolutionPanelVSync
-            local scale = VideoOptionsResolutionPanelUIScaleSlider
-            local bar = InterfaceOptionsActionBarsPanelBottomLeft
-            local listed = ""
-            for _, c in ipairs(VideoOptionsResolutionPanel.controls) do
-                listed = listed .. c:GetName() .. " "
-            end
-            return "listed=" .. listed
-                .. "| vsync.value=" .. tostring(vsync.value)
-                .. " scale.value=" .. tostring(scale.value)
-                .. " bar.value=" .. tostring(bar.value)
-                .. " bar.uvar=" .. tostring(bar.uvar)
-                .. " hidden=" .. tostring(vsync._hidden)
-        )LUA",
-         "Check"},
-    });
-    // The retired boxes keep their place on the panel, so setup still reaches
-    // them, and lose only the value the Okay loops would have written back.
-    CHECK(result ==
-          "listed=VideoOptionsResolutionPanelVSync VideoOptionsResolutionPanelUIScaleSlider "
-          "| vsync.value=nil scale.value=1 bar.value=nil "
-          "bar.uvar=SHOW_MULTI_ACTIONBAR_1 hidden=true");
-}
 
 TEST_CASE("the options panel script parses", "[addonlua]") {
     // Twelve categories of check button, slider and dropdown, built from the
@@ -444,19 +364,6 @@ out = out .. ' ' .. tostring(f.shown) .. ' ' .. tostring(frames[2].shown)
 return out
 )LUA", "check"}});
     CHECK(result == "1 32 57.6 0.5 2 BOTTOM BOTTOMLEFT 100 187.2 0.25 1 2 101.1 2 3 1 false 2 true 256 false false");
-}
-
-// The Sound and Effects pages are among the removed ones (kRemovedCategories),
-// so no text may send the player to them.
-TEST_CASE("the options' headings name no page that was removed", "[lua][options]") {
-    const std::string removed = wowee::addons::kRemovedControlsLua;
-    const std::string panel = wowee::addons::kWoweeOptionsPanelLua;
-    REQUIRE(removed.find("\"AudioOptionsSoundPanel\"") != std::string::npos);
-    REQUIRE(removed.find("\"VideoOptionsEffectsPanel\"") != std::string::npos);
-    for (const char* named : {"game's Sound panel", "Soundfenster", "Resolution and Effects", "Auflösung und Effekte"}) {
-        CAPTURE(named);
-        CHECK(panel.find(named) == std::string::npos);
-    }
 }
 
 // The question after a changed interface scale, in the client's words, and the

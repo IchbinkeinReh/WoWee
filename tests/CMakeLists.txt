@@ -3791,6 +3791,12 @@ wowee_add_test(test_pass_ablation
 wowee_add_test(test_spell_missile
     SOURCES test_spell_missile.cpp)
 
+# ── test_original_interface ──────────────────────────
+# The interface departures the user took back (T339).
+wowee_add_test(test_original_interface SOURCES test_original_interface.cpp)
+target_compile_definitions(test_original_interface PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # ── test_built_beside ────────────────────────────────
 # What a frame takes from a thread of its own once it is there, and the
 # character selection's view made so.
