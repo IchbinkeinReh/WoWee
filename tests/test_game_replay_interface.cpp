@@ -2742,3 +2742,24 @@ TEST_CASE("a widget has no methods 12340's widgets do not have", "[replay][inter
     // A real one still answers.
     CHECK(ui.is("type(wf.Show) == 'function' and type(wt.SetTexture) == 'function'"));
 }
+
+// T379: Blizzard_CombatLog's refilter walks the log from the newest entry back
+// and adds each older line with backFill (AddMessage(text, r, g, b, nil, true)),
+// which 12340 puts at the oldest end (0x00972f20 -> 0x0096a9f0). Appended at the
+// bottom instead, every refilter showed the combat log upside down.
+TEST_CASE("a back-filled line goes above the ones there (0x0096a9f0)", "[replay][interface]") {
+    Session s;
+    Interface ui(s);
+    ui.run("c = CreateFrame('ScrollingMessageFrame') c:AddMessage('A') c:AddMessage('B', 1, 1, 0, nil, true) "
+           "function line(i) return (c:GetMessageInfo(i)) end");
+    CHECK(ui.is("c:GetNumMessages() == 2 and line(1) == 'B' and line(2) == 'A'"));
+    // A full ring: the back-filled line takes the oldest one's place.
+    ui.run("c:SetMaxLines(2) c:Clear() c:AddMessage('A') c:AddMessage('C') c:AddMessage('B', 1, 1, 1, nil, true)");
+    CHECK(ui.is("c:GetNumMessages() == 2 and line(1) == 'B' and line(2) == 'C'"));
+    // Only a boolean true back-fills.
+    ui.run("c:Clear() c:AddMessage('A') c:AddMessage('B', 1, 1, 1, nil, 1)");
+    CHECK(ui.is("line(1) == 'A' and line(2) == 'B'"));
+    // Without all three of r, g, b the rest move up: typeID, backFill, accessID.
+    ui.run("c:Clear() c:AddMessage('A') c:AddMessage('B', 5, true, 7)");
+    CHECK(ui.is("line(1) == 'B' and select(2, c:GetMessageInfo(1)) == 7 and select(3, c:GetMessageInfo(1)) == 5"));
+}

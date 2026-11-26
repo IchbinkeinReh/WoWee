@@ -2958,27 +2958,50 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
     // and a message frame never passes through SetText, so resolving it there
     // alone would have left every one of these lines showing the escape.
     m.text = wowee::ui::resolvePluralEscapes(luaL_optstring(L, 2, ""));
-    // WoW's colours are optional and default to the frame's own.
-    m.color[0] = static_cast<float>(luaL_optnumber(L, 3, w->color[0]));
-    m.color[1] = static_cast<float>(luaL_optnumber(L, 4, w->color[1]));
-    m.color[2] = static_cast<float>(luaL_optnumber(L, 5, w->color[2]));
+    // 0x00972f20: a colour only when all three of r, g, b are numbers (each
+    // held to 0..1, 0x0061be50); then typeID, backFill, accessID, extraData
+    // follow at 6-9. Without the three the frame's own colour is taken and
+    // the rest move up to 3-6, as the usage line's brackets say.
+    const bool scrolling = sameWord(w->objectType.c_str(), "ScrollingMessageFrame");
+    const bool coloured = lua_isnumber(L, 3) && lua_isnumber(L, 4) && lua_isnumber(L, 5);
+    const int after = coloured ? 6 : 3;
+    for (int c = 0; c < 3; ++c) {
+        m.color[c] = coloured ? std::clamp(static_cast<float>(lua_tonumber(L, 3 + c)), 0.0f, 1.0f)
+                              : w->color[c];
+    }
     m.color[3] = 1.0f;
     // The three the chat history hangs off a line. FrameXML hands them over on
     // the way in and reads them back with GetMessageInfo when it moves a
     // conversation into a window of its own; dropping them here meant the copy
     // had nothing to copy.
-    m.lineId   = luaL_optnumber(L, 6, 0.0);
-    m.accessId = luaL_optnumber(L, 8, 0.0);
+    if (lua_isnumber(L, after)) m.lineId = lua_tonumber(L, after);
+    // backFill: only a boolean true (0x0084deb0 asks the type).
+    const bool backFill = scrolling && lua_type(L, after + 1) == LUA_TBOOLEAN && lua_toboolean(L, after + 1);
+    if (lua_isnumber(L, after + 2)) m.accessId = lua_tonumber(L, after + 2);
     // Kept apart by type, because the caller looks it up in a table on the way
     // back out and a number written down as text finds nothing there.
-    if (lua_type(L, 9) == LUA_TNUMBER) {
+    if (lua_type(L, after + 3) == LUA_TNUMBER) {
         m.hasExtra = m.extraIsNumber = true;
-        m.extraNumber = lua_tonumber(L, 9);
-    } else if (lua_type(L, 9) == LUA_TSTRING) {
+        m.extraNumber = lua_tonumber(L, after + 3);
+    } else if (lua_type(L, after + 3) == LUA_TSTRING) {
         m.hasExtra = true;
-        m.extra = lua_tostring(L, 9);
+        m.extra = lua_tostring(L, after + 3);
     }
     w->isMessageFrame = true;
+    if (backFill) {
+        // A line from before the ones there (0x0096a9f0 with backFill): it
+        // goes to the oldest end of the ring, and with the ring full it takes
+        // the oldest line's slot. The newest line, the view and the ring's
+        // newest slot stay as they are - Blizzard_CombatLog's refilter walks
+        // the log from the newest entry back and fills the frame upwards.
+        if (w->messages.size() >= std::max<size_t>(w->maxMessages, 1)) {
+            if (w->messagesInsertTop) w->messages.pop_back();
+            else                      w->messages.pop_front();
+        }
+        if (w->messagesInsertTop) w->messages.push_back(std::move(m));
+        else                      w->messages.push_front(std::move(m));
+        return 0;
+    }
     // UIErrorsFrame asks for insertMode="TOP", which puts a new line above the
     // ones already there rather than below them.
     if (w->messagesInsertTop) w->messages.push_front(std::move(m));
