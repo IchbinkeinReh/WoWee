@@ -1421,6 +1421,19 @@ TEST_CASE("indented= sets a font string's wrapped lines in", "[framexml][emit]")
     REQUIRE(has(emitFrameXml(root).lua, ":SetIndentedWordWrap(true)"));
 }
 
+TEST_CASE("a message frame's own font takes nonspacewrap and indented (T372)", "[framexml][emit]") {
+    // ChatFrameTemplate: <FontString inherits="ChatFontNormal" justifyH="LEFT"
+    // indented="true" nonspacewrap="true"/> straight inside the frame - its
+    // font instance, which keeps both flags (0x00497070).
+    XmlNode root = parseOrFail(
+        "<Ui><ScrollingMessageFrame name=\"C\">"
+        "<FontString inherits=\"ChatFontNormal\" justifyH=\"LEFT\" indented=\"true\" nonspacewrap=\"true\"/>"
+        "</ScrollingMessageFrame></Ui>");
+    const std::string lua = emitFrameXml(root).lua;
+    CHECK(has(lua, ":SetNonSpaceWrap(true)"));
+    CHECK(has(lua, ":SetIndentedWordWrap(true)"));
+}
+
 TEST_CASE("A TitleRegion is the frame's own title region", "[framexml][emit]") {
     // The client builds a region and lays it out (0x004932c0); a press in it
     // moves the frame. No drag scripts are written for it, and a window that

@@ -820,6 +820,17 @@ struct Emitter {
                 line(var + ":SetSpacing(" + of + std::to_string(node.attrFloat("spacing", 0.0f)) + ")");
             if (node.attr("indented"))
                 line(var + ":SetIndentedWordWrap(" + of + (node.attrBool("indented") ? "true" : "false") + ")");
+        } else {
+            // The frame's own font instance takes nonspacewrap and indented
+            // as a font string does (0x00497070: flags 0x1000 and 0x20000 of
+            // the instance). ChatFrameTemplate asks for both, so a chat line's
+            // word too long for the window goes on in the next line instead of
+            // ending the message, and the lines after a message's first are set
+            // in (T372).
+            if (node.attr("nonspacewrap"))
+                line(var + ":SetNonSpaceWrap(" + std::string(node.attrBool("nonspacewrap") ? "true" : "false") + ")");
+            if (node.attr("indented"))
+                line(var + ":SetIndentedWordWrap(" + std::string(node.attrBool("indented") ? "true" : "false") + ")");
         }
         if (const std::string* j = node.attr("justifyH"))
             line(var + ":SetJustifyH(" + of + quote(*j) + ")");

@@ -2877,7 +2877,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 auto lineCount = [&](const std::string& text) {
                     if (wrapW <= 0.0f) return size_t{1};
                     const auto lines = wrapText(
-                        parseMarkup(text, pictureUnits(size, w->effScale)), wrapW, false,
+                        parseMarkup(text, pictureUnits(size, w->effScale)), wrapW, w->nonSpaceWrap,
                         [&](const std::string& piece) {
                             return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                        piece.c_str()).x;
@@ -2997,7 +2997,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         drawMarkupText(dl, font, size, w->effScale,
                                        ImVec2(bx + shadowPx(w->shadowX * s), by - shadowPx(w->shadowY * s)),
                                        shadowColor(*w, rgba[3]),
-                                       w->drawAlpha, m.text, wrapW, false,
+                                       w->drawAlpha, m.text, wrapW, w->nonSpaceWrap,
                                        w->justifyH.c_str(), true, nullptr, 0,
                                        (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f), lineH - size);
                     }
@@ -3011,7 +3011,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // ChatFrameTemplate declares LEFT, so chat is unchanged.
                     drawMarkupText(dl, font, size, w->effScale, ImVec2(bx, by),
                                    packColor(rgba, w->drawAlpha), w->drawAlpha * rgba[3], m.text,
-                                   wrapW, false, w->justifyH.c_str(), false, &tree, w->id,
+                                   wrapW, w->nonSpaceWrap, w->justifyH.c_str(), false, &tree, w->id,
                                    (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f), lineH - size);
                     if (passedOver > 0) dl->PopClipRect();
                     y += lineH * static_cast<float>(shownRows) * (topDown ? 1.0f : -1.0f);
