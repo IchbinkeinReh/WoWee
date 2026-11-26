@@ -220,13 +220,30 @@ json findPath(ToolContext& context, const json& args) {
         throw ToolError("to, guid or name");
     }
     const glm::vec3 me = playerAt(context);
-    const auto plan = planWalk(context, me, to);
+    const FacetIndex world(facetsForWalk(context, me, to));
+    const auto plan = planWalk(world, me, to);
     json points = json::array();
     for (const auto& p : plan.points) points.push_back(vec3Json(p));
-    return {{"reaches", plan.reaches},
-            {"ends_yards_off", rounded(plan.left, 1)},
-            {"points", std::move(points)},
-            {"looked_at", plan.visited}};
+    json out = {{"reaches", plan.reaches},
+                {"ends_yards_off", rounded(plan.left, 1)},
+                {"points", std::move(points)},
+                {"looked_at", plan.visited},
+                {"faces", world.size()}};
+    // A plan that got no further than where it began says why each of the
+    // first steps round the feet is not taken (tester: walk_to out of the
+    // Warsong flag rooms, 'looked_at 1').
+    if (!plan.reaches && plan.visited <= 1) {
+        json steps = json::object();
+        const char* names[8] = {"north", "north-east", "east", "south-east", "south", "south-west", "west",
+                                "north-west"};
+        const glm::vec2 dirs[8] = {{1, 0}, {1, -1}, {0, -1}, {-1, -1}, {-1, 0}, {-1, 1}, {0, 1}, {1, 1}};
+        for (int i = 0; i < 8; ++i) {
+            const std::string why = whyNoStep(world, me, glm::vec2(me) + dirs[i]);
+            steps[names[i]] = why.empty() ? std::string("open") : why;
+        }
+        out["first_steps"] = std::move(steps);
+    }
+    return out;
 }
 
 }  // namespace

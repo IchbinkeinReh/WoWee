@@ -655,3 +655,18 @@ TEST_CASE("where there is no way, it goes as near as it can", "[mcp][walk]") {
     CHECK_FALSE(nowhere.reaches);
     CHECK(nowhere.points.empty());
 }
+
+// The path tool's account of a plan that got no further than where it began
+// (tester: walk_to out of the Warsong flag rooms looked at one place).
+TEST_CASE("a step the planner does not take says why", "[mcp][walk]") {
+    auto world = plain();
+    wall(world, -10, 10);
+    const FacetIndex index(world);
+    CHECK(whyNoStep(index, {0, 0, 0}, {1, 0}).empty());
+    const std::string blocked = whyNoStep(index, {4.6f, 0, 0}, {5.6f, 0});
+    CHECK(blocked.rfind("blocked by a building", 0) == 0);
+    CHECK(whyNoStep(index, {0, 0, 0}, {500, 500}) == "no ground");
+    WalkLimits stuckBefore;
+    stuckBefore.avoid.push_back({1, 0, 0});
+    CHECK(whyNoStep(index, {0.5f, 0, 0}, {1, 0}, stuckBefore) == "a place stuck at before");
+}

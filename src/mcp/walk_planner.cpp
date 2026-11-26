@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <queue>
 
 namespace wowee::mcp {
@@ -150,6 +151,64 @@ bool FacetIndex::clear(const glm::vec3& feet, const glm::vec3& to, float bodyRad
         }
     }
     return true;
+}
+
+std::string FacetIndex::blockedBy(const glm::vec3& feet, const glm::vec3& to, float bodyRadius,
+                                  float bodyHeight) const {
+    thread_local std::vector<probe::Facet> some;
+    const glm::vec2 a(feet);
+    const glm::vec2 b(to);
+    const float length = glm::length(b - a);
+    if (length < 1e-3f) return {};
+    const glm::vec2 dir = (b - a) / length;
+    const glm::vec2 side(-dir.y, dir.x);
+    gather(glm::min(a, b) - glm::vec2(bodyRadius), glm::max(a, b) + glm::vec2(bodyRadius), some);
+    std::vector<float> heights{kKnee, kChest};
+    for (float height = kChest + 0.8f; height < bodyHeight; height += 0.8f) heights.push_back(height);
+    for (const float lateral : {0.0f, bodyRadius, -bodyRadius}) {
+        for (const float height : heights) {
+            const glm::vec3 from(a + side * lateral, feet.z + height);
+            const auto hit = probe::castRay(some, from, glm::vec3(dir, 0.0f), length + bodyRadius * 0.5f);
+            if (hit && hit->normal.z < kWalkable) {
+                const char* what = hit->kind == probe::Facet::Kind::Ground     ? "ground"
+                                   : hit->kind == probe::Facet::Kind::Building ? "building"
+                                   : hit->kind == probe::Facet::Kind::Doodad   ? "doodad"
+                                                                               : "face";
+                char text[128];
+                std::snprintf(text, sizeof text, "blocked by a %s (owner %u) at %.1f yd high, %.1f yd aside, %.2f yd ahead",
+                              what, static_cast<unsigned>(hit->owner), height, lateral, hit->distance);
+                return text;
+            }
+        }
+    }
+    return {};
+}
+
+std::string whyNoStep(const FacetIndex& world, const glm::vec3& a, const glm::vec2& b, const WalkLimits& limits) {
+    char text[96];
+    const auto ground = world.groundAt(b.x, b.y, a.z, limits.climb);
+    if (!ground) return "no ground";
+    const float rise = ground->z - a.z;
+    if (rise > limits.climb) {
+        std::snprintf(text, sizeof text, "rises %.1f yd", rise);
+        return text;
+    }
+    if (-rise > limits.drop) {
+        std::snprintf(text, sizeof text, "drops %.1f yd", -rise);
+        return text;
+    }
+    if (rise > 0.3f && std::cos(ground->slopeDegrees / kDegrees) < kWalkable) {
+        std::snprintf(text, sizeof text, "too steep (%.0f degrees)", ground->slopeDegrees);
+        return text;
+    }
+    const glm::vec3 landed(b, ground->z);
+    for (const auto& p : limits.avoid) {
+        if (std::fabs(p.z - landed.z) < 3.0f && flat(p, landed) < limits.avoidRadius && flat(p, landed) < flat(p, a)) {
+            return "a place stuck at before";
+        }
+    }
+    const glm::vec3 feet(a.x, a.y, std::max(a.z, ground->z - 0.2f));
+    return world.blockedBy(feet, glm::vec3(b, feet.z), limits.bodyRadius, limits.bodyHeight);
 }
 
 WalkPlan planWalk(const FacetIndex& world, const glm::vec3& from, const glm::vec3& to, const WalkLimits& limits) {

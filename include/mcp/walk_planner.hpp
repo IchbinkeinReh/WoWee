@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -52,6 +53,11 @@ public:
     /// to the head.
     [[nodiscard]] bool clear(const glm::vec3& feet, const glm::vec3& to, float bodyRadius, float bodyHeight) const;
     [[nodiscard]] bool empty() const { return facets_.empty(); }
+    [[nodiscard]] size_t size() const { return facets_.size(); }
+    /// Why clear() says no: the height over the feet and the side offset of
+    /// the first ray that meets a face too steep to walk. Empty when clear.
+    [[nodiscard]] std::string blockedBy(const glm::vec3& feet, const glm::vec3& to, float bodyRadius,
+                                        float bodyHeight) const;
 
 private:
     [[nodiscard]] int64_t key(int cx, int cy) const;
@@ -63,6 +69,13 @@ private:
 };
 
 WalkPlan planWalk(const FacetIndex& world, const glm::vec3& from, const glm::vec3& to, const WalkLimits& limits = {});
+
+/// Why one step of the planner from `a` to the ground at `b` is not taken -
+/// no ground, a rise or drop past the limits, too steep, a place to avoid,
+/// blocked at a height - for the path tool to say where a plan that looked
+/// at one place stops. Empty when the step is open.
+std::string whyNoStep(const FacetIndex& world, const glm::vec3& a, const glm::vec2& b,
+                      const WalkLimits& limits = {});
 
 /// From tools_terrain.cpp, on the game's thread: the faces in reach gathered
 /// and the way planned, and the faces in a box round a place.
