@@ -2522,6 +2522,37 @@ TEST_CASE("the realm's time zone comes with its time", "[replay][interface]") {
     CHECK(gh.holidayZoneShift() == 0);
 }
 
+// 12340 has no LibStub and no CallbackHandler-1.0 (no such string in
+// wow.exe): an addon's own copies register. A built-in CallbackHandler of
+// minor 7 refused the embedded one (Ace3 of 3.3.5: minor 6) and never called
+// OnUsed, so AceEvent-3.0 registered no event.
+TEST_CASE("an addon's own LibStub libraries register", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("rawget(_G, 'LibStub') == nil"));
+    // LibStub.lua as Ace3 ships it (minor 2), then a library of minor 6.
+    ui.run("local LIBSTUB_MAJOR, LIBSTUB_MINOR = 'LibStub', 2 "
+           "local LibStub = _G[LIBSTUB_MAJOR] "
+           "if not LibStub or LibStub.minor < LIBSTUB_MINOR then "
+           "  LibStub = LibStub or {libs = {}, minors = {}} "
+           "  _G[LIBSTUB_MAJOR] = LibStub LibStub.minor = LIBSTUB_MINOR "
+           "  function LibStub:NewLibrary(major, minor) "
+           "    minor = assert(tonumber(strmatch(minor, '%d+')), 'Minor version must either be a number or contain a number.') "
+           "    local oldminor = self.minors[major] "
+           "    if oldminor and oldminor >= minor then return nil end "
+           "    self.minors[major], self.libs[major] = minor, self.libs[major] or {} "
+           "    return self.libs[major], oldminor end "
+           "  function LibStub:GetLibrary(major, silent) "
+           "    if not self.libs[major] and not silent then error('no ' .. tostring(major), 2) end "
+           "    return self.libs[major], self.minors[major] end "
+           "  setmetatable(LibStub, { __call = LibStub.GetLibrary }) "
+           "end "
+           "ownCbh = LibStub:NewLibrary('CallbackHandler-1.0', 6)");
+    CHECK(ui.is("ownCbh ~= nil"));
+    CHECK(ui.is("LibStub('CallbackHandler-1.0') == ownCbh"));
+}
+
 // SMSG_GAMESPEED_SET (0x007e2840) is one float, the clock's speed
 // (0x0076cfa0); the time of day stays. It was read as a packed time and a
 // float, so the realm's 4-byte packet changed nothing.
