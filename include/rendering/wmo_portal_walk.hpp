@@ -287,6 +287,21 @@ inline std::vector<std::optional<Rect>> groupsSeen(const Building& b, std::span<
     return seen;
 }
 
+/// Whether a camera no room was found for is taken for inside a building
+/// the walk cannot start from (its room doodads then all drawn, rather than
+/// a room emptied around it): only in a room's box, in no box of the
+/// building's outside, and with nothing under it at all - no face of any
+/// building and no ground. With a face or the ground under it the camera's
+/// group is that face's (0x007d59b0), and the building is seen from outside
+/// (0x007ad350). V457: at the Ruins of Lordaeron the camera stands in the
+/// box of UNDERCITY.WMO's group 7 (a room under the sky, 0x2040) over
+/// ground that is not that group's, and the chandelier of group 96 deep
+/// below - which no portal shows from there, nor from group 7 - hung its
+/// chain up into the courtyard.
+inline bool insideUnwalkable(bool inRoomBox, bool inOutsideBox, bool anythingBelow) {
+    return inRoomBox && !inOutsideBox && !anythingBelow;
+}
+
 /// Whether a building's doodad is drawn: the client draws a doodad with the
 /// groups whose MODR lists it (0x007ac060 walks a group, its doodads with
 /// it), so a room's doodad only where that room is seen and, within the

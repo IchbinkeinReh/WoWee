@@ -1339,6 +1339,9 @@ void WMORenderer::updateRoomDoodads(const Camera& camera) {
     frustum.extractFromMatrix(viewProj);
     std::vector<CameraRoom> rooms;
     bool roomsKnown = false;
+    // Whether any building's face or the ground is under the camera
+    // (wmo_portal_walk::insideUnwalkable), asked once when first needed.
+    bool belowKnown = false, anythingBelow = false;
     std::vector<uint32_t> starts;
     for (size_t ii = 0; ii < instances.size(); ++ii) {
         WMOInstance& inst = instances[ii];
@@ -1366,9 +1369,10 @@ void WMORenderer::updateRoomDoodads(const Camera& camera) {
                 starts = room->groups;
             } else {
                 // A camera in a room's box and in no box of the outside, with
-                // no room found under it, is taken for inside somewhere the
-                // walk cannot start from: its doodads all drawn, as before,
-                // rather than a room emptied around the camera.
+                // nothing at all under it - no building's face, no ground - is
+                // taken for inside somewhere the walk cannot start from: its
+                // doodads all drawn, as before, rather than a room emptied
+                // around the camera. Over another floor it is outside (V457).
                 bool inRoomBox = false, inOutsideBox = false;
                 for (const auto& g : model->groups) {
                     if (localEye.x < g.boundingBoxMin.x || localEye.x > g.boundingBoxMax.x ||
@@ -1379,7 +1383,14 @@ void WMORenderer::updateRoomDoodads(const Camera& camera) {
                                            ? model->portalWalkFlags[g.groupIndex] : 0u;
                     ((f & wmo_portal_walk::kExterior) != 0 ? inOutsideBox : inRoomBox) = true;
                 }
-                if (inRoomBox && !inOutsideBox) cull = false;
+                if (!belowKnown) {
+                    belowKnown = true;
+                    anythingBelow = cameraGround_ && *cameraGround_ < camPos.z;
+                    for (const FaceBelow& f : facesBelowCamera(camPos, cameraGround_)) {
+                        if (f.instance) anythingBelow = true;
+                    }
+                }
+                if (wmo_portal_walk::insideUnwalkable(inRoomBox, inOutsideBox, anythingBelow)) cull = false;
                 // From outside: in from each of its outside's groups in view.
                 for (size_t gi = 0; gi < model->groups.size(); ++gi) {
                     const uint32_t number = model->groups[gi].groupIndex;

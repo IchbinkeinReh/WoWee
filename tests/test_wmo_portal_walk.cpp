@@ -5,7 +5,9 @@
 #include "rendering/frustum.hpp"
 #include "rendering/wmo_portal_walk.hpp"
 
+
 #include <catch_amalgamated.hpp>
+#include "test_support.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
@@ -354,4 +356,29 @@ TEST_CASE("a doodad is drawn with a group of its own that is seen", "[wmo_portal
     CHECK(walk::doodadSeen(shell, inn.flags, seen, nowhere));
     CHECK(walk::doodadSeen(none, inn.flags, seen, nowhere));
     CHECK(walk::doodadSeen(unknown, inn.flags, seen, nowhere));
+}
+
+TEST_CASE("a camera over another floor is outside the building whose room box it is in (V457)", "[wmo_portal]") {
+    // The Ruins of Lordaeron: the camera in the box of UNDERCITY.WMO's group
+    // 7 (0x2040, a room under the sky), over ground that is not the group's.
+    // 0x007d59b0 takes the camera's group from the face under it, so
+    // Undercity is seen from outside (0x007ad350), and group 96's chandelier,
+    // which no portal shows, is not drawn.
+    using wowee::rendering::wmo_portal_walk::insideUnwalkable;
+    CHECK_FALSE(insideUnwalkable(true, false, true));
+    // Only with nothing under the camera at all is a room's box taken for
+    // inside: its doodads all drawn rather than a room emptied.
+    CHECK(insideUnwalkable(true, false, false));
+    CHECK_FALSE(insideUnwalkable(true, true, false));
+    CHECK_FALSE(insideUnwalkable(false, false, false));
+}
+
+TEST_CASE("the room doodads take a camera over a floor for outside (V457)", "[wmo_portal]") {
+    const std::string wmo = wowee::test::slurp("src/rendering/wmo_renderer.cpp");
+    REQUIRE_FALSE(wmo.empty());
+    const size_t from = wmo.find("void WMORenderer::updateRoomDoodads(");
+    REQUIRE(from != std::string::npos);
+    const std::string body = wmo.substr(from, wmo.find("size_t WMORenderer::instanceDoodadCount(", from) - from);
+    CHECK(body.find("insideUnwalkable(inRoomBox, inOutsideBox, anythingBelow)") != std::string::npos);
+    CHECK(body.find("if (inRoomBox && !inOutsideBox) cull = false;") == std::string::npos);
 }
