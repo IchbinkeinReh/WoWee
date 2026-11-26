@@ -35,19 +35,26 @@ bool ModelFrameView::ensureSize(pipeline::AssetManager* assets, int width, int h
     assets_ = assets;
     width = std::clamp(width, 8, 1024);
     height = std::clamp(height, 8, 1024);
-    if (target_ && width == width_ && height == height_) return true;
+    // The same size and the renderer there: nothing to do. With the renderer
+    // still being made beside the frames, the target stays and the renderer
+    // is asked for again below - returning here left it never taken, so a
+    // model frame of a file (the map arrows, T360) showed nothing for ever.
+    const bool sameTarget = target_ && width == width_ && height == height_;
+    if (sameTarget && m2_) return true;
     auto* renderer = core::Application::getInstance().getRenderer();
     vkCtx_ = renderer ? renderer->getVkContext() : nullptr;
     if (!vkCtx_ || !renderer->getPerFrameSetLayout()) return false;
-    if (target_) {
-        // A renderer being made was given the target's pass: taken first.
-        if (m2Building_.started() && !m2_) m2_ = m2Building_.take(true);
-        ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
-        destroyTarget();
+    if (!sameTarget) {
+        if (target_) {
+            // A renderer being made was given the target's pass: taken first.
+            if (m2Building_.started() && !m2_) m2_ = m2Building_.take(true);
+            ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
+            destroyTarget();
+        }
+        if (!createTarget(width, height)) return false;
+        width_ = width;
+        height_ = height;
     }
-    if (!createTarget(width, height)) return false;
-    width_ = width;
-    height_ = height;
     if (!m2_) {
         // Made beside the frames (BuiltBeside); the frame shows nothing till
         // it is there and asks again each frame.

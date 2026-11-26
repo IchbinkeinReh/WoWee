@@ -7495,6 +7495,10 @@ void Application::render() {
                         const int ph = static_cast<int>(viewH * uiScale + 0.5f);
                         if (!view->ensureSize(assetManager.get(), pw, ph) || !view->setModel(frame->modelFile, frame->modelIconTexture)) {
                             frame->externalTexture = 0;
+                            // Kept while its renderer is made beside the frames
+                            // (or its model will not load): let go, it was made
+                            // anew each frame and never got there (T360).
+                            shown.insert(id);
                             continue;
                         }
                         rendering::model_frame::Pose pose;
