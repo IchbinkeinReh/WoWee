@@ -7570,6 +7570,10 @@ rt_memory::Snapshot Renderer::memorySnapshot() const {
     const auto& mon = core::MemoryMonitor::getInstance();
     s.ramTotal = mon.getTotalRAM();
     s.ramAvailable = mon.getAvailableRAM();
+#ifdef WOWEE_IOS
+    // os_proc_available_memory: the app's own headroom (MemoryMonitor).
+    s.ramIsAppHeadroom = true;
+#endif
     s.systemLow = secondsNow() - systemLowAt_ < 30.0;
     static const uint64_t fakeGpuFree = envMiB("WOWEE_FAKE_GPU_FREE_MB");
     static const uint64_t fakeAvail = envMiB("WOWEE_FAKE_AVAIL_MB");
@@ -7627,6 +7631,7 @@ void Renderer::rtMemoryGuard() {
             r.reason = v.what == Short::Gpu ? Reason::GpuBudget : Reason::RamShort;
             r.needed = v.needed;
             r.available = v.available;
+            r.reserve = v.reserve;
             refuseRt(r);
         }
         return;

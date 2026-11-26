@@ -47,7 +47,9 @@ TEST_CASE("on shared memory the GPU's share comes out of the RAM", "[rt_memory]"
     const Verdict w = judgeEnable(s, n);
     CHECK(w.what == Short::Ram);
     CHECK(w.needed == 650 * kMiB);
-    CHECK(w.available == 1600 * kMiB);
+    // What was compared: the RAM above the reserve, and the reserve beside it.
+    CHECK(w.available == 576 * kMiB);
+    CHECK(w.reserve == 1024 * kMiB);
 }
 
 TEST_CASE("the system saying it is short refuses and offers", "[rt_memory]") {
@@ -62,6 +64,51 @@ TEST_CASE("the system saying it is short refuses and offers", "[rt_memory]") {
     s.ramAvailable = 400 * kMiB;  // under half the 1024 reserved
     CHECK(ramCritical(s));
     CHECK(ramReserve(1024 * kMiB) == 256 * kMiB);
+    CHECK(ramReserve(65536 * kMiB) == 1024 * kMiB);  // an eighth, but never over a gigabyte
+}
+
+// U11: on iOS what is available is the app's own headroom before the system
+// ends it (os_proc_available_memory); the system's eighth of a 12 GB phone
+// taken off it again refused every switch-on. Only a small margin is kept.
+TEST_CASE("an app's own headroom keeps a margin, not the system's reserve", "[rt_memory]") {
+    Snapshot s;
+    s.unified = true;
+    s.ramTotal = 11722 * kMiB;
+    s.ramAvailable = 691 * kMiB;
+    s.ramIsAppHeadroom = true;
+    Need n;
+    n.gpu = 213 * kMiB;
+    n.ram = 50 * kMiB;  // the user's 263 MB
+    CHECK(judgeEnable(s, n).what == Short::None);
+    CHECK(usableRam(s) == 691 * kMiB - kAppHeadroomMargin);
+    CHECK_FALSE(ramCritical(s));
+    n.gpu = 600 * kMiB;
+    const Verdict v = judgeEnable(s, n);
+    CHECK(v.what == Short::Ram);
+    CHECK(v.available == 691 * kMiB - kAppHeadroomMargin);
+    CHECK(v.reserve == kAppHeadroomMargin);
+    s.ramAvailable = 100 * kMiB;
+    CHECK(ramCritical(s));
+    // The same numbers as the system's free RAM keep the system's reserve.
+    s.ramIsAppHeadroom = false;
+    s.ramAvailable = 691 * kMiB;
+    n.gpu = 213 * kMiB;
+    CHECK(judgeEnable(s, n).what == Short::Ram);
+}
+
+TEST_CASE("the refusal says what could be used and what was kept free", "[rt_memory]") {
+    Refusal r;
+    r.reason = Reason::RamShort;
+    r.needed = 263 * kMiB;
+    r.available = 531 * kMiB;
+    r.reserve = 160 * kMiB;
+    const std::string de = message(r, true);
+    CHECK(de.find("263 MB") != std::string::npos);
+    CHECK(de.find("nutzbar 531 MB") != std::string::npos);
+    CHECK(de.find("160 MB") != std::string::npos);
+    const std::string en = message(r, false);
+    CHECK(en.find("531 MB can be used") != std::string::npos);
+    CHECK(en.find("160 MB are kept free") != std::string::npos);
 }
 
 TEST_CASE("the dialog says what ran out and how much, in German for deDE", "[rt_memory]") {

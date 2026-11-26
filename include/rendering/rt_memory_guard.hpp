@@ -29,6 +29,12 @@ struct Snapshot {
     /// The system's RAM: what is available to take, and all of it.
     uint64_t ramAvailable = 0;
     uint64_t ramTotal = 0;
+    /// ramAvailable is this app's own headroom before the system ends it
+    /// (iOS: os_proc_available_memory), not the system's free RAM. The
+    /// system's reserve is then already taken off by the system, and taking
+    /// an eighth of the device's RAM off it again refused everything (U11:
+    /// 263 MB asked of 691 MB headroom on a 12 GB phone).
+    bool ramIsAppHeadroom = false;
     /// The device-local memory is the system's RAM (an integrated GPU, every
     /// phone): what the tracing takes on the GPU it takes from the RAM.
     bool unified = false;
@@ -60,16 +66,36 @@ inline Need estimate(uint64_t triangles, uint32_t width, uint32_t height, uint32
     return n;
 }
 
-/// What must stay free of the system's RAM: an eighth of it, and never under
-/// 256 MB - below that a phone's system starts ending apps.
-inline uint64_t ramReserve(uint64_t ramTotal) { return std::max<uint64_t>(256 * kMiB, ramTotal / 8); }
+/// What must stay free of the system's RAM: an eighth of it, never under
+/// 256 MB - below that a phone's system starts ending apps - and never over
+/// 1 GB, which leaves a large machine more than any frame takes at once.
+inline uint64_t ramReserve(uint64_t ramTotal) {
+    return std::clamp<uint64_t>(ramTotal / 8, 256 * kMiB, 1024 * kMiB);
+}
+
+/// What is kept of an app's own headroom (ramIsAppHeadroom): the streaming's
+/// and a frame's allocations beside the tracing's, which come and go by tens
+/// of megabytes.
+inline constexpr uint64_t kAppHeadroomMargin = 160 * kMiB;
+
+/// What stays untouched of what the snapshot calls available.
+inline uint64_t reserveOf(const Snapshot& s) {
+    return s.ramIsAppHeadroom ? kAppHeadroomMargin : ramReserve(s.ramTotal);
+}
+
+/// What of the available RAM may be taken.
+inline uint64_t usableRam(const Snapshot& s) {
+    const uint64_t reserve = reserveOf(s);
+    return s.ramAvailable > reserve ? s.ramAvailable - reserve : 0;
+}
 
 enum class Short { None, Gpu, Ram };
 
 struct Verdict {
     Short what = Short::None;
     uint64_t needed = 0;     ///< bytes the tracing would take of what ran short
-    uint64_t available = 0;  ///< bytes there were of it
+    uint64_t available = 0;  ///< bytes of it that could be taken: what `needed` was compared with
+    uint64_t reserve = 0;    ///< bytes kept free beside that (RAM only)
 };
 
 /// Whether switching the tracing on fits.
@@ -78,11 +104,10 @@ inline Verdict judgeEnable(const Snapshot& s, const Need& n) {
         const uint64_t free = s.gpuBudget > s.gpuUsage ? s.gpuBudget - s.gpuUsage : 0;
         if (n.gpu > free) return {Short::Gpu, n.gpu, free};
     }
-    if (s.ramTotal > 0) {
+    if (s.ramTotal > 0 || s.ramIsAppHeadroom) {
         const uint64_t take = n.ram + (s.unified ? n.gpu : 0);
-        const uint64_t reserve = ramReserve(s.ramTotal);
-        const uint64_t free = s.ramAvailable > reserve ? s.ramAvailable - reserve : 0;
-        if (s.systemLow || take > free) return {Short::Ram, take, s.ramAvailable};
+        const uint64_t free = usableRam(s);
+        if (s.systemLow || take > free) return {Short::Ram, take, free, reserveOf(s)};
     }
     return {};
 }
@@ -91,6 +116,7 @@ inline Verdict judgeEnable(const Snapshot& s, const Need& n) {
 /// to switch it off: the system says so, or under half the reserve is left.
 inline bool ramCritical(const Snapshot& s) {
     if (s.systemLow) return true;
+    if (s.ramIsAppHeadroom) return s.ramAvailable < kAppHeadroomMargin;
     if (s.ramTotal == 0) return false;
     return s.ramAvailable < ramReserve(s.ramTotal) / 2;
 }
@@ -109,6 +135,8 @@ struct Refusal {
     Reason reason = Reason::GpuBudget;
     uint64_t needed = 0;
     uint64_t available = 0;
+    /// RamShort: what was kept free beside `available` (said in the text).
+    uint64_t reserve = 0;
     /// The tracing was switched off already (and saved so); otherwise the
     /// dialog offers to.
     bool switchedOff = true;
@@ -125,7 +153,9 @@ inline std::string message(const Refusal& r, bool german) {
                        " MB, verf\xC3\xBCgbar " + have + " MB. Raytracing wurde ausgeschaltet.";
             case Reason::RamShort:
                 return "Nicht genug Arbeitsspeicher f\xC3\xBCr Raytracing: ben\xC3\xB6tigt etwa " + need +
-                       " MB, verf\xC3\xBCgbar " + have + " MB. Raytracing wurde ausgeschaltet.";
+                       " MB, nutzbar " + have + " MB" +
+                       (r.reserve > 0 ? " (" + mb(r.reserve) + " MB bleiben dem System frei)" : std::string()) +
+                       ". Raytracing wurde ausgeschaltet.";
             case Reason::OutOfDeviceMemory:
                 return "Der Grafikspeicher ist voll (eine Anforderung von " + need +
                        " MB schlug fehl). Raytracing wurde ausgeschaltet.";
@@ -147,7 +177,9 @@ inline std::string message(const Refusal& r, bool german) {
                    " MB are available. Ray tracing has been turned off.";
         case Reason::RamShort:
             return "Not enough system memory for ray tracing: it needs about " + need + " MB and " + have +
-                   " MB are available. Ray tracing has been turned off.";
+                   " MB can be used" +
+                   (r.reserve > 0 ? " (" + mb(r.reserve) + " MB are kept free for the system)" : std::string()) +
+                   ". Ray tracing has been turned off.";
         case Reason::OutOfDeviceMemory:
             return "Graphics memory ran out (a request for " + need +
                    " MB failed). Ray tracing has been turned off.";
