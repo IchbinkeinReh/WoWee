@@ -2387,3 +2387,34 @@ TEST_CASE("a pet can be renamed while its own field says so", "[replay][interfac
     CHECK(ui.is("PetCanBeRenamed() == nil"));
 }
 
+// T354: UnitName (0x0060e740) names an object that is not a unit by its kind
+// - an item by its item record, a game object by its own name - before it
+// says UNKNOWNOBJECT. A quest an item starts names the item as "questnpc", and
+// the quest frame's title said "Unbekannt".
+TEST_CASE("an item or a game object a token names is called by its name", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    constexpr uint64_t kSkin = 0x40000000003BC2A0ull;
+    auto& info = s.handler().itemInfoCacheRef()[20310];
+    info.entry = 20310;
+    info.valid = true;
+    info.name = "Geschundene Daemonenhaut";
+    s.receive(UpdateObject().create(kSkin, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 20310}, {UF::ITEM_FIELD_STACK_COUNT, 1}}));
+    // The quest it starts, offered by the item (PlayerMenu::SendQuestGiverQuestDetails).
+    wowee::network::Packet details(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_DETAILS));
+    details.writeUInt64(kSkin);
+    details.writeUInt64(0);
+    details.writeUInt32(7583);
+    details.writeString("Der Verderber");
+    details.writeString("Details.");
+    details.writeString("Objectives.");
+    details.writeUInt8(0);
+    for (int i = 0; i < 2; ++i) details.writeUInt32(0);
+    details.writeUInt8(0);
+    for (int i = 0; i < 40; ++i) details.writeUInt32(0);
+    s.receive(details);
+    REQUIRE(ui.is("UnitGUID('questnpc') ~= nil"));
+    CHECK(ui.is("UnitName('questnpc') == 'Geschundene Daemonenhaut'"));
+}

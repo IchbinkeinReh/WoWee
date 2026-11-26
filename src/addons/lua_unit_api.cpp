@@ -28,6 +28,23 @@
 
 namespace wowee::addons {
 
+/// The name of an object that is not a unit, as 0x0060e740 finds it: an item
+/// or a bag by its item record, a game object by its own; empty where it has
+/// none yet or the object is not known.
+static std::string objectName(game::GameHandler* gh, uint64_t guid) {
+    const auto object = gh->getEntityManager().getEntity(guid);
+    if (!object) return {};
+    if (object->getType() == game::ObjectType::ITEM || object->getType() == game::ObjectType::CONTAINER) {
+        const uint16_t entryField = game::fieldIndex(game::UF::OBJECT_FIELD_ENTRY);
+        const uint32_t entry = entryField != 0xFFFF ? object->getField(entryField) : 0;
+        const auto* info = entry ? gh->getItemInfo(entry) : nullptr;
+        return info && info->valid ? info->name : std::string{};
+    }
+    if (object->getType() == game::ObjectType::GAMEOBJECT)
+        return std::static_pointer_cast<game::GameObject>(object)->getName();
+    return {};
+}
+
 // UnitName(unit): the name and the realm (0x0060e740). A token that names
 // nothing - "target" with no target - is nil and nil; a unit whose name the
 // client does not know yet is UNKNOWNOBJECT. It said "Unknown" to both, so an
@@ -78,6 +95,13 @@ static int lua_UnitName(lua_State* L) {
                         if (c.guid == guid) { own = c.name; break; }
                     }
                 }
+                // An object that is not a unit is named by its kind
+                // (0x0060e740, by the type mask at +8 of its fields): an item
+                // by its item record (0x0067ca30 -> 0x004fd200), a game object
+                // by its own (0x0070cdf0). "questnpc" of a quest an item or a
+                // poster starts is that object, and QuestFrame's title said
+                // "Unbekannt" (T354).
+                if (own.empty()) own = objectName(gh, guid);
                 if (own.empty()) {
                     lua_pushstring(L, game::interfaceString("UNKNOWNOBJECT", "Unknown").c_str());
                 } else {
