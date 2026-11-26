@@ -1852,6 +1852,19 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         luaSvc.isPlayerIndoors = [r = renderer.get()]() -> bool {
             return r && r->isPlayerIndoors();
         };
+        // Minimap:GetZoom/SetZoom on the map's own levels (0x007f3b40,
+        // 0x007f3ae0; V458).
+        luaSvc.minimapZoom = [r = renderer.get()]() -> int {
+            const auto* map = r ? r->getMinimap() : nullptr;
+            return map ? map->getZoomLevel() : -1;
+        };
+        luaSvc.minimapIndoors = [r = renderer.get()]() -> bool {
+            const auto* map = r ? r->getMinimap() : nullptr;
+            return map && map->isIndoors();
+        };
+        luaSvc.setMinimapZoom = [r = renderer.get()](int level) {
+            if (auto* map = r ? r->getMinimap() : nullptr) map->setZoomLevel(level);
+        };
         luaSvc.getFullscreen = [uim = uiManager.get()]() -> bool {
             return uim ? uim->getGameScreen().getFullscreen() : false;
         };

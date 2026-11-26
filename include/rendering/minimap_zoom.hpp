@@ -46,8 +46,11 @@ constexpr float radius(int level, bool indoors = false) {
 /// frame anew. So the frame takes the map's level when the map changes over
 /// - or when the frame does not know which map it is on, as one made anew
 /// does not - and the levels the CVars kept (read back at start, 0x007f4f60's
-/// area) go each to its own map once that map is in use; after that the
-/// frame's own SetZoom moves the map. `mapLevel` is the map's level in use,
+/// area) go each to its own map once that map is in use. The frame then
+/// takes the map's level: Minimap:SetZoom sets the map's level in use itself
+/// (0x007f3ae0) and GetZoom reads it (0x007f3b40), so a level the frame kept
+/// never moves the map (V458: Orgrimmar's outdoor map was left at the indoor
+/// level the frame still held). `mapLevel` is the map's level in use,
 /// changed in place. True when MINIMAP_UPDATE_ZOOM is due (0x007f5ba0).
 struct FrameZoom {
     int& level;          ///< the frame's level (GetZoom)
@@ -70,7 +73,7 @@ inline bool syncFrame(FrameZoom frame, bool& wasIndoors, bool mapIndoors, int& m
         frame.level = mapLevel;
         due = true;
     }
-    if (frame.level != mapLevel) mapLevel = clampLevel(frame.level);
+    frame.level = mapLevel;
     return due;
 }
 

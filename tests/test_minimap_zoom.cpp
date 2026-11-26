@@ -80,12 +80,24 @@ TEST_CASE("a login indoors takes the saved indoor level, however late it comes (
     CHECK(f.level == 2);
 }
 
-TEST_CASE("the frame's own SetZoom moves the map in use", "[minimap_zoom]") {
+TEST_CASE("the frame takes the map's level, never the other way (V458)", "[minimap_zoom]") {
+    // Minimap:SetZoom sets the map's level in use itself (0x007f3ae0); the
+    // frame only follows it, so a level it still holds from the other map
+    // never moves this one.
     bool wasIndoors = false;
-    int mapLevel = 3;
+    int mapLevel = 5;  // the outdoor map, at 5
     Frame f;
-    f.level = 3;
-    f.level = 5;  // Minimap:SetZoom(5)
+    f.level = 4;  // left from the inn
     CHECK_FALSE(mz::syncFrame(f.zoom(), wasIndoors, false, mapLevel));
     CHECK(mapLevel == 5);
+    CHECK(f.level == 5);
+    // Into the inn and out again: each map keeps its own.
+    int insideLevel = 4;
+    CHECK(mz::syncFrame(f.zoom(), wasIndoors, true, insideLevel));
+    CHECK(f.level == 4);
+    CHECK(insideLevel == 4);
+    int outsideLevel = 5;
+    CHECK(mz::syncFrame(f.zoom(), wasIndoors, false, outsideLevel));
+    CHECK(f.level == 5);
+    CHECK(outsideLevel == 5);
 }

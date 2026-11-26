@@ -7543,6 +7543,13 @@ int lua_Minimap_SetZoom(lua_State* L) {
         // frame can be sent one, and a stray call on another frame must not be
         // what the minimap opens at next time.
         if (w->name == "Minimap") {
+            // The map's level in use itself (0x007f3ae0), not a copy on the
+            // frame that a frame loop hands on later (V458).
+            auto* svc = getLuaServices(L);
+            if (svc && svc->setMinimapZoom && svc->minimapIndoors) {
+                w->zoomIndoors = svc->minimapIndoors();
+                svc->setMinimapZoom(w->zoomLevel);
+            }
             setStoredCVar(rendering::minimap_zoom::cvarName(w->zoomIndoors), std::to_string(w->zoomLevel));
         }
     }
@@ -7550,6 +7557,14 @@ int lua_Minimap_SetZoom(lua_State* L) {
 }
 int lua_Minimap_GetZoom(lua_State* L) {
     const auto* w = widgetOf(L, 1);
+    // 0x007f3b40: the engine's level of the map in use.
+    if (w && w->name == "Minimap") {
+        auto* svc = getLuaServices(L);
+        if (const int level = svc && svc->minimapZoom ? svc->minimapZoom() : -1; level >= 0) {
+            lua_pushnumber(L, level);
+            return 1;
+        }
+    }
     lua_pushnumber(L, w ? w->zoomLevel : 0);
     return 1;
 }

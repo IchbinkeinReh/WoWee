@@ -324,6 +324,14 @@ struct LuaServices {
     /// stubbed, answering a flat false and a flat true. Two paths to the same
     /// question, and only one of them was ever improved.
     std::function<bool()> isPlayerIndoors;
+    /// The minimap's level in use, and setting it (V458). 0x007f3b40, GetZoom,
+    /// answers the engine's level of the map in use - outdoor 0x00af4e4c or
+    /// indoor 0x00af4e50 - and 0x007f3ae0, SetZoom, sets that one and its
+    /// CVar. When these are there the frame keeps no level of its own;
+    /// minimapZoom answers -1 while there is no map.
+    std::function<int()> minimapZoom;
+    std::function<bool()> minimapIndoors;
+    std::function<void(int)> setMinimapZoom;
 
     /// Load a load-on-demand addon by name, as LoadAddOn() does.
     ///
