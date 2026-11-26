@@ -304,6 +304,37 @@ uint32_t unitBodyFlags(const game::Entity& entity, bool moving, bool swimming, b
     return flags;
 }
 
+// The ground between `top` and `bottom` (render space) and its normal: the
+// highest of the terrain (its normal from two neighbouring heights), a WMO
+// floor and an M2 floor (taken as level). wowee keeps no movement ground
+// normal, so this stands in for 0x00987490's.
+std::optional<rendering::mount_transition::GroundHit> groundUnder(rendering::Renderer* renderer,
+                                                                  const glm::vec3& top, const glm::vec3& bottom) {
+    if (!renderer) return std::nullopt;
+    std::optional<float> best;
+    glm::vec3 normal(0.0f, 0.0f, 1.0f);
+    auto consider = [&](std::optional<float> z, const glm::vec3& n) {
+        if (z && *z <= top.z && *z >= bottom.z && (!best || *z > *best)) {
+            best = z;
+            normal = n;
+        }
+    };
+    if (auto* terrain = renderer->getTerrainManager()) {
+        const auto z = terrain->getHeightAt(top.x, top.y);
+        const auto zx = terrain->getHeightAt(top.x + 0.5f, top.y);
+        const auto zy = terrain->getHeightAt(top.x, top.y + 0.5f);
+        glm::vec3 n(0.0f, 0.0f, 1.0f);
+        if (z && zx && zy) n = glm::normalize(glm::vec3((*z - *zx) * 2.0f, (*z - *zy) * 2.0f, 1.0f));
+        consider(z, n);
+    }
+    if (auto* wmo = renderer->getWMORenderer()) consider(wmo->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
+    if (auto* m2 = renderer->getM2Renderer()) consider(m2->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
+    if (!best) return std::nullopt;
+    const float span = top.z - bottom.z;
+    return rendering::mount_transition::GroundHit{
+        .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
+}
+
 // Another unit's swimming or flying tilt (swim_pitch::otherUnit,
 // 0x00719a90): the pitch its last movement packet carried, while its flags
 // say forward or back.
@@ -4052,31 +4083,8 @@ void Application::connectSpellVisualHooks() {
                 entitySpawner_->getCreatureInstanceId(guid) != 0)
                 entitySpawner_->mountUnitNow(guid, displayId, player);
         });
-        svs->setGroundQuery([this](const glm::vec3& top, const glm::vec3& bottom)
-                                -> std::optional<rendering::mount_transition::GroundHit> {
-            if (!renderer) return std::nullopt;
-            std::optional<float> best;
-            glm::vec3 normal(0.0f, 0.0f, 1.0f);
-            auto consider = [&](std::optional<float> z, const glm::vec3& n) {
-                if (z && *z <= top.z && *z >= bottom.z && (!best || *z > *best)) {
-                    best = z;
-                    normal = n;
-                }
-            };
-            if (auto* terrain = renderer->getTerrainManager()) {
-                const auto z = terrain->getHeightAt(top.x, top.y);
-                const auto zx = terrain->getHeightAt(top.x + 0.5f, top.y);
-                const auto zy = terrain->getHeightAt(top.x, top.y + 0.5f);
-                glm::vec3 n(0.0f, 0.0f, 1.0f);
-                if (z && zx && zy) n = glm::normalize(glm::vec3((*z - *zx) * 2.0f, (*z - *zy) * 2.0f, 1.0f));
-                consider(z, n);
-            }
-            if (auto* wmo = renderer->getWMORenderer()) consider(wmo->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
-            if (auto* m2 = renderer->getM2Renderer()) consider(m2->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
-            if (!best) return std::nullopt;
-            const float span = top.z - bottom.z;
-            return rendering::mount_transition::GroundHit{
-                .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
+        svs->setGroundQuery([this](const glm::vec3& top, const glm::vec3& bottom) {
+            return groundUnder(renderer.get(), top, bottom);
         });
         // A transport's matrix, for a dynamic object riding it
         // (0x007132e0 -> 0x00704910).
@@ -6441,10 +6449,29 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             // Tilted by its pitch while it swims or flies forward or back
             // (swim_pitch::otherUnit, 0x00719a90): the model's own Y axis,
             // nose up positive, as the player's (Renderer).
-            const float unitTilt = unitSwimTilt(*gameHandler, *entity, guid,
-                                                _creatureSwimmingState.count(guid) > 0 ||
-                                                    _creatureFlyingState.count(guid) > 0);
-            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, -unitTilt, bodyYaw));
+            const bool swimsOrFlies = _creatureSwimmingState.count(guid) > 0 ||
+                                      _creatureFlyingState.count(guid) > 0;
+            const float unitTilt = unitSwimTilt(*gameHandler, *entity, guid, swimsOrFlies);
+            glm::vec3 unitRotation(0.0f, -unitTilt, bodyYaw);
+            // On the ground (0x0071fbf0 -> 0x007197d0, not swimming or
+            // flying): the ground normal it stands on eased into +0x9d8, the
+            // model tilted on it by its M2 global flags & 3 (0x0082dd80) -
+            // a catapult or demolisher (flags 0x1b) leans with the slope.
+            const pipeline::M2Model* unitModel = charRenderer->getInstanceModelData(instanceId);
+            if (!swimsOrFlies && !creatureMount && unitModel && (unitModel->globalFlags & 3u) != 0) {
+                auto& eased = entitySpawner_->getUnitGroundNormals();
+                const glm::vec3 feet = renderPos;
+                const glm::vec3 up(0.0f, 0.0f, 2.0f);
+                const auto known = eased.find(guid);
+                glm::vec3 normal = known != eased.end() ? known->second : glm::vec3(0.0f, 0.0f, 1.0f);
+                if (const auto hit = groundUnder(renderer.get(), feet + up, feet - up))
+                    normal = known != eased.end()
+                                 ? rendering::mount_transition::easeGroundNormal(normal, hit->normal, deltaTime)
+                                 : hit->normal;
+                eased[guid] = normal;
+                unitRotation = rendering::mount_transition::tiltedRotation(normal, bodyYaw, unitModel->globalFlags);
+            }
+            charRenderer->setInstanceRotation(instanceId, unitRotation);
             if (creatureMount)
                 charRenderer->setInstanceRotation(creatureMount->instanceId, glm::vec3(0.0f, -unitTilt, bodyYaw));
         }

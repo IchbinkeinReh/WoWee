@@ -589,6 +589,7 @@ void EntitySpawner::despawnPlayer(uint64_t guid) {
     onlinePlayerAppearance_.erase(guid);
     deadCreatureGuids_.erase(guid);
     creatureRenderPosCache_.erase(guid);
+    unitGroundNormals_.erase(guid);
     creatureSwimmingState_.erase(guid);
     creatureWalkingState_.erase(guid);
     creatureFlyingState_.erase(guid);

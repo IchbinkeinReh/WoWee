@@ -208,6 +208,7 @@ void EntitySpawner::shutdown() {
     creatureDisplayIds_.clear();
     requestedCreatureDisplayIds_.clear();
     creatureRenderPosCache_.clear();
+    unitGroundNormals_.clear();
     creatureWasMoving_.clear();
     unitBodies_.clear();
     creatureWasSwimming_.clear();
@@ -262,6 +263,7 @@ void EntitySpawner::resetAllState() {
     creatureDisplayIds_.clear();
     requestedCreatureDisplayIds_.clear();
     creatureRenderPosCache_.clear();
+    unitGroundNormals_.clear();
     playerInstances_.clear();
     onlinePlayerAppearance_.clear();
     remotePlayerMounts_.clear();
@@ -350,6 +352,7 @@ void EntitySpawner::rebuildLookups() {
     humanoidExtraMap_.clear();
     creatureModelIds_.clear();
     creatureRenderPosCache_.clear();
+    unitGroundNormals_.clear();
     nonRenderableCreatureDisplayIds_.clear();
     initialize();
 }

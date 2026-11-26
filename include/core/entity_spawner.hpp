@@ -659,6 +659,8 @@ public:
     std::unordered_map<uint64_t, uint32_t>& getCreatureModelIds() { return creatureModelIds_; }
     const std::unordered_map<uint64_t, uint32_t>& getCreatureDisplayIds() const { return creatureDisplayIds_; }
     std::unordered_map<uint64_t, glm::vec3>& getCreatureRenderPosCache() { return creatureRenderPosCache_; }
+    /// The unit's ground normal (+0x9d8), eased each frame (0x007197d0).
+    std::unordered_map<uint64_t, glm::vec3>& getUnitGroundNormals() { return unitGroundNormals_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasMoving() { return creatureWasMoving_; }
     /// A unit's drawn body behind its facing (FUN_0073dab0), for the
     /// instance it was turned for and the key bones that instance has.
@@ -1079,6 +1081,7 @@ private:
     // has not completed yet. This prevents an older queued display from winning.
     std::unordered_map<uint64_t, uint32_t> requestedCreatureDisplayIds_;
     std::unordered_map<uint64_t, glm::vec3> creatureRenderPosCache_; // guid → last synced render position
+    std::unordered_map<uint64_t, glm::vec3> unitGroundNormals_;      // guid → eased ground normal
     std::unordered_map<uint64_t, bool> creatureWasMoving_;
     std::unordered_map<uint64_t, UnitBody> unitBodies_;
     std::unordered_map<uint64_t, bool> creatureWasSwimming_;
