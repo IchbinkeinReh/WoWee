@@ -1939,16 +1939,52 @@ static int lua_GetItemCount(lua_State* L) {
     if (!gh) { return luaReturnZero(L); }
     const uint32_t itemId = itemIdFromArg(L, 1);
     const bool bank = luaClientSwitchArg(L, 2, false);
-    const bool withBroken = luaClientSwitchArg(L, 3, false);
-    uint32_t count = 0;
-    const auto add = [&](const game::ItemDef& d) {
-        if (d.itemId != itemId) return;
-        if (!withBroken && d.maxDurability != 0 && d.curDurability == 0) return;
-        count += d.stackCount > 0 ? d.stackCount : 1;
-    };
+    const bool withCharges = luaClientSwitchArg(L, 3, false);
     const auto& inv = gh->getInventory();
-    inv.forEachCarried(add);
-    if (bank) inv.forEachBanked(add);
+    // 0x00754d00 with 8 for the bank and 0x80, the charges switch, for a
+    // broken item too.
+    const auto countOf = [&](uint32_t id, bool withBank, bool withBroken) {
+        uint32_t n = 0;
+        const auto add = [&](const game::ItemDef& d) {
+            if (d.itemId != id) return;
+            if (!withBroken && d.maxDurability != 0 && d.curDurability == 0) return;
+            n += d.stackCount > 0 ? d.stackCount : 1;
+        };
+        inv.forEachCarried(add);
+        if (withBank) inv.forEachBanked(add);
+        return n;
+    };
+    uint32_t count = countOf(itemId, bank, withCharges);
+    // With the charges asked for, an item that does not stack (template +0x5c,
+    // the stack size, under 2) whose use spell spends charges counts them: the
+    // charges left on every one held (0x00754d50 over 0x00753f60) where its
+    // template's are below nought, and the casts its reagents allow
+    // (0x00801770 -> 0x007ffa30: the least of held / needed) where it has any.
+    const auto* info = count != 0 && withCharges ? gh->getItemInfo(itemId) : nullptr;
+    if (info && info->maxStack < 2) {
+        const auto use = std::find_if(info->spells.begin(), info->spells.end(),
+                                      [](const auto& s) { return s.spellId != 0 && s.spellTrigger == 0; });
+        if (use != info->spells.end()) {
+            if (use->charges < 0) {
+                uint32_t left = 0;
+                inv.forEachCarried([&](const game::ItemDef& d) {
+                    if (d.itemId != itemId || (d.maxDurability != 0 && d.curDurability == 0)) return;
+                    const int32_t c = gh->getItemSpellCharges(d.guid);
+                    left += static_cast<uint32_t>(c < 0 ? -c : c);
+                });
+                count = left;
+            }
+            gh->loadSpellNameCache();
+            if (const auto se = gh->spellNameCacheRef().find(use->spellId); se != gh->spellNameCacheRef().end()) {
+                uint32_t casts = 0x7fffffffu;
+                for (const auto& r : se->second.reagents) {
+                    if (r.itemId == 0 || r.itemId == 0xfffffffeu || static_cast<int32_t>(r.count) <= 0) continue;
+                    casts = std::min(casts, countOf(r.itemId, false, false) / r.count);
+                }
+                if (casts != 0x7fffffffu && casts != 0) count = casts;
+            }
+        }
+    }
     lua_pushnumber(L, count);
     return 1;
 }

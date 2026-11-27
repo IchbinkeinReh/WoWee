@@ -523,6 +523,46 @@ TEST_CASE("the item tooltip setters answer as the client's do", "[replay][interf
     CHECK(ui.is("not pcall(tip.SetGuildBankItem, tip, 'x', 1)"));
 }
 
+// 0x0051c2e0 with includeCharges: an item that does not stack counts the charges left on
+// it where its template's are below nought (0x00754d50), and then the casts its spell's
+// reagents allow (0x00801770 -> 0x007ffa30).
+TEST_CASE("GetItemCount with the charges counts charges and reagent casts", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    constexpr uint32_t kRod = 90001, kDust = 90002, kSpell = 90003;
+    answerItem(s, kRod, "Rod");
+    answerItem(s, kDust, "Dust");
+    auto& rod = s.handler().itemInfoCacheRef()[kRod];
+    rod.maxStack = 1;
+    rod.spells[0].spellId = kSpell;
+    rod.spells[0].spellTrigger = 0;
+    rod.spells[0].charges = -3;
+    for (int i = 0; i < 2; ++i) {
+        wowee::game::ItemDef item;
+        item.guid = 0x4000000000000900ull + static_cast<uint64_t>(i);
+        item.itemId = kRod;
+        item.stackCount = 1;
+        s.handler().getInventory().setBackpackSlot(i, item);
+        s.handler().onlineItemsRef()[item.guid].entry = kRod;
+        s.handler().onlineItemsRef()[item.guid].spellCharges0 = -2;
+    }
+    CHECK(ui.is("GetItemCount(90001) == 2"));
+    CHECK(ui.is("GetItemCount(90001, nil, true) == 4"));
+    // With reagents: five of two needed is two casts.
+    s.handler().spellNameCacheRef()[kSpell].reagents[0] = {kDust, 2};
+    wowee::game::ItemDef dust;
+    dust.guid = 0x4000000000000910ull;
+    dust.itemId = kDust;
+    dust.stackCount = 5;
+    s.handler().getInventory().setBackpackSlot(5, dust);
+    CHECK(ui.is("GetItemCount(90001, nil, true) == 2"));
+    CHECK(ui.is("GetItemCount(90001) == 2"));
+    // Too few for one: the count stays.
+    s.handler().spellNameCacheRef()[kSpell].reagents[0] = {kDust, 9};
+    CHECK(ui.is("GetItemCount(90001, nil, true) == 4"));
+}
+
 // T161: 0x006277f0, +0x480: what the item that is not traded would be enchanted with.
 TEST_CASE("an item in a trade says what it would be enchanted with", "[replay][interface]") {
     Session s;
@@ -1992,6 +2032,8 @@ TEST_CASE("the tracking that runs is drawn with its active icon", "[replay][inte
     aura(4, kMinerals);   // no active icon of its own
     CHECK(ui.is("GetTrackingTexture() == 'spell2580'"));
     CHECK(ui.is("select(2, GetTrackingInfo(1)) == 'spell2383'"));
+    // 0x0057f1b0 rounds the index: 1.6 is the second.
+    CHECK(ui.is("select(2, GetTrackingInfo(1.6)) == 'spell2580'"));
 }
 
 // T335, T336: what the companion tab lists and which one is out, as 12340 asks

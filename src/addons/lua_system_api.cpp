@@ -3883,13 +3883,16 @@ static int lua_GetNumTrackingTypes(lua_State* L) {
 /// carries it instead, under a name no interface will ever call.
 static int lua_GetTrackingInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    // 0x0057f1b0: the index rounded to the nearest.
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
     const auto spells = trackingSpells(gh);
     if (index >= 1 && index <= static_cast<int>(spells.size())) {
         const uint32_t sid = spells[static_cast<size_t>(index - 1)];
         const bool active = trackingActive(gh, sid);
         lua_pushstring(L, gh->getSpellName(sid).c_str());
-        lua_pushstring(L, trackingIcon(gh, sid, active).c_str());
+        // Nil for a SpellIcon row that is not there.
+        if (const std::string icon = trackingIcon(gh, sid, active); !icon.empty()) lua_pushstring(L, icon.c_str());
+        else lua_pushnil(L);
         luaPushOneOrNil(L, active ? 1 : 0);
         lua_pushstring(L, "spell");
         return 4;
@@ -3943,7 +3946,7 @@ static int lua_SetTracking(lua_State* L) {
         setOtherTracking(gh, -1);
         return 0;
     }
-    const int index = static_cast<int>(lua_tonumber(L, 1));
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));   // 0x0057f380 rounds
     if (index >= 1 && index <= static_cast<int>(spells.size())) {
         // 0x0057f380 -> 0x0080da40: a tracking spell's cast asks the taint
         // check like any other.
