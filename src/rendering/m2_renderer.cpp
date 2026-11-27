@@ -3047,6 +3047,25 @@ void M2Renderer::pushAlongParticles(const rt_lights::PointLight& light, const M2
     }
 }
 
+namespace {
+/// The lights pushed while it lives, from where it was made on, as one
+/// source's (PointLight::group), each with its place among them.
+struct SourceTag {
+    std::vector<rt_lights::PointLight>& out;
+    size_t first;
+    uint32_t group;
+    SourceTag(std::vector<rt_lights::PointLight>& lights, uint32_t g) : out(lights), first(lights.size()), group(g) {}
+    SourceTag(const SourceTag&) = delete;
+    SourceTag& operator=(const SourceTag&) = delete;
+    ~SourceTag() {
+        for (size_t k = first; k < out.size(); ++k) {
+            out[k].group = group;
+            out[k].groupPart = static_cast<uint32_t>(k - first);
+        }
+    }
+};
+}  // namespace
+
 void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                  std::vector<rt_lights::PointLight>& out) const {
     for (uint32_t id : rtLitInstances_) {
@@ -3055,6 +3074,9 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         const M2Instance& inst = instances[found->second];
         const M2ModelGPU* model = inst.cachedModel;
         if (!model) continue;
+        // Whatever lights this instance gives, one source (U21): the group
+        // and each one's place in it, set as the iteration ends.
+        const SourceTag tag(out, rt_lights::m2SourceGroup(inst.id));
         // The model's own reach plus what its lights could add to it.
         const float reach = range + model->boundRadius * inst.scale + 30.0f;
         const glm::vec3 d = inst.position - eye;
@@ -3114,7 +3136,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             // In the colour of its own flames (rt_fire_color.hpp), as strong as
             // what of them is drawn this moment (visibleFlameShare: the
             // twinkle's sizes; the user's answer to V417).
-            l.color *= fireTint(*model) * rt_lights::visibleFlameShare(model->particleEmitters, inst.particles);
+            l.flameShare = rt_lights::visibleFlameShare(model->particleEmitters, inst.particles);
+            l.color *= fireTint(*model) * l.flameShare;
             // At its flames where it has any (rt_lights::flameCentre).
             if (const auto flame = rt_lights::flameCentre(
                     model->particleEmitters,

@@ -61,6 +61,18 @@ struct PointLight {
     bool hasStorey = false;
     float storeyFloor = 0.0f;
     float storeyCeiling = 0.0f;
+    /// The source it is one of (U21): the lights one fire, torch or lamp
+    /// gives - a doodad's every light, at its flames' path and its glow -
+    /// share a group, which a crowded view brings down to fewer lights before
+    /// it drops any source (selectLights). 0: a source of its own.
+    uint32_t group = 0;
+    /// Its place among its source's lights, as the source gives them (the
+    /// first its strongest): what of a source stays a light of its own when
+    /// it is cut down, by an order that holds from frame to frame.
+    uint32_t groupPart = 0;
+    /// A fire's light: the share of its flames drawn this moment
+    /// (visibleFlameShare), for the diagnostics; below 0 for any other.
+    float flameShare = -1.0f;
 };
 
 /// What the shader reads per light (std430): position and end, colour and
@@ -159,21 +171,88 @@ inline size_t lightLimit(int requested) {
     return static_cast<size_t>(std::clamp(requested, kMinLightLimit, kMaxLightLimit));
 }
 
+/// The group of a doodad's lights (PointLight::group): its instance's id,
+/// never 0, apart from any other renderer's.
+[[nodiscard]] inline uint32_t m2SourceGroup(uint32_t instanceId) { return 0x80000000u | (instanceId & 0x7fffffffu); }
+
+/// Several lights of one source as one (U21, the user's request): their
+/// colours summed - the source's whole strength, in its flames' colour, which
+/// each part carries already - at their middle weighted by strength, as far
+/// and as wide as the farthest-reaching of them; baked, carried, kind and
+/// storey of the strongest. `parts` is never empty.
+inline PointLight mergedLight(const std::vector<const PointLight*>& parts) {
+    const auto strengthOf = [](const PointLight& l) { return std::max(l.color.r, std::max(l.color.g, l.color.b)); };
+    const PointLight* strongest = parts.front();
+    glm::vec3 color(0.0f), weighted(0.0f);
+    float weights = 0.0f, start = 0.0f, end = 0.0f;
+    for (const PointLight* p : parts) {
+        if (strengthOf(*p) > strengthOf(*strongest)) strongest = p;
+        color += p->color;
+        const float w = std::max(strengthOf(*p), 0.0f);
+        weighted += p->position * w;
+        weights += w;
+        start = std::max(start, p->attenuationStart);
+        end = std::max(end, p->attenuationEnd);
+    }
+    PointLight out = *strongest;
+    out.color = color;
+    out.position = weights > 0.0f ? weighted / weights : strongest->position;
+    out.attenuationStart = start;
+    out.attenuationEnd = end;
+    out.groupPart = parts.front()->groupPart;
+    return out;
+}
+
+/// How many lights each source may keep when `maxLights` must hold the
+/// `counts` of the sources' lights, no fewer than one each (U21): every
+/// source cut to the same most, the highest that fits, and one more each with
+/// what is left over for the sources first in `order` (indices into counts)
+/// that have more. Only for counts.size() <= maxLights; a source within the
+/// most keeps all of its own.
+inline std::vector<size_t> lightsPerSource(const std::vector<size_t>& counts, size_t maxLights,
+                                           const std::vector<size_t>& order) {
+    const auto total = [&](size_t cap) {
+        size_t sum = 0;
+        for (size_t c : counts) sum += std::min(c, cap);
+        return sum;
+    };
+    size_t largest = 1;
+    for (size_t c : counts) largest = std::max(largest, c);
+    size_t most = 1;
+    while (most < largest && total(most + 1) <= maxLights) ++most;
+    std::vector<size_t> allowed(counts.size(), 0);
+    for (size_t s = 0; s < counts.size(); ++s) allowed[s] = std::min(counts[s], most);
+    size_t left = maxLights - std::min(maxLights, total(most));
+    for (size_t s : order) {
+        if (left == 0) break;
+        if (s < counts.size() && counts[s] > allowed[s]) {
+            ++allowed[s];
+            --left;
+        }
+    }
+    return allowed;
+}
+
 /// Keep the lights that can light something within `maxDistance` of the eye
-/// and that `visible(position, radius)` says reach into the view, the
-/// `maxLights` most important of them, most important first. Lights too faint
-/// or too small to see go too. Returns the count kept.
+/// and that `visible(position, radius)` says reach into the view, at most
+/// `maxLights`, most important first. Lights too faint or too small to see go
+/// too. Returns the count kept.
+///
+/// More of them than that (U21, the user's request): first a source with
+/// several lights (PointLight::group) gives up lights of its own, down to one,
+/// so that every source still shines - its first ones (groupPart) kept, the
+/// rest of it merged into one (mergedLight); every source cut to the same
+/// most, the nearer sources keeping one more where there is room. Only where
+/// even one light a source is too many, each source as one light and the most
+/// important of those kept, as before. All of it from this frame's lights
+/// alone, in an order that does not follow their flicker.
 template <class Visible>
 size_t selectLights(std::vector<PointLight>& lights, const glm::vec3& eye, float maxDistance,
                     size_t maxLights, Visible&& visible) {
     constexpr float kMinStrength = 0.02f;
     constexpr float kMinReach = 0.25f;
-    struct Ranked {
-        float score;
-        uint32_t index;
-    };
-    std::vector<Ranked> ranked;
-    ranked.reserve(lights.size());
+    std::vector<uint32_t> candidates;
+    candidates.reserve(lights.size());
     for (uint32_t i = 0; i < lights.size(); ++i) {
         const PointLight& l = lights[i];
         const float strength = std::max(l.color.r, std::max(l.color.g, l.color.b));
@@ -182,13 +261,95 @@ size_t selectLights(std::vector<PointLight>& lights, const glm::vec3& eye, float
             continue;
         if (glm::length(l.position - eye) - l.attenuationEnd > maxDistance) continue;
         if (!visible(l.position, l.attenuationEnd)) continue;
-        ranked.push_back({importance(l, eye), i});
+        candidates.push_back(i);
     }
+    std::vector<PointLight> pool;
+    std::vector<uint32_t> poolIndex;  // the least index of the lights each pooled one stands for
+    pool.reserve(std::min(candidates.size(), maxLights));
+    if (candidates.size() <= maxLights) {
+        for (uint32_t i : candidates) {
+            pool.push_back(lights[i]);
+            poolIndex.push_back(i);
+        }
+    } else {
+        // The sources: a group's lights together, a light of no group alone,
+        // each one's lights in their groupPart order.
+        struct SourceLights {
+            uint32_t group;
+            std::vector<uint32_t> members;
+        };
+        std::vector<SourceLights> sources;
+        {
+            std::vector<std::pair<uint32_t, uint32_t>> keyed;  // (group, index)
+            keyed.reserve(candidates.size());
+            for (uint32_t i : candidates) keyed.emplace_back(lights[i].group, i);
+            std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (const auto& [group, index] : keyed) {
+                if (group == 0 || sources.empty() || sources.back().group != group) sources.push_back({group, {}});
+                sources.back().members.push_back(index);
+            }
+            for (SourceLights& s : sources) {
+                std::stable_sort(s.members.begin(), s.members.end(), [&](uint32_t a, uint32_t b) {
+                    return lights[a].groupPart != lights[b].groupPart ? lights[a].groupPart < lights[b].groupPart
+                                                                      : a < b;
+                });
+            }
+        }
+        const auto rest = [&](const std::vector<uint32_t>& members, size_t from) {
+            std::vector<const PointLight*> parts;
+            uint32_t least = ~0u;
+            for (size_t k = from; k < members.size(); ++k) {
+                parts.push_back(&lights[members[k]]);
+                least = std::min(least, members[k]);
+            }
+            pool.push_back(parts.size() == 1 ? *parts.front() : mergedLight(parts));
+            poolIndex.push_back(least);
+        };
+        if (sources.size() <= maxLights) {
+            std::vector<size_t> counts;
+            counts.reserve(sources.size());
+            for (const SourceLights& s : sources) counts.push_back(s.members.size());
+            // The one more first for the nearer sources: by their first
+            // light's distance, which moves with the camera and not with a
+            // flame's flicker; ties by index.
+            std::vector<float> away(sources.size());
+            for (size_t s = 0; s < sources.size(); ++s) {
+                away[s] = glm::length(lights[sources[s].members.front()].position - eye);
+            }
+            std::vector<size_t> order(sources.size());
+            for (size_t s = 0; s < order.size(); ++s) order[s] = s;
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                if (away[a] != away[b]) return away[a] < away[b];
+                return sources[a].members.front() < sources[b].members.front();
+            });
+            const std::vector<size_t> allowed = lightsPerSource(counts, maxLights, order);
+            for (size_t s = 0; s < sources.size(); ++s) {
+                const std::vector<uint32_t>& m = sources[s].members;
+                const size_t own = allowed[s] >= m.size() ? m.size() : allowed[s] - 1;
+                for (size_t k = 0; k < own; ++k) {
+                    pool.push_back(lights[m[k]]);
+                    poolIndex.push_back(m[k]);
+                }
+                if (own < m.size()) rest(m, own);
+            }
+        } else {
+            for (const SourceLights& s : sources) rest(s.members, 0);
+        }
+    }
+    struct Ranked {
+        float score;
+        uint32_t index;
+        uint32_t pooled;
+    };
+    std::vector<Ranked> ranked;
+    ranked.reserve(pool.size());
+    for (uint32_t k = 0; k < pool.size(); ++k) ranked.push_back({importance(pool[k], eye), poolIndex[k], k});
     const size_t kept = std::min(ranked.size(), maxLights);
     // Ties by index, so the same lights keep the same order from frame to
     // frame and the accumulated shadows do not shuffle.
     auto better = [](const Ranked& a, const Ranked& b) {
-        return a.score != b.score ? a.score > b.score : a.index < b.index;
+        if (a.score != b.score) return a.score > b.score;
+        return a.index != b.index ? a.index < b.index : a.pooled < b.pooled;
     };
     if (kept < ranked.size()) {
         std::nth_element(ranked.begin(), ranked.begin() + static_cast<std::ptrdiff_t>(kept), ranked.end(), better);
@@ -197,7 +358,7 @@ size_t selectLights(std::vector<PointLight>& lights, const glm::vec3& eye, float
     std::sort(ranked.begin(), ranked.end(), better);
     std::vector<PointLight> out;
     out.reserve(kept);
-    for (const Ranked& r : ranked) out.push_back(lights[r.index]);
+    for (const Ranked& r : ranked) out.push_back(pool[r.pooled]);
     lights.swap(out);
     return lights.size();
 }

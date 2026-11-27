@@ -20,6 +20,7 @@
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/lighting_manager.hpp"
+#include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/water_renderer.hpp"
 #include "ui/ui_manager.hpp"
@@ -286,9 +287,64 @@ json serverInfo(ToolContext& context, const json& args) {
             {"refused_last", context.refusals.last()}};
 }
 
+/// The traced point lights near the camera as the last frame had them, and
+/// the eye's exposure (U24): to tell a fire's light that is weaker from one
+/// place than from another by its strength, its flames' visible share, its
+/// reach and whether the budget kept it, from the exposure over it all.
+json rtLightsOf(ToolContext& context, const json& args) {
+    auto* renderer = context.app.getRenderer();
+    if (!renderer) throw ToolError("no renderer");
+    const auto& diag = renderer->rtLightDiag();
+    const double radius = args.value("radius", 30.0);
+    static constexpr const char* kKinds[] = {"model", "fire", "lamp", "building", "unit", "emissive", "particle"};
+    auto* m2 = renderer->getM2Renderer();
+    json lights = json::array();
+    for (const auto& e : diag.lights) {
+        const float distance = glm::length(e.position - diag.eye);
+        if (distance > radius) continue;
+        json l = {{"kind", e.source < 7 ? kKinds[e.source] : "?"},
+                  {"pos", vec3Json(e.position)},
+                  {"distance", rounded(distance, 2)},
+                  {"strength", rounded(std::max(e.color.r, std::max(e.color.g, e.color.b)), 3)},
+                  {"color", json::array({rounded(e.color.r, 3), rounded(e.color.g, 3), rounded(e.color.b, 3)})},
+                  {"reach", rounded(e.attenuationEnd, 2)},
+                  {"full_within", rounded(e.attenuationStart, 2)},
+                  {"kept", e.rank >= 0},
+                  {"rank", e.rank}};
+        if (e.merged) l["merged"] = true;
+        if (e.flameShare >= 0.0f) l["flame_share"] = rounded(e.flameShare, 3);
+        if (e.group != 0) {
+            char g[16];
+            std::snprintf(g, sizeof(g), "0x%08x", e.group);
+            l["source"] = g;
+            if (m2) {
+                if (std::string name = m2->rtSourceModelName(e.group); !name.empty()) l["model"] = std::move(name);
+            }
+        }
+        lights.push_back(std::move(l));
+    }
+    return {{"frame", diag.frame},
+            {"camera", vec3Json(diag.eye)},
+            {"exposure", rounded(renderer->eyeExposure(), 3)},
+            {"adapted_log2", rounded(renderer->eyeAdaptedLog2(), 2)},
+            {"light_range", rounded(diag.range, 1)},
+            {"gathered", diag.gathered},
+            {"kept", diag.kept},
+            {"limit", diag.limit},
+            {"lights", std::move(lights)}};
+}
+
 }  // namespace
 
 void addStateTools(Toolbox& box) {
+    box.push_back(lookTool("rt_lights",
+                           "The ray traced point lights near the camera as the last frame had them, nearest first: "
+                           "kind, model, place, distance, final strength and colour, reach, a fire's visible flame "
+                           "share, and whether the light budget kept it (rank) or merged it into its source's one "
+                           "light; with the eye adaptation's exposure. Empty without ray tracing.",
+                           schema::object({schema::optional("radius",
+                                                            schema::number("yards round the camera, at most 60", 1, 60))}),
+                           rtLightsOf));
     box.push_back(lookTool("state",
                            "Overview of the client and the player: login / char select / in world / dead, whether a "
                            "loading screen is up, the transport it is on, position "

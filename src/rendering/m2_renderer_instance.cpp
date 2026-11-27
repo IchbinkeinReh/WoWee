@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include "rendering/m2_deck_floor.hpp"
 #include "rendering/m2_renderer.hpp"
+#include "rendering/rt_point_lights.hpp"
 #include "game/go_interaction_anim.hpp"
 #include "rendering/collision_facets.hpp"
 #include "core/frame_profiler.hpp"
@@ -718,6 +719,14 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
                  inst.worldBoundsMin, inst.worldBoundsMax, instanceId);
     // No spatialIndexDirty_ = true - handled incrementally
     if (inst.clutterChunk != 0) releaseDetailChunk(inst.clutterChunk);
+}
+
+std::string M2Renderer::rtSourceModelName(uint32_t group) const {
+    if ((group & 0x80000000u) == 0) return {};
+    const auto found = instanceIndexById.find(group & 0x7fffffffu);
+    if (found == instanceIndexById.end() || found->second >= instances.size()) return {};
+    const M2ModelGPU* model = instances[found->second].cachedModel;
+    return model ? model->name : std::string();
 }
 
 void M2Renderer::removeInstance(uint32_t instanceId) {

@@ -656,3 +656,134 @@ TEST_CASE("each light has its own stable flicker phase (U19)", "[rt][lights]") {
     CHECK(one->color.r == Catch::Approx(0.5f));
     CHECK(two->color.r == Catch::Approx(1.0f));
 }
+
+// U21 (the user's request): a crowded view first cuts its sources down to
+// fewer lights each, so that every source still shines.
+TEST_CASE("over the light budget a source gives up its own lights before any source goes", "[rt][lights][u21]") {
+    const glm::vec3 eye(0.0f);
+    const auto all = [](const glm::vec3&, float) { return true; };
+    // Four fires of three lights each along the view, the nearer the first.
+    const auto fires = [](int count, int parts) {
+        std::vector<PointLight> out;
+        for (int f = 0; f < count; ++f) {
+            for (int k = 0; k < parts; ++k) {
+                PointLight l;
+                l.position = {10.0f + 10.0f * float(f), 0.2f * float(k), 0.0f};
+                l.color = glm::vec3(1.0f - 0.2f * float(k), 0.5f, 0.1f);
+                l.attenuationEnd = 6.0f + float(k);
+                l.attenuationStart = 1.0f;
+                l.group = m2SourceGroup(100u + uint32_t(f));
+                l.groupPart = uint32_t(k);
+                out.push_back(l);
+            }
+        }
+        return out;
+    };
+    const auto groupsOf = [](const std::vector<PointLight>& lights) {
+        std::vector<uint32_t> g;
+        for (const auto& l : lights) g.push_back(l.group);
+        std::sort(g.begin(), g.end());
+        g.erase(std::unique(g.begin(), g.end()), g.end());
+        return g;
+    };
+    const auto total = [](const std::vector<PointLight>& lights) {
+        glm::vec3 c(0.0f);
+        for (const auto& l : lights) c += l.color;
+        return c;
+    };
+
+    // Within the budget: nothing merged.
+    {
+        auto kept = fires(4, 3);
+        REQUIRE(selectLights(kept, eye, 200.0f, 12, all) == 12);
+    }
+    // Eight for four sources of three: each keeps two - its first, and the
+    // rest merged - and all four still shine with all their light.
+    {
+        const auto lights = fires(4, 3);
+        auto kept = lights;
+        REQUIRE(selectLights(kept, eye, 200.0f, 8, all) == 8);
+        CHECK(groupsOf(kept).size() == 4);
+        CHECK(total(kept).r == Catch::Approx(total(lights).r));
+        CHECK(total(kept).g == Catch::Approx(total(lights).g));
+        for (const auto& l : kept) {
+            const size_t perGroup =
+                std::count_if(kept.begin(), kept.end(), [&](const PointLight& o) { return o.group == l.group; });
+            CHECK(perGroup == 2u);
+        }
+    }
+    // Six: one each and the two nearest sources one more.
+    {
+        auto kept = fires(4, 3);
+        REQUIRE(selectLights(kept, eye, 200.0f, 6, all) == 6);
+        CHECK(groupsOf(kept).size() == 4);
+        const auto count = [&](uint32_t g) {
+            return std::count_if(kept.begin(), kept.end(), [&](const PointLight& o) { return o.group == g; });
+        };
+        CHECK(count(m2SourceGroup(100)) == 2);
+        CHECK(count(m2SourceGroup(101)) == 2);
+        CHECK(count(m2SourceGroup(102)) == 1);
+        CHECK(count(m2SourceGroup(103)) == 1);
+    }
+    // A source cut to one: the sum of its colours, at its strength-weighted
+    // middle, as far as its farthest reach.
+    {
+        auto kept = fires(4, 3);
+        REQUIRE(selectLights(kept, eye, 200.0f, 4, all) == 4);
+        CHECK(groupsOf(kept).size() == 4);
+        const auto one = std::find_if(kept.begin(), kept.end(),
+                                      [](const PointLight& l) { return l.group == m2SourceGroup(100); });
+        REQUIRE(one != kept.end());
+        CHECK(one->color.r == Catch::Approx(1.0f + 0.8f + 0.6f));
+        CHECK(one->color.g == Catch::Approx(1.5f));
+        CHECK(one->attenuationEnd == Catch::Approx(8.0f));
+        CHECK(one->position.x == Catch::Approx(10.0f));
+        CHECK(one->position.y == Catch::Approx((0.0f * 1.0f + 0.2f * 0.8f + 0.4f * 0.6f) / 2.4f));
+    }
+    // Fewer than the sources: each as one, and the most important kept as
+    // before - here the nearest three.
+    {
+        auto kept = fires(4, 3);
+        REQUIRE(selectLights(kept, eye, 200.0f, 3, all) == 3);
+        const auto g = groupsOf(kept);
+        CHECK(g == std::vector<uint32_t>{m2SourceGroup(100), m2SourceGroup(101), m2SourceGroup(102)});
+    }
+    // The same lights in another order, as the gathering may hand them: the
+    // same choice.
+    {
+        auto a = fires(4, 3);
+        auto b = a;
+        std::reverse(b.begin(), b.end());
+        REQUIRE(selectLights(a, eye, 200.0f, 6, all) == 6);
+        REQUIRE(selectLights(b, eye, 200.0f, 6, all) == 6);
+        std::vector<glm::vec3> pa, pb;
+        for (const auto& l : a) pa.push_back(l.position);
+        for (const auto& l : b) pb.push_back(l.position);
+        const auto byX = [](const glm::vec3& p, const glm::vec3& q) { return p.x != q.x ? p.x < q.x : p.y < q.y; };
+        std::sort(pa.begin(), pa.end(), byX);
+        std::sort(pb.begin(), pb.end(), byX);
+        REQUIRE(pa.size() == pb.size());
+        for (size_t i = 0; i < pa.size(); ++i) CHECK(pa[i] == pb[i]);
+    }
+    // A flicker that makes a later part brighter than the first does not
+    // change which part stays a light of its own.
+    {
+        auto kept = fires(4, 3);
+        kept[2].color *= 3.0f;  // fire 0's third part flares
+        REQUIRE(selectLights(kept, eye, 200.0f, 8, all) == 8);
+        const bool firstKept = std::any_of(kept.begin(), kept.end(), [](const PointLight& l) {
+            return l.group == m2SourceGroup(100) && l.position == glm::vec3(10.0f, 0.0f, 0.0f) &&
+                   l.color.r == Catch::Approx(1.0f);
+        });
+        CHECK(firstKept);
+    }
+}
+
+TEST_CASE("lightsPerSource fills the budget evenly", "[rt][lights][u21]") {
+    CHECK(lightsPerSource({3, 3, 3}, 9, {0, 1, 2}) == std::vector<size_t>{3, 3, 3});
+    CHECK(lightsPerSource({3, 3, 3}, 3, {0, 1, 2}) == std::vector<size_t>{1, 1, 1});
+    CHECK(lightsPerSource({3, 3, 3}, 5, {2, 0, 1}) == std::vector<size_t>{2, 1, 2});
+    // A small source keeps all of its own; the room goes to the larger.
+    CHECK(lightsPerSource({1, 6, 6}, 9, {0, 1, 2}) == std::vector<size_t>{1, 4, 4});
+    CHECK(lightsPerSource({1, 6, 6}, 8, {2, 1, 0}) == std::vector<size_t>{1, 3, 4});
+}

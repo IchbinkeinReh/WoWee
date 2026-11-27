@@ -6331,6 +6331,8 @@ HorizonRenderer::GroundIn Renderer::horizonGroundIn() const {
 }
 
 float Renderer::getTerrainLoadReach() const { return terrain_stream::loadReach(farClip_); }
+float Renderer::eyeExposure() const { return eyeAdaptation_ ? eyeAdaptation_->exposure() : 1.0f; }
+float Renderer::eyeAdaptedLog2() const { return eyeAdaptation_ ? eyeAdaptation_->adaptedLog2() : 0.0f; }
 float Renderer::getTerrainUnloadReach() const { return terrain_stream::unloadReach(getTerrainLoadReach()); }
 void Renderer::setCinematicView(const std::optional<CinematicView>& view) {
     cinematicView_ = view;
@@ -7458,9 +7460,47 @@ void Renderer::recordRtLighting() {
         }
         Frustum frustum;
         frustum.extractFromMatrix(in.viewProj);
+        // The lights near the camera before the budget, for the MCP
+        // server's rt_lights (U24); matched with what is kept below.
+        constexpr float kLightDiagRadius = 60.0f;
+        ++rtLightDiag_.frame;
+        rtLightDiag_.eye = in.cameraPos;
+        rtLightDiag_.range = kLightRange;
+        rtLightDiag_.radius = kLightDiagRadius;
+        rtLightDiag_.gathered = lightScratch.size();
+        rtLightDiag_.limit = rt_lights::lightLimit(lightingTune_.lightCountLimit);
+        rtLightDiag_.lights.clear();
+        for (const rt_lights::PointLight& l : lightScratch) {
+            if (glm::length(l.position - in.cameraPos) > kLightDiagRadius) continue;
+            rtLightDiag_.lights.push_back({.position = l.position,
+                                           .color = l.color,
+                                           .attenuationStart = l.attenuationStart,
+                                           .attenuationEnd = l.attenuationEnd,
+                                           .flameShare = l.flameShare,
+                                           .group = l.group,
+                                           .source = static_cast<uint8_t>(l.source)});
+        }
         rt_lights::selectLights(lightScratch, in.cameraPos, kLightRange,
                                 rt_lights::lightLimit(lightingTune_.lightCountLimit),
                                 [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
+        rtLightDiag_.kept = lightScratch.size();
+        for (RtLightDiagEntry& e : rtLightDiag_.lights) {
+            for (size_t k = 0; k < lightScratch.size(); ++k) {
+                if (lightScratch[k].position == e.position && lightScratch[k].group == e.group) {
+                    e.rank = static_cast<int>(k);
+                    e.merged = false;
+                    break;
+                }
+                if (e.group != 0 && lightScratch[k].group == e.group && e.rank < 0) {
+                    e.rank = static_cast<int>(k);
+                    e.merged = true;
+                }
+            }
+        }
+        std::sort(rtLightDiag_.lights.begin(), rtLightDiag_.lights.end(),
+                  [&](const RtLightDiagEntry& a, const RtLightDiagEntry& b) {
+                      return glm::length(a.position - in.cameraPos) < glm::length(b.position - in.cameraPos);
+                  });
         // A building's light shades the baked colours of its own storey only
         // (rt_light_storey.hpp): found once per place, a quarter yard apart,
         // and again when the buildings change. WOWEE_RT_LIGHT_STOREY=0: every

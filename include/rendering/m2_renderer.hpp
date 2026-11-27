@@ -877,6 +877,9 @@ public:
         return instanceIndexById.find(instanceId) != instanceIndexById.end();
     }
     void removeInstance(uint32_t instanceId);
+    /// The model name of the doodad a traced light's group names
+    /// (rt_lights::m2SourceGroup), empty for none.
+    [[nodiscard]] std::string rtSourceModelName(uint32_t group) const;
 
     /// Give an instance's model events an owner, whose callback they go to
     /// (CM2Model +0x1c4, 0x00824060): a game object's (0x00712f30), with its

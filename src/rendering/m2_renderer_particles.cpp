@@ -812,6 +812,11 @@ void M2Renderer::prepareM2Particles() {
             }
             // One model's emitters together no brighter than a fire.
             rt_lights::capTotalStrength(rtParticleLights_, firstLight, rt_lights::kMaxParticleModelStrength);
+            // And one source (U21): the model's, all its emitters' lights.
+            for (size_t k = firstLight; k < rtParticleLights_.size(); ++k) {
+                rtParticleLights_[k].group = rt_lights::m2SourceGroup(inst.id);
+                rtParticleLights_[k].groupPart = static_cast<uint32_t>(k - firstLight);
+            }
         }
 
         if (!emitterDiag.empty()) {

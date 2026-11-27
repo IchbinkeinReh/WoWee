@@ -74,6 +74,7 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 | `screenshot` | the frame, a part of it or one window, as JPEG or PNG |
 | `wait` | for an event, a window, a text, a chat line or a state, or for a time |
 | `server_info` | what the server may do and what it has refused |
+| `rt_lights` | the ray traced point lights near the camera as the last frame had them: kind, model, place, final strength, reach, a fire's visible flame share, kept by the light budget or merged into its source's one light; the eye adaptation's exposure |
 
 **To act** (these press something, one at a time):
 

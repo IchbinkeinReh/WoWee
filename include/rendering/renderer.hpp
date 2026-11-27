@@ -1065,6 +1065,37 @@ public:
     };
     [[nodiscard]] bool rtLightKindViewShown() const { return rtLightKindView_; }
     [[nodiscard]] const std::vector<RtLightMarker>& rtLightMarkers() const { return rtLightMarkers_; }
+    /// The traced point lights near the camera as the last frame had them
+    /// (U24: the MCP server's rt_lights): each as gathered - its kind, its
+    /// source, where, its final strength and reach, a fire's visible flame
+    /// share - and what the budget made of it: kept as it is at a rank,
+    /// merged into its source's one light at a rank (U21), or dropped (-1).
+    struct RtLightDiagEntry {
+        glm::vec3 position{0.0f};
+        glm::vec3 color{0.0f};
+        float attenuationStart = 0.0f;
+        float attenuationEnd = 0.0f;
+        float flameShare = -1.0f;
+        uint32_t group = 0;
+        uint8_t source = 0;
+        int rank = -1;
+        bool merged = false;
+    };
+    struct RtLightDiag {
+        uint64_t frame = 0;
+        glm::vec3 eye{0.0f};
+        float range = 0.0f;   ///< the lights' distance (Ray Tracing page)
+        float radius = 0.0f;  ///< what of them is listed
+        size_t gathered = 0;  ///< before the budget
+        size_t kept = 0;
+        size_t limit = 0;
+        std::vector<RtLightDiagEntry> lights;  ///< within the radius, nearest first
+    };
+    [[nodiscard]] const RtLightDiag& rtLightDiag() const { return rtLightDiag_; }
+    /// The eye adaptation's exposure this frame (1 where it is off) and the
+    /// log2 luminance the eye is adapted to.
+    [[nodiscard]] float eyeExposure() const;
+    [[nodiscard]] float eyeAdaptedLog2() const;
     /// The time of day the world is lit at, in hours (0-24), instead of the
     /// server's; negative for the server's own (Settings > Debug Graphics,
     /// WOWEE_GAME_TIME). Only what is drawn: the server's clock is left alone.
@@ -1560,6 +1591,7 @@ private:
     int rtDebugView_ = 0;
     bool rtLightKindView_ = false;
     std::vector<RtLightMarker> rtLightMarkers_;
+    RtLightDiag rtLightDiag_;
     float gameTimeOverride_ = -1.0f;
     /// Screenshots being converted and written on a worker (captureScreenshot);
     /// waited for at shutdown so none is cut off half written.
