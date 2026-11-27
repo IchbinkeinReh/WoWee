@@ -468,6 +468,61 @@ TEST_CASE("what an item rolled is before its price", "[replay][interface]") {
     CHECK(text().find("Strength") == std::string::npos);
 }
 
+// 0x0062f420 / 0x0062e050 hand on what 0x006277f0 answers - 1 for a line that counts down
+// (a lock, a duration, an enchant's time, a cooldown) - and each has its own shapes;
+// 0x0062dae0 and 0x006304a0 answer nothing.
+TEST_CASE("the item tooltip setters answer as the client's do", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    answerItem(s, 24021, "Light-Touched Breastplate", 5);
+    wowee::game::ItemDef item;
+    item.guid = 0x4000000000000777ull;
+    item.itemId = 24021;
+    item.name = "Light-Touched Breastplate";
+    item.stackCount = 1;
+    s.handler().getInventory().setBackpackSlot(3, item);
+    s.handler().onlineItemsRef()[item.guid].entry = 24021;
+    ui.run("tip = CreateFrame('GameTooltip', 'PlayAnswerTip', UIParent) tip:SetOwner(UIParent, 'ANCHOR_NONE') "
+           "function answers(...) return select('#', ...), ... end");
+    // A plain item: nothing counts down, and the repair cost.
+    CHECK(ui.is("select('#', tip:SetBagItem(0, 4)) == 2"));
+    CHECK(ui.is("tip:SetBagItem(0, 4) == nil"));
+    CHECK(ui.is("select(2, tip:SetBagItem(0, 4)) == 0"));
+    // An empty slot or one the bag does not have: one nil. No bag there, or one
+    // out of range: nothing.
+    CHECK(ui.is("answers(tip:SetBagItem(0, 5)) == 1"));
+    CHECK(ui.is("answers(tip:SetBagItem(0, 40)) == 1"));
+    CHECK(ui.is("answers(tip:SetBagItem(1, 1)) == 0"));
+    CHECK(ui.is("answers(tip:SetBagItem(-1, 1)) == 0"));
+    CHECK(ui.is("answers(tip:SetBagItem(12, 1)) == 0"));
+    CHECK(ui.is("answers(tip:SetBagItem('x', 1)) == 0"));
+    // An item that lasts a while has a line that counts down.
+    s.handler().itemInfoCacheRef()[24021].itemDuration = 3600;
+    CHECK(ui.is("tip:SetBagItem(0, 4) == 1"));
+    // SetInventoryItem: nil, nil, 0 for an empty slot; 1, 1, cost when worn.
+    ui.run("n, a, b, c = answers(tip:SetInventoryItem('player', 1))");
+    CHECK(ui.is("n == 3 and a == nil and b == nil and c == 0"));
+    REQUIRE(s.handler().getInventory().setEquipSlot(wowee::game::EquipSlot::CHEST, item));
+    ui.run("n, a, b, c = answers(tip:SetInventoryItem('player', 5))");
+    CHECK(ui.is("n == 3 and a == 1 and b == 1 and c == 0"));
+    s.handler().itemInfoCacheRef()[24021].itemDuration = 0;
+    ui.run("n, a, b, c = answers(tip:SetInventoryItem('player', 5))");
+    CHECK(ui.is("n == 3 and a == 1 and b == nil and c == 0"));
+    // The ammo's two answers; the slots it refuses, and a unit that is not a text.
+    CHECK(ui.is("answers(tip:SetInventoryItem('player', 0)) == 2"));
+    CHECK(ui.is("not pcall(tip.SetInventoryItem, tip, 'player', 30)"));
+    CHECK(ui.is("not pcall(tip.SetInventoryItem, tip, 'player', 'x')"));
+    CHECK(ui.is("not pcall(tip.SetInventoryItem, tip, nil, 1)"));
+    CHECK(ui.is("pcall(tip.SetInventoryItem, tip, 'player', 150)"));
+    // SetHyperlink and SetGuildBankItem answer nothing, whatever they drew.
+    ui.run("tip:SetOwner(UIParent, 'ANCHOR_NONE')");
+    CHECK(ui.is("answers(tip:SetHyperlink('item:24021')) == 0"));
+    CHECK(ui.is("tip:NumLines() > 0"));
+    CHECK(ui.is("answers(tip:SetGuildBankItem(1, 1)) == 0"));
+    CHECK(ui.is("not pcall(tip.SetGuildBankItem, tip, 'x', 1)"));
+}
+
 // T161: 0x006277f0, +0x480: what the item that is not traded would be enchanted with.
 TEST_CASE("an item in a trade says what it would be enchanted with", "[replay][interface]") {
     Session s;

@@ -853,6 +853,10 @@ struct Widget {
         uint8_t put = 0;   ///< the Parts that are in
     };
     std::optional<TooltipRoll> tooltipRoll;
+    /// Whether the item builder put in a line that counts down - a lock, a duration, a
+    /// temporary enchant's time or a cooldown (0x006277f0's answer, which SetBagItem and
+    /// SetInventoryItem hand on). Cleared with the lines.
+    bool tooltipTimedLine = false;
     /// Stand-ins for GameTooltipTextLeft1..N, created on demand by whatever
     /// asks to be anchored to one. FrameXML positions things against a
     /// tooltip's individual lines - SetTooltipMoney hangs the coin frame off

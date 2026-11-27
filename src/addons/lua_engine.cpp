@@ -2586,6 +2586,7 @@ static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
         }
     }
     w->tooltipLines.clear();
+    w->tooltipTimedLine = false;
     // And SetMinimumWidth's width, unless it was forced (+0x3d8, +0x3dc).
     if (!w->tooltipMinWidthForced) w->tooltipMinWidth = 0.0f;
     w->tooltipUnit.clear();   // +0x328
@@ -4623,6 +4624,7 @@ static void appendEnchantLineById(wowee::ui::Widget* w, game::GameHandler* gh,
     // 0x0061a9e0 with ITEM_ENCHANT_TIME_LEFT, rounded up): "Großartiger
     // Feuerstein (59 Min.)" rather than the name alone (T343).
     if (msLeft != 0) {
+        w->tooltipTimedLine = true;   // 0x006277f0's answer (ITEM_ENCHANT_TIME_LEFT)
         name = wowee::ui::resolvePluralEscapes(game::interface_text::timeLeftText(
             "ITEM_ENCHANT_TIME_LEFT", name, msLeft, true,
             [](const char* key, const char* enUS) { return game::interfaceString(key, enUS); }));
@@ -5067,7 +5069,15 @@ static int setHyperlink(lua_State* L, bool again) {
     return 1;
 }
 
-int lua_Tooltip_SetHyperlink(lua_State* L) { return setHyperlink(L, false); }
+// 0x0062dae0 answers nothing, whatever it drew; CompanionButton_OnEnter reads
+// that as no refresh. The bootstrap's own setters that draw through a link ask
+// __WoweeSetLink instead, which says whether it was filled.
+int lua_Tooltip_SetHyperlink(lua_State* L) {
+    lua_pop(L, setHyperlink(L, false));
+    return 0;
+}
+/// __WoweeSetLink(link): SetHyperlink with whether the tooltip was filled.
+int lua_Tooltip_SetLinkFilled(lua_State* L) { return setHyperlink(L, false); }
 /// __WoweeRefillHyperlink(link): as SetHyperlink, for a tooltip that has the link.
 int lua_Tooltip_RefillHyperlink(lua_State* L) { return setHyperlink(L, true); }
 
@@ -6587,6 +6597,8 @@ static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
 /// (SetBagItem through _WoweeContainerItemInstance) as much as a worn one's -
 /// so the open/read line, the maker, the charges and the price are the same
 /// wherever the item is hovered.
+/// Set while SetInventoryItem builds the player's own item: its running cooldown is told.
+static bool s_tooltipInventoryCooldown = false;
 void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::ItemDef& instance,
                               uint32_t itemId) {
     lua_newtable(L);
@@ -6642,6 +6654,15 @@ void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::I
     if (const auto cooldown = gh->itemCooldown(itemId); cooldown.duration != 0 && !cooldown.enabled) {
         lua_pushboolean(L, 1);
         lua_setfield(L, -2, "cooldownHeld");
+    } else if (s_tooltipInventoryCooldown && cooldown.enabled && cooldown.start != 0 && cooldown.duration != 0) {
+        // What is left of a running one, for the paperdoll's item (0x0062e050
+        // hands 0x006277f0 the time at +0x47c, as 0x0062f420 does for a bag's).
+        const int64_t left = static_cast<int64_t>(cooldown.start) + static_cast<int64_t>(cooldown.duration) -
+                             static_cast<int64_t>(std::llround(luaGetTimeNow() * 1000.0));
+        if (left > 0) {
+            lua_pushnumber(L, static_cast<lua_Number>(left));
+            lua_setfield(L, -2, "cooldownLeft");
+        }
     }
     // How long it has left, for an item that lasts a while
     // (ITEM_FIELD_DURATION, seconds; 0x007070b0).
@@ -7051,21 +7072,47 @@ int lua_Tooltip_HoldItemRoll(lua_State* L) {
     return 0;
 }
 
-/// SetInventoryItem(unit, slot) - the gear on the paperdoll.
+/// SetInventoryItem(unit, slot [, nameOnly]) - the gear on the paperdoll (0x0062e050).
+///
+/// Its shapes: the usage line for a unit that is not a text; "Invalid inventory
+/// slot" for a slot that is not a number or not one of equipment and bags (1-23),
+/// bank and bank bags (40-74), key ring and tokens (87-150) or the ammo (0);
+/// nil, nil, 0 for a unit not there or nothing in the slot; the ammo's 1 or nil
+/// and nil; another player's 1, nil, 0; the player's own 1, what 0x006277f0
+/// answered (1 for a line that counts down, else nil) and the repair cost.
 int lua_Tooltip_SetInventoryItem(lua_State* L) {
+    if (!lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:SetInventoryItem(unit, slot [, nameOnly])", usageName(L, 1));
+    if (!lua_isnumber(L, 3)) return luaL_error(L, "Invalid inventory slot in SetInventoryItem");
+    const int slot = static_cast<int>(std::lround(lua_tonumber(L, 3)));
+    if (!wowee::addons::tooltip_rules::inventorySlotValid(slot))
+        return luaL_error(L, "Invalid inventory slot in SetInventoryItem");
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    const int slot = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || slot < 1) { luaPushOneOrNil(L, 0); return 1; }
+    const auto nothing = [L] {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        return 3;
+    };
+    if (!w || !gh) return nothing();
 
     // The unit argument was ignored, so every slot of the inspect paperdoll
     // showed whatever the player themselves had in that slot - the wrong item
     // rather than none, which is the harder kind to notice.
-    std::string uid(luaL_optstring(L, 2, "player"));
+    std::string uid(lua_tostring(L, 2));
     wowee::addons::toLowerInPlace(uid);
+    if (uid != "player" && wowee::addons::resolveUnitGuid(gh, uid) == 0) return nothing();
+    // The ammo (slot 0, the client's -1): its template's tooltip, and two answers.
+    if (slot == 0) {
+        const uint32_t ammo = uid == "player" ? gh->getAmmoId() : 0u;
+        luaPushOneOrNil(L, ammo != 0 && fillItemTooltipById(L, gh, ammo, nullptr) ? 1 : 0);
+        lua_pushnil(L);
+        return 2;
+    }
     // Another player is only ever inspected as equipment, and the cache behind
     // it is one entry per equipment slot.
-    if (uid != "player" && slot > 19) { luaPushOneOrNil(L, 0); return 1; }
+    if (uid != "player" && slot > 19) return nothing();
     if (uid != "player") {
         // 0x0062e050's other-unit leg reads the same record GetInventoryItemLink
         // reads, so which row answers depends on which unit this is: the one in
@@ -7091,12 +7138,13 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
         def.suffixFactor = record.seed;
         wowee::ui::Widget::TooltipRoll roll = rollOf(gh, def, 0);
         roll.permanentEnchant = record.enchantId;
-        if (!fillWithRoll(w, gh, roll, [&] { return fillItemTooltipById(L, gh, entry, nullptr, &record.gems); })) {
-            luaPushOneOrNil(L, 0);
-            return 1;
-        }
-        luaPushOneOrNil(L, 1);
-        return 1;
+        if (entry == 0) return nothing();
+        fillWithRoll(w, gh, roll, [&] { return fillItemTooltipById(L, gh, entry, nullptr, &record.gems); });
+        // 1, nil, 0 whatever the builder made of it (0x0062e050's record leg).
+        lua_pushnumber(L, 1);
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        return 3;
     }
 
     // Every slot this numbering reaches, not equipment alone. bankframe.lua
@@ -7107,9 +7155,8 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     // GameTooltip:SetText(self.tooltipText) when this answers false, which is
     // the "Bank Bag" line, not the bag's own tooltip.
     const game::ItemSlot* sp = wowee::addons::inventorySlotItem(gh->getInventory(), slot);
-    if (!sp) { luaPushOneOrNil(L, 0); return 1; }
+    if (!sp || sp->empty()) return nothing();
     const auto& s = *sp;
-    if (s.empty()) { luaPushOneOrNil(L, 0); return 1; }
     // Through the fuller builder, with the slot's own copy of the item as the
     // floor: the slot knows the name and quality even for an entry no
     // GetItemInfo has arrived for, and answering nothing there would be worse
@@ -7118,7 +7165,10 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     // bank slot's id would read off the end of it.
     const auto roll = rollOf(gh, s.item, slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS)
                                              ? gh->getEquipSlotGuid(slot - 1) : 0);
-    if (!fillWithRoll(w, gh, roll, [&] { return fillItemTooltipById(L, gh, s.item.itemId, &s.item); })) {
+    s_tooltipInventoryCooldown = true;
+    const bool built = fillWithRoll(w, gh, roll, [&] { return fillItemTooltipById(L, gh, s.item.itemId, &s.item); });
+    s_tooltipInventoryCooldown = false;
+    if (!built) {
         // It has named the suffix and has its stats itself.
         fillItemTooltip(w, s.item, gh);
         appendEnchantLineById(w, gh, roll.permanentEnchant);
@@ -7129,25 +7179,11 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
         // place, before the requirements; this short fallback ends with it.
         appendDurabilityLine(w, s.item);
     }
-    // hasItem, then whether a cooldown is running on it (the paperdoll keeps
-    // refreshing the tooltip while one is), then what repairing it costs
-    // (0x0062e050 -> 0x00584b20) for repair mode.
+    // hasItem, then what 0x006277f0 answered - a line that counts down (the
+    // paperdoll keeps refreshing the tooltip while there is one) - then what
+    // repairing it costs (0x0062e050 -> 0x00584b20) for repair mode.
     luaPushOneOrNil(L, 1);
-    bool cooling = false;
-    lua_getglobal(L, "GetInventoryItemCooldown");
-    if (lua_isfunction(L, -1)) {
-        lua_pushstring(L, "player");
-        lua_pushnumber(L, slot);
-        if (lua_pcall(L, 2, 3, 0) == 0) {
-            cooling = lua_tonumber(L, -2) > 0.0;
-            lua_pop(L, 3);
-        } else {
-            lua_pop(L, 1);
-        }
-    } else {
-        lua_pop(L, 1);
-    }
-    luaPushOneOrNil(L, cooling ? 1 : 0);
+    luaPushOneOrNil(L, w->tooltipTimedLine ? 1 : 0);
     const uint64_t itemGuid = slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS) ? gh->getEquipSlotGuid(slot - 1) : 0;
     lua_pushnumber(L, gh->itemRepairCostShown(itemGuid));
     return 3;
@@ -7309,6 +7345,22 @@ static int lua_WoweeContainerRepairCost(lua_State* L) {
     return 1;
 }
 
+/// __WoweeTooltipTimed(self[, mark]): with mark, notes that the item builder put
+/// in a line that counts down; without, answers whether it did since the lines
+/// were last cleared - 0x006277f0's return value (its local set to 1 at the
+/// lock lines, ITEM_ENCHANT_TIME_LEFT, ITEM_DURATION, ITEM_COOLDOWN_TIME and
+/// COOLDOWN_ON_LEAVE_COMBAT).
+static int lua_WoweeTooltipTimed(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (lua_toboolean(L, 2)) {
+        w->tooltipTimedLine = true;
+        return 0;
+    }
+    lua_pushboolean(L, w->tooltipTimedLine ? 1 : 0);
+    return 1;
+}
+
 int lua_Tooltip_SetBagItem(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
@@ -7352,12 +7404,16 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
 /// guild bank where no item has a tooltip, which reads as the tooltip system
 /// being broken rather than as one method missing. The data was already there
 /// - GetGuildBankItemInfo answers from the same slots.
+///
+/// 0x006304a0 answers nothing, and raises for a tab or slot that is not a number.
 int lua_Tooltip_SetGuildBankItem(lua_State* L) {
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Invalid tab or slot in SetGuildBankItem");
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    const int tab  = static_cast<int>(luaL_optnumber(L, 2, 0));
-    const int slot = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || slot < 1) { lua_pushboolean(L, 0); return 1; }
+    const int tab  = static_cast<int>(std::lround(lua_tonumber(L, 2)));
+    const int slot = static_cast<int>(std::lround(lua_tonumber(L, 3)));
+    if (!w || !gh || slot < 1) return 0;
 
     const auto& data = gh->getGuildBankData();
     // The open tab is the one kept current; any other answers from whatever
@@ -7368,7 +7424,7 @@ int lua_Tooltip_SetGuildBankItem(lua_State* L) {
     } else if (tab >= 1 && tab <= static_cast<int>(data.tabs.size())) {
         items = &data.tabs[tab - 1].items;
     }
-    if (!items) { lua_pushboolean(L, 0); return 1; }
+    if (!items) return 0;
 
     for (const auto& it : *items) {
         if (it.slotId + 1 != slot) continue;
@@ -7379,15 +7435,12 @@ int lua_Tooltip_SetGuildBankItem(lua_State* L) {
         game::ItemDef rolled;
         rolled.itemId = it.itemEntry;
         rolled.randomPropertyId = static_cast<int32_t>(it.randomPropertyId);
-        const bool filled = fillWithRoll(w, gh, rollOf(gh, rolled, 0),
-                                         [&] { return fillItemTooltipById(L, gh, it.itemEntry); });
+        fillWithRoll(w, gh, rollOf(gh, rolled, 0), [&] { return fillItemTooltipById(L, gh, it.itemEntry); });
         lua_pushnil(L);
         lua_setglobal(L, "__WoweeTooltipItemCount");
-        lua_pushboolean(L, filled ? 1 : 0);
-        return 1;
+        return 0;
     }
-    lua_pushboolean(L, 0);
-    return 1;
+    return 0;
 }
 
 int lua_Tooltip_ClearLines(lua_State* L) {
@@ -12760,6 +12813,7 @@ void LuaEngine::registerCoreAPI() {
         {"SetGlyph",               lua_Tooltip_SetGlyph},
         {"__WoweeRefillHyperlink", lua_Tooltip_RefillHyperlink},
         {"SetHyperlink",    lua_Tooltip_SetHyperlink},
+        {"__WoweeSetLink",  lua_Tooltip_SetLinkFilled},
         // On frames as well as on font strings, where these were already
         // registered. A chat frame is asked for its own font - not a label's -
         // by FCF_SetChatWindowFontSize, which reads the face and flags off the
@@ -13050,7 +13104,7 @@ void LuaEngine::registerCoreAPI() {
         lua_Tooltip_SetExistingSocketGem, lua_Tooltip_SetSocketedItem, lua_Tooltip_SetCurrencyToken,
         lua_Tooltip_SetBackpackToken, lua_Tooltip_SetGuildBankItem, lua_Tooltip_SetSpellByID,
         lua_Tooltip_SetQuestLogRewardSpell, lua_Tooltip_SetEquipmentSet,
-        lua_Tooltip_SetLFGCompletionReward, lua_Tooltip_SetGlyph, lua_Tooltip_SetHyperlink, lua_Tooltip_RefillHyperlink,
+        lua_Tooltip_SetLFGCompletionReward, lua_Tooltip_SetGlyph, lua_Tooltip_SetHyperlink, lua_Tooltip_SetLinkFilled, lua_Tooltip_RefillHyperlink,
         lua_Tooltip_SetTalent, lua_Tooltip_SetAuctionItem, lua_Tooltip_SetTradeSkillItem, lua_Tooltip_SetUnit,
         lua_Tooltip_SetFrameStack, lua_Tooltip_SetUnitAura, lua_Tooltip_SetSendMailItem,
         lua_Tooltip_SetPetAction, lua_Tooltip_SetShapeshift, lua_Tooltip_AddFontStrings,
@@ -14558,6 +14612,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetSendMailItem");
     lua_pushcfunction(L_, lua_WoweeContainerRepairCost);
     lua_setglobal(L_, "__WoweeContainerRepairCost");
+    lua_pushcfunction(L_, lua_WoweeTooltipTimed);
+    lua_setglobal(L_, "__WoweeTooltipTimed");
     lua_pushcfunction(L_, lua_Tooltip_SetPetAction);
     lua_setglobal(L_, "__WoweeTooltipSetPetAction");
     lua_pushcfunction(L_, lua_Tooltip_SetShapeshift);
@@ -15104,10 +15160,11 @@ void LuaEngine::registerCoreAPI() {
         "    local link = GetLootSlotLink and GetLootSlotLink(slot)\n"
         "    if link then\n"
         "        __WoweeTooltipItemCount = select(3, GetLootSlotInfo(slot))\n"
-        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        local ok, r1, r2 = pcall(self.__WoweeSetLink, self, link)\n"
         "        __WoweeTooltipItemCount = nil\n"
         "        if not ok then error(r1, 0) end\n"
-        "        return r1, r2\n"
+        // 0x0062e520 answers nothing.
+        "        return\n"
         "    end\n"
         "    local _, name = GetLootSlotInfo(slot)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
@@ -15116,7 +15173,7 @@ void LuaEngine::registerCoreAPI() {
         // for the price of the whole pile.
         "function __WoweeSetHyperlinkCounted(self, link, count)\n"
         "    __WoweeTooltipItemCount = count\n"
-        "    local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "    local ok, r1, r2 = pcall(self.__WoweeSetLink, self, link)\n"
         "    __WoweeTooltipItemCount = nil\n"
         "    if not ok then error(r1, 0) end\n"
         "    return r1, r2\n"
@@ -15125,7 +15182,7 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeFrameMT:SetLootRollItem(rollId)\n"
         "    self:ClearLines()\n"
         "    local link = GetLootRollItemLink and GetLootRollItemLink(rollId)\n"
-        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(3, GetLootRollItemInfo(rollId))) end\n"
+        "    if link then __WoweeSetHyperlinkCounted(self, link, select(3, GetLootRollItemInfo(rollId))) end\n"
         "end\n"
         // The merchant item's index rides along while its link is drawn, so
         // the item tooltip can say the arena rating its cost asks for.
@@ -15134,7 +15191,7 @@ void LuaEngine::registerCoreAPI() {
         "    local link = GetMerchantItemLink and GetMerchantItemLink(index)\n"
         "    if link then\n"
         "        __WoweeTooltipMerchantIndex = index\n"
-        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        local ok, r1, r2 = pcall(self.__WoweeSetLink, self, link)\n"
         "        __WoweeTooltipMerchantIndex = nil\n"
         "        if not ok then error(r1, 0) end\n"
         "        return r1, r2\n"
@@ -15148,7 +15205,7 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    self:ClearLines()\n"
         "    local link = GetBuybackItemLink and GetBuybackItemLink(index)\n"
-        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(4, GetBuybackItemInfo(index))) end\n"
+        "    if link then __WoweeSetHyperlinkCounted(self, link, select(4, GetBuybackItemInfo(index))) return end\n"
         "    local name = GetBuybackItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -15162,10 +15219,11 @@ void LuaEngine::registerCoreAPI() {
         "    local link = GetInboxItemLink(index, attachIndex)\n"
         "    if link then\n"
         "        __WoweeTooltipItemCount = select(3, GetInboxItem(index, attachIndex))\n"
-        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        local ok, r1, r2 = pcall(self.__WoweeSetLink, self, link)\n"
         "        __WoweeTooltipItemCount = nil\n"
         "        if not ok then error(r1, 0) end\n"
-        "        return r1, r2\n"
+        // 0x0062f9e0: what 0x006277f0 answered (a line that counts down), else nil.
+        "        return __WoweeTooltipTimed(self) and 1 or nil\n"
         "    end\n"
         "    local name = GetInboxItem(index, attachIndex)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
@@ -15222,10 +15280,11 @@ void LuaEngine::registerCoreAPI() {
         "    local link = GetQuestItemLink and GetQuestItemLink(itemType, index)\n"
         "    if link then\n"
         "        __WoweeTooltipItemCount = select(3, GetQuestItemInfo(itemType, index))\n"
-        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        local ok, r1, r2 = pcall(self.__WoweeSetLink, self, link)\n"
         "        __WoweeTooltipItemCount = nil\n"
         "        if not ok then error(r1, 0) end\n"
-        "        return r1, r2\n"
+        // 0x0062e670 answers nothing.
+        "        return\n"
         "    end\n"
         "    local name = GetQuestItemInfo(itemType, index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
@@ -15309,7 +15368,7 @@ void LuaEngine::registerCoreAPI() {
         // The reward's own item tooltip, priced for its count (0x00630a80 ->
         // 0x006277f0 with +0x4b8), ending with OnTooltipSetItem.
         "    local link = GetLFGDungeonRewardLink(dungeonId, rewardIndex)\n"
-        "    if link then return __WoweeSetHyperlinkCounted(self, link, count) end\n"
+        "    if link then __WoweeSetHyperlinkCounted(self, link, count) return end\n"
         "    self:SetText(name, 1, 1, 1)\n"
         "    if count and count > 1 then self:AddLine('x' .. count, 1, 1, 1) end\n"
         "end\n"
@@ -15499,6 +15558,8 @@ void LuaEngine::registerCoreAPI() {
         "            if not colorblind then mark = '' end\n"
         "            local text = l.encrypted and (ENCRYPTED or 'Encrypted') or (LOCKED or 'Locked')\n"
         "            self:AddLine(mark .. text, r, g, b)\n"
+        // One of the lines 0x006277f0 answers 1 for (set after the lock walk).
+        "            __WoweeTooltipTimed(self, true)\n"
         "        end\n"
         "    end\n"
         // The type line (0x006277f0): a bag says CONTAINER_SLOTS with its
@@ -15726,6 +15787,7 @@ void LuaEngine::registerCoreAPI() {
         "                if n == 24 then key, n = 'ITEM_DURATION_DAYS', 1 else key = 'ITEM_DURATION_HOURS' end\n"
         "            else key, n = 'ITEM_DURATION_DAYS', math.ceil(s / 86400) end\n"
         "            if _G[key] then self:AddLine(format(_G[key], n), 1, 1, 1) end\n"
+        "            __WoweeTooltipTimed(self, true)\n"
         "        end\n"
         // The holiday it is for, white (0x0062abca).
         "        if data.holidayName then self:AddLine(format(ITEM_REQ_SKILL or 'Requires %s', data.holidayName), 1, 1, 1) end\n"
@@ -15870,8 +15932,10 @@ void LuaEngine::registerCoreAPI() {
         "            if n < 2 and ms >= 60000 then unit('MINUTES_ABBR', 60000) end\n"
         "            if n < 2 and ms > 0 then unit('SECONDS_ABBR', 1000) end\n"
         "            self:AddLine(format(ITEM_COOLDOWN_TIME or 'Cooldown remaining: %s', out), 1, 1, 1)\n"
+        "            __WoweeTooltipTimed(self, true)\n"
         "        elseif inst and inst.cooldownHeld and COOLDOWN_ON_LEAVE_COMBAT then\n"
         "            self:AddLine(COOLDOWN_ON_LEAVE_COMBAT, 1, 1, 1)\n"
+        "            __WoweeTooltipTimed(self, true)\n"
         "        end\n"
         "        if data.description and not usedDescription then self:AddLine('\"'..data.description..'\"', 1, 0.82, 0, 1) end\n"
         // Who made it, under the flavour text (0x006277f0): ITEM_CREATED_BY,
@@ -15951,24 +16015,35 @@ void LuaEngine::registerCoreAPI() {
         // Two implementations of one method, and the weaker one was winning by
         // load order alone. Found by tools/api_shadowing_check.py, which calls
         // this shape a fault and was right.
+        // 0x0062f420's shapes: nothing for an argument that is not a number,
+        // a bag past 11 or below 0 (the key ring and the bank's own slots are
+        // SetInventoryItem's) or a bag not there; one nil for a slot the bag
+        // does not have or an empty one - the lines left as they were, as the
+        // builder is never reached; else two.
         "function __WoweeFrameMT:SetBagItem(bag, slot)\n"
-        "    self:ClearLines()\n"
+        "    if type(bag) ~= 'number' and not tonumber(bag) then return end\n"
+        "    if type(slot) ~= 'number' and not tonumber(slot) then return end\n"
+        "    bag, slot = math.floor(tonumber(bag) + 0.5), math.floor(tonumber(slot) + 0.5)\n"
+        "    if bag < 0 or bag > 11 then return end\n"
+        "    local size = GetContainerNumSlots(bag) or 0\n"
+        "    if size <= 0 then return end\n"
+        "    if slot < 1 or slot > size then return nil end\n"
         "    local tex, count, locked, quality, readable, lootable, link = GetContainerItemInfo(bag, slot)\n"
-        "    if not link then return end\n"
-        "    local id = link:match('item:(%d+)')\n"
-        "    if not id then return end\n"
+        "    local id = link and tonumber(link:match('item:(%d+)'))\n"
+        "    if not id then return nil end\n"
+        "    self:ClearLines()\n"
         // The enchants are the item builder's own lines (0x006277f0), so they
         // are in before the OnTooltipSetItem it ends with - an addon reading
         // the tooltip from that script sees them.
-        "    id = tonumber(id)\n"
         "    self:_WoweeHoldItemRoll(bag, slot)\n"
         "    local filled = _WoweePopulateItemTooltip(self, id, _WoweeContainerItemInstance(bag, slot))\n"
         "    __WoweeTooltipItemBuilt(self, filled, id)\n"
-        // As 0x0062f420 answers: whether the tooltip counts something down
-        // (a cooldown running), and what repairing the item costs - the bag
-        // button's repair mode reads the second.
-        "    local start = GetContainerItemCooldown(bag, slot)\n"
-        "    return (start and start > 0) and 1 or nil, __WoweeContainerRepairCost(bag, slot)\n"
+        // As 0x0062f420 answers: what 0x006277f0 answered - whether the
+        // tooltip has a line that counts down (a lock, a duration, an
+        // enchant's time, a cooldown; nil while the item is being fetched) -
+        // and what repairing the item costs, which the bag button's repair
+        // mode reads.
+        "    return __WoweeTooltipTimed(self) and 1 or nil, __WoweeContainerRepairCost(bag, slot)\n"
         "end\n"
         // The spellbook's tooltip. SpellButton_OnEnter calls this and nothing
         // answered it, so hovering any spell in the book showed nothing -

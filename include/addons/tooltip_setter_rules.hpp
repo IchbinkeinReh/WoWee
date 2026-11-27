@@ -238,4 +238,11 @@ inline uint8_t auraFilterBits(const char* filter) {
     return bits;
 }
 
+/// The slots SetInventoryItem takes (0x0062e050, the client's slot one less): the ammo
+/// (0, its -1), equipment and bags (1-23), bank and bank bags (40-74), key ring and
+/// tokens (87-150). The backpack's own slots and the buyback ones are not among them.
+constexpr bool inventorySlotValid(int slot) {
+    return (slot >= 0 && slot <= 23) || (slot >= 40 && slot <= 74) || (slot >= 87 && slot <= 150);
+}
+
 }  // namespace wowee::addons::tooltip_rules
