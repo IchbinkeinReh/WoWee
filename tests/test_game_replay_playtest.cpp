@@ -2738,3 +2738,37 @@ TEST_CASE("the player moves itself again after a far teleport without control (T
     CHECK(s.sent().of(Opcode::CMSG_SET_ACTIVE_MOVER).size() == before + 1);
     CHECK(gh.isServerMovementAllowed());
 }
+
+// Y's open item (FIXER Z): 0x006e7f50's other branch - the player object
+// made while it charms a possessed unit (UNIT_FLAG_POSSESSED 0x01000000)
+// and looks through it (PLAYER_FARSIGHT) makes that unit the mover
+// (0x0071c930(1), 0x00513880 -> 0x00717c50 with the charm) and takes the
+// farsight up (0x006e2880: CMSG_FAR_SIGHT 1). It was always the player.
+TEST_CASE("the player object made while possessing makes the possessed unit the mover (0x006e7f50)",
+          "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    constexpr uint64_t kEye = 0x77;
+    gh.setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    for (const float v : {-1431.29f, -68.57f, 156.87f, 0.4f}) world.writeFloat(v);
+    s.receive(world);
+    gh.setWorldEntryCallback({});
+    s.receive(UpdateObject().create(kEye, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 10}, {UF::UNIT_FIELD_MAXHEALTH, 10},
+                                     {UF::UNIT_FIELD_FLAGS, 0x01000000u}},
+                                    false));
+    const size_t movers = s.sent().of(Opcode::CMSG_SET_ACTIVE_MOVER).size();
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}, {UF::UNIT_FIELD_LEVEL, 9},
+                   {UF::UNIT_FIELD_CHARM, static_cast<uint32_t>(kEye)},
+                   {UF::PLAYER_FARSIGHT, static_cast<uint32_t>(kEye)}});
+    CHECK(gh.activeMover() == kEye);
+    const auto sentMovers = s.sent().of(Opcode::CMSG_SET_ACTIVE_MOVER);
+    REQUIRE(sentMovers.size() == movers + 1);
+    auto last = sentMovers.back();
+    CHECK(last.readUInt64() == kEye);
+    CHECK(s.sent().of(Opcode::CMSG_FAR_SIGHT).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_MOVE_NOT_ACTIVE_MOVER).empty());
+}

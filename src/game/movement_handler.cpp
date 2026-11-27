@@ -5055,6 +5055,40 @@ void MovementHandler::onActivePlayerMade() {
     resetActiveMover();
     const uint64_t player = owner_.getPlayerGuid();
     if (player == 0 || !owner_.getSocket()) return;
+    // 0x006e7f50's pick: the unit the player charms (UNIT_FIELD_CHARM) when
+    // it is there, it is possessed (UNIT_FLAG_POSSESSED 0x01000000, its
+    // flags' top byte bit 0) and the player looks through it
+    // (PLAYER_FARSIGHT) - it is made controlled (0x0071c930(1)) and is the
+    // mover instead, and the farsight is taken up (0x006e2880).
+    uint64_t charm = 0;
+    uint64_t farsight = 0;
+    auto& entities = owner_.getEntityManager();
+    if (auto self = entities.getEntity(player)) {
+        const auto guidAt = [&self](UF low) -> uint64_t {
+            const uint16_t i = fieldIndex(low);
+            if (i == 0xFFFF) return 0;
+            return (static_cast<uint64_t>(self->getField(static_cast<uint16_t>(i + 1))) << 32) | self->getField(i);
+        };
+        charm = guidAt(UF::UNIT_FIELD_CHARM);
+        farsight = guidAt(UF::PLAYER_FARSIGHT);
+    }
+    bool charmMoves = false;
+    if (charm != 0 && charm == farsight) {
+        constexpr uint32_t kUnitFlagPossessed = 0x01000000u;
+        const uint16_t flags = fieldIndex(UF::UNIT_FIELD_FLAGS);
+        if (auto unit = entities.getEntity(charm);
+            unit && flags != 0xFFFF && (unit->getField(flags) & kUnitFlagPossessed) != 0)
+            charmMoves = true;
+    }
+    if (charmMoves) {
+        unitControl_[charm] = true;
+        // From no mover: nothing of the player's movement is stopped or
+        // said (0x00717c50 sends CMSG_SET_ACTIVE_MOVER alone).
+        activeMover_ = 0;
+        setActiveMover(charm);
+        onFarsightChanged(farsight);
+        return;
+    }
     owner_.getSocket()->send(SetActiveMoverPacket::build(player));
     LOG_INFO("Sent CMSG_SET_ACTIVE_MOVER for player 0x", std::hex, player, std::dec, " (player object made)");
     owner_.fireAddonEvent("VEHICLE_UPDATE", {});
