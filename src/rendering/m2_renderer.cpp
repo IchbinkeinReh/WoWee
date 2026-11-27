@@ -3024,9 +3024,12 @@ void M2Renderer::pushAlongParticles(const rt_lights::PointLight& light, const M2
         if (auto path = particleMeanPath(inst, model, ei)) paths.push_back(*path);
     }
     if (paths.empty()) {
+        if (rtNoteNow_) rtNoteNow_->noEmitterOn = true;
         out.push_back(light);
         return;
     }
+    if (rtNoteNow_)
+        rtNoteNow_->flamePaths = std::max(rtNoteNow_->flamePaths, static_cast<uint16_t>(paths.size()));
     const std::vector<float> weights = rt_lights::particleLightWeights(n);
     const float share = 1.0f / static_cast<float>(paths.size());
     // Parts in one place are one light, summed (rt_lights::addSplitPart);
@@ -3039,7 +3042,9 @@ void M2Renderer::pushAlongParticles(const rt_lights::PointLight& light, const M2
             rt_lights::PointLight part = light;
             part.position = path.at(rt_lights::particleLightAge(k, static_cast<int>(weights.size()), path.life));
             part.color = light.color * (weights[static_cast<size_t>(k)] * share);
+            const size_t before = out.size();
             const size_t at = rt_lights::addSplitPart(out, splitFirst, anchor, part);
+            if (rtNoteNow_ && out.size() == before) ++rtNoteNow_->partsSummed;
             if (!anchor) anchor = at;
         }
     }
@@ -3079,6 +3084,15 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         const float reach = range + model->boundRadius * inst.scale + 30.0f;
         const glm::vec3 d = inst.position - eye;
         if (glm::dot(d, d) > reach * reach) continue;
+        // The source's note for rt_lights (setRtSourceNotes), written below
+        // and by pushAlongParticles.
+        rtNoteNow_ = nullptr;
+        if (rtNotesOn_) {
+            rtNoteNow_ = &rtNotes_[rt_lights::m2SourceGroup(inst.id)];
+            *rtNoteNow_ = {};
+            rtNoteNow_->position = inst.position;
+            rtNoteNow_->modelLights = static_cast<uint16_t>(model->lights.size());
+        }
         const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
         // The pulse of a glow card's bone (rt_glow_pulse.hpp): the area the
         // bone's matrix, with its parents', draws it at this frame.
@@ -3093,7 +3107,10 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         // Every light here shines only while its source shows that it emits
         // (emission): its particles, or its glowing surface. Glow patches
         // below carry the same rule batch by batch.
-        if ((model->isLamp || !model->lights.empty()) && !emission(*model, inst).any()) continue;
+        if ((model->isLamp || !model->lights.empty()) && !emission(*model, inst).any()) {
+            if (rtNoteNow_) rtNoteNow_->notShown = true;
+            continue;
+        }
         if (model->lights.empty() && model->isLamp) {
             // A lamp with no light of its own (rt_lights::lampLight).
             // Where the bones hold the glass this frame (a lantern swings).
@@ -3125,7 +3142,10 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         if (model->lights.empty() && (model->isBrazierOrFire || model->isTorch)) {
             // A fire with no light of its own (rt_lights::fireLight), while
             // it burns (emission).
-            if (!emission(*model, inst).any()) continue;
+            if (!emission(*model, inst).any()) {
+                if (rtNoteNow_) rtNoteNow_->notShown = true;
+                continue;
+            }
             const glm::vec3 bmin = model->hasVertexBox ? model->vertexBoxMin : model->boundMin;
             const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
@@ -3195,6 +3215,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                              return rt_lights::coincide(o.position, l.position);
                                          });
                 if (same != out.end()) {
+                    if (rtNoteNow_) ++rtNoteNow_->partsSummed;
                     same->color += l.color;
                     same->attenuationEnd = std::max(same->attenuationEnd, l.attenuationEnd);
                     same->attenuationStart = std::max(same->attenuationStart, l.attenuationStart);
@@ -3216,7 +3237,10 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 turned ? rtSteadyCarried(*model, inst, static_cast<uint32_t>(light.bone)) : inst.modelMatrix,
                 turned ? kNoBones : inst.boneMatrices, rtModelFlickerStrength_, inst.animDuration,
                 rt_lights::lightPhaseMs(glm::vec3(inst.modelMatrix[3])));
-            if (!l) continue;
+            if (!l) {
+                if (rtNoteNow_) ++rtNoteNow_->lightsOff;
+                continue;
+            }
             l->color *= fade;
             // A light whose own colour and strength hold still pulses with
             // its glow card (rt_glow_pulse.hpp).
@@ -3230,6 +3254,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             pushAlongParticles(*l, *model, inst, out);
         }
     }
+    rtNoteNow_ = nullptr;
     // The particle emitters' (prepareM2Particles), within the range.
     for (const rt_lights::PointLight& l : rtParticleLights_) {
         if (glm::length(l.position - eye) - l.attenuationEnd > range) continue;

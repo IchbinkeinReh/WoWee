@@ -256,6 +256,15 @@ TEST_CASE("the lights kept are those that reach the view, the strongest first", 
     REQUIRE(selectLights(twins, eye, 100.0f, 2, inView) == 2);
     CHECK(twins[0].attenuationStart == 0.0f);
     CHECK(twins[1].attenuationStart == 1.0f);
+
+    // Why each of the others went (the MCP server's rt_lights says it).
+    using wowee::rendering::rt_lights::LightDrop;
+    using wowee::rendering::rt_lights::lightDropBeforeBudget;
+    CHECK(lightDropBeforeBudget(lights[0], eye, 100.0f, inView) == LightDrop::None);
+    CHECK(lightDropBeforeBudget(lights[1], eye, 100.0f, inView) == LightDrop::Far);
+    CHECK(lightDropBeforeBudget(lights[3], eye, 100.0f, inView) == LightDrop::Faint);
+    CHECK(lightDropBeforeBudget(lights[4], eye, 100.0f, inView) == LightDrop::OutOfView);
+    CHECK(lightDropBeforeBudget(lights[5], eye, 100.0f, inView) == LightDrop::ShortReach);
 }
 
 TEST_CASE("the light count limit is held to what the buffer takes", "[rt][lights]") {

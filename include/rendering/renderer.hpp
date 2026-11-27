@@ -1089,6 +1089,9 @@ public:
         uint8_t source = 0;
         int rank = -1;
         bool merged = false;
+        /// Why selectLights left it out before any budget
+        /// (rt_lights::LightDrop), 0 where it did not.
+        uint8_t drop = 0;
     };
     struct RtLightDiag {
         uint64_t frame = 0;
@@ -1099,6 +1102,9 @@ public:
         size_t kept = 0;
         size_t limit = 0;
         std::vector<RtLightDiagEntry> lights;  ///< within the radius, nearest first
+        /// Per source group: lights keepOneLightPerPlace folded into another
+        /// light standing in the same place (only where it did).
+        std::unordered_map<uint32_t, uint16_t> placeJoined;
     };
     [[nodiscard]] const RtLightDiag& rtLightDiag() const { return rtLightDiag_; }
     /// The eye adaptation's exposure this frame (1 where it is off) and the

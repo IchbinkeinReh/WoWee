@@ -2,6 +2,9 @@
 // the clock and what was last refused.
 
 #include <cmath>
+#include <cstdio>
+#include <map>
+#include <string>
 #include <utility>
 
 #include "core/application.hpp"
@@ -298,10 +301,26 @@ json rtLightsOf(ToolContext& context, const json& args) {
     const double radius = args.value("radius", 30.0);
     static constexpr const char* kKinds[] = {"model", "fire", "lamp", "building", "unit", "emissive", "particle"};
     auto* m2 = renderer->getM2Renderer();
+    static constexpr const char* kDrops[] = {"", "too faint", "reach too short", "not finite", "too far",
+                                             "out of view"};
+    // Per source: its lights listed, kept, merged by the budget, and why
+    // others were left out.
+    struct SourceCount {
+        int lights = 0, kept = 0, merged = 0;
+        int drops[6] = {};
+    };
+    std::map<uint32_t, SourceCount> perSource;
     json lights = json::array();
     for (const auto& e : diag.lights) {
         const float distance = glm::length(e.position - diag.eye);
         if (distance > radius) continue;
+        if (e.group != 0) {
+            SourceCount& c = perSource[e.group];
+            ++c.lights;
+            if (e.merged) ++c.merged;
+            else if (e.rank >= 0) ++c.kept;
+            if (e.drop < 6) ++c.drops[e.drop];
+        }
         json l = {{"kind", e.source < 7 ? kKinds[e.source] : "?"},
                   {"pos", vec3Json(e.position)},
                   {"distance", rounded(distance, 2)},
@@ -312,6 +331,7 @@ json rtLightsOf(ToolContext& context, const json& args) {
                   {"kept", e.rank >= 0},
                   {"rank", e.rank}};
         if (e.merged) l["merged"] = true;
+        if (e.drop != 0 && e.drop < 6 && e.rank < 0) l["dropped"] = kDrops[e.drop];
         if (e.flameShare >= 0.0f) l["flame_share"] = rounded(e.flameShare, 3);
         if (e.cardPulse != 1.0f) l["card_pulse"] = rounded(e.cardPulse, 3);
         if (e.group != 0) {
@@ -324,6 +344,48 @@ json rtLightsOf(ToolContext& context, const json& args) {
         }
         lights.push_back(std::move(l));
     }
+    // Why a source gives fewer lights this frame: the doodads' own notes
+    // (M2Renderer::RtSourceNote), what keepOneLightPerPlace folded, what the
+    // budget merged and why others were left out. Doodads that give no light
+    // now (flames or glow not shown) are listed too.
+    const auto groupText = [](uint32_t group) {
+        char g[16];
+        std::snprintf(g, sizeof(g), "0x%08x", group);
+        return std::string(g);
+    };
+    if (m2) {
+        for (const auto& [group, note] : m2->rtSourceNotes()) {
+            if (glm::length(note.position - diag.eye) <= radius) perSource.try_emplace(group);
+        }
+    }
+    json sources = json::array();
+    for (const auto& [group, c] : perSource) {
+        json why = json::array();
+        const auto say = [&why](const std::string& s) { why.push_back(s); };
+        if (m2) {
+            const auto& notes = m2->rtSourceNotes();
+            if (const auto it = notes.find(group); it != notes.end()) {
+                const auto& n = it->second;
+                if (n.notShown) say("no flames or glow shown: no light");
+                if (n.lightsOff)
+                    say(std::to_string(n.lightsOff) + " of " + std::to_string(n.modelLights) +
+                        " model lights off by their tracks");
+                if (n.noEmitterOn) say("no emitter on: one light where the model gives it, not along flames");
+                if (n.flamePaths) say("split along " + std::to_string(n.flamePaths) + " flame path(s)");
+                if (n.partsSummed) say(std::to_string(n.partsSummed) + " part(s) summed with one in the same place");
+            }
+        }
+        if (const auto it = diag.placeJoined.find(group); it != diag.placeJoined.end())
+            say(std::to_string(it->second) + " joined with another light in the same place");
+        if (c.merged) say(std::to_string(c.merged) + " merged into the source's light by the budget");
+        for (int k = 1; k < 6; ++k)
+            if (c.drops[k]) say(std::to_string(c.drops[k]) + " " + kDrops[k]);
+        json s = {{"source", groupText(group)}, {"lights", c.lights}, {"kept", c.kept}, {"why", std::move(why)}};
+        if (m2) {
+            if (std::string name = m2->rtSourceModelName(group); !name.empty()) s["model"] = std::move(name);
+        }
+        sources.push_back(std::move(s));
+    }
     return {{"frame", diag.frame},
             {"camera", vec3Json(diag.eye)},
             {"exposure", rounded(renderer->eyeExposure(), 3)},
@@ -332,7 +394,8 @@ json rtLightsOf(ToolContext& context, const json& args) {
             {"gathered", diag.gathered},
             {"kept", diag.kept},
             {"limit", diag.limit},
-            {"lights", std::move(lights)}};
+            {"lights", std::move(lights)},
+            {"sources", std::move(sources)}};
 }
 
 }  // namespace
@@ -342,7 +405,10 @@ void addStateTools(Toolbox& box) {
                            "The ray traced point lights near the camera as the last frame had them, nearest first: "
                            "kind, model, place, distance, final strength and colour, reach, a fire's visible flame "
                            "share and glow-card pulse, and whether the light budget kept it (rank) or merged it into its source's one "
-                           "light; with the eye adaptation's exposure. Empty without ray tracing.",
+                           "light, or why it was dropped; per source (`sources`) why it gives fewer lights this "
+                           "frame (flames not shown, model lights off by their tracks, no emitter on, parts summed "
+                           "or joined in one place, merged by the budget, too faint / far / out of view); with the "
+                           "eye adaptation's exposure. Empty without ray tracing.",
                            schema::object({schema::optional("radius",
                                                             schema::number("yards round the camera, at most 120", 1, 120))}),
                            rtLightsOf));

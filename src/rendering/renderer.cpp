@@ -7454,12 +7454,26 @@ void Renderer::recordRtLighting() {
         static std::vector<rt_lights::PointLight> lightScratch;
         lightScratch.clear();
         // None of it depends on the hour.
+        // With the doodads' notes for the MCP server's rt_lights (why a
+        // source gives fewer lights), this collection's only.
+        if (m2Renderer) m2Renderer->setRtSourceNotes(true);
         if (m2Renderer) m2Renderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        if (m2Renderer) m2Renderer->setRtSourceNotes(false);
         if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         if (characterRenderer) characterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         // Lava (rt_lights::liquidGlowPatches).
         if (waterRenderer) waterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        // What keepOneLightPerPlace folds together, per source (rt_lights).
+        static std::unordered_map<uint32_t, uint16_t> perSourceBefore;
+        perSourceBefore.clear();
+        for (const rt_lights::PointLight& l : lightScratch)
+            if (l.group != 0) ++perSourceBefore[l.group];
         rt_lights::keepOneLightPerPlace(lightScratch);
+        rtLightDiag_.placeJoined.clear();
+        for (const rt_lights::PointLight& l : lightScratch)
+            if (l.group != 0) --perSourceBefore[l.group];
+        for (const auto& [group, joined] : perSourceBefore)
+            if (joined != 0) rtLightDiag_.placeJoined[group] = joined;
         // The Debug Graphics settings' strength and reach per kind of light.
         for (rt_lights::PointLight& l : lightScratch) {
             // A light fades out by where it stands over the last 15 % of the
@@ -7483,20 +7497,22 @@ void Renderer::recordRtLighting() {
         rtLightDiag_.gathered = lightScratch.size();
         rtLightDiag_.limit = rt_lights::lightLimit(lightingTune_.lightCountLimit);
         rtLightDiag_.lights.clear();
+        const auto inView = [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); };
         for (const rt_lights::PointLight& l : lightScratch) {
             if (glm::length(l.position - in.cameraPos) > kLightDiagRadius) continue;
-            rtLightDiag_.lights.push_back({.position = l.position,
-                                           .color = l.color,
-                                           .attenuationStart = l.attenuationStart,
-                                           .attenuationEnd = l.attenuationEnd,
-                                           .flameShare = l.flameShare,
-                                           .cardPulse = l.cardPulse,
-                                           .group = l.group,
-                                           .source = static_cast<uint8_t>(l.source)});
+            rtLightDiag_.lights.push_back(
+                {.position = l.position,
+                 .color = l.color,
+                 .attenuationStart = l.attenuationStart,
+                 .attenuationEnd = l.attenuationEnd,
+                 .flameShare = l.flameShare,
+                 .cardPulse = l.cardPulse,
+                 .group = l.group,
+                 .source = static_cast<uint8_t>(l.source),
+                 .drop = static_cast<uint8_t>(rt_lights::lightDropBeforeBudget(l, in.cameraPos, kLightRange, inView))});
         }
         rt_lights::selectLights(lightScratch, in.cameraPos, kLightRange,
-                                rt_lights::lightLimit(lightingTune_.lightCountLimit),
-                                [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
+                                rt_lights::lightLimit(lightingTune_.lightCountLimit), inView);
         rtLightDiag_.kept = lightScratch.size();
         // selectLights merges a source's lights only where there are more
         // than the limit; within it a light not kept was dropped (too faint,

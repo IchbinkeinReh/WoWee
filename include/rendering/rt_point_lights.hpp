@@ -237,10 +237,28 @@ inline std::vector<size_t> lightsPerSource(const std::vector<size_t>& counts, si
     return allowed;
 }
 
+/// Why selectLights leaves a light out before any budget, the first test it
+/// fails (the MCP server's rt_lights says it of a light not kept).
+enum class LightDrop : uint8_t { None = 0, Faint, ShortReach, NotFinite, Far, OutOfView };
+template <class Visible>
+[[nodiscard]] LightDrop lightDropBeforeBudget(const PointLight& l, const glm::vec3& eye, float maxDistance,
+                                              Visible&& visible) {
+    constexpr float kMinStrength = 0.02f;
+    constexpr float kMinReach = 0.25f;
+    const float strength = std::max(l.color.r, std::max(l.color.g, l.color.b));
+    if (!(strength >= kMinStrength)) return LightDrop::Faint;
+    if (!(l.attenuationEnd >= kMinReach)) return LightDrop::ShortReach;
+    if (!std::isfinite(l.position.x) || !std::isfinite(l.position.y) || !std::isfinite(l.position.z))
+        return LightDrop::NotFinite;
+    if (glm::length(l.position - eye) - l.attenuationEnd > maxDistance) return LightDrop::Far;
+    if (!visible(l.position, l.attenuationEnd)) return LightDrop::OutOfView;
+    return LightDrop::None;
+}
+
 /// Keep the lights that can light something within `maxDistance` of the eye
 /// and that `visible(position, radius)` says reach into the view, at most
 /// `maxLights`, most important first. Lights too faint or too small to see go
-/// too. Returns the count kept.
+/// too (lightDropBeforeBudget). Returns the count kept.
 ///
 /// More of them than that (U21, the user's request): first a source with
 /// several lights (PointLight::group) gives up lights of its own, down to one,
@@ -253,18 +271,10 @@ inline std::vector<size_t> lightsPerSource(const std::vector<size_t>& counts, si
 template <class Visible>
 size_t selectLights(std::vector<PointLight>& lights, const glm::vec3& eye, float maxDistance,
                     size_t maxLights, Visible&& visible) {
-    constexpr float kMinStrength = 0.02f;
-    constexpr float kMinReach = 0.25f;
     std::vector<uint32_t> candidates;
     candidates.reserve(lights.size());
     for (uint32_t i = 0; i < lights.size(); ++i) {
-        const PointLight& l = lights[i];
-        const float strength = std::max(l.color.r, std::max(l.color.g, l.color.b));
-        if (!(strength >= kMinStrength) || !(l.attenuationEnd >= kMinReach)) continue;
-        if (!std::isfinite(l.position.x) || !std::isfinite(l.position.y) || !std::isfinite(l.position.z))
-            continue;
-        if (glm::length(l.position - eye) - l.attenuationEnd > maxDistance) continue;
-        if (!visible(l.position, l.attenuationEnd)) continue;
+        if (lightDropBeforeBudget(lights[i], eye, maxDistance, visible) != LightDrop::None) continue;
         candidates.push_back(i);
     }
     std::vector<PointLight> pool;

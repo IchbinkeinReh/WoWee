@@ -706,6 +706,23 @@ public:
     /// The particle emitters' lights are those the last prepareM2Particles
     /// gathered. None of it depends on the hour.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// What a doodad's lights came to in the last collectRtLights made with
+    /// notes on (the MCP server's rt_lights `sources`): why it gives fewer.
+    struct RtSourceNote {
+        glm::vec3 position{0.0f};
+        uint16_t modelLights = 0;  ///< the M2 lights its model carries
+        uint16_t lightsOff = 0;    ///< of those, off by their own tracks now
+        uint16_t flamePaths = 0;   ///< emitter paths its light was split along
+        uint16_t partsSummed = 0;  ///< parts added to one in the same place
+        bool notShown = false;     ///< no flames or glow shown: no light (emission)
+        bool noEmitterOn = false;  ///< emitters, none on: the light where the model gives it
+    };
+    /// On: the next collectRtLights keeps a note per source (cleared first).
+    void setRtSourceNotes(bool on) const {
+        rtNotesOn_ = on;
+        if (on) rtNotes_.clear();
+    }
+    [[nodiscard]] const std::unordered_map<uint32_t, RtSourceNote>& rtSourceNotes() const { return rtNotes_; }
     /// WOWEE_RT_LIGHT_DIAG: the doodads within `radius` of `eye` and what
     /// each gives of light - its M2 lights, a fire's or a lamp's, its glow
     /// patches, its emitters - logged.
@@ -1519,6 +1536,11 @@ private:
     void forgetRtLit(M2Instance& inst);
     // The instances whose models carry lights, by M2Instance::id.
     std::vector<uint32_t> rtLitInstances_;
+    // setRtSourceNotes: whether collectRtLights keeps notes, the notes by
+    // source group, and the one the instance being collected writes.
+    mutable bool rtNotesOn_ = false;
+    mutable std::unordered_map<uint32_t, RtSourceNote> rtNotes_;
+    mutable RtSourceNote* rtNoteNow_ = nullptr;
     /// One light per particle emitter near the camera whose model gives no
     /// other (rt_lights::ParticleGlow), gathered by prepareM2Particles as it
     /// writes the particles out; read by collectRtLights after the worker
