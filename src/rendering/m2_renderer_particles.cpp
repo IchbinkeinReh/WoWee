@@ -796,18 +796,17 @@ void M2Renderer::prepareM2Particles() {
                 }
                 // A part too faint for the trace to keep (selectLights drops
                 // a light under kMinParticlePartStrength) gives its share to
-                // the first, so all of them together stay the one light.
+                // the first, and parts in one place are one light
+                // (rt_lights::addSplitPart), so all of them together stay the
+                // one light.
                 const size_t first = rtParticleLights_.size();
+                std::optional<size_t> anchor;
                 for (int k = 0; k < perEmitter; ++k) {
                     rt_lights::PointLight part = *l;
                     part.position = path->at(rt_lights::particleLightAge(k, perEmitter, path->life));
                     part.color *= weights[static_cast<size_t>(k)];
-                    const float strength = std::max(part.color.r, std::max(part.color.g, part.color.b));
-                    if (k > 0 && strength < rt_lights::kMinParticlePartStrength) {
-                        rtParticleLights_[first].color += part.color;
-                        continue;
-                    }
-                    rtParticleLights_.push_back(part);
+                    const size_t at = rt_lights::addSplitPart(rtParticleLights_, first, anchor, part);
+                    if (!anchor) anchor = at;
                 }
             }
             // One model's emitters together no brighter than a fire.

@@ -26,6 +26,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/m2_particle_motion.hpp"
+#include "rendering/rt_particle_lights.hpp"
 
 namespace wowee::rendering::rt_lights {
 
@@ -393,6 +394,32 @@ void keepOneLightPerPlace(std::vector<Light>& lights) {
         if (!merged) lights[kept++] = lights[i];
     }
     lights.resize(kept);
+}
+
+/// One part of a light shared out along its particles' path (a model's own
+/// light in M2Renderer::pushAlongParticles, an emitter's glow light): onto
+/// `anchor`, the first part of its path, when too faint to be traced; onto an
+/// earlier part of the same split (from `splitFirst` on) that stands where it
+/// does; else a light of its own. Answers where it went. Parts in one place
+/// would otherwise meet keepOneLightPerPlace, which keeps the strongest alone:
+/// a brazier's three parts a tenth of a yard apart came and went as their
+/// spacing crossed kCoincidentLights - every brazier of the model at once, on
+/// their shared global sequence (T443). Summed, the split stays the one light.
+template <class Light>
+size_t addSplitPart(std::vector<Light>& out, size_t splitFirst, std::optional<size_t> anchor, const Light& part) {
+    const float strength = std::max(part.color.r, std::max(part.color.g, part.color.b));
+    if (anchor && *anchor < out.size() && strength < kMinParticlePartStrength) {
+        out[*anchor].color += part.color;
+        return *anchor;
+    }
+    for (size_t k = splitFirst; k < out.size(); ++k) {
+        if (coincide(out[k].position, part.position)) {
+            out[k].color += part.color;
+            return k;
+        }
+    }
+    out.push_back(part);
+    return out.size() - 1;
 }
 
 /// The least reach an M2 light is given in the world, in yards (evaluateM2Light).

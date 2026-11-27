@@ -544,6 +544,54 @@ TEST_CASE("Two lights in one place become the stronger one", "[rt_lights]") {
     CHECK(lights[1].color.r == Catch::Approx(0.5f));
 }
 
+// T443: a brazier's three parts a tenth of a yard apart came and went as the
+// frame's spacing crossed kCoincidentLights - keepOneLightPerPlace kept the
+// first part alone, a third of the light gone in a step.
+TEST_CASE("Parts of one split light in one place are summed, not dropped (T443)", "[rt_lights]") {
+    using wowee::rendering::rt_lights::PointLight;
+    using wowee::rendering::rt_lights::addSplitPart;
+    using wowee::rendering::rt_lights::keepOneLightPerPlace;
+    const auto split = [](float spacing) {
+        std::vector<PointLight> out;
+        PointLight other;
+        other.position = glm::vec3(0.0f, 0.0f, 19.0f);
+        other.color = glm::vec3(0.3f);
+        out.push_back(other);  // another source's, before the split
+        std::optional<size_t> anchor;
+        const float w[3] = {0.37f, 0.12f, 0.04f};
+        for (int k = 0; k < 3; ++k) {
+            PointLight part;
+            part.position = glm::vec3(5.0f, 0.0f, 18.93f + spacing * static_cast<float>(k));
+            part.color = glm::vec3(w[k]);
+            const size_t at = addSplitPart(out, 1, anchor, part);
+            if (!anchor) anchor = at;
+        }
+        keepOneLightPerPlace(out);
+        float sum = 0.0f;
+        for (const PointLight& l : out)
+            if (l.position.x > 1.0f) sum += l.color.r;
+        return std::pair<size_t, float>(out.size(), sum);
+    };
+    // Apart: three lights; in one place: fewer, but as strong together.
+    const auto apart = split(0.101f);
+    const auto close = split(0.099f);
+    CHECK(apart.first == 4);
+    CHECK(close.first < 4);
+    CHECK(apart.second == Catch::Approx(0.53f));
+    CHECK(close.second == Catch::Approx(0.53f));
+    // Too faint: onto the first part.
+    std::vector<PointLight> out;
+    PointLight a, b;
+    a.position = glm::vec3(0.0f);
+    a.color = glm::vec3(0.5f);
+    b.position = glm::vec3(0.0f, 0.0f, 3.0f);
+    b.color = glm::vec3(0.01f);
+    const size_t first = addSplitPart(out, 0, std::nullopt, a);
+    CHECK(addSplitPart(out, 0, first, b) == first);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].color.r == Catch::Approx(0.51f));
+}
+
 TEST_CASE("a fire's light goes among its particles, not into its coals", "[rt][lights]") {
     pipeline::M2ParticleEmitter flame{};
     flame.emitterType = 1;   // a plane, straight up

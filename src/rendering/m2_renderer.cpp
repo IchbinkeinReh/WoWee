@@ -3029,20 +3029,18 @@ void M2Renderer::pushAlongParticles(const rt_lights::PointLight& light, const M2
     }
     const std::vector<float> weights = rt_lights::particleLightWeights(n);
     const float share = 1.0f / static_cast<float>(paths.size());
+    // Parts in one place are one light, summed (rt_lights::addSplitPart);
+    // one too faint for the trace (selectLights) gives its share to its
+    // path's first - so all of them together stay the one light.
+    const size_t splitFirst = out.size();
     for (const ParticleMeanPath& path : paths) {
-        const size_t first = out.size();
+        std::optional<size_t> anchor;
         for (int k = 0; k < static_cast<int>(weights.size()); ++k) {
             rt_lights::PointLight part = light;
             part.position = path.at(rt_lights::particleLightAge(k, static_cast<int>(weights.size()), path.life));
             part.color = light.color * (weights[static_cast<size_t>(k)] * share);
-            // Too faint for the trace to keep (selectLights): its share to
-            // the first, so all of them together stay the one light.
-            const float strength = std::max(part.color.r, std::max(part.color.g, part.color.b));
-            if (k > 0 && strength < rt_lights::kMinParticlePartStrength) {
-                out[first].color += part.color;
-                continue;
-            }
-            out.push_back(part);
+            const size_t at = rt_lights::addSplitPart(out, splitFirst, anchor, part);
+            if (!anchor) anchor = at;
         }
     }
 }
