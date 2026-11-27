@@ -26,11 +26,15 @@ int gHandlerSaveRef = LUA_NOREF;
 /// Past nine: 2.4's ChatFrame builds the player link out of arg11, the line
 /// id, and concatenating the nil it found there raised for every message, so
 /// the chat window stayed empty.
-constexpr int kMaxHandlerArgs = 20;
+/// 12340 (0x00819ea0) has no limit; 32 covers the widest 3.3.5 event (the
+/// combat log's twenty-odd).
+constexpr int kMaxHandlerArgs = 32;
 const char* const kHandlerArgNames[kMaxHandlerArgs] = {
     "arg1",  "arg2",  "arg3",  "arg4",  "arg5",  "arg6",  "arg7",
     "arg8",  "arg9",  "arg10", "arg11", "arg12", "arg13", "arg14",
-    "arg15", "arg16", "arg17", "arg18", "arg19", "arg20"};
+    "arg15", "arg16", "arg17", "arg18", "arg19", "arg20", "arg21",
+    "arg22", "arg23", "arg24", "arg25", "arg26", "arg27", "arg28",
+    "arg29", "arg30", "arg31", "arg32"};
 /// `this`, `event`, and one per argN.
 constexpr int kHandlerSaveSlots = 2 + kMaxHandlerArgs;
 

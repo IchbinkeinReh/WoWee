@@ -925,8 +925,10 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
     // `## Interface: 11200` is 1.12.0, `20400` is 2.4.3, `30300` is 3.3.5a.
     // Everything before 3.0 takes no handler arguments at all and reads the
     // frame off the global `this`, the event off `event` and the payload off
-    // `arg1`..`argN`; 3.0 replaced that with the arguments this client already
-    // passes. See LuaEngine::setLegacyHandlerGlobals.
+    // `arg1`..`argN`; 3.0 added the arguments this client already passes but
+    // kept the globals - 12340's runner (0x00819ea0) still sets them around
+    // every handler, and 3.3.5's own Blizzard_AuctionUI reads arg1/arg2 in
+    // its OnEvent (T416). They went in 4.0. See interfaceReadsHandlerGlobals.
     //
     // Read off the manifest rather than off the active expansion profile,
     // because it is a fact about the files about to be loaded and the two can
@@ -944,7 +946,7 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         it != toc->directives.end()) {
         interfaceVersion = std::atoi(it->second.c_str());
     }
-    const bool legacyHandlers = interfaceVersion == 0 || interfaceVersion < 30000;
+    const bool legacyHandlers = interfaceReadsHandlerGlobals(interfaceVersion);
     setLegacyHandlerGlobals(legacyHandlers);
     // Published, because some of FrameXML's own signatures changed between
     // expansions and the snippets this client runs against them have to pick.

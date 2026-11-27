@@ -32,6 +32,16 @@ namespace wowee::addons {
 void setLegacyHandlerGlobals(bool on);
 bool legacyHandlerGlobals();
 
+/// Whether an interface of this `## Interface:` number reads them. T416:
+/// every client before 4.0 publishes them - 3.3.5a's handler runner
+/// (0x00819ea0) sets `this`, `event` and arg1..argN around each call and puts
+/// the old values back after - so 30300 too; 3.x's handlers also get the
+/// arguments, but Blizzard_AuctionUI and many addons still read the globals.
+/// A manifest that does not say (0) counts as old.
+[[nodiscard]] constexpr bool interfaceReadsHandlerGlobals(int interfaceVersion) {
+    return interfaceVersion == 0 || interfaceVersion < 40000;
+}
+
 /// pcall a frame's handler, publishing those globals around the call.
 ///
 /// The same stack contract as lua_pcall - the function, then the frame, then

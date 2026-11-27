@@ -251,3 +251,24 @@ TEST_CASE("A handler that raises still gives the names back",
     CHECK(fx.global("this") == "before");
     CHECK(fx.global("arg1") == "kept");
 }
+
+// T416: 3.3.5a's runner (0x00819ea0) sets this/event/arg1..argN around every
+// handler, as the clients before it did; only 4.0 dropped them. A 30300
+// interface was given none, and Blizzard_AuctionUI's multisell handler read
+// a nil arg1 (SetMinMaxValues(0, arg1) raised; the sell tab stayed blocked).
+TEST_CASE("3.3.5's interface reads the handler globals too (T416, 0x00819ea0)", "[handlerglobals]") {
+    using wowee::addons::interfaceReadsHandlerGlobals;
+    CHECK(interfaceReadsHandlerGlobals(0));
+    CHECK(interfaceReadsHandlerGlobals(11200));
+    CHECK(interfaceReadsHandlerGlobals(20400));
+    CHECK(interfaceReadsHandlerGlobals(30300));
+    CHECK_FALSE(interfaceReadsHandlerGlobals(40000));
+    // And a payload past twenty still reaches its name.
+    Fixture fx;
+    setLegacyHandlerGlobals(true);
+    fx.handler("OnEvent", "sawLast = arg24");
+    std::vector<std::string> args{"COMBAT_LOG_EVENT"};
+    for (int i = 1; i <= 24; ++i) args.push_back(i == 24 ? "last" : "x");
+    REQUIRE(fx.dispatch("OnEvent", args) == 0);
+    CHECK(fx.global("sawLast") == "last");
+}
