@@ -267,6 +267,11 @@ TEST_CASE("GetQuestLogTitle answers a level -1 quest at the player's level", "[r
     ui.run("levels = {} for i = 1, GetNumQuestLogEntries() do local t, l, _, _, h, _, _, _, id = GetQuestLogTitle(i) "
            "if not h then levels[id] = l end end");
     CHECK(ui.is("levels[911] == 80 and levels[912] == 78"));
+    // GetQuestLink (0x005e51d0) makes the same substitution before 0x0061e5c0.
+    ui.run("links = {} for i = 1, GetNumQuestLogEntries() do local _, _, _, _, h, _, _, _, id = GetQuestLogTitle(i) "
+           "if not h then links[id] = GetQuestLink(i) end end");
+    CHECK(ui.is("links[911]:find('Hquest:911:80|h', 1, true) ~= nil"));
+    CHECK(ui.is("links[912]:find('Hquest:912:78|h', 1, true) ~= nil"));
 }
 
 // P56: 0x0062f9e0 gives the tooltip the attachment's property and seed, as

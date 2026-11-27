@@ -1120,7 +1120,11 @@ static int lua_GetQuestLink(lua_State* L) {
     if (!gh || index < 1) { return luaReturnNil(L); }
     const auto* qp = questAtRow(gh, index);
     if (!qp) { return luaReturnNil(L); }
-    lua_pushstring(L, game::questChatLink(qp->questId, qp->level, qp->title, static_cast<int>(gh->getPlayerLevel())).c_str());
+    // 0x005e51d0 takes the level from 0x005e0d20, as GetQuestLogTitle does:
+    // the player's for a quest of level -1 (T449).
+    const int playerLevel = static_cast<int>(gh->getPlayerLevel());
+    const int level = qp->level == -1 ? playerLevel : qp->level;
+    lua_pushstring(L, game::questChatLink(qp->questId, level, qp->title, playerLevel).c_str());
     return 1;
 }
 
@@ -7478,11 +7482,16 @@ void registerQuestLuaAPI(lua_State* L) {
                 // zero from the reference. The local half above (GetStatistic) makes
                 // the same choices, which keeps the two columns of one row in step.
                 {"GetComparisonStatistic", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            if (!gh || lua_gettop(L) < 1)
+            // 0x005b5e70: a number, else its usage line; an id naming no
+            // achievement (0x006f6020) answers nothing, as GetStatistic (T450).
+            if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GetComparisonStatistic(achievementID)");
+            auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(lua_tonumber(L, 1));
+            if (!gh || id == 0) return 0;
             gh->ensureAchievementCriteriaLoaded();
+            gh->ensureAchievementNamesLoaded();
+            if (gh->getAchievementName(id).empty()) return 0;
             const auto& list = gh->getAchievementCriteria(id);
             if (list.empty()) { lua_pushstring(L, "--"); return 1; }
             const auto* progress = gh->getComparisonCriteriaProgress(

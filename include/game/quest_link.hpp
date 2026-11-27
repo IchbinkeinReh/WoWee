@@ -19,8 +19,9 @@ namespace wowee::game {
     return -above > triviality::greyGap(static_cast<uint32_t>(playerLevel)) ? "|cff808080" : "|cff40c040";
 }
 
-/// A quest's chat link (0x005e51d0, 0x0061e5c0): its level as the template has
-/// it, -1 for one of the player's, coloured as that.
+/// A quest's chat link (0x0061e5c0): the level the caller hands it - GetQuestLink
+/// (0x005e51d0) the player's for a quest of level -1 - coloured as that, a -1
+/// as the player's.
 [[nodiscard]] inline std::string questChatLink(uint32_t questId, int questLevel, const std::string& title,
                                                int playerLevel) {
     return std::string(questColour(questLevel == -1 ? playerLevel : questLevel, playerLevel)) + "|Hquest:" +
