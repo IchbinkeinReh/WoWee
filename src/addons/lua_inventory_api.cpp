@@ -5028,6 +5028,9 @@ struct AuctionSellSlot {
     bool    held = false;
     uint8_t bag  = 0;
     uint8_t slot = 0;
+    /// GameHandler::auctionSellSlotEpoch when the box was filled: a later one
+    /// means the auction state let it go (a multisell's end or give-up).
+    uint32_t epoch = 0;
 };
 static AuctionSellSlot& auctionSellSlot() { static AuctionSellSlot s; return s; }
 
@@ -5150,6 +5153,9 @@ static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
     // The sell box empties with the house (0x0059f150 -> 0x0059a560), however
     // the house was closed.
     if (gh && !gh->isAuctionHouseOpen() && auctionSellSlot().held) auctionSellSlot() = AuctionSellSlot{};
+    // A multisell's end or give-up let it go (0x0059ba80, 0x0059ab20).
+    if (gh && auctionSellSlot().held && auctionSellSlot().epoch != gh->auctionSellSlotEpoch())
+        auctionSellSlot() = AuctionSellSlot{};
     const AuctionSellSlot& sel = auctionSellSlot();
     if (!gh || !sel.held) return nullptr;
     const auto& inv = gh->getInventory();
@@ -7939,43 +7945,29 @@ void registerInventoryLuaAPI(lua_State* L) {
                 fireAuctionSellUpdate(gh);
                 return 0;
             }
-            if (stacks > 1)
-                gh->fireAddonEvent("AUCTION_MULTISELL_START", {std::to_string(stacks)});
-            for (uint32_t posted = 0; posted < stacks; ++posted) {
-                // One auction's worth, taken from the end of the list as
-                // 0x0059ba80 takes it: whole items first, then part of the
-                // next, which keeps the rest of it for the auctions after.
-                std::vector<std::pair<uint64_t, uint32_t>> parts;
-                uint32_t left = stack;
-                while (left > 0 && !sources.empty()) {
-                    AuctionSource& s = sources.back();
-                    const uint32_t used = std::min(left, s.count);
-                    parts.emplace_back(s.guid, used);
-                    s.count -= used;
-                    left -= used;
-                    if (s.count == 0) sources.pop_back();
-                }
-                if (left > 0) break;   // counted above, so not reached
-                gh->auctionSellItems(parts, bid, buy, dur);
-                // The reference drives its stepper off the answer to each post,
-                // so its posts are spaced out; these go together. Nothing on the
-                // wire asks for spacing - each request names its own sources and
-                // counts, worked out here as the server will take them.
-                //
-                // The third of its events, AUCTION_MULTISELL_FAILURE, is raised
-                // by the routine that gives a multisell up (0x0059ab20, which
-                // also empties the pending item): the stepper calls it when the
-                // source records it was walking run out under one more stack
-                // (0x0059ba80, 0x0059ab20 at its 0x59bc06), and so does the
-                // handler that tears the auction house state down while a
-                // multisell stands open (0x0059f150). Neither state this client
-                // can reach - its sources are one sell slot and its posts all
-                // go out together - so that name stays unfired, and the last
-                // UPDATE below is what hides the bar instead.
-                if (stacks > 1)
-                    gh->fireAddonEvent("AUCTION_MULTISELL_UPDATE",
-                                       {std::to_string(posted + 1), std::to_string(stacks)});
+            std::vector<std::pair<uint64_t, uint32_t>> walk;
+            walk.reserve(sources.size());
+            for (const auto& src : sources) walk.emplace_back(src.guid, src.count);
+            if (stacks > 1) {
+                // 0x0059f990: AUCTION_MULTISELL_START and the first post; the
+                // rest go one by one as the realm takes each (0x0059ffb0 ->
+                // 0x0059ba80), and the box stays filled until the end.
+                gh->auctionMultisellStart(std::move(walk), stack, stacks, bid, buy, dur);
+                return 0;
             }
+            // One auction from several sources: posted (0x0059ba80 from the
+            // end of the walk), then the box let go (0x0059a560).
+            std::vector<std::pair<uint64_t, uint32_t>> parts;
+            uint32_t left = stack;
+            while (left > 0 && !walk.empty()) {
+                auto& src = walk.back();
+                const uint32_t used = std::min(left, src.second);
+                parts.emplace_back(src.first, used);
+                src.second -= used;
+                left -= used;
+                if (src.second == 0) walk.pop_back();
+            }
+            gh->auctionSellItems(parts, bid, buy, dur);
             auctionSellSlot() = AuctionSellSlot{};
             fireAuctionSellUpdate(gh);
             return 0;
@@ -7995,7 +7987,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (!gh) return 0;
             AuctionSellSlot candidate{};
             if (uint8_t bag = 0, slot = 0; wowee::ui::frameXmlCursorWireSlot(bag, slot)) {
-                candidate = {.held = true, .bag = bag, .slot = slot};
+                candidate = {.held = true, .bag = bag, .slot = slot, .epoch = gh->auctionSellSlotEpoch()};
                 const AuctionSellSlot previous = auctionSellSlot();
                 auctionSellSlot() = candidate;
                 uint64_t guid = 0;
@@ -8102,7 +8094,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             // let go with NEW_AUCTION_UPDATE (0x0059a560) when it held an item.
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const bool held = auctionSellSlot().held && gh->isAuctionHouseOpen();
+            const bool held = auctionSellItemSlot(gh) != nullptr;
             gh->closeAuctionHouse();
             if (held) {
                 auctionSellSlot() = AuctionSellSlot{};

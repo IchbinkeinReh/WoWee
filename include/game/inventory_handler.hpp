@@ -800,6 +800,20 @@ public:
                           uint32_t buyout, uint32_t duration);
     void auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                uint32_t buyout, uint32_t duration);
+    /// StartAuction of several stacks (0x0059f990): AUCTION_MULTISELL_START,
+    /// then one auction of stackSize at a time from the sources (taken from
+    /// the end, 0x0059ba80); the next goes only after the realm took the one
+    /// before (SMSG_AUCTION_COMMAND_RESULT, 0x0059ffb0), each answer raising
+    /// AUCTION_MULTISELL_UPDATE done/total. A refusal, sources running out or
+    /// the house closing give up (0x0059ab20: AUCTION_MULTISELL_FAILURE). The
+    /// end and a give-up let the sell box go (auctionSellSlotEpoch).
+    void auctionMultisellStart(std::vector<std::pair<uint64_t, uint32_t>> sources, uint32_t stackSize,
+                               uint32_t stacks, uint32_t bid, uint32_t buyout, uint32_t duration);
+    [[nodiscard]] bool auctionMultisellActive() const { return multisell_.active; }
+    /// Raised whenever the auction state lets the sell box go by itself (a
+    /// multisell's end or give-up, 0x0059ab20/0x0059ba80); the box remembers
+    /// the value it was filled at.
+    [[nodiscard]] uint32_t auctionSellSlotEpoch() const { return sellSlotEpoch_; }
     /// PlaceAuctionBid's checks and request (0x0059da40).
     void auctionBid(const AuctionEntry& auction, uint32_t bid);
     /// 0x00754dd0: whether `count` more of the item fit its MaxCount and its
@@ -1300,6 +1314,16 @@ private:
     bool auctionOpen_ = false;
     uint64_t auctioneerGuid_ = 0;
     uint32_t auctionHouseId_ = 0;
+    /// 0x00c0e740..0x00c0e770 and 0x00c0f434: a multisell under way.
+    struct Multisell {
+        bool active = false;
+        std::vector<std::pair<uint64_t, uint32_t>> sources;
+        uint32_t stackSize = 0, total = 0, remaining = 0, bid = 0, buyout = 0, duration = 0;
+    } multisell_;
+    uint32_t sellSlotEpoch_ = 0;
+    void auctionMultisellStep();
+    void auctionMultisellGiveUp();
+    void releaseAuctionSellSlot();
     AuctionListResult auctionBrowseResults_;
     AuctionListResult auctionOwnerResults_;
     AuctionListResult auctionBidderResults_;

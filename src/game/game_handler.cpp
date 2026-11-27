@@ -2120,6 +2120,16 @@ void GameHandler::auctionSellItems(const std::vector<std::pair<uint64_t, uint32_
     if (inventoryHandler_) inventoryHandler_->auctionSellItems(sources, bid, buyout, duration);
 }
 
+void GameHandler::auctionMultisellStart(std::vector<std::pair<uint64_t, uint32_t>> sources, uint32_t stackSize,
+                                        uint32_t stacks, uint32_t bid, uint32_t buyout, uint32_t duration) {
+    if (inventoryHandler_)
+        inventoryHandler_->auctionMultisellStart(std::move(sources), stackSize, stacks, bid, buyout, duration);
+}
+
+uint32_t GameHandler::auctionSellSlotEpoch() const {
+    return inventoryHandler_ ? inventoryHandler_->auctionSellSlotEpoch() : 0;
+}
+
 void GameHandler::auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                         uint32_t buyout, uint32_t duration) {
     if (inventoryHandler_) inventoryHandler_->auctionSellItemByGuid(itemGuid, stackCount, bid, buyout, duration);

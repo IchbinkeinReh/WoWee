@@ -5370,6 +5370,10 @@ public:
                           uint32_t buyout, uint32_t duration);
     void auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                uint32_t buyout, uint32_t duration);
+    /// See InventoryHandler::auctionMultisellStart (0x0059f990/0x0059ba80).
+    void auctionMultisellStart(std::vector<std::pair<uint64_t, uint32_t>> sources, uint32_t stackSize,
+                               uint32_t stacks, uint32_t bid, uint32_t buyout, uint32_t duration);
+    [[nodiscard]] uint32_t auctionSellSlotEpoch() const;
     /// PlaceAuctionBid's checks and request (0x0059da40).
     void auctionBid(const AuctionEntry& auction, uint32_t bid);
     void auctionCancelItem(uint32_t auctionId);

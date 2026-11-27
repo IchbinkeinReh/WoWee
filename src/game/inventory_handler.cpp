@@ -5380,6 +5380,8 @@ void InventoryHandler::closeAuctionHouse() {
     auctionOwnerResults_ = AuctionListResult{};
     auctionBidderResults_ = AuctionListResult{};
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_CLOSED", {});
+    // 0x0059f150: a multisell under way is given up with the house.
+    if (multisell_.active) auctionMultisellGiveUp();
 }
 
 void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, uint8_t levelMax,
@@ -5442,6 +5444,59 @@ void InventoryHandler::auctionSellItems(const std::vector<std::pair<uint64_t, ui
         return;
     }
     owner_.getSocket()->send(AuctionSellItemPacket::build(auctioneerGuid_, sources, bid, buyout, duration));
+}
+
+void InventoryHandler::auctionMultisellStart(std::vector<std::pair<uint64_t, uint32_t>> sources,
+                                             uint32_t stackSize, uint32_t stacks, uint32_t bid,
+                                             uint32_t buyout, uint32_t duration) {
+    // 0x0059f990's several-stack branch: the walk's sources and the request
+    // kept, AUCTION_MULTISELL_START with the count, the first post.
+    multisell_ = Multisell{true, std::move(sources), stackSize, stacks, stacks, bid, buyout, duration};
+    owner_.fireAddonEvent("AUCTION_MULTISELL_START", {std::to_string(stacks)});
+    auctionMultisellStep();
+}
+
+void InventoryHandler::releaseAuctionSellSlot() {
+    // 0x0059a560's part: the box let go, NEW_AUCTION_UPDATE.
+    ++sellSlotEpoch_;
+    owner_.fireAddonEvent("NEW_AUCTION_UPDATE", {});
+}
+
+void InventoryHandler::auctionMultisellGiveUp() {
+    // 0x0059ab20(0): over, the box let go, AUCTION_MULTISELL_FAILURE.
+    multisell_ = Multisell{};
+    releaseAuctionSellSlot();
+    owner_.fireAddonEvent("AUCTION_MULTISELL_FAILURE", {});
+}
+
+void InventoryHandler::auctionMultisellStep() {
+    // 0x0059ba80: none left - over, the box let go; else one more auction of
+    // stackSize, whole sources from the end first, then part of the next
+    // (which keeps the rest); sources short of a stack give up.
+    if (multisell_.remaining == 0) {
+        multisell_ = Multisell{};
+        releaseAuctionSellSlot();
+        return;
+    }
+    --multisell_.remaining;
+    auto& sources = multisell_.sources;
+    uint64_t have = 0;
+    for (const auto& src : sources) have += src.second;
+    if (have < multisell_.stackSize) {
+        auctionMultisellGiveUp();
+        return;
+    }
+    std::vector<std::pair<uint64_t, uint32_t>> parts;
+    uint32_t left = multisell_.stackSize;
+    while (left > 0 && !sources.empty()) {
+        auto& src = sources.back();
+        const uint32_t used = std::min(left, src.second);
+        parts.emplace_back(src.first, used);
+        src.second -= used;
+        left -= used;
+        if (src.second == 0) sources.pop_back();
+    }
+    auctionSellItems(parts, multisell_.bid, multisell_.buyout, multisell_.duration);
 }
 
 void InventoryHandler::auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
@@ -5761,8 +5816,17 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
     // sell successful." and "Auction bid/buyout failed: Bid too low." in
     // English - with the refusals numbered as the server does not number
     // them - red and in chat both.
+    // 0x0059ffb0: a refused post gives a multisell up; a taken one counts
+    // and posts the next.
+    if (multisell_.active && action == 0 && error != 0) auctionMultisellGiveUp();
     if (error == 0) {
         if (action == 0) {
+            if (multisell_.active) {
+                owner_.fireAddonEvent("AUCTION_MULTISELL_UPDATE",
+                                      {std::to_string(multisell_.total - multisell_.remaining),
+                                       std::to_string(multisell_.total)});
+                auctionMultisellStep();
+            }
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_STARTED", "Auction created."));
             ownerListWanted_ = true;
             if (ownerListAnswersDue_ < 1) auctionListOwnerItems(0);

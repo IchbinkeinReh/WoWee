@@ -4459,6 +4459,63 @@ TEST_CASE("the scoreboard's faction tabs split a battleground's rows (T410)", "[
     ui.run("SetBattlefieldScoreFaction(nil)");
 }
 
+// T411 (FIXER Z): several stacks go one at a time (0x0059f990 -> 0x0059ba80):
+// AUCTION_MULTISELL_START and the first post; each auction the realm takes
+// (SMSG_AUCTION_COMMAND_RESULT, 0x0059ffb0) raises AUCTION_MULTISELL_UPDATE
+// done/total and sends the next; a refusal gives up (0x0059ab20:
+// AUCTION_MULTISELL_FAILURE, the box let go). All stacks went at once and
+// the bar ran to the end before any answer.
+TEST_CASE("a multisell posts the next stack on the realm's answer (T411)", "[replay][interface][auction]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    s.handler().getInventoryHandler()->openAuctionHouse(0x77);
+    carryForAuction(s, 0, 0x4000000000000C01ull, 2589, 20);
+    carryForAuction(s, 1, 0x4000000000000C02ull, 2589, 20);
+    carryForAuction(s, 2, 0x4000000000000C03ull, 2589, 20);
+    ui.run("ClearCursor() PickupContainerItem(0, 1) ClickAuctionSellItemButton()");
+    REQUIRE(ui.is("GetAuctionSellItemInfo() == 'Item 2589'"));
+    ui.run("ms = '' local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'AUCTION_MULTISELL_START', 'AUCTION_MULTISELL_UPDATE', 'AUCTION_MULTISELL_FAILURE'}) "
+           "do f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(_, e, a, b) ms = ms .. e:sub(19) .. (a or '') .. '/' .. (b or '') .. ';' end)");
+    const auto answer = [&s](uint32_t error) {
+        wowee::network::Packet r(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_COMMAND_RESULT));
+        r.writeUInt32(1000);
+        r.writeUInt32(0);   // a post
+        r.writeUInt32(error);
+        if (error == 1) r.writeUInt32(0);
+        s.receive(r);
+    };
+    ui.run("StartAuction(100, 200, 1, 20, 3)");
+    CHECK(s.sent().of(Opcode::CMSG_AUCTION_SELL_ITEM).size() == 1);
+    CHECK(ui.is("ms == 'START3/;'"));
+    CHECK(ui.is("GetAuctionSellItemInfo() == 'Item 2589'"));
+    answer(0);
+    CHECK(s.sent().of(Opcode::CMSG_AUCTION_SELL_ITEM).size() == 2);
+    CHECK(ui.is("ms == 'START3/;UPDATE1/3;'"));
+    // The second post refused (no money for the deposit): given up, nothing more.
+    answer(3);
+    CHECK(s.sent().of(Opcode::CMSG_AUCTION_SELL_ITEM).size() == 2);
+    CHECK(ui.is("ms == 'START3/;UPDATE1/3;FAILURE/;'"));
+    CHECK(ui.is("GetAuctionSellItemInfo() == nil"));
+    answer(0);
+    CHECK(s.sent().of(Opcode::CMSG_AUCTION_SELL_ITEM).size() == 2);
+
+    // Two stacks taken both: two updates, the box let go after the last.
+    ui.run("ClearCursor() PickupContainerItem(0, 1) ClickAuctionSellItemButton() ms = ''");
+    REQUIRE(ui.is("GetAuctionSellItemInfo() == 'Item 2589'"));
+    ui.run("StartAuction(100, 200, 1, 20, 2)");
+    answer(0);
+    CHECK(ui.is("GetAuctionSellItemInfo() == 'Item 2589'"));
+    answer(0);
+    CHECK(s.sent().of(Opcode::CMSG_AUCTION_SELL_ITEM).size() == 4);
+    CHECK(ui.is("ms == 'START2/;UPDATE1/2;UPDATE2/2;'"));
+    CHECK(ui.is("GetAuctionSellItemInfo() == nil"));
+    ui.run("ClearCursor()");
+}
+
 // T413 (FIXER Z): every world load clears the battleground score state
 // (0x006e7f50 -> 0x00528010 -> 0x0054ca50): no rows, no winner, both
 // factions. After the realm's port home the scoreboard reopened itself from
