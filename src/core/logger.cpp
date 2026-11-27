@@ -10,6 +10,7 @@
 #include <iterator>
 #include <ranges>
 #include "core/local_time.hpp"
+#include "core/log_location.hpp"
 #include "core/log_privacy.hpp"
 #include <cstdio>
 #ifdef __ANDROID__
@@ -63,20 +64,17 @@ std::filesystem::path perUserLogDir() {
     return std::filesystem::temp_directory_path() / "wowee-logs";
 }
 
-/// Whether this process is the executable inside a macOS application bundle.
-///
-/// main() moves the working directory into the bundle's Resources so the
-/// assets resolve, and an app dragged to /Applications is writable there. So
-/// the log went into the app itself - Contents/Resources/logs, where nobody
-/// finds it without Show Package Contents - and every run modified a signed
-/// bundle. A bundled client always logs to the per-user directory instead.
+/// Whether this process logs to the per-user directory: on iOS always, else
+/// when its executable is inside an application bundle (core/log_location.hpp).
 bool runningFromAppBundle() {
-#if defined(__APPLE__)
+#if defined(WOWEE_IOS)
+    return logToPerUserDirectory({}, true);
+#elif defined(__APPLE__)
     uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);
     std::string path(size, '\0');
     if (_NSGetExecutablePath(path.data(), &size) != 0) return false;
-    return path.find(".app/Contents/MacOS/") != std::string::npos;
+    return logToPerUserDirectory(path, false);
 #else
     return false;
 #endif

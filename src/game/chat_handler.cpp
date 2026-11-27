@@ -187,7 +187,12 @@ void ChatHandler::initializeChatLog() {
 
     const char* pathRaw = std::getenv("WOWEE_CHAT_LOG_PATH");
     const bool hasPathOverride = pathRaw && *pathRaw;
-    chatLogPath_ = hasPathOverride ? pathRaw : "logs/chat.log";
+    // Beside wowee.log, wherever the logger put it: in an app bundle (iOS,
+    // LiveContainer, a macOS .app) that is the per-user directory, not
+    // "logs/" inside the bundle (core/log_location.hpp).
+    const std::filesystem::path logDir = core::Logger::getInstance().logDirectory();
+    chatLogPath_ = hasPathOverride ? std::string(pathRaw)
+                                   : (logDir.empty() ? std::filesystem::path("logs") : logDir).append("chat.log").string();
     if (!hasPathOverride && !isTruthyEnvValue(enabledValue) && !enabledValue.empty()) {
         chatLogPath_ = enabledValue;
     }

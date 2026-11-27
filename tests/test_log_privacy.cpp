@@ -4,6 +4,7 @@
 // it: the data folder, the config and the integrity-hash search all live under
 // the home directory, and each was logged in full.
 #include "catch_amalgamated.hpp"
+#include "core/log_location.hpp"
 #include "core/log_privacy.hpp"
 
 #include <string>
@@ -39,4 +40,17 @@ TEST_CASE("either separator matches", "[log_privacy]") {
     CHECK(redactHome("C:/Users/Sam/AppData/Local/Wowee", "C:\\Users\\Sam") ==
           "~/AppData/Local/Wowee");
     CHECK(redactHome("C:\\Users\\Sam\\AppData", "C:\\Users\\Sam") == "~\\AppData");
+}
+
+// Where the log goes (core/log_location.hpp): never inside an app bundle -
+// under LiveContainer an iOS guest .app is writable and wowee.log landed in
+// it, where the Files app does not show it.
+TEST_CASE("an app bundle logs to the per-user directory", "[log_privacy][log_location]") {
+    using wowee::core::logToPerUserDirectory;
+    CHECK(logToPerUserDirectory("", true));   // iOS: always
+    CHECK(logToPerUserDirectory("/var/mobile/Containers/Data/Application/X/Documents/Applications/wowee.app/wowee", true));
+    CHECK(logToPerUserDirectory("/Applications/Wowee.app/Contents/MacOS/wowee", false));
+    CHECK(logToPerUserDirectory("/private/var/containers/Bundle/Application/X/wowee.app/wowee", false));
+    CHECK_FALSE(logToPerUserDirectory("/home/sam/wowee/build/bin/wowee", false));
+    CHECK_FALSE(logToPerUserDirectory("C:/Games/wowee/wowee.exe", false));
 }
