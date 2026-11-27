@@ -5832,6 +5832,8 @@ TEST_CASE("a refused guild bank deposit leaves the item on the cursor (0x005a50c
     ui.run("PickupGuildBankItem(1, 10)");            // tab 1 takes it
     CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS).size() == 1);
     CHECK(ui.is("not CursorHasItem()"));
+    // T432: the sent deposit lets the bag item's lock go with the cursor.
+    CHECK(ui.is("select(3, GetContainerItemInfo(0, 1)) == nil"));
 }
 
 TEST_CASE("a guild bank slot is let go by every drop (0x00519280)", "[replay][interface]") {

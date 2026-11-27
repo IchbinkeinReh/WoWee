@@ -2057,8 +2057,10 @@ static int lua_PickupGuildBankItem(lua_State* L) {
     // Carrying a bag item, so this is the deposit (0x005a50c0).
     uint8_t srcBag = 0, srcSlot = 0;
     if (cursorWireSlot(srcBag, srcSlot)) {
-        // Refused, the item stays on the cursor (0x005a50c0 returns first).
-        if (gh->guildBankDepositItem(tab0, slot0, srcBag, srcSlot)) setCursorType(L, CursorType::NONE);
+        // Refused, the item stays on the cursor (0x005a50c0 returns first);
+        // sent, the cursor is let go with the bag item's lock (0x00519280(1, 1),
+        // case 1 -> 0x00513770): the slot is not left grey (T432).
+        if (gh->guildBankDepositItem(tab0, slot0, srcBag, srcSlot)) clearCursorItem(L);
         return 0;
     }
     // Carrying a bank item already: a move inside the bank (0x005a5410) -
