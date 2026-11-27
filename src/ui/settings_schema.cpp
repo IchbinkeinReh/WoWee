@@ -250,6 +250,20 @@ constexpr SettingDesc kSchema[] = {
      "are sharper and cost more; Low suits weaker hardware. Not in\n"
      "the original client, so off unless chosen.",
      "Off|Low|Medium|High", 0},
+    // The light in the air itself (VolumetricLight): the sun's and the moon's
+    // shafts through openings and the glow round lamps, in clear air and
+    // from this frame alone - beside the mist above, which is a medium over
+    // the whole view. Off by default: the original client has none, and off
+    // records nothing. Two qualities, the march's size and its sample counts
+    // (volumetric_light::budgetFor). Under the mist's row, the room left at
+    // the foot of this page's second column.
+    {"volumetriclight", "Volumetric light", SettingKind::Enum, 0, 2, 1,
+     "Detail", "",
+     "Light seen in the air: the sun's and the moon's shafts through\n"
+     "gaps in trees, doors and windows, and the glow round torches,\n"
+     "fires, lamps and lava. With ray tracing on, traced against the\n"
+     "world. High is sharper and costs more. Not in the original client.",
+     "Off|Low|High", 0},
     // The ray traced water (water_rt.glsli): with the ray traced lighting
     // on, water and ocean are this client's own - waves, the world in the
     // mirror and the bed through it, traced. Otherwise every liquid is the

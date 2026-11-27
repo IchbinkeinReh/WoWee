@@ -74,6 +74,8 @@ public:
     float pendingFogStrength = 1.0f;
     /// Volumetric fog: 0 off, 1-3 the volume's size. See VolumetricFog.
     int pendingVolumetricFog = 0;
+    /// Volumetric light: 0 off, 1 low, 2 high. See VolumetricLight.
+    int pendingVolumetricLight = 0;
     /// Ray traced lighting: 0 off, 1 sun, 2 + occlusion, 3 + bounce. See RtLighting.
     int pendingRtLighting = 0;
     bool pendingRtFullRes = false;  ///< trace every pixel (Ray Tracing)

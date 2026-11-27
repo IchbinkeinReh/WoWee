@@ -1948,6 +1948,7 @@ void GameScreen::saveSettings() {
     out << "fog_sky_blend=" << settingsPanel_.pendingFogSkyBlend << "\n";
     out << "fog_strength=" << settingsPanel_.pendingFogStrength << "\n";
     out << "light_shafts=" << settingsPanel_.pendingVolumetricFog << "\n";
+    out << "volumetric_light=" << settingsPanel_.pendingVolumetricLight << "\n";
     out << "ray_traced_lighting=" << settingsPanel_.pendingRtLighting << "\n";
     out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
     out << "rt_soft_lamps=" << (settingsPanel_.pendingRtSoftLamps ? 1 : 0) << "\n";
@@ -2305,6 +2306,7 @@ void GameScreen::loadSettings() {
             else if (key == "fog_sky_blend") settingsPanel_.pendingFogSkyBlend = std::clamp(std::stof(val), 0.0f, 1.0f);
             else if (key == "fog_strength") settingsPanel_.pendingFogStrength = std::clamp(std::stof(val), 0.0f, 2.0f);
             else if (key == "light_shafts") settingsPanel_.pendingVolumetricFog = std::clamp(std::stoi(val), 0, 3);
+            else if (key == "volumetric_light") settingsPanel_.pendingVolumetricLight = std::clamp(std::stoi(val), 0, 2);
             else if (key == "ray_traced_lighting") settingsPanel_.pendingRtLighting = std::clamp(std::stoi(val), 0, 3);
             else if (key == "rt_full_resolution") settingsPanel_.pendingRtFullRes = (std::stoi(val) != 0);
             else if (key == "rt_soft_lamps") settingsPanel_.pendingRtSoftLamps = (std::stoi(val) != 0);

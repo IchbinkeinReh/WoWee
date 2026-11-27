@@ -1942,6 +1942,22 @@ wowee_add_test(test_recording_size
 wowee_add_test(test_volumetric_fog_math
     SOURCES test_volumetric_fog_math.cpp)
 
+# -- test_volumetric_light --
+# The volumetric light's arithmetic, which its march shader mirrors, and the
+# option's plumbing: the schema row, its German text, the settings file's
+# key, and that no preset turns it on.
+add_executable(test_volumetric_light
+    test_volumetric_light.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/settings_schema.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/settings_i18n.cpp
+    ${TEST_COMMON_SOURCES})
+target_include_directories(test_volumetric_light PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_volumetric_light SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_volumetric_light PRIVATE catch2_main)
+wowee_test_link_glm(test_volumetric_light)
+add_test(NAME volumetric_light COMMAND test_volumetric_light)
+register_test_target(test_volumetric_light)
+
 # ── test_packed_time ─────────────────────────────────────────
 # Header-only domain logic: the one uint32 that carries a whole date, which
 # four separate readers in this tree got wrong in four different ways.

@@ -105,6 +105,7 @@ class RtScene;
 class RtLighting;
 class LootSparkles;
 class SunShafts;
+class VolumetricLight;
 class EyeAdaptationPass;
 class ScreenEffects;
 class ScreenCapture;
@@ -954,6 +955,10 @@ public:
     /// off, 1-3 the volume's resolution. Applied at the start of the next
     /// frame. See VolumetricFog.
     void setVolumetricFogQuality(int quality);
+    /// Light seen in the air: the sun's and the moon's shafts through
+    /// openings and the glow round lamps, fires and lava. 0 off, 1 low, 2
+    /// high (volumetric_light::Quality). See VolumetricLight.
+    void setVolumetricLightQuality(int quality);
     /// Ray traced lighting: 0 off, 1 sun shadows, 2 + ambient occlusion,
     /// 3 + multi-bounce diffuse from a probe volume. See RtLighting.
     void setRtLightingMode(int mode);
@@ -1591,6 +1596,11 @@ private:
     /// picture, and a login screen or a loading screen is not one.
     bool worldDrawnThisFrame_ = false;
     void recordSunShafts();
+    // The volumetric light: built where the shafts are, screened over the
+    // picture right after them. See VolumetricLight.
+    std::unique_ptr<VolumetricLight> volumetricLight_;
+    int volumetricLightQuality_ = 0;  // opt-in: the original client has none
+    void recordVolumetricLight();
     void recordEyeAdaptation();
 
     /// The character previews' off-screen passes (character select, the

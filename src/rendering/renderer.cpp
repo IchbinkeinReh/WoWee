@@ -69,6 +69,8 @@
 #include "rendering/hiz_system.hpp"
 #include "rendering/volumetric_fog.hpp"
 #include "rendering/sun_shafts.hpp"
+#include "rendering/volumetric_light.hpp"
+#include "rendering/volumetric_light_math.hpp"
 #include "rendering/eye_adaptation_pass.hpp"
 #include "rendering/screen_effects.hpp"
 #include "rendering/rt_lighting.hpp"
@@ -1195,6 +1197,16 @@ bool Renderer::initialize(core::Window* win) {
         sunShafts_.reset();
     }
 
+    // Not fatal: without it the option does nothing.
+    volumetricLight_ = std::make_unique<VolumetricLight>();
+    if (!volumetricLight_->initialize(vkCtx, perFrameSetLayout)) {
+        LOG_WARNING("Volumetric light failed to initialise - volumetric light unavailable");
+        volumetricLight_->shutdown();
+        volumetricLight_.reset();
+    } else {
+        volumetricLight_->setQuality(volumetric_light::qualityFromIndex(volumetricLightQuality_));
+    }
+
     // Not fatal either: without it the eye does not adapt.
     eyeAdaptation_ = std::make_unique<EyeAdaptationPass>();
     if (!eyeAdaptation_->initialize(vkCtx)) {
@@ -1270,6 +1282,10 @@ void Renderer::shutdown() {
     if (sunShafts_) {
         sunShafts_->shutdown();
         sunShafts_.reset();
+    }
+    if (volumetricLight_) {
+        volumetricLight_->shutdown();
+        volumetricLight_.reset();
     }
     if (eyeAdaptation_) {
         eyeAdaptation_->shutdown();
@@ -2081,6 +2097,8 @@ void Renderer::endFrame() {
     if (vkCtx) vkCtx->gpuMark(currentCmd, "screen effects");
     recordSunShafts();
     if (vkCtx) vkCtx->gpuMark(currentCmd, "sun shafts");
+    recordVolumetricLight();
+    if (vkCtx) vkCtx->gpuMark(currentCmd, "volumetric light");
     recordEyeAdaptation();
 
     const auto& overlayFbs = vkCtx->getOverlayFramebuffers();
@@ -2106,6 +2124,7 @@ void Renderer::endFrame() {
         // the glow and death passes, then the shafts screened over it.
         if (screenEffects_) screenEffects_->composite(currentCmd, vkCtx->getCurrentFrame());
         if (sunShafts_) sunShafts_->composite(currentCmd, vkCtx->getCurrentFrame());
+        if (volumetricLight_) volumetricLight_->composite(currentCmd, vkCtx->getCurrentFrame());
         vkCtx->gpuMark(currentCmd, "effects composite");
         // The eye's exposure over all of it, the interface left out. It is
         // not a plain multiply - white times an exposure under one is grey,
@@ -7314,6 +7333,20 @@ void Renderer::setInteractiveWater(bool on) {
     if (waterRenderer) waterRenderer->setInteractiveWater(on);
 }
 
+namespace {
+// The lamps the ray traced lighting chose this frame, for the volumetric
+// light to take instead of gathering them again; main thread only, valid
+// from recordRtLighting to recordVolumetricLight of the same frame.
+std::vector<rt_lights::PointLight>& volumetricLampsFromRt() {
+    static std::vector<rt_lights::PointLight> lamps;
+    return lamps;
+}
+bool& volumetricLampsFromRtValid() {
+    static bool valid = false;
+    return valid;
+}
+}  // namespace
+
 void Renderer::recordRtLighting() {
     if (!rtLighting_ || !rtLighting_->active() || !camera) return;
     RtLighting::FrameInputs in{};
@@ -7454,6 +7487,12 @@ void Renderer::recordRtLighting() {
             }
         }
         rtLighting_->setPointLights(lightScratch);
+        // The volumetric light's lamps are these same ones this frame
+        // (recordVolumetricLight), rather than gathered a second time.
+        if (volumetricLightQuality_ > 0) {
+            volumetricLampsFromRt() = lightScratch;
+            volumetricLampsFromRtValid() = true;
+        }
         if (waterRenderer) waterRenderer->setWaterLamps(lightScratch, in.cameraPos);
         if (characterRenderer) {
             characterRenderer->setRtSeeThroughLights(
@@ -8405,6 +8444,142 @@ void Renderer::recordPreviewComposites() {
         if (view) view->compositePass(currentCmd, frame);
     }
     vkCtx->gpuMark(currentCmd, "character previews");
+}
+
+void Renderer::setVolumetricLightQuality(int quality) {
+    volumetricLightQuality_ = std::clamp(quality, 0, 2);
+    if (volumetricLight_) volumetricLight_->setQuality(volumetric_light::qualityFromIndex(volumetricLightQuality_));
+}
+
+void Renderer::recordVolumetricLight() {
+    // The lamps the trace handed over are this frame's only.
+    const bool fromRt = volumetricLampsFromRtValid();
+    volumetricLampsFromRtValid() = false;
+    if (!volumetricLight_ || currentCmd == VK_NULL_HANDLE || !vkCtx) return;
+    const uint32_t frame = vkCtx->getCurrentFrame();
+    VolumetricLight::FrameInputs in;
+    const auto& images = vkCtx->getSwapchainImages();
+    in.draw = volumetricLightQuality_ > 0 && volumetricLight_->usable() && worldDrawnThisFrame_ && camera &&
+              lightingManager && currentImageIndex < images.size() && frame < MAX_FRAMES &&
+              perFrameDescSets[frame] != VK_NULL_HANDLE;
+    if (in.draw) {
+        const auto quality = volumetric_light::qualityFromIndex(volumetricLightQuality_);
+        const volumetric_light::Budget budget = volumetric_light::budgetFor(quality);
+        const auto& lp = lightingManager->getLightingParams();
+        in.view = currentFrameData.view;
+        in.projection = currentFrameData.projection;
+        in.cameraPos = glm::vec3(currentFrameData.viewPos);
+        in.perFrameSet = perFrameDescSets[frame];
+
+        // The traced scene, when the ray traced lighting runs this frame - the
+        // same conditions as its water's (RtWaterFrame).
+        const bool traced = rtLighting_ && rtLighting_->active() && rtDeferredThisFrame_ && rtScene_ &&
+                            rtScene_->descriptorsWritten();
+        const bool hardware = traced && rtScene_->backend() == RtScene::Backend::Hardware &&
+                              vkCtx->hardwareRayQueryEnabled();
+        if (traced) {
+            in.sceneSet = rtScene_->descriptorSet();
+            in.sceneLayout = rtScene_->descriptorSetLayout();
+            in.sceneHasContent = rtScene_->hasContent();
+            in.hardware = hardware;
+        }
+        // This slot's shadow map, when its pass drew it this frame.
+        const bool mapReady = currentFrameData.shadowParams.x > 0.5f && shadowMapReadyThisFrame() &&
+                              shadowDepthLayout_[frame] == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (mapReady) in.shadowView = shadowDepthView[frame];
+
+        // How thick the air is (volumetric_light::airFactor): the zone's fog,
+        // the morning, the weather. Rain and snow also put a lid over the sky
+        // body, as over the sun shafts.
+        float rain = 0.0f, snow = 0.0f, cover = 0.0f;
+        if (weather) {
+            const float w = glm::clamp(weather->getIntensity(), 0.0f, 1.0f);
+            if (weather->getWeatherType() == Weather::Type::RAIN) rain = w;
+            if (weather->getWeatherType() == Weather::Type::SNOW) snow = w;
+            cover = w;
+        }
+        const float strength = lightingManager->getFogStrength();
+        const float authoredEnd = strength > 0.001f ? lp.fogEnd * strength : 0.0f;
+        const float air = volumetric_light::airFactor(authoredEnd, lightingManager->getTimeOfDayHours(), rain, snow);
+        constexpr float kBodyScatter = 0.001f;   // per yard: a faint haze across, shafts toward the sun
+        constexpr float kLampScatter = 0.03f;    // per yard: a glow round the flame, not a ball of fog
+        in.bodyScatter = kBodyScatter * air * (1.0f - 0.8f * cover);
+        in.lampScatter = kLampScatter * air;
+
+        // The sky body: the sun while it is up, else the moon while she is
+        // (volumetric_light::bodyShares), by the drawn ones' own heights. The
+        // mist, when it is built, already has the sun's shafts in it.
+        const glm::vec3 sunDir = glm::normalize(lp.sunDir);
+        const glm::vec3 moonDir = glm::normalize(lp.moonDir);
+        const volumetric_light::BodyShares shares = volumetric_light::bodyShares(sunDir.z, moonDir.z);
+        if (shares.sun > 0.0f && !volumetricThisFrame_) {
+            in.bodyDir = sunDir;
+            in.bodyShare = shares.sun;
+            in.lobe = volumetric_light::lobeShare(1.0f - glm::clamp(sunOcclusion_, 0.0f, 1.0f));
+        } else if (shares.moon > 0.0f) {
+            in.bodyDir = moonDir;
+            in.bodyShare = shares.moon;
+            in.lobe = volumetric_light::lobeShare(1.0f - glm::clamp(moonOcclusionState_.eased, 0.0f, 1.0f));
+        }
+        in.bodyColor = glm::vec3(currentFrameData.lightColor);
+        // Each sample asks whether the sky body reaches it: a traced ray with
+        // ray queries, the shadow map otherwise; with neither, no sky light at
+        // all rather than air lit through roofs.
+        in.bodyOcclusion = hardware ? VolumetricLight::Occlusion::Traced
+                           : mapReady ? VolumetricLight::Occlusion::ShadowMap
+                                      : VolumetricLight::Occlusion::None;
+        in.lampOcclusion = traced ? VolumetricLight::Occlusion::Traced : VolumetricLight::Occlusion::DepthSteps;
+
+        // The lamps: the trace's own this frame, or gathered here the same
+        // way (recordRtLighting) - a model's light only while its flames or
+        // its glow show (collectRtLights).
+        constexpr float kLampRange = 80.0f;
+        const glm::mat4 viewProj = in.projection * in.view;
+        static std::vector<rt_lights::PointLight> gathered;
+        if (!fromRt) {
+            WOWEE_PROFILE_SCOPE("volumetric light: lamps", Cpu);
+            gathered.clear();
+            if (m2Renderer) m2Renderer->collectRtLights(in.cameraPos, kLampRange, gathered);
+            if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLampRange, gathered);
+            if (characterRenderer) characterRenderer->collectRtLights(in.cameraPos, kLampRange, gathered);
+            if (waterRenderer) waterRenderer->collectRtLights(in.cameraPos, kLampRange, gathered);
+            rt_lights::keepOneLightPerPlace(gathered);
+            for (rt_lights::PointLight& l : gathered) {
+                l.color *= rtLightReachShare(glm::length(l.position - in.cameraPos), kLampRange);
+                const size_t k = std::min(static_cast<size_t>(l.source), rt_lights::kSourceCount - 1);
+                l.color *= std::max(lightingTune_.sourceIntensity[k], 0.0f);
+                const float reach = std::max(lightingTune_.sourceReach[k], 0.0f);
+                l.attenuationStart *= reach;
+                l.attenuationEnd *= reach;
+            }
+            Frustum frustum;
+            frustum.extractFromMatrix(viewProj);
+            rt_lights::selectLights(gathered, in.cameraPos, kLampRange, static_cast<size_t>(budget.maxLights) * 2u,
+                                    [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
+        }
+        const std::vector<rt_lights::PointLight>& lamps = fromRt ? volumetricLampsFromRt() : gathered;
+        for (size_t i : volumetric_light::pickLights(lamps, in.cameraPos, kLampRange, budget.maxLights)) {
+            rt_lights::PointLight l = lamps[i];
+            // A building's own light fills its room evenly: half, so a hall's
+            // air glows and does not turn to fog.
+            if (l.source == rt_lights::Source::Building) l.color *= 0.5f;
+            in.lamps.push_back(rt_lights::toGpu(l));
+        }
+
+        if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
+            in.depthImage = postProcessPipeline_->getSceneDepthImage();
+            in.depthMultisampled = postProcessPipeline_->sceneDepthIsMsaa();
+            in.depthLayout = postProcessPipeline_->sceneDepthLayout();
+        } else {
+            in.depthImage = vkCtx->getDepthCopySourceImage();
+            in.depthMultisampled = vkCtx->isDepthCopySourceMsaa();
+        }
+        const uint64_t ppGen = postProcessPipeline_ ? postProcessPipeline_->targetsGeneration() : 0;
+        in.depthGeneration = (vkCtx->swapchainGeneration() << 32) ^ ppGen;
+    }
+    // Every frame, the off ones included, so the composite knows there is
+    // nothing of this frame's to add.
+    volumetricLight_->record(currentCmd, frame, vkCtx->getSwapchainExtent(), in);
 }
 
 void Renderer::recordSunShafts() {

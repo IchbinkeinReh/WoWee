@@ -152,6 +152,13 @@ constexpr SettingGerman kGerman[] = {
      "und Fackeln und Lava glühen darin. Höhere Stufen sind schärfer und kosten mehr; Niedrig "
      "passt zu schwächerer Hardware. Nicht im ursprünglichen Client, daher aus, bis gewählt.",
      "Aus|Niedrig|Mittel|Hoch", nullptr, nullptr},
+    {"volumetriclight",
+     "Volumetrisches Licht",
+     "Licht, das in der Luft selbst zu sehen ist: Strahlen von Sonne und Mond durch Lücken in "
+     "Bäumen, Türen und Fenstern und der Schein um Fackeln, Feuer, Lampen und Lava. Mit "
+     "Raytracing gegen die Welt verfolgt. Hoch ist schärfer und kostet mehr. Nicht im "
+     "ursprünglichen Client.",
+     "Aus|Niedrig|Hoch", nullptr, nullptr},
     {"interactivewater",
      "Interaktives Wasser",
      "Auf dem Raytracing-Wasser: eine Bugwelle vor jedem, der schwimmt oder watet, und ein "

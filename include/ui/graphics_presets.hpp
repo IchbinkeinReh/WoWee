@@ -142,6 +142,9 @@ constexpr GraphicsPresetValues kGraphicsPresets[] = {
 /// put these back to their defaults (presetRowValues). (Frame generation,
 /// off in their file, is a row only in builds with FSR 3 frame generation,
 /// so it is not one of these: its default, off, is what every preset sets.)
+/// Nor is the volumetric light (volumetriclight, 2026-11-27): newer than the
+/// user's file, which has it off, so every preset puts it back to off -
+/// Super-Ultra included until the user says otherwise.
 struct GraphicsPresetExtra {
     const char* key;   ///< the schema key
     float value;

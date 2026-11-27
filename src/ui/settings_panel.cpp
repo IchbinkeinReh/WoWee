@@ -986,7 +986,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
     "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter", "showfps",
     "animatedportraits",
-    "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
+    "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts", "volumetriclight",
     "lensflare",
     "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtlightreach", "rtwater", "rtswimwaves", "interactivewater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "watertessdensity", "shorewaves", "ridewaves", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
@@ -1222,6 +1222,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "fogskyblend",    .asFloat = &SettingsPanel::pendingFogSkyBlend},
     {.key = "fogstrength",    .asFloat = &SettingsPanel::pendingFogStrength},
     {.key = "lightshafts",    .asInt   = &SettingsPanel::pendingVolumetricFog},
+    {.key = "volumetriclight", .asInt  = &SettingsPanel::pendingVolumetricLight},
     {.key = "raytracedlighting", .asInt = &SettingsPanel::pendingRtLighting},
     {.key = "rtfullres", .asBool = &SettingsPanel::pendingRtFullRes},
     {.key = "rtsoftlamps", .asBool = &SettingsPanel::pendingRtSoftLamps},
@@ -1739,6 +1740,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         }
     } else if (key == "lightshafts") {
         if (renderer) renderer->setVolumetricFogQuality(pendingVolumetricFog);
+    } else if (key == "volumetriclight") {
+        if (renderer) renderer->setVolumetricLightQuality(pendingVolumetricLight);
     } else if (key == "raytracedlighting") {
         if (renderer) renderer->setRtLightingMode(pendingRtLighting);
     } else if (key == "rtfullres") {

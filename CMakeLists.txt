@@ -699,6 +699,12 @@ function(compile_shaders TARGET_NAME)
         "sun_shafts_mask.comp.glsl|sun_shafts_mask_ms.comp.spv|-DSHAFTS_MSAA"
         # The eye adaptation's clip mask, sky only, over the same depth.
         "eye_highlight_mask.comp.glsl|eye_highlight_mask_ms.comp.spv|-DEYE_MSAA"
+        # The volumetric light's depth over a multisampled depth left
+        # unresolved, and its march through the compute tracer and through
+        # ray queries (volumetric_light.hpp).
+        "volumetric_light_depth.comp.glsl|volumetric_light_depth_ms.comp.spv|-DVL_MSAA"
+        "volumetric_light.comp.glsl|volumetric_light_sw.comp.spv|-DVL_TRACE"
+        "volumetric_light.comp.glsl|volumetric_light_hw.comp.spv|-DVL_TRACE -DRT_HARDWARE --target-env=vulkan1.2"
         "rt_apply_ms.frag.glsl|rt_apply_msp.frag.spv|-DRT_MSAA_PIXEL"
         "rt_trace.comp.glsl|rt_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
         "rt_gi_trace.comp.glsl|rt_gi_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
@@ -1177,6 +1183,7 @@ set(WOWEE_SOURCES
     src/rendering/hiz_system.cpp
     src/rendering/volumetric_fog.cpp
     src/rendering/sun_shafts.cpp
+    src/rendering/volumetric_light.cpp
     src/rendering/eye_adaptation_pass.cpp
     src/rendering/screen_effects.cpp
     src/rendering/cube_texture.cpp
