@@ -316,6 +316,9 @@ public:
      */
     void renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                       const glm::vec3& shadowCenter = glm::vec3(0), float shadowRadius = 1e9f);
+    /// Once a frame before the cascades: the alpha-keyed batches' texture
+    /// sets of this frame in flight start over (their pool is reset).
+    void beginShadowFrame(uint32_t frameIndex);
 
     /**
      * Get number of loaded models
@@ -1227,7 +1230,18 @@ private:
 
     // Shadow rendering (Phase 7)
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
+    /// The alpha-keyed batches' (MOMT blend 1): shadow.frag cuts them out of
+    /// their texture as the M2 foliage pass does, where the depth-only one
+    /// cast their whole quad - a grille, a fence, a vine card.
+    VkPipeline shadowAlphaPipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout shadowPipelineLayout_ = VK_NULL_HANDLE;
+    static constexpr uint32_t kShadowTexPoolFrames = 2;
+    VkDescriptorPool shadowTexPool_[kShadowTexPoolFrames] = {};
+    uint32_t shadowFrame_ = 0;
+    std::unordered_map<VkImageView, VkDescriptorSet> shadowTexSetCache_;
+    /// The shadow set (set 0) with `tex` sampled; VK_NULL_HANDLE while its
+    /// image is not there yet or the frame's sets ran out.
+    VkDescriptorSet shadowTexSet(VkTexture* tex);
     /// The set the shadow pass binds. Five separate members before,
     /// built and torn down here and in three other renderers.
     ShadowParamsSet shadowParams_;

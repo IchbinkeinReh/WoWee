@@ -7034,6 +7034,7 @@ void Renderer::recordShadowPass(const ShadowPlan& plan, bool onWorker) {
     // when the GPU gets to them.
     if (plan.terrain) plan.terrain->beginShadowFrame(plan.frame);
     if (plan.m2) plan.m2->beginShadowFrame(plan.frame);
+    if (plan.wmo) plan.wmo->beginShadowFrame(plan.frame);
     if (plan.characters) plan.characters->beginShadowFrame(plan.frame);
     // Largest first: each cascade lies inside the one before it, so the M2
     // renderer culls the first one against every instance and the rest

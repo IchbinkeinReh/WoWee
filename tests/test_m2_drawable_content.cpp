@@ -217,3 +217,30 @@ TEST_CASE("a city's far shell casts nothing on its streets", "[wmo]") {
     CHECK_FALSE(wmoGroupFarShell(0xa09, 1, true));
     CHECK_FALSE(wmoGroupFarShell(0x2a41, 0, true));
 }
+
+// A building's alpha-keyed batch (MOMT blend 1: a grille, a fence, a vine
+// card) casts its cut-out in the shadow map, not its whole quad: the WMO
+// shadow pass draws it through shadow.frag's alpha test with its own texture,
+// as the M2 pass draws its foliage, and still draws no blended layer.
+TEST_CASE("a building's alpha-keyed batches are cut out in the shadow pass", "[wmo][shadow]") {
+    const std::string renderer = source("src/rendering/wmo_renderer.cpp");
+    REQUIRE(!renderer.empty());
+    const size_t begin = renderer.find("void WMORenderer::renderShadow(");
+    REQUIRE(begin != std::string::npos);
+    const size_t end = renderer.find("uint32_t WMORenderer::getTotalTriangleCount", begin);
+    REQUIRE(end != std::string::npos);
+    const std::string pass = renderer.substr(begin, end - begin);
+    CHECK(pass.find("if (mb.isTransparent) continue;") != std::string::npos);
+    CHECK(pass.find("mb.alphaTest") != std::string::npos);
+    CHECK(pass.find("shadowAlphaPipeline_") != std::string::npos);
+    CHECK(pass.find("shadowTexSet(mb.texture)") != std::string::npos);
+    CHECK(pass.find("glm::ivec4(1, 1, 0, 0)") != std::string::npos);
+    // The alpha-tested pipeline has the fragment stage.
+    const size_t built = renderer.find("shadowAlphaPipeline_ = buildShadowPipeline(");
+    REQUIRE(built != std::string::npos);
+    CHECK(renderer.find("fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT)", built) <
+          renderer.find(";", renderer.find("useDynamicRendering()", built)));
+    // Its texture sets start over each frame with the other casters'.
+    const std::string frame = source("src/rendering/renderer.cpp");
+    CHECK(frame.find("if (plan.wmo) plan.wmo->beginShadowFrame(plan.frame);") != std::string::npos);
+}

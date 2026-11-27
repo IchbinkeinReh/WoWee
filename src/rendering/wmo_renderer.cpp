@@ -429,6 +429,9 @@ void WMORenderer::shutdown() {
 
     // Destroy shadow resources
     destroy(device, shadowPipeline_);
+    destroy(device, shadowAlphaPipeline_);
+    for (auto& pool : shadowTexPool_) destroy(device, pool);
+    shadowTexSetCache_.clear();
     destroy(device, shadowPipelineLayout_);
     destroyShadowParamsSet(device, allocator, shadowParams_);
 
@@ -2100,9 +2103,34 @@ bool WMORenderer::initializeShadow(VkRenderPass shadowRenderPass) {
     shadowPipeline_ = buildShadowPipeline(
         device, vkCtx_->getPipelineCache(),
         vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-        noFragmentStage(),  // never alpha-tested: depth only
+        noFragmentStage(),  // the solid batches: depth only
         vertBind, vertAttrs, shadowPipelineLayout_, shadowRenderPass,
         vkCtx_->useDynamicRendering());
+    // The alpha-keyed batches through shadow.frag's alpha test.
+    shadowAlphaPipeline_ = buildShadowPipeline(
+        device, vkCtx_->getPipelineCache(),
+        vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+        fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT),
+        vertBind, vertAttrs, shadowPipelineLayout_, shadowRenderPass,
+        vkCtx_->useDynamicRendering());
+    // One texture-set pool per frame in flight, reset in beginShadowFrame.
+    {
+        VkDescriptorPoolSize sizes[2]{};
+        sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[0].descriptorCount = 256;
+        sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        sizes[1].descriptorCount = 256;
+        VkDescriptorPoolCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        ci.maxSets = 256;
+        ci.poolSizeCount = 2;
+        ci.pPoolSizes = sizes;
+        for (uint32_t f = 0; f < kShadowTexPoolFrames; ++f) {
+            if (vkCreateDescriptorPool(device, &ci, nullptr, &shadowTexPool_[f]) != VK_SUCCESS) {
+                core::Logger::getInstance().error("WMORenderer: failed to create shadow texture pool");
+                shadowTexPool_[f] = VK_NULL_HANDLE;
+            }
+        }
+    }
 
     vertShader.destroy();
     fragShader.destroy();
@@ -2115,6 +2143,54 @@ bool WMORenderer::initializeShadow(VkRenderPass shadowRenderPass) {
     return true;
 }
 
+void WMORenderer::beginShadowFrame(uint32_t frameIndex) {
+    shadowFrame_ = frameIndex;
+    if (vkCtx_ && frameIndex < kShadowTexPoolFrames && shadowTexPool_[frameIndex]) {
+        vkResetDescriptorPool(vkCtx_->getDevice(), shadowTexPool_[frameIndex], 0);
+    }
+    shadowTexSetCache_.clear();
+}
+
+VkDescriptorSet WMORenderer::shadowTexSet(VkTexture* tex) {
+    if (!tex || !vkCtx_ || shadowFrame_ >= kShadowTexPoolFrames) return VK_NULL_HANDLE;
+    VkDescriptorPool pool = shadowTexPool_[shadowFrame_];
+    const VkImageView view = tex->getImageView();
+    // Not uploaded yet: no set, and the batch waits (a null view is a read of
+    // nothing on the GPU; the white set would cast the whole quad).
+    if (!pool || view == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    if (auto it = shadowTexSetCache_.find(view); it != shadowTexSetCache_.end()) return it->second;
+    VkDescriptorSetAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = pool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &shadowParams_.layout;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(vkCtx_->getDevice(), &ai, &set) != VK_SUCCESS) return VK_NULL_HANDLE;
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imgInfo.imageView = view;
+    imgInfo.sampler = tex->getSampler();
+    VkDescriptorBufferInfo bufInfo{};
+    bufInfo.buffer = shadowParams_.ubo;
+    bufInfo.offset = 0;
+    bufInfo.range = sizeof(ShadowParamsUBO);
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = set;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &imgInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = set;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[1].pBufferInfo = &bufInfo;
+    vkUpdateDescriptorSets(vkCtx_->getDevice(), 2, writes, 0, nullptr);
+    shadowTexSetCache_[view] = set;
+    return set;
+}
+
 void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                                const glm::vec3& shadowCenter, float shadowRadius) {
     if (!shadowPipeline_ || !shadowParams_.set) return;
@@ -2123,6 +2199,9 @@ void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceM
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipelineLayout_,
         0, 1, &shadowParams_.set, 0, nullptr);
+    // The alpha-keyed batches are drawn after the solid ones of a group,
+    // through the alpha-tested pipeline, and the depth-only one bound again.
+    VkPipeline bound = shadowPipeline_;
 
     // WMO shadow cull uses the ortho half-extent (shadow map coverage) rather than
     // the proximity radius so that distant buildings whose shadows reach the player
@@ -2140,11 +2219,14 @@ void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceM
         if (modelIt == loadedModels.end()) continue;
         const ModelData& model = modelIt->second;
 
-        // A building does not move, so the unused slots stay zero.
+        // A building does not move, so the unused slots stay zero; flags x/y
+        // (sample, alpha-test) are set for the alpha-keyed batches only.
         ShadowPush push{.lightSpaceModel = lightSpaceMatrix * instance.drawMatrix()};
         vkCmdPushConstants(cmd, shadowPipelineLayout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // as the layout declares
                            0, sizeof(ShadowPush), &push);
+        ShadowPush cutPush = push;
+        cutPush.flags = glm::ivec4(1, 1, 0, 0);
 
         for (size_t gi = 0; gi < model.groups.size(); ++gi) {
             const auto& group = model.groups[gi];
@@ -2172,15 +2254,54 @@ void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceM
             vkCmdBindVertexBuffers(cmd, 0, 1, &group.vertexBuffer, &offset);
             vkCmdBindIndexBuffer(cmd, group.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
+            bool anyCut = false;
             for (const auto& mb : group.mergedBatches) {
                 // A blended layer - glass, a light card, a water sheet - is
                 // not opaque and casts nothing, as the M2 shadow pass and the
                 // ray-traced scene (registerRtModel, blend >= 2) have it. Drawn
                 // here, a window or a pane of light threw a solid shadow.
                 if (mb.isTransparent) continue;
+                if (mb.alphaTest && mb.texture && shadowAlphaPipeline_) {
+                    anyCut = true;
+                    continue;
+                }
+                if (bound != shadowPipeline_) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
+                    bound = shadowPipeline_;
+                }
                 for (const auto& dr : mb.draws) {
                     vkCmdDrawIndexed(cmd, dr.indexCount, 1, dr.firstIndex, 0, 0);
                 }
+            }
+            // An alpha-keyed batch (MOMT blend 1) casts its cut-out, not its
+            // quad, as the M2 pass's foliage and the ray-traced scene's
+            // cutouts do: alpha-tested against its own texture in shadow.frag.
+            if (anyCut) {
+                for (const auto& mb : group.mergedBatches) {
+                    if (mb.isTransparent || !mb.alphaTest || !mb.texture) continue;
+                    // Its texture not there yet: no shadow for now, rather
+                    // than the solid quad.
+                    VkDescriptorSet texSet = shadowTexSet(mb.texture);
+                    if (texSet == VK_NULL_HANDLE) continue;
+                    if (bound != shadowAlphaPipeline_) {
+                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowAlphaPipeline_);
+                        bound = shadowAlphaPipeline_;
+                    }
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipelineLayout_,
+                        0, 1, &texSet, 0, nullptr);
+                    vkCmdPushConstants(cmd, shadowPipelineLayout_,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0, sizeof(ShadowPush), &cutPush);
+                    for (const auto& dr : mb.draws) {
+                        vkCmdDrawIndexed(cmd, dr.indexCount, 1, dr.firstIndex, 0, 0);
+                    }
+                }
+                // Back to the shadow set and the plain push for what follows.
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipelineLayout_,
+                    0, 1, &shadowParams_.set, 0, nullptr);
+                vkCmdPushConstants(cmd, shadowPipelineLayout_,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(ShadowPush), &push);
             }
         }
     }
