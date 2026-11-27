@@ -128,6 +128,58 @@ TEST_CASE("volumetric light: each quality has a bounded cost", "[volumetric_ligh
     CHECK(low.sunSteps >= 8);
     CHECK(high.sunSteps <= 32);
     CHECK(high.lightSteps <= 8);
+    CHECK(high.lightSteps <= vl::kMaxLampSteps);
+    // VL5: only some of a lamp's samples ask for its sight - half on High,
+    // one on Low.
+    CHECK(high.lampRays == 4);
+    CHECK(low.lampRays == 1);
+    CHECK(low.lampRays < high.lampRays);
+    CHECK(high.lampRays < high.lightSteps);
+    CHECK(vl::lampRaysFor(high.lightSteps, high) == 4);
+    CHECK(vl::lampRaysFor(low.lightSteps, low) == 1);
+    // The compute tracer's fewer samples keep High's share.
+    CHECK(vl::lampRaysFor(4, high) == 2);
+    CHECK(vl::lampRaysFor(1, high) == 1);
+    CHECK(vl::lampRaysFor(0, high) == 0);
+    CHECK(vl::lampRayStride(8, 4) == 2);
+    CHECK(vl::lampRayStride(4, 1) == 4);
+    CHECK(vl::lampRayStride(4, 4) == 1);
+    CHECK(vl::lampRayStride(4, 3) == 1);  // not a divisor: every sample asks
+}
+
+TEST_CASE("volumetric light: a lamp's sight from some samples stands for all", "[volumetric_light]") {
+    // In sight from every sample asked: the whole glow, as when all asked.
+    CHECK(vl::lampGlowSeen(3.0f, 1.2f, 1.2f) == Catch::Approx(3.0f));
+    // Hidden from all: none.
+    CHECK(vl::lampGlowSeen(3.0f, 1.2f, 0.0f) == 0.0f);
+    // Half of the asked glow in sight: half of the whole.
+    CHECK(vl::lampGlowSeen(3.0f, 1.0f, 0.5f) == Catch::Approx(1.5f));
+    // Nothing asked or no glow: nothing (never lit unasked).
+    CHECK(vl::lampGlowSeen(3.0f, 0.0f, 0.0f) == 0.0f);
+    CHECK(vl::lampGlowSeen(0.0f, 1.0f, 1.0f) == 0.0f);
+    // Over the frames, as the asked samples move (every stride-th from a
+    // pick that changes), the mean is the glow of the samples in sight - the
+    // answer all samples asking would give.
+    const float f[8] = {0.5f, 1.0f, 2.0f, 3.0f, 3.0f, 2.0f, 1.0f, 0.5f};
+    const bool seen[8] = {true, true, true, true, false, false, true, true};  // a post shades the middle
+    float total = 0.0f, exact = 0.0f;
+    for (int k = 0; k < 8; ++k) {
+        total += f[k];
+        if (seen[k]) exact += f[k];
+    }
+    const unsigned stride = vl::lampRayStride(8, 4);
+    float mean = 0.0f;
+    for (unsigned pick = 0; pick < stride; ++pick) {
+        float asked = 0.0f, inSight = 0.0f;
+        for (unsigned k = pick; k < 8; k += stride) {
+            asked += f[k];
+            if (seen[k]) inSight += f[k];
+        }
+        mean += vl::lampGlowSeen(total, asked, inSight) / static_cast<float>(stride);
+    }
+    CHECK(mean == Catch::Approx(exact).epsilon(0.15));
+    // A negligible glow is far under one 8-bit step.
+    CHECK(vl::kLampNegligible * 32.0f * 4.0f < 1.0f / 255.0f);
 }
 
 TEST_CASE("volumetric light: a lamp's glow fades from its core to nothing at its reach", "[volumetric_light]") {
@@ -422,11 +474,25 @@ TEST_CASE("volumetric light: the shaders say what the arithmetic says", "[volume
     CHECK(march.find("float p = phaseHG(cosTheta, 0.8);") != std::string::npos);
     CHECK(march.find("return clamp(0.1 * t, 2.0, 8.0);") != std::string::npos);
     CHECK(march.find("return pointDepth < sceneDepth - 0.1;") != std::string::npos);
-    CHECK(march.find("shown += v * shade;") != std::string::npos);
+    CHECK(march.find("shown += first * second;") != std::string::npos);
     // The march's pattern moves from frame to frame, so the history gathers.
     CHECK(march.find("0.61803399 * float(frameNo)") != std::string::npos);
     // VL2's per-ray weight is gone.
     CHECK(march.find("(share - 0.5) / 0.5") == std::string::npos);
+    // VL5: the lamps' rays from some samples, a faint glow asks none, the
+    // sky body's two rays after the screen's word on the point beside.
+    CHECK(march.find("const int kMaxLampSteps = 16;") != std::string::npos);
+    CHECK(vl::kMaxLampSteps == 16);
+    CHECK(march.find("const float kLampNegligible = 3e-5;") != std::string::npos);
+    CHECK(vl::kLampNegligible == 3e-5f);
+    CHECK(march.find("int lampRays = clamp(int(vl.camForward.w + 0.5), 1, lampSteps);") != std::string::npos);
+    CHECK(march.find("int stride = max(lampSteps / lampRays, 1);") != std::string::npos);
+    CHECK(march.find("light += unshadowed * (inSight / asked);") != std::string::npos);
+    const size_t beside = march.find("if (!besideInAir(q)) continue;");
+    const size_t litRay = march.find("float first = vlBodyAsk(litFirst ? p : q, toBody, litFirst, rng);");
+    REQUIRE(beside != std::string::npos);
+    REQUIRE(litRay != std::string::npos);
+    CHECK(beside < litRay);
     const float r = vl::shaftRadius(50.0f);
     CHECK(r == Catch::Approx(vl::kShaftRadiusShare * 50.0f));
     CHECK(vl::kShaftRadiusMin == 2.0f);

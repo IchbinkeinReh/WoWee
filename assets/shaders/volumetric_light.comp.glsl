@@ -19,8 +19,10 @@
 //                  beside the shade, nothing in the open;
 //   each lamp      where the ray runs through the lamp's reach, a fixed
 //                  number of samples over that stretch, placed as densely as
-//                  the glow is bright (volumetric_light::glowSample), each
-//                  lit only if the lamp is in sight of it - a traced ray to a
+//                  the glow is bright (volumetric_light::glowSample), all
+//                  weighed and only some asking whether the lamp is in sight
+//                  (volumetric_light::lampRaysFor; a glow too faint to see
+//                  asks none, kLampNegligible) - a traced ray to a
 //                  point of the lamp's flame or glass (its size, as the
 //                  traced lamps' own soft shadows) with the ray traced
 //                  lighting, otherwise a few steps toward it against the
@@ -84,7 +86,7 @@ layout(set = 1, binding = 0) uniform VLParams {
     mat4 invViewProj;   // clip (reversed depth) to world
     mat4 viewProj;
     vec4 camPos;        // xyz = the eye, w = how far the sky body's light is gathered
-    vec4 camForward;    // xyz = the view's forward axis
+    vec4 camForward;    // xyz = the view's forward axis, w = rays per lamp (lampRaySamples)
     vec4 bodyDir;       // xyz = toward the sun or moon, w = its share (0: none this frame)
     vec4 bodyColor;     // rgb = its light, w = the forward lobe's share (1)
     vec4 air;           // x = sky body scatter per yard, y = lamp scatter per yard,
@@ -111,6 +113,10 @@ layout(set = 1, binding = 4, rgba16f) uniform writeonly image2D uMarch;
 #endif
 
 const int RT_LIGHT_KIND_UNIT = 4;  // rt_lights::Source::Unit
+const int kMaxLampSteps = 16;       // volumetric_light::kMaxLampSteps
+// volumetric_light::kLampNegligible: a lamp's glow on a texel this faint
+// (its brightest channel, unshadowed) asks no ray.
+const float kLampNegligible = 3e-5;
 
 vec3 unproject(vec2 uv, float depth) {
     vec4 w = vl.invViewProj * vec4(uv * 2.0 - 1.0, depth, 1.0);
@@ -219,6 +225,19 @@ bool besideInAir(vec3 q) {
     return pointDepth < sceneDepth - 0.1;
 }
 
+// lit: whether the sun (moon) reaches x; otherwise how shaded x is from it.
+// With the ray traced lighting a ray from the air to the sky, which whatever
+// is opaque stops, a unit included; otherwise the shadow map.
+float vlBodyAsk(vec3 x, vec3 toBody, bool lit, inout uint rng) {
+#ifdef VL_TRACE
+    if (vl.modes.y == 2) {
+        bool blocked = rtOccluded(x, toBody, 2000.0, rng);
+        return (blocked != lit) ? 1.0 : 0.0;
+    }
+#endif
+    return lit ? mapVisibility(x) : mapShade(x);
+}
+
 // A hash to 0..1 for the turning of the point beside each step.
 float vlHash(uvec3 v) {
     v = v * 1664525u + 1013904223u;
@@ -298,6 +317,8 @@ void main() {
                          0.61803399 * float(frameNo));
 #ifdef VL_TRACE
     uint rng = rtHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + 26699u + frameNo * 7919u);
+#else
+    uint rng = 0u;  // only the traced rays draw on it
 #endif
 
     vec3 light = vec3(0.0);
@@ -321,46 +342,42 @@ void main() {
         float phase = vlBodyPhase(dot(dir, toBody)) * vl.bodyColor.w;
         float spin = vlHash(uvec3(uint(pixel.x), uint(pixel.y), frameNo));
         float shown = 0.0;
+        // A step adds only where it is lit AND shade lies beside it, so the
+        // two rays are asked in the order likelier to end early: the one
+        // that answered "no" at the last step first (lit open air: the
+        // shade beside; under a roof or a crown: the light itself). Only
+        // fewer rays - the sum is the same whichever comes first.
+        bool litFirst = true;
         for (int i = 0; i < steps; ++i) {
             float t = (float(i) + offset) * dt;
             vec3 p = eye + dir * t;
-            float v;
-#ifdef VL_TRACE
-            if (vl.modes.y == 2) {
-                // The sun's ray from the air to the sky; whatever is opaque
-                // stops it, a unit included.
-                v = rtOccluded(p, toBody, 2000.0, rng) ? 0.0 : 1.0;
-            } else
-#endif
-            {
-                v = mapVisibility(p);
-            }
-            if (v <= 0.0) continue;
-            // Lit: does shade lie beside it? One point across the light, its
+            // Does shade lie beside it? One point across the light, its
             // direction turned from step to step and frame to frame
             // (volumetric_light::shaftStep). Open air has none beside it and
             // adds nothing - no veil over the open sky or a plain (T434);
-            // a gap in a crown, a window, a ridge before a low sun do.
+            // a gap in a crown, a window, a ridge before a low sun do. The
+            // point must be air the eye sees: a lookup in the screen's
+            // depth, asked before either ray.
             float angle = 6.28318530718 * fract(spin + 0.61803399 * float(i));
             vec3 q = p + (cos(angle) * across1 + sin(angle) * across2) * vlShaftRadius(t);
             if (!besideInAir(q)) continue;
-            float shade;
-#ifdef VL_TRACE
-            if (vl.modes.y == 2) {
-                shade = rtOccluded(q, toBody, 2000.0, rng) ? 1.0 : 0.0;
-            } else
-#endif
-            {
-                shade = mapShade(q);
+            // One call site per ray, so the tracer is inlined twice as before.
+            float first = vlBodyAsk(litFirst ? p : q, toBody, litFirst, rng);
+            if (first <= 0.0) continue;
+            float second = vlBodyAsk(litFirst ? q : p, toBody, !litFirst, rng);
+            if (second <= 0.0) {
+                litFirst = !litFirst;
+                continue;
             }
-            shown += v * shade;
+            shown += first * second;
         }
         light += vl.bodyColor.rgb * (phase * shown * dt * vl.air.x * vl.bodyDir.w);
     }
 
     // The lamps.
     int lamps = min(vl.modes.x, 32);
-    int lampSteps = max(int(vl.air.w + 0.5), 1);
+    int lampSteps = clamp(int(vl.air.w + 0.5), 1, kMaxLampSteps);
+    int lampRays = clamp(int(vl.camForward.w + 0.5), 1, lampSteps);
     for (int i = 0; i < lamps; ++i) {
         vec3 lp = vl.lights[i].positionEnd.xyz;
         float end = abs(vl.lights[i].positionEnd.w);
@@ -383,16 +400,40 @@ void main() {
         float h = sqrt(across * across + core * core);
         float a0 = atan((t0 - along) / h);
         float a1 = atan((t1 - along) / h);
-        float sum = 0.0;
+        // First every sample's glow, unshadowed: the samples cost a few
+        // instructions each, the rays to the lamp nearly all of the time.
+        float f[kMaxLampSteps];
+        float total = 0.0;
         for (int k = 0; k < lampSteps; ++k) {
             float a = mix(a0, a1, (float(k) + offset) / float(lampSteps));
             float x = h * tan(a);
             float weight = (a1 - a0) * (h * h + x * x) / h;
             vec3 p = eye + dir * (along + x);
-            vec3 toLamp = lp - p;
-            float d = length(toLamp);
-            float f = vlGlowFalloff(d, end) * weight;
-            if (f <= 0.0) continue;
+            f[k] = vlGlowFalloff(length(lp - p), end) * weight;
+            total += max(f[k], 0.0);
+        }
+        if (!(total > 0.0)) continue;
+        vec3 unshadowed = vl.lights[i].colorStart.rgb * (total / float(lampSteps) * vl.air.y);
+        // A glow too faint to change the picture even unshadowed asks no
+        // ray (volumetric_light::kLampNegligible): it adds nothing, as if
+        // its lamp were hidden - so it never lights what a ray would have
+        // found shaded.
+        if (max(max(unshadowed.r, unshadowed.g), unshadowed.b) < kLampNegligible) continue;
+        // Then whether the lamp is in sight: a ray from only some of the
+        // samples (vl.camForward.w of them, every stride-th, which ones
+        // moving from frame to frame and from lamp to lamp), their glow-
+        // weighted share in sight standing for the whole stretch
+        // (volumetric_light::lampRaySamples). Where nothing shades the lamp
+        // that is exact; at a shadow's edge in the air the history gathers
+        // the other samples' rays over the next frames.
+        int stride = max(lampSteps / lampRays, 1);
+        int pick = int(fract(offset + 0.38196601 * float(i)) * float(stride)) % stride;
+        float asked = 0.0;
+        float inSight = 0.0;
+        for (int k = pick; k < lampSteps; k += stride) {
+            if (f[k] <= 0.0) continue;
+            float a = mix(a0, a1, (float(k) + offset) / float(lampSteps));
+            vec3 p = eye + dir * (along + h * tan(a));
             bool hidden = false;
 #ifdef VL_TRACE
             if (vl.modes.z == 2) {
@@ -425,10 +466,13 @@ void main() {
             if (vl.modes.z == 1) {
                 hidden = depthOccluded(p, lp);
             }
-            if (!hidden) sum += f;
+            asked += f[k];
+            if (!hidden) inSight += f[k];
         }
-        sum /= float(lampSteps);
-        light += vl.lights[i].colorStart.rgb * (sum * vl.air.y);
+        // No sample asked (all of the picked ones without glow): nothing is
+        // known of the lamp's sight, and it adds nothing this frame.
+        if (!(asked > 0.0)) continue;
+        light += unshadowed * (inSight / asked);
     }
 
     imageStore(uMarch, pixel, vec4(max(light, vec3(0.0)), 1.0));

@@ -497,8 +497,6 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
     params.invViewProj = glm::inverse(viewProj);
     params.viewProj = viewProj;
     params.camPos = glm::vec4(in.cameraPos, volumetric_light::kSunReach);
-    // The view's forward axis: the third row of the view's rotation, negated.
-    params.camForward = glm::vec4(-in.view[0][2], -in.view[1][2], -in.view[2][2], 0.0f);
     params.bodyDir = glm::vec4(in.bodyDir, body == Occlusion::None ? 0.0f : std::max(in.bodyShare, 0.0f));
     params.bodyColor = glm::vec4(in.bodyColor, in.lobe);
     // The compute tracer walks its tree per ray: its lamps take the lower
@@ -506,6 +504,11 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
     const unsigned lampSteps = (lamps == Occlusion::Traced && !in.hardware)
                                    ? std::min(budget.lightSteps, volumetric_light::budgetFor(Quality::Low).lightSteps)
                                    : budget.lightSteps;
+    // The view's forward axis: the third row of the view's rotation, negated;
+    // in w how many of a lamp's samples ask for its sight
+    // (volumetric_light::lampRaysFor).
+    params.camForward = glm::vec4(-in.view[0][2], -in.view[1][2], -in.view[2][2],
+                                  static_cast<float>(volumetric_light::lampRaysFor(lampSteps, budget)));
     params.air = glm::vec4(in.bodyScatter, in.lampScatter, static_cast<float>(budget.sunSteps),
                            static_cast<float>(lampSteps));
     const size_t lampCount = std::min<size_t>(in.lamps.size(), std::min(budget.maxLights, volumetric_light::kMaxLights));

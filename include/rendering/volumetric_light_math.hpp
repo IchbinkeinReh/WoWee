@@ -34,20 +34,61 @@ inline Quality qualityFromIndex(int index) {
 /// beside it (shaftRadius), so its steps cost up to two lookups each; the
 /// steps move from frame to frame and the history (historyWeight) gathers
 /// the last frames of them (VL4: 16/8 steps where VL had 24/12).
+///
+/// The rays to the lamps were nearly all of the cost (VL5: 51 ms of a 92 ms
+/// frame in Brill at night, High): each sample of a lamp's glow asked one.
+/// Now a lamp's samples are all weighed, unshadowed, and only `lampRays` of
+/// them ask whether the lamp is in sight (lampRaySamples) - the samples are
+/// a few instructions each, the rays the time.
 struct Budget {
     unsigned divisor = 0;     ///< the march's image is the screen's size over this
     unsigned sunSteps = 0;    ///< samples of the sky body's light along a ray
     unsigned lightSteps = 0;  ///< samples inside each lamp's reach a ray crosses
     unsigned maxLights = 0;   ///< lamps per frame, the most important first
+    unsigned lampRays = 0;    ///< of a lamp's samples, how many ask for its sight
 };
 
 inline Budget budgetFor(Quality q) {
     switch (q) {
-        case Quality::Low: return {.divisor = 4, .sunSteps = 8, .lightSteps = 4, .maxLights = 16};
-        case Quality::High: return {.divisor = 2, .sunSteps = 16, .lightSteps = 8, .maxLights = 32};
+        case Quality::Low: return {.divisor = 4, .sunSteps = 8, .lightSteps = 4, .maxLights = 16, .lampRays = 1};
+        case Quality::High: return {.divisor = 2, .sunSteps = 16, .lightSteps = 8, .maxLights = 32, .lampRays = 4};
         case Quality::Off: break;
     }
     return {};
+}
+
+/// The most samples a lamp takes (the march's array of them).
+inline constexpr unsigned kMaxLampSteps = 16;
+
+/// A lamp's glow on a texel this faint, its brightest channel unshadowed,
+/// changes nothing on screen - thirty-two of them stay under a third of one
+/// 8-bit step even brightened four times by the eye - and asks no ray; it
+/// adds nothing, as if the lamp were hidden.
+inline constexpr float kLampNegligible = 3e-5f;
+
+/// How many of `steps` samples ask for the lamp's sight: `rays` (the
+/// quality's), the same share of fewer samples, at least one, at most all.
+inline unsigned lampRaysFor(unsigned steps, const Budget& b) {
+    if (steps == 0 || b.lightSteps == 0) return 0;
+    const unsigned rays = (steps * b.lampRays + b.lightSteps - 1) / b.lightSteps;
+    return std::clamp(rays, 1u, steps);
+}
+
+/// Which samples ask: every stride-th from `pick` (0..stride-1, moved from
+/// frame to frame by the march's pattern). Their glow-weighted share in
+/// sight stands for the whole stretch: exact where nothing shades the lamp,
+/// at a shadow's edge in the air the history gathers the rest.
+inline unsigned lampRayStride(unsigned steps, unsigned rays) {
+    return rays == 0 ? 1u : std::max(steps / rays, 1u);
+}
+
+/// A lamp's glow seen through the samples that asked: `total` the glow of
+/// all samples, unshadowed; `asked` and `inSight` the glow of those that
+/// asked and of those of them whose ray reached the lamp. Nothing asked,
+/// nothing known: no light.
+inline float lampGlowSeen(float total, float asked, float inSight) {
+    if (!(total > 0.0f) || !(asked > 0.0f)) return 0.0f;
+    return total * (inSight / asked);
 }
 
 /// How much light the air scatters toward the eye per yard, for the sky
