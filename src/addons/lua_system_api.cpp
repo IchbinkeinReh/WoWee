@@ -3358,9 +3358,9 @@ static int lua_GetMinimapZoneText(lua_State* L) {
 
 // SetupFullscreenScale(frame) - the scale of a full-screen frame.
 //
-// The client's own, and it was a no-op here: frame:SetScale(min(1, aspect *
-// 0.75)) for a frame that sits outside UIParent's scale, worked out for this
-// client's root by fullscreenFrameScale. WorldMapFrame_OnShow is the caller
+// The client's own (0x0054ed80): frame:SetScale(min(1, aspect * 0.75)) for a
+// frame that sits outside UIParent's scale (fullscreenFrameScale), whose screen
+// is 768 units high at any interface scale. WorldMapFrame_OnShow is the caller
 // that matters - the full-size map takes the whole height of the screen,
 // whatever the interface scale.
 static int lua_SetupFullscreenScale(lua_State* L) {

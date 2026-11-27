@@ -6,23 +6,24 @@
 namespace wowee {
 namespace ui {
 
-/// The scale that makes a frame laid out on a 1024 by 768 guide fill the
-/// screen as the client's full-screen frames do, for a screen rootW by rootH
-/// interface units.
+/// The scale SetupFullscreenScale gives a frame laid out on a 1024 by 768
+/// guide, for a screen rootW by rootH interface units.
 ///
-/// The client's SetupFullscreenScale(frame) is frame:SetScale(min(1, aspect *
-/// 0.75)). It is called on frames taken out of UIParent (the full-size world
-/// map does SetParent(nil) first), which do not take the interface scale, so
-/// their screen is always 768 units tall: the guide fills the height and
-/// shrinks only on a screen narrower than 4:3. This client's root does take
-/// the interface scale and is 768 / scale units tall, so the same picture
-/// needs rootH / 768 on top of it - which is min(rootH / 768, rootW / 1024).
+/// The client's (0x0054ed80) is frame:SetScale(min(1, aspect * 0.75)), the
+/// aspect being width / height (0x0047bf90 keeps aspect * 0.75 for it). Its
+/// callers take the frame out of UIParent first (the full-size world map's
+/// SetParent(nil)), and a frame without a parent does not take the interface
+/// scale: its screen is 768 units high here as in the client (widget_tree's
+/// trueScale), so the guide fills the height and shrinks only on a screen
+/// narrower than 4:3. The interface scale is in rootW and rootH alike and
+/// drops out of the aspect.
 ///
-/// The fit this replaces stopped at 1, so with the interface scale below 1 the
-/// map came out that much smaller than the screen; the client's does not.
+/// It was min(rootH / 768, rootW / 1024) from when a frame without a parent
+/// still took the interface scale; since it does not, that put the scale in
+/// twice and the map came out 1 / scale too tall (T448).
 [[nodiscard]] inline float fullscreenFrameScale(float rootW, float rootH) {
     if (rootW <= 0.0f || rootH <= 0.0f) return 1.0f;
-    return std::min(rootH / 768.0f, rootW / 1024.0f);
+    return std::min(1.0f, rootW / rootH * 0.75f);
 }
 
 }  // namespace ui

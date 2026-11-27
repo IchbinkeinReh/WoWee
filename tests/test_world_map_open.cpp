@@ -167,11 +167,12 @@ TEST_CASE("fullscreenFrameScale: the guide fills the screen's height",
     using wowee::ui::fullscreenFrameScale;
     // Interface scale 1 on a 4:3 screen: the root is the guide.
     REQUIRE(fullscreenFrameScale(1024.0f, 768.0f) == Catch::Approx(1.0f));
-    // Interface scale 0.8 on 16:9: the root is 960 tall, and the map is made
-    // that tall rather than left at 768 of it.
-    REQUIRE(fullscreenFrameScale(1706.67f, 960.0f) == Catch::Approx(1.25f));
-    // Interface scale 1.28: 600 tall, so the map shrinks to fit.
-    REQUIRE(fullscreenFrameScale(1066.67f, 600.0f) == Catch::Approx(600.0f / 768.0f));
+    // A frame without a parent is in a screen 768 high whatever the interface
+    // scale (T448): at 0.9 on 1920x1032 the root is 853.33 high, and the map
+    // keeps 1 - not 853.33 / 768, which made it a ninth too tall.
+    REQUIRE(fullscreenFrameScale(1587.6f, 853.33f) == Catch::Approx(1.0f));
+    REQUIRE(fullscreenFrameScale(1706.67f, 960.0f) == Catch::Approx(1.0f));
+    REQUIRE(fullscreenFrameScale(1066.67f, 600.0f) == Catch::Approx(1.0f));
 }
 
 TEST_CASE("fullscreenFrameScale: narrower than 4:3 fits the width, as the client's",
