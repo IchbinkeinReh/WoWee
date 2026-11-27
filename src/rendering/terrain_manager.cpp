@@ -31,6 +31,7 @@
 #include "core/profiler.hpp"
 #include "core/frame_profiler.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/data_stream.hpp"
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
@@ -271,6 +272,30 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
     }
     streamCentre_ = glm::vec2(focus.x, focus.y);
     haveStreamCentre_ = true;
+    // The way the focus goes, measured every few yards; a jump is a
+    // teleport, after which there is no way yet. Only streamed (the data
+    // from a server) does it change the order tiles are read in: from disk
+    // it is the client's, nearest first.
+    {
+        const glm::vec2 at(focus.x, focus.y);
+        if (!haveHeadingFrom_) {
+            headingFrom_ = at;
+            haveHeadingFrom_ = true;
+        }
+        const float moved = glm::length(at - headingFrom_);
+        if (moved > terrain_stream::kHeadingJump) {
+            heading_ = glm::vec2(0.0f);
+            headingFrom_ = at;
+        } else if (moved >= terrain_stream::kHeadingStep) {
+            heading_ = (at - headingFrom_) / moved;
+            headingFrom_ = at;
+        }
+        const bool streamed = pipeline::DataStream::instance().active();
+        std::lock_guard<std::mutex> lock(queueMutex);
+        readCentre_ = at;
+        readHeading_ = streamed ? heading_ : glm::vec2(0.0f);
+        haveReadCentre_ = true;
+    }
 
     // Always process ready tiles each frame (GPU uploads from background thread)
     // Time-budgeted internally to prevent frame spikes.
@@ -1582,8 +1607,18 @@ void TerrainManager::workerLoop() {
             }
 
             if (!loadQueue.empty()) {
-                coord = loadQueue.front();
-                loadQueue.pop_front();
+                // The nearest to the focus, ahead of the travel first
+                // (terrain_stream::nextToRead), not the oldest asked for:
+                // the focus has moved on since the far ones were queued.
+                size_t pick = 0;
+                if (haveReadCentre_) {
+                    pick = terrain_stream::nextToRead(
+                        loadQueue.size(),
+                        [this](size_t i) { return std::pair<int, int>(loadQueue[i].x, loadQueue[i].y); },
+                        readCentre_.x, readCentre_.y, readHeading_.x, readHeading_.y);
+                }
+                coord = loadQueue[pick];
+                loadQueue.erase(loadQueue.begin() + static_cast<std::ptrdiff_t>(pick));
                 hasWork = true;
                 ++preparingTiles_;
             }
@@ -2822,6 +2857,16 @@ void TerrainManager::precacheTiles(const std::vector<std::pair<int, int>>& tiles
         // opportunistic radius streaming tiles.
         loadQueue.push_front(coord);
         pendingTiles[coord] = true;
+    }
+    // Read about the place these are for (callers name it last, nearest
+    // last), not about where the focus was: a teleport precaches before the
+    // next update moves the focus there.
+    if (!tiles.empty()) {
+        const auto& [x, y] = tiles.back();
+        readCentre_ = glm::vec2((31.5f - static_cast<float>(y)) * terrain_stream::kTileSize,
+                                (31.5f - static_cast<float>(x)) * terrain_stream::kTileSize);
+        readHeading_ = glm::vec2(0.0f);
+        haveReadCentre_ = true;
     }
 
     // Notify workers to start loading

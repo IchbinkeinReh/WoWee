@@ -643,6 +643,16 @@ private:
     std::mutex queueMutex;
     std::condition_variable queueCV;
     std::deque<TileCoord> loadQueue;              // THREAD-SAFE: protected by queueMutex
+    // Where the workers read from next (terrain_stream::nextToRead): the
+    // stream focus and, while travelling, the way it goes. Protected by
+    // queueMutex; set by the main thread each update.
+    glm::vec2 readCentre_{0.0f};
+    glm::vec2 readHeading_{0.0f};
+    bool haveReadCentre_ = false;
+    // Main thread: where the heading was last measured from.
+    glm::vec2 headingFrom_{0.0f};
+    bool haveHeadingFrom_ = false;
+    glm::vec2 heading_{0.0f};
     std::queue<std::shared_ptr<PendingTile>> readyQueue; // THREAD-SAFE: protected by queueMutex
     // Jobs a worker preparing a tile has opened to the others (runParallel).
     // A worker with no tile to take helps with the front one. Protected by

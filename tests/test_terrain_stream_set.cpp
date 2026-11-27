@@ -258,3 +258,95 @@ TEST_CASE("few tiles are read ahead of a slow main thread", "[terrain_stream]") 
     CHECK(done == 300);
     CHECK(mostHeld <= kReadyTiles + kWorkers);
 }
+
+// ---- which queued tile is read next (streaming from a server) --------------
+
+namespace {
+/// The centre of tile (x, y) in render coordinates.
+glm::vec2 tileCentre(int x, int y) {
+    return {(31.5f - static_cast<float>(y)) * kTileSize, (31.5f - static_cast<float>(x)) * kTileSize};
+}
+size_t pick(const std::vector<std::pair<int, int>>& queue, glm::vec2 focus, glm::vec2 heading) {
+    return nextToRead(queue.size(), [&](size_t i) { return queue[i]; }, focus.x, focus.y, heading.x, heading.y);
+}
+}  // namespace
+
+TEST_CASE("the tile under the focus is read first, then the nearest", "[terrain_stream][read_order]") {
+    const glm::vec2 focus = tileCentre(30, 40) + glm::vec2(100.0f, -50.0f);
+    const auto [ux, uy] = tileOf(glm::vec3(focus, 0.0f));
+    std::vector<std::pair<int, int>> queue = {{ux + 3, uy}, {ux - 1, uy + 1}, {ux, uy}, {ux + 1, uy}};
+    for (const glm::vec2 heading : {glm::vec2(0.0f), glm::vec2(1.0f, 0.0f), glm::vec2(-0.6f, 0.8f)}) {
+        CHECK(queue[pick(queue, focus, heading)] == std::make_pair(ux, uy));
+    }
+    queue.erase(queue.begin() + 2);
+    // Without a heading the nearest square, whatever its place in the queue.
+    const size_t next = pick(queue, focus, glm::vec2(0.0f));
+    for (const auto& [x, y] : queue) {
+        CHECK(distanceToTile(queue[next].first, queue[next].second, focus.x, focus.y) <=
+              distanceToTile(x, y, focus.x, focus.y));
+    }
+}
+
+TEST_CASE("a tile ahead of the travel is read before one as near behind", "[terrain_stream][read_order]") {
+    const glm::vec2 focus = tileCentre(32, 32);
+    // Render +x is a smaller tile y: one tile ahead and one behind when going +x.
+    const std::pair<int, int> ahead = {32, 31}, behind = {32, 33};
+    const std::vector<std::pair<int, int>> queue = {behind, ahead};
+    CHECK(queue[pick(queue, focus, glm::vec2(0.0f))] == behind);   // a tie: the earlier
+    CHECK(queue[pick(queue, focus, glm::vec2(1.0f, 0.0f))] == ahead);
+    CHECK(queue[pick(queue, focus, glm::vec2(-1.0f, 0.0f))] == behind);
+    // Sideways, neither is ahead: the earlier again.
+    CHECK(queue[pick(queue, focus, glm::vec2(0.0f, 1.0f))] == behind);
+    // Ahead but much further does not jump the queue past a near one behind.
+    const std::vector<std::pair<int, int>> far = {behind, {32, 28}};
+    CHECK(far[pick(far, focus, glm::vec2(1.0f, 0.0f))] == behind);
+}
+
+// A flight over ground none of which is cached yet, the tiles read one at a
+// time at a fixed rate (each waits for a slow server). Read in the order they
+// were queued - nearest first from where they were asked for, newest in
+// front - the reader works through tiles the flier has left behind; picked
+// about the focus, the tile under the flier is in sooner, and picked about
+// the focus and its way, the tile it flies into next as well.
+TEST_CASE("streamed, the ground the flier comes to is in sooner", "[terrain_stream][read_order]") {
+    constexpr float kReach = 600.0f;
+    constexpr float kSpeed = 40.0f;          // yards a second, a fast flight
+    constexpr float kSecondsPerTile = 3.0f;  // a slow server
+    const glm::vec2 heading = glm::normalize(glm::vec2(1.0f, 0.6f));
+    struct Result {
+        int under = 0;   // seconds over a tile not in
+        int next = 0;    // seconds the tile a tile ahead was not in
+    };
+    auto fly = [&](int mode) {               // 0 queue order, 1 nearest, 2 nearest and ahead
+        std::set<std::pair<int, int>> asked, loaded;
+        std::vector<std::pair<int, int>> queue;
+        glm::vec2 at = tileCentre(32, 40);
+        float readClock = 0.0f;
+        Result r;
+        for (int second = 0; second < 240; ++second) {
+            // Streamed about the focus: what came into reach, nearest first,
+            // in front of what was queued before (TerrainManager::streamTiles).
+            std::vector<std::pair<int, int>> fresh;
+            for (const auto& t : loadOrder(at.x, at.y, kReach))
+                if (asked.insert(t).second) fresh.push_back(t);
+            queue.insert(queue.begin(), fresh.begin(), fresh.end());
+            for (readClock += 1.0f; readClock >= kSecondsPerTile && !queue.empty(); readClock -= kSecondsPerTile) {
+                size_t i = 0;
+                if (mode > 0) i = pick(queue, at, mode == 2 ? heading : glm::vec2(0.0f));
+                loaded.insert(queue[i]);
+                queue.erase(queue.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+            if (!loaded.count(tileOf(glm::vec3(at, 0.0f)))) ++r.under;
+            if (!loaded.count(tileOf(glm::vec3(at + heading * kTileSize, 0.0f)))) ++r.next;
+            at += heading * kSpeed;
+        }
+        return r;
+    };
+    const Result queued = fly(0), nearest = fly(1), ahead = fly(2);
+    INFO("under / next: queue order " << queued.under << "/" << queued.next << ", nearest " << nearest.under << "/"
+                                      << nearest.next << ", ahead " << ahead.under << "/" << ahead.next);
+    CHECK(nearest.under < queued.under);
+    CHECK(ahead.under <= nearest.under);
+    CHECK(ahead.next < nearest.next);
+    CHECK(ahead.next < queued.next);
+}

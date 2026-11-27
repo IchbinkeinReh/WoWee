@@ -137,4 +137,54 @@ inline std::vector<std::pair<int, int>> loadOrder(float renderX, float renderY, 
     return out;
 }
 
+/// How much a tile ahead of the travel is preferred to one as near behind:
+/// its distance counts (1 - kAheadWeight) times, one straight behind
+/// (1 + kAheadWeight) times.
+inline constexpr float kAheadWeight = 0.5f;
+
+/// How far the focus moves before the way it went is taken as the heading,
+/// and a jump past which it is a teleport, not travel (no heading).
+inline constexpr float kHeadingStep = 8.0f;
+inline constexpr float kHeadingJump = 200.0f;
+
+/// Which queued tile a worker reads next: the one with the least weighted
+/// distance from the focus (renderX, renderY). The distance is to the
+/// tile's square (the tile under the focus is 0 and always first); with a
+/// heading (headX, headY: the way the focus is going, any length, 0 0 for
+/// none) a tile in front of the focus counts as nearer than one as near
+/// behind it - where the player is going is read before where they were.
+/// This is WoWee's own: the client reads its areas nearest first and from
+/// disk (0x007b5950), where the order hardly shows; streamed, each tile
+/// waits for the network. Ties go to the earlier in the queue.
+inline float readPriority(int x, int y, float renderX, float renderY, float headX, float headY) {
+    const float d = distanceToTile(x, y, renderX, renderY);
+    const float headLen = std::sqrt(headX * headX + headY * headY);
+    if (d <= 0.0f || headLen < 1e-3f) return d;
+    // The tile's centre, in render coordinates (x from the tile's y).
+    const float cx = (31.5f - static_cast<float>(y)) * kTileSize;
+    const float cy = (31.5f - static_cast<float>(x)) * kTileSize;
+    const float vx = cx - renderX, vy = cy - renderY;
+    const float vLen = std::sqrt(vx * vx + vy * vy);
+    if (vLen < 1e-3f) return d;
+    const float ahead = (vx * headX + vy * headY) / (vLen * headLen);
+    return d * (1.0f - kAheadWeight * ahead);
+}
+
+/// The index into a queue of `count` tiles (tileAt(i) gives tile i as a
+/// pair x, y) of the one to read next, by readPriority.
+template <class TileAt>
+size_t nextToRead(size_t count, TileAt tileAt, float renderX, float renderY, float headX, float headY) {
+    size_t best = 0;
+    float bestScore = 0.0f;
+    for (size_t i = 0; i < count; ++i) {
+        const std::pair<int, int> t = tileAt(i);
+        const float score = readPriority(t.first, t.second, renderX, renderY, headX, headY);
+        if (i == 0 || score < bestScore) {
+            best = i;
+            bestScore = score;
+        }
+    }
+    return best;
+}
+
 }  // namespace wowee::rendering::terrain_stream
