@@ -6668,9 +6668,17 @@ void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::I
     // (ITEM_FIELD_DURATION, seconds; 0x007070b0).
     lua_pushnumber(L, gh->getItemDurationByGuid(instance.guid));
     lua_setfield(L, -2, "duration");
-    // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
+    // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES),
+    // and of each of the five by place (T439: the line under a spell counts
+    // that spell's).
     lua_pushnumber(L, gh->getItemSpellCharges(instance.guid));
     lua_setfield(L, -2, "charges0");
+    lua_createtable(L, 5, 0);
+    for (int k = 0; k < 5; ++k) {
+        lua_pushnumber(L, gh->getItemSpellCharges(instance.guid, k));
+        lua_rawseti(L, -2, k + 1);
+    }
+    lua_setfield(L, -2, "chargesBySlot");
     // The saved equipment sets holding this very item (0x005ae380): their
     // names in the sets' own order, once per slot that names its guid.
     if (instance.guid != 0) {
@@ -15910,7 +15918,8 @@ void LuaEngine::registerCoreAPI() {
         "                    if sp.createdItem then self:AddLine(text, 1, 1, 1, 1) else self:AddLine(text, 0, 1, 0, 1) end\n"
         "                    if sp.charges then\n"
         "                        local n = sp.charges\n"
-        "                        if inst and sp.slot == 0 and inst.charges0 then n = inst.charges0 end\n"
+        "                        if inst and inst.chargesBySlot and sp.slot then n = inst.chargesBySlot[sp.slot + 1] or n\n"
+        "                        elseif inst and sp.slot == 0 and inst.charges0 then n = inst.charges0 end\n"
         "                        n = math.abs(n)\n"
         "                        if n == 0 then self:AddLine(ITEM_SPELL_CHARGES_NONE or 'No charges', 1, 1, 1)\n"
         "                        else self:AddLine(format(ITEM_SPELL_CHARGES or '%d Charges', n), 1, 1, 1) end\n"

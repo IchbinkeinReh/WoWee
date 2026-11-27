@@ -1996,7 +1996,11 @@ static int lua_GetItemCount(lua_State* L) {
                 uint32_t left = 0;
                 inv.forEachCarried([&](const game::ItemDef& d) {
                     if (d.itemId != itemId || (d.maxDurability != 0 && d.curDurability == 0)) return;
-                    const int32_t c = gh->getItemSpellCharges(d.guid);
+                    // The use spell's own charges (0x00707dc0: +0x28 + its
+                    // index * 4), not always the first spell's (T439).
+                    const int32_t c = use != info->spells.end()
+                                          ? gh->getItemSpellCharges(d.guid, static_cast<int>(use - info->spells.begin()))
+                                          : 0;   // an enchantment's: its slot's charges, not tracked
                     left += static_cast<uint32_t>(c < 0 ? -c : c);
                 });
                 count = left;

@@ -5592,10 +5592,12 @@ public:
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() ? it->second.duration : 0u;
     }
-    /// ITEM_FIELD_SPELL_CHARGES[0] of an item this client holds, 0 when unknown.
-    int32_t getItemSpellCharges(uint64_t guid) const {
+    /// ITEM_FIELD_SPELL_CHARGES[index] of an item this client holds, 0 when
+    /// unknown.
+    int32_t getItemSpellCharges(uint64_t guid, int index = 0) const {
         auto it = onlineItems_.find(guid);
-        return it != onlineItems_.end() ? it->second.spellCharges0 : 0;
+        if (it == onlineItems_.end() || index < 0 || index >= 5) return 0;
+        return it->second.spellCharges[static_cast<size_t>(index)];
     }
     uint32_t getItemEntryByGuid(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
@@ -6681,9 +6683,10 @@ public:
         std::chrono::steady_clock::time_point temporaryEnchantSetAt{};
         std::array<uint32_t, 3> socketEnchantIds{};
         uint32_t flags = 0;              // ITEM_FIELD_FLAGS (bit 0x1 = soulbound)
-        /// ITEM_FIELD_SPELL_CHARGES, the first of the five (STACK_COUNT + 2):
-        /// what is left of the template's first spell's charges.
-        int32_t  spellCharges0 = 0;
+        /// ITEM_FIELD_SPELL_CHARGES, all five (STACK_COUNT + 2..6): what is
+        /// left of each template spell's charges, by the spell's place
+        /// (0x00707dc0 reads the use spell's, +0x28 + index * 4).
+        std::array<int32_t, 5> spellCharges{};
         /// ITEM_FIELD_DURATION (STACK_COUNT + 1): seconds the item has left,
         /// for one that lasts a while.
         uint32_t duration = 0;

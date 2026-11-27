@@ -2284,7 +2284,12 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (sock2EnchIt != block.fields.end()) info.socketEnchantIds[1]  = sock2EnchIt->second;
         if (sock3EnchIt != block.fields.end()) info.socketEnchantIds[2]  = sock3EnchIt->second;
         if (flagsIt    != block.fields.end()) info.flags                 = flagsIt->second;
-        if (chargesIt  != block.fields.end()) info.spellCharges0         = static_cast<int32_t>(chargesIt->second);
+        if (chargesIt  != block.fields.end()) info.spellCharges[0]       = static_cast<int32_t>(chargesIt->second);
+        // The other four (STACK_COUNT + 3..6), each spell's own (T439).
+        for (uint16_t k = 1; chargesField != 0xFFFF && k < 5; ++k) {
+            if (const auto c = block.fields.find(static_cast<uint16_t>(chargesField + k)); c != block.fields.end())
+                info.spellCharges[k] = static_cast<int32_t>(c->second);
+        }
         if (durationIt != block.fields.end()) info.duration              = durationIt->second;
         if (createdIt  != block.fields.end()) info.createPlayedTime      = createdIt->second;
         if (enchBase != 0xFFFF) {
@@ -2473,8 +2478,9 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
                 inventoryChanged = true;
                 enchantMoved = true;
             }
-        } else if (isItemInInventory && itemChargesField != 0xFFFF && key == itemChargesField) {
-            it->second.spellCharges0 = static_cast<int32_t>(val);
+        } else if (isItemInInventory && itemChargesField != 0xFFFF && key >= itemChargesField &&
+                   key < itemChargesField + 5u) {
+            it->second.spellCharges[static_cast<size_t>(key - itemChargesField)] = static_cast<int32_t>(val);
         } else if (isItemInInventory && itemDurationField != 0xFFFF && key == itemDurationField) {
             it->second.duration = val;
         } else if (isItemInInventory && itemCreatedField != 0xFFFF && key == itemCreatedField) {

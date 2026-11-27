@@ -582,7 +582,7 @@ TEST_CASE("GetItemCount with the charges counts charges and reagent casts", "[re
         item.stackCount = 1;
         s.handler().getInventory().setBackpackSlot(i, item);
         s.handler().onlineItemsRef()[item.guid].entry = kRod;
-        s.handler().onlineItemsRef()[item.guid].spellCharges0 = -2;
+        s.handler().onlineItemsRef()[item.guid].spellCharges[0] = -2;
     }
     CHECK(ui.is("GetItemCount(90001) == 2"));
     CHECK(ui.is("GetItemCount(90001, nil, true) == 4"));
@@ -598,6 +598,19 @@ TEST_CASE("GetItemCount with the charges counts charges and reagent casts", "[re
     // Too few for one: the count stays.
     s.handler().spellNameCacheRef()[kSpell].reagents[0] = {kDust, 9};
     CHECK(ui.is("GetItemCount(90001, nil, true) == 4"));
+    // T439: a use spell in the second place counts the second spell's charges
+    // (0x00707dc0: +0x28 + index * 4), not the first's.
+    s.handler().spellNameCacheRef()[kSpell].reagents[0] = {0, 0};
+    rod.spells[1] = rod.spells[0];
+    rod.spells[0] = {};
+    rod.spells[0].spellId = 90004;
+    rod.spells[0].spellTrigger = 1;
+    for (int i = 0; i < 2; ++i) {
+        auto& oi = s.handler().onlineItemsRef()[0x4000000000000900ull + static_cast<uint64_t>(i)];
+        oi.spellCharges[0] = 0;
+        oi.spellCharges[1] = -1;
+    }
+    CHECK(ui.is("GetItemCount(90001, nil, true) == 2"));
 }
 
 // T161: 0x006277f0, +0x480: what the item that is not traded would be enchanted with.
