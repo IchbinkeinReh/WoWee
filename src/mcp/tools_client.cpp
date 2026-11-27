@@ -23,11 +23,21 @@ namespace {
 void enterWorld(ToolContext& context, const json& args, Script& script) {
     const Aftermath after(context);
     const double timeout = args.value("timeout", 90.0);
+    // At the character selection with the list there (tester's wish: right
+    // after the realm was chosen, Enter before the list came went nowhere):
+    // waited for up to 20 s.
     script.then([&context](Script& s) {
         const std::string state = clientState(context);
-        if (state != "char_select") return s.fail("at " + state + ", not at the character selection");
-        return Script::Step::Next;
+        auto* gh = context.app.getGameHandler();
+        const bool listed = gh && !gh->getCharacters().empty();
+        if (state == "char_select" && listed) return Script::Step::Next;
+        if (s.elapsed() > 20.0) {
+            return s.fail(state == "char_select" ? std::string("no character list after 20 s")
+                                                 : "at " + state + ", not at the character selection");
+        }
+        return Script::Step::Again;
     });
+    script.then(Script::seconds(0.5));
     // Enter goes in with the selected character (character_screen.cpp).
     for (auto& fn : pressKey(context, SDL_SCANCODE_RETURN, SDL_KMOD_NONE, 0.1)) script.then(std::move(fn));
     script.then([&context, timeout](Script& s) {

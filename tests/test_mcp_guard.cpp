@@ -394,6 +394,17 @@ TEST_CASE("a guild is made for the character itself and only its own deleted", "
     CHECK_FALSE(gives(".guild create \"Lockis Bank\"", c));
 }
 
+TEST_CASE("items come with a count after the own name", "[mcp][gm]") {
+    GuardContext c = context();
+    CHECK(gives(".additem Locki 6948 5", c));
+    CHECK(gives(".additem locki 6948 20", c));
+    for (const char* command : {".additem 6948 5", ".additem Other 6948 5", ".additem Locki 6948 -5",
+                                ".additem Locki 6948 0", ".additem Locki 6948 1.5", ".additem Locki 6948 5 7"}) {
+        INFO(command);
+        CHECK_FALSE(gives(command, c));
+    }
+}
+
 TEST_CASE("an arena team is made for the character itself", "[mcp][gm]") {
     GuardContext c = context();
     for (const char* command : {".arena create \"Lockis Team\" 2", ".arena create Locki \"Lockis Team\" 3",

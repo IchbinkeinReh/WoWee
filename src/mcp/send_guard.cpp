@@ -433,8 +433,16 @@ bool gmWordsAllowed(const std::vector<std::string>& w, const std::string& ownNam
     }
     if (isOneOf(verb, {"help", "commands"})) return true;
     if (isOneOf(verb, {"aura", "unaura", "learn", "unlearn"})) return isNumberOrLink(sub) || sub == "all";
-    // A second number would make the first one a player's.
-    if (verb == "additem") return args >= 1 && isNumberOrLink(sub) && (args == 1 || !isNumber(sub));
+    // A second number would make the first one a player's (the realm reads
+    // an optional player before the item, a guid by number): a count comes
+    // after the character's own name (`.additem Locki ID COUNT`, tester's
+    // wish), positive, as a negative count takes items away.
+    if (verb == "additem") {
+        if (args == 3 && sameName(sub, ownName) && isNumberOrLink(w[2]) && isNumber(w[3]) && w[3][0] != '-' &&
+            w[3] != "0" && w[3].find('.') == std::string::npos)
+            return true;
+        return args >= 1 && isNumberOrLink(sub) && (args == 1 || !isNumber(sub));
+    }
     if (verb == "morph") return args == 1 && isNumber(sub);
     if (verb == "go") {
         return isOneOf(sub, {"xyz", "zonexy", "grid", "creature", "gameobject", "taxinode", "trigger", "graveyard",
