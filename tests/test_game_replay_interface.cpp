@@ -5124,6 +5124,21 @@ TEST_CASE("a guild rank event names the rank (0x006d92d0 case 10)", "[replay][in
     rankEvent("4", "Anfaenger2", "6");
     CHECK(ui.is("GuildControlGetRankName(5) == 'Anfaenger2'"));
     CHECK(ui.is("GuildControlGetRankName(1) == 'Meister'"));
+    // T437: a roster with four ranks (a rank deleted) - 0x005ccc90 answers ""
+    // past the roster's rank count (DAT_00c22ab8), not the old name still cached.
+    wowee::network::Packet roster(wowee::game::wireOpcode(Opcode::SMSG_GUILD_ROSTER));
+    roster.writeUInt32(0);
+    roster.writeString("");
+    roster.writeString("");
+    roster.writeUInt32(4);
+    for (int r = 0; r < 4; ++r)
+        for (int i = 0; i < 14; ++i) roster.writeUInt32(0);
+    s.receive(roster);
+    REQUIRE(ui.is("GuildControlGetNumRanks() == 4"));
+    CHECK(ui.is("GuildControlGetRankName(4) == 'Mitglied'"));
+    CHECK(ui.is("GuildControlGetRankName(5) == ''"));
+    CHECK(ui.is("GuildControlGetRankName(6) == ''"));
+    CHECK(ui.is("GuildControlGetRankName(1.4) == 'Meister'"));
 }
 
 // T414 (FIXER AA, found in code beside it): GetMapLandmarkInfo for an index

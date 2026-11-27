@@ -119,6 +119,19 @@ static constexpr uint32_t kGuildRankFlagBits[] = {
 };
 static constexpr size_t kGuildRankFlagCount = std::size(kGuildRankFlagBits);
 
+/// How many ranks the guild has (DAT_00c22ab8, GuildControlGetNumRanks): the
+/// roster's, else the query's names up to the last one that has one - the
+/// query pads to ten with empty strings.
+static int guildRankCount(game::GameHandler* gh) {
+    if (!gh) return 0;
+    if (const auto& ranks = gh->getGuildRoster().ranks; !ranks.empty()) return static_cast<int>(ranks.size());
+    const auto& names = gh->getGuildRankNames();
+    size_t named = 0;
+    for (size_t i = 0; i < names.size(); ++i)
+        if (!names[i].empty()) named = i + 1;
+    return static_cast<int>(named);
+}
+
 static void collectKnownLanguages(uint8_t raceId, std::vector<LanguageEntry>& out) {
     const bool horde = (raceId == 2 || raceId == 5 || raceId == 6 ||
                         raceId == 8 || raceId == 10);
@@ -2995,16 +3008,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GuildControlGetNumRanks", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return luaReturnZero(L);
-            const auto& ranks = gh->getGuildRoster().ranks;
-            if (!ranks.empty()) {
-                lua_pushnumber(L, static_cast<double>(ranks.size()));
-                return 1;
-            }
-            const auto& names = gh->getGuildRankNames();
-            size_t named = 0;
-            for (size_t i = 0; i < names.size(); ++i)
-                if (!names[i].empty()) named = i + 1;
-            lua_pushnumber(L, static_cast<double>(named));
+            lua_pushnumber(L, static_cast<double>(guildRankCount(gh)));
             return 1;
         }},
                 {"GuildControlGetRankName", [](lua_State* L) -> int {
@@ -3012,9 +3016,11 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GuildControlGetRankName(index)");
             auto* gh = getGameHandler(L);
-            const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
-            // A bad index answers "" (0x005ccc90).
-            if (!gh || idx < 1) { lua_pushstring(L, ""); return 1; }
+            // Rounded (0x005ccc90), and "" past the rank count (DAT_00c22ab8,
+            // what GuildControlGetNumRanks answers): a deleted rank's name
+            // stays in the cache entry and is not answered (T437).
+            const int idx = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            if (!gh || idx < 1 || idx > guildRankCount(gh)) { lua_pushstring(L, ""); return 1; }
             const auto& ranks = gh->getGuildRankNames();
             if (idx > static_cast<int>(ranks.size())) { lua_pushstring(L, ""); return 1; }
             lua_pushstring(L, ranks[static_cast<size_t>(idx) - 1].c_str());
