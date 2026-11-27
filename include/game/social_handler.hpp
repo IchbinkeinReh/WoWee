@@ -12,6 +12,8 @@
 #include "game/difficulty_change.hpp"
 #include "network/packet.hpp"
 #include <array>
+
+#include "game/arena_roster_sort.hpp"
 #include <chrono>
 #include <functional>
 #include <string>
@@ -784,6 +786,17 @@ public:
         return it != arenaTeamQueries_.end() ? &it->second : nullptr;
     }
     void requestArenaTeamRoster(uint32_t teamId);
+    /// 0x005a3600: CMSG_ARENA_TEAM_ROSTER for the team in the player's slot
+    /// (0..2), at most once in 10 s per slot, nothing for an empty slot.
+    void requestArenaTeamRosterOfSlot(uint32_t slot);
+    /// 0x005a3700(1), on any change of the player's 21 arena team fields
+    /// (0x1150, 0x54 bytes): each slot's team's roster asked for (throttled)
+    /// and ARENA_TEAM_UPDATE.
+    void onArenaTeamFieldsChanged();
+    /// GetArenaTeam's look into the team cache (0x00680170 with callback
+    /// 0x005a28c0): the record, or the query sent once - its answer raises
+    /// ARENA_TEAM_UPDATE.
+    const ArenaTeamQueryData* ownArenaTeamQuery(uint32_t teamId);
     [[nodiscard]] const ArenaTeamRoster* getArenaTeamRoster(uint32_t teamId) const {
         for (const auto& r : arenaTeamRosters_)
             if (r.teamId == teamId) return &r;
@@ -1080,11 +1093,14 @@ private:
     /// Teams asked about for somebody else's arena teams, which are not the
     /// player's own and stay out of arenaTeamStats_.
     std::unordered_set<uint32_t> arenaTeamQueriesAsked_;
+    std::unordered_set<uint32_t> ownArenaTeamQueriesAsked_;
+    /// 0x00c0f7f0: per slot, when its roster may be asked for again (ms).
+    std::array<int64_t, 3> arenaRosterNextMs_{};
     std::vector<ArenaTeamRoster> arenaTeamRosters_;
     /// The column the arena rosters are sorted by, so clicking it again knows
     /// to reverse rather than re-sort the same way.
-    std::string arenaSortKey_;
-    bool arenaSortAscending_ = true;
+    /// 0x00c0f7fc: the roster's column order (0x005a2e80).
+    arena_roster_sort::Order arenaSortOrder_;
     /// 0x00acf834, which the client starts at 1.
     bool arenaRosterShowOffline_ = true;
     /// 0x00bea54a.

@@ -18,6 +18,7 @@
 #include "game/power_prediction.hpp"
 #include "game/reputation_standing.hpp"
 #include "game/update_field_table.hpp"
+#include "game/chr_names.hpp"
 #include "game/opcode_table.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
@@ -2433,12 +2434,14 @@ void SocialHandler::declineArenaTeamInvite() {
 
 // The four arena team commands that had no sender. Every one is the team id
 // and, for three of them, a player name - the shape AzerothCore reads in
-// ArenaTeamHandler.cpp: `recvData >> arenaTeamId >> name`. Disband and the two
+// ArenaTeamHandler.cpp: `recvData >> arenaTeamId >> name`. A slot without a
+// team is sent as team 0 (0x00515cc0..0x00516130 read the slot table and send
+// what is there; the realm answers it). Disband and the two
 // invite answers below were already built; these four were named by the
 // interface's own popups and slash commands and reached bindings with nothing
 // behind them, so the buttons closed and nothing happened.
 void SocialHandler::arenaTeamInvite(uint32_t teamId, const std::string& name) {
-    if (teamId == 0 || name.empty()) return;
+    if (name.empty()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_ARENA_TEAM_INVITE));
     packet.writeUInt32(teamId);
@@ -2447,7 +2450,6 @@ void SocialHandler::arenaTeamInvite(uint32_t teamId, const std::string& name) {
 }
 
 void SocialHandler::arenaTeamLeave(uint32_t teamId) {
-    if (teamId == 0) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_ARENA_TEAM_LEAVE));
     packet.writeUInt32(teamId);
@@ -2455,7 +2457,7 @@ void SocialHandler::arenaTeamLeave(uint32_t teamId) {
 }
 
 void SocialHandler::arenaTeamRemove(uint32_t teamId, const std::string& name) {
-    if (teamId == 0 || name.empty()) return;
+    if (name.empty()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_ARENA_TEAM_REMOVE));
     packet.writeUInt32(teamId);
@@ -2464,7 +2466,7 @@ void SocialHandler::arenaTeamRemove(uint32_t teamId, const std::string& name) {
 }
 
 void SocialHandler::arenaTeamSetLeader(uint32_t teamId, const std::string& name) {
-    if (teamId == 0 || name.empty()) return;
+    if (name.empty()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_ARENA_TEAM_LEADER));
     packet.writeUInt32(teamId);
@@ -2473,7 +2475,6 @@ void SocialHandler::arenaTeamSetLeader(uint32_t teamId, const std::string& name)
 }
 
 void SocialHandler::disbandArenaTeam(uint32_t teamId) {
-    if (teamId == 0) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_ARENA_TEAM_DISBAND));
     packet.writeUInt32(teamId);
@@ -6336,10 +6337,12 @@ void SocialHandler::handleArenaTeamQueryResponse(network::Packet& packet) {
         cached.borderColor = packet.readUInt32();
     }
     // A team asked about for an inspect is somebody else's: it answers the
-    // inspect window, not the player's own list.
+    // inspect window, not the player's own list - unless GetArenaTeam asked
+    // for it as well (0x005a28c0: ARENA_TEAM_UPDATE).
+    const bool forOwn = ownArenaTeamQueriesAsked_.erase(teamId) != 0;
     if (arenaTeamQueriesAsked_.erase(teamId)) {
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("INSPECT_HONOR_UPDATE", {});
-        return;
+        if (!forOwn) return;
     }
     bool known = false;
     for (auto& s : arenaTeamStats_) { if (s.teamId == teamId) { s.teamName = teamName; s.teamType = teamType; known = true; break; } }
@@ -6416,30 +6419,37 @@ void SocialHandler::handleArenaTeamRoster(network::Packet& packet) {
 }
 
 void SocialHandler::sortArenaTeamRosters(const std::string& key) {
-    if (key.empty()) return;
-    // The same column twice reverses. A different one starts again in the
-    // direction that column reads best: a name from A, a number from the top.
-    if (key == arenaSortKey_) {
-        arenaSortAscending_ = !arenaSortAscending_;
-    } else {
-        arenaSortKey_ = key;
-        arenaSortAscending_ = (key == "name" || key == "class");
+    // 0x005a3490 -> 0x005a2e80: the column (an unknown name is the name
+    // column) to the front of the order, the front one turned round; every
+    // roster held sorted again and ARENA_TEAM_ROSTER_UPDATE for each that
+    // has rows.
+    arena_roster_sort::click(arenaSortOrder_, arena_roster_sort::columnFor(key));
+    for (auto& roster : arenaTeamRosters_) {
+        if (roster.members.empty()) continue;
+        sortArenaRoster(roster);
+        owner_.fireAddonEvent("ARENA_TEAM_ROSTER_UPDATE", {});
     }
-    for (auto& roster : arenaTeamRosters_) sortArenaRoster(roster);
 }
 
 void SocialHandler::sortArenaRoster(ArenaTeamRoster& roster) const {
-    const std::string& key = arenaSortKey_;
-    const bool asc = arenaSortAscending_;
+    namespace ars = arena_roster_sort;
     const bool onlineFirst = !arenaRosterShowOffline_;
-    auto value = [&key](const ArenaTeamMember& m) -> uint64_t {
-        if (key == "class")        return m.classId;
-        if (key == "played")       return m.weekGames;
-        if (key == "won")          return m.weekWins;
-        if (key == "seasonplayed") return m.seasonGames;
-        if (key == "seasonwon")    return m.seasonWins;
-        if (key == "rating")       return m.personalRating;
-        return 0;
+    auto* assets = owner_.services().assetManager;
+    const auto className = [assets](uint8_t classId) { return chrClassName(assets, classId, 2).name; };
+    const auto compare = [&](const ArenaTeamMember& a, const ArenaTeamMember& b, int column) {
+        switch (column) {
+            case ars::Name: return a.name.compare(b.name);
+            case ars::Class: {
+                const std::string na = className(a.classId), nb = className(b.classId);
+                return na.empty() || nb.empty() ? 0 : compareCaseless(na, nb);
+            }
+            case ars::Played: return ars::compareNumbers(a.weekGames, b.weekGames);
+            case ars::Won: return ars::compareNumbers(a.weekWins, b.weekWins);
+            case ars::SeasonPlayed: return ars::compareNumbers(a.seasonGames, b.seasonGames);
+            case ars::SeasonWon: return ars::compareNumbers(a.seasonWins, b.seasonWins);
+            case ars::Rating: return ars::compareNumbers(a.personalRating, b.personalRating);
+            default: return 0;
+        }
     };
     std::stable_sort(roster.members.begin(), roster.members.end(),
         [&](const ArenaTeamMember& a, const ArenaTeamMember& b) {
@@ -6447,13 +6457,12 @@ void SocialHandler::sortArenaRoster(ArenaTeamRoster& roster) const {
             // comes first whatever the column, so the rows GetNumArenaTeamMembers
             // counts are the first ones.
             if (onlineFirst && a.online != b.online) return a.online;
-            if (key.empty()) return false;
-            if (key == "name") {
-                return asc ? (a.name < b.name) : (b.name < a.name);
+            // Then the columns in their order, each one's direction its own.
+            for (const auto& [column, reversed] : arenaSortOrder_.keys) {
+                const int r = compare(a, b, column);
+                if (r != 0) return reversed ? r > 0 : r < 0;
             }
-            const uint64_t va = value(a), vb = value(b);
-            if (va == vb) return a.name < b.name;   // steady under ties
-            return asc ? (va < vb) : (vb < va);
+            return false;
         });
 }
 
@@ -6513,6 +6522,12 @@ void SocialHandler::handleArenaTeamEvent(network::Packet& packet) {
         case 8: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_DISBANDED_S", "%s has disbanded %s.", args); break;
         default: gameError(owner_, ErrTo::Chat, "ERR_GUILD_INTERNAL", "Internal guild error."); break;
     }
+    // Then each of the three slots' rosters may be asked for at once and
+    // ARENA_TEAM_ROSTER_UPDATE(1) says so (0x005a28e0(slot, 1)).
+    for (auto& next : arenaRosterNextMs_) {
+        next = 0;
+        owner_.fireAddonEvent("ARENA_TEAM_ROSTER_UPDATE", {"1"});
+    }
 }
 
 void SocialHandler::handleArenaTeamStats(network::Packet& packet) {
@@ -6537,6 +6552,39 @@ void SocialHandler::requestArenaTeamRoster(uint32_t teamId) {
     network::Packet pkt(wireOpcode(Opcode::CMSG_ARENA_TEAM_ROSTER));
     pkt.writeUInt32(teamId);
     owner_.getSocket()->send(pkt);
+}
+
+/// The team id in the player's arena slot (0..2), 0 for none.
+static uint32_t arenaSlotTeam(GameHandler& owner, uint32_t slot) {
+    const uint16_t base = fieldIndex(UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1);
+    const auto me = owner.getEntityManager().getEntity(owner.getPlayerGuid());
+    if (slot >= 3 || !me || base == 0xFFFF) return 0;
+    return me->getField(static_cast<uint16_t>(base + slot * 7));
+}
+
+void SocialHandler::requestArenaTeamRosterOfSlot(uint32_t slot) {
+    const uint32_t teamId = arenaSlotTeam(owner_, slot);
+    if (teamId == 0) return;
+    const int64_t now = static_cast<int64_t>(core::appTimeSeconds() * 1000.0);
+    if (arenaRosterNextMs_[slot] != 0 && now - arenaRosterNextMs_[slot] < 0) return;
+    requestArenaTeamRoster(teamId);
+    arenaRosterNextMs_[slot] = now + 10000;
+}
+
+void SocialHandler::onArenaTeamFieldsChanged() {
+    for (uint32_t slot = 0; slot < 3; ++slot) requestArenaTeamRosterOfSlot(slot);
+    owner_.fireAddonEvent("ARENA_TEAM_UPDATE", {});
+}
+
+const ArenaTeamQueryData* SocialHandler::ownArenaTeamQuery(uint32_t teamId) {
+    if (teamId == 0) return nullptr;
+    if (const auto* known = knownArenaTeam(teamId)) return known;
+    if (ownArenaTeamQueriesAsked_.insert(teamId).second && owner_.getSocket()) {
+        network::Packet pkt(wireOpcode(Opcode::CMSG_ARENA_TEAM_QUERY));
+        pkt.writeUInt32(teamId);
+        owner_.getSocket()->send(pkt);
+    }
+    return nullptr;
 }
 
 void SocialHandler::handleArenaError(network::Packet& packet) {

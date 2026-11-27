@@ -6719,9 +6719,11 @@ static int lua_ArenaTeamRoster(lua_State* L) {
     // 0x005a3cf0
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: ArenaTeamRoster(team)");
+    // 0x005a3600 for slot round(team) - 1: once in 10 s, nothing for an
+    // empty slot.
     auto* gh = getGameHandler(L);
-    const uint32_t teamId = arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-    if (gh && teamId) gh->requestArenaTeamRoster(teamId);
+    const long slot = std::lround(lua_tonumber(L, 1)) - 1;
+    if (gh && slot >= 0 && slot < 3) gh->requestArenaTeamRosterOfSlot(static_cast<uint32_t>(slot));
     return 0;
 }
 
@@ -6984,10 +6986,12 @@ static int lua_HasKey(lua_State* L) {
 // style and colours and nothing here reads them. Those eight answer zero rather
 // than nil, so the tabard draws black instead of raising mid-arithmetic.
 static int lua_GetArenaTeam(lua_State* L) {
-    // 0x005a3860: the team in that slot - its cached name and size, the
-    // stats SMSG_ARENA_TEAM_STATS gave, the player's own games and rating
-    // from the slot's fields, and the banner colours as 0..1 with the emblem
-    // and border styles. Anything unknown: nil and 21 zeros.
+    // 0x005a3860: the team in that slot - its cached name and size (asked
+    // for when not cached, 0x00680170: the answer raises ARENA_TEAM_UPDATE),
+    // the stats SMSG_ARENA_TEAM_STATS gave (the slot table 0x00c0f840, zero
+    // until they come), the player's own games and rating from the slot's
+    // fields, and the banner colours as 0..1 with the emblem and border
+    // styles. No team or no record yet: nil and 21 zeros.
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: GetArenaTeam(team)");
     auto* gh = getGameHandler(L);
@@ -6998,10 +7002,12 @@ static int lua_GetArenaTeam(lua_State* L) {
         for (const auto& t : gh->getArenaTeamStats())
             if (t.teamId == teamId) { stats = &t; break; }
     }
-    const auto* record = (gh && teamId) ? gh->knownArenaTeam(teamId) : nullptr;
+    const auto* record = (gh && teamId) ? gh->ownArenaTeamQuery(teamId) : nullptr;
     const uint16_t base = game::fieldIndex(game::UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1);
     const auto me = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
-    if (!stats || !record || !me || base == 0xFFFF) {
+    static const game::ArenaTeamStats kNoStats{};
+    if (!stats) stats = &kNoStats;
+    if (!record || !me || base == 0xFFFF) {
         lua_pushnil(L);
         for (int i = 0; i < 21; ++i) lua_pushnumber(L, 0);
         return 22;
@@ -8737,7 +8743,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usgae: SortArenaTeamRoster(\"type\")");
             auto* gh = getGameHandler(L);
             const char* key = luaL_optstring(L, 1, "");
-            if (gh && key && *key) gh->sortArenaTeamRosters(key);
+            if (gh && key) gh->sortArenaTeamRosters(key);
             return 0;
         }},
                 {"GetArenaTeamRosterSelection",  lua_GetArenaTeamRosterSelection},

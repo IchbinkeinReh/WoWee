@@ -3248,6 +3248,14 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         // already scribed announces nothing either.
         owner_.ensureGlyphPropertiesLoaded();
         const auto& lastFields = owner_.lastPlayerFieldsRef();
+        bool arenaFieldsMoved = false;
+        if (const uint16_t arena = fieldIndex(UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1); arena != 0xFFFF) {
+            arenaFieldsMoved = std::any_of(block.fields.begin(), block.fields.end(), [&](const auto& f) {
+                if (f.first < arena || f.first >= arena + 21) return false;
+                const auto was = lastFields.find(f.first);
+                return (was == lastFields.end() ? 0u : was->second) != f.second;
+            });
+        }
         if (const uint16_t glyphsIdx = fieldIndex(UF::PLAYER_FIELD_GLYPHS_1);
             glyphsIdx != 0xFFFF) {
             for (uint16_t i = 0; i < GameHandler::MAX_GLYPH_SLOTS; ++i) {
@@ -3739,6 +3747,10 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                 health != 0xFFFF && static_cast<int32_t>(entity->getField(health)) < 1)
                 pendingEvents_.emit("PLAYER_DEAD", {});
         }
+        // The 21 arena team fields moved (0x1150, 0x54 bytes, callback
+        // 0x006cdda0 -> 0x005a3700(1)): the rosters asked for,
+        // ARENA_TEAM_UPDATE.
+        if (arenaFieldsMoved) owner_.onArenaTeamFieldsChanged();
         PlayerFieldIndices pfi = PlayerFieldIndices::resolve();
         bool slotsChanged = applyPlayerStatFields(block.fields, pfi, false);
         if (slotsChanged) {

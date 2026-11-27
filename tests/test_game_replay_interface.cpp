@@ -4566,6 +4566,63 @@ TEST_CASE("AcceptBattlefieldPort refuses an acceptance the player cannot make (0
     CHECK(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).size() == 2);
 }
 
+// Arena team review (found by Z in code): GetArenaTeam asks for a team it
+// has no record of (0x005a3860 -> 0x00680170, answer -> ARENA_TEAM_UPDATE
+// via 0x005a28c0) and answers without stats (zero until they come); a
+// change of the arena team fields asks for the rosters (0x006cdda0 ->
+// 0x005a3700(1), once in 10 s per slot, 0x005a3600) and raises
+// ARENA_TEAM_UPDATE; ArenaTeamRoster keeps the same 10 s; an arena team
+// event lets each slot ask again with ARENA_TEAM_ROSTER_UPDATE(1)
+// (0x006cc980 -> 0x005a28e0).
+TEST_CASE("the own arena teams are asked for as 12340 asks", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1, 7}});
+    Interface ui(s);
+    ui.run("teamUpdates, rosterUpdates = 0, '' local f = CreateFrame('Frame') "
+           "f:RegisterEvent('ARENA_TEAM_UPDATE') f:RegisterEvent('ARENA_TEAM_ROSTER_UPDATE') "
+           "f:SetScript('OnEvent', function(_, e, a) if e == 'ARENA_TEAM_UPDATE' then teamUpdates = teamUpdates + 1 "
+           "else rosterUpdates = rosterUpdates .. tostring(a) .. ';' end end)");
+    CHECK(ui.is("GetArenaTeam(1) == nil"));
+    CHECK(ui.is("GetArenaTeam(1) == nil"));
+    REQUIRE(s.sent().of(Opcode::CMSG_ARENA_TEAM_QUERY).size() == 1);
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_ARENA_TEAM_QUERY_RESPONSE));
+    answer.writeUInt32(7);
+    answer.writeString("Die Sieben");
+    answer.writeUInt32(2);
+    for (int k = 0; k < 5; ++k) answer.writeUInt32(0);
+    s.receive(answer);
+    CHECK(ui.is("teamUpdates == 1"));
+    CHECK(ui.is("GetArenaTeam(1) == 'Die Sieben'"));
+    CHECK(ui.is("select(2, GetArenaTeam(1)) == 2 and select(3, GetArenaTeam(1)) == 0"));
+
+    const uint16_t rating =
+        static_cast<uint16_t>(wowee::game::fieldIndex(UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1) + 6);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{rating, 1500}}));
+    CHECK(ui.is("teamUpdates == 2"));
+    CHECK(s.sent().of(Opcode::CMSG_ARENA_TEAM_ROSTER).size() == 1);
+    ui.run("ArenaTeamRoster(1) ArenaTeamRoster(1) ArenaTeamRoster(2)");
+    CHECK(s.sent().of(Opcode::CMSG_ARENA_TEAM_ROSTER).size() == 1);
+
+    wowee::network::Packet event(wowee::game::wireOpcode(Opcode::SMSG_ARENA_TEAM_EVENT));
+    event.writeUInt8(4);
+    event.writeUInt8(2);
+    event.writeString("Egon");
+    event.writeString("Die Sieben");
+    s.receive(event);
+    CHECK(ui.is("rosterUpdates == '1;1;1;'"));
+    ui.run("ArenaTeamRoster(1)");
+    CHECK(s.sent().of(Opcode::CMSG_ARENA_TEAM_ROSTER).size() == 2);
+
+    // A slot without a team is still sent, as team 0 (0x00515dd0).
+    s.setConnected(true);
+    ui.run("ArenaTeamLeave(3)");
+    const auto leaves = s.sent().of(Opcode::CMSG_ARENA_TEAM_LEAVE);
+    REQUIRE(leaves.size() == 1);
+    auto leave = leaves.back();
+    CHECK(leave.readUInt32() == 0);
+}
+
 // T413 (FIXER Z): every world load clears the battleground score state
 // (0x006e7f50 -> 0x00528010 -> 0x0054ca50): no rows, no winner, both
 // factions. After the realm's port home the scoreboard reopened itself from
@@ -4601,4 +4658,55 @@ TEST_CASE("the battleground score is gone after a world load (T413)", "[replay][
     // The filter is both again: a new board's row is counted.
     s.receive(board(false));
     CHECK(ui.is("GetNumBattlefieldScores() == 1"));
+}
+
+// Arena team review (found by Z in code): the roster's order is a list of the
+// seven columns (0x005a2e80): the clicked one to the front with its own
+// direction, the front one clicked again turns round, ties go to the next
+// column; names start it (0x005a40e0); the column names compare without case
+// (0x005a3490) and each roster with rows is announced after a sort.
+TEST_CASE("the arena roster sorts by a column list as 0x005a2e80", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1, 7}});
+    Interface ui(s);
+    wowee::network::Packet roster(wowee::game::wireOpcode(Opcode::SMSG_ARENA_TEAM_ROSTER));
+    roster.writeUInt32(7);
+    roster.writeUInt8(0);
+    roster.writeUInt32(3);
+    roster.writeUInt32(2);
+    const auto member = [&roster](uint64_t guid, const char* name, uint32_t played, uint32_t rating) {
+        roster.writeUInt64(guid);
+        roster.writeUInt8(1);
+        roster.writeString(name);
+        roster.writeUInt32(1);
+        roster.writeUInt8(80);
+        roster.writeUInt8(9);
+        for (const uint32_t v : {played, 0u, played, 0u, rating}) roster.writeUInt32(v);
+    };
+    member(0x101, "Bert", 5, 1500);
+    member(0x102, "Anna", 5, 1600);
+    member(0x103, "Carl", 9, 1400);
+    s.receive(roster);
+    const auto order = [&ui]() {
+        ui.run("order = '' for i = 1, 3 do order = order .. (GetArenaTeamRosterInfo(1, i) or '-') .. ';' end");
+        return ui.is("order");
+    };
+    ui.run("rosterEvents = 0 local f = CreateFrame('Frame') f:RegisterEvent('ARENA_TEAM_ROSTER_UPDATE') "
+           "f:SetScript('OnEvent', function() rosterEvents = rosterEvents + 1 end)");
+    order();
+    CHECK(ui.is("order == 'Anna;Bert;Carl;'"));
+    ui.run("SortArenaTeamRoster('played')");
+    order();
+    CHECK(ui.is("order == 'Carl;Anna;Bert;'"));
+    CHECK(ui.is("rosterEvents == 1"));
+    ui.run("SortArenaTeamRoster('PLAYED')");
+    order();
+    CHECK(ui.is("order == 'Anna;Bert;Carl;'"));
+    ui.run("SortArenaTeamRoster('rating')");
+    order();
+    CHECK(ui.is("order == 'Anna;Bert;Carl;'"));
+    ui.run("SortArenaTeamRoster('rating')");
+    order();
+    CHECK(ui.is("order == 'Carl;Bert;Anna;'"));
 }

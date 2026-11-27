@@ -3277,6 +3277,12 @@ public:
     using ArenaTeamStats = game::ArenaTeamStats;
     const std::vector<ArenaTeamStats>& getArenaTeamStats() const override;
     void requestArenaTeamRoster(uint32_t teamId);
+    /// ArenaTeamRoster's request (0x005a3600): see SocialHandler.
+    void requestArenaTeamRosterOfSlot(uint32_t slot);
+    /// The player's arena team fields changed (0x005a3700(1)).
+    void onArenaTeamFieldsChanged();
+    /// GetArenaTeam's cache look (0x00680170): the record or a query.
+    const ArenaTeamQueryData* ownArenaTeamQuery(uint32_t teamId);
 
     // Arena team roster (aliased from handler_types.hpp)
     using ArenaTeamMember = game::ArenaTeamMember;

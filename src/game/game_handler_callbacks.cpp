@@ -3009,6 +3009,18 @@ void GameHandler::requestArenaTeamRoster(uint32_t teamId) {
     if (socialHandler_) socialHandler_->requestArenaTeamRoster(teamId);
 }
 
+void GameHandler::requestArenaTeamRosterOfSlot(uint32_t slot) {
+    if (socialHandler_) socialHandler_->requestArenaTeamRosterOfSlot(slot);
+}
+
+void GameHandler::onArenaTeamFieldsChanged() {
+    if (socialHandler_) socialHandler_->onArenaTeamFieldsChanged();
+}
+
+const ArenaTeamQueryData* GameHandler::ownArenaTeamQuery(uint32_t teamId) {
+    return socialHandler_ ? socialHandler_->ownArenaTeamQuery(teamId) : nullptr;
+}
+
 void GameHandler::requestPvpLog() {
     if (socialHandler_) socialHandler_->requestPvpLog();
 }
