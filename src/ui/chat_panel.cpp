@@ -290,8 +290,11 @@ void ChatPanel::sendChatMessage(game::GameHandler& gameHandler) {
             }
 
             std::string emoteText = rendering::AnimationController::getEmoteText(cmdLower, targetNamePtr);
-            if (!emoteText.empty()) {
-                uint32_t dbcId = rendering::AnimationController::getEmoteDbcId(cmdLower);
+            // An emote is known by its row, not its line: STAND and SIT have
+            // no text and are still sent (T453).
+            const uint32_t knownDbcId = rendering::AnimationController::getEmoteDbcId(cmdLower);
+            if (!emoteText.empty() || knownDbcId != 0) {
+                uint32_t dbcId = knownDbcId;
                 bool played = true;
                 if (dbcId != 0) {
                     // The server's echo is the line, as it is for an emote
@@ -307,7 +310,7 @@ void ChatPanel::sendChatMessage(game::GameHandler& gameHandler) {
                 if (auto* renderer = services_.renderer; renderer && played) {
                     if (auto* ac = renderer->getAnimationController()) ac->playEmote(cmdLower);
                 }
-                if (dbcId == 0) {
+                if (dbcId == 0 && !emoteText.empty()) {
                     game::MessageChatData msg;
                     msg.type = game::ChatType::TEXT_EMOTE;
                     msg.language = game::ChatLanguage::UNIVERSAL;

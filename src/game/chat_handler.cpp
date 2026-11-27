@@ -1635,10 +1635,12 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
     const auto narrate = [this, data](const std::string& senderName) {
         const std::string* targetPtr = data.targetName.empty() ? nullptr : &data.targetName;
         std::string emoteText = rendering::AnimationController::getEmoteTextByDbcId(data.textEmoteId, senderName, targetPtr);
+        // An emote with no text for it makes no line (0x00503660 jumps past
+        // the chat line when every slot it tries is empty, T453); its voice
+        // line below still plays.
         if (emoteText.empty()) {
-            emoteText = data.targetName.empty()
-                ? senderName + " performs an emote."
-                : senderName + " performs an emote at " + data.targetName + ".";
+            if (owner_.emoteSoundCallbackRef()) owner_.emoteSoundCallbackRef()(data.senderGuid, data.textEmoteId);
+            return;
         }
 
         MessageChatData chatMsg;

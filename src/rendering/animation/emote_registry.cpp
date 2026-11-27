@@ -398,15 +398,16 @@ std::string EmoteRegistry::textFor(const std::string& emoteName,
                                    const std::string* targetName) const {
     auto it = emoteTable_.find(emoteName);
     if (it != emoteTable_.end()) {
+        // 0x00503660: the text for the target, else the one without (the
+        // target bit cleared), else no line at all - STAND, SIT, TRAIN,
+        // MOUNTSPECIAL and PROMISE have no self text and print nothing, and
+        // SLEEP at a target prints its plain line (T453).
         const auto& info = it->second;
-        const std::string& base = (targetName ? info.textTarget : info.textNoTarget);
-        if (!base.empty()) {
-            return replacePlaceholders(base, targetName);
+        if (targetName && !targetName->empty() && !info.textTarget.empty()) {
+            return replacePlaceholders(info.textTarget, targetName);
         }
-        if (targetName && !targetName->empty()) {
-            return "You " + info.command + " at " + *targetName + ".";
-        }
-        return "You " + info.command + ".";
+        if (!info.textNoTarget.empty()) return replacePlaceholders(info.textNoTarget, nullptr);
+        return "";
     }
     return "";
 }
@@ -434,18 +435,16 @@ std::string EmoteRegistry::textByDbcId(uint32_t dbcId,
 
     const EmoteInfo& info = *it->second;
 
-    if (targetName && !targetName->empty()) {
-        if (!info.othersTarget.empty()) {
-            return fillEmoteTemplate(info.othersTarget, {&senderName, targetName},
-                                     {&senderName, targetName});
-        }
-        return senderName + " " + info.command + "s at " + *targetName + ".";
+    // As the self text (0x00503660): the target's text, else the plain one,
+    // else no line (T453).
+    if (targetName && !targetName->empty() && !info.othersTarget.empty()) {
+        return fillEmoteTemplate(info.othersTarget, {&senderName, targetName},
+                                 {&senderName, targetName});
     }
-
     if (!info.othersNoTarget.empty()) {
         return fillEmoteTemplate(info.othersNoTarget, {&senderName}, {&senderName});
     }
-    return senderName + " " + info.command + "s.";
+    return "";
 }
 
 } // namespace rendering
