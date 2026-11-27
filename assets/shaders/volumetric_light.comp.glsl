@@ -265,7 +265,12 @@ void main() {
             }
             lit += v;
         }
-        light += vl.bodyColor.rgb * (phase * lit * dt * vl.air.x * vl.bodyDir.w);
+        // Only where part of the ray lies in shade: evenly lit air is the
+        // fog's and the sky's already (volumetric_light::shaftWeight).
+        float share = lit / float(steps);
+        float ts = clamp((share - 0.5) / 0.5, 0.0, 1.0);
+        float shown = 1.0 - ts * ts * (3.0 - 2.0 * ts);
+        light += vl.bodyColor.rgb * (phase * lit * dt * vl.air.x * vl.bodyDir.w * shown);
     }
 
     // The lamps.

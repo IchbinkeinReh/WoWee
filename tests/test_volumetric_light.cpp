@@ -226,19 +226,24 @@ TEST_CASE("volumetric light: faint by default, Low fainter than High", "[volumet
     CHECK(low.body <= 0.7f * high.body);
     CHECK(low.lamp <= 0.7f * high.lamp);
     CHECK(low.body >= 0.4f * high.body);
-    // A twentieth of V572's sun and a fifth of its lamps at most.
-    CHECK(high.body <= 0.001f / 20.0f);
+    // A fifth of V572's sun and of its lamps at most.
+    CHECK(high.body <= 0.001f / 5.0f);
     CHECK(high.lamp <= 0.03f / 5.0f);
-    // A full reach of open, lit air seen from the side, in the thickest air
-    // and a white sun: well under one step of 255 - no veil (T434).
-    const float side = high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(0.0f);
-    CHECK(side < 1.0f / 255.0f);
+    // Open air lit end to end adds nothing, whichever way one looks (T434).
+    CHECK(vl::shaftWeight(1.0f) == 0.0f);
+    // The worst a ray seen from the side can take, half in shade, in the
+    // thickest air and a white sun: a few steps of 255 - no veil.
+    float worst = 0.0f;
+    for (float f = 0.0f; f <= 1.0f; f += 0.01f) worst = std::max(worst, f * vl::shaftWeight(f));
+    const float side = high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(0.0f) * worst;
+    CHECK(side < 3.0f / 255.0f);
     // With the back to it, less still.
-    CHECK(high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(-1.0f) < side);
-    // Straight at it, in clear air: a glow, not a white wall.
-    const float toward = high.body * vl::kSunReach * vl::bodyPhase(1.0f);
-    CHECK(toward > 4.0f / 255.0f);
-    CHECK(toward < 0.15f);
+    CHECK(high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(-1.0f) * worst < side);
+    // A shaft toward the sun through a gap, twenty yards of lit air in shade
+    // otherwise, clear air: seen, but not a white wall.
+    const float shaft = high.body * 20.0f * vl::bodyPhase(1.0f) * vl::shaftWeight(20.0f / vl::kSunReach);
+    CHECK(shaft > 4.0f / 255.0f);
+    CHECK(shaft < 0.15f);
     // The moon less than the sun for the same light.
     CHECK(vl::kMoonScatterShare < 1.0f);
     CHECK(vl::kMoonScatterShare > 0.0f);
@@ -252,6 +257,20 @@ TEST_CASE("volumetric light: faint by default, Low fainter than High", "[volumet
     }
     CHECK(through * high.lamp < 0.12);
     CHECK(through * high.lamp > 0.02);
+}
+
+TEST_CASE("volumetric light: the sky body's light only beside shade", "[volumetric_light]") {
+    CHECK(vl::shaftWeight(0.0f) == Catch::Approx(1.0f));
+    CHECK(vl::shaftWeight(0.5f) == Catch::Approx(1.0f));
+    CHECK(vl::shaftWeight(1.0f) == Catch::Approx(0.0f));
+    float last = 1.0f;
+    for (float f = 0.0f; f <= 1.0f; f += 0.005f) {
+        const float w = vl::shaftWeight(f);
+        INFO("lit share " << f);
+        CHECK(w <= last + 1e-6f);
+        CHECK(last - w < 0.02f);  // smooth: no edge where a ray's last sample turns lit
+        last = w;
+    }
 }
 
 TEST_CASE("volumetric light: a lamp's glow fainter by day", "[volumetric_light]") {

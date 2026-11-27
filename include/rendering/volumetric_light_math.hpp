@@ -59,7 +59,7 @@ struct Scatter {
     float lamp = 0.0f;
 };
 
-inline constexpr float kBodyScatter = 4.0e-5f;  // per yard, High
+inline constexpr float kBodyScatter = 2.0e-4f;  // per yard, High, before shaftWeight
 inline constexpr float kLampScatter = 0.006f;   // per yard, High
 inline constexpr float kLowShare = 0.6f;        // Low's share of High's
 
@@ -191,6 +191,20 @@ inline std::optional<std::pair<float, float>> segmentThroughSphere(const glm::ve
 inline float phaseHG(float cosTheta, float g) {
     const float g2 = g * g;
     return (1.0f - g2) / std::pow(std::max(1.0f + g2 - 2.0f * g * cosTheta, 1e-4f), 1.5f);
+}
+
+/// How much of the sky body's light along a ray is shown, by the share of
+/// the ray's samples it reaches (`litShare`, 0..1): all of it while at least
+/// half the ray lies in shade, fading smoothly to none for a ray lit end to
+/// end. Evenly lit air is what the zone's fog and the sky are drawn with
+/// already; what the eye sees as light in the air is the shafts beside the
+/// shade - a gap in a crown, a window, a doorway. Open daylight, the sky and
+/// the air round an unhidden sun or moon gain nothing (T434 and the
+/// tester's aim: off and on alike in the open, shafts only through what
+/// stands in the light, the night sky dark).
+inline float shaftWeight(float litShare) {
+    const float t = std::clamp((litShare - 0.5f) / 0.5f, 0.0f, 1.0f);
+    return 1.0f - t * t * (3.0f - 2.0f * t);
 }
 
 /// The forward lobe toward the sun (moon), smoothly held under `cap` times
