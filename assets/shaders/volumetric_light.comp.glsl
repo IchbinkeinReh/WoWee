@@ -14,10 +14,13 @@
 //                  ray queries a ray to it - so whatever is opaque cuts the
 //                  shafts, and a room lit by no opening has none;
 //   each lamp      where the ray runs through the lamp's reach, a fixed
-//                  number of samples over that stretch, each lit only if the
-//                  lamp is in sight of it - a traced ray to the lamp with the
-//                  ray traced lighting, otherwise a few steps toward it
-//                  against the scene's depth.
+//                  number of samples over that stretch, placed as densely as
+//                  the glow is bright (volumetric_light::glowSample), each
+//                  lit only if the lamp is in sight of it - a traced ray to a
+//                  point of the lamp's flame or glass (its size, as the
+//                  traced lamps' own soft shadows) with the ray traced
+//                  lighting, otherwise a few steps toward it against the
+//                  scene's depth.
 //
 // The samples are spread by a fixed pattern over the screen, not moved from
 // frame to frame: nothing here is carried over from an earlier frame. The
@@ -119,18 +122,33 @@ vec2 cascadeTileCoord(int c, vec2 uv) {
 // except that a point the map does not cover is dark rather than lit: with
 // no word on what stands between it and the sky, it takes none of the sky's
 // light (the user's rule: sun and moon only where they reach).
+//
+// Toward the edge of the outer cascade the light fades out smoothly
+// (volumetric_light::coverageFade) rather than stopping on a line: the cut
+// drew a hard-edged cone round the moon (T434). Above everything the map
+// holds (in front of its near plane) nothing stands between the point and
+// the sky, as the surfaces' own shadow lookup takes it.
 float mapVisibility(vec3 p) {
     if (shadowParams.x < 0.5) return 0.0;
     int count = min(int(cascadeInfo.x + 0.5), 4);
+    if (count < 1) return 0.0;
+    int last = count - 1;
+    vec4 lsOuter = cascadeMatrix[last] * vec4(p, 1.0);
+    vec2 outer = abs(cascadeTileCoord(last, lsOuter.xy / lsOuter.w));
+    float edge = max(outer.x, outer.y);
+    float t = clamp((edge - 0.8) / 0.2, 0.0, 1.0);
+    float cover = 1.0 - t * t * (3.0 - 2.0 * t);
+    if (cover <= 0.0) return 0.0;
     for (int c = 0; c < count; ++c) {
         vec4 ls = cascadeMatrix[c] * vec4(p, 1.0);
         vec3 proj = ls.xyz / ls.w;
         vec2 tile = abs(cascadeTileCoord(c, proj.xy));
         vec2 inset = 2.0 * cascadeTexel[c].yz / (cascadeRect[c].zw - cascadeRect[c].xy);
         if (tile.x > 1.0 - inset.x || tile.y > 1.0 - inset.y) continue;
-        if (proj.z < 0.0 || proj.z > 1.0) return 0.0;
+        if (proj.z < 0.0) return cover;
+        if (proj.z > 1.0) return 0.0;
         float stored = textureLod(uShadowDepth, proj.xy, 0.0).r;
-        return (proj.z - 0.0005 <= stored) ? 1.0 : 0.0;
+        return (proj.z - 0.0005 <= stored) ? cover : 0.0;
     }
     return 0.0;
 }
@@ -141,10 +159,22 @@ float phaseHG(float cosTheta, float g) {
     return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4), 1.5);
 }
 
+// volumetric_light::bodyPhase.
+float vlBodyPhase(float cosTheta) {
+    const float cap = 8.0;
+    float p = phaseHG(cosTheta, 0.7);
+    return cap * p / (cap + p);
+}
+
+// volumetric_light::glowCore.
+float vlGlowCore(float end) {
+    return clamp(0.125 * end, 0.5, 1.5);
+}
+
 // volumetric_light::glowFalloff.
 float vlGlowFalloff(float d, float end) {
     if (!(end > 0.0) || !(d < end)) return 0.0;
-    float core = clamp(0.2 * end, 0.75, 3.0);
+    float core = vlGlowCore(end);
     float q = d / core;
     float x = d / end;
     float w = 1.0 - x * x * x * x;
@@ -212,12 +242,13 @@ void main() {
         float dt = reach / float(steps);
         vec3 toBody = normalize(vl.bodyDir.xyz);
         // Mostly forward, as off dust and haze: toward the sun the air takes
-        // many times the light it does seen from the side. The lobe shrinks
-        // while the disc itself is hidden from the eye (bodyColor.w). Its
-        // peak held to six times even: straight at the sun the open air
-        // would otherwise pile into a white disc round it, the look the
-        // mist's shoulder was made against - the shafts live off its centre.
-        float phase = mix(0.25, min(phaseHG(dot(dir, toBody), 0.7), 6.0), vl.bodyColor.w);
+        // many times the light it does seen from the side, and seen from
+        // the side or with the back to it next to none - no even floor
+        // under it, which laid a veil over the whole picture (T434). The
+        // lobe shrinks while the disc itself is hidden from the eye
+        // (bodyColor.w). Its peak held smoothly under eight times even
+        // (volumetric_light::bodyPhase): no flat top with a ring round it.
+        float phase = vlBodyPhase(dot(dir, toBody)) * vl.bodyColor.w;
         float lit = 0.0;
         for (int i = 0; i < steps; ++i) {
             vec3 p = eye + dir * ((float(i) + offset) * dt);
@@ -253,18 +284,41 @@ void main() {
         float t0 = max(-b - s, 0.0);
         float t1 = min(-b + s, dist);
         if (t1 <= t0) continue;
-        float dt = (t1 - t0) / float(lampSteps);
+        // The samples as dense as the glow is bright (volumetric_light::
+        // glowSample): the glow comes out smooth, its edge the lamp's own
+        // soft one, with no grain to blur into blotches (T436).
+        float along = -b;
+        float across = sqrt(max(dot(oc, oc) - b * b, 0.0));
+        float core = vlGlowCore(end);
+        float h = sqrt(across * across + core * core);
+        float a0 = atan((t0 - along) / h);
+        float a1 = atan((t1 - along) / h);
         float sum = 0.0;
         for (int k = 0; k < lampSteps; ++k) {
-            vec3 p = eye + dir * (t0 + (float(k) + offset) * dt);
+            float a = mix(a0, a1, (float(k) + offset) / float(lampSteps));
+            float x = h * tan(a);
+            float weight = (a1 - a0) * (h * h + x * x) / h;
+            vec3 p = eye + dir * (along + x);
             vec3 toLamp = lp - p;
             float d = length(toLamp);
-            float f = vlGlowFalloff(d, end);
+            float f = vlGlowFalloff(d, end) * weight;
             if (f <= 0.0) continue;
             bool hidden = false;
 #ifdef VL_TRACE
             if (vl.modes.z == 2) {
-                if (d > 0.4) {
+                // To a point of the flame or the glass, each sample its own:
+                // a lamp has a size (rtLightRadius), and its housing's shadow
+                // in the air a soft edge, as the traced lamps' shadows on the
+                // ground have - not a hard wedge (T436).
+                float sourceRadius = clamp(0.04 * end, 0.15, 0.5);
+                float u1 = rtRandom(rng), u2 = rtRandom(rng), u3 = rtRandom(rng);
+                float z = 1.0 - 2.0 * u1;
+                float r = sqrt(max(1.0 - z * z, 0.0));
+                float phi = 6.28318530718 * u2;
+                vec3 target = lp + vec3(r * cos(phi), r * sin(phi), z) * (sourceRadius * pow(u3, 1.0 / 3.0));
+                vec3 toTarget = target - p;
+                float dT = length(toTarget);
+                if (dT > 0.4) {
                     // Short of the lamp by its standoff, so its own lantern
                     // and the hand that holds it do not stop the ray; fixed
                     // lamps meet the fixtures by their faces turned toward
@@ -272,7 +326,7 @@ void main() {
                     rtSkipFixtures = int(vl.lights[i].storey.w + 0.5) != RT_LIGHT_KIND_UNIT &&
                                      vl.lights[i].storey.z > -0.5;
                     rtFixtureFacesOnly = true;
-                    hidden = rtOccluded(p, toLamp / d, d - 0.35, rng);
+                    hidden = rtOccluded(p, toTarget / dT, dT - 0.35, rng);
                     rtFixtureFacesOnly = false;
                     rtSkipFixtures = false;
                 }
@@ -283,7 +337,8 @@ void main() {
             }
             if (!hidden) sum += f;
         }
-        light += vl.lights[i].colorStart.rgb * (sum * dt * vl.air.y);
+        sum /= float(lampSteps);
+        light += vl.lights[i].colorStart.rgb * (sum * vl.air.y);
     }
 
     imageStore(uMarch, pixel, vec4(max(light, vec3(0.0)), 1.0));

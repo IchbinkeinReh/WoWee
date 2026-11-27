@@ -154,6 +154,11 @@ struct M2ModelGPU {
     // its own space (rt_lights::lampLight). Set when its ray traced mesh is.
     bool isLamp = false;
     glm::vec3 lampLocal{0.0f};
+    /// Of a lamp: its glowing batches' colours by their areas, and what
+    /// lampLight's colour is times for its glass and flames
+    /// (M2Renderer::lampTint, rt_lights::lampColor).
+    glm::vec3 lampGlass{0.0f};
+    mutable std::optional<glm::vec3> lampTint;
     /// The bone that carries the lamp's glass (rt_lights::dominantBone): a
     /// lantern on its chain swings away from its bind pose, and a light left
     /// there sat beside it, shadowed by the lantern's own frame.
@@ -1525,6 +1530,7 @@ private:
     static void detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     /// M2ModelGPU::flameClouds, from the emitters' tracks at the start.
     glm::vec3 fireTint(const M2ModelGPU& model) const;
+    glm::vec3 lampTint(const M2ModelGPU& model) const;
     void computeFlameClouds(M2ModelGPU& gpuModel);
     // The instances placed in the dynamic level - moving ones - are brought
     // up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).

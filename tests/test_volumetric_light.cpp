@@ -132,7 +132,8 @@ TEST_CASE("volumetric light: each quality has a bounded cost", "[volumetric_ligh
 
 TEST_CASE("volumetric light: a lamp's glow fades from its core to nothing at its reach", "[volumetric_light]") {
     const float end = 8.0f;
-    const float core = 1.6f;  // a fifth of the reach
+    const float core = 1.0f;  // an eighth of the reach
+    CHECK(vl::glowCore(end) == Catch::Approx(core));
     CHECK(vl::glowFalloff(core, end) == Catch::Approx(2.0f * std::pow(1.0f - std::pow(core / end, 4.0f), 2.0f) / 2.0f));
     CHECK(vl::glowFalloff(0.0f, end) == Catch::Approx(2.0f));
     CHECK(vl::glowFalloff(end, end) == 0.0f);
@@ -146,9 +147,159 @@ TEST_CASE("volumetric light: a lamp's glow fades from its core to nothing at its
         CHECK(f >= 0.0f);
         previous = f;
     }
-    // The core is held between three quarters of a yard and three yards.
-    CHECK(vl::glowFalloff(0.75f, 1.0f) == Catch::Approx(2.0f * std::pow(1.0f - std::pow(0.75f, 4.0f), 2.0f) / 2.0f));
-    CHECK(vl::glowFalloff(3.0f, 40.0f) == Catch::Approx(2.0f * std::pow(1.0f - std::pow(3.0f / 40.0f, 4.0f), 2.0f) / 2.0f));
+    // The core is held between half a yard and a yard and a half: the
+    // flame and the air right round it, not a ball the size of a room (T436).
+    CHECK(vl::glowCore(1.0f) == Catch::Approx(0.5f));
+    CHECK(vl::glowCore(40.0f) == Catch::Approx(1.5f));
+    CHECK(vl::glowFalloff(0.5f, 1.0f) == Catch::Approx(2.0f * std::pow(1.0f - std::pow(0.5f, 4.0f), 2.0f) / 2.0f));
+    CHECK(vl::glowFalloff(1.5f, 40.0f) == Catch::Approx(2.0f * std::pow(1.0f - std::pow(1.5f / 40.0f, 4.0f), 2.0f) / 2.0f));
+    // Soft to its end: no step anywhere, and its slope nothing at the reach,
+    // so the glow has no rim.
+    for (float e : {3.0f, 8.0f, 12.0f}) {
+        float last = vl::glowFalloff(0.0f, e);
+        for (float d = 0.01f; d <= e + 0.5f; d += 0.01f) {
+            const float f = vl::glowFalloff(d, e);
+            INFO("end " << e << " at " << d);
+            CHECK(std::abs(f - last) < 0.03f);
+            last = f;
+        }
+        CHECK(vl::glowFalloff(e * 0.99f, e) < 1e-3f);
+    }
+}
+
+TEST_CASE("volumetric light: a lamp's samples follow its glow, smooth with any count", "[volumetric_light]") {
+    // The unwindowed glow 2 / (1 + (d / core)^2) along a ray passing `across`
+    // from the lamp: each sample stands for exactly the whole, whatever its
+    // place - no grain for any number of samples.
+    const float core = 1.0f;
+    for (float across : {0.0f, 0.3f, 1.0f, 4.0f}) {
+        const float t0 = 2.0f, t1 = 18.0f, along = 10.0f;
+        const float h = std::sqrt(across * across + core * core);
+        const float exact = 2.0f * core * core / h *
+                            (std::atan((t1 - along) / h) - std::atan((t0 - along) / h));
+        for (float u : {0.05f, 0.3f, 0.5f, 0.77f, 0.99f}) {
+            const vl::GlowSample s = vl::glowSample(along, across, t0, t1, core, u);
+            const float x = s.t - along;
+            const float d2 = across * across + x * x;
+            const float f = 2.0f / (1.0f + d2 / (core * core));
+            INFO("across " << across << " u " << u);
+            CHECK(s.t >= t0 - 1e-4f);
+            CHECK(s.t <= t1 + 1e-4f);
+            CHECK(f * s.weight == Catch::Approx(exact).epsilon(1e-3));
+        }
+    }
+    // With the window, four samples (Low) come within a few percent of the
+    // glow along the ray, summed finely.
+    const float end = 8.0f;
+    const float c = vl::glowCore(end);
+    for (float across : {0.0f, 0.5f, 2.0f, 5.0f}) {
+        const float along = 20.0f;
+        const float half = std::sqrt(end * end - across * across);
+        const float t0 = along - half, t1 = along + half;
+        double fine = 0.0;
+        const int n = 20000;
+        for (int i = 0; i < n; ++i) {
+            const float t = t0 + (t1 - t0) * (static_cast<float>(i) + 0.5f) / n;
+            const float x = t - along;
+            fine += vl::glowFalloff(std::sqrt(across * across + x * x), end) * (t1 - t0) / n;
+        }
+        double four = 0.0;
+        for (int k = 0; k < 4; ++k) {
+            const vl::GlowSample s = vl::glowSample(along, across, t0, t1, c, (static_cast<float>(k) + 0.5f) / 4.0f);
+            const float x = s.t - along;
+            four += vl::glowFalloff(std::sqrt(across * across + x * x), end) * s.weight / 4.0;
+        }
+        INFO("across " << across);
+        CHECK(four == Catch::Approx(fine).epsilon(0.08));
+    }
+}
+
+TEST_CASE("volumetric light: faint by default, Low fainter than High", "[volumetric_light]") {
+    const vl::Scatter off = vl::scatterFor(vl::Quality::Off);
+    const vl::Scatter low = vl::scatterFor(vl::Quality::Low);
+    const vl::Scatter high = vl::scatterFor(vl::Quality::High);
+    CHECK(off.body == 0.0f);
+    CHECK(off.lamp == 0.0f);
+    // Low visibly fainter, not the same at a lower size (T434).
+    CHECK(low.body > 0.0f);
+    CHECK(low.lamp > 0.0f);
+    CHECK(low.body <= 0.7f * high.body);
+    CHECK(low.lamp <= 0.7f * high.lamp);
+    CHECK(low.body >= 0.4f * high.body);
+    // A twentieth of V572's sun and a fifth of its lamps at most.
+    CHECK(high.body <= 0.001f / 20.0f);
+    CHECK(high.lamp <= 0.03f / 5.0f);
+    // A full reach of open, lit air seen from the side, in the thickest air
+    // and a white sun: well under one step of 255 - no veil (T434).
+    const float side = high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(0.0f);
+    CHECK(side < 1.0f / 255.0f);
+    // With the back to it, less still.
+    CHECK(high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(-1.0f) < side);
+    // Straight at it, in clear air: a glow, not a white wall.
+    const float toward = high.body * vl::kSunReach * vl::bodyPhase(1.0f);
+    CHECK(toward > 4.0f / 255.0f);
+    CHECK(toward < 0.15f);
+    // The moon less than the sun for the same light.
+    CHECK(vl::kMoonScatterShare < 1.0f);
+    CHECK(vl::kMoonScatterShare > 0.0f);
+    // A lamp's glow through its middle at night, High, clear air: a soft
+    // glow of a fraction of its colour.
+    const float end = 9.0f;
+    double through = 0.0;
+    for (int i = 0; i < 2000; ++i) {
+        const float x = -end + 2.0f * end * (static_cast<float>(i) + 0.5f) / 2000.0f;
+        through += vl::glowFalloff(std::abs(x), end) * (2.0f * end / 2000.0f);
+    }
+    CHECK(through * high.lamp < 0.12);
+    CHECK(through * high.lamp > 0.02);
+}
+
+TEST_CASE("volumetric light: a lamp's glow fainter by day", "[volumetric_light]") {
+    CHECK(vl::lampDaylight(0.0f) == Catch::Approx(1.0f));
+    CHECK(vl::lampDaylight(1.0f) == Catch::Approx(vl::kLampDaylightShare));
+    CHECK(vl::lampDaylight(2.0f) == Catch::Approx(vl::kLampDaylightShare));
+    CHECK(vl::lampDaylight(0.5f) < 1.0f);
+    CHECK(vl::lampDaylight(0.5f) > vl::kLampDaylightShare);
+    CHECK(vl::kLampDaylightShare > 0.0f);
+}
+
+TEST_CASE("volumetric light: a building's own light does not glow in the air", "[volumetric_light]") {
+    enum class Src { Model, Fire, Lamp, Building, Unit, Emissive, Particle };
+    CHECK_FALSE(vl::glowsInAir(Src::Building, Src::Building));
+    for (Src s : {Src::Model, Src::Fire, Src::Lamp, Src::Unit, Src::Emissive, Src::Particle}) {
+        CHECK(vl::glowsInAir(s, Src::Building));
+    }
+}
+
+TEST_CASE("volumetric light: the shadow map's light fades out at its edge", "[volumetric_light]") {
+    CHECK(vl::coverageFade(0.0f) == Catch::Approx(1.0f));
+    CHECK(vl::coverageFade(0.8f) == Catch::Approx(1.0f));
+    CHECK(vl::coverageFade(1.0f) == Catch::Approx(0.0f));
+    CHECK(vl::coverageFade(1.5f) == Catch::Approx(0.0f));
+    float last = 1.0f;
+    for (float e = 0.0f; e <= 1.2f; e += 0.005f) {
+        const float f = vl::coverageFade(e);
+        INFO("at " << e);
+        CHECK(f <= last + 1e-6f);
+        CHECK(last - f < 0.04f);  // no step: no hard-edged cone (T434)
+        last = f;
+    }
+}
+
+TEST_CASE("volumetric light: the sky body's lobe has no flat top or rim", "[volumetric_light]") {
+    // Rising all the way to the body, held under the cap, never a plateau:
+    // the hard cap drew a ring round the moon (T434).
+    float last = vl::bodyPhase(-1.0f);
+    for (float c = -0.995f; c <= 1.0f; c += 0.005f) {
+        const float p = vl::bodyPhase(c);
+        INFO("cos " << c);
+        CHECK(p > last);
+        CHECK(p < vl::kBodyLobeCap);
+        last = p;
+    }
+    // Sideways and behind small beside the forward lobe.
+    CHECK(vl::bodyPhase(0.0f) < 0.3f);
+    CHECK(vl::bodyPhase(1.0f) > 20.0f * vl::bodyPhase(0.0f));
 }
 
 TEST_CASE("volumetric light: the stretch of a ray inside a lamp's reach", "[volumetric_light]") {
@@ -226,6 +377,8 @@ TEST_CASE("volumetric light: thicker air in foggy zones, at dawn and in rain", "
     // Rain and snow.
     CHECK(vl::airFactor(900.0f, 12.0f, 1.0f, 0.0f) == Catch::Approx(2.2f));
     CHECK(vl::airFactor(900.0f, 12.0f, 0.0f, 1.0f) == Catch::Approx(1.8f));
+    // All of them at once: held under a milky wall.
+    CHECK(vl::airFactor(300.0f, 6.5f, 1.0f, 1.0f) == Catch::Approx(vl::kMaxAirFactor));
 }
 
 TEST_CASE("volumetric light: the most important lamps that reach the view", "[volumetric_light]") {

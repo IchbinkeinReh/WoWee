@@ -443,11 +443,12 @@ inline glm::vec3 particleCloudOffset(const pipeline::M2ParticleEmitter& emitter,
 /// middle of that glass in the model's space (lampGlowCentre), warm, reaching
 /// some nine yards. Its glass glows at every hour, and so does its light.
 inline constexpr float kLampReach = 6.0f;
+inline constexpr glm::vec3 kLampColor{1.0f, 0.78f, 0.48f};
 inline PointLight lampLight(const glm::vec3& local, const glm::mat4& modelMatrix) {
     PointLight out;
     out.position = glm::vec3(modelMatrix * glm::vec4(local, 1.0f));
     const float scale = glm::length(glm::vec3(modelMatrix[0]));
-    out.color = glm::vec3(1.0f, 0.78f, 0.48f);
+    out.color = kLampColor;
     out.attenuationEnd = std::clamp(kLampReach * scale, 3.0f, 12.0f) * kWorldReachScale;
     out.attenuationStart = 0.2f * out.attenuationEnd;
     out.source = Source::Lamp;

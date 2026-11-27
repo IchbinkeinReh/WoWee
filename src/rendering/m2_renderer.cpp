@@ -2234,6 +2234,15 @@ void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& mode
                 gpuModel.flameCards += color * (0.5f * glm::length(glm::cross(b - a, c - a)));
         });
     }
+    // A lamp's glass and glowing cards (lampTint).
+    gpuModel.lampGlass = glm::vec3(0.0f);
+    gpuModel.lampTint.reset();
+    if (gpuModel.isLamp) {
+        forEachGlowTriangle([&](uint32_t, const auto&, const glm::vec3& color, const glm::vec3& a,
+                                const glm::vec3& b, const glm::vec3& c, uint32_t) {
+            gpuModel.lampGlass += color * (0.5f * glm::length(glm::cross(b - a, c - a)));
+        });
+    }
     // What gives a light already (an M2 light, fireLight, lampLight) - its
     // glow is that light, and a second would light it twice - and a trap the
     // renderer never draws. Nothing else is left out by what it is or what
@@ -2269,6 +2278,25 @@ glm::vec3 M2Renderer::fireTint(const M2ModelGPU& model) const {
     const glm::vec3 own = model.isTorch ? rt_lights::kTorchColor : rt_lights::kFireColor;
     model.fireTint = rt_lights::fireColor(model.isTorch, flames.color()) / own;
     return *model.fireTint;
+}
+
+glm::vec3 M2Renderer::lampTint(const M2ModelGPU& model) const {
+    if (model.lampTint) return *model.lampTint;
+    // Its glass and cards, and its flames' particles where it has any (a
+    // candle's, a brazier lamp's), summed as a fire's are.
+    rt_lights::FlameColor glass;
+    glass.added = model.lampGlass;
+    const auto at0 = [&](const pipeline::M2AnimationTrack& t) {
+        return interpFloat(t, 0.0f, 0.0f, 0, model.globalSequenceDurations);
+    };
+    for (size_t i = 0; i < model.particleEmitters.size(); ++i) {
+        const pipeline::M2ParticleEmitter& e = model.particleEmitters[i];
+        const VkTexture* tex = i < model.particleTextures.size() ? model.particleTextures[i] : nullptr;
+        glass.addEmitter(e, at0(e.emissionRate), at0(e.lifespan),
+                         tex ? tex->averageColor() * tex->alphaCoverage() : glm::vec3(1.0f));
+    }
+    model.lampTint = rt_lights::lampColor(glass.color()) / rt_lights::kLampColor;
+    return *model.lampTint;
 }
 
 void M2Renderer::computeFlameClouds(M2ModelGPU& gpuModel) {
@@ -3063,7 +3091,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                     l.position = *flame;
                 }
             }
-            l.color *= fade * cardPulse;
+            // In the colour of its glass and flames (rt_lights::lampColor).
+            l.color *= lampTint(*model) * fade * cardPulse;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
             // Not a game object's: a server's object (Hallow's End's lit

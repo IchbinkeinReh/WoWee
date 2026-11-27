@@ -92,6 +92,26 @@ struct FlameColor {
     return most > 1e-6f ? c / most : own;
 }
 
+/// The colour of a lamp's light (rt_lights::lampLight): its warm own where its glass and
+/// flames are pale or about that - a human street lamp's, a lantern's, which stay as they
+/// were -, theirs where they are clearly another colour: Brill's and Undercity's green lamps
+/// lit the ground and the air round them peach (T436). Pale glass, whose mean says little of
+/// the light behind it, is not taken for white light.
+inline constexpr float kLampTintedGlass = 0.35f;  // saturation from which the glass decides
+
+[[nodiscard]] inline glm::vec3 lampColor(const std::optional<glm::vec3>& glass) {
+    if (!glass) return kLampColor;
+    const float most = std::max(glass->r, std::max(glass->g, glass->b));
+    const float least = std::min(glass->r, std::min(glass->g, glass->b));
+    if (!(most > 1e-6f) || (most - least) / most < kLampTintedGlass) return kLampColor;
+    constexpr float kOrdinary = 0.33f, kOther = 0.42f;
+    const float t = std::clamp((glm::length(onWheel(*glass) - onWheel(kLampColor)) - kOrdinary) / (kOther - kOrdinary),
+                               0.0f, 1.0f);
+    const glm::vec3 c = glm::mix(kLampColor, *glass, t * t * (3.0f - 2.0f * t));
+    const float top = std::max(c.r, std::max(c.g, c.b));
+    return top > 1e-6f ? c / top : kLampColor;
+}
+
 /// How much of a fire's flames is drawn this moment, 0..1: of its live particles - its flame
 /// emitters' where it has any alive (isFlameEmitter), else all - each by its alpha and its
 /// area over its life, the share the twinkle leaves (0x0097be80: drawn at its size times

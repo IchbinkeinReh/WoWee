@@ -8501,10 +8501,8 @@ void Renderer::recordVolumetricLight() {
         const float strength = lightingManager->getFogStrength();
         const float authoredEnd = strength > 0.001f ? lp.fogEnd * strength : 0.0f;
         const float air = volumetric_light::airFactor(authoredEnd, lightingManager->getTimeOfDayHours(), rain, snow);
-        constexpr float kBodyScatter = 0.001f;   // per yard: a faint haze across, shafts toward the sun
-        constexpr float kLampScatter = 0.03f;    // per yard: a glow round the flame, not a ball of fog
-        in.bodyScatter = kBodyScatter * air * (1.0f - 0.8f * cover);
-        in.lampScatter = kLampScatter * air;
+        // Per quality (volumetric_light::scatterFor): faint, Low fainter.
+        const volumetric_light::Scatter scatter = volumetric_light::scatterFor(quality);
 
         // The sky body: the sun while it is up, else the moon while she is
         // (volumetric_light::bodyShares), by the drawn ones' own heights. The
@@ -8512,6 +8510,7 @@ void Renderer::recordVolumetricLight() {
         const glm::vec3 sunDir = glm::normalize(lp.sunDir);
         const glm::vec3 moonDir = glm::normalize(lp.moonDir);
         const volumetric_light::BodyShares shares = volumetric_light::bodyShares(sunDir.z, moonDir.z);
+        float bodyScatter = scatter.body;
         if (shares.sun > 0.0f && !volumetricThisFrame_) {
             in.bodyDir = sunDir;
             in.bodyShare = shares.sun;
@@ -8520,7 +8519,11 @@ void Renderer::recordVolumetricLight() {
             in.bodyDir = moonDir;
             in.bodyShare = shares.moon;
             in.lobe = volumetric_light::lobeShare(1.0f - glm::clamp(moonOcclusionState_.eased, 0.0f, 1.0f));
+            bodyScatter *= volumetric_light::kMoonScatterShare;
         }
+        in.bodyScatter = bodyScatter * air * (1.0f - 0.8f * cover);
+        // A lamp's glow fainter by day (volumetric_light::lampDaylight).
+        in.lampScatter = scatter.lamp * air * volumetric_light::lampDaylight(shares.sun);
         in.bodyColor = glm::vec3(currentFrameData.lightColor);
         // Each sample asks whether the sky body reaches it: a traced ray with
         // ray queries, the shadow map otherwise; with neither, no sky light at
@@ -8558,12 +8561,23 @@ void Renderer::recordVolumetricLight() {
                                     [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
         }
         const std::vector<rt_lights::PointLight>& lamps = fromRt ? volumetricLampsFromRt() : gathered;
-        for (size_t i : volumetric_light::pickLights(lamps, in.cameraPos, kLampRange, budget.maxLights)) {
-            rt_lights::PointLight l = lamps[i];
-            // A building's own light fills its room evenly: half, so a hall's
-            // air glows and does not turn to fog.
-            if (l.source == rt_lights::Source::Building) l.color *= 0.5f;
-            in.lamps.push_back(rt_lights::toGpu(l));
+        // Not a building's own light (volumetric_light::glowsInAir): it is
+        // the room's painted light, no flame to be seen, and its glow was one
+        // beige veil over the whole room (T434).
+        static std::vector<rt_lights::PointLight> glowing;
+        glowing.clear();
+        for (const rt_lights::PointLight& l : lamps) {
+            if (volumetric_light::glowsInAir(l.source, rt_lights::Source::Building)) glowing.push_back(l);
+        }
+        for (size_t i : volumetric_light::pickLights(glowing, in.cameraPos, kLampRange, budget.maxLights)) {
+            in.lamps.push_back(rt_lights::toGpu(glowing[i]));
+        }
+
+        // The minimap, where it was drawn with the scene, is left out: it is
+        // interface (T435) - as the screen's glow leaves it (recordScreenEffects).
+        if (minimap && minimap->isShown() && !minimapDrawsInOverlay_ && window && window->getWidth() > 0 &&
+            window->getHeight() > 0) {
+            in.keepRect = minimap->screenUvRect(window->getWidth(), window->getHeight());
         }
 
         if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {

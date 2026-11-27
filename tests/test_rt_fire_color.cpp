@@ -114,6 +114,9 @@ TEST_CASE("other flames give their own", "[rt][fire]") {
     REQUIRE(violet);
     near(*violet, 0.38f, 0.26f, 1.0f);
     CHECK(fireColor(false, violet) == *violet);
+    // A lamp's glass the same (lampColor): a green lamp's light is green (T436).
+    CHECK(lampColor(green) == *green);
+    CHECK(lampColor(violet) == *violet);
     // ORCBONFIRE_BLUE, of the same texture as an orange one
     const auto blue = flamesOf({{4, 0x20029, 30.0f, 2.0f, kFlameLick, kFlameLickCoverage, 0.5f,
                                  {{0.0f, 0.0f, 1.0f}, {0.184314f, 0.737255f, 0.87451f}, {0.694118f, 0.917647f, 1.0f}},
@@ -219,4 +222,29 @@ TEST_CASE("the fire light of a fire without a light of its own follows its flame
     REQUIRE(pushed != std::string::npos);
     CHECK(renderer.substr(fire, pushed - fire).find("visibleFlameShare(model->particleEmitters, inst.particles)") !=
           std::string::npos);
+}
+
+TEST_CASE("A lamp's light is its glass's colour only where that is clearly another", "[rt_lights][lamp]") {
+    // No glass known, or pale glass (its mean says little of the light): the warm own.
+    CHECK(lampColor(std::nullopt) == kLampColor);
+    CHECK(lampColor(glm::vec3(1.0f, 1.0f, 1.0f)) == kLampColor);
+    CHECK(lampColor(glm::vec3(1.0f, 0.95f, 0.85f)) == kLampColor);
+    CHECK(lampColor(glm::vec3(0.0f)) == kLampColor);
+    // Warm yellow or orange glass, as a human street lamp's: the own.
+    CHECK(lampColor(glm::vec3(1.0f, 0.8f, 0.45f)) == kLampColor);
+    CHECK(lampColor(glm::vec3(1.0f, 0.7f, 0.4f)) == kLampColor);
+    // Green, blue: theirs, brightest channel 1.
+    const glm::vec3 green = lampColor(glm::vec3(0.3f, 1.0f, 0.35f));
+    CHECK(green.g == Catch::Approx(1.0f));
+    CHECK(green.r < 0.5f);
+    CHECK(green.b < 0.5f);
+    const glm::vec3 blue = lampColor(glm::vec3(0.4f, 0.6f, 1.0f));
+    CHECK(blue.b == Catch::Approx(1.0f));
+    CHECK(blue.r < 0.6f);
+    // Never brighter than one, never negative.
+    for (const glm::vec3& g : {glm::vec3(5.0f, 0.1f, 0.1f), glm::vec3(0.1f, 3.0f, 0.2f)}) {
+        const glm::vec3 c = lampColor(g);
+        CHECK(std::max(c.r, std::max(c.g, c.b)) == Catch::Approx(1.0f));
+        CHECK(std::min(c.r, std::min(c.g, c.b)) >= 0.0f);
+    }
 }

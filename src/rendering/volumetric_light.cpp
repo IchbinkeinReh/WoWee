@@ -101,7 +101,9 @@ bool VolumetricLight::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
         return false;
     }
     baseLayout_ = createPipelineLayout(device, {perFrameLayout_, setLayout_});
-    compositeLayout_ = createPipelineLayout(device, {compositeSetLayout_});
+    const VkPushConstantRange keepRange{.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0,
+                                        .size = sizeof(glm::vec4)};
+    compositeLayout_ = createPipelineLayout(device, {compositeSetLayout_}, {keepRange});
     if (baseLayout_ == VK_NULL_HANDLE || compositeLayout_ == VK_NULL_HANDLE) {
         LOG_ERROR("VolumetricLight: failed to create pipeline layouts");
         return false;
@@ -570,6 +572,7 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
     drawThisFrame_[frame] = true;
+    keepRect_[frame] = in.keepRect;
     return true;
 }
 
@@ -578,6 +581,7 @@ void VolumetricLight::composite(VkCommandBuffer cmd, uint32_t frame) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositeLayout_, 0, 1, &compositeSets_[frame], 0,
                             nullptr);
+    vkCmdPushConstants(cmd, compositeLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4), &keepRect_[frame]);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 

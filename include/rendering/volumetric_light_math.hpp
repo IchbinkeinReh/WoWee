@@ -46,6 +46,67 @@ inline Budget budgetFor(Quality q) {
     return {};
 }
 
+/// How much light the air scatters toward the eye per yard, for the sky
+/// body and for the lamps, before the air's thickness (airFactor). Clear air
+/// over a hundred yards scatters next to nothing: what the eye sees of it is
+/// a faint glow toward the sun and the shafts where something shades part
+/// of it - not a veil over the scene, which the zone's own fog already is
+/// (T434: 0.001 a yard with an even floor under the lobe was a milky veil
+/// by day and grey fog by night). Low scatters less than High, not only
+/// coarser: the two must look apart (T434: Low was High at a lower size).
+struct Scatter {
+    float body = 0.0f;
+    float lamp = 0.0f;
+};
+
+inline constexpr float kBodyScatter = 4.0e-5f;  // per yard, High
+inline constexpr float kLampScatter = 0.006f;   // per yard, High
+inline constexpr float kLowShare = 0.6f;        // Low's share of High's
+
+inline Scatter scatterFor(Quality q) {
+    switch (q) {
+        case Quality::Low: return {.body = kBodyScatter * kLowShare, .lamp = kLampScatter * kLowShare};
+        case Quality::High: return {.body = kBodyScatter, .lamp = kLampScatter};
+        case Quality::Off: break;
+    }
+    return {};
+}
+
+/// The moon's light in the air beside the sun's for the same colour: at night
+/// the eye sees the air's faint light the less (T434: the moon's cone filled
+/// the night sky).
+inline constexpr float kMoonScatterShare = 0.5f;
+
+/// A lamp's glow by day: the eye, held to the daylight, sees the air round a
+/// lamp little lit beside the sunlit air about it. `sunShare` is
+/// bodyShares' sun (1 by full day). T436: a street lamp's glow was a wall of
+/// light at one in the afternoon.
+inline constexpr float kLampDaylightShare = 0.35f;
+
+inline float lampDaylight(float sunShare) {
+    return 1.0f - (1.0f - kLampDaylightShare) * std::clamp(sunShare, 0.0f, 1.0f);
+}
+
+/// Whether a light of the trace's list glows in the air. Not a building's own
+/// light (MOLT): it stands for the light a room is painted with, not for a
+/// flame one can see - its glow was the same beige over the whole of a room
+/// (T434, the Crossroads inn without the ray traced lighting). Its lamps,
+/// fires and glowing surfaces give their own lights and glow.
+template <class SourceT>
+inline bool glowsInAir(SourceT source, SourceT building) {
+    return source != building;
+}
+
+/// How much of the sky body's light a point of air takes from the shadow
+/// map toward the edge of its outer cascade, by max(|x|, |y|) across that
+/// tile: all of it inside nine tenths, none past its edge, smooth between.
+/// Past the map nothing says the point is lit, so it is not (the user's
+/// rule); the cut was a hard-edged cone round the moon (T434).
+inline float coverageFade(float edge) {
+    const float t = std::clamp((edge - 0.8f) / 0.2f, 0.0f, 1.0f);
+    return 1.0f - t * t * (3.0f - 2.0f * t);
+}
+
 /// The most lamps any quality takes: the size of the shader's array.
 inline constexpr unsigned kMaxLights = 32;
 
@@ -54,20 +115,56 @@ inline constexpr unsigned kMaxLights = 32;
 /// through; the shadow map's own reach ends the rest.
 inline constexpr float kSunReach = 120.0f;
 
+/// The radius of a lamp's glow core, yards: an eighth of its reach, half a
+/// yard to a yard and a half - about the flame and its glass with the air
+/// right round them, not a ball of light the size of the room (V572/T436:
+/// a fifth of the reach, up to three yards, glowed as a wall of light).
+inline float glowCore(float end) {
+    return std::clamp(0.125f * end, 0.5f, 1.5f);
+}
+
 /// How much of a lamp's light the air `distance` yards from it holds, for a
 /// lamp that reaches `end` yards: bright at its core, a soft tail, nothing
-/// at its reach. The inverse square from a core a fifth of the reach (three
-/// quarters of a yard to three yards), times 2 so it crosses 1 at the core,
-/// windowed to nothing at the end - rt_lights::realisticAttenuation's shape
-/// with a core the size of the glow rather than of the flame.
+/// at its reach. The inverse square from the core (glowCore), times 2 so it
+/// crosses 1 at the core, windowed to nothing at the end -
+/// rt_lights::realisticAttenuation's shape with a core the size of the glow
+/// rather than of the flame. Smooth everywhere, its slope nothing at the end:
+/// no ring where the reach stops.
 /// volumetric_light.comp.glsl's vlGlowFalloff must agree.
 inline float glowFalloff(float distance, float end) {
     if (!(end > 0.0f) || !(distance < end)) return 0.0f;
-    const float core = std::clamp(0.2f * end, 0.75f, 3.0f);
+    const float core = glowCore(end);
     const float q = distance / core;
     const float x = distance / end;
     const float w = 1.0f - x * x * x * x;
     return std::min(2.0f * w * w / (1.0f + q * q), 2.0f);
+}
+
+/// Where along a ray the march puts a lamp's samples: as densely as the glow
+/// is bright (equi-angular sampling, Kulla and Fajardo 2012, about the core
+/// rather than the lamp's point). `along` is where the ray comes nearest the
+/// lamp, `across` how near, `t0`..`t1` the stretch inside its reach and `u`
+/// 0..1 the sample's place in it. Returns where the sample lies and what it
+/// stands for (one over the density): glowFalloff times that, summed over
+/// the samples and divided by their number, is the glow along the stretch -
+/// without the window, exactly, whatever the number of samples, so the glow
+/// has no grain or bands for the blur to hide, and its edge is the lamp's
+/// own soft one.
+struct GlowSample {
+    float t = 0.0f;
+    float weight = 0.0f;
+};
+
+inline GlowSample glowSample(float along, float across, float t0, float t1, float core, float u) {
+    const float h = std::sqrt(across * across + core * core);
+    const float a0 = std::atan((t0 - along) / h);
+    const float a1 = std::atan((t1 - along) / h);
+    const float a = a0 + (a1 - a0) * std::clamp(u, 0.0f, 1.0f);
+    const float x = h * std::tan(a);
+    GlowSample s;
+    s.t = along + x;
+    s.weight = (a1 - a0) * (h * h + x * x) / h;
+    return s;
 }
 
 /// Where the ray origin + t * dir (dir of unit length) runs inside the sphere
@@ -96,6 +193,21 @@ inline float phaseHG(float cosTheta, float g) {
     return (1.0f - g2) / std::pow(std::max(1.0f + g2 - 2.0f * g * cosTheta, 1e-4f), 1.5f);
 }
 
+/// The forward lobe toward the sun (moon), smoothly held under `cap` times
+/// even: cap * p / (cap + p). The hard min() it replaces left a flat top
+/// with a crease round it - straight at the moon a bright ring (T434).
+inline constexpr float kBodyLobeG = 0.7f;
+inline constexpr float kBodyLobeCap = 8.0f;
+
+inline float bodyPhase(float cosTheta) {
+    const float p = phaseHG(cosTheta, kBodyLobeG);
+    return kBodyLobeCap * p / (kBodyLobeCap + p);
+}
+
+/// The thickest the air gets: fog, dawn and rain together once multiplied to
+/// eight times clear air, a milky wall.
+inline constexpr float kMaxAirFactor = 2.5f;
+
 /// How much thicker than clear air the air is: the zone's own fog (read off
 /// how close its authored fog ends: Duskwood's 525 yards gives more, an open
 /// plain's far end less - the mist's factor, Renderer::volumetricFogExtinction),
@@ -110,7 +222,7 @@ inline float airFactor(float authoredFogEnd, float hours, float rain, float snow
     f *= 1.0f + 0.8f * dawn;
     f *= 1.0f + 1.2f * std::clamp(rain, 0.0f, 1.0f);
     f *= 1.0f + 0.8f * std::clamp(snow, 0.0f, 1.0f);
-    return f;
+    return std::min(f, kMaxAirFactor);
 }
 
 /// The sun's and the moon's shares of the sky's light in the air, from the

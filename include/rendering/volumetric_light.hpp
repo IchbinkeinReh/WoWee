@@ -46,11 +46,18 @@ class VkContext;
  *   blur    a 5x5 blur kept to like depths (volumetric_light_blur.comp.glsl);
  *
  * and in the overlay pass, ahead of the interface and the eye's exposure,
- * the result is screened over the picture (volumetric_light_composite.frag).
+ * the result is screened over the picture (volumetric_light_composite.frag),
+ * the minimap's disc left out where it was drawn with the scene.
+ *
+ * Faint by design (volumetric_light::scatterFor): clear air near the eye
+ * scatters next to nothing, so the sky body's light shows as a glow toward
+ * it and as shafts where something shades part of the air, never as a veil;
+ * a lamp's as a soft glow round its flame in its own colour, fainter by day.
  *
  * The lamps are the ones the ray traced lighting shades with, gathered the
  * same way (rt_lights): a model's light only while its flames or its glowing
- * surface show. The sun's light only while the sun is up and the moon's only
+ * surface show; not a building's own light, which stands for its rooms'
+ * painted light and no flame. The sun's light only while the sun is up and the moon's only
  * after it has set and while she is up; neither indoors but through an
  * opening, since each sample asks whether the sky body reaches it.
  *
@@ -109,6 +116,12 @@ public:
         bool depthMultisampled = false;
         VkImageLayout depthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         uint64_t depthGeneration = 0;
+
+        /// Where the minimap is on screen when it was drawn with the scene
+        /// (uv x, y, w, h; w 0 for none): the light is left off its disc,
+        /// which is interface and no air (T435), as the screen's glow
+        /// leaves it out (ScreenEffects::FrameInputs::keepRect).
+        glm::vec4 keepRect{0.0f};
     };
 
     VolumetricLight() = default;
@@ -187,6 +200,7 @@ private:
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet sets_[MAX_FRAMES] = {};
     VkDescriptorSet compositeSets_[MAX_FRAMES] = {};
+    glm::vec4 keepRect_[MAX_FRAMES] = {};
 };
 
 } // namespace rendering
