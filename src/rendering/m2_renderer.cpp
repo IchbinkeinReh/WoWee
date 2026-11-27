@@ -2869,14 +2869,37 @@ void M2Renderer::syncRtScene() {
     WOWEE_PROFILE_SCOPE("rt: animated doodads", Cpu);
     constexpr float kAnimatedCastRadius = 60.0f;
     constexpr uint32_t kMaxAnimatedPieces = 3000;
+    // A fixture farther out - a brazier, a lamp post: a model carrying its own
+    // light - still stands in the scene, its pieces where its pose last put
+    // them (its bind pose if it never had one), placed once and left. Its
+    // light reaches as far as the traced lights go, and its own faces stop
+    // that light from every distance alike: dropped at 60 yards, the Durotar
+    // brazier's light went out past its bowl onto the floor round its post
+    // from farther, and under the bowl's shadow nearer (U24).
+    constexpr uint32_t kMaxFarFixturePieces = 3000;
+    uint32_t farFixturePieces = 0;
     for (size_t idx : animatedInstanceIndices_) {
         if (idx >= instances.size()) continue;
         M2Instance& inst = instances[idx];
         const M2ModelGPU* model = modelOf(inst);
         const glm::vec3 d = inst.position - cachedCamPos_;
-        const bool wanted = model && !model->rtPieces.empty() && inst.fade >= 1.0f && !inst.rtMoved &&
-                            !inst.boneMatrices.empty() && glm::dot(d, d) < kAnimatedCastRadius * kAnimatedCastRadius &&
+        const bool placeable = model && !model->rtPieces.empty() && inst.fade >= 1.0f && !inst.rtMoved;
+        const bool wanted = placeable && !inst.boneMatrices.empty() &&
+                            glm::dot(d, d) < kAnimatedCastRadius * kAnimatedCastRadius &&
                             rtAnimatedPieces_ + model->rtPieces.size() <= kMaxAnimatedPieces;
+        if (!wanted && placeable && model->rtFixture &&
+            farFixturePieces + model->rtPieces.size() <= kMaxFarFixturePieces) {
+            inst.rtPieceInstances.resize(model->rtPieces.size(), RtScene::kInvalid);
+            for (size_t i = 0; i < model->rtPieces.size(); ++i) {
+                const auto& piece = model->rtPieces[i];
+                uint32_t& id = inst.rtPieceInstances[i];
+                if (id != RtScene::kInvalid && ownsRtSlot(id, piece.mesh, inst.id)) continue;
+                id = rtScene_->addDynamicInstance(piece.mesh, rtSteadyCarried(*model, inst, piece.bone));
+                if (id != RtScene::kInvalid) trackRtSlot(id, piece.mesh, inst.id);
+            }
+            farFixturePieces += static_cast<uint32_t>(model->rtPieces.size());
+            continue;
+        }
         if (!wanted) {
             for (uint32_t id : inst.rtPieceInstances) {
                 if (id != RtScene::kInvalid && ownsRtSlot(id, rtTrackedMeshOf(id), inst.id)) dropRtSlot(id);
