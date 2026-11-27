@@ -8,6 +8,9 @@
 # their settings as its defaults.
 #
 # Invoked with -DDIR=<staged addons dir>.
+# With -P nothing else sets the policies (cmake/check_script_policies.cmake).
+cmake_minimum_required(VERSION 3.15)
+
 file(GLOB_RECURSE staged_saved_vars "${DIR}/*.lua.saved")
 if(staged_saved_vars)
     file(REMOVE ${staged_saved_vars})

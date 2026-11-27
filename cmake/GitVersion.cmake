@@ -8,6 +8,9 @@
 #
 # Expects: SRC_DIR, IN_FILE, OUT_FILE
 
+# With -P nothing else sets the policies (cmake/check_script_policies.cmake).
+cmake_minimum_required(VERSION 3.15)
+
 find_package(Git QUIET)
 
 set(WOWEE_GIT_VERSION "unknown")

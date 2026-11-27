@@ -4966,6 +4966,12 @@ if(_wowee_all_tests)
     set_property(TEST ${_wowee_all_tests} APPEND PROPERTY ENVIRONMENT "WOWEE_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
 endif()
 
+# Every script run with cmake -P sets its policies first: CMake 4 has only the
+# new behaviour and cannot show a 3.x failure by running one.
+add_test(NAME cmake_scripts_set_policies
+         COMMAND ${CMAKE_COMMAND} "-DSRC=${CMAKE_SOURCE_DIR}"
+                 -P ${CMAKE_SOURCE_DIR}/cmake/check_script_policies.cmake)
+
 # No test finds the player's own per-user folders (test_user_paths.hpp).
 wowee_add_test(test_user_paths_sandboxed
     SOURCES test_user_paths_sandboxed.cpp ${CMAKE_SOURCE_DIR}/src/core/config_paths.cpp
