@@ -621,6 +621,27 @@ constexpr SettingDesc kSchema[] = {
      "faces turned toward the light do, so a light inside a lantern\n"
      "still shines out through the lantern's glass. Not in the\n"
      "original client.", "", 0, "raytracedlighting"},
+    // The volumetric light's three terms (Details, "Volumetric light"), each
+    // a percent of its scatter as volumetric_light::scatterFor has it
+    // (volumetric_light::tunedScatter): 100 is the base. 200 by default
+    // (user 2026-11-27).
+    {"dbgvlsun", "Volumetric light: sun (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "Volumetric light",
+     "How much light the sun gives the air with the volumetric light\n"
+     "on (Details). 100 the base, 0 none, 400 four times. Default 200.", "", 200, "volumetriclight"},
+    {"dbgvlmoon", "Volumetric light: moon (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "",
+     "How much light the moon gives the air with the volumetric light\n"
+     "on (Details). 100 the base, 0 none, 400 four times. Default 200.", "", 200, "volumetriclight"},
+    {"dbgvllights", "Volumetric light: lights (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "",
+     "How much light lamps, fires and lava give the air around them\n"
+     "with the volumetric light on (Details). 100 the base, 0 none,\n"
+     "400 four times. Default 200.", "", 200, "volumetriclight"},
+    // How many frames the volumetric light's history averages over
+    // (volumetric_light::historyWeight; user 2026-11-27: five were too few).
+    {"dbgvlhistory", "Volumetric light: smoothing (frames)", SettingKind::Int, 1, 60, 1, "Debug Glow", "",
+     "Over how many frames the volumetric light is averaged: more is\n"
+     "calmer and less grainy, but a lamp that moves or flickers takes\n"
+     "longer to show it. 1 is no smoothing. Starts afresh after a\n"
+     "teleport, a cut or a loading screen. Default 20.", "", 20, "volumetriclight"},
     {"dbgemissivelightintensity", "Glowing surfaces: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "What glows",
      "What glows of models and buildings: lamp glass, glow cards,\n"
      "lava, crystals, glowing batches.\n"
@@ -664,27 +685,6 @@ constexpr SettingDesc kSchema[] = {
      "a lamp's flame - is placed the same way along its flames.\n"
      "More costs trace time. Not in the original client.", "", 1,
      "raytracedlighting"},
-    // The volumetric light's three terms (Details, "Volumetric light"), each
-    // a percent of its scatter as volumetric_light::scatterFor has it
-    // (volumetric_light::tunedScatter): 100 is the base. 200 by default
-    // (user 2026-11-27).
-    {"dbgvlsun", "Volumetric light: sun (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "Volumetric light",
-     "How much light the sun gives the air with the volumetric light\n"
-     "on (Details). 100 the base, 0 none, 400 four times. Default 200.", "", 200, "volumetriclight"},
-    {"dbgvlmoon", "Volumetric light: moon (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "",
-     "How much light the moon gives the air with the volumetric light\n"
-     "on (Details). 100 the base, 0 none, 400 four times. Default 200.", "", 200, "volumetriclight"},
-    {"dbgvllights", "Volumetric light: lights (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "",
-     "How much light lamps, fires and lava give the air around them\n"
-     "with the volumetric light on (Details). 100 the base, 0 none,\n"
-     "400 four times. Default 200.", "", 200, "volumetriclight"},
-    // How many frames the volumetric light's history averages over
-    // (volumetric_light::historyWeight; user 2026-11-27: five were too few).
-    {"dbgvlhistory", "Volumetric light: smoothing (frames)", SettingKind::Int, 1, 60, 1, "Debug Glow", "",
-     "Over how many frames the volumetric light is averaged: more is\n"
-     "calmer and less grainy, but a lamp that moves or flickers takes\n"
-     "longer to show it. 1 is no smoothing. Starts afresh after a\n"
-     "teleport, a cut or a loading screen. Default 20.", "", 20, "volumetriclight"},
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"
