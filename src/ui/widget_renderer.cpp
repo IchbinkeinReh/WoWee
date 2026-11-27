@@ -689,6 +689,7 @@ void WidgetRenderer::sizeArtAndText(WidgetTree& tree) {
     const auto measure = [&](Widget* w) {
         if (font && w->kind == WidgetKind::FontString) sizeFontStringWidget(w, font);
         else if (w->kind == WidgetKind::Texture) sizeTextureWidget(w);
+        else if (w->isSimpleHtml) sizeSimpleHtmlWidget(tree, w);
     };
     for (uint32_t id = tree.takeMeasureDirty(1); id != 0;
          id = tree.takeMeasureDirty(id + 1)) {
@@ -772,7 +773,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size, f
                 // Only on the pass that draws the text. The shadow and outline
                 // passes repeat the same runs offset by a pixel, and an icon
                 // drawn three times reads as a smear rather than as depth.
-                if (!forceColor) {
+                if (!forceColor && dl) {
                     VkDescriptorSet tex = resident(run.texture);
                     if (tex != kMissing) {
                         // Sat on the baseline like a capital, which is where
@@ -798,7 +799,9 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size, f
             }
             const float runW = font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                    run.text.c_str()).x;
-            if (gradientStart_ < 0) {
+            if (!dl) {
+                // Measured only (drawSimpleHtml's measuring pass).
+            } else if (gradientStart_ < 0) {
                 dl->AddText(font, size, ImVec2(x, y), col, run.text.c_str());
             } else {
                 // Glyph by glyph under an alpha gradient (0x006c78f0): whole
@@ -830,7 +833,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size, f
             // pass entirely. Only from the pass that draws the text itself -
             // the outline and shadow draw the same glyphs and would file the
             // same link two or three times over.
-            if (linkSink && !forceColor && !run.link.empty()) {
+            if (dl && linkSink && !forceColor && !run.link.empty()) {
                 // Into the space the click arrives in, which is not the space
                 // this draws in. dispatchMouse takes DisplaySize.y - MousePos.y
                 // and divides by the interface scale, so the tree is in
@@ -849,9 +852,9 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size, f
     return y - at.y;
 }
 
-void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
-                                    const Widget& w, float ws,
-                                    float x0, float y0, float x1) {
+float WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
+                                     const Widget& w, float ws,
+                                     float x0, float y0, float x1) {
     const float boxW = x1 - x0;
     float y = y0;
     for (const HtmlBlock& b : parseSimpleHtml(w.text, w.htmlLinkFormat)) {
@@ -892,7 +895,7 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
             float ix = x0;
             if (align == "CENTER") ix = x0 + (boxW - dw) * 0.5f;
             else if (align == "RIGHT") ix = x1 - dw;
-            VkDescriptorSet tex = resident(b.src);
+            VkDescriptorSet tex = dl ? resident(b.src) : kMissing;
             if (tex != kMissing) {
                 dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(ix, y),
                              ImVec2(ix + dw, y + dh), ImVec2(0, 0), ImVec2(1, 1),
@@ -903,7 +906,7 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
             continue;
         }
         const float* color = of.color;
-        if (of.hasShadow) {
+        if (of.hasShadow && dl) {
             drawMarkupText(dl, font, size, w.effScale,
                            ImVec2(x0 + of.shadowX * ws, y - of.shadowY * ws),
                            shadowColor(of, color[3], w.drawAlpha), w.drawAlpha,
@@ -918,6 +921,29 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
         if (!b.text.empty() && b.text.back() == '\n') h -= size + spacing;
         y += h;
     }
+    return y - y0;
+}
+
+void WidgetRenderer::sizeSimpleHtmlWidget(WidgetTree& tree, Widget* w) {
+    // Laid out as the draw lays it out, at the scale it is drawn at, and kept
+    // in interface units: how far the page's text reaches below its top
+    // (0x0096cc90 stacks its paragraphs from there), which is what its scroll
+    // frame's range is made of (WidgetTree::scrollContentExtent).
+    const float s = tree.uiScale();
+    float height = 0.0f;
+    if (!w->text.empty() && s > 0.0f) {
+        const float ws = s * (w->effScale > 0.0f ? w->effScale : 1.0f);
+        const float boxW = w->rectW * s;
+        if (looksLikeSimpleHtml(w->text)) {
+            height = drawSimpleHtml(nullptr, tree, *w, ws, 0.0f, 0.0f, boxW);
+        } else if (ImFont* font = interfaceFaceOrDefault(w->fontFace)) {
+            const float size = interfaceFontSize(w->fontHeight) * ws;
+            height = drawMarkupText(nullptr, font, size, w->effScale, ImVec2(0.0f, 0.0f), 0u, 1.0f,
+                                    w->text, boxW > size ? boxW : 0.0f, false, w->justifyH.c_str());
+        }
+        height /= s;
+    }
+    w->htmlTextHeight = height;
 }
 
 void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, DrawPart part, float scale,

@@ -144,8 +144,12 @@ private:
     /// A SimpleHTML page holding a document rather than a string: its blocks
     /// stacked down the frame, text justified per block and each picture on a
     /// line of its own. See simple_html.hpp.
-    void drawSimpleHtml(ImDrawList* dl, WidgetTree& tree, const Widget& w,
-                        float ws, float x0, float y0, float x1);
+    /// Answers the height it took, in pixels; with no draw list it only
+    /// measures.
+    float drawSimpleHtml(ImDrawList* dl, WidgetTree& tree, const Widget& w,
+                         float ws, float x0, float y0, float x1);
+    /// A SimpleHTML's text height (Widget::htmlTextHeight), in the sizing pass.
+    void sizeSimpleHtmlWidget(WidgetTree& tree, Widget* w);
     /// Screen height and interface scale of the pass in flight, so a link rect
     /// can be filed in the coordinates the click will arrive in.
     float linkScreenH_ = 0.0f;

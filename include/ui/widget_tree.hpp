@@ -706,6 +706,13 @@ struct Widget {
     /// The fonts of its headings (+0x2d0 + 4 * element): font strings that are nowhere, made as
     /// one is set. One without a face is as its paragraphs (0x0096cc90).
     uint32_t htmlHeadingFont[3] = {0, 0, 0};
+    /// How far down from its top its text reaches, in interface units, as the
+    /// sizing pass laid it out. The client's paragraphs are font strings in it,
+    /// each anchored under the last and as wide as the page (0x0096cc90), and
+    /// a scroll frame's range is the union of its child's rect with what is in
+    /// it (0x0096b4c0 -> 0x004913c0): a page taller than the frame scrolls,
+    /// while the frame's own rect stays as its XML declares.
+    float htmlTextHeight = 0.0f;
     /// A scrolling message frame keeps its own lines rather than a single
     /// string: chat is a list that grows at one end and falls off the other,
     /// and the frame draws as many as fit from the bottom up.
@@ -1400,7 +1407,8 @@ public:
     /// Never smaller than the child's own rect, so a frame that does set its
     /// own height (a HybridScrollFrame sets it from its rows) keeps it.
     /// Hidden frames do not count: a pool of buttons parked out of the way is
-    /// not content, and counting it scrolls into empty space.
+    /// not content, and counting it scrolls into empty space. A SimpleHTML's
+    /// text counts from its top down (htmlTextHeight).
     void scrollContentExtent(uint32_t childId, float& outW, float& outH);
 
     /// Something moved, resized or changed parent - every rect is stale.

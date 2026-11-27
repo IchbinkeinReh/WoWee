@@ -3018,6 +3018,41 @@ TEST_CASE("A scroll child's reach is its contents, not its declared size",
     }
 }
 
+// T426: a book page is a SimpleHTML in a scroll frame, and its paragraphs are
+// font strings hanging from its top, as wide as the page (0x0096cc90); the
+// scroll range is the union of the child's rect with what is in it
+// (0x0096b4c0 -> 0x004913c0). The page's own rect stays as its XML has it.
+TEST_CASE("A SimpleHTML's text reaches below its rect into the scroll range",
+          "[widget][scroll]") {
+    WidgetTree tree;
+    const uint32_t page = tree.create(WidgetKind::Frame, 0, "Page");
+    Widget* p = tree.get(page);
+    p->width = 270.0f;
+    p->height = 304.0f;
+    p->isSimpleHtml = true;
+    Anchor pa;
+    pa.point = "TOPLEFT";
+    pa.relativePoint = "TOPLEFT";
+    tree.addPoint(page, pa);
+    tree.layout(kScreenW, kScreenH);
+
+    tree.get(page)->text = "a long page";
+    tree.get(page)->htmlTextHeight = 330.0f;
+    float w = 0.0f, h = 0.0f;
+    tree.scrollContentExtent(page, w, h);
+    CHECK(h == Catch::Approx(330.0f));
+    CHECK(tree.get(page)->rectH == Catch::Approx(304.0f));
+
+    // Text that fits takes nothing more, and no text is none.
+    tree.get(page)->htmlTextHeight = 100.0f;
+    tree.scrollContentExtent(page, w, h);
+    CHECK(h == Catch::Approx(304.0f));
+    tree.get(page)->htmlTextHeight = 330.0f;
+    tree.get(page)->text.clear();
+    tree.scrollContentExtent(page, w, h);
+    CHECK(h == Catch::Approx(304.0f));
+}
+
 // An edit box paints its own text and caret, the way a status bar paints its
 // fill and a message frame its lines. Dropped from the draw order as "a frame
 // with nothing of its own to paint", the chat box still opened, took the focus

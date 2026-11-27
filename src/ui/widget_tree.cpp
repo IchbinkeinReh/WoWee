@@ -928,6 +928,13 @@ void WidgetTree::scrollContentExtent(uint32_t childId, float& outW, float& outH)
     // than it declares, never less.
     float minX = child->left,   maxX = child->left + child->rectW;
     float minY = child->bottom, maxY = child->bottom + child->rectH;
+    // A SimpleHTML's paragraphs hang from its top (0x0096cc90), and they are
+    // what is in it as much as any frame (0x004913c0).
+    const auto htmlText = [&](const Widget& w) {
+        if (w.isSimpleHtml && w.htmlTextHeight > 0.0f && !w.text.empty())
+            minY = std::min(minY, w.bottom + w.rectH - w.htmlTextHeight);
+    };
+    htmlText(*child);
 
     // Measured against the child's own frame rather than the screen: everything
     // under a scroll child moves with it, so the span between the outermost
@@ -948,6 +955,7 @@ void WidgetTree::scrollContentExtent(uint32_t childId, float& outW, float& outH)
             minY = std::min(minY, w->bottom);
             maxY = std::max(maxY, w->bottom + w->rectH);
         }
+        htmlText(*w);
         stack.insert(stack.end(), w->children.begin(), w->children.end());
     }
 
