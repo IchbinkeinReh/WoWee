@@ -4990,6 +4990,45 @@ TEST_CASE("a renamed guild bank tab shows its new name at once (0x005a4220)", "[
     CHECK(ui.is("select(2, GetGuildBankTabInfo(1)):find('INV_Misc_Herb_01') ~= nil"));
 }
 
+// T433: 0x006d92d0 case 10 writes the event's rank name (string 1) at its
+// rank (string 0) into the guild's cache entry, and the rank count
+// (string 2); the roster carries no names, so an added or renamed rank kept
+// none or its old one.
+TEST_CASE("a guild rank event names the rank (0x006d92d0 case 10)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& gh = s.handler();
+    wowee::game::Character self;
+    self.guid = Session::kPlayerGuid;
+    self.guildId = 5;
+    gh.charactersRef().push_back(self);
+    gh.setActiveCharacterGuid(self.guid);
+    wowee::network::Packet query(wowee::game::wireOpcode(Opcode::SMSG_GUILD_QUERY_RESPONSE));
+    query.writeUInt32(5);
+    query.writeString("Testgilde");
+    const char* ranks[10] = {"Meister", "Offizier", "Veteran", "Mitglied", "Anfänger", "", "", "", "", ""};
+    for (const char* r : ranks) query.writeString(r);
+    for (int i = 0; i < 5; ++i) query.writeUInt32(0);
+    query.writeUInt32(5);
+    s.receive(query);
+    REQUIRE(ui.is("GuildControlGetRankName(5) == 'Anfänger'"));
+    const auto rankEvent = [&s](const char* rank, const char* name, const char* count) {
+        wowee::network::Packet event(wowee::game::wireOpcode(Opcode::SMSG_GUILD_EVENT));
+        event.writeUInt8(10);
+        event.writeUInt8(3);
+        event.writeString(rank);
+        event.writeString(name);
+        event.writeString(count);
+        s.receive(event);
+    };
+    rankEvent("5", "TestRang", "6");
+    CHECK(ui.is("GuildControlGetRankName(6) == 'TestRang'"));
+    rankEvent("4", "Anfaenger2", "6");
+    CHECK(ui.is("GuildControlGetRankName(5) == 'Anfaenger2'"));
+    CHECK(ui.is("GuildControlGetRankName(1) == 'Meister'"));
+}
+
 // T414 (FIXER AA, found in code beside it): GetMapLandmarkInfo for an index
 // with no landmark ends in 0x00545a30's tail - seven values, nil, nil, 0, 0,
 // 0, nil, nil - not a single nil.

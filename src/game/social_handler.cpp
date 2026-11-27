@@ -1,5 +1,6 @@
 #include "core/app_clock.hpp"
 #include "core/crt_round.hpp"
+#include "game/client_text_copy.hpp"
 #include "game/lfg_roles.hpp"
 #include "game/group_defines.hpp"
 #include "core/local_time.hpp"
@@ -3731,6 +3732,20 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             owner_.requestGuildBankWithdrawMoney();
             break;
         case GuildEvent::RANK_UPDATED: {
+            // 0x006d92d0 case 10 first writes the rank into the guild's cache
+            // entry (0x0067d930): its name (string 1, as 0x007e1830 keeps it,
+            // 16 characters) at the rank (string 0), and the rank count
+            // (string 2, +0x2f8) - added and renamed ranks are only told
+            // here; the roster carries no names (T433).
+            if (data.numStrings >= 3 && !guildName_.empty()) {
+                const long rank = std::strtol(data.strings[0].c_str(), nullptr, 10);
+                if (rank >= 0 && rank < 10) {
+                    const std::string name = clientTextCopy(data.strings[1], 0x10, 0x40, true);
+                    guildQueryData_.rankNames[rank] = name;
+                    if (static_cast<size_t>(rank) < guildRankNames_.size()) guildRankNames_[rank] = name;
+                }
+                guildQueryData_.rankCount = static_cast<uint32_t>(std::strtoul(data.strings[2].c_str(), nullptr, 10));
+            }
             // 0x006d92d0 case 10: when the rank changed is the player's own
             // (PLAYER_GUILDRANK against the first string), its rights are asked
             // for again and so is the money it may take (0x005caa40:
@@ -3764,9 +3779,14 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
                     static_cast<uint8_t>(std::strtol(data.strings[0].c_str(), nullptr, 10)),
                     data.strings[1], data.strings[2]);
             break;
-        case GuildEvent::BANK_TEXT_CHANGED:
         case GuildEvent::RANK_DELETED:
-            // Silent here; the interface events they mean are fired below.
+            // Case 0xb: the rank count from string 0 into the guild's cache
+            // entry (+0x2f8), then as case 10.
+            if (data.numStrings >= 1 && !guildName_.empty())
+                guildQueryData_.rankCount = static_cast<uint32_t>(std::strtoul(data.strings[0].c_str(), nullptr, 10));
+            break;
+        case GuildEvent::BANK_TEXT_CHANGED:
+            // Silent here; the interface events it means are fired below.
             break;
         default:
             // Any other type - the tabard event (9) among them - is
