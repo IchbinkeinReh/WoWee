@@ -5300,10 +5300,12 @@ public:
     void checkInbox();
     /// GetInboxNumItems' second value: the mailbox's letters, shown or not.
     uint32_t getMailTotalCount() const;
-    /// GetLatestThreeSenders (0x0056f3a0): who sent the letters already at
-    /// the mailbox, from the server's latest three; a GM's letter (paper 61)
-    /// is named gmName.
-    std::vector<std::string> latestMailSenders(const std::string& gmName) const;
+    /// GetLatestThreeSenders (0x0056f3a0): the letters already at the
+    /// mailbox among the server's latest three (a sender guid or entry set,
+    /// no delay left), as letters for the inbox's sender name (0x0056d960):
+    /// type, sender guid or entry and paper. A calendar letter's (5) sender
+    /// is its guid here, so it comes back as type 0.
+    std::vector<MailMessage> latestMailLetters() const;
 
     // Bank
     void openBank(uint64_t guid);

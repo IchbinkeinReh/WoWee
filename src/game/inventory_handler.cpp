@@ -4849,7 +4849,9 @@ void InventoryHandler::handleQueryNextMailTime(network::Packet& packet) {
     nextMailTime_ = packet.readFloat();
     const uint32_t count = packet.readUInt32();
     size_t i = 0;
-    for (; i < pendingMail_.size() && i < count && packet.hasRemaining(28); ++i) {
+    // 24 bytes each (8 + 4 + 4 + 4 + 4): asking for 28 dropped the last one -
+    // a single letter on its way was never seen.
+    for (; i < pendingMail_.size() && i < count && packet.hasRemaining(24); ++i) {
         auto& p = pendingMail_[i];
         p.senderGuid = packet.readUInt64();
         p.senderEntry = packet.readUInt32();

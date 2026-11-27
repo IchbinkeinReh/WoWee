@@ -4604,17 +4604,22 @@ static int lua_GetKeyRingSize(lua_State* L) {
 //
 // From the server's list of letters on their way rather than the inbox, which
 // is only there at a mailbox; a sender leaves it once their letters are read.
+static std::string mailSenderName(game::GameHandler* gh, const game::MailMessage& mail);
+
 static int lua_GetLatestThreeSenders(lua_State* L) {
-    // 0x0056f3a0: as many names as letters have arrived from the server's
-    // latest three, none at all when there are none.
+    // 0x0056f3a0: one value per letter that has arrived from the server's
+    // latest three, named as the inbox names it (0x0056d960) - nil for a
+    // sender not known (yet), never a made-up name; none at all when there
+    // are none.
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    lua_getglobal(L, "GM_EMAIL_NAME");
-    const std::string gmName = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
-    lua_pop(L, 1);
-    const auto names = gh->latestMailSenders(gmName);
-    for (const auto& n : names) lua_pushstring(L, n.c_str());
-    return static_cast<int>(names.size());
+    const auto letters = gh->latestMailLetters();
+    for (const auto& letter : letters) {
+        const std::string name = mailSenderName(gh, letter);
+        if (name.empty()) lua_pushnil(L);
+        else lua_pushstring(L, name.c_str());
+    }
+    return static_cast<int>(letters.size());
 }
 
 // GetContainerItemDurability(bag, slot) → current, maximum (0x005d7ef0)

@@ -4398,3 +4398,35 @@ TEST_CASE("leaving a battleground queue waits for the realm (T407)", "[replay][i
     ui.run("AcceptBattlefieldPort(1, 1)");
     CHECK(ui.is("GetBattlefieldStatus(1) == 'confirm'"));
 }
+
+// T412 (FIXER Z): GetLatestThreeSenders (0x0056f3a0) names each letter as
+// the inbox does (0x0056d960): an auction house by its AuctionHouse.dbc row,
+// a creature or object by its cached name, a GM letter (paper 61) as
+// GM_EMAIL_NAME - and nil when there is no name, never 'Auction House' or
+// 'Unknown' in English. A slot with neither guid nor entry is skipped. Each
+// letter of MSG_QUERY_NEXT_MAIL_TIME is 24 bytes (0x0056daf0); the last one
+// was dropped for want of 28.
+TEST_CASE("the minimap mail senders are named as the inbox names them (T412)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet next(wowee::game::wireOpcode(Opcode::MSG_QUERY_NEXT_MAIL_TIME));
+    next.writeFloat(0.0f);
+    next.writeUInt32(3);
+    const auto letter = [&next](uint64_t guid, uint32_t entry, uint32_t type, uint32_t paper) {
+        next.writeUInt64(guid);
+        next.writeUInt32(entry);
+        next.writeUInt32(type);
+        next.writeUInt32(paper);
+        next.writeFloat(0.0f);
+    };
+    letter(0, 2, 2, 62);           // an auction house; no AuctionHouse.dbc here
+    letter(0, 987654, 3, 41);      // a creature nobody has asked about
+    letter(0x1234, 0, 0, 61);      // a GM's letter
+    s.receive(next);
+    CHECK(ui.is("select('#', GetLatestThreeSenders()) == 3"));
+    CHECK(ui.is("select(1, GetLatestThreeSenders()) == nil"));
+    CHECK(ui.is("select(2, GetLatestThreeSenders()) == nil"));
+    CHECK(ui.is("select(3, GetLatestThreeSenders()) ~= nil"));
+    CHECK(ui.is("select(3, GetLatestThreeSenders()) ~= 'Unknown'"));
+}
