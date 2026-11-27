@@ -3385,14 +3385,21 @@ void registerSocialLuaAPI(lua_State* L) {
                 gh->sayGameError(server_notice::kTargetNotInGroupS, {who ? who : ""});
                 return 0;
             }
+            // 1 or nil, not a boolean (T442): the number 1.0 where the flag is
+            // set (0x0084e2a0), nil where not (0x0084e280) - 0x0052ca00 and
+            // 0x00572950 alike.
+            const auto answer = [L](bool held) {
+                if (held) lua_pushnumber(L, 1);
+                else lua_pushnil(L);
+                return 1;
+            };
             for (const auto& mem : pd.members) {
-                if (mem.guid == guid) { lua_pushboolean(L, (mem.flags & bit) ? 1 : 0); return 1; }
+                if (mem.guid == guid) return answer((mem.flags & bit) != 0);
             }
-            if (raid && guid == gh->getPlayerGuid()) { lua_pushboolean(L, (pd.flags & bit) ? 1 : 0); return 1; }
+            if (raid && guid == gh->getPlayerGuid()) return answer((pd.flags & bit) != 0);
             // A token that named somebody outside the roster: the reference reads
             // the flags of the unit it resolved, finds none, and answers no.
-            lua_pushboolean(L, 0);
-            return 1;
+            return answer(false);
         }},
                 // The pair, and the two are not the same shape. Set is
                 // 0x0052e1b0 and asks the taint check (kind 4); Clear is
