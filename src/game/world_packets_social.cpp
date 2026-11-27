@@ -627,7 +627,7 @@ bool WhoResultParser::parse(network::Packet& packet, bool hasGender, std::vector
         e.level = packet.readUInt32();
         e.classId = packet.readUInt32();
         e.raceId = packet.readUInt32();
-        if (hasGender) packet.readUInt8();
+        if (hasGender) e.gender = packet.readUInt8();
         e.zoneId = packet.readUInt32();
         if (rows.size() < kMaxRows) rows.push_back(std::move(e));
     }

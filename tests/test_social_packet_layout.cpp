@@ -376,6 +376,9 @@ TEST_CASE("SMSG_WHO's rows read as 0x006b8720 reads them", "[who]") {
     CHECK(rows[0].zoneId == 1497u);
     CHECK(rows[1].guildName == "Die Gilde");
     CHECK(rows[1].zoneId == 3487u);
+    // The gender is kept: GetWhoInfo names race and class in it
+    // (0x006b4a80 -> 0x00715970 / 0x007159e0).
+    CHECK(rows[0].gender == 1u);
 
     // Cut short: what was read stands, and it says so.
     Writer cut;

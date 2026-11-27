@@ -3971,9 +3971,18 @@ void registerSocialLuaAPI(lua_State* L) {
             // The race and class by their localized names and the zone by its
             // own, as the panel shows them (the zone was always empty, and
             // the race and class English).
-            const std::string raceName = gh->getWhoRaceName(w.raceId);
-            const std::string className = gh->getWhoClassName(w.classId);
-            const std::string zoneName = gh->getWhoAreaName(w.zoneId);
+            // In the row's gender (0x00715970 / 0x007159e0 with the
+            // gender the realm sent: Name_male, Name_female, Name); a race,
+            // class or zone the tables lack is the localized UNKNOWN.
+            const std::string unknown = game::interfaceString("UNKNOWN", "Unknown");
+            std::string raceName = localizedRaceName(gh, w.raceId, w.gender);
+            if (raceName.empty()) raceName = gh->getWhoRaceName(w.raceId);
+            std::string className = localizedClassName(gh, w.classId, w.gender);
+            if (className.empty()) className = gh->getWhoClassName(w.classId);
+            std::string zoneName = gh->getWhoAreaName(w.zoneId);
+            if (raceName.empty()) raceName = unknown;
+            if (className.empty()) className = unknown;
+            if (zoneName.empty()) zoneName = unknown;
             lua_pushstring(L, w.name.c_str());
             lua_pushstring(L, w.guildName.c_str());
             lua_pushnumber(L, w.level);

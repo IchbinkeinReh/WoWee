@@ -13,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -251,6 +252,10 @@ public:
     // order. The last field of each PLAYER_QUEST_LOG slot is when the quest
     // fails, as a Unix timestamp; zero means the quest is not timed.
     [[nodiscard]] std::vector<std::pair<uint32_t, uint32_t>> getQuestTimers() const;
+    // 0x005e4320: the seconds left on one PLAYER_QUEST_LOG slot's timer, less
+    // one and never under zero; none where the slot has no timer or its state
+    // says failed (bit 2).
+    [[nodiscard]] std::optional<uint32_t> questSlotTimeLeft(int slot) const;
     // Server-side quest log capacity: 20 slots in Vanilla/Turtle, 25 from TBC on
     [[nodiscard]] int maxQuestLogSlots() const;
     // QuestSort.dbc name ("Seasonal", class/profession sorts, ...) for negative

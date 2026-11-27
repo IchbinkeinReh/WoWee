@@ -1815,6 +1815,22 @@ std::vector<std::pair<uint32_t, uint32_t>> QuestHandler::getQuestTimers() const 
     return timers;
 }
 
+std::optional<uint32_t> QuestHandler::questSlotTimeLeft(int slot) const {
+    const auto& fields = owner_.lastPlayerFieldsRef();
+    const uint8_t qStride = owner_.getPacketParsers() ? owner_.getPacketParsers()->questLogStride() : 5;
+    if (slot < 0 || slot >= maxQuestLogSlots() || qStride < 3 || fields.empty()) return std::nullopt;
+    const uint16_t idField = static_cast<uint16_t>(fieldIndex(UF::PLAYER_QUEST_LOG_START) + slot * qStride);
+    const auto field = [&](uint16_t f) {
+        const auto it = fields.find(f);
+        return it != fields.end() ? it->second : 0u;
+    };
+    const uint32_t expiry = field(static_cast<uint16_t>(idField + qStride - 1));
+    if (expiry == 0 || (field(static_cast<uint16_t>(idField + 1)) & 2u) != 0) return std::nullopt;
+    const auto now = static_cast<int64_t>(std::time(nullptr));
+    const int64_t left = static_cast<int64_t>(expiry) - now - 1;
+    return static_cast<uint32_t>(left > 0 ? left : 0);
+}
+
 int QuestHandler::findQuestLogSlotIndexFromServer(uint32_t questId) const {
     if (questId == 0 || owner_.lastPlayerFieldsRef().empty()) return -1;
     const uint16_t ufQuestStart = fieldIndex(UF::PLAYER_QUEST_LOG_START);

@@ -305,18 +305,20 @@ static int lua_GetNumQuestLogEntries(lua_State* L) {
 // None of these appeared in a scan of either frame's own file, because the
 // panel that draws the rewards is a third file they both pull in.
 
-// GetQuestLogTimeLeft() → seconds left on the selected quest, or nil.
-// Backed by the same PLAYER_QUEST_LOG expiry the tracker's timers read.
+// GetQuestLogTimeLeft() → seconds left on the selected quest, or nil
+// (0x005e4320): the quest log slot of the selected row, slot 0 with none
+// selected; its timer less the time now, less one, never under zero; nil
+// for a slot with no timer or one whose state says failed.
 static int lua_GetQuestLogTimeLeft(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) return luaReturnNil(L);
-    const auto* q = gh->getSelectedQuest();   // 0x005e4320
-    if (!q) return luaReturnNil(L);
-    const uint32_t questId = q->questId;
-    for (const auto& t : gh->getQuestTimers()) {
-        if (t.first == questId) { lua_pushnumber(L, t.second); return 1; }
-    }
-    return luaReturnNil(L);   // not a timed quest
+    auto* quests = gh ? gh->getQuestHandler() : nullptr;
+    if (!quests) return luaReturnNil(L);
+    const auto* q = gh->getSelectedQuest();
+    const int slot = q ? quests->findQuestLogSlotIndexFromServer(q->questId) : 0;
+    const auto left = quests->questSlotTimeLeft(slot);
+    if (!left) return luaReturnNil(L);
+    lua_pushnumber(L, *left);
+    return 1;
 }
 
 // Defined further down, with the other quest-log readers.

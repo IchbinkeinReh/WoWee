@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -5872,4 +5873,62 @@ TEST_CASE("an empty script element clears the inherited handler (T419, 0x0048fef
     CHECK(ui.is("type(PlayBar:GetScript('OnHide')) == 'function'"));
     ui.run("PlayBar:Show()");
     CHECK(ui.is("shownBy == nil"));
+}
+
+// Found by AE in code: GetQuestLogTimeLeft (0x005e4320) reads the quest log
+// slot of the selected row - slot 0 with nothing selected - and answers its
+// timer less now, less one; nil for no timer or a failed slot.
+TEST_CASE("GetQuestLogTimeLeft answers slot 0 with nothing selected", "[replay][interface][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto field = [](uint16_t slot, uint16_t word) {
+        return static_cast<uint16_t>(wowee::game::fieldIndex(UF::PLAYER_QUEST_LOG_START) + slot * 5 + word);
+    };
+    const auto expiry = static_cast<uint32_t>(std::time(nullptr) + 600);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 9387}}));
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{field(0, 4), expiry}}));
+    REQUIRE(s.handler().getSelectedQuest() == nullptr);
+    ui.run("left = GetQuestLogTimeLeft()");
+    CHECK(ui.is("type(left) == 'number' and left >= 597 and left <= 599"));
+    // A failed slot has no timer.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{field(0, 1), 2}}));
+    CHECK(ui.is("GetQuestLogTimeLeft() == nil"));
+    // Run out: zero, not under it.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{field(0, 1), 0}, {field(0, 4), 1}}));
+    CHECK(ui.is("GetQuestLogTimeLeft() == 0"));
+}
+
+// Found by AE in code: GetWhoInfo (0x006b4a80) names a race, class or zone
+// the tables lack with the localized UNKNOWN, never an empty string.
+TEST_CASE("GetWhoInfo names an unknown zone UNKNOWN", "[replay][interface][who]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("SetWhoToUI(1)");
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_WHO));
+    p.writeUInt32(1);
+    p.writeUInt32(1);
+    p.writeString("Locki");
+    p.writeString("");
+    p.writeUInt32(80);
+    p.writeUInt32(8);
+    p.writeUInt32(10);
+    p.writeUInt8(1);
+    p.writeUInt32(987654);  // no such area
+    s.receive(p);
+    CHECK(ui.is("GetNumWhoResults() == 1"));
+    CHECK(ui.is("select(6, GetWhoInfo(1)) == 'Unknown'"));
+    CHECK(ui.is("select(1, GetWhoInfo(1)) == 'Locki'"));
+}
+
+// Found by AE in code: GetSpellTabInfo for a tab out of range answers nil,
+// nil and four zeroes (0x0053be70), not two empty strings.
+TEST_CASE("GetSpellTabInfo out of range: nil name and texture, zero counts", "[replay][interface][spell]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("(function() local n, t, o, c, ho, hc = GetSpellTabInfo(9) "
+                "return n == nil and t == nil and o == 0 and c == 0 and ho == 0 and hc == 0 end)()"));
+    CHECK(ui.is("select('#', GetSpellTabInfo(9)) == 6"));
 }

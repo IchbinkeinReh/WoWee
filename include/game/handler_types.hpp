@@ -197,6 +197,7 @@ struct WhoEntry {
     uint32_t classId  = 0;
     uint32_t raceId   = 0;
     uint32_t zoneId   = 0;
+    uint8_t  gender   = 0;  ///< 0 male, 1 female (WotLK sends it; older ones do not)
 };
 
 // ---- Battleground ----

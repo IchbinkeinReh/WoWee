@@ -1067,11 +1067,13 @@ static int lua_GetSpellTabInfo(lua_State* L) {
     // nil made that a raise inside OnLoad, which loses the whole file.
     // SpellBookFrame.xml was failing to load outright.
     //
-    // Six zeroes give a book with no pages, which is what a player with no
-    // spells yet has, and the frame loads and fills in when they arrive.
+    // Four zeroes give a book with no pages, which is what a player with no
+    // spells yet has, and the frame loads and fills in when they arrive. The
+    // name and texture are nil, as 0x0053be70 answers a tab out of range
+    // (nil, nil, 0, 0, 0, 0): an addon's `if name then` hides such a tab.
     auto emptyTab = [](lua_State* s) {
-        lua_pushstring(s, "");   // name
-        lua_pushstring(s, "");   // texture
+        lua_pushnil(s);          // name
+        lua_pushnil(s);          // texture
         lua_pushnumber(s, 0);    // offset
         lua_pushnumber(s, 0);    // numSpells
         lua_pushnumber(s, 0);    // highestRankOffset
