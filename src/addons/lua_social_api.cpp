@@ -744,8 +744,9 @@ std::vector<const game::GuildRosterMember*> guildRosterView(game::GameHandler* g
         else if (by == "rank")   { if (a->rankIndex != b->rankIndex) return a->rankIndex < b->rankIndex; }
         else if (by == "note")   { if (a->publicNote != b->publicNote) return a->publicNote < b->publicNote; }
         else if (by == "zone")   {
-            const std::string za = a->online ? gh->getWhoAreaName(a->zoneId) : std::string();
-            const std::string zb = b->online ? gh->getWhoAreaName(b->zoneId) : std::string();
+            // By the zone shown, which is an offline member's last one too.
+            const std::string za = gh->getWhoAreaName(a->zoneId);
+            const std::string zb = gh->getWhoAreaName(b->zoneId);
             if (za != zb) return za < zb;
         } else if (by == "online") {
             // Longest offline last, which is what the "last online" column
@@ -888,13 +889,25 @@ static int lua_GetNumGuildMembers(lua_State* L) {
     return 1;
 }
 
-// GetGuildRosterInfo(index) → name, rank, rankIndex, level, class, zone, note, officerNote, online, status, classId
+// GetGuildRosterInfo(index) → name, rank, rankIndex, level, class, zone, note,
+// officerNote, online, status, classFileName (0x005cc9c0): the usage line for
+// a non-number; the index rounded; past the roster (or before it) eleven
+// values all the same - nil, nil, 0, 0, five nils, "", nil.
 static int lua_GetGuildRosterInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetGuildRosterInfo(index)");
     auto* gh = getGameHandler(L);
-    int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) { return luaReturnNil(L); }
+    const long index = std::lrint(lua_tonumber(L, 1));
     const auto view = guildRosterView(gh);
-    if (index > static_cast<int>(view.size())) { return luaReturnNil(L); }
+    if (!gh || index < 1 || index > static_cast<long>(view.size())) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
+        for (int i = 0; i < 5; ++i) lua_pushnil(L);
+        lua_pushstring(L, "");
+        lua_pushnil(L);
+        return 11;
+    }
     const auto& m = *view[static_cast<size_t>(index) - 1];
 
     lua_pushstring(L, m.name.c_str());                      // 1: name
@@ -903,10 +916,16 @@ static int lua_GetGuildRosterInfo(lua_State* L) {
         ? rankNames[m.rankIndex].c_str() : "");              // 2: rank name
     lua_pushnumber(L, m.rankIndex);                          // 3: rankIndex
     lua_pushnumber(L, m.level);                              // 4: level
-    lua_pushstring(L, m.classId < 12 ? localizedClassName(gh, m.classId, 2).c_str() : "Unknown"); // 5: class
-    std::string zone;
-    if (m.zoneId != 0 && m.online) zone = gh->getWhoAreaName(m.zoneId);
-    if (zone.empty()) lua_pushnil(L);                        // 6: zone, nil when unknown
+    // 5: the class's name for the member's gender (0x007159e0 with the
+    // roster's gender at +0x40: the female name for a woman where the row
+    // has one), nil for a class without a row.
+    const std::string className = m.classId < 12 ? localizedClassName(gh, m.classId, m.gender) : std::string();
+    if (className.empty()) lua_pushnil(L);
+    else lua_pushstring(L, className.c_str());
+    // 6: the zone the roster gives (+0x44, AreaTable), for a member offline
+    // as well - where they were last - nil when it has no name.
+    const std::string zone = m.zoneId != 0 ? gh->getWhoAreaName(m.zoneId) : std::string();
+    if (zone.empty()) lua_pushnil(L);
     else lua_pushstring(L, zone.c_str());
     lua_pushstring(L, m.publicNote.c_str());                 // 7: note
     lua_pushstring(L, m.officerNote.c_str());                // 8: officerNote

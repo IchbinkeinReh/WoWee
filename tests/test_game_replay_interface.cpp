@@ -2138,6 +2138,10 @@ TEST_CASE("a companion is filed, shown out and sent away as 12340 does", "[repla
     CHECK(ui.is("select(3, GetCompanionInfo('CRITTER', 1)) == 62609 and select(1, GetCompanionInfo('CRITTER', 1)) == 33238"));
     CHECK(ui.is("select(3, GetCompanionInfo('MOUNT', 1)) == 6654"));
     CHECK(ui.is("not select(5, GetCompanionInfo('CRITTER', 1)) and not select(5, GetCompanionInfo('CRITTER', 2))"));
+    // Past the list, or before it, nothing at all (0x0053e2c0 returns 0).
+    CHECK(ui.is("select('#', GetCompanionInfo('CRITTER', 3)) == 0"));
+    CHECK(ui.is("select('#', GetCompanionInfo('MOUNT', 2)) == 0"));
+    CHECK(ui.is("select('#', GetCompanionInfo('CRITTER', -1)) == 0"));
 
     ui.run("heard = {} local f = CreateFrame('Frame') f:RegisterEvent('COMPANION_UPDATE') "
            "f:SetScript('OnEvent', function(self, event, kind) heard[#heard + 1] = kind end)");
@@ -5291,6 +5295,50 @@ TEST_CASE("a guild rank event names the rank (0x006d92d0 case 10)", "[replay][in
     CHECK(ui.is("GuildControlGetRankName(5) == ''"));
     CHECK(ui.is("GuildControlGetRankName(6) == ''"));
     CHECK(ui.is("GuildControlGetRankName(1.4) == 'Meister'"));
+
+    // Found by AL in code: GetGuildRosterInfo (0x005cc9c0) answers eleven
+    // values past the roster - nil, nil, 0, 0, five nils, "", nil - the
+    // usage line for a non-number, and an offline member's row whole.
+    wowee::network::Packet members(wowee::game::wireOpcode(Opcode::SMSG_GUILD_ROSTER));
+    members.writeUInt32(2);
+    members.writeString("");
+    members.writeString("");
+    members.writeUInt32(4);
+    for (int r = 0; r < 4; ++r)
+        for (int i = 0; i < 14; ++i) members.writeUInt32(0);
+    const auto member = [&members](uint64_t guid, uint8_t status, const char* name, uint8_t gender) {
+        members.writeUInt64(guid);
+        members.writeUInt8(status);
+        members.writeString(name);
+        members.writeUInt32(3);       // rank
+        members.writeUInt8(70);       // level
+        members.writeUInt8(9);        // class
+        members.writeUInt8(gender);
+        members.writeUInt32(1637);    // zone
+        if (status == 0) members.writeFloat(2.5f);
+        members.writeString("note");
+        members.writeString("");
+    };
+    member(0x11, 1, "Aona", 1);
+    member(0x12, 0, "Bern", 0);
+    s.receive(members);
+    ui.run("SetGuildRosterShowOffline(1)");
+    REQUIRE(ui.is("GetNumGuildMembers(true) == 2"));
+    CHECK(ui.is("select('#', GetGuildRosterInfo(3)) == 11"));
+    CHECK(ui.is("select('#', GetGuildRosterInfo(0)) == 11"));
+    CHECK(ui.is("select(3, GetGuildRosterInfo(3)) == 0 and select(4, GetGuildRosterInfo(3)) == 0"));
+    CHECK(ui.is("select(10, GetGuildRosterInfo(3)) == '' and select(1, GetGuildRosterInfo(3)) == nil"));
+    CHECK(ui.is("(function() local ok, e = pcall(GetGuildRosterInfo, 'x') "
+                "return not ok and e:find('Usage: GetGuildRosterInfo%(index%)') ~= nil end)()"));
+    CHECK(ui.is("select(1, GetGuildRosterInfo(1.4)) == 'Aona' and select(9, GetGuildRosterInfo(1)) == 1"));
+    CHECK(ui.is("select(1, GetGuildRosterInfo(2)) == 'Bern' and select(9, GetGuildRosterInfo(2)) == nil"));
+    CHECK(ui.is("select(4, GetGuildRosterInfo(2)) == 70 and select(11, GetGuildRosterInfo(2)) == 'WARLOCK'"));
+    // The zone is the roster's for a member offline too (+0x44 read without
+    // the online flag); no area names here, so the binding itself.
+    const std::string api = wowee::test::slurp("src/addons/lua_social_api.cpp");
+    REQUIRE_FALSE(api.empty());
+    CHECK(api.find("m.zoneId != 0 && m.online") == std::string::npos);
+    CHECK(api.find("localizedClassName(gh, m.classId, m.gender)") != std::string::npos);
 }
 
 // T414 (FIXER AA, found in code beside it): GetMapLandmarkInfo for an index

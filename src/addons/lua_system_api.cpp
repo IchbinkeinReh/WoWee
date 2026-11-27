@@ -9324,17 +9324,19 @@ void registerSystemLuaAPI(lua_State* L) {
                 // "MOUNT" or "CRITTER". Both are spells the player knows, told
                 // apart by what the spell does - see rebuildCompanions.
                 // GetCompanionInfo(type, index) (0x0053e2c0): the type and a
-                // non-zero index, or the usage line; the index rounded.
+                // non-zero index, or the usage line; the index rounded. An
+                // index past the list answers nothing at all (index - 1 not
+                // below the count: return 0), not a nil.
                 {"GetCompanionInfo", [](lua_State* L) -> int {
             const int type = companionTypeArg(L, 1);
             const long idx = companionIndexArg(L, 2);
             if (type < 0 || idx == 0) return luaL_error(L, "Usage: GetCompanionInfo(type, index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(idx);
-            if (!gh || index < 1) return luaReturnNil(L);
+            if (!gh || index < 1) return 0;
             const bool mounts = type == 1;
             const auto& list = gh->getCompanions(mounts);
-            if (index > static_cast<int>(list.size())) return luaReturnNil(L);
+            if (index > static_cast<int>(list.size())) return 0;
             const auto& c = list[static_cast<size_t>(index) - 1];
             // The creature itself, for a critter and a mount alike, and its
             // name - nil until the cache has it, which is asked here
