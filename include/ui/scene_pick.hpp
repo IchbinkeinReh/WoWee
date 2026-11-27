@@ -9,9 +9,12 @@
 // way, which is exactly how one of them quietly diverges. What genuinely
 // differs between them is expressed as parameters instead.
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include <cmath>
 
@@ -124,6 +127,44 @@ struct ScenePick {
         return mouseoverObjectGuid != 0 ? mouseoverObjectGuid : mouseoverCorpseGuid;
     }
 };
+
+/// A unit whose sphere the ray meets: its centre and where along the ray no
+/// part of it can be nearer.
+struct UnitCandidate {
+    uint64_t guid = 0;
+    float centerT = 0.0f;
+    float sphereT = 0.0f;
+};
+
+/// Where the ray first meets the triangles of one of these units.
+struct UnitTriangleHit {
+    size_t index = 0;
+    float t = 0.0f;
+};
+
+/// Of units whose spheres the ray meets, the one whose triangles it meets
+/// first (0x004f9550 -> 0x0081df10's first pass tests the model triangles of
+/// every candidate, the living and the dead alike); none when it meets no
+/// unit's triangles, and the spheres decide. Nearest sphere first: one the
+/// ray enters only past a body already met cannot be in front of it and is
+/// not tested. `trianglesAt(guid, reach)` is where the ray meets that unit's
+/// triangles within the reach. Sorts the list.
+inline std::optional<UnitTriangleHit> frontUnitByTriangles(
+    std::vector<UnitCandidate>& hits, const std::function<std::optional<float>(uint64_t, float)>& trianglesAt) {
+    std::sort(hits.begin(), hits.end(),
+              [](const UnitCandidate& a, const UnitCandidate& b) { return a.sphereT < b.sphereT; });
+    std::optional<UnitTriangleHit> best;
+    float front = 1e30f;
+    for (size_t i = 0; i < hits.size(); ++i) {
+        if (hits[i].sphereT > front) break;
+        const auto at = trianglesAt(hits[i].guid, front);
+        if (at && (!best || *at < best->t)) {
+            best = UnitTriangleHit{i, *at};
+            front = *at;
+        }
+    }
+    return best;
+}
 
 /// Called for every entity the ray hits, so a caller can gather what only it
 /// cares about (a hooked fishing bobber, quest objective objects) without

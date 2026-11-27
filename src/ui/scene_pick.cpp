@@ -68,14 +68,10 @@ ScenePick pickScene(game::GameHandler& gameHandler,
         return worldT < 1e29f && t > worldT + kOcclusionSlack;
     };
 
-    // The living units whose spheres the ray meets, for the triangle test
-    // below when there is more than one.
-    struct UnitCandidate {
-        uint64_t guid;
-        float centerT;
-        float sphereT;  // no body of it nearer along the ray than this
-    };
+    // The units whose spheres the ray meets, living and dead apart, for the
+    // triangle test below when there is more than one.
     std::vector<UnitCandidate> livingHits;
+    std::vector<UnitCandidate> deadHits;
 
     for (const auto& [guid, entity] : gameHandler.getEntityManager().getEntities()) {
         if (!entity) continue;
@@ -167,6 +163,7 @@ ScenePick pickScene(game::GameHandler& gameHandler,
                     pick.deadUnitCenterT = centerT;
                     pick.deadUnitGuid = guid;
                 }
+                deadHits.push_back({guid, centerT, std::max(centerT - hitRadius, 0.0f)});
             } else {
                 // Whatever its reaction: 0x004f9550 ranks the models it meets by
                 // what they are (0x004f6270 - living, lootable corpse, object),
@@ -215,23 +212,24 @@ ScenePick pickScene(game::GameHandler& gameHandler,
     // already met cannot be in front of it, and is not skinned at all.
     // And against an object: whichever's triangles are in front.
     auto& app = core::Application::getInstance();
+    const auto trianglesAt = [&app, &ray](uint64_t guid, float reach) {
+        return app.rayHitUnit(guid, ray.origin, ray.direction, reach);
+    };
     if (livingHits.size() > 1 || (!livingHits.empty() && pick.objectGuid != 0)) {
-        std::sort(livingHits.begin(), livingHits.end(),
-                  [](const UnitCandidate& a, const UnitCandidate& b) { return a.sphereT < b.sphereT; });
-        std::vector<std::optional<float>> precise(livingHits.size());
-        float front = 1e30f;
-        for (size_t i = 0; i < livingHits.size(); ++i) {
-            if (livingHits[i].sphereT > front) break;
-            precise[i] = app.rayHitUnit(livingHits[i].guid, ray.origin, ray.direction, front);
-            if (precise[i]) front = *precise[i];
+        if (const auto best = frontUnitByTriangles(livingHits, trianglesAt)) {
+            pick.livingUnitGuid = livingHits[best->index].guid;
+            pick.livingUnitCenterT = livingHits[best->index].centerT;
+            pick.unitT = best->t;
         }
-        if (const auto best = rendering::ray_mesh::nearestPrecise(precise)) {
-            pick.livingUnitGuid = livingHits[*best].guid;
-            pick.livingUnitCenterT = livingHits[*best].centerT;
-            pick.unitT = *precise[*best];
+    } else if (livingHits.empty() && (deadHits.size() > 1 || (!deadHits.empty() && pick.objectGuid != 0))) {
+        // Bodies lying on one another: the one whose triangles are in front
+        // at the pointer, so pointing at what shows of the lower one picks
+        // it (0x0081df10 tests the dead as the living).
+        if (const auto best = frontUnitByTriangles(deadHits, trianglesAt)) {
+            pick.deadUnitGuid = deadHits[best->index].guid;
+            pick.deadUnitCenterT = deadHits[best->index].centerT;
+            pick.unitT = best->t;
         }
-    } else if (livingHits.empty() && pick.deadUnitGuid != 0 && pick.objectGuid != 0) {
-        if (const auto at = app.rayHitUnit(pick.deadUnitGuid, ray.origin, ray.direction, 1e30f)) pick.unitT = *at;
     }
 
     return pick;
