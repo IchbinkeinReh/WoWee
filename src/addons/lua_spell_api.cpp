@@ -2056,11 +2056,26 @@ void registerSpellLuaAPI(lua_State* L) {
             if (gh && !game::isPreWotlk()) gh->leaveShapeshiftForm();
             return 0;
         }},
-                // GetShapeshiftFormCooldown is defined in the bootstrap, over
-                // GetShapeshiftFormInfo and GetSpellCooldown, because those are
-                // in two different files and it needs both. A stub here would
-                // be dead - the bootstrap runs after these are registered - and
-                // framexml_lua_override_check exists to catch exactly that.
+                {"GetShapeshiftFormCooldown", [](lua_State* L) -> int {
+            // 0x0053c180: a non-zero number or the usage line; the place has
+            // its fraction cut (control word | 0xc00 round the fistp), and a
+            // place on the bar (count 0x00be8e28) answers its
+            // spell's cooldown by id (0x00be8e2c[i] -> 0x00809000, as
+            // GetSpellCooldown), any other 0, 0, 1. It went by the form's
+            // name before, which finds another spell of that name.
+            const double asked = lua_isnumber(L, 1) ? lua_tonumber(L, 1) : 0.0;
+            if (asked == 0.0) return luaL_error(L, "Usage: GetShapeshiftFormCooldown(index)");
+            auto* gh = getGameHandler(L);
+            const long long index = static_cast<long long>(std::trunc(asked));
+            const auto spells = gh ? gh->stanceBarSpells() : std::vector<uint32_t>{};
+            if (index < 1 || static_cast<unsigned long long>(index) > spells.size()) {
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 1);
+                return 3;
+            }
+            return pushHistoryCooldown(L, gh->playerSpellCooldown(spells[static_cast<size_t>(index) - 1]));
+        }},
                 {"GetShapeshiftForm", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return luaReturnZero(L);

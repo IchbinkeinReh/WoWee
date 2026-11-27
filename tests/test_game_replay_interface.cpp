@@ -6639,3 +6639,43 @@ TEST_CASE("a skill-up redraws an open trade skill window (T446)", "[replay][inte
     rank(7, 150);  // the most moving too
     CHECK(ui.is("updates == 2"));
 }
+
+// 0x0053c180: a stance bar place answers its own spell's cooldown, by id - two
+// forms of one name are two cooldowns.
+TEST_CASE("GetShapeshiftFormCooldown answers the place's spell by id", "[replay][interface][stancebar]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80},
+                   {UF::UNIT_FIELD_BYTES_0, 1u | (11u << 8)}});
+    constexpr uint32_t kCat = 768, kTravel = 783;
+    for (const auto& [id, order] : {std::pair<uint32_t, int32_t>{kCat, 2}, {kTravel, 3}}) {
+        auto& e = s.handler().spellNameCacheRef()[id];
+        e.name = "Gestalt";
+        e.effectIds[0] = 6;
+        e.effectAuraIds[0] = 36;
+        e.stanceBarOrder = order;
+        e.activeIconId = 122;
+        e.recoveryMs = 10000;
+    }
+    Interface ui(s);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_INITIAL_SPELLS));
+    p.writeUInt8(0);
+    p.writeUInt16(2);
+    for (uint32_t id : {kCat, kTravel}) {
+        p.writeUInt32(id);
+        p.writeUInt16(0);
+    }
+    p.writeUInt16(1);
+    p.writeUInt32(kTravel);
+    p.writeUInt16(0);
+    p.writeUInt16(0);
+    p.writeUInt32(8000);
+    p.writeUInt32(0);
+    s.receive(p);
+    REQUIRE(s.handler().stanceBarSpells() == std::vector<uint32_t>{kCat, kTravel});
+    CHECK(ui.is("select(2, GetShapeshiftFormCooldown(2)) == 10"));
+    CHECK(ui.is("select(2, GetShapeshiftFormCooldown(2.9)) == 10"));
+    CHECK(ui.is("select(2, GetShapeshiftFormCooldown(1)) == 0"));
+    CHECK(ui.is("(function() local a, b, c = GetShapeshiftFormCooldown(3) return a == 0 and b == 0 and c == 1 end)()"));
+    CHECK(ui.is("(function() local a, b, c = GetShapeshiftFormCooldown(-1) return a == 0 and b == 0 and c == 1 end)()"));
+    CHECK(ui.is("not pcall(GetShapeshiftFormCooldown, 'x')"));
+}
