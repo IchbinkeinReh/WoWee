@@ -21,6 +21,7 @@
 #include "ui/framexml_takeover.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "pipeline/stream_wait.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/imgui_blend.hpp"
 #include "rendering/imgui_texture.hpp"
@@ -143,6 +144,12 @@ std::vector<uint8_t> WidgetRenderer::readTextureFile(const std::string& path,
 
     std::string resolved = textureFileOf(path);
     auto data = assets_->readFile(resolved);
+    // Streaming, under texture()'s NoWait: still on its way, not missing -
+    // no other spelling is tried and nothing is remembered.
+    if (data.empty() && pipeline::stream_wait::deferredNow()) {
+        resolvedOut = resolved;
+        return data;
+    }
     if (data.empty()) {
         // The interface is WotLK's; the assets are whichever expansion this
         // install carries, and the two do not always agree on a folder. The
@@ -163,6 +170,7 @@ std::vector<uint8_t> WidgetRenderer::readTextureFile(const std::string& path,
             alt.replace(at, std::strlen(swap.from), swap.to);
             data = assets_->readFile(alt);
             if (!data.empty()) { resolved = alt; break; }
+            if (pipeline::stream_wait::deferredNow()) return {};
         }
     }
     if (data.empty()) {
@@ -179,8 +187,17 @@ VkDescriptorSet WidgetRenderer::texture(const std::string& path, uint8_t variant
     if (it != textures_.end()) return it->second;
     if (!assets_ || !vkCtx_ || path.empty()) return kMissing;
 
+    // On the main thread in play: streaming, a file not here yet is fetched
+    // in the background and asked for again next frame (the draw wants every
+    // uncached texture it shows), drawn as nothing until then - a buff icon
+    // on mounting no longer holds the frame for the server.
     std::string resolved;
-    auto data = readTextureFile(path, resolved);
+    std::vector<uint8_t> data;
+    {
+        pipeline::stream_wait::NoWait noWait;
+        data = readTextureFile(path, resolved);
+        if (data.empty() && noWait.deferred()) return kMissing;
+    }
     if (data.empty()) {
         LOG_WARNING("Widget texture not found: ", path);
         textures_[key] = kMissing;
