@@ -3740,7 +3740,8 @@ void GameHandler::runInterfaceCommand(const std::string& lua) const {
 }
 
 void GameHandler::requestGuildBankLog(uint8_t tab) {
-    if (socialHandler_) socialHandler_->requestGuildBankLog(tab);
+    // At a banker only (0x005a58c0), which the inventory handler knows.
+    if (inventoryHandler_) inventoryHandler_->requestGuildBankLog(tab);
 }
 
 const std::vector<GuildBankLogEntry>& GameHandler::getGuildBankLog(uint8_t tab) const {

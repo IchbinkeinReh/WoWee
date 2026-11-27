@@ -4744,3 +4744,336 @@ TEST_CASE("GetMapLandmarkInfo answers seven values past the last landmark (0x005
     CHECK(ui.is("select(2, GetMapLandmarkInfo(999)) == nil"));
     CHECK(ui.is("select(7, GetMapLandmarkInfo(999)) == nil"));
 }
+
+namespace {
+// A guild bank at banker 0x77 for rank 0: tab 1 deposit and ten a day, tab
+// 2 view only, tab 3 deposit and none a day. Tab 1 holds 5 and 18 of 2589
+// (a stack of twenty) in slots 1 and 2 and one 4306 in slot 3.
+void openTestGuildBank(Session& s) {
+    auto& gh = s.handler();
+    wowee::game::Character self;
+    self.guid = Session::kPlayerGuid;
+    self.guildId = 5;
+    gh.charactersRef().push_back(self);
+    gh.setActiveCharacterGuid(self.guid);
+    wowee::network::Packet perms(wowee::game::wireOpcode(Opcode::MSG_GUILD_PERMISSIONS));
+    perms.writeUInt32(0);           // rank
+    perms.writeUInt32(0);           // rights
+    perms.writeUInt32(0);           // gold a day
+    perms.writeUInt8(3);            // tabs bought
+    const uint32_t tabs[6][2] = {{0x3, 10}, {0x1, 10}, {0x3, 0}, {0, 0}, {0, 0}, {0, 0}};
+    for (const auto& t : tabs) {
+        perms.writeUInt32(t[0]);
+        perms.writeUInt32(t[1]);
+    }
+    s.receive(perms);
+    auto& info = gh.itemInfoCacheRef()[2589];
+    info.entry = 2589;
+    info.valid = true;
+    info.maxStack = 20;
+    gh.openGuildBank(0x77);
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_GUILD_BANK_LIST));
+    list.writeUInt64(0);            // money
+    list.writeUInt8(0);             // tab
+    list.writeUInt32(10);           // withdrawals left
+    list.writeUInt8(1);             // full update, with the tab names
+    list.writeUInt8(3);
+    for (int i = 0; i < 3; ++i) {
+        list.writeString("Tab");
+        list.writeString("INV_Misc_QuestionMark");
+    }
+    const uint32_t slots[3][3] = {{0, 2589, 5}, {1, 2589, 18}, {2, 4306, 1}};
+    list.writeUInt8(3);
+    for (const auto& sl : slots) {
+        list.writeUInt8(static_cast<uint8_t>(sl[0]));
+        list.writeUInt32(sl[1]);
+        list.writeUInt32(0);        // flags
+        list.writeUInt32(0);        // random property
+        list.writeUInt32(sl[2]);    // stack
+        list.writeUInt32(0);        // enchantment
+        list.writeUInt8(0);         // charges
+        list.writeUInt8(0);         // sockets
+    }
+    s.receive(list);
+}
+
+struct BankMove {
+    uint8_t bankToBank, destTab, destSlot;
+    uint32_t destEntry;
+    uint8_t srcTab, srcSlot;
+    uint32_t srcEntry;
+    uint8_t zero;
+    uint32_t amount;
+};
+BankMove readBankMove(wowee::network::Packet p) {
+    BankMove m{};
+    p.readUInt64();
+    m.bankToBank = p.readUInt8();
+    m.destTab = p.readUInt8();
+    m.destSlot = p.readUInt8();
+    m.destEntry = p.readUInt32();
+    m.srcTab = p.readUInt8();
+    m.srcSlot = p.readUInt8();
+    m.srcEntry = p.readUInt32();
+    m.zero = p.readUInt8();
+    m.amount = p.readUInt32();
+    return m;
+}
+} // namespace
+
+// Z's open guild bank item (FIXER AA): a guild bank item put down on another
+// slot of the bank is moved there (0x005a6200 -> 0x005a5410) - bankToBank 1,
+// onto the same item what its stack has room for, onto an empty slot the
+// whole stack; a tab without the deposit right 0x02 answers
+// ERR_GUILD_PERMISSIONS and the item stays held. WoWee dropped the cursor
+// and sent nothing.
+TEST_CASE("a guild bank item is moved inside the bank (0x005a5410)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    openTestGuildBank(s);
+    ui.run("bagslots = 0; local f = CreateFrame('Frame'); f:RegisterEvent('GUILDBANKBAGSLOTS_CHANGED');"
+           " f:SetScript('OnEvent', function() bagslots = bagslots + 1 end)");
+    const auto moves = [&] { return s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS); };
+    ui.run("PickupGuildBankItem(1, 1)");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("PickupGuildBankItem(1, 2)");
+    REQUIRE(moves().size() == 1);
+    {
+        const BankMove m = readBankMove(moves().back());
+        CHECK(m.bankToBank == 1);
+        CHECK(m.destTab == 0);
+        CHECK(m.destSlot == 1);
+        CHECK(m.destEntry == 2589);
+        CHECK(m.srcTab == 0);
+        CHECK(m.srcSlot == 0);
+        CHECK(m.srcEntry == 2589);
+        CHECK(m.zero == 0);
+        CHECK(m.amount == 2);       // twenty less the eighteen there
+    }
+    CHECK(ui.is("CursorHasItem() == nil"));
+    CHECK(ui.is("bagslots == 1"));
+    // Onto an empty slot: the whole of an item whose stack is not known.
+    ui.run("PickupGuildBankItem(1, 3)");
+    ui.run("PickupGuildBankItem(1, 50)");
+    REQUIRE(moves().size() == 2);
+    {
+        const BankMove m = readBankMove(moves().back());
+        CHECK(m.destSlot == 49);
+        CHECK(m.destEntry == 0);
+        CHECK(m.srcSlot == 2);
+        CHECK(m.srcEntry == 4306);
+        CHECK(m.amount == 0);
+    }
+    // A view-only tab: refused, the item still held.
+    ui.run("PickupGuildBankItem(1, 2)");
+    ui.run("PickupGuildBankItem(2, 1)");
+    CHECK(moves().size() == 2);
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("ClearCursor()");
+    // Out of range: nothing at all.
+    ui.run("PickupGuildBankItem(7, 1)");
+    ui.run("PickupGuildBankItem(1, 99)");
+    CHECK(ui.is("CursorHasItem() == nil"));
+}
+
+// Z's open guild bank item (FIXER AA): AutoStoreGuildBankItem (0x005a63f0)
+// sends autoStore 1 with the slot's entry and stack - WoWee sent autoStore 0
+// to bag 0 slot 0, which the realm refuses - then GUILDBANKBAGSLOTS_CHANGED;
+// a tab with no items a day for the rank answers ERR_GUILD_PERMISSIONS.
+TEST_CASE("AutoStoreGuildBankItem sends the slot to the bags (0x005a63f0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    openTestGuildBank(s);
+    ui.run("bagslots = 0; local f = CreateFrame('Frame'); f:RegisterEvent('GUILDBANKBAGSLOTS_CHANGED');"
+           " f:SetScript('OnEvent', function() bagslots = bagslots + 1 end)");
+    ui.run("AutoStoreGuildBankItem(1, 1)");
+    const auto sent = s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS);
+    REQUIRE(sent.size() == 1);
+    auto p = sent.back();
+    CHECK(p.readUInt64() == 0x77);
+    CHECK(p.readUInt8() == 0);      // bankToBank
+    CHECK(p.readUInt8() == 0);      // tab
+    CHECK(p.readUInt8() == 0);      // slot
+    CHECK(p.readUInt32() == 2589);
+    CHECK(p.readUInt8() == 1);      // autoStore
+    CHECK(p.readUInt32() == 5);     // the stack
+    CHECK(p.readUInt8() == 1);      // toChar
+    CHECK(p.readUInt32() == 0);
+    CHECK(ui.is("bagslots == 1"));
+    // An empty slot sends nothing.
+    ui.run("AutoStoreGuildBankItem(1, 60)");
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS).size() == 1);
+}
+
+// T411's open part (FIXER AA): the bag items a multisell draws from are
+// locked from its start to its end or give-up (0x0059aaa0 -> 0x00513740,
+// 0x0059aae0); WoWee locked the sell box's item alone.
+TEST_CASE("a multisell's source items are locked while it runs (T411, 0x0059aaa0)", "[replay][interface][auction]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    s.handler().getInventoryHandler()->openAuctionHouse(0x77);
+    carryForAuction(s, 0, 0x4000000000000C01ull, 2589, 20);
+    carryForAuction(s, 1, 0x4000000000000C02ull, 2589, 20);
+    carryForAuction(s, 2, 0x4000000000000C03ull, 2589, 20);
+    ui.run("ClearCursor() PickupContainerItem(0, 1) ClickAuctionSellItemButton()");
+    REQUIRE(ui.is("GetAuctionSellItemInfo() == 'Item 2589'"));
+    CHECK(ui.is("select(3, GetContainerItemInfo(0, 2)) == nil"));
+    ui.run("StartAuction(100, 200, 1, 20, 3)");
+    // The first post took the last source; the one left is locked.
+    CHECK(ui.is("select(3, GetContainerItemInfo(0, 2)) == 1"));
+    wowee::network::Packet r(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_COMMAND_RESULT));
+    r.writeUInt32(1000);
+    r.writeUInt32(0);
+    r.writeUInt32(3);   // refused: given up
+    s.receive(r);
+    CHECK(ui.is("select(3, GetContainerItemInfo(0, 2)) == nil"));
+}
+
+// T415 (FIXER AA): SetBattlefieldScoreFaction (0x0054c120) and
+// SortBattlefieldScoreData (0x0054de00 -> 0x0054cee0) end in 0x0054aa30 -
+// the board sorted over the 17-key list (0x0054a740, killing blows first
+// from the first board on) and UPDATE_BATTLEFIELD_SCORE, which redraws the
+// rows. Neither raised the event; the rows kept the packet's order until a
+// header was clicked, one key only, and 'class'/'statN' did not sort.
+TEST_CASE("the scoreboard is sorted and announced as 12340 does (T415, 0x0054aa30)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("scores = 0; local f = CreateFrame('Frame'); f:RegisterEvent('UPDATE_BATTLEFIELD_SCORE');"
+           " f:SetScript('OnEvent', function() scores = scores + 1 end)");
+    struct Row { uint64_t guid; const char* name; uint8_t cls; uint32_t kb; uint32_t flags; };
+    const Row rows[3] = {{0xF130000000000101ull, "Anna", 1, 1, 2},
+                         {0xF130000000000102ull, "Bert", 8, 3, 0},
+                         {0xF130000000000103ull, "Carl", 4, 2, 1}};
+    wowee::network::Packet log(wowee::game::wireOpcode(Opcode::MSG_PVP_LOG_DATA));
+    log.writeUInt8(0);    // a battleground
+    log.writeUInt8(0);    // no winner yet
+    log.writeUInt32(3);
+    for (const auto& r : rows) {
+        log.writeUInt64(r.guid);
+        log.writeUInt32(r.kb);
+        for (int k = 0; k < 5; ++k) log.writeUInt32(1);   // hk, deaths, honour, damage, healing
+        log.writeUInt32(1);   // one objective
+        log.writeUInt32(r.flags);
+    }
+    s.receive(log);
+    for (const auto& r : rows) {
+        wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_NAME_QUERY_RESPONSE));
+        answer.writePackedGuid(r.guid);
+        answer.writeUInt8(0);
+        answer.writeString(r.name);
+        answer.writeString("");
+        answer.writeUInt8(2);     // race
+        answer.writeUInt8(0);     // gender
+        answer.writeUInt8(r.cls);
+        answer.writeUInt8(0);
+        s.receive(answer);
+    }
+    REQUIRE(ui.is("scores == 1"));
+    const auto order = [&] {
+        ui.run("order = '' for i = 1, GetNumBattlefieldScores() do order = order .. GetBattlefieldScore(i) .. ';' end");
+    };
+    order();
+    CHECK(ui.is("order == 'Bert;Carl;Anna;'"));   // killing blows, most first
+    ui.run("SetBattlefieldScoreFaction(nil)");
+    CHECK(ui.is("scores == 2"));
+    ui.run("SetBattlefieldScoreFaction(5)");      // ignored, nothing raised
+    CHECK(ui.is("scores == 2"));
+    ui.run("SortBattlefieldScoreData('kills')");  // at the front: turned round
+    CHECK(ui.is("scores == 3"));
+    order();
+    CHECK(ui.is("order == 'Anna;Carl;Bert;'"));
+    ui.run("SortBattlefieldScoreData('CLASS')");  // mage 8, rogue 4, warrior 1: the highest first
+    order();
+    CHECK(ui.is("order == 'Bert;Carl;Anna;'"));
+    ui.run("SortBattlefieldScoreData('stat1')");
+    order();
+    CHECK(ui.is("order == 'Anna;Carl;Bert;'"));
+    ui.run("SortBattlefieldScoreData('stat9')");  // past stat8: nothing at all
+    CHECK(ui.is("scores == 5"));
+    ui.run("SortBattlefieldScoreData('name')");
+    order();
+    CHECK(ui.is("order == 'Anna;Bert;Carl;'"));
+    ui.run("SortBattlefieldScoreData('name')");
+    order();
+    CHECK(ui.is("order == 'Carl;Bert;Anna;'"));
+    // Back to killing blows: it keeps the direction it was turned to.
+    ui.run("SortBattlefieldScoreData('bogus')");
+    order();
+    CHECK(ui.is("order == 'Anna;Carl;Bert;'"));
+}
+
+// Z's open guild bank items (FIXER AA): opening sends CMSG_GUILD_BANKER_ACTIVATE
+// alone with the first tab's full-list flag (0x00c13598); QueryGuildBankTab
+// (0x005a5ce0 -> 0x005a5800) takes tabs 1..6 and sends each tab's own flag -
+// cleared by a list of it (0x005a7250); QueryGuildBankText (0x005a5940) asks
+// once while the text is stale, else answers GUILDBANK_UPDATE_TEXT at once.
+TEST_CASE("the guild bank asks for a tab's list and text as 12340 asks (0x005a5800, 0x005a5940)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    openTestGuildBank(s);
+    const auto sent = [&](Opcode op) { return s.sent().of(op); };
+    REQUIRE(sent(Opcode::CMSG_GUILD_BANKER_ACTIVATE).size() == 1);
+    {
+        auto p = sent(Opcode::CMSG_GUILD_BANKER_ACTIVATE).back();
+        p.readUInt64();
+        CHECK(p.readUInt8() == 1);
+    }
+    CHECK(sent(Opcode::CMSG_GUILD_BANK_QUERY_TAB).empty());
+    const auto lastFull = [&] {
+        auto p = sent(Opcode::CMSG_GUILD_BANK_QUERY_TAB).back();
+        p.readUInt64();
+        p.readUInt8();
+        return p.readUInt8();
+    };
+    ui.run("QueryGuildBankTab(1)");
+    REQUIRE(sent(Opcode::CMSG_GUILD_BANK_QUERY_TAB).size() == 1);
+    CHECK(lastFull() == 0);     // tab 1's list came
+    ui.run("QueryGuildBankTab(2)");
+    REQUIRE(sent(Opcode::CMSG_GUILD_BANK_QUERY_TAB).size() == 2);
+    CHECK(lastFull() == 1);
+    ui.run("QueryGuildBankTab(7)");
+    CHECK(sent(Opcode::CMSG_GUILD_BANK_QUERY_TAB).size() == 2);
+    ui.run("texts = 0; local f = CreateFrame('Frame'); f:RegisterEvent('GUILDBANK_UPDATE_TEXT');"
+           " f:SetScript('OnEvent', function(_, _, tab) texts = texts + 1; textTab = tab end)");
+    ui.run("QueryGuildBankText(1)");
+    CHECK(sent(Opcode::MSG_QUERY_GUILD_BANK_TEXT).size() == 1);
+    CHECK(ui.is("texts == 0"));
+    ui.run("QueryGuildBankText(1)");
+    CHECK(sent(Opcode::MSG_QUERY_GUILD_BANK_TEXT).size() == 1);
+    CHECK(ui.is("texts == 1 and textTab == 1"));
+    // SetGuildBankText keeps 2047 characters (0x007e1830 with 0x800) and asks
+    // only for a bought tab (0x005a5c40).
+    ui.run("SetGuildBankText(1, string.rep('a', 3000))");
+    REQUIRE(sent(Opcode::CMSG_SET_GUILD_BANK_TEXT).size() == 1);
+    {
+        auto p = sent(Opcode::CMSG_SET_GUILD_BANK_TEXT).back();
+        CHECK(p.readUInt8() == 0);
+        CHECK(p.readString().size() == 2047);
+    }
+    ui.run("SetGuildBankText(5, 'x')");
+    CHECK(sent(Opcode::CMSG_SET_GUILD_BANK_TEXT).size() == 1);
+}
+
+// T417 (FIXER AA): SMSG_AUCTION_COMMAND_RESULT raises no PLAYER_MONEY
+// (0x0059ffb0); the money event comes with the coinage field alone.
+TEST_CASE("an auction command result raises no PLAYER_MONEY (T417, 0x0059ffb0)", "[replay][interface][auction]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    s.handler().getInventoryHandler()->openAuctionHouse(0x77);
+    ui.run("money = 0; local f = CreateFrame('Frame'); f:RegisterEvent('PLAYER_MONEY');"
+           " f:SetScript('OnEvent', function() money = money + 1 end)");
+    wowee::network::Packet r(wowee::game::wireOpcode(Opcode::SMSG_AUCTION_COMMAND_RESULT));
+    r.writeUInt32(1000);
+    r.writeUInt32(0);   // a post
+    r.writeUInt32(0);   // taken
+    s.receive(r);
+    CHECK(ui.is("money == 0"));
+}

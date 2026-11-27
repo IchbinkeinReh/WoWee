@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <ctime>
 #include <deque>
 #include <cstdio>
 #include <fstream>
@@ -1838,6 +1839,13 @@ void pushItemLinkOrEmpty(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
 /// RecentTimeDate reads them: it takes the largest that is not zero and says
 /// "N days ago". The server sends one number of seconds, so they are derived
 /// from it rather than from a calendar.
+/// A guild bank log line's age now (0x005a4e50: time() less its stamp).
+uint32_t bankLogAgeNow(const game::GuildBankLogEntry& e) {
+    if (e.receivedAt == 0) return e.secondsAgo;
+    const int64_t since = static_cast<int64_t>(std::time(nullptr)) - e.receivedAt;
+    return e.secondsAgo + static_cast<uint32_t>(since > 0 ? since : 0);
+}
+
 void pushTimeAgo(lua_State* L, uint32_t secondsAgo) {
     constexpr uint32_t kHour = 3600, kDay = 24 * kHour;
     constexpr uint32_t kMonth = 30 * kDay, kYear = 365 * kDay;
@@ -5190,6 +5198,9 @@ std::vector<uint64_t> lockedItems(game::GameHandler* gh) {
     uint64_t selling = 0;
     auctionSellItemSlot(gh, &selling);
     add(selling);
+    // T411: a multisell's sources, from its start to its end (0x0059aaa0).
+    if (const auto* inv = gh->getInventoryHandler())
+        for (const uint64_t guid : inv->auctionMultisellSourceGuids()) add(guid);
     if (gh->isSocketingOpen()) {
         add(gh->getSocketItemGuid());
         for (int i = 0; i < 3; ++i) add(gh->getSocketPendingGemGuid(i));
@@ -7294,9 +7305,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             // 0x005a5ce0
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: QueryGuildBankTab(tab)");
+            // 0x005a5ce0: tabs 1..6 only.
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
-            if (gh && tab >= 1) gh->queryGuildBankTab(static_cast<uint8_t>(tab - 1));
+            const int tab = static_cast<int>(lua_tonumber(L, 1));
+            if (gh && tab >= 1 && tab <= 6) gh->queryGuildBankTab(static_cast<uint8_t>(tab - 1));
             return 0;
         }},
                 // How many tabs the guild has bought (0x005a44d0 pushes
@@ -7447,23 +7459,19 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"AutoStoreGuildBankItem", [](lua_State* L) -> int {
-            // 0x005a63f0
+            // 0x005a63f0: both numbers or the usage line; nothing without the
+            // player or a banker; tab 1..6 and slot 1..98 rounded; then the
+            // cursor let go (0x00519280) before the slot is looked at.
             if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
                 return luaL_error(L, "Usage: AutoStoreGuildBankItem(tab, slot)");
             auto* gh = getGameHandler(L);
-            const int tab  = static_cast<int>(luaL_optnumber(L, 1, 1));
-            const int slot = static_cast<int>(luaL_optnumber(L, 2, 1));
-            // Destination 0,0 lets the server pick the first free bag slot,
-            // which is what "auto store" means. Its put-down sound waits for
-            // the slot it lands in (0x005a4800 -> 0x00bd08a4).
-            if (gh && gh->getInventoryHandler()) {
-                for (const auto& it : gh->getGuildBankData().tabItems) {
-                    if (it.slotId == static_cast<uint8_t>(slot - 1) && it.itemEntry != 0)
-                        gh->getInventoryHandler()->notePendingItemMove(0, it.itemEntry);
-                }
-            }
-            if (gh) gh->guildBankWithdrawItem(static_cast<uint8_t>(tab - 1),
-                                              static_cast<uint8_t>(slot - 1), 0, 0);
+            auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            if (!inv || gh->getPlayerGuildRankField() == 0xFFFFFFFFu || inv->getGuildBankerGuid() == 0) return 0;
+            const uint8_t tab0 = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 1))) - 1u);
+            const uint8_t slot0 = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 2))) - 1u);
+            if (tab0 >= 6 || slot0 >= 98) return 0;
+            clearCursor(L);
+            inv->guildBankAutoStore(tab0, slot0);
             return 0;
         }},
                 // Rank *is* in what this client parses - the roster carries a
@@ -7488,9 +7496,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             // 0x005a6d50
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: QueryGuildBankLog(tab)");
+            // 0x005a6d50 -> 0x005a58c0: rounded, the byte less one, at a banker.
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
-            if (gh && tab >= 1) gh->requestGuildBankLog(static_cast<uint8_t>(tab - 1));
+            const auto tab = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 1))) - 1u);
+            if (gh) gh->requestGuildBankLog(tab);
             return 0;
         }},
                 // Ask for a tab's info text. The panel calls this when a tab is
@@ -7499,9 +7508,11 @@ void registerInventoryLuaAPI(lua_State* L) {
             // 0x005a7110
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: QueryGuildBankLog(tab)");
+            // 0x005a7110 -> 0x005a5940: rounded, the byte less one; asked at a
+            // banker while stale, else GUILDBANK_UPDATE_TEXT at once.
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (gh && tab >= 1) gh->queryGuildBankText(static_cast<uint8_t>(tab - 1));
+            const auto tab = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 1))) - 1u);
+            if (gh) gh->queryGuildBankText(tab);
             return 0;
         }},
                 // A purchased tab's text, "" when it has none; nil for a tab
@@ -7528,11 +7539,21 @@ void registerInventoryLuaAPI(lua_State* L) {
             // 0x005a7180
             if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
                 return luaL_error(L, "Usage: SetGuildBankText(tab, text)");
+            // Rounded, the byte less one (0x005a7180 -> 0x005a5c40).
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const auto tab = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 1))) - 1u);
             const char* text = luaL_optstring(L, 2, "");
-            if (gh && tab >= 1)
-                gh->setGuildBankTabText(static_cast<uint8_t>(tab - 1), text ? text : "");
+            // Cut where its 2048th character starts (0x007e1830 with 0x800:
+            // 2047 kept).
+            std::string kept = text ? text : "";
+            int chars = 0;
+            for (size_t i = 0; i < kept.size(); ++i) {
+                if ((static_cast<unsigned char>(kept[i]) & 0xC0u) != 0x80u && ++chars == 0x800) {
+                    kept.resize(i);
+                    break;
+                }
+            }
+            if (gh) gh->setGuildBankTabText(tab, kept);
             return 0;
         }},
                 {"GetNumGuildBankTransactions", [](lua_State* L) -> int {
@@ -7575,7 +7596,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (e.type == 3) { lua_pushnumber(L, tab); lua_pushnumber(L, e.otherTab + 1); }
             else if (e.type == 7) { lua_pushnumber(L, e.otherTab + 1); lua_pushnumber(L, tab); }
             else { lua_pushnil(L); lua_pushnil(L); }
-            pushTimeAgo(L, e.secondsAgo);
+            pushTimeAgo(L, bankLogAgeNow(e));
             return 10;
         }},
                 // type, name, amount, year, month, day, hour
@@ -7593,7 +7614,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushstring(L, bankMoneyLogTypeName(e.type));
             pushNameOrNil(L, gh->lookupName(e.playerGuid));
             lua_pushnumber(L, e.count);              // copper
-            pushTimeAgo(L, e.secondsAgo);
+            pushTimeAgo(L, bankLogAgeNow(e));
             return 7;
         }},
                 // The six textures a guild tabard is drawn from, in the order

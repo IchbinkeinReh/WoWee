@@ -726,6 +726,15 @@ public:
     /// and had no way to read it, so a tab's description could be saved and
     /// never seen again.
     void queryGuildBankText(uint8_t tabId);
+    /// Guild event 0x13: the tab's text changed and is to be asked again.
+    void markGuildBankTextStale(uint8_t tabId) {
+        if (tabId < guildBankTextStale_.size()) guildBankTextStale_[tabId] = true;
+    }
+    /// QueryGuildBankLog's request (0x005a58c0): only at a banker.
+    void requestGuildBankLog(uint8_t tabId);
+    /// SetGuildBankText's request (0x005a5c40): at a banker and for a tab
+    /// the guild has bought.
+    void setGuildBankTabText(uint8_t tabId, const std::string& text);
     const std::string& getGuildBankTabText(uint8_t tabId) const;
 
     /// Rename a guild bank tab and pick its icon.
@@ -760,6 +769,23 @@ public:
     /// TRADE_POTENTIAL_BIND_ENCHANT's answer for an item (0x005869a0).
     [[nodiscard]] bool enchantWouldBind(uint64_t itemGuid) const;
     void guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
+    /// What became of a guild bank item put down inside the bank (0x005a5410).
+    enum class GuildBankMove { Ignored, Refused, Dropped, Sent };
+    /// A guild bank item held on the cursor (its entry, tab and slot from
+    /// zero, the split asked for or 0) put down on a tab's slot (0x005a5410):
+    /// the destination tab needs the deposit right 0x02 and, across tabs, the
+    /// source tab - and the destination too when it holds an item - items a
+    /// day, or ERR_GUILD_PERMISSIONS and the cursor stays (Refused). Onto the
+    /// same item the amount is what the destination's stack has room for
+    /// (Dropped when the item's stack size is unknown: nothing sent); onto
+    /// another item 0 (a swap), onto an empty slot the split.
+    GuildBankMove guildBankMoveItem(uint8_t destTab, uint8_t destSlot, uint32_t srcEntry,
+                                    uint8_t srcTab, uint8_t srcSlot, uint32_t split);
+    /// AutoStoreGuildBankItem's request (0x005a63f0), tab and slot from zero:
+    /// nothing for an empty slot; the tab's items a day for the player's rank
+    /// or ERR_GUILD_PERMISSIONS; then the slot's entry and stack sent to the
+    /// bags and GUILDBANKBAGSLOTS_CHANGED.
+    void guildBankAutoStore(uint8_t tab, uint8_t slot);
     // Deposit an inventory item into the first free slot of the viewed tab.
     void guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot);
     bool isGuildBankOpen() const { return guildBankOpen_; }
@@ -817,6 +843,15 @@ public:
     void auctionMultisellStart(std::vector<std::pair<uint64_t, uint32_t>> sources, uint32_t stackSize,
                                uint32_t stacks, uint32_t bid, uint32_t buyout, uint32_t duration);
     [[nodiscard]] bool auctionMultisellActive() const { return multisell_.active; }
+    /// The bag items a multisell still draws from, locked while it runs
+    /// (0x0059aaa0 -> 0x00513740 at its start, 0x0059aae0 at its end or
+    /// give-up; 0x0059aa50 asks the list while 0x00c0f434 is set).
+    [[nodiscard]] std::vector<uint64_t> auctionMultisellSourceGuids() const {
+        std::vector<uint64_t> out;
+        if (!multisell_.active) return out;
+        for (const auto& src : multisell_.sources) out.push_back(src.first);
+        return out;
+    }
     /// Raised whenever the auction state lets the sell box go by itself (a
     /// multisell's end or give-up, 0x0059ab20/0x0059ba80); the box remembers
     /// the value it was filled at.
@@ -1312,6 +1347,13 @@ private:
     bool guildBankOpen_ = false;
     uint64_t guildBankerGuid_ = 0;
     std::array<std::string, 6> guildBankTabText_{};
+    /// Per tab, 12340's 0x00c13598: a full list wanted (set at start and by
+    /// 0x005a7760, cleared by a list of the tab, 0x005a7250) - the byte
+    /// QueryGuildBankTab sends (0x005a5800).
+    std::array<bool, 6> guildBankTabWantsFull_{true, true, true, true, true, true};
+    /// Per tab, 0x00c0f8e8: the text to be asked for again (set at start and
+    /// by guild event 0x13, 0x005a4310; cleared when asked, 0x005a5940).
+    std::array<bool, 6> guildBankTextStale_{true, true, true, true, true, true};
     GuildBankData guildBankData_;
     int32_t guildBankWithdrawMoney_ = 0;
     uint8_t guildBankActiveTab_ = 0;

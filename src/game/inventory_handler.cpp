@@ -5010,10 +5010,12 @@ void InventoryHandler::openGuildBank(uint64_t guid) {
     // the follow-up query-tab is rejected and no bank list ever arrives, so the
     // window opened empty (or not at all).
     if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() && guid != 0) {
-        auto activate = GuildBankerActivatePacket::build(guid);
+        auto activate = GuildBankerActivatePacket::build(guid, guildBankTabWantsFull_[0]);
         owner_.getSocket()->send(activate);
     }
-    queryGuildBankTab(0);
+    // And nothing more: 12340 opens with CMSG_GUILD_BANKER_ACTIVATE alone,
+    // which the realm answers with the first tab's list (SendBankTabsInfo);
+    // the CMSG_GUILD_BANK_QUERY_TAB for tab 1 sent beside it asked twice.
 }
 
 void InventoryHandler::closeGuildBank() {
@@ -5029,7 +5031,9 @@ void InventoryHandler::queryGuildBankTab(uint8_t tabId) {
     // asked the server for a tab and told it not to send what is in it. This
     // client keeps no cached tab to refresh, so there is nothing a partial
     // update could be for.
-    auto packet = GuildBankQueryTabPacket::build(guildBankerGuid_, tabId, true);
+    // 0x005a5800: the tab's own flag - a full list until one of it came.
+    if (tabId >= guildBankTabWantsFull_.size()) return;
+    auto packet = GuildBankQueryTabPacket::build(guildBankerGuid_, tabId, guildBankTabWantsFull_[tabId]);
     owner_.getSocket()->send(packet);
 }
 
@@ -5077,10 +5081,33 @@ void InventoryHandler::guildBankWithdrawItem(uint8_t tabId, uint8_t bankSlot, ui
 }
 
 void InventoryHandler::queryGuildBankText(uint8_t tabId) {
+    // 0x005a5940: asked only at a banker and while the text is stale (then
+    // no longer); else GUILDBANK_UPDATE_TEXT with the tab at once - the
+    // text kept is the answer.
+    if (guildBankerGuid_ == 0 || tabId >= guildBankTextStale_.size() || !guildBankTextStale_[tabId]) {
+        owner_.fireAddonEvent("GUILDBANK_UPDATE_TEXT", {std::to_string(tabId + 1)});
+        return;
+    }
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet p(wireOpcode(Opcode::MSG_QUERY_GUILD_BANK_TEXT));
     p.writeUInt8(tabId);
     owner_.getSocket()->send(p);
+    guildBankTextStale_[tabId] = false;
+}
+
+void InventoryHandler::requestGuildBankLog(uint8_t tabId) {
+    if (guildBankerGuid_ == 0) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    network::Packet pkt(wireOpcode(Opcode::MSG_GUILD_BANK_LOG_QUERY));
+    pkt.writeUInt8(tabId);
+    owner_.getSocket()->send(pkt);
+}
+
+void InventoryHandler::setGuildBankTabText(uint8_t tabId, const std::string& text) {
+    if (guildBankerGuid_ == 0 || tabId >= guildBankTabCount_) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    auto packet = GuildBankSetTabTextPacket::build(tabId, text);
+    owner_.getSocket()->send(packet);
 }
 
 const std::string& InventoryHandler::getGuildBankTabText(uint8_t tabId) const {
@@ -5207,6 +5234,90 @@ void InventoryHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uin
     owner_.getSocket()->send(packet);
 }
 
+namespace {
+/// The player's rank's row for a bank tab: its rights (0x005a41c0) and its
+/// items a day (0x005a41f0), both 0 past the sixth tab or without a row.
+std::pair<uint32_t, uint32_t> guildBankTabAllowance(GameHandler& gh, uint8_t tab) {
+    if (tab >= 6) return {0u, 0u};
+    const auto* row = gh.getGuildRankRow(gh.getPlayerGuildRankField());
+    if (!row) return {0u, 0u};
+    return {row->bankTabRights[tab], row->bankTabSlotsPerDay[tab]};
+}
+
+/// Game error 0x5f, a system line (0x005216f0, row type 0).
+void guildBankPermissionError(GameHandler& gh) {
+    gh.playGameErrorSound("ERR_GUILD_PERMISSIONS");
+    gh.addSystemChatMessage(interfaceString("ERR_GUILD_PERMISSIONS", "You don't have permission to do that."));
+}
+} // namespace
+
+InventoryHandler::GuildBankMove InventoryHandler::guildBankMoveItem(uint8_t destTab, uint8_t destSlot,
+                                                                    uint32_t srcEntry, uint8_t srcTab,
+                                                                    uint8_t srcSlot, uint32_t split) {
+    // 0x005a5410: nothing without a banker, an item or the player.
+    if (guildBankerGuid_ == 0 || srcEntry == 0) return GuildBankMove::Ignored;
+    if (owner_.getPlayerGuildRankField() == 0xFFFFFFFFu) return GuildBankMove::Ignored;
+    if ((guildBankTabAllowance(owner_, destTab).first & 0x02u) == 0) {
+        guildBankPermissionError(owner_);
+        return GuildBankMove::Refused;
+    }
+    const auto* dest = guildBankData_.slotAt(destTab, destSlot);
+    const uint32_t destEntry = dest ? dest->itemEntry : 0u;
+    const auto* info = owner_.getItemInfo(srcEntry);
+    const uint32_t maxStack = info && info->valid && info->maxStack > 0 ? static_cast<uint32_t>(info->maxStack) : 0u;
+    uint32_t amount = 0;
+    if (maxStack == 0) {
+        // The item's stack size unknown: onto the same item nothing goes
+        // and the cursor is let go; anywhere else the whole stack, the
+        // split not asked.
+        if (srcEntry == destEntry) return GuildBankMove::Dropped;
+        amount = 0;
+    } else if (destEntry == 0) {
+        amount = split;
+    } else if (srcEntry == destEntry) {
+        // What the destination's stack has room for, or less if asked.
+        const int64_t room = static_cast<int64_t>(maxStack) - static_cast<int64_t>(dest->stackCount);
+        if (split == 0) {
+            const auto* src = guildBankData_.slotAt(srcTab, srcSlot);
+            const int64_t have = src ? static_cast<int64_t>(src->stackCount) : 0;
+            amount = static_cast<uint32_t>(room <= have ? room : have);
+        } else {
+            amount = static_cast<int64_t>(split) < room ? split : static_cast<uint32_t>(room);
+        }
+    }
+    if (srcTab != destTab &&
+        ((destEntry != 0 && guildBankTabAllowance(owner_, destTab).second == 0) ||
+         guildBankTabAllowance(owner_, srcTab).second == 0)) {
+        guildBankPermissionError(owner_);
+        return GuildBankMove::Refused;
+    }
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+        auto packet = GuildBankSwapItemsPacket::buildBankToBank(guildBankerGuid_, destTab, destSlot, destEntry,
+                                                                srcTab, srcSlot, srcEntry, amount);
+        owner_.getSocket()->send(packet);
+    }
+    return GuildBankMove::Sent;
+}
+
+void InventoryHandler::guildBankAutoStore(uint8_t tab, uint8_t slot) {
+    // 0x005a63f0, after its range test and the cursor let go.
+    if (guildBankerGuid_ == 0) return;
+    const auto* item = guildBankData_.slotAt(tab, slot);
+    if (!item) return;
+    if (guildBankTabAllowance(owner_, tab).second == 0) {
+        guildBankPermissionError(owner_);
+        return;
+    }
+    // Its put-down sound waits for the slot it lands in (0x00bd08a4).
+    notePendingItemMove(0, item->itemEntry);
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+        auto packet = GuildBankSwapItemsPacket::buildAutoStore(guildBankerGuid_, tab, slot, item->itemEntry,
+                                                               item->stackCount);
+        owner_.getSocket()->send(packet);
+    }
+    owner_.fireAddonEvent("GUILDBANKBAGSLOTS_CHANGED", {});
+}
+
 void InventoryHandler::guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
         guildBankerGuid_ == 0 || !guildBankOpen_) return;
@@ -5252,6 +5363,8 @@ void InventoryHandler::requestGuildBankWithdrawMoney() {
 void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     if (!GuildBankListParser::parse(packet, guildBankData_)) return;
     ++guildBankListCount_;
+    // 0x005a7250: the tab's full-list flag cleared.
+    if (guildBankData_.tabId < guildBankTabWantsFull_.size()) guildBankTabWantsFull_[guildBankData_.tabId] = false;
     // The tab names come with the count of tabs bought (0x005a7250 ->
     // 0x00c1dc0c).
     if (guildBankData_.tabsIncluded)
@@ -5860,10 +5973,11 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
                 owner_.getSocket()->send(wave);
             }
         }
-        if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
-            fireBagUpdates();
-        }
+        // T417: no PLAYER_MONEY here - 0x0059ffb0 raises none; the money
+        // event comes with the coinage field alone, and this one made two
+        // per post, bid or cancel. The bags' diff stays (it raises only
+        // what changed).
+        fireBagUpdates();
     } else {
         GameErrorText err;
         switch (error) {

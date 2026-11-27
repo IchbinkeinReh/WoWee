@@ -24,6 +24,9 @@
 #include <cstdlib>
 #include <cmath>
 #include <bit>
+#include <array>
+#include <algorithm>
+#include <cctype>
 #include "game/interface_text.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -3713,18 +3716,74 @@ static int& battlefieldScoreFaction(game::GameHandler* gh) {
     return gh ? gh->battlefieldScoreFactionRef() : none;
 }
 
-/// Which column the scoreboard is sorted by, and which way.
-///
-/// The direction lives here because the interface does not keep it: clicking a
-/// column hands the same name over again and expects the order to reverse,
-/// which only works if something remembers what it was.
-static std::string& battlefieldSortColumn() {
-    static std::string column;
-    return column;
+/// The scoreboard's sort keys (0x00bea2c0): seventeen pairs of a key and a
+/// direction, every key 0..16 once, all direction 0 at start (the area init
+/// at 0x0054e2xx) and never reset. Keys: 0 killing blows, 1 deaths, 2 honor,
+/// 3 name, 4 class, 5 honorable kills, 6 damage, 7 healing, 8 team, 9..16 the
+/// battleground's stat1..stat8.
+struct BgSortKey { int key; int turned; };
+static std::array<BgSortKey, 17>& battlefieldSortKeys() {
+    static std::array<BgSortKey, 17> keys = [] {
+        std::array<BgSortKey, 17> k{};
+        for (int i = 0; i < 17; ++i) k[static_cast<size_t>(i)] = {i, 0};
+        return k;
+    }();
+    return keys;
 }
-static bool& battlefieldSortDescending() {
-    static bool descending = true;
-    return descending;
+
+/// 0x0054cee0: the key to the front of the list - at the front already, its
+/// direction turned; else with the direction it last had.
+static void battlefieldSortBy(int key) {
+    auto& keys = battlefieldSortKeys();
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (keys[i].key != key) continue;
+        BgSortKey front = keys[i];
+        if (i == 0) {
+            front.turned = front.turned == 0 ? 1 : 0;
+        } else {
+            for (size_t j = i; j > 0; --j) keys[j] = keys[j - 1];
+        }
+        keys[0] = front;
+        return;
+    }
+}
+
+/// One step of 0x0054a740 for two rows with names: -1 when `a` goes first,
+/// 1 when `b` does, 0 to ask the next key. Class and stat keys decide even
+/// when equal in 12340 (they answer 1 for equal rows, `decided`); here equal
+/// rows keep the packet's order instead of the sort's accident.
+static int bgScoreKeyCompare(game::GameHandler* gh, int key, bool& decided,
+                             const game::BgPlayerScore& a, const game::BgPlayerScore& b) {
+    decided = false;
+    const auto desc = [](uint32_t x, uint32_t y) { return x == y ? 0 : (y < x ? -1 : 1); };
+    switch (key) {
+        case 0: return desc(a.killingBlows, b.killingBlows);
+        case 1: return desc(a.deaths, b.deaths);
+        case 2: return desc(a.bonusHonor, b.bonusHonor);
+        case 3: {
+            const int c = std::strcmp(a.name.c_str(), b.name.c_str());
+            return c < 0 ? -1 : (c > 0 ? 1 : 0);
+        }
+        case 4: {
+            decided = true;
+            const uint8_t ca = gh ? gh->lookupPlayerClass(a.guid) : 0;
+            const uint8_t cb = gh ? gh->lookupPlayerClass(b.guid) : 0;
+            return ca == cb ? 0 : (cb < ca ? -1 : 1);
+        }
+        case 5: return desc(a.honorableKills, b.honorableKills);
+        case 6: return desc(a.damageDone, b.damageDone);
+        case 7: return desc(a.healingDone, b.healingDone);
+        case 8: return a.team == b.team ? 0 : (b.team <= a.team ? 1 : -1);
+        default: {
+            if (key < 9) return 0;
+            const size_t stat = static_cast<size_t>(key - 9);
+            if (stat >= a.bgStats.size() || stat >= b.bgStats.size()) return 0;
+            decided = true;
+            const auto x = static_cast<int32_t>(a.bgStats[stat].second);
+            const auto y = static_cast<int32_t>(b.bgStats[stat].second);
+            return x == y ? 0 : (x <= y ? 1 : -1);
+        }
+    }
 }
 
 /// The scoreboard rows that pass the current filter, in the current order.
@@ -3767,38 +3826,30 @@ filteredBgScores(game::GameHandler* gh, const game::BgScoreboardData& sb) {
             rows.push_back(&p);
     }
 
-    const std::string& column = battlefieldSortColumn();
-    if (column.empty()) return rows;
-
-    // Only the columns this client has the numbers for. "class" is not one of
-    // them - the scoreboard packet carries no class.
-    //
-    // Damage and healing were excluded here for the same reason, back when the
-    // parser skipped their eight bytes and every row read zero; sorting by
-    // them would have rearranged nothing while looking like it worked. The
-    // parser reads them now and GetBattlefieldScore hands them to the frame,
-    // so the two columns show real numbers - and were the only two whose
-    // header did nothing when clicked.
-    auto key = [&column](const game::BgPlayerScore* p) -> double {
-        if (column == "kills")   return p->killingBlows;
-        if (column == "deaths")  return p->deaths;
-        if (column == "hk")      return p->honorableKills;
-        if (column == "cp")      return p->bonusHonor;
-        if (column == "team")    return p->team;
-        if (column == "damage")  return p->damageDone;
-        if (column == "healing") return p->healingDone;
-        return 0.0;
-    };
-    const bool byName = (column == "name");
-    const bool descending = battlefieldSortDescending();
+    // 0x0054aa30 sorts the board with 0x0054a740 over the key list, from the
+    // first board on; rows without a name record compare equal.
+    const auto& keys = battlefieldSortKeys();
     std::stable_sort(rows.begin(), rows.end(),
-                     [&](const game::BgPlayerScore* a, const game::BgPlayerScore* b) {
-                         if (byName) {
-                             return descending ? a->name > b->name : a->name < b->name;
+                     [gh, &keys](const game::BgPlayerScore* a, const game::BgPlayerScore* b) {
+                         if (a->name.empty() || b->name.empty()) return false;
+                         for (const auto& k : keys) {
+                             bool decided = false;
+                             int c = bgScoreKeyCompare(gh, k.key, decided, *a, *b);
+                             if (k.turned != 0) c = -c;
+                             if (c != 0) return c < 0;
+                             if (decided) return false;
                          }
-                         return descending ? key(a) > key(b) : key(a) < key(b);
+                         return false;
                      });
     return rows;
+}
+
+/// 0x0054aa30's end: UPDATE_BATTLEFIELD_SCORE, unless names are still owed.
+static void announceBattlefieldScore(game::GameHandler* gh) {
+    if (!gh) return;
+    const auto* sb = gh->getBgScoreboard();
+    if (sb && sb->namesPending != 0) return;
+    gh->fireAddonEvent("UPDATE_BATTLEFIELD_SCORE", {});
 }
 
 // UnitIsConnected(unit) → boolean
@@ -4367,32 +4418,59 @@ void registerUnitLuaAPI(lua_State* L) {
                 // anything not a number for both; any other number is ignored.
                 // The rows are filtered as they are read, so the list follows
                 // at once, as 0x0054aa30's refilter does.
+                // T415: and then 0x0054aa30 - the board sorted again and
+                // UPDATE_BATTLEFIELD_SCORE, which is what redraws the rows.
                 {"SetBattlefieldScoreFaction", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!lua_isnumber(L, 1)) { battlefieldScoreFaction(gh) = -1; return 0; }
+            if (!lua_isnumber(L, 1)) {
+                battlefieldScoreFaction(gh) = -1;
+                announceBattlefieldScore(gh);
+                return 0;
+            }
             const int faction = static_cast<int>(lua_tonumber(L, 1));
             if (faction != -1 && (faction < 0 || faction > 1)) return 0;
             battlefieldScoreFaction(gh) = faction;
+            announceBattlefieldScore(gh);
             return 0;
         }},
-                // SortBattlefieldScoreData(column) - order the rows.
-                //
-                // The same column twice reverses, which is the real client's
-                // behaviour and has to be remembered here: the interface hands
-                // over only the column name and keeps no direction of its own.
-                //
-                // A name is sensible ascending and a score is not, so a fresh
-                // column starts descending for everything but the name.
+                // SortBattlefieldScoreData(type) (0x0054de00): the column by
+                // name, without case - kills, deaths, cp, name, class, hk,
+                // damage, healing, team, statN (N + 8, nothing at all past
+                // stat8), anything else kills - to the front of the key list
+                // (0x0054cee0: the front one turned round), then sorted and
+                // UPDATE_BATTLEFIELD_SCORE (0x0054aa30); nothing while names
+                // are owed (0x00bea590).
                 {"SortBattlefieldScoreData", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usgae: SortBattlefieldScoreData(\"type\")");   // 0x0054de00
-            std::string column(luaL_optstring(L, 1, ""));
-            if (column.empty()) return 0;
-            if (column == battlefieldSortColumn()) {
-                battlefieldSortDescending() = !battlefieldSortDescending();
-            } else {
-                battlefieldSortColumn() = column;
-                battlefieldSortDescending() = (column != "name");
+            const std::string column(lua_tostring(L, 1));
+            const auto lower = [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); };
+            const auto is = [&](const char* name) {
+                const size_t n = std::strlen(name);
+                if (column.size() != n) return false;
+                for (size_t i = 0; i < n; ++i)
+                    if (lower(column[i]) != name[i]) return false;
+                return true;
+            };
+            int key = 0;
+            if (is("kills")) key = 0;
+            else if (is("deaths")) key = 1;
+            else if (is("cp")) key = 2;
+            else if (is("name")) key = 3;
+            else if (is("class")) key = 4;
+            else if (is("hk")) key = 5;
+            else if (is("damage")) key = 6;
+            else if (is("healing")) key = 7;
+            else if (is("team")) key = 8;
+            else if (column.size() >= 4 && lower(column[0]) == 's' && lower(column[1]) == 't' &&
+                     lower(column[2]) == 'a' && lower(column[3]) == 't') {
+                key = std::atoi(column.c_str() + 4) + 8;
+                if (key < 0 || key > 16) return 0;
             }
+            auto* gh = getGameHandler(L);
+            const auto* sb = gh ? gh->getBgScoreboard() : nullptr;
+            if (sb && sb->namesPending != 0) return 0;
+            battlefieldSortBy(key);
+            announceBattlefieldScore(gh);
             return 0;
         }},
                 {"GetNumBattlefieldScores", [](lua_State* L) -> int {

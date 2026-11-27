@@ -276,6 +276,10 @@ struct BgScoreboardData {
     uint8_t winner = 0;
     bool isArena   = false;
     ArenaTeamScore arenaTeams[2];
+    /// Rows whose names are still being asked for (0x00bea590): while any
+    /// are, the board is neither sorted nor announced (0x0054aa30,
+    /// 0x0054cee0).
+    uint32_t namesPending = 0;
 };
 
 struct BgPlayerPosition {
@@ -312,6 +316,10 @@ struct GuildBankLogEntry {
     uint32_t count = 0;       ///< stack size for items, copper for money
     uint8_t  otherTab = 0;    ///< a move's destination
     uint32_t secondsAgo = 0;
+    /// When it arrived (time()), so its age is reckoned at the call: 12340
+    /// keeps the line's time as now less its age and the log functions take
+    /// time() less that (0x005a4e50).
+    int64_t  receivedAt = 0;
 };
 
 // ---- Guild petition ----

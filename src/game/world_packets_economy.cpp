@@ -419,14 +419,17 @@ network::Packet AutoStoreBankItemPacket::build(uint8_t srcBag, uint8_t srcSlot) 
 // Guild Bank System
 // ============================================================
 
-network::Packet GuildBankerActivatePacket::build(uint64_t guid) {
+network::Packet GuildBankerActivatePacket::build(uint64_t guid, bool full) {
     network::Packet p(wireOpcode(Opcode::CMSG_GUILD_BANKER_ACTIVATE));
     p.writeUInt64(guid);
     // sendAllSlots, and it has to be one. The server passes this straight to
     // SendBankList as "with content": a zero asks for the tab names and no
     // items at all. This said zero while its comment said "full slots update",
     // so opening the vault fetched a list of tabs with nothing in them.
-    p.writeUInt8(1);
+    // 12340 sends its tab-1 flag (0x006d... -> 0x00c13598): one until that
+    // tab's list has come, which is the first opening; after it the kept
+    // slots stand and the realm sends the tabs alone.
+    p.writeUInt8(full ? 1 : 0);
     return p;
 }
 
@@ -510,6 +513,38 @@ network::Packet GuildBankSwapItemsPacket::buildInventoryToBank(
     p.writeUInt8(srcSlot);    // playerSlot
     p.writeUInt8(0);          // toChar = 0 (character → bank = deposit)
     p.writeUInt32(splitCount); // splitedAmount
+    return p;
+}
+
+network::Packet GuildBankSwapItemsPacket::buildAutoStore(uint64_t guid, uint8_t tabId, uint8_t bankSlot,
+                                                         uint32_t itemEntry, uint32_t count) {
+    network::Packet p(wireOpcode(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS));
+    p.writeUInt64(guid);
+    p.writeUInt8(0);          // bankToBank = 0
+    p.writeUInt8(tabId);
+    p.writeUInt8(bankSlot);
+    p.writeUInt32(itemEntry);
+    p.writeUInt8(1);          // autoStore = 1
+    p.writeUInt32(count);     // the slot's stack
+    p.writeUInt8(1);          // toChar = 1
+    p.writeUInt32(0);
+    return p;
+}
+
+network::Packet GuildBankSwapItemsPacket::buildBankToBank(uint64_t guid, uint8_t destTab, uint8_t destSlot,
+                                                          uint32_t destEntry, uint8_t srcTab, uint8_t srcSlot,
+                                                          uint32_t srcEntry, uint32_t amount) {
+    network::Packet p(wireOpcode(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS));
+    p.writeUInt64(guid);
+    p.writeUInt8(1);          // bankToBank = 1
+    p.writeUInt8(destTab);
+    p.writeUInt8(destSlot);
+    p.writeUInt32(destEntry);
+    p.writeUInt8(srcTab);
+    p.writeUInt8(srcSlot);
+    p.writeUInt32(srcEntry);
+    p.writeUInt8(0);
+    p.writeUInt32(amount);
     return p;
 }
 

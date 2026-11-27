@@ -3837,11 +3837,14 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
                 break;
             case GuildEvent::BANK_TEXT_CHANGED:
                 // The tab, as the server counts them from zero and the panel
-                // counts them from one. It answers by querying the new text.
-                if (data.numStrings >= 1)
-                    owner_.addonEventCallbackRef()(
-                        "GUILDBANK_TEXT_CHANGED",
-                        {std::to_string(std::strtol(data.strings[0].c_str(), nullptr, 10) + 1)});
+                // counts them from one. It answers by querying the new text,
+                // which is stale from here (0x006d92d0 case 0x13 -> 0x005a4310).
+                if (data.numStrings >= 1) {
+                    const long tab = std::strtol(data.strings[0].c_str(), nullptr, 10);
+                    if (auto* inv = owner_.getInventoryHandler(); inv && tab >= 0 && tab < 256)
+                        inv->markGuildBankTextStale(static_cast<uint8_t>(tab));
+                    owner_.addonEventCallbackRef()("GUILDBANK_TEXT_CHANGED", {std::to_string(tab + 1)});
+                }
                 break;
             default: break;
         }
@@ -6653,11 +6656,13 @@ void SocialHandler::handlePvpLogData(network::Packet& packet) {
                            [this, generation, fillNames, announce](bool, const std::string&) {
                                if (generation != bgScoreGeneration_ || bgScorePending_ == 0) return;
                                bgScorePending_ -= 1;
+                               bgScoreboard_.namesPending = bgScorePending_;
                                if (bgScorePending_ != 0) return;
                                fillNames();
                                announce();
                            });
     }
+    bgScoreboard_.namesPending = bgScorePending_;
     if (bgScorePending_ == 0) announce();
 }
 
@@ -7676,6 +7681,7 @@ void SocialHandler::handleGuildBankLog(network::Packet& packet) {
         }
         if (!packet.hasRemaining(4)) break;
         e.secondsAgo = packet.readUInt32();
+        e.receivedAt = static_cast<int64_t>(std::time(nullptr));
         log.push_back(e);
     }
     packet.skipAll();

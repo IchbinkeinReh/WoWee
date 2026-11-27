@@ -4047,6 +4047,17 @@ struct GuildBankData {
     int32_t withdrawAmount = -1;  // -1 = unlimited
     std::vector<GuildBankTab> tabs;  // Only populated on fullUpdate
     std::vector<GuildBankItemSlot> tabItems;  // Current tab items
+    /// The item in a tab's slot (both from zero) - the open tab's from
+    /// tabItems, another's from what its tab kept - as 0x005a4c10 answers
+    /// it: null for an empty slot or one out of range.
+    [[nodiscard]] const GuildBankItemSlot* slotAt(uint32_t tab, uint32_t slot) const {
+        const std::vector<GuildBankItemSlot>* items =
+            tab == tabId ? &tabItems : (tab < tabs.size() ? &tabs[tab].items : nullptr);
+        if (!items || tab >= 6 || slot >= 98) return nullptr;
+        for (const auto& s : *items)
+            if (s.slotId == slot) return s.itemEntry != 0 ? &s : nullptr;
+        return nullptr;
+    }
     /// Whether the list just parsed carried the tab names, which is what the
     /// panel's GUILDBANK_UPDATE_TABS means. A slots-only update leaves `tabs`
     /// as it found them, so their contents cannot answer this.
@@ -4056,7 +4067,9 @@ struct GuildBankData {
 /** CMSG_GUILD_BANKER_ACTIVATE packet builder */
 class GuildBankerActivatePacket {
 public:
-    static network::Packet build(uint64_t guid);
+    /// `full` is 12340's flag for tab 1 (0x00c13598): set until a list of it
+    /// arrived, set again by 0x005a7760.
+    static network::Packet build(uint64_t guid, bool full = true);
 };
 
 /** CMSG_GUILD_BANK_QUERY_TAB packet builder */
@@ -4092,6 +4105,16 @@ public:
     // Inventory to bank
     static network::Packet buildInventoryToBank(uint64_t guid, uint8_t tabId, uint8_t bankSlot,
                                                  uint8_t srcBag, uint8_t srcSlot, uint32_t splitCount = 0);
+    /// AutoStoreGuildBankItem's (0x005a63f0): bankToBank 0, the tab and slot,
+    /// the item's entry, autoStore 1, the slot's stack count, toChar 1, 0.
+    static network::Packet buildAutoStore(uint64_t guid, uint8_t tabId, uint8_t bankSlot,
+                                          uint32_t itemEntry, uint32_t count);
+    /// A move inside the bank (0x005a5410): bankToBank 1, the destination
+    /// tab, slot and the entry lying there, the source tab, slot and entry, a
+    /// zero byte and the amount (0 for the whole stack or a swap).
+    static network::Packet buildBankToBank(uint64_t guid, uint8_t destTab, uint8_t destSlot,
+                                           uint32_t destEntry, uint8_t srcTab, uint8_t srcSlot,
+                                           uint32_t srcEntry, uint32_t amount);
 };
 
 /** SMSG_GUILD_BANK_LIST parser */

@@ -2380,7 +2380,8 @@ void GameHandler::replyToLastWhisper(const std::string& message) {
 }
 
 void GameHandler::setGuildBankTabText(uint8_t tab, const std::string& text) {
-    if (socialHandler_) socialHandler_->setGuildBankTabText(tab, text);
+    // At a banker, for a bought tab (0x005a5c40).
+    if (inventoryHandler_) inventoryHandler_->setGuildBankTabText(tab, text);
 }
 
 void GameHandler::channelModeration(Opcode op, const std::string& channelName,

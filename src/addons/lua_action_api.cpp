@@ -2038,51 +2038,72 @@ static int lua_PlaceGlyphInSocket(lua_State* L) {
 // The tab and slot are FrameXML's, counted from one; the wire counts from zero,
 // which is the shift AutoStoreGuildBankItem already applies.
 static int lua_PickupGuildBankItem(lua_State* L) {
-    // 0x005a6200
+    // 0x005a6200: both numbers or the usage line, rounded; tab 1..6, slot
+    // 1..98 (as bytes less one) or nothing.
     if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
         return luaL_error(L, "Usage: PickupGuildBankItem(tab, slot)");
     auto* gh = getGameHandler(L);
-    const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (!gh || tab < 1 || slot < 1) return 0;
+    if (!gh) return 0;
+    const uint8_t tab0 = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 1))) - 1u);
+    const uint8_t slot0 = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 2))) - 1u);
+    if (tab0 >= 6 || slot0 >= 98) return 0;
+    const int tab = tab0 + 1, slot = slot0 + 1;
 
     if (droppedItemFromNowhere(L)) return 0;
 
-    // Carrying a bag item, so this is the deposit.
+    // Carrying a bag item, so this is the deposit (0x005a50c0).
     uint8_t srcBag = 0, srcSlot = 0;
     if (cursorWireSlot(srcBag, srcSlot)) {
-        gh->guildBankDepositItem(static_cast<uint8_t>(tab - 1),
-                                 static_cast<uint8_t>(slot - 1), srcBag, srcSlot);
+        gh->guildBankDepositItem(tab0, slot0, srcBag, srcSlot);
         setCursorType(L, CursorType::NONE);
         return 0;
     }
-    // Carrying a bank item already: that is a move within the bank, and the
-    // request builder says plainly that it does not write that path. Dropping
-    // the cursor is better than sending something the server will read as a
-    // withdrawal to nowhere.
+    // Carrying a bank item already: a move inside the bank (0x005a5410) -
+    // the cursor's entry, its tab and slot and the split it carries.
     if (s_cursorType == CursorType::GUILDBANK) {
-        setCursorType(L, CursorType::NONE);
+        auto* inv = gh->getInventoryHandler();
+        if (!inv) return 0;
+        using Move = game::InventoryHandler::GuildBankMove;
+        const Move m = inv->guildBankMoveItem(tab0, slot0, s_cursorId,
+                                              static_cast<uint8_t>(s_cursorBag - 1),
+                                              static_cast<uint8_t>(s_cursorSlot - 1), s_cursorSplit);
+        if (m == Move::Sent) {
+            // The source stays locked until the bank's next list
+            // (0x00519280 after the send), then GUILDBANKBAGSLOTS_CHANGED.
+            s_guildBankMoveSent = true;
+            setCursorType(L, CursorType::NONE);
+            gh->fireAddonEvent("GUILDBANKBAGSLOTS_CHANGED", {});
+        } else if (m == Move::Dropped) {
+            setCursorType(L, CursorType::NONE);
+        }
         return 0;
     }
 
-    // Otherwise pick the slot up, if there is anything in it.
-    const auto& bank = gh->getGuildBankData();
-    for (const auto& it : bank.tabItems) {
-        if (it.slotId != slot - 1 || it.itemEntry == 0) continue;
-        setCursorType(L, CursorType::GUILDBANK);
-        s_cursorId = it.itemEntry;
-        cursorItemPickedUp(L, it.itemEntry);
-        s_cursorBag = tab;
-        s_cursorSlot = slot;
-        s_cursorSplit = 0;   // the whole stack, unless SplitGuildBankItem says otherwise
-        const auto* info = gh->getItemInfo(it.itemEntry);
-        wowee::ui::frameXmlSetCursorItem(
-            info ? gh->getItemIconPath(info->displayInfoId) : std::string());
-        // The slot is locked while its item is held (0x005137d0).
-        guildBankCursorSlot() = {tab, slot};
-        gh->fireAddonEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
-        return 0;
+    // Otherwise pick the slot up, if there is anything in it - out of that
+    // tab's own slots (0x005a4c10), not the open tab's - and not while the
+    // slot is locked by a move on its way (0x005137a0).
+    const auto* it = gh->getGuildBankData().slotAt(tab0, slot0);
+    if (!it) return 0;
+    {
+        auto& moved = guildBankMovedSlots();
+        const uint32_t lists = gh->guildBankListCount();
+        std::erase_if(moved, [lists](const GuildBankMovedSlot& mv) { return mv.list != lists; });
+        for (const auto& mv : moved)
+            if (mv.tab == tab && mv.slot == slot) return 0;
     }
+    const uint32_t entry = it->itemEntry;
+    setCursorType(L, CursorType::GUILDBANK);
+    s_cursorId = entry;
+    cursorItemPickedUp(L, entry);
+    s_cursorBag = tab;
+    s_cursorSlot = slot;
+    s_cursorSplit = 0;   // the whole stack, unless SplitGuildBankItem says otherwise
+    const auto* info = gh->getItemInfo(entry);
+    wowee::ui::frameXmlSetCursorItem(
+        info ? gh->getItemIconPath(info->displayInfoId) : std::string());
+    // The slot is locked while its item is held (0x005137d0).
+    guildBankCursorSlot() = {tab, slot};
+    gh->fireAddonEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
     return 0;
 }
 
