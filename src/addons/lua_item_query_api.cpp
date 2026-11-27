@@ -65,8 +65,16 @@ uint32_t itemUseSpell(game::GameHandler* gh, uint32_t itemId) {
     if (info) {
         if (const int k = useSpellIndex(*info); k >= 0) return info->spells[static_cast<size_t>(k)].spellId;
     }
+    return itemEnchantUse(gh, itemId).spellId;
+}
+
+/// 0x00707c60 and 0x00706ec0 / 0x00706f40 both take the first enchantment
+/// slot with an Effect 7 whose EffectArg (+0x2c) is a spell: that spell, and
+/// the row's Charges (+4).
+ItemEnchantUse itemEnchantUse(game::GameHandler* gh, uint32_t itemId) {
+    ItemEnchantUse out;
     auto ench = gh ? dbc(gh, "SpellItemEnchantment.dbc") : nullptr;
-    if (!ench || ench->getFieldCount() < 14) return 0;
+    if (!ench || ench->getFieldCount() < 14) return out;
     for (int slot = 0; slot < static_cast<int>(game::EquipSlot::NUM_SLOTS); ++slot) {
         const auto it = gh->onlineItemsRef().find(gh->getEquipSlotGuid(slot));
         if (it == gh->onlineItemsRef().end() || it->second.entry != itemId) continue;
@@ -76,12 +84,19 @@ uint32_t itemUseSpell(game::GameHandler* gh, uint32_t itemId) {
         for (const uint32_t id : ids) {
             const int32_t row = id != 0 ? ench->findRecordById(id) : -1;
             if (row < 0) continue;
-            for (uint32_t k = 0; k < 3; ++k)
-                if (ench->getUInt32(static_cast<uint32_t>(row), 2 + k) == 7)
-                    return ench->getUInt32(static_cast<uint32_t>(row), 11 + k);
+            for (uint32_t k = 0; k < 3; ++k) {
+                const uint32_t spell = ench->getUInt32(static_cast<uint32_t>(row), 11 + k);
+                if (ench->getUInt32(static_cast<uint32_t>(row), 2 + k) != 7 || spell == 0) continue;
+                out.found = true;
+                out.spellId = spell;
+                out.charges = static_cast<int32_t>(ench->getUInt32(static_cast<uint32_t>(row), 1));
+                return out;
+            }
         }
+        // 0x005a86b0 takes the first such item it finds.
+        return out;
     }
-    return 0;
+    return out;
 }
 
 QuestSpecialItem questSpecialItemAt(game::GameHandler* gh, int questIndex) {

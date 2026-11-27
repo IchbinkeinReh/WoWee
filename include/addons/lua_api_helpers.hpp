@@ -1006,6 +1006,16 @@ inline void askItemForEvent(game::GameHandler* gh, uint32_t itemId, const char* 
 const game::GameHandler::QuestLogEntry* questOfLogRow(game::GameHandler* gh, int index);
 /// The spell using an item casts (0x00510ef0), 0 for none.
 uint32_t itemUseSpell(game::GameHandler* gh, uint32_t itemId);
+/// An item without a use spell of its template, as one held carries one in an
+/// on-use enchantment (0x005a86b0 -> 0x00707c60 / 0x00706f40): the first
+/// SpellItemEnchantment Effect 7 with an EffectArg, its spell and the row's
+/// Charges. found false when none is held so.
+struct ItemEnchantUse {
+    bool found = false;
+    uint32_t spellId = 0;
+    int32_t charges = 0;
+};
+ItemEnchantUse itemEnchantUse(game::GameHandler* gh, uint32_t itemId);
 /// The enchantments of the sockets on screen as they would be with the gems put
 /// in so far: theirs, else those already there (0x006301a0).
 std::array<uint32_t, 3> socketsAsTheyWouldBe(game::GameHandler* gh);

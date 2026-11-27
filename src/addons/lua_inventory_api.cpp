@@ -1960,12 +1960,24 @@ static int lua_GetItemCount(lua_State* L) {
     // charges left on every one held (0x00754d50 over 0x00753f60) where its
     // template's are below nought, and the casts its reagents allow
     // (0x00801770 -> 0x007ffa30: the least of held / needed) where it has any.
+    // An item whose template has no use spell takes the one an on-use
+    // enchantment on a held one gives, with that row's charges (0x005a86b0 ->
+    // 0x00706f40 / 0x00707c60).
     const auto* info = count != 0 && withCharges ? gh->getItemInfo(itemId) : nullptr;
     if (info && info->maxStack < 2) {
         const auto use = std::find_if(info->spells.begin(), info->spells.end(),
                                       [](const auto& s) { return s.spellId != 0 && s.spellTrigger == 0; });
+        int32_t useCharges = 0;
+        uint32_t useSpell = 0;
         if (use != info->spells.end()) {
-            if (use->charges < 0) {
+            useCharges = use->charges;
+            useSpell = use->spellId;
+        } else if (const auto e = itemEnchantUse(gh, itemId); e.found) {
+            useCharges = e.charges;
+            useSpell = e.spellId;
+        }
+        if (useSpell != 0) {
+            if (useCharges < 0) {
                 uint32_t left = 0;
                 inv.forEachCarried([&](const game::ItemDef& d) {
                     if (d.itemId != itemId || (d.maxDurability != 0 && d.curDurability == 0)) return;
@@ -1975,7 +1987,7 @@ static int lua_GetItemCount(lua_State* L) {
                 count = left;
             }
             gh->loadSpellNameCache();
-            if (const auto se = gh->spellNameCacheRef().find(use->spellId); se != gh->spellNameCacheRef().end()) {
+            if (const auto se = gh->spellNameCacheRef().find(useSpell); se != gh->spellNameCacheRef().end()) {
                 uint32_t casts = 0x7fffffffu;
                 for (const auto& r : se->second.reagents) {
                     if (r.itemId == 0 || r.itemId == 0xfffffffeu || static_cast<int32_t>(r.count) <= 0) continue;
