@@ -5528,7 +5528,22 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"QuestFlagsPVP", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             constexpr uint32_t kQuestFlagsPvp = 0x00002000u;
-            luaPushOneOrNil(L, gh && (questFrameFlags(gh) & kQuestFlagsPvp) ? 1 : 0);
+            // 0x0058c3e0: never on a realm whose type allows player killing
+            // (0x00b2f998, set at the realm's choice from Cfg_Configs: the
+            // row of that realm type, its PlayerKillingAllowed) - there the
+            // whole world is PvP and a quest flagging the player says nothing.
+            bool pvpRealm = false;
+            if (auto* am = gh ? gh->services().assetManager : nullptr; am && am->isInitialized()) {
+                if (auto cfg = am->loadDBCOptional("Cfg_Configs.dbc"); cfg && cfg->isLoaded() &&
+                                                                       cfg->getFieldCount() >= 3) {
+                    for (uint32_t i = 0; i < cfg->getRecordCount(); ++i) {
+                        if (cfg->getUInt32(i, 1) != gh->getRealmType()) continue;
+                        pvpRealm = cfg->getUInt32(i, 2) != 0;
+                        break;
+                    }
+                }
+            }
+            luaPushOneOrNil(L, gh && !pvpRealm && (questFrameFlags(gh) & kQuestFlagsPvp) ? 1 : 0);
             return 1;
         }},
                 // QuestIsDaily() (0x0058c4d0) / QuestIsWeekly() (0x0058c510):
