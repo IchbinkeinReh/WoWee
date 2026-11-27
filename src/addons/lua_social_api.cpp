@@ -4351,11 +4351,12 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GetFactionInfo(index)");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || index < 1) { return luaReturnNil(L); }
+            const long long index = luaTruncated(lua_tonumber(L, 1));  // 0x005d1187
+            if (!gh) return pushNoFaction(L, gh, 0);
             const auto& rows = gh->getReputationRows();
-            if (index > static_cast<int>(rows.size())) { return luaReturnNil(L); }
-            return pushFactionRow(L, gh, rows[index - 1]);
+            // Past the rows (either way) 0x005d1150 asks 0x005d0da0 of faction 0.
+            if (index < 1 || index > static_cast<long long>(rows.size())) return pushNoFaction(L, gh, 0);
+            return pushFactionRow(L, gh, rows[static_cast<size_t>(index) - 1]);
         }},
                 // The reputation tab's controls. Every one of these has a verb
                 // on GameHandler and none had a binding, so the tab could show

@@ -527,8 +527,7 @@ static int lua_GetQuestLogRewardFactionInfo(lua_State* L) {
 }
 
 // GetFactionInfoByID(id) - the same thirteen values GetFactionInfo gives by
-// position, found by faction id instead. The reputation list carries the id
-// already.
+// position, for any faction of Faction.dbc by its id (pushFactionById).
 //
 // This used to answer a name and five nils. The quest reward panel reads the
 // ninth and eleventh - isHeader and hasRep - to decide whether to print a
@@ -538,13 +537,9 @@ static int lua_GetFactionInfoByID(lua_State* L) {
     // 0x005d11e0
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: GetFactionInfoByID(id)");
-    auto* gh = getGameHandler(L);
-    const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-    if (!gh || id == 0) return luaReturnNil(L);
-    for (const auto& r : gh->getReputationList()) {
-        if (r.factionId == id) return pushFactionInfo(L, gh, r);
-    }
-    return luaReturnNil(L);
+    // Truncated, its low 32 bits as EBX (0x005d1217..0x005d122f).
+    const auto id = static_cast<int32_t>(static_cast<uint32_t>(luaTruncated(lua_tonumber(L, 1))));
+    return pushFactionById(L, getGameHandler(L), id);
 }
 
 // ---- Quest watch ordering ----

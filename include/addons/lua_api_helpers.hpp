@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstring>
 #include <cctype>
+#include <climits>
 #include <cmath>
 #include <algorithm>
 
@@ -228,6 +229,12 @@ inline int32_t luaToClientInt(lua_State* L, int idx) {
 }
 
 inline int luaReturnNil(lua_State* L)  { lua_pushnil(L); return 1; }
+/// A number as the client's fistp with the truncating control word makes it
+/// a 64-bit integer: toward zero, and the x87 integer indefinite
+/// (0x8000000000000000) for what does not fit or is no number.
+inline long long luaTruncated(double x) {
+    return std::isfinite(x) && std::fabs(x) < 9.2e18 ? static_cast<long long>(x) : LLONG_MIN;
+}
 /// 1 or nil, the way the client answers many of its yes-or-no questions.
 inline void luaPushOneOrNil(lua_State* L, bool yes) {
     if (yes) lua_pushnumber(L, 1);
@@ -1059,7 +1066,9 @@ inline int pushFactionInfo(lua_State* L, game::GameHandler* gh,
     // which is what Alliance is.
     luaPushOneOrNil(L, isHeader);                                                  // 9: isHeader
     luaPushOneOrNil(L, isCollapsed);                                               // 10: isCollapsed
-    luaPushOneOrNil(L, hasRep);                                                    // 11: hasRep
+    // A heading's only: for a faction that is no group 0x005d0da0 pushes nil
+    // for isHeader, isCollapsed and hasRep alike (0x005d0ec5).
+    luaPushOneOrNil(L, isHeader && hasRep);                                        // 11: hasRep
     luaPushOneOrNil(L, faction && f.factionId == gh->getWatchedFactionId());       // 12: isWatched
     luaPushOneOrNil(L, isChild);                                                   // 13: isChild
     return 13;
@@ -1120,6 +1129,51 @@ inline int pushFactionRow(lua_State* L, game::GameHandler* gh,
     return pushFactionInfo(L, gh, e, row.isHeader,
                            row.isHeader && gh->isFactionCollapsed(row.factionId),
                            row.hasRep, row.isChild);
+}
+
+/// 0x005d0da0 asked of an id Faction.dbc has no row for: the group of that id
+/// where one is drawn (0 FACTION_OTHER, -1 FACTION_INACTIVE), else nil, nil,
+/// 1, 0, 0, 0 and seven nils (0x005d0ffe) - thirteen values either way.
+/// GetFactionInfo past the rows asks it of 0 (0x005d1150 clears EBX), so
+/// with an Other group drawn that is its row.
+inline int pushNoFaction(lua_State* L, game::GameHandler* gh, long long id) {
+    if (gh && (id == 0 || id == -1)) {
+        const uint32_t group = id == 0 ? game::reputation_tree::kOther : game::reputation_tree::kInactive;
+        for (const auto& row : gh->getReputationRows())
+            if (row.factionId == group) return pushFactionRow(L, gh, row);
+    }
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushnumber(L, 1);
+    for (int i = 0; i < 3; ++i) lua_pushnumber(L, 0);
+    for (int i = 0; i < 7; ++i) lua_pushnil(L);
+    return 13;
+}
+
+/// GetFactionInfoByID's answer (0x005d11e0 -> 0x005d0da0): any faction of
+/// Faction.dbc, met or not - its name (+0x5c), description (+0x60) and the
+/// standing the realm's list holds at its reputation index (0x005d05b0, 0
+/// without one), at war and peace forced from that list's flags (0x005d04b0,
+/// 0x005d0500). A drawn row answers as GetFactionInfo does for it (heading,
+/// open or closed, in a group); one not drawn is no heading and in no group.
+inline int pushFactionById(lua_State* L, game::GameHandler* gh, long long id) {
+    if (!gh || id <= 0 || id >= static_cast<long long>(game::reputation_tree::kOther))
+        return pushNoFaction(L, gh, id);
+    const auto factionId = static_cast<uint32_t>(id);
+    const std::string& name = gh->getFactionNamePublic(factionId);
+    if (name.empty()) return pushNoFaction(L, gh, id);
+    for (const auto& row : gh->getReputationRows())
+        if (row.factionId == factionId) return pushFactionRow(L, gh, row);
+    game::GameHandler::ReputationEntry e;
+    e.factionId = factionId;
+    e.name = name;
+    const uint32_t repListId = gh->getRepListIdByFactionId(factionId);
+    const auto& standings = gh->getInitialFactions();
+    if (repListId < standings.size()) {
+        e.reputationIndex = repListId;
+        e.flags = standings[repListId].flags;
+    }
+    return pushFactionInfo(L, gh, e, false, false, false, false);
 }
 
 /// The item behind a row of the currency list, or zero for no such row.

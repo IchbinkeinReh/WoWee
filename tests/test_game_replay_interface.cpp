@@ -1128,6 +1128,45 @@ TEST_CASE("a faction put away is in the inactive group", "[replay][interface][re
                 "if n == 'Shattrath City' then return rep end end end)()"));
 }
 
+// 0x005d0da0 by id (0x005d11e0) and past the rows (0x005d1150, faction 0):
+// any faction of Faction.dbc, met or not; the Other group for 0; nil, nil, 1,
+// 0, 0, 0 and seven nils for no faction; hasRep a heading's only.
+TEST_CASE("GetFactionInfo and GetFactionInfoByID answer as the client", "[replay][interface][reputation]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Reputation ui(s);
+    // Thrallmar not met (repList 2), its standing still the realm's.
+    s.handler().initialFactionsRef()[2].flags = 0;
+    CHECK(ui.rowsAre("+The Burning Crusade;>+Shattrath City;>Cenarion Expedition;>The Aldor;+Other;"
+                     "Hydraxian Waterlords;"));
+    const auto none = [&ui](const std::string& call) {
+        return ui.is("(function() local t = {" + call + "} return select('#', " + call +
+                     ") == 13 and t[1] == nil and t[2] == nil and t[3] == 1 and t[4] == 0 and t[5] == 0 "
+                     "and t[6] == 0 and next(t, 6) == nil end)()");
+    };
+    CHECK(none("GetFactionInfoByID(12345)"));
+    CHECK(none("GetFactionInfoByID(-5)"));
+    // Faction 0 and past the rows: the Other group drawn.
+    CHECK(ui.is("(function() local n, _, _, _, _, _, _, _, head = GetFactionInfo(99) return n == 'Other' and head == 1 "
+                "and select('#', GetFactionInfo(99)) == 13 end)()"));
+    CHECK(ui.is("GetFactionInfo(0) == 'Other' and GetFactionInfoByID(0) == 'Other'"));
+    CHECK(ui.is("GetFactionInfo(5.9) == 'Other'"));  // truncated: row 5
+    // Not met: name, description, standing; no heading, no group.
+    CHECK(ui.is("(function() local n, d, st, lo, hi, v, war, can, head, closed, rep, watched, child = "
+                "GetFactionInfoByID(947) return n == 'Thrallmar' and d == 'Sent by Thrall.' and st == 4 and lo == 0 "
+                "and hi == 3000 and v == 100 and war == nil and can == 1 and head == nil and closed == nil "
+                "and rep == nil and watched == nil and child == nil end)()"));
+    // A drawn heading as its row; a plain faction without hasRep.
+    CHECK(ui.is("(function() local n, _, _, _, _, _, _, _, head, _, _, _, child = GetFactionInfoByID(936) "
+                "return n == 'Shattrath City' and head == 1 and child == 1 end)()"));
+    CHECK(ui.is("(function() local n, _, _, _, _, _, _, _, head, _, rep = GetFactionInfo(6) "
+                "return n == 'Hydraxian Waterlords' and head == nil and rep == nil end)()"));
+    // With no Other group drawn, past the rows is no faction.
+    s.handler().initialFactionsRef()[3].flags = 0;
+    CHECK(none("GetFactionInfo(99)"));
+    CHECK(none("GetFactionInfoByID(0)"));
+}
+
 // P73: by name as the client compares names - the groups (0x005d1710) and the
 // factions in each (0x005d02f0), these before the groups in it. The table's
 // places are the other way round, and a byte compare puts the accented last.
