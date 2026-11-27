@@ -5110,8 +5110,10 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"ResurrectHasTimer", [](lua_State* L) -> int {
+            // 0x00515a00: never on an arena's map (0x00bea570 == 4), else the
+            // offer's timer flag (0x00c9eac4).
             auto* gh = getGameHandler(L);
-            luaPushOneOrNil(L, (gh && gh->resurrectHasTimer()) ? 1 : 0);
+            luaPushOneOrNil(L, (gh && gh->currentMapInstanceType() != 4 && gh->resurrectHasTimer()) ? 1 : 0);
             return 1;
         }},
                 // ResurrectGetOfferer() (0x00515950): the name cache's name for
