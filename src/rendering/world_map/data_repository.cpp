@@ -4,6 +4,7 @@
 #include "rendering/world_map/coordinate_projection.hpp"
 #include "rendering/world_map/data_repository.hpp"
 #include "rendering/world_map/map_resolver.hpp"
+#include "rendering/world_map/poi_row.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "core/coordinates.hpp"
@@ -652,56 +653,18 @@ void DataRepository::loadPOIs(pipeline::AssetManager& assetManager) {
         return;
     }
 
-    // Columns from the active layout, falling back to 3.3.5a's: 0 ID,
-    // 1 Importance, 2-10 Icon[9], 11 FactionID, 12-14 X/Y/Z, 15 ContinentID,
-    // 16 Flags, 17 AreaID, 18 Name_lang (enUS). The name is 18, not 16 -
-    // 16 is Flags, read as a string offset it named every POI wrongly or
-    // not at all.
     const auto* activeLayout = pipeline::getActiveDBCLayout();
-    const auto* poiL = activeLayout ? activeLayout->getLayout("AreaPOI") : nullptr;
-    const uint32_t colId         = poiL ? (*poiL)["ID"]          : 0;
-    const uint32_t colImportance = poiL ? (*poiL)["Importance"]  : 1;
-    const uint32_t colIcon       = poiL ? (*poiL)["Icon0"]       : 2;
-    const uint32_t colFaction    = poiL ? (*poiL)["FactionID"]   : 11;
-    const uint32_t colX          = poiL ? (*poiL)["X"]           : 12;
-    const uint32_t colY          = poiL ? (*poiL)["Y"]           : 13;
-    const uint32_t colZ          = poiL ? (*poiL)["Z"]           : 14;
-    const uint32_t colMap        = poiL ? (*poiL)["ContinentID"] : 15;
-    const uint32_t colFlags      = poiL ? (*poiL)["Flags"]       : 16;
-    const uint32_t colArea       = poiL ? (*poiL)["AreaID"]      : 17;
-    const uint32_t colState      = poiL ? poiL->tryField("WorldStateID") : 52;
-    const uint32_t colName       = poiL ? (*poiL)["Name"]        : 18;
+    const auto cols = PoiColumns::of(activeLayout ? activeLayout->getLayout("AreaPOI") : nullptr);
 
     const uint32_t fieldCount = poiDbc->getFieldCount();
-    if (fieldCount <= colName) {
+    if (fieldCount <= cols.name) {
         LOG_WARNING("DataRepository: AreaPOI.dbc has too few fields (", fieldCount, ")");
         return;
     }
 
     int loaded = 0;
     for (uint32_t i = 0; i < poiDbc->getRecordCount(); i++) {
-        POI poi;
-        poi.id = poiDbc->getUInt32(i, colId);
-        poi.importance = poiDbc->getUInt32(i, colImportance);
-        poi.iconType = poiDbc->getUInt32(i, colIcon);
-        poi.factionId = poiDbc->getUInt32(i, colFaction);
-        // The file's axes are the wire's. Taken as canonical, every point's
-        // two were exchanged: Bloodhoof at 85/3 of Mulgore's map.
-        const glm::vec3 place = core::coords::serverToCanonical(
-            glm::vec3(poiDbc->getFloat(i, colX), poiDbc->getFloat(i, colY), poiDbc->getFloat(i, colZ)));
-        poi.wowX = place.x;
-        poi.wowY = place.y;
-        poi.wowZ = place.z;
-        poi.mapId = poiDbc->getUInt32(i, colMap);
-        // A layout that carries no Flags column reads as no flags, which costs
-        // the interface's battle-map pin test (lua_system_api.cpp) and nothing
-        // else - the map itself draws these pins without asking the flag.
-        poi.flags = colFlags < fieldCount ? poiDbc->getUInt32(i, colFlags) : 0;
-        poi.areaId = colArea < fieldCount ? poiDbc->getUInt32(i, colArea) : 0;
-        poi.worldStateId = colState < fieldCount ? poiDbc->getUInt32(i, colState) : 0;
-        for (uint32_t k = 0; k < 9 && colIcon + k < fieldCount; ++k) poi.icons[k] = poiDbc->getInt32(i, colIcon + k);
-        poi.name = poiDbc->getString(i, colName);
-
+        POI poi = readPoiRow(*poiDbc, i, cols);
         if (poi.name.empty()) continue;
 
         poiMarkers_.push_back(std::move(poi));

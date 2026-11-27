@@ -3630,9 +3630,19 @@ static int lua_GetMapLandmarkInfo(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMapLandmarkInfo(index)");
     auto* svc = getLuaServices(L);
     const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
-    if (!svc || !svc->getMapLandmarks || index < 1) return luaReturnNil(L);
+    // 0x00545a30's tail for an index with no landmark: seven values, not one -
+    // nil, nil, 0, 0, 0, nil, nil.
+    const auto none = [](lua_State* S) {
+        lua_pushnil(S);
+        lua_pushnil(S);
+        for (int i = 0; i < 3; ++i) lua_pushnumber(S, 0);
+        lua_pushnil(S);
+        lua_pushnil(S);
+        return 7;
+    };
+    if (!svc || !svc->getMapLandmarks || index < 1) return none(L);
     const auto marks = svc->getMapLandmarks();
-    if (index > static_cast<int>(marks.size())) return luaReturnNil(L);
+    if (index > static_cast<int>(marks.size())) return none(L);
     const auto& m = marks[static_cast<size_t>(index) - 1];
 
     lua_pushstring(L, m.name.c_str());          // 1: name

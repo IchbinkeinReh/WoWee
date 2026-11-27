@@ -708,3 +708,56 @@ TEST_CASE("Spell.dbc's created item comes from CREATE_ITEM and CREATE_ITEM_2", "
     CHECK(wowee::pipeline::spellCreatedItem(dbc, 1, effectFields, itemTypeFields) == 39900);
     CHECK(wowee::pipeline::spellCreatedItem(dbc, 2, effectFields, itemTypeFields) == 0);
 }
+
+// T414: GetMapLandmarkInfo's second value (0x00545a30 reads +0x4c of 12340's
+// POI record, AreaPOI's Description_lang) came back '' for every pin - the
+// world map's loader read the name block and never the description block.
+// A German file's shape: enUS columns empty, the text in deDE (locale 3).
+#include "rendering/world_map/poi_row.hpp"
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+
+TEST_CASE("AreaPOI rows carry their description (T414, 0x00545a30)", "[dbc][T414]") {
+    using namespace wowee::rendering::world_map;
+    std::string strings(1, '\0');
+    const uint32_t hof = static_cast<uint32_t>(strings.size());
+    strings += "Hof"; strings += '\0';
+    const uint32_t contested = static_cast<uint32_t>(strings.size());
+    strings += "Umk\xc3\xa4mpft"; strings += '\0';
+    std::vector<uint32_t> row(53, 0);
+    row[0] = 1633; row[2] = 34; row[15] = 529; row[16] = 0x200;
+    row[18 + 3] = hof;        // Name_lang deDE
+    row[35 + 3] = contested;  // Description_lang deDE
+    row[34] = row[51] = 0x00FFFFFEu;  // the two blocks' locale flags
+    row[52] = 1767;
+    DBCFile dbc;
+    REQUIRE(dbc.load(buildSyntheticDBC(1, 53, {row}, strings)));
+
+    SECTION("3.3.5a's columns without a layout") {
+        const POI poi = readPoiRow(dbc, 0, PoiColumns{});
+        CHECK(poi.name == "Hof");
+        CHECK(poi.description == "Umk\xc3\xa4mpft");
+        CHECK(poi.worldStateId == 1767);
+    }
+    SECTION("an installed layout that predates the Description column") {
+        wowee::pipeline::DBCFieldMap old;
+        old.dbc = "AreaPOI";
+        old.fields = {{"ID", 0}, {"Importance", 1}, {"Icon0", 2}, {"FactionID", 11}, {"X", 12},
+                      {"Y", 13}, {"Z", 14}, {"ContinentID", 15}, {"Flags", 16}, {"AreaID", 17},
+                      {"Name", 18}, {"WorldStateID", 52}};
+        const POI poi = readPoiRow(dbc, 0, PoiColumns::of(&old));
+        CHECK(poi.name == "Hof");
+        CHECK(poi.description == "Umk\xc3\xa4mpft");
+    }
+    SECTION("the shipped wotlk layout") {
+        const char* root = std::getenv("WOWEE_SOURCE_DIR");
+        if (!root) SKIP("WOWEE_SOURCE_DIR not set");
+        wowee::pipeline::DBCLayout layout;
+        REQUIRE(layout.loadFromJson(std::string(root) + "/Data/expansions/wotlk/dbc_layouts.json"));
+        const auto* l = layout.getLayout("AreaPOI");
+        REQUIRE(l);
+        CHECK(l->tryField("Description") == 35);
+        CHECK(readPoiRow(dbc, 0, PoiColumns::of(l)).description == "Umk\xc3\xa4mpft");
+    }
+}

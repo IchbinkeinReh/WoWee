@@ -28,6 +28,7 @@
     "Flags": 16,
     "AreaID": 17,
     "Name": 18,
+    "Description": 35,
     "WorldStateID": 52
   },
   "AreaTable": {

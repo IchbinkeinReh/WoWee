@@ -1667,6 +1667,8 @@ add_executable(test_dbc_loader
 target_include_directories(test_dbc_loader PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_dbc_loader SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
 target_link_libraries(test_dbc_loader PRIVATE catch2_main)
+# poi_row.hpp (T414) reaches glm.
+wowee_test_link_glm(test_dbc_loader)
 add_test(NAME dbc_loader COMMAND test_dbc_loader)
 register_test_target(test_dbc_loader)
 

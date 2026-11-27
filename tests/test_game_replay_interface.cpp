@@ -4729,3 +4729,18 @@ TEST_CASE("a renamed guild bank tab shows its new name at once (0x005a4220)", "[
     CHECK(ui.is("GetGuildBankTabInfo(1) == 'Kräuter'"));
     CHECK(ui.is("select(2, GetGuildBankTabInfo(1)):find('INV_Misc_Herb_01') ~= nil"));
 }
+
+// T414 (FIXER AA, found in code beside it): GetMapLandmarkInfo for an index
+// with no landmark ends in 0x00545a30's tail - seven values, nil, nil, 0, 0,
+// 0, nil, nil - not a single nil.
+TEST_CASE("GetMapLandmarkInfo answers seven values past the last landmark (0x00545a30)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select('#', GetMapLandmarkInfo(999)) == 7"));
+    CHECK(ui.is("select('#', GetMapLandmarkInfo(0)) == 7"));
+    CHECK(ui.is("select(3, GetMapLandmarkInfo(999)) == 0"));
+    CHECK(ui.is("select(5, GetMapLandmarkInfo(999)) == 0"));
+    CHECK(ui.is("select(2, GetMapLandmarkInfo(999)) == nil"));
+    CHECK(ui.is("select(7, GetMapLandmarkInfo(999)) == nil"));
+}
