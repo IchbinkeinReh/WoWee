@@ -1467,6 +1467,32 @@ void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const
     sayCastFailure(spellId, result);
 }
 
+void SpellHandler::showNamedCastFailure(uint32_t spellId, uint8_t result, int powerType, uint32_t miscArg) {
+    // 0x00808200 case 100/0x83: the item is looked up through the item cache
+    // with 0x007fea80 as its callback (0x0067ca30); one not cached yet is
+    // asked of the server and the line is raised when it answers - "Missing
+    // reagent: <name>" also for a reagent that is not carried at all (V581).
+    const bool namesItem = (result == 0x64 || result == kCastResultTotems) && miscArg != 0 &&
+                           miscArg != cast_failure::kNoReagentNamed;
+    const auto* info = namesItem ? owner_.getItemInfo(miscArg) : nullptr;
+    if (!namesItem || (info && info->valid)) {
+        showPlayerCastFailure(spellId, result, castFailureMessage(owner_, spellId, result, powerType, miscArg));
+        return;
+    }
+    // The fizzle and the three-second hold now (0x00808200 before its
+    // switch); the line itself from the callback, which does not ask the hold.
+    showPlayerCastFailure(spellId, result, std::string());
+    static uint32_t localWaits = 0;
+    owner_.askItemThen(miscArg, "local cast failure " + std::to_string(++localWaits),
+                       [this, spellId, result, powerType, miscArg](bool found) {
+                           if (!found) return;
+                           const std::string late = castFailureMessage(owner_, spellId, result, powerType, miscArg);
+                           if (late.empty()) return;
+                           owner_.addUIError(late);
+                           sayCastFailure(spellId, result);
+                       });
+}
+
 void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
     // 0x0080cce0: the cursor holds it (0x00d3f4e4) until a unit is clicked
     // or it is put down; it takes the place of a spell held for a place.
@@ -2930,8 +2956,7 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid, uint64_
         if (self && !(item && (item->itemFlags & 0x10000000u) != 0)) {
             uint32_t arg = 0;
             if (const uint8_t code = toolsMissing(spellId, *self, arg); code != 0) {
-                showPlayerCastFailure(spellId, code,
-                                      castFailureMessage(owner_, spellId, code, static_cast<int32_t>(e.powerType), arg));
+                showNamedCastFailure(spellId, code, static_cast<int32_t>(e.powerType), arg);
                 return false;
             }
         }

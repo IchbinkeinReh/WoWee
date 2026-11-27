@@ -801,6 +801,9 @@ public:
     /// with the character's line, unless it repeats the last one within
     /// three seconds (cast_failure::RepeatHold). Nothing for empty words.
     void showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const;
+    /// A local refusal that names an item: shown now, or once the item cache
+    /// has the item's name (0x00808200 -> 0x0067ca30/0x007fea80).
+    void showNamedCastFailure(uint32_t spellId, uint8_t result, int powerType, uint32_t miscArg);
 
 private:
     void sendPetNameQuery(uint32_t key, uint64_t petGuid);

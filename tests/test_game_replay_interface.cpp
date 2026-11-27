@@ -4515,9 +4515,19 @@ TEST_CASE("a spell whose reagent is not carried is refused before it is sent (T4
     ui.run("sent = 0 local f = CreateFrame('Frame') f:RegisterEvent('UNIT_SPELLCAST_SENT') "
            "f:SetScript('OnEvent', function() sent = sent + 1 end)");
     const auto casts = [&] { return s.sent().of(Opcode::CMSG_CAST_SPELL).size(); };
+    ui.run("errs = {} local g = CreateFrame('Frame') g:RegisterEvent('UI_ERROR_MESSAGE') "
+           "g:SetScript('OnEvent', function(_, _, m) errs[#errs + 1] = m end)");
     ui.run("CastSpellByID(" + std::to_string(kEnslave) + ")");
     CHECK(casts() == 0);
     CHECK(ui.is("sent == 0"));
+    // The reagent is neither carried nor cached: its name is asked for and
+    // the line comes with the answer (0x00808200 -> 0x0067ca30, 0x007fea80) -
+    // V581: nothing was said at all.
+    CHECK(s.sent().of(Opcode::CMSG_ITEM_QUERY_SINGLE).size() >= 1);
+    CHECK(ui.is("#errs == 0"));
+    answerItem(s, kShard, "Soul Shard");
+    CHECK(ui.is("#errs == 1"));
+    CHECK(ui.is("errs[1] ~= nil and errs[1] ~= ''"));
     carryForAuction(s, 0, 0x4000000000000C41ull, kShard, 1);
     ui.run("CastSpellByID(" + std::to_string(kEnslave) + ")");
     CHECK(casts() == 1);
