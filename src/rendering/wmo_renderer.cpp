@@ -2173,6 +2173,11 @@ void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceM
             vkCmdBindIndexBuffer(cmd, group.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
             for (const auto& mb : group.mergedBatches) {
+                // A blended layer - glass, a light card, a water sheet - is
+                // not opaque and casts nothing, as the M2 shadow pass and the
+                // ray-traced scene (registerRtModel, blend >= 2) have it. Drawn
+                // here, a window or a pane of light threw a solid shadow.
+                if (mb.isTransparent) continue;
                 for (const auto& dr : mb.draws) {
                     vkCmdDrawIndexed(cmd, dr.indexCount, 1, dr.firstIndex, 0, 0);
                 }
