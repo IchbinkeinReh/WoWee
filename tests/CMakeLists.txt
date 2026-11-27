@@ -2120,6 +2120,11 @@ wowee_add_test(test_ship_path
 wowee_add_test(test_world_map
     SOURCES test_world_map.cpp)
 
+# ── test_shadow_bias ──────────────────────────────────────────
+# The sun shadow map's depth bias in yards (U22). Header-only.
+wowee_add_test(test_shadow_bias
+    SOURCES test_shadow_bias.cpp)
+
 # ── test_world_map_coordinate_projection ──────────────────────
 wowee_add_test(test_world_map_coordinate_projection
     SOURCES test_world_map_coordinate_projection.cpp

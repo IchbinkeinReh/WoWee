@@ -47,7 +47,15 @@ float csmSampleCascade(sampler2DShadow smap, int c, vec3 worldPos, vec3 n, float
     // Half a texel in, so a bilinear compare stays inside the tile too.
     const vec2 lo = cascadeRect[c].xy + 0.5 * texel;
     const vec2 hi = cascadeRect[c].zw - 0.5 * texel;
-    const float ref = proj.z - depthBias;
+    // The bias in yards by this cascade's texel and the slope to the sun
+    // (shadow_bias.hpp, depthBiasYards), in depth units by cascadeInfo.w;
+    // never more than the caller's. The caller's alone, a share of the whole
+    // depth range, came to over a yard along the light under a low sun, and a
+    // character's shadow began that far from its feet (U22).
+    const float nlc = clamp(abs(nl), 0.05, 1.0);
+    const float slope = min(sqrt(max(1.0 - nlc * nlc, 0.0)) / nlc, 4.0);
+    const float yards = cascadeTexel[c].x * (1.0 + 1.5 * slope);
+    const float ref = proj.z - (cascadeInfo.w > 0.0 ? min(depthBias, yards * cascadeInfo.w) : depthBias);
     if (cascadeInfo.y > 0.5) {
         float quad = 0.0;
         for (int x = 0; x < 2; ++x) {
