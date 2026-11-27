@@ -2405,6 +2405,46 @@ TEST_CASE("a charmed creature keeps its own name", "[replay][playtest]") {
     CHECK(unit->getName() == "Diener der Gan'arg");
 }
 
+// T431: the unit name getter asks UNIT_FIELD_PETNUMBER at every call
+// (00720000.c ~7791-7812). An enslaved demon the realm gave a number goes by
+// the realm's pet name; when the charm ends the number goes back to 0 and it
+// is its creature again, localised.
+TEST_CASE("a released demon is called by its creature's name again", "[replay][playtest]") {
+    constexpr uint64_t kDemon = 0xF1300017E30019A4ull;
+    Session s;
+    spawnPlayer(s);
+    auto& gh = s.handler();
+    s.receive(UpdateObject().create(kDemon, wowee::game::ObjectType::UNIT,
+                                    {{UF::OBJECT_FIELD_ENTRY, 6115}, {UF::UNIT_FIELD_HEALTH, 10},
+                                     {UF::UNIT_FIELD_MAXHEALTH, 10}}));
+    wowee::network::Packet creature(wowee::game::wireOpcode(Opcode::SMSG_CREATURE_QUERY_RESPONSE));
+    creature.writeUInt32(6115);
+    creature.writeString("Streunende Teufelswache");
+    for (int i = 0; i < 5; ++i) creature.writeString("");
+    for (uint32_t v : {0u, 3u, 3u, 0u}) creature.writeUInt32(v);
+    for (uint32_t v : {0u, 0u, 4449u, 0u, 0u, 0u}) creature.writeUInt32(v);
+    for (int i = 0; i < 12; ++i) creature.writeUInt32(0);
+    s.receive(creature);
+    const auto name = [&] {
+        const auto unit = std::dynamic_pointer_cast<wowee::game::Unit>(gh.getEntityManager().getEntity(kDemon));
+        return unit ? unit->getName() : std::string("?");
+    };
+    REQUIRE(name() == "Streunende Teufelswache");
+    s.receive(UpdateObject().values(kDemon, {{UF::UNIT_FIELD_PETNUMBER, 7}}));
+    gh.getSpellHandler()->requestPetName(kDemon);
+    REQUIRE_FALSE(s.sent().of(Opcode::CMSG_PET_NAME_QUERY).empty());
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_PET_NAME_QUERY_RESPONSE));
+    answer.writeUInt32(s.sent().of(Opcode::CMSG_PET_NAME_QUERY).back().readUInt32());
+    answer.writeString("Roaming Felguard");
+    answer.writeUInt32(0);
+    answer.writeUInt8(0);
+    s.receive(answer);
+    CHECK(name() == "Roaming Felguard");
+    s.receive(UpdateObject().values(kDemon, {{UF::UNIT_FIELD_PETNUMBER, 0}}));
+    CHECK(name() == "Streunende Teufelswache");
+    REQUIRE(gh.getSpellHandler()->ownPetName(kDemon) == nullptr);
+}
+
 // P59: the player stayed, for the game, where it got on, and stood there when it was let go;
 // jumped onto it, it fell on from there.
 TEST_CASE("the player in a vehicle's seat is its place there, and is let go at it", "[replay][playtest]") {

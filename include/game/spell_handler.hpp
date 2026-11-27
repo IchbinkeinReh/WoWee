@@ -745,6 +745,8 @@ public:
         const auto it = petNames_.find(guid);
         return it != petNames_.end() ? &it->second : nullptr;
     }
+    /// Its pet number gone back to 0: called by its creature's name again (T431).
+    void forgetPetName(uint64_t guid) { petNames_.erase(guid); }
     /// The pets' names still without an answer, once more.
     void askPetNamesAgain();
     /// 0x007ff180 != 0: whether the spell takes time to cast for this unit -

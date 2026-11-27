@@ -4221,6 +4221,15 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     const bool watchesPetName = entity->getType() == ObjectType::UNIT && petNameStamp != 0xFFFF &&
                                 block.fields.find(petNameStamp) != block.fields.end();
     const uint32_t oldPetNameStamp = watchesPetName ? entity->getField(petNameStamp) : 0;
+    // The pet number, which decides whose name a creature goes by: the unit
+    // name getter (00720000.c ~7791-7812) asks UNIT_FIELD_PETNUMBER at every
+    // call - 0 is the creature cache's (localised) name. A charmed demon the
+    // realm gave a number is called by the pet name until the charm ends and
+    // the realm sets the number back to 0 (T431).
+    const uint16_t petNumberAt = fieldIndex(UF::UNIT_FIELD_PETNUMBER);
+    const bool watchesPetNumber = entity->getType() == ObjectType::UNIT && petNumberAt != 0xFFFF &&
+                                  block.fields.find(petNumberAt) != block.fields.end();
+    const uint32_t oldPetNumber = watchesPetNumber ? entity->getField(petNumberAt) : 0;
     // The player's UNIT_FLAG2_COMPREHEND_LANG (0x8) turning over changes the
     // languages they can speak: LANGUAGE_LIST_CHANGED (0x0073c5d0, 0xf0).
     const uint16_t flags2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
@@ -4326,6 +4335,16 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
 
     if (watchesLanguages && ((entity->getField(flags2) ^ oldFlags2) & 0x8u) != 0)
         pendingEvents_.emit("LANGUAGE_LIST_CHANGED", {});
+    if (watchesPetNumber && oldPetNumber != 0 && entity->getField(petNumberAt) == 0) {
+        if (auto* spells = owner_.getSpellHandler()) spells->forgetPetName(block.guid);
+        if (auto* unit = dynamic_cast<Unit*>(entity.get())) {
+            const std::string own = getCachedCreatureName(unit->getEntry());
+            if (!own.empty() && unit->getName() != own) {
+                unit->setName(own);
+                owner_.announceUnitName(block.guid);
+            }
+        }
+    }
     if (watchesPetName && entity->getField(petNameStamp) != oldPetNameStamp) {
         auto guidAt = [&](UF lo) -> uint64_t {
             const uint16_t i = fieldIndex(lo);
