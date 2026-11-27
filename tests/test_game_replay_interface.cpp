@@ -5339,6 +5339,73 @@ TEST_CASE("a moved item stays locked until the realm answers (0x006df890)", "[re
     CHECK_FALSE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
 }
 
+// T420 (FIXER AD): a split's source (0x005d7ff0 -> 0x006db9d0, then
+// ClearCursor(0, 1), no unlock) waits for its new count. AzerothCore sends
+// that count in a CREATE block of the known item, which 12340 reads as a
+// values update (0x004d63b0 -> 0x004d5550, so 0x00707720 runs); WoWee let
+// the lock go only for a values block and the source stayed locked for good.
+// A worn item put back on its own slot is put down and unlocked (0x005e85d0
+// -> ClearCursor(1, 1)) - WoWee refused it as locked.
+TEST_CASE("a split's source and a worn put-back are let go (T420)", "[replay][interface]") {
+    constexpr uint64_t kLinen = 0x4000000000000B11ull, kRod = 0x4000000000000B12ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    carryForAuction(s, 0, kLinen, 2589, 17);
+    ui.engine.dispatchOnUpdate(0.0f);
+    ui.run("seen = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'ITEM_LOCKED', 'ITEM_UNLOCKED'}) do f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(self, e, a, b) seen[#seen + 1] = e .. ' ' .. a .. ' ' .. tostring(b) end)");
+    ui.run("SplitContainerItem(0, 1, 5)");
+    ui.run("seen = {} PickupContainerItem(0, 3)");
+    REQUIRE(s.sent().of(Opcode::CMSG_SPLIT_ITEM).size() == 1);
+    REQUIRE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
+    // The realm: the source re-sent whole with its new count.
+    s.receive(UpdateObject().create(kLinen, wowee::game::ObjectType::ITEM,
+                                    {{UF::OBJECT_FIELD_ENTRY, 2589u}, {UF::ITEM_FIELD_STACK_COUNT, 12u}}));
+    CHECK_FALSE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
+    ui.engine.dispatchOnUpdate(0.0f);
+    CHECK(ui.is("seen[1] == 'ITEM_UNLOCKED 0 1'"));
+    // ...and the same by a values block.
+    ui.run("SplitContainerItem(0, 1, 2) PickupContainerItem(0, 4)");
+    REQUIRE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
+    s.receive(UpdateObject().values(kLinen, {{UF::ITEM_FIELD_STACK_COUNT, 10u}}));
+    CHECK_FALSE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
+    // A key the realm puts in a keyring slot: the same slot array's callback.
+    constexpr uint64_t kKey = 0x4000000000000B13ull;
+    s.handler().getInventoryHandler()->lockItemUntilRealmAnswers(kKey);
+    // 3.3.5a: PLAYER_FIELD_KEYRING_SLOT_1 = 0x1f0, after the seven bank bags
+    // and the twelve buyback slots (the layout file names no ring).
+    const auto ring = static_cast<uint16_t>(wowee::game::fieldIndex(UF::PLAYER_FIELD_BANKBAG_SLOT_1) + 14 + 24);
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid,
+                                      {{static_cast<uint16_t>(ring + 2), static_cast<uint32_t>(kKey)},
+                                       {static_cast<uint16_t>(ring + 3), static_cast<uint32_t>(kKey >> 32)}}));
+    CHECK_FALSE(s.handler().getInventoryHandler()->itemAwaitsRealm(kKey));
+
+    // A worn fishing rod lifted and put back on its slot.
+    auto& gh = s.handler();
+    gh.itemInfoCacheRef()[6256].entry = 6256;
+    gh.itemInfoCacheRef()[6256].valid = true;
+    gh.itemInfoCacheRef()[6256].name = "Rod";
+    wowee::game::ItemDef rod;
+    rod.itemId = 6256;
+    rod.name = "Rod";
+    rod.guid = kRod;
+    REQUIRE(gh.inventoryRef().setEquipSlot(wowee::game::EquipSlot::MAIN_HAND, rod));
+    gh.equipSlotGuidsRef()[15] = kRod;
+    gh.onlineItemsRef()[kRod].entry = 6256;
+    ui.engine.dispatchOnUpdate(0.0f);
+    ui.run("seen = {} PickupInventoryItem(16)");
+    REQUIRE(ui.is("seen[1] == 'ITEM_LOCKED 16 nil'"));
+    const size_t sentBefore = s.sent().all().size();
+    ui.run("seen = {} PickupInventoryItem(16)");
+    CHECK(ui.is("not CursorHasItem()"));
+    CHECK(ui.is("seen[1] == 'ITEM_UNLOCKED 16 nil'"));
+    CHECK(ui.is("not IsInventoryItemLocked(16)"));
+    CHECK(s.sent().all().size() == sentBefore);   // nothing goes out
+}
+
 namespace {
 // One SMSG_GUILD_BANK_LIST of tab 1 (not full) naming the given slots.
 void listGuildBankSlots(Session& s, const std::vector<std::array<uint32_t, 3>>& slots) {

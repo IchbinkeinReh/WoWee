@@ -7509,8 +7509,12 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
             bool isLow = ((key - keyringBase) % 2 == 0);
             if (slotIndex < static_cast<int>(owner_.keyringSlotGuidsRef().size())) {
                 uint64_t& guid = owner_.keyringSlotGuidsRef()[slotIndex];
+                const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+                // The keyring is part of the same slot array (0x006dedd0's
+                // callback): a key moved there is let go too (T420).
+                if (!initial) slotItemChanged(before, guid);
                 slotsChanged = true;
             }
         }

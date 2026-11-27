@@ -2329,6 +2329,16 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
             info.temporaryEnchantId != prev.temporaryEnchantId ||
             info.socketEnchantIds  != prev.socketEnchantIds;
         if (itemChanged) newItemCreated = true;
+        // The stack count's callback (0x00707720) runs for that create as for
+        // a values update: AzerothCore sends a split's or a merge's source
+        // with its new count this way, and its move's lock went only with a
+        // values update - the source of a split stayed locked (T420).
+        if (!isNew && stackIt != block.fields.end() && info.stackCount != prev.stackCount) {
+            if (auto* inv = owner_.getInventoryHandler()) {
+                const auto* itemTemplate = owner_.getItemInfo(info.entry);
+                inv->itemStackChanged(block.guid, info.entry, itemTemplate && itemTemplate->maxStack > 1);
+            }
+        }
         owner_.queryItemInfo(info.entry, block.guid);
         // 0x0070aa40, as the item object is made: a refundable item of the
         // player's asks for its refund record. ITEM_FIELD_OWNER is the pair

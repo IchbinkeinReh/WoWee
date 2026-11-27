@@ -3063,6 +3063,15 @@ static int lua_PickupInventoryItem(lua_State* L) {
     // branch of its own for it either.
     if (slot <= 19 && repairedHeldItem(gh, gh->getEquipSlotGuid(slot - 1))) return 0;
 
+    // The worn item held put back on its own slot: 0x005e85d0 sees the
+    // slot's item is the cursor's and puts the cursor down (ClearCursor(1, 1),
+    // the unlock) - before it asks the slot's lock, which is the held item's
+    // own. Asked first, the lock refused the put-back and the slot stayed
+    // locked for good (T420).
+    if (s_cursorType == CursorType::ITEM && cursorItemSlot().equipped && s_cursorSlot == slot) {
+        clearCursorItem(L);
+        return 0;
+    }
     if (slot <= 19 && itemLocked(gh, gh->getEquipSlotGuid(slot - 1))) return 0;   // 0x005e85d0
 
     if (droppedItemFromNowhere(L)) return 0;
