@@ -3626,6 +3626,9 @@ static int lua_UnitClassification(lua_State* L) {
         case 2:  lua_pushstring(L, "rareelite"); break;
         case 3:  lua_pushstring(L, "worldboss"); break;
         case 4:  lua_pushstring(L, "rare"); break;
+        // 0x0060d970's table 0x00ad21bc: normal, elite, rareelite,
+        // worldboss, rare, trivial.
+        case 5:  lua_pushstring(L, "trivial"); break;
         default: lua_pushstring(L, "normal"); break;
     }
     return 1;
