@@ -12,6 +12,7 @@
 #include "game/inventory_handler.hpp"
 #include "game/player_display_flags.hpp"
 #include "game/chat_gesture.hpp"
+#include "game/client_text_copy.hpp"
 #include "game/quest_link.hpp"
 #include "game_replay.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -5213,6 +5214,131 @@ TEST_CASE("an item's lock is announced as 12340 announces it (0x0060bfe0)", "[re
     CHECK(ui.is("#seen == 3"));
 }
 
+namespace {
+// One SMSG_GUILD_BANK_LIST of tab 1 (not full) naming the given slots.
+void listGuildBankSlots(Session& s, const std::vector<std::array<uint32_t, 3>>& slots) {
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_GUILD_BANK_LIST));
+    list.writeUInt64(0);
+    list.writeUInt8(0);
+    list.writeUInt32(10);
+    list.writeUInt8(0);
+    list.writeUInt8(static_cast<uint8_t>(slots.size()));
+    for (const auto& sl : slots) {
+        list.writeUInt8(static_cast<uint8_t>(sl[0]));
+        list.writeUInt32(sl[1]);
+        if (sl[1] == 0) continue;
+        list.writeUInt32(0);
+        list.writeUInt32(0);
+        list.writeUInt32(sl[2]);
+        list.writeUInt32(0);
+        list.writeUInt8(0);
+        list.writeUInt8(0);
+    }
+    s.receive(list);
+}
+}  // namespace
+
+// AA's open guild bank items (FIXER AB): 0x005a7250's events. The first list
+// opens the vault with GUILDBANKFRAME_OPENED alone (and GUILDBANK_UPDATE_TABS
+// once per tab name before it) - no GUILDBANKBAGSLOTS_CHANGED, no
+// GUILDBANK_UPDATE_MONEY; with the vault open a list announces
+// GUILDBANKBAGSLOTS_CHANGED at once, or, when an item template is not cached,
+// only when the last one waited on comes (0x005a47a0).
+TEST_CASE("a guild bank list announces itself as 0x005a7250 does", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    ui.run("seen = '' local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'GUILDBANKFRAME_OPENED', 'GUILDBANKBAGSLOTS_CHANGED', 'GUILDBANK_UPDATE_TABS', "
+           "'GUILDBANK_UPDATE_MONEY'}) do f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(self, e) seen = seen .. e .. ';' end)");
+    openTestGuildBank(s);
+    CHECK(ui.is("seen == 'GUILDBANK_UPDATE_TABS;GUILDBANK_UPDATE_TABS;GUILDBANK_UPDATE_TABS;GUILDBANKFRAME_OPENED;'"));
+    ui.run("seen = ''");
+    listGuildBankSlots(s, {{4, 2589, 3}});   // a template already cached
+    CHECK(ui.is("seen == 'GUILDBANKBAGSLOTS_CHANGED;'"));
+    ui.run("seen = ''");
+    listGuildBankSlots(s, {{5, 7001, 1}, {6, 7001, 1}, {7, 7002, 1}});
+    CHECK(ui.is("seen == ''"));
+    answerItem(s, 7001, "Eins");
+    CHECK(ui.is("seen == ''"));
+    answerItem(s, 7002, "Zwei");
+    CHECK(ui.is("seen == 'GUILDBANKBAGSLOTS_CHANGED;'"));
+}
+
+// AA's open guild bank items (FIXER AB): a listed slot whose item is on the
+// cursor puts the cursor down (0x005a7250: ClearCursor + 0x00513800); the
+// local player made anew resets every tab's slots and flags (0x006e1bb0 ->
+// 0x005a7760), so the next tab query asks for the full list again.
+TEST_CASE("a guild bank list lets the held slot go, a new player starts the bank again", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    openTestGuildBank(s);
+    // A list more, so a slot an earlier test left "moved" (the static moved
+    // list counts lists per session) is no longer taken for locked.
+    listGuildBankSlots(s, {{10, 0, 0}});
+    ui.run("PickupGuildBankItem(1, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    listGuildBankSlots(s, {{1, 2589, 18}});   // another slot: still held
+    CHECK(ui.is("CursorHasItem() == 1"));
+    listGuildBankSlots(s, {{0, 2589, 4}});    // the held one
+    CHECK(ui.is("not CursorHasItem()"));
+    CHECK(ui.is("select(3, GetGuildBankItemInfo(1, 1)) == nil"));
+
+    const auto fullByte = [&s]() {
+        const auto q = s.sent().of(Opcode::CMSG_GUILD_BANK_QUERY_TAB);
+        REQUIRE(!q.empty());
+        wowee::network::Packet p = q.back();
+        p.readUInt64();
+        p.readUInt8();
+        return p.readUInt8();
+    };
+    ui.run("QueryGuildBankTab(1)");
+    CHECK(fullByte() == 0);                   // tab 1 was listed
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    CHECK(ui.is("GetNumGuildBankTabs() == 0"));
+    s.handler().getInventoryHandler()->openGuildBank(0x77);
+    ui.run("QueryGuildBankTab(1)");
+    CHECK(fullByte() == 1);
+}
+
+// AA's open guild bank item (FIXER AB): tab names and texts are kept as
+// 0x007e1830 keeps them - every '|' left behind (0x007e17f0), a name ends at
+// its first line break and holds 15 characters (16, 64 bytes, flag 1:
+// 0x005a4220, 0x005a7250, 0x005a5a00), a text 2047 (0x005a4ae0, 0x005a7180).
+TEST_CASE("guild bank tab names and texts are taken as 0x007e1830 takes them", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.handler().setGuildBankTabCount(1);
+    wowee::network::Packet event(wowee::game::wireOpcode(Opcode::SMSG_GUILD_EVENT));
+    event.writeUInt8(0x10);
+    event.writeUInt8(3);
+    event.writeString("0");
+    event.writeString("|cffff0000Rot|r\nZweite");
+    event.writeString("INV_Misc_Herb_01");
+    s.receive(event);
+    CHECK(ui.is("GetGuildBankTabInfo(1) == 'cffff0000Rotr'"));
+    event = wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_GUILD_EVENT));
+    event.writeUInt8(0x10);
+    event.writeUInt8(3);
+    event.writeString("0");
+    event.writeString("ABCDEFGHIJKLMNOPQRST");
+    event.writeString("INV_Misc_Herb_01");
+    s.receive(event);
+    CHECK(ui.is("GetGuildBankTabInfo(1) == 'ABCDEFGHIJKLMNO'"));
+    wowee::network::Packet text(wowee::game::wireOpcode(Opcode::MSG_QUERY_GUILD_BANK_TEXT));
+    text.writeUInt8(0);
+    text.writeString("a|Hitem:1|h[b]|h\nzwei");
+    s.receive(text);
+    CHECK(ui.is("GetGuildBankText(1) == 'aHitem:1h[b]h' .. string.char(10) .. 'zwei'"));
+    CHECK(wowee::game::clientTextCopy("x\ny", 16, 64, true) == "x");
+    CHECK(wowee::game::clientTextCopy("x\\ny", 16, 64, true) == "x");
+    CHECK(wowee::game::clientTextCopy(std::string(100, 'a'), 0x800, 0x40, false).size() == 63);
+}
+
 // LFG review (found by AB in code): GetLFGRoleUpdate answers a boolean first,
 // false without a role check (0x00554610, was nil); UnitHasLFGDeserter /
 // UnitHasLFGRandomCooldown of a unit naming nobody answer nothing
@@ -5226,4 +5352,30 @@ TEST_CASE("LFG answers of an idle player are 12340's (0x00554610, 0x00555840)", 
     CHECK(ui.is("select('#', UnitHasLFGDeserter('party3')) == 0"));
     CHECK(ui.is("select('#', UnitHasLFGRandomCooldown('party3')) == 0"));
     CHECK(ui.is("UnitHasLFGDeserter('player') == false"));
+}
+
+// Equipment manager review (found by AB in code): SaveEquipmentSet does
+// nothing - no usage line either - before the session's set list came
+// (0x005af9c0, 0x00c1e955 set by 0x005af490); a set name is taken as
+// 0x007e1830 takes it - every '|' left behind, so "|n" is no line break and
+// the name the server is told has no pipe; a real line break still refuses.
+TEST_CASE("equipment set names and the set list gate are 12340's (0x005af9c0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    CHECK(ui.is("pcall(SaveEquipmentSet) == true"));   // no list yet: not even the usage line
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_EQUIPMENT_SET_LIST));
+    list.writeUInt32(0);
+    s.receive(list);
+    CHECK(ui.is("pcall(SaveEquipmentSet) == false"));
+    CHECK(ui.is("pcall(SaveEquipmentSet, 'a' .. string.char(10) .. 'b', 1) == false"));
+    const size_t before = s.sent().of(Opcode::CMSG_EQUIPMENT_SET_SAVE).size();
+    ui.run("SaveEquipmentSet('Tank|nSet', 1)");
+    const auto saves = s.sent().of(Opcode::CMSG_EQUIPMENT_SET_SAVE);
+    REQUIRE(saves.size() == before + 1);
+    wowee::network::Packet p = saves.back();
+    p.readPackedGuid();
+    p.readUInt32();
+    CHECK(p.readString() == "TanknSet");
 }

@@ -35,6 +35,8 @@
 #include "game/reputation_standing.hpp"
 #include "game/server_notices.hpp"
 #include <algorithm>
+#include <cstdint>
+#include <optional>
 #include <array>
 #include <cmath>
 #include <ctime>
@@ -2572,25 +2574,27 @@ std::set<int>& pendingIgnoredSlots() {
     return slots;
 }
 
-/// A set name as 0x007e1830 takes one (max 32 characters, 128 bytes, one line):
-/// well-formed UTF-8, no line break - "\r", "\n" or an escaped "\\n" or "|n"
-/// - and fewer than 32 characters, the 32nd being where it cuts and refuses.
-bool equipmentSetNameValid(const std::string& name) {
-    size_t chars = 0;
+/// A set name as 0x007e1830 takes one (32 characters, 128 bytes, one line),
+/// or nothing when it refuses it: the argument well-formed UTF-8
+/// (0x007e0ec0); then the copy without any '|' (0x007e17f0, 127 bytes)
+/// holds no line break - "\r", "\n" or an escaped "\\n" (0x007e1640) - and
+/// fewer than 32 characters, the 32nd being where it cuts and refuses. The
+/// set gets that copy: a '|' never reaches the name ("|n" is an 'n').
+std::optional<std::string> equipmentSetNameTaken(const std::string& name) {
     for (size_t i = 0; i < name.size();) {
         const auto c = static_cast<unsigned char>(name[i]);
         const size_t len = c < 0x80 ? 1 : (c & 0xe0) == 0xc0 ? 2 : (c & 0xf0) == 0xe0 ? 3
                          : (c & 0xf8) == 0xf0 ? 4 : 0;
-        if (len == 0 || i + len > name.size()) return false;
+        if (len == 0 || i + len > name.size()) return std::nullopt;
         for (size_t k = 1; k < len; ++k) {
-            if ((static_cast<unsigned char>(name[i + k]) & 0xc0) != 0x80) return false;
+            if ((static_cast<unsigned char>(name[i + k]) & 0xc0) != 0x80) return std::nullopt;
         }
-        if (c == '\r' || c == '\n') return false;
-        if ((c == '\\' || c == '|') && i + 1 < name.size() && name[i + 1] == 'n') return false;
-        if (++chars >= 32) return false;
         i += len;
     }
-    return true;
+    const std::string stripped = game::clientTextCopy(name, SIZE_MAX, 0x80, false);
+    const std::string kept = game::clientTextCopy(name, 0x20, 0x80, true);
+    if (kept != stripped) return std::nullopt;   // cut at a line break or the 32nd character
+    return kept;
 }
 
 /// The marked slots as the save sends them: bit i for equipment slot i + 1.
@@ -2667,13 +2671,20 @@ static int lua_GetEquipmentSetItemIDs(lua_State* L) {
 
 // SaveEquipmentSet(name, iconIndex) - asks the server to keep it
 static int lua_SaveEquipmentSet(lua_State* L) {
-    // 0x005af9c0
+    // 0x005af9c0: nothing at all - not even the usage line - until the
+    // session's set list has come (0x00c1e955).
+    {
+        auto* gh = getGameHandler(L);
+        const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+        if (!inv || !inv->equipmentSetListReceived()) return 0;
+    }
     if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
         return luaL_error(L, "Usage: SaveEquipmentSet(\"setName\", iconIndex)");
     auto* gh = getGameHandler(L);
-    const std::string name = luaL_optstring(L, 1, "");
+    const auto taken = equipmentSetNameTaken(luaL_optstring(L, 1, ""));
     if (!gh) return 0;
-    if (!equipmentSetNameValid(name)) return luaL_error(L, "Invalid string for setName");
+    if (!taken) return luaL_error(L, "Invalid string for setName");
+    const std::string& name = *taken;
 
     // The icon arrives as a position in the same list the macro picker shows,
     // and the server wants its name rather than its path.
@@ -2716,9 +2727,9 @@ static int lua_RenameEquipmentSet(lua_State* L) {
     if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
         return luaL_error(L, "Usage: RenameEquipmentSet(\"oldName\", \"newName\")");
     }
-    std::string newName = lua_tostring(L, 2);
-    if (!equipmentSetNameValid(newName)) return luaL_error(L, "Invalid string for setName");
-    if (auto* gh = getGameHandler(L)) gh->renameEquipmentSet(lua_tostring(L, 1), newName, pendingIgnoredSlotMask());
+    const auto newName = equipmentSetNameTaken(lua_tostring(L, 2));
+    if (!newName) return luaL_error(L, "Invalid string for setName");
+    if (auto* gh = getGameHandler(L)) gh->renameEquipmentSet(lua_tostring(L, 1), *newName, pendingIgnoredSlotMask());
     return 0;
 }
 
@@ -7471,6 +7482,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             const uint8_t slot0 = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 2))) - 1u);
             if (tab0 >= 6 || slot0 >= 98) return 0;
             clearCursor(L);
+            // A spell waiting for a target put down when the slot holds an
+            // item (0x005a63f0: 0x007fd620 -> 0x00809a60).
+            if (gh->getGuildBankData().slotAt(tab0, slot0)) stopSpellTargetingFor(gh);
             inv->guildBankAutoStore(tab0, slot0);
             return 0;
         }},
@@ -7543,16 +7557,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const auto tab = static_cast<uint8_t>(static_cast<uint8_t>(std::lround(lua_tonumber(L, 1))) - 1u);
             const char* text = luaL_optstring(L, 2, "");
-            // Cut where its 2048th character starts (0x007e1830 with 0x800:
-            // 2047 kept).
-            std::string kept = text ? text : "";
-            int chars = 0;
-            for (size_t i = 0; i < kept.size(); ++i) {
-                if ((static_cast<unsigned char>(kept[i]) & 0xC0u) != 0x80u && ++chars == 0x800) {
-                    kept.resize(i);
-                    break;
-                }
-            }
+            // 0x007e1830 with 0x800 and 0x2000: every '|' left behind, cut
+            // where its 2048th character starts (2047 kept).
+            const std::string kept = game::clientTextCopy(text ? text : "", 0x800, 0x2000, false);
             if (gh) gh->setGuildBankTabText(tab, kept);
             return 0;
         }},
@@ -7709,8 +7716,11 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pop(L, 1);
             // The list holds full paths; the bank keeps the bare icon name.
             if (const auto slash = icon.find_last_of('\\'); slash != std::string::npos) icon.erase(0, slash + 1);
+            // The name as 0x005a5a00 takes it (0x007e1830: 16 characters,
+            // one line, no '|').
+            const std::string kept = game::clientTextCopy(name ? name : "", 0x10, 0x40, true);
             if (gh && tab >= 1 && !icon.empty())
-                gh->setGuildBankTabInfo(static_cast<uint8_t>(tab - 1), name, icon.c_str());
+                gh->setGuildBankTabInfo(static_cast<uint8_t>(tab - 1), kept.c_str(), icon.c_str());
             return 0;
         }},
                 // What the next tab costs, in copper, or nil once all six are

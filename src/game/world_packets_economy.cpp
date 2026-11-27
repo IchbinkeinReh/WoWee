@@ -1,3 +1,4 @@
+#include "game/client_text_copy.hpp"
 #include "game/mail_text.hpp"
 #include "game/world_packets.hpp"
 #include "game/packet_parsers.hpp"
@@ -573,6 +574,9 @@ bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
     if (!packet.hasRemaining(14)) return false;
 
     data.money = packet.readUInt64();
+    // 0x005a7250 holds the money at 0x7ffff ffffffff at most.
+    data.money = std::min<uint64_t>(data.money, 0x0007ffffffffffffull);
+    data.listed.clear();
     // 0x005a7250 keeps every tab's 98 slots and writes only the slots a list
     // names - the realms send a changed slot alone to whoever looks at the
     // tab. The open tab's slots go back to their tab before another is read.
@@ -608,7 +612,9 @@ bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
                     LOG_WARNING("GuildBankListParser: truncated tab at index ", static_cast<int>(i));
                     break;
                 }
-                data.tabs[i].tabName = packet.readString();
+                // 0x005a7250 keeps it as 0x007e1830 does (16 characters,
+                // one line, no '|').
+                data.tabs[i].tabName = clientTextCopy(packet.readString(), 0x10, 0x40, true);
                 if (!packet.hasData()) {
                     data.tabs[i].tabIcon.clear();
                 } else {
@@ -628,6 +634,7 @@ bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
     const auto store = [&data](const GuildBankItemSlot& slot) {
         std::erase_if(data.tabItems, [&slot](const GuildBankItemSlot& s) { return s.slotId == slot.slotId; });
         data.tabItems.push_back(slot);
+        data.listed.push_back(slot);
     };
     for (uint8_t i = 0; i < numSlots; ++i) {
         // Validate minimum bytes before reading slot (slotId(1) + itemEntry(4) = 5)

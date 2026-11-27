@@ -2705,6 +2705,9 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         // ...and 0x00528010 -> 0x0054ca50: the battleground score of the map
         // left behind is gone - no rows, no winner, both factions (T413).
         owner_.clearBattlefieldScore();
+        // ...and the old player object's end (0x006e1bb0 -> 0x005a7760): the
+        // guild bank's slots and flags start again.
+        if (auto* inv = owner_.getInventoryHandler()) inv->resetGuildBankForNewPlayer();
         // The time played, asked for quietly (0x006e6b40): what is refundable
         // and what an item says of it count from the answer. The earlier
         // clients' answer has no byte that keeps it from the chat.

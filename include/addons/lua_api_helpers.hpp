@@ -1610,6 +1610,9 @@ void pickupStablePetCursor(lua_State* L, int slot, const std::string& icon);
 std::optional<int> cursorStablePet();
 /// ClearCursor's own put-down (0x00519280), whatever is held.
 void clearCursor(lua_State* L);
+/// A spell waiting for its target put down (0x007fd620 -> 0x00809a60), as
+/// the guild bank's pickup, split and auto-store do before they take a slot.
+void stopSpellTargetingFor(game::GameHandler* gh);
 /// The moves waiting on the bind prompt, before a drop is made.
 size_t parkedEquipMoves(lua_State* L);
 /// After a drop made from the cursor: put the cursor down (0x00519280, as

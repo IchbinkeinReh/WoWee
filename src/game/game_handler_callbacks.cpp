@@ -515,6 +515,8 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     // with error 9, and an empty vault window was already on screen.
     if (socialHandler_) socialHandler_->clearGuildMembership();
     if (socialHandler_) socialHandler_->resetForWorldEntry();
+    // No equipment set list yet (0x005ae1b0).
+    if (inventoryHandler_) inventoryHandler_->forgetEquipmentSetList();
     // A new combat log, timed from now (0x007538a0).
     if (combatLogFeed_) combatLogFeed_->enterWorld();
     // The player in the first phase again (0x0052b550: 0xac80a4 = 1).

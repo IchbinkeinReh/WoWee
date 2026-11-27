@@ -4062,6 +4062,9 @@ struct GuildBankData {
     /// panel's GUILDBANK_UPDATE_TABS means. A slots-only update leaves `tabs`
     /// as it found them, so their contents cannot answer this.
     bool tabsIncluded = false;
+    /// The slots the list just parsed named, in its order (0x005a7250 reads
+    /// one at a time): what it releases from the cursor and waits on.
+    std::vector<GuildBankItemSlot> listed;
 };
 
 /** CMSG_GUILD_BANKER_ACTIVATE packet builder */

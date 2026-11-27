@@ -10,6 +10,7 @@
 #include "game/spell_handler.hpp"
 #include "game/auction_pending_sales.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "addons/lua_api_helpers.hpp"
 #include "game/spell_classification.hpp"
 #include "game/glyph_socket.hpp"
 #include "game/item_text.hpp"
@@ -1064,7 +1065,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::MSG_QUERY_GUILD_BANK_TEXT] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(1)) return;
         const uint8_t tabId = packet.readUInt8();
-        std::string text = packet.readString();
+        // Kept as 0x005a4ae0 keeps it (0x007e1830: 2048 characters, no '|').
+        std::string text = clientTextCopy(packet.readString(), 0x800, 0x2000, false);
         if (tabId < guildBankTabText_.size()) guildBankTabText_[tabId] = std::move(text);
         // The panel asked for this text and was never told it arrived, so the
         // info box kept whatever it was drawn with. Its handler reads the tab
@@ -5363,50 +5365,80 @@ void InventoryHandler::requestGuildBankWithdrawMoney() {
 void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     if (!GuildBankListParser::parse(packet, guildBankData_)) return;
     ++guildBankListCount_;
-    // 0x005a7250: the tab's full-list flag cleared.
-    if (guildBankData_.tabId < guildBankTabWantsFull_.size()) guildBankTabWantsFull_[guildBankData_.tabId] = false;
-    // The tab names come with the count of tabs bought (0x005a7250 ->
-    // 0x00c1dc0c).
-    if (guildBankData_.tabsIncluded)
+    // 0x005a7250, in its order. The item templates the last list still
+    // waited on are not waited on any more.
+    guildBankItemWaitCount_ = 0;
+    guildBankItemWaits_.clear();
+    // The tab names come with the count of tabs bought (0x00c1dc0c), and
+    // GUILDBANK_UPDATE_TABS once for each name read.
+    if (guildBankData_.tabsIncluded) {
         guildBankTabCount_ = static_cast<uint8_t>(guildBankData_.tabs.size());
-    // Receiving the bank list means the banker accepted us - make sure the
-    // window is shown even if the open path didn't (e.g. a server-initiated
-    // refresh, or the banker guid arrived only with the list).
-    if (guildBankerGuid_ != 0 && !guildBankOpen_) {
-        guildBankOpen_ = true;
-        // GUILDBANKFRAME_OPENED, with the vault (0x005a7250 -> 0x0051fce0).
-        owner_.setInteractionObject(guildBankerGuid_, go_interaction::Window::GuildBank);
-        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GUILDBANKFRAME_OPENED", {});
+        for (size_t i = 0; i < guildBankData_.tabs.size(); ++i)
+            owner_.fireAddonEvent("GUILDBANK_UPDATE_TABS");
     }
     // Each list is tagged with the tab it describes. Track it so the UI
     // highlights the right tab and item withdraw/deposit target the tab the
     // player is actually viewing (clicking a tab only sends a query - it never
     // updated the active tab, so operations defaulted to tab 0).
     guildBankActiveTab_ = guildBankData_.tabId;
-    if (owner_.addonEventCallbackRef()) {
-        // The three the panel listens for and this fired none of.
-        //
-        // GUILDBANK_UPDATE_TABS is the one that runs
-        // GuildBankFrame_SelectAvailableTab, which is what picks a tab the
-        // player may look in and draws it - without it the frame kept whatever
-        // tab it had and never chose one. Only when a tab list actually
-        // arrived: the event means the set of tabs changed, and a slot refresh
-        // does not change it.
-        if (guildBankData_.tabsIncluded && !guildBankData_.tabs.empty()) {
-            owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_TABS", {});
-        }
-        owner_.addonEventCallbackRef()("GUILDBANKBAGSLOTS_CHANGED", {});
-        // The money line, read from GetGuildBankMoney. Not the withdraw
-        // allowance: that is MSG_GUILD_BANK_MONEY_WITHDRAWN's, which says so
-        // itself (0x005a4ab0) - the list's own allowance is the tab's items
-        // (0x005a7250 -> 0x00c1dc30).
-        owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_MONEY", {});
-    }
-    for (const auto& tab : guildBankData_.tabs) {
-        for (const auto& item : tab.items) {
-            if (item.itemEntry != 0) owner_.ensureItemInfo(item.itemEntry);
+    // Per slot named: a guild bank item held from that slot is put down
+    // (ClearCursor + 0x00513800), and an item whose template is not cached is
+    // asked for and waited on (0x0067ca30 with the callback 0x005a47a0).
+    const auto& held = addons::guildBankCursorSlot();
+    for (const auto& slot : guildBankData_.listed) {
+        if (held.tab == guildBankData_.tabId + 1 && held.slot == slot.slotId + 1) owner_.dropCursor();
+        if (slot.itemEntry == 0) continue;
+        if (!owner_.itemInfoCacheRef().count(slot.itemEntry)) {
+            owner_.ensureItemInfo(slot.itemEntry);
+            ++guildBankItemWaits_[slot.itemEntry];
+            ++guildBankItemWaitCount_;
         }
     }
+    // The tab's full-list flag cleared.
+    if (guildBankData_.tabId < guildBankTabWantsFull_.size()) guildBankTabWantsFull_[guildBankData_.tabId] = false;
+    if (!guildBankOpen_) {
+        if (guildBankerGuid_ == 0) {
+            // A list with no vault asked for: GUILDBANKFRAME_CLOSED.
+            owner_.fireAddonEvent("GUILDBANKFRAME_CLOSED");
+            return;
+        }
+        // The banker accepted: GUILDBANKFRAME_OPENED, with the vault
+        // (0x0051fce0) - and nothing else, the frame draws itself on show.
+        guildBankOpen_ = true;
+        owner_.setInteractionObject(guildBankerGuid_, go_interaction::Window::GuildBank);
+        owner_.fireAddonEvent("GUILDBANKFRAME_OPENED");
+    } else if (guildBankItemWaitCount_ == 0) {
+        // Open: GUILDBANKBAGSLOTS_CHANGED now, or once the last item
+        // template waited on has come. No GUILDBANK_UPDATE_MONEY here - the
+        // money event comes from the guild event and the cursor (0x006d0000,
+        // 0x00519280).
+        owner_.fireAddonEvent("GUILDBANKBAGSLOTS_CHANGED");
+    }
+}
+
+void InventoryHandler::guildBankItemAnswered(uint32_t itemId) {
+    // 0x005a47a0, once per slot that waited on this entry.
+    const auto it = guildBankItemWaits_.find(itemId);
+    if (it == guildBankItemWaits_.end()) return;
+    const uint32_t slots = it->second;
+    guildBankItemWaits_.erase(it);
+    for (uint32_t i = 0; i < slots; ++i) {
+        if (guildBankItemWaitCount_ != 0 && --guildBankItemWaitCount_ != 0) continue;
+        owner_.fireAddonEvent("GUILDBANKBAGSLOTS_CHANGED");
+    }
+}
+
+void InventoryHandler::resetGuildBankForNewPlayer() {
+    // 0x005a7760: each tab's slots freed and its full-list and text flags
+    // set; no tabs bought.
+    for (auto& tab : guildBankData_.tabs) tab.items.clear();
+    guildBankData_.tabItems.clear();
+    guildBankData_.listed.clear();
+    guildBankTabCount_ = 0;
+    guildBankTabWantsFull_.fill(true);
+    guildBankTextStale_.fill(true);
+    guildBankItemWaitCount_ = 0;
+    guildBankItemWaits_.clear();
 }
 
 // ============================================================
@@ -6918,11 +6950,12 @@ uint64_t InventoryHandler::getBankBagItemGuid(int bag, int slot) const {
 void InventoryHandler::handleEquipmentSetList(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t count = packet.readUInt32();
+    // 0x005af490 reads the first ten and stops there, list taken.
     if (count > 10) {
-        LOG_WARNING("SMSG_EQUIPMENT_SET_LIST: unexpected count ", count, ", ignoring");
-        packet.skipAll();
-        return;
+        LOG_WARNING("SMSG_EQUIPMENT_SET_LIST: count ", count, ", the first ten read");
+        count = 10;
     }
+    equipmentSetListReceived_ = true;
     equipmentSets_.clear();
     equipmentSets_.reserve(count);
     equipmentSwapPending_ = false;
@@ -7014,6 +7047,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         ~AnswerWaits() {
             self.owner_.onItemAnsweredForWaits(entry, found);
             self.merchantItemAnswered(entry);
+            self.guildBankItemAnswered(entry);
         }
     } answerWaits{*this, data.entry, data.valid};
     LOG_DEBUG("handleItemQueryResponse: RECV entry=", data.entry, " name='", data.name,

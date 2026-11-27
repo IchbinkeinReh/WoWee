@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/client_text_copy.hpp"
 #include "game/equipment_sets.hpp"
 #include "game/world_packets.hpp"
 #include "game/auction_query_gate.hpp"
@@ -553,6 +554,13 @@ public:
     void openMailbox(uint64_t guid);
     /// How many guild bank lists have arrived (SMSG_GUILD_BANK_LIST).
     uint32_t guildBankListCount() const { return guildBankListCount_; }
+    bool equipmentSetListReceived() const { return equipmentSetListReceived_; }
+    /// A character entered: no set list yet (0x005ae1b0).
+    void forgetEquipmentSetList() { equipmentSetListReceived_ = false; }
+    /// The local player object made anew (0x006e1bb0 -> 0x005a7760): every
+    /// tab's slots gone, no tabs bought, each tab's full list and text to be
+    /// asked for again.
+    void resetGuildBankForNewPlayer();
     void closeMailbox();
     /// Look for mail, as SMSG_RECEIVED_MAIL does with its delay (0x005704d0):
     /// with the mailbox open, only once it closes; otherwise ask the server
@@ -813,7 +821,9 @@ public:
     void storeGuildBankTabInfo(uint8_t tab, const std::string& name, const std::string& icon) {
         if (tab >= 6) return;
         if (guildBankData_.tabs.size() <= tab) guildBankData_.tabs.resize(tab + 1u);
-        guildBankData_.tabs[tab].tabName = name;
+        // The name as 0x005a4220 keeps it (0x007e1830: 16 characters, one
+        // line, no '|').
+        guildBankData_.tabs[tab].tabName = clientTextCopy(name, 0x10, 0x40, true);
         guildBankData_.tabs[tab].tabIcon = icon;
     }
 
@@ -987,6 +997,9 @@ private:
     void announceInventoryChange(const InventoryChange& change);
     std::set<uint32_t> merchantWaits_;
     void merchantItemAnswered(uint32_t itemId);
+    /// A guild bank slot's item template has come (0x005a47a0): the wait for
+    /// it is over, and GUILDBANKBAGSLOTS_CHANGED comes with the last one.
+    void guildBankItemAnswered(uint32_t itemId);
     /// What the currency items the player holds summed to at the last
     /// CURRENCY_DISPLAY_UPDATE fireBagUpdates raised (~0: none raised yet).
     uint64_t currencySignature_ = ~uint64_t{0};
@@ -1358,6 +1371,10 @@ private:
     int32_t guildBankWithdrawMoney_ = 0;
     uint8_t guildBankActiveTab_ = 0;
     uint8_t guildBankTabCount_ = 0;
+    /// 0x00c1dc28: the listed slots whose item template is still owed, and
+    /// how many slots wait on each entry (one cache callback per slot).
+    uint32_t guildBankItemWaitCount_ = 0;
+    std::unordered_map<uint32_t, uint32_t> guildBankItemWaits_;
 
     // ---- Auction House state ----
     bool auctionOpen_ = false;
@@ -1416,6 +1433,9 @@ private:
 
     // ---- Equipment set state ----
     std::vector<equipment_sets::Set> equipmentSets_;
+    /// 0x00c1e955: SMSG_EQUIPMENT_SET_LIST has come this session (set by
+    /// 0x005af490, cleared by 0x005ae1b0) - SaveEquipmentSet waits for it.
+    bool equipmentSetListReceived_ = false;
     [[nodiscard]] equipment_sets::Worn wornGuids() const;
     void sendEquipmentSet(const equipment_sets::Set& set);
     void rebuildEquipmentSetInfo();

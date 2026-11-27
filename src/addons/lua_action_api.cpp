@@ -123,6 +123,16 @@ std::optional<int> cursorStablePet() {
 
 void clearCursor(lua_State* L) { clearCursorItem(L); }
 
+void stopSpellTargetingFor(game::GameHandler* gh) {
+    if (!gh) return;
+    if (!(gh->isGroundTargeting() || gh->isUnitTargeting() || gh->isAwaitingItemTarget() ||
+          gh->isAwaitingGlyphTarget()))
+        return;
+    gh->cancelGroundTargeting();
+    if (gh->isAwaitingItemTarget()) gh->cancelItemTargeting();
+    gh->cancelGlyphTargeting();
+}
+
 size_t parkedEquipMoves(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
@@ -2096,6 +2106,10 @@ static int lua_PickupGuildBankItem(lua_State* L) {
             if (mv.tab == tab && mv.slot == slot) return 0;
     }
     const uint32_t entry = it->itemEntry;
+    // A spell waiting for a target is put down first (0x007fd620 ->
+    // 0x00809a60). (12340 then needs the item's Item.dbc row, 0x0065c290,
+    // for the cursor's display - every item has one.)
+    stopSpellTargetingFor(gh);
     setCursorType(L, CursorType::GUILDBANK);
     s_cursorId = entry;
     cursorItemPickedUp(L, entry);
