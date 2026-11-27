@@ -4505,6 +4505,22 @@ TEST_CASE("a spell whose reagent is not carried is refused before it is sent (T4
     carryForAuction(s, 0, 0x4000000000000C41ull, kShard, 1);
     ui.run("CastSpellByID(" + std::to_string(kEnslave) + ")");
     CHECK(casts() == 1);
+    // 0x008093d0 right after it: a spell wanting a weapon (class 2, a sword's
+    // bit) with none worn fails as EQUIPPED_ITEM_CLASS, nothing sent.
+    constexpr uint32_t kStrike = 12294;
+    auto& strike = s.handler().spellNameCacheRef()[kStrike];
+    strike.name = "Strike";
+    strike.equippedItemClass = 2;
+    strike.equippedItemSubClassMask = 1u << 7;
+    wowee::network::Packet more(wowee::game::wireOpcode(Opcode::SMSG_INITIAL_SPELLS));
+    more.writeUInt8(0);
+    more.writeUInt16(1);
+    more.writeUInt32(kStrike);
+    more.writeUInt16(0);
+    more.writeUInt16(0);
+    s.receive(more);
+    ui.run("CastSpellByID(" + std::to_string(kStrike) + ")");
+    CHECK(casts() == 1);
 }
 
 // FIXER W (found in code): IsSpellKnown(id, isPet) also finds a spell on a

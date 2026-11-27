@@ -2935,6 +2935,16 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid, uint64_
                 return false;
             }
         }
+        // ... then 0x008093d0(ammo 1, show 1): the weapon the spell wants
+        // and its ammunition.
+        if (self) {
+            uint32_t arg = 0, arg2 = 0;
+            if (const uint8_t code = weaponMissing(spellId, *self, arg, arg2); code != 0) {
+                showPlayerCastFailure(spellId, code,
+                                      castFailureMessage(owner_, spellId, code, static_cast<int32_t>(e.powerType), arg, arg2));
+                return false;
+            }
+        }
     }
     // 0x00809610: the unit asked - the cast's, else the target - where the
     // spell may take it (Targets with each effect's ImplicitTargetA, the pet
@@ -3169,10 +3179,18 @@ bool SpellHandler::tooltipNoReagents(uint32_t spellId) const {
 }
 
 bool SpellHandler::weaponCarried(uint32_t spellId, const Entity& player) const {
-    const auto& e = owner_.spellNameCacheRef().find(spellId)->second;
+    uint32_t arg = 0, arg2 = 0;
+    return weaponMissing(spellId, player, arg, arg2) == 0;
+}
+
+uint8_t SpellHandler::weaponMissing(uint32_t spellId, const Entity& player, uint32_t& arg, uint32_t& arg2) const {
+    arg = arg2 = 0;
+    const auto own = owner_.spellNameCacheRef().find(spellId);
+    if (own == owner_.spellNameCacheRef().end()) return 0;
+    const auto& e = own->second;
     // 0x008093d0: no item wanted (Targets 0x10, no EquippedItemClass or
     // subclasses) ...
-    if ((e.targetFlags & 0x10u) != 0 || e.equippedItemClass < 0 || e.equippedItemSubClassMask == 0) return true;
+    if ((e.targetFlags & 0x10u) != 0 || e.equippedItemClass < 0 || e.equippedItemSubClassMask == 0) return 0;
     const auto field = [&](UF f) {
         const uint16_t i = fieldIndex(f);
         return i != 0xFFFF ? player.getField(i) : 0u;
@@ -3187,22 +3205,32 @@ bool SpellHandler::weaponCarried(uint32_t spellId, const Entity& player) const {
     else if ((e.attrEx3 & 0x1000000u) != 0) slots = 0x10000u;
     else if ((e.attr & 0x2u) != 0) slots = 0x20000u;
     const auto* weapon = found(slots);
-    if (!weapon) return false;
+    // Refused with the class and mask: _MAINHAND for 0x400, else _OFFHAND
+    // for 0x1000000, else EQUIPPED_ITEM_CLASS.
+    const auto refuse = [&](uint8_t code) {
+        arg = static_cast<uint32_t>(e.equippedItemClass);
+        arg2 = e.equippedItemSubClassMask;
+        return code;
+    };
+    if (!weapon) return refuse((e.attrEx3 & 0x400u) != 0 ? 0x1e : (e.attrEx3 & 0x1000000u) != 0 ? 0x1f : 0x1d);
     // Both hands wanted (AttributesEx3 0x1000400): the off hand too.
-    if ((e.attrEx3 & 0x1000400u) == 0x1000400u && !found(0x10000u)) return false;
+    if ((e.attrEx3 & 0x1000400u) == 0x1000400u && !found(0x10000u)) return refuse(0x1f);
     // Its ammunition, where its ItemSubClass row (Flags 0x10: thrown) does
     // not do without: PLAYER_AMMO_ID put in, and some carried.
     auto* am = core::Application::getInstance().getAssetManager();
     if (auto sub = am ? am->loadDBCOptional("ItemSubClass.dbc") : nullptr; sub && sub->getFieldCount() > 4) {
         for (uint32_t r = 0; r < sub->getRecordCount(); ++r) {
             if (sub->getUInt32(r, 0) != weapon->itemClass || sub->getUInt32(r, 1) != weapon->subClass) continue;
-            if ((sub->getUInt32(r, 4) & 0x10u) != 0) return true;
+            if ((sub->getUInt32(r, 4) & 0x10u) != 0) return 0;
             break;
         }
     }
-    if (weapon->ammoType == 0) return true;
+    if (weapon->ammoType == 0) return 0;
     const uint32_t ammo = field(UF::PLAYER_AMMO_ID);
-    return ammo != 0 && owner_.getInventory().countCarried(ammo) != 0;
+    if (ammo != 0 && owner_.getInventory().countCarried(ammo) != 0) return 0;
+    arg = weapon->ammoType;
+    constexpr uint8_t kSpellFailedNoAmmo = 0x34;
+    return kSpellFailedNoAmmo;
 }
 
 bool SpellHandler::spellUsable(uint32_t spellId, const ItemQueryResponseData* item) {

@@ -1202,6 +1202,10 @@ private:
     bool reagentsFree(uint32_t spellId, const Entity& player) const;
     /// 0x008093d0 for the player: the weapon it wants, and its ammunition.
     bool weaponCarried(uint32_t spellId, const Entity& player) const;
+    /// What 0x008093d0 raises when it is not: EQUIPPED_ITEM_CLASS (0x1d),
+    /// _MAINHAND (0x1e) or _OFFHAND (0x1f) with the class and subclass mask,
+    /// NO_AMMO (0x34) with the ammunition type; 0 when it is.
+    uint8_t weaponMissing(uint32_t spellId, const Entity& player, uint32_t& arg, uint32_t& arg2) const;
     /// 0x007ff480 from the caster to the unit (none: a place), at the
     /// friendly row or the hostile.
     unit_target::Range spellReach(uint32_t spellId, const Entity& caster, const Entity* unit, bool friendly) const;
