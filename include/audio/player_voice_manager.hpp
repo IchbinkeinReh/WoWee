@@ -9,6 +9,7 @@
 
 #include "audio/sound_filter.hpp"
 #include "audio/vocal_error.hpp"
+#include "pipeline/no_wait_reads.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -73,6 +74,8 @@ private:
     int loadedGender_ = -1;
     std::array<uint32_t, vocal_error::kCount> sounds_{};
     std::unordered_map<uint32_t, Kit> kits_;
+    /// Clips of kits still coming from the streaming server.
+    pipeline::NoWaitReads reads_;
     /// The Death Knight filter for the race and gender loaded, and each file
     /// run through it.
     std::vector<sound_filter::Element> deathKnightFilter_;

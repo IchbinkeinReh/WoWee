@@ -1470,6 +1470,9 @@ private:
         uint32_t package = 0;
         game::object_effect::Runner runner;
         std::unordered_map<uint32_t, std::pair<uint32_t, const game::object_effect::Effect*>> loops;
+        /// Loops started while their clips were still coming from the
+        /// streaming server: started once they are here.
+        std::unordered_map<uint32_t, const game::object_effect::Effect*> comingLoops;
         bool gameObject = false;
     };
     std::unordered_map<uint64_t, ObjectEffectState> objectEffects_;

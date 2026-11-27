@@ -52,6 +52,7 @@
 
 #include "audio/play_limit.hpp"
 #include "audio/voice_priority.hpp"
+#include "pipeline/no_wait_reads.hpp"
 
 namespace wowee::pipeline { class AssetManager; }
 
@@ -270,6 +271,11 @@ public:
     /// Its handle for AudioEngine's setSoundPosition / setSoundPitch /
     /// stopSoundWithFade, 0 where nothing started.
     uint32_t playLoop(uint32_t soundId, const glm::vec3& at, float fadeInSeconds, pipeline::AssetManager* assets);
+    /// Whether the row's clips are still coming from the streaming server: a
+    /// kit() asked for and not settled yet (a play of it made nothing).
+    [[nodiscard]] bool kitComing(uint32_t soundId) const {
+        return soundId != 0 && kits_.find(soundId) == kits_.end();
+    }
     /// A doodad's event that sets its game object's ObjectEffect state.
     struct ObjectStateEvent {
         uint32_t instanceId = 0;
@@ -304,6 +310,8 @@ private:
         float fadeOut = 0.0f;      ///< how long a $DSE takes to end it
     };
     std::unordered_map<uint32_t, Kit> kits_;
+    /// Clips of kits still coming from the streaming server.
+    pipeline::NoWaitReads reads_;
     std::vector<ObjectStateEvent> objectStateEvents_;
     MoverInstanceQuery moverInstanceQuery_;
     std::unordered_map<std::string, uint32_t> idsByName_;

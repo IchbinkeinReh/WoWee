@@ -14,6 +14,7 @@
 #include <zlib.h>
 
 #include "pipeline/mpq_archive_set.hpp"
+#include "pipeline/no_wait_reads.hpp"
 
 using wowee::pipeline::MpqArchiveSet;
 namespace fs = std::filesystem;
@@ -477,6 +478,73 @@ TEST_CASE("Streaming: a read that may not wait is filled in the background, not 
         set.close();
     }
     fs::remove_all(mirror, ec);
+}
+
+TEST_CASE("Streaming: a sound kit's clips are gathered over frames, none waited for",
+          "[mpq][stream][nowait][kit]") {
+    // A zone change in streaming mode: the ambience asks for its kit's clips
+    // on the main thread. NoWaitReads reads what is here, leaves the rest to
+    // the background and is asked again each frame until every clip is in;
+    // a clip the archives do not have is settled at once as missing, and
+    // what came is not read twice.
+    namespace sw = wowee::pipeline::stream_wait;
+    using Clock = std::chrono::steady_clock;
+    TempData remote;
+    const fs::path mirror = remote.root.parent_path() / (remote.root.filename().string() + "_kitmirror");
+    std::error_code ec;
+    fs::remove_all(mirror, ec);
+    {
+        StreamedCopy copy(remote.root, mirror, {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"},
+                          512, 0, 150);
+        MpqArchiveSet set;
+        REQUIRE(set.open(mirror.string()));
+        const std::vector<std::string> paths = {"a\\crc.bin", "a\\zipped.bin", "a\\stored.txt", "a\\nothere.wav"};
+        wowee::pipeline::NoWaitReads reads;
+        std::map<std::string, int> readsOf;
+        auto read = [&](const std::string& p) {
+            auto data = set.read(p);
+            if (!data.empty()) ++readsOf[p];
+            return data;
+        };
+        int frames = 0;
+        double longestFrameMs = 0.0;
+        bool ready = false;
+        const auto start = Clock::now();
+        while (!ready && std::chrono::duration<double>(Clock::now() - start).count() < 20.0) {
+            const auto frame = Clock::now();
+            ready = reads.ready(paths, read);
+            longestFrameMs = std::max(longestFrameMs,
+                                      std::chrono::duration<double, std::milli>(Clock::now() - frame).count());
+            ++frames;
+            if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        REQUIRE(ready);
+        CHECK(frames > 1);                // the clips came later, the frames went on
+        CHECK(longestFrameMs < 100.0);    // no frame waited for the 150 ms server
+        CHECK(reads.take("a\\crc.bin") == pattern(10000));
+        CHECK(reads.take("a\\zipped.bin") == pattern(5000));
+        const auto stored = reads.take("a\\stored.txt");
+        CHECK(std::string(stored.begin(), stored.end()) == "locale bytes");
+        CHECK(reads.take("a\\nothere.wav").empty());   // missing, settled, not pending forever
+        CHECK(reads.held() == 0);
+        for (const auto& [p, n] : readsOf) CHECK(n == 1);   // nothing read twice
+        CHECK_FALSE(sw::noWait());   // no scope left behind
+        set.close();
+    }
+    fs::remove_all(mirror, ec);
+}
+
+TEST_CASE("NoWaitReads on a local install reads every clip at the first ask", "[mpq][nowait][kit]") {
+    // Local MPQ mode: nothing is ever deferred, so a kit is complete at once
+    // - the same as the plain reads it replaced.
+    TempData data;
+    MpqArchiveSet set;
+    REQUIRE(set.open(data.root.string()));
+    wowee::pipeline::NoWaitReads reads;
+    const std::vector<std::string> paths = {"a\\crc.bin", "a\\nothere.wav"};
+    CHECK(reads.ready(paths, [&](const std::string& p) { return set.read(p); }));
+    CHECK(reads.take("a\\crc.bin") == pattern(10000));
+    CHECK(reads.take("a\\nothere.wav").empty());
 }
 
 TEST_CASE("Streaming past the disk limit: what is held in memory reads through the archives",

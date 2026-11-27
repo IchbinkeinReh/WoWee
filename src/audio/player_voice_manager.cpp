@@ -96,11 +96,21 @@ const PlayerVoiceManager::Kit* PlayerVoiceManager::kit(uint32_t soundId) {
         if (idx >= 0) {
             const auto row = static_cast<uint32_t>(idx);
             const std::string dir = dbc->getString(row, kSoundDirectory);
+            std::vector<std::string> paths(10), named;
             for (uint32_t f = 0; f < 10; ++f) {
                 const std::string name = dbc->getString(row, kSoundFile0 + f);
                 if (name.empty()) continue;
-                const std::string path = dir.empty() ? name : dir + "\\" + name;
-                auto data = assetManager_->readFile(path);
+                paths[f] = dir.empty() ? name : dir + "\\" + name;
+                named.push_back(paths[f]);
+            }
+            // Streaming mode: clips still on the server are not waited for;
+            // this line is not spoken, the next one asks again.
+            if (!reads_.ready(named, [this](const std::string& p) { return assetManager_->readFile(p); }))
+                return nullptr;
+            for (uint32_t f = 0; f < 10; ++f) {
+                const std::string& path = paths[f];
+                if (path.empty()) continue;
+                auto data = reads_.take(path);
                 if (data.empty()) continue;
                 sound_names::note(data, path);
                 loaded.files.push_back(std::move(data));

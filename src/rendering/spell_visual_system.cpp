@@ -1518,7 +1518,14 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
             for (uint32_t f = 0; f < files.size(); ++f) files[f] = dbc->getString(row, 3 + f);
             const std::string path = spell_missile::soundEntryFile(dbc->getString(row, 23), files);
             if (!path.empty()) {
-                loaded.data = cachedAssetManager_->readFile(path);
+                // Streaming mode: a spell's sound still on the server is not
+                // waited for (a frozen frame at a cast); this play is silent
+                // and the next one asks again (pipeline/no_wait_reads.hpp).
+                if (!soundReads_.ready({path}, [this](const std::string& p) {
+                        return cachedAssetManager_->readFile(p);
+                    }))
+                    return nullptr;
+                loaded.data = soundReads_.take(path);
                 audio::sound_names::note(loaded.data, path);
             }
             const float volume = dbc->getFloat(row, 24);

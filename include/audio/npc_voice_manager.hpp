@@ -10,6 +10,7 @@
 #include <glm/glm.hpp>
 
 #include "audio/npc_line_counter.hpp"
+#include "pipeline/no_wait_reads.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -103,6 +104,8 @@ private:
     // A kit's loaded clips by NPCSounds id, so a line is read from disk once
     // however many units share the display; an empty slot stays empty.
     std::unordered_map<uint32_t, std::array<std::vector<VoiceSample>, 3>> kitSamples_;
+    // Clips of kits still coming from the streaming server.
+    pipeline::NoWaitReads reads_;
     // Which file of a kit slot was asked last (-1 for none), so the next ask is
     // not the same line while another one has weight. The client keeps this on the
     // SoundEntries record it is picking from (+0x44); it is kept per kit slot here

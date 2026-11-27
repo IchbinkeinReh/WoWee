@@ -45,11 +45,22 @@ const M2EventSounds::Kit* M2EventSounds::kit(uint32_t soundId, pipeline::AssetMa
         if (idx >= 0 && dbc->getFieldCount() > 27) {
             const uint32_t row = static_cast<uint32_t>(idx);
             const std::string dir = dbc->getString(row, 23);
+            std::vector<std::string> paths(10), named;
             for (uint32_t f = 0; f < 10; ++f) {
                 const std::string name = dbc->getString(row, 3 + f);
                 if (name.empty()) continue;
-                const std::string path = dir.empty() ? name : dir + "\\" + name;
-                auto data = assets->readFile(path);
+                paths[f] = dir.empty() ? name : dir + "\\" + name;
+                named.push_back(paths[f]);
+            }
+            // Streaming mode: a model's sound whose clips are still on the
+            // server is not waited for (a frozen frame while travelling);
+            // this event is silent and the next one asks again.
+            if (!reads_.ready(named, [assets](const std::string& p) { return assets->readFile(p); }))
+                return nullptr;
+            for (uint32_t f = 0; f < 10; ++f) {
+                const std::string& path = paths[f];
+                if (path.empty()) continue;
+                auto data = reads_.take(path);
                 if (data.empty()) continue;
                 audio::sound_names::note(data, path);
                 loaded.files.push_back(std::move(data));

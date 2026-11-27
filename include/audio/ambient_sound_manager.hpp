@@ -7,6 +7,7 @@
 #include <vector>
 #include <glm/vec3.hpp>
 #include "audio/zone_ambience.hpp"
+#include "pipeline/no_wait_reads.hpp"
 
 namespace wowee {
 namespace pipeline {
@@ -76,6 +77,8 @@ private:
 
     pipeline::AssetManager* assets_ = nullptr;
     std::unordered_map<int32_t, Kit> kits_;
+    /// Clips of kits still coming from the streaming server.
+    pipeline::NoWaitReads reads_;
     std::unordered_map<uint32_t, LiquidRow> liquidRows_;
     bool liquidRowsLoaded_ = false;
 

@@ -195,9 +195,11 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
             case oe::Action::Kind::StartLoop: {
                 const uint32_t handle = sounds.playLoop(e.recId, placeOf(e), kLoopFadeSeconds, assetManager_);
                 if (handle != 0) st.loops[e.id] = {handle, &e};
+                else if (sounds.kitComing(e.recId)) st.comingLoops[e.id] = &e;
                 break;
             }
             case oe::Action::Kind::StopLoop: {
+                st.comingLoops.erase(e.id);
                 auto it = st.loops.find(e.id);
                 if (it != st.loops.end()) {
                     audio.stopSoundWithFade(it->second.first, kLoopFadeSeconds);
@@ -206,6 +208,15 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
                 break;
             }
             }
+        }
+        // Streaming mode: a loop whose clips were not here yet starts as
+        // they come (pipeline/no_wait_reads.hpp).
+        for (auto it = st.comingLoops.begin(); it != st.comingLoops.end();) {
+            const oe::Effect& e = *it->second;
+            const uint32_t handle = sounds.playLoop(e.recId, placeOf(e), kLoopFadeSeconds, assetManager_);
+            if (handle != 0) st.loops[e.id] = {handle, &e};
+            if (handle != 0 || !sounds.kitComing(e.recId)) it = st.comingLoops.erase(it);
+            else ++it;
         }
         for (const auto& [effectId, loop] : st.loops) {
             const auto [handle, e] = loop;

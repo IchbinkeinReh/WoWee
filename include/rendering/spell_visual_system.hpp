@@ -25,6 +25,7 @@
 #include "rendering/swing_trail.hpp"
 #include "rendering/camera_shake.hpp"
 #include "rendering/mount_transition.hpp"
+#include "pipeline/no_wait_reads.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -1325,6 +1326,7 @@ private:
         bool loops = false;        ///< Flags (25) 0x200
     };
     std::unordered_map<uint32_t, LoadedSound> soundEntries_;           // SoundEntries id → its file, empty if none
+    pipeline::NoWaitReads soundReads_;                                    // their files still coming from the streaming server
     std::unordered_map<std::string, uint32_t> spellVisualModelIds_;   // M2 path → M2Renderer modelId
     std::unordered_set<uint32_t> spellVisualFailedModels_;           // modelIds that failed to load (negative cache)
     uint32_t nextSpellVisualModelId_ = 999000; // Reserved range 999000-999799

@@ -139,11 +139,32 @@ std::pair<const std::vector<VoiceSample>*, int32_t*> NpcVoiceManager::kitSlot(ui
     // stays empty, so it is not gone looking for again per click.
     auto loaded = kitSamples_.find(kitId);
     if (loaded == kitSamples_.end()) {
-        loaded = kitSamples_.try_emplace(kitId).first;
-        kitLastFile_[kitId].fill(-1);
         const auto row = kitRows_.find(kitId);
         auto se = assetManager_->loadDBCOptional("SoundEntries.dbc");
-        if (row != kitRows_.end() && se && se->isLoaded() && se->getFieldCount() > 23) {
+        const bool rowsHere = row != kitRows_.end() && se && se->isLoaded() && se->getFieldCount() > 23;
+        // Streaming mode: a kit whose clips are still on the server is not
+        // waited for (a frozen frame at a click); this line is not spoken and
+        // the next ask reads on (pipeline/no_wait_reads.hpp).
+        if (rowsHere) {
+            std::vector<std::string> paths;
+            for (size_t k = 0; k < 3; ++k) {
+                if (row->second[k] == 0) continue;
+                const auto entry = soundEntryRowById_.find(row->second[k]);
+                if (entry == soundEntryRowById_.end()) continue;
+                const std::string directory = se->getString(entry->second, 23);
+                for (uint32_t f = 0; f < 10; ++f) {
+                    const std::string file = se->getString(entry->second, 3 + f);
+                    if (file.empty()) continue;
+                    const std::string path = sound_entry::filePath(directory, file);
+                    if (assetManager_->fileExists(path)) paths.push_back(path);
+                }
+            }
+            if (!reads_.ready(paths, [this](const std::string& p) { return assetManager_->readFile(p); }))
+                return {};
+        }
+        loaded = kitSamples_.try_emplace(kitId).first;
+        kitLastFile_[kitId].fill(-1);
+        if (rowsHere) {
             for (size_t k = 0; k < 3; ++k) {
                 if (row->second[k] == 0) continue;
                 const auto entry = soundEntryRowById_.find(row->second[k]);
@@ -180,6 +201,10 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
     if (!assetManager_->fileExists(path)) {
         return false;
     }
+    // Read by kitSlot's ready() (held there; a path asked twice in a kit is
+    // read again).
+    sample.data = reads_.take(path);
+    if (sample.data.empty()) sample.data = assetManager_->readFile(path);
 
     sample.path = path;
     // The reach the SoundEntries row naming this file asks for, when a row
@@ -190,7 +215,6 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
         sample.volume = it->second.volume;
         sample.flags = it->second.flags;
     }
-    sample.data = assetManager_->readFile(path);
     sound_names::note(sample.data, path);
 
     if (sample.data.empty()) {

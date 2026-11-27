@@ -56,11 +56,23 @@ const AmbientSoundManager::Kit* AmbientSoundManager::kit(int32_t soundId) {
         if (idx >= 0 && dbc->getFieldCount() > 27) {
             const auto row = static_cast<uint32_t>(idx);
             const std::string dir = dbc->getString(row, 23);
+            std::vector<std::string> paths(10);
             for (uint32_t f = 0; f < 10; ++f) {
                 const std::string name = dbc->getString(row, 3 + f);
-                if (name.empty()) continue;
-                const std::string path = dir.empty() ? name : dir + "\\" + name;
-                auto data = assets_->readFile(path);
+                if (!name.empty()) paths[f] = dir.empty() ? name : dir + "\\" + name;
+            }
+            std::vector<std::string> named;
+            for (const auto& path : paths)
+                if (!path.empty()) named.push_back(path);
+            // On a zone change in streaming mode the clips may still be on
+            // the server: not waited for (a frozen frame) - the channel stays
+            // as it is and update() asks again until they are here.
+            if (!reads_.ready(named, [this](const std::string& p) { return assets_->readFile(p); }))
+                return nullptr;
+            for (uint32_t f = 0; f < 10; ++f) {
+                const std::string& path = paths[f];
+                if (path.empty()) continue;
+                auto data = reads_.take(path);
                 if (data.empty()) continue;
                 sound_names::note(data, path);
                 loaded.files.push_back(std::move(data));
@@ -142,9 +154,13 @@ void AmbientSoundManager::update(bool isDay, bool indoors) {
         fadingHandle_ = 0;
     } else {
         // The one already falling goes on falling; the one playing falls
-        // over five seconds, behind the new one rising over five.
-        engine.stopSoundWithFade(current_.handle, za::kCrossfadeSeconds);
-        fadingHandle_ = current_.handle;
+        // over five seconds, behind the new one rising over five. A channel
+        // that played nothing (its clips were still on their way from the
+        // streaming server) leaves the one falling as it is.
+        if (current_.handle != 0) {
+            engine.stopSoundWithFade(current_.handle, za::kCrossfadeSeconds);
+            fadingHandle_ = current_.handle;
+        }
     }
     current_ = {};
     current_.sound = want->sound;
