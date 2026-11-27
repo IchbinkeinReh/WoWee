@@ -2944,6 +2944,23 @@ int lua_Frame_SetWheelEnabled(lua_State* L) {
 // Chat. AddMessage was a name in the method list and nothing else, so every
 // line the interface was handed went nowhere: the frame received the events,
 // formatted the text, and dropped it.
+namespace {
+/// How deep the events run whose chat lines the MCP server hears as events
+/// already (CHAT_MSG_*, the combat log's): AddMessage under them is not told
+/// again.
+int& chatEventDepth() {
+    static int depth = 0;
+    return depth;
+}
+/// ChatFrame1 .. ChatFrameN, the chat windows.
+bool isChatWindowName(const std::string& name) {
+    constexpr size_t kPrefix = 9;  // "ChatFrame"
+    if (name.size() <= kPrefix || name.compare(0, kPrefix, "ChatFrame") != 0) return false;
+    return std::all_of(name.begin() + static_cast<std::ptrdiff_t>(kPrefix), name.end(),
+                       [](char c) { return c >= '0' && c <= '9'; });
+}
+}  // namespace
+
 int lua_MessageFrame_AddMessage(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
@@ -3009,6 +3026,11 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
         m.hasExtra = true;
         m.extra = lua_tostring(L, after + 3);
     }
+    // To the MCP server's chat: a chat window's line that came of no chat or
+    // combat log event (it hears those as events) - /played, print, an
+    // addon's. Not a line filled in from before (backFill).
+    if (mcp::gate::heardChatWindowLine && !backFill && chatEventDepth() == 0 && isChatWindowName(w->name))
+        mcp::gate::heardChatWindowLine(w->name, m.text);
     w->isMessageFrame = true;
     if (backFill) {
         // A line from before the ones there (0x0096a9f0 with backFill): it
@@ -16913,6 +16935,16 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
     if (eventName == "TRADE_SKILL_UPDATE" || eventName == "TRADE_SKILL_SHOW") {
         invalidateTradeSkillRows();
     }
+
+    // The lines the chat frames write for these, the MCP server has as the
+    // events themselves (lua_MessageFrame_AddMessage).
+    struct ChatEventGuard {
+        bool on;
+        explicit ChatEventGuard(bool chat) : on(chat) { if (on) ++chatEventDepth(); }
+        ~ChatEventGuard() { if (on) --chatEventDepth(); }
+        ChatEventGuard(const ChatEventGuard&) = delete;
+        ChatEventGuard& operator=(const ChatEventGuard&) = delete;
+    } chatEventGuard{eventName.rfind("CHAT_MSG_", 0) == 0 || eventName.rfind("COMBAT_LOG_EVENT", 0) == 0};
 
     // An event handler may cause another event, which is ordinary and has to
     // keep working - but a cycle between two of them recurses through both this

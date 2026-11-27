@@ -106,7 +106,10 @@ json chatTool(ToolContext& context, const json& args) {
                      {"kind", e.value.name.substr(std::string("CHAT_MSG_").size())},
                      {"ago_s", rounded(context.now - e.value.at, 1)}};
         if (!e.value.args.empty()) line["text"] = plainText(e.value.args[0]);
-        if (e.value.args.size() > 1 && !e.value.args[1].empty()) line["from"] = e.value.args[1];
+        // FRAME: a line the interface wrote into a chat window itself
+        // (/played, print), with the window; else the sender.
+        const bool window = e.value.name == "CHAT_MSG_FRAME";
+        if (e.value.args.size() > 1 && !e.value.args[1].empty()) line[window ? "window" : "from"] = e.value.args[1];
         if (e.value.args.size() > 8 && !e.value.args[8].empty()) line["channel"] = e.value.args[8];
         lines.push_back(std::move(line));
     }
@@ -157,7 +160,9 @@ void addLogTools(Toolbox& box) {
                            object({since(), limit("events, 60 by default, the newest"),
                                    optional("names", text("parts of names, comma separated", 256))}),
                            eventsTool, Tool::Where::Anywhere));
-    box.push_back(lookTool("chat", "Chat lines, by kind (SYSTEM, SAY, LOOT, MONSTER_SAY, WHISPER, ...).",
+    box.push_back(lookTool("chat",
+                           "Chat lines, by kind (SYSTEM, SAY, LOOT, MONSTER_SAY, WHISPER, ...; FRAME: what the "
+                           "interface wrote into a chat window itself, as /played's lines or print's, with the window).",
                            object({since(), limit("lines, 40 by default, the newest"),
                                    optional("kind", text("one kind only", 48)),
                                    optional("grep", text("only lines with this in them", 64))}),

@@ -29,6 +29,10 @@ inline bool (*settingChanged)(const std::string& name, const std::string& before
 inline bool (*allowsAccountData)(uint32_t type, const std::string& before, const std::string& after) = nullptr;
 /// Every event the interface is told (LuaEngine), with its arguments as text.
 inline void (*heardEvent)(const std::string& event, const std::vector<std::string>& args) = nullptr;
+/// A line the interface itself wrote into a chat window (ChatFrameN:AddMessage
+/// outside the chat and combat log events, which come as events): /played's,
+/// print's, an addon's.
+inline void (*heardChatWindowLine)(const std::string& window, const std::string& text) = nullptr;
 
 inline bool sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload) {
     return allowsSend == nullptr || allowsSend(wireOpcode, payload);

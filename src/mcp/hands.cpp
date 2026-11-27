@@ -125,7 +125,8 @@ json Aftermath::report(ToolContext& context) const {
     for (const auto& c : context.chat.after(chat, 6, [](const EventLine& l) {
              return l.name == "CHAT_MSG_SYSTEM" || l.name == "CHAT_MSG_LOOT" || l.name == "CHAT_MSG_MONEY" ||
                     l.name == "CHAT_MSG_MONSTER_SAY" || l.name == "CHAT_MSG_MONSTER_WHISPER" ||
-                    l.name == "CHAT_MSG_SKILL" || l.name == "CHAT_MSG_COMBAT_XP_GAIN";
+                    l.name == "CHAT_MSG_SKILL" || l.name == "CHAT_MSG_COMBAT_XP_GAIN" ||
+                    l.name == "CHAT_MSG_FRAME";
          })) {
         if (!c.value.args.empty()) lines.push_back(plainText(c.value.args[0]).substr(0, 200));
     }

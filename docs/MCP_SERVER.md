@@ -69,7 +69,7 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 | `terrain`, `look_around`, `raycast`, `path` | the ground, the ways that are open, what a line meets, the way `walk_to` would take - out of the faces the character itself is moved against, those of game objects (lifts, ships, doors) where they are now among them, by name |
 | `ui`, `ui_at` | windows, dialogs, tooltips, error texts; one window's texts and controls; what is under a point |
 | `inventory`, `spellbook`, `action_bars`, `quest_log`, `character`, `map` | asked of the interface's own functions |
-| `log`, `events`, `chat`, `combat_log` | since a cursor: pass the `next` of the last answer as `since` |
+| `log`, `events`, `chat`, `combat_log` | since a cursor: pass the `next` of the last answer as `since`. `chat` also lists, as kind `FRAME` with its `window`, a line the interface wrote into a chat window itself (`/played`, `print`, an addon's) - once, not again for the chat and combat log events it already has |
 | `sounds` | the sounds going on, and those begun in the last seconds: file, place, volume, whether heard |
 | `screenshot` | the frame, a part of it or one window, as JPEG or PNG; with `boxes` the mean colour and luma of each box under `means` (`picture=false`: the means alone) |
 | `wait` | for an event, a window, a text, a chat line or a state, or for a time |

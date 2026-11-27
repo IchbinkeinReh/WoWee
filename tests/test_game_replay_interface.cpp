@@ -17,6 +17,7 @@
 #include "game/quest_handler.hpp"
 #include "game/quest_link.hpp"
 #include "game_replay.hpp"
+#include "mcp/gate.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "rendering/animation/emote_registry.hpp"
 #include "ui/framexml_emitter.hpp"
@@ -6432,4 +6433,43 @@ TEST_CASE("CloseItemText closes a book read from the bags", "[replay][interface]
     CHECK(ui.is("ItemTextGetText() == ''"));
     ui.run("CloseItemText()");
     CHECK(ui.is("closed == 1"));
+}
+
+namespace {
+std::vector<std::pair<std::string, std::string>>& chatWindowLines() {
+    static std::vector<std::pair<std::string, std::string>> lines;
+    return lines;
+}
+}  // namespace
+
+// MCP wish: what the interface writes into a chat window itself (/played's
+// lines, print's) reaches the MCP server's chat; the lines the chat frames
+// write for chat and combat log events, which it has as events, do not.
+TEST_CASE("a chat window's own lines are told to the MCP server once", "[replay][interface][mcp]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    chatWindowLines().clear();
+    wowee::mcp::gate::heardChatWindowLine = [](const std::string& window, const std::string& text) {
+        chatWindowLines().emplace_back(window, text);
+    };
+    struct Unhook {
+        ~Unhook() { wowee::mcp::gate::heardChatWindowLine = nullptr; }
+    } unhook;
+    ui.run("cf = CreateFrame('ScrollingMessageFrame', 'ChatFrame5') "
+           "other = CreateFrame('ScrollingMessageFrame', 'NotAChatFrame') "
+           "local f = CreateFrame('Frame') f:RegisterEvent('CHAT_MSG_SAY') f:RegisterEvent('TIME_PLAYED_MSG') "
+           "f:RegisterEvent('COMBAT_LOG_EVENT') "
+           "f:SetScript('OnEvent', function(self, event, a) cf:AddMessage(event .. ':' .. tostring(a)) end)");
+    ui.engine.fireEvent("CHAT_MSG_SAY", {"hallo", "Bern"});
+    ui.engine.fireEvent("COMBAT_LOG_EVENT", {"1", "SWING_DAMAGE"});
+    CHECK(chatWindowLines().empty());
+    ui.engine.fireEvent("TIME_PLAYED_MSG", {"3600", "60"});
+    REQUIRE(chatWindowLines().size() == 1);
+    CHECK(chatWindowLines()[0].first == "ChatFrame5");
+    CHECK(chatWindowLines()[0].second == "TIME_PLAYED_MSG:3600");
+    // Not a chat window; a line filled in from before; then a plain print.
+    ui.run("other:AddMessage('x') cf:AddMessage('y', 1, 1, 1, 0, true) cf:AddMessage('z')");
+    REQUIRE(chatWindowLines().size() == 2);
+    CHECK(chatWindowLines()[1].second == "z");
 }

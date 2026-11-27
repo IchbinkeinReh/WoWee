@@ -104,6 +104,7 @@ std::unique_ptr<Server> Server::start(core::Application& app, const Options& opt
     gate::settingChanged = &Server::gateSetting;
     gate::allowsAccountData = &Server::gateAccountData;
     gate::heardEvent = &Server::gateEvent;
+    gate::heardChatWindowLine = &Server::gateChatWindowLine;
     core::Logger::getInstance().setTap(&Server::logTap);
     return server;
 }
@@ -156,6 +157,7 @@ Server::~Server() {
     gate::settingChanged = nullptr;
     gate::allowsAccountData = nullptr;
     gate::heardEvent = nullptr;
+    gate::heardChatWindowLine = nullptr;
     addons::putBackCVars();
     // Those who wait are told first, or the threads that wait would be waited
     // for.
@@ -403,6 +405,18 @@ bool Server::gateQuit() {
 
 void Server::gateEvent(const std::string& event, const std::vector<std::string>& args) {
     if (gServer) gServer->heard(event, args);
+}
+
+void Server::gateChatWindowLine(const std::string& window, const std::string& text) {
+    if (!gServer) return;
+    Server& s = *gServer;
+    // One line written into several windows at one moment (a system line in
+    // two tabs) is listed once.
+    if (text == s.lastWindowLine_ && s.context_.now == s.lastWindowLineAt_) return;
+    s.lastWindowLine_ = text;
+    s.lastWindowLineAt_ = s.context_.now;
+    // As a chat line of kind FRAME: the chat tool lists it with the window.
+    s.context_.chat.push({.name = "CHAT_MSG_FRAME", .args = shownArgs({text, window}), .at = s.context_.now});
 }
 
 void Server::logTap(int level, const std::string& text) {

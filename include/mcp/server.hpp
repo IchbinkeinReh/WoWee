@@ -65,6 +65,7 @@ private:
     static bool gateLua();
     static bool gateQuit();
     static void gateEvent(const std::string& event, const std::vector<std::string>& args);
+    static void gateChatWindowLine(const std::string& window, const std::string& text);
     static void logTap(int level, const std::string& text);
 
     Options options_;
@@ -80,6 +81,10 @@ private:
     Redactor redactor_;
     double nextSecrets_ = 0.0;
     uint32_t sendRefusals_ = 0;
+    // The last chat window line heard, and when: the same line in several
+    // windows at one moment is one line.
+    std::string lastWindowLine_;
+    double lastWindowLineAt_ = -1.0;
 };
 
 }  // namespace wowee::mcp
