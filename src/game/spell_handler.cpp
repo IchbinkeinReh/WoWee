@@ -2667,7 +2667,7 @@ bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, u
             owner_.stopAutoRepeat(true);
     }
     cancelGroundTargeting();
-    if (!castChecksPass(spellId, 0)) return false;
+    if (!castChecksPass(spellId, 0, itemGuid)) return false;
     playCastActivateSound(spellId, itemGuid);
     if (itemGuid != 0) {
         owner_.getSocket()->send(UseItemPacket::build(bag, slot, itemGuid, spellId, 0, 0, gameObjectGuid, 0, 0,
@@ -2914,11 +2914,28 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
     }
 }
 
-bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
+bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid, uint64_t itemGuid) {
     loadSpellNameCache();
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return true;
     const auto& e = it->second;
+    // 0x0080cce0 -> 0x008091d0(show 1), before the unit is asked and before
+    // any cursor: a totem, tool or reagent not carried fails the cast here,
+    // said (0x00808200), so nothing is sent and no target is waited for
+    // (T438). Not for an item cast whose item carries flag 0x10000000.
+    {
+        const uint32_t itemEntry = itemGuid != 0 ? owner_.getItemEntryByGuid(itemGuid) : 0u;
+        const auto* item = itemEntry != 0 ? owner_.getItemInfo(itemEntry) : nullptr;
+        const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+        if (self && !(item && (item->itemFlags & 0x10000000u) != 0)) {
+            uint32_t arg = 0;
+            if (const uint8_t code = toolsMissing(spellId, *self, arg); code != 0) {
+                showPlayerCastFailure(spellId, code,
+                                      castFailureMessage(owner_, spellId, code, static_cast<int32_t>(e.powerType), arg));
+                return false;
+            }
+        }
+    }
     // 0x00809610: the unit asked - the cast's, else the target - where the
     // spell may take it (Targets with each effect's ImplicitTargetA, the pet
     // for TARGET_UNIT_PET), held to the spell's reach (0x007ff480,
@@ -2983,20 +3000,36 @@ bool SpellHandler::historyHeld(uint32_t spellId, uint32_t itemId, uint32_t categ
 }
 
 bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
-    const auto& e = owner_.spellNameCacheRef().find(spellId)->second;
+    uint32_t arg = 0;
+    return toolsMissing(spellId, player, arg) == 0;
+}
+
+uint8_t SpellHandler::toolsMissing(uint32_t spellId, const Entity& player, uint32_t& arg) const {
+    arg = 0;
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return 0;
+    const auto& e = it->second;
     const auto& inv = owner_.getInventory();
     // 0x008091d0: each Totem carried (0x00754a20) ...
-    for (const uint32_t totem : e.totems)
-        if (totem != 0 && inv.countCarried(totem) == 0) return false;
+    for (const uint32_t totem : e.totems) {
+        if (totem != 0 && inv.countCarried(totem) == 0) {
+            arg = totem;
+            return kCastResultTotems;
+        }
+    }
     // ... each TotemCategory met by what is carried: items whose own
     // category is of its type, their masks together covering its mask
     // (0x007548f0 -> 0x007541f0; TotemCategory.dbc type 18, mask 19).
     for (const uint32_t cat : e.totemCategories) {
-        if (cat != 0 && !carriesTotemCategory(cat)) return false;
+        if (cat != 0 && !carriesTotemCategory(cat)) {
+            arg = cat;
+            return kCastResultTotemCategory;
+        }
     }
-    if (reagentsFree(spellId, player)) return true;
+    if (reagentsFree(spellId, player)) return 0;
     // Each reagent carried in its count - one more where the reagent is an
     // item whose own spell this is, with charges.
+    constexpr uint8_t kSpellFailedReagents = 100;
     for (const auto& r : e.reagents) {
         if (r.itemId == 0) continue;
         uint32_t need = r.count;
@@ -3004,9 +3037,12 @@ bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
             for (const auto& sp : info->spells)
                 if (sp.spellId == spellId && sp.charges != 0) ++need;
         }
-        if (inv.countCarried(r.itemId) < need) return false;
+        if (inv.countCarried(r.itemId) < need) {
+            arg = r.itemId;
+            return kSpellFailedReagents;
+        }
     }
-    return true;
+    return 0;
 }
 
 bool SpellHandler::reagentsFree(uint32_t spellId, const Entity& player) const {

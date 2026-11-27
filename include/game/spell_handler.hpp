@@ -1169,10 +1169,11 @@ private:
     /// 0x0080c790 -> 0x0080cce0: the unit the spell goes at, or the cursor
     /// held for one, or the refusal - the player's spells and a pet's alike.
     void castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targetGuid);
-    /// 0x0080cce0's checks of the player before the units: the unit asked
-    /// held to the reach (0x00809610), then 0x00739650. False, said, where
-    /// the cast is refused.
-    bool castChecksPass(uint32_t spellId, uint64_t targetGuid);
+    /// 0x0080cce0's checks of the player before the units: the totems, tools
+    /// and reagents carried (0x008091d0, unless the item cast with carries
+    /// flag 0x10000000), the unit asked held to the reach (0x00809610), then
+    /// 0x00739650. False, said, where the cast is refused.
+    bool castChecksPass(uint32_t spellId, uint64_t targetGuid, uint64_t itemGuid = 0);
     /// The sound of a cast that passed its checks (0x0080cce0).
     void playCastActivateSound(uint32_t spellId, uint64_t itemGuid);
     /// What 0x00739650 asks of the player for the spell (cast_check::Caster).
@@ -1188,6 +1189,10 @@ private:
     uint32_t classSpellFamily() const;
     /// 0x008091d0 for the player: the spell's totems, tools and reagents.
     bool toolsCarried(uint32_t spellId, const Entity& player) const;
+    /// What 0x008091d0 raises when one is missing: TOTEMS (0x83) with the
+    /// totem's item, TOTEM_CATEGORY (0x82) with the category, REAGENTS (100)
+    /// with the reagent's item; 0 when all are carried.
+    uint8_t toolsMissing(uint32_t spellId, const Entity& player, uint32_t& arg) const;
     /// 0x006de230: an item of the spell's EquippedItemClass and subclass
     /// mask on in one of `slots` (bit per equipment slot) - not in a hand
     /// disarmed, nor broken.

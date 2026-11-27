@@ -4477,6 +4477,36 @@ TEST_CASE("CastSpellByID casts the pet's spell through the pet (0x0053e060)", "[
     CHECK(actions().size() == 2);
 }
 
+// T438: 0x0080cce0 asks 0x008091d0 before the unit and the cursor: a reagent
+// not carried fails the cast there (SPELL_FAILED_REAGENTS with the item), so
+// no CMSG_CAST_SPELL goes out and UNIT_SPELLCAST_SENT is not raised. With the
+// reagent carried it is sent.
+TEST_CASE("a spell whose reagent is not carried is refused before it is sent (T438)", "[replay][interface]") {
+    constexpr uint32_t kEnslave = 1098, kShard = 6265;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& spell = s.handler().spellNameCacheRef()[kEnslave];
+    spell.name = "Enslave";
+    spell.reagents[0] = {kShard, 1};
+    wowee::network::Packet known(wowee::game::wireOpcode(Opcode::SMSG_INITIAL_SPELLS));
+    known.writeUInt8(0);
+    known.writeUInt16(1);
+    known.writeUInt32(kEnslave);
+    known.writeUInt16(0);
+    known.writeUInt16(0);
+    s.receive(known);
+    ui.run("sent = 0 local f = CreateFrame('Frame') f:RegisterEvent('UNIT_SPELLCAST_SENT') "
+           "f:SetScript('OnEvent', function() sent = sent + 1 end)");
+    const auto casts = [&] { return s.sent().of(Opcode::CMSG_CAST_SPELL).size(); };
+    ui.run("CastSpellByID(" + std::to_string(kEnslave) + ")");
+    CHECK(casts() == 0);
+    CHECK(ui.is("sent == 0"));
+    carryForAuction(s, 0, 0x4000000000000C41ull, kShard, 1);
+    ui.run("CastSpellByID(" + std::to_string(kEnslave) + ")");
+    CHECK(casts() == 1);
+}
+
 // FIXER W (found in code): IsSpellKnown(id, isPet) also finds a spell on a
 // slot of the pet's bar that its book lacks (0x0053c3a0 -> 0x005d3560).
 TEST_CASE("IsSpellKnown of the pet sees its bar (0x0053c3a0)", "[replay][interface]") {
