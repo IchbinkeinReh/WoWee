@@ -72,6 +72,11 @@ inline Scatter scatterFor(Quality q) {
     return {};
 }
 
+/// A term's scatter under its Debug Glow slider (dbgvlsun, dbgvlmoon,
+/// dbgvllights): `share` is the slider's percent over 100. 1 leaves it
+/// exactly as it is; below 0 is taken as 0.
+inline float tunedScatter(float scatter, float share) { return scatter * (share > 0.0f ? share : 0.0f); }
+
 /// The moon's light in the air beside the sun's for the same colour: at night
 /// the eye sees the air's faint light the less (T434: the moon's cone filled
 /// the night sky).

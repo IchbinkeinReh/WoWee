@@ -157,6 +157,11 @@ public:
     int pendingDbgGlowPulse = 100;    ///< Debug Glow: glow pulse strength, percent
     int pendingDbgFireFlicker = 100;  ///< Debug Glow: fire flicker strength, percent
     int pendingDbgModelFlicker = 100;  ///< Debug Glow: model light flicker strength, percent
+    /// Debug Glow: the volumetric light's sun, moon and lamp terms, percent
+    /// (Renderer::LightingTune::volumetricSun/Moon/Lights).
+    int pendingDbgVlSun = 100;
+    int pendingDbgVlMoon = 100;
+    int pendingDbgVlLights = 100;
     int pendingDbgGlowAnim = 100;      ///< Debug Glow: glow colour animation strength, percent
     int pendingDbgLightCountLimit = 512;
     int pendingRtParticleLights = 1;  ///< lights per particle emitter (rt_particle_lights.hpp)

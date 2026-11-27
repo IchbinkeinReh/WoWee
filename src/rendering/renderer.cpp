@@ -8515,15 +8515,18 @@ void Renderer::recordVolumetricLight() {
             in.bodyDir = sunDir;
             in.bodyShare = shares.sun;
             in.lobe = volumetric_light::lobeShare(1.0f - glm::clamp(sunOcclusion_, 0.0f, 1.0f));
+            bodyScatter = volumetric_light::tunedScatter(bodyScatter, lightingTune_.volumetricSun);
         } else if (shares.moon > 0.0f) {
             in.bodyDir = moonDir;
             in.bodyShare = shares.moon;
             in.lobe = volumetric_light::lobeShare(1.0f - glm::clamp(moonOcclusionState_.eased, 0.0f, 1.0f));
             bodyScatter *= volumetric_light::kMoonScatterShare;
+            bodyScatter = volumetric_light::tunedScatter(bodyScatter, lightingTune_.volumetricMoon);
         }
         in.bodyScatter = bodyScatter * air * (1.0f - 0.8f * cover);
         // A lamp's glow fainter by day (volumetric_light::lampDaylight).
-        in.lampScatter = scatter.lamp * air * volumetric_light::lampDaylight(shares.sun);
+        in.lampScatter = volumetric_light::tunedScatter(scatter.lamp, lightingTune_.volumetricLights) * air *
+                         volumetric_light::lampDaylight(shares.sun);
         in.bodyColor = glm::vec3(currentFrameData.lightColor);
         // Each sample asks whether the sky body reaches it: a traced ray with
         // ray queries, the shadow map otherwise; with neither, no sky light at

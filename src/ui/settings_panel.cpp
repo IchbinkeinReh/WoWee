@@ -997,6 +997,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "dbgemissivelightintensity", "dbgemissivelightreach", "dbgparticlelightintensity", "dbgparticlelightreach",
     "dbgglowpulse", "dbgfireflicker", "dbgmodelflicker", "dbgglowanim",
     "dbginteriorbase", "dbginteriorfullat", "dbgmaxlight", "dbglightcountlimit", "rtparticlelights",
+    "dbgvlsun", "dbgvlmoon", "dbgvllights",
     "dbgtracedsunshadow", "dbgmapsunshadow", "dbgpointshadow", "dbgbakedlampshadow", "dbgocclusion", "dbgterrainshadow", "dbgblobshadow",
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
@@ -1286,6 +1287,9 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "dbgmaxlight", .asInt = &SettingsPanel::pendingDbgMaxLight},
     {.key = "dbglightcountlimit", .asInt = &SettingsPanel::pendingDbgLightCountLimit},
     {.key = "rtparticlelights", .asInt = &SettingsPanel::pendingRtParticleLights},
+    {.key = "dbgvlsun", .asInt = &SettingsPanel::pendingDbgVlSun},
+    {.key = "dbgvlmoon", .asInt = &SettingsPanel::pendingDbgVlMoon},
+    {.key = "dbgvllights", .asInt = &SettingsPanel::pendingDbgVlLights},
     {.key = "dbgshadowdarkness", .asInt = &SettingsPanel::pendingDbgShadowDarkness},
     {.key = "dbgtracedsunshadow", .asInt = &SettingsPanel::pendingDbgTracedSunShadow},
     {.key = "dbgmapsunshadow", .asInt = &SettingsPanel::pendingDbgMapSunShadow},
@@ -1522,6 +1526,9 @@ void SettingsPanel::applyLightingTune() {
     t.occlusion = pct(pendingDbgOcclusion);
     t.bakedTerrainShadow = pct(pendingDbgTerrainShadow);
     t.blobShadow = pct(pendingDbgBlobShadow);
+    t.volumetricSun = pct(static_cast<float>(pendingDbgVlSun));
+    t.volumetricMoon = pct(static_cast<float>(pendingDbgVlMoon));
+    t.volumetricLights = pct(static_cast<float>(pendingDbgVlLights));
     renderer->setLightingTune(t);
     renderer->setRtDebugView(pendingDbgView);
     renderer->setGameTimeOverride(pendingDbgTimeOverride ? pendingDbgTime : -1.0f);
@@ -1839,7 +1846,10 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
                key == "dbgbakedlampshadow" ||
                key == "dbgocclusion" ||
                key == "dbgterrainshadow" ||
-               key == "dbgblobshadow") {
+               key == "dbgblobshadow" ||
+               key == "dbgvlsun" ||
+               key == "dbgvlmoon" ||
+               key == "dbgvllights") {
         applyLightingTune();
     } else if (key == "mistdensity") {
         if (renderer) renderer->setVolumetricFogDensity(pendingVolumetricDensity);

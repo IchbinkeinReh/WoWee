@@ -417,3 +417,70 @@ TEST_CASE("volumetric light: the most important lamps that reach the view", "[vo
     edge[0] = {{85.0f, 0.0f, 0.0f}, 8.0f};
     CHECK(vl::pickLights(edge, glm::vec3(0.0f), 80.0f, 32).size() == 1);
 }
+
+TEST_CASE("volumetric light: three Debug Glow sliders, 100 % by default", "[volumetric_light][settings]") {
+    // User request 2026-11-27 (VL3): the sun's, the moon's and the lamps'
+    // part each as a percent of today's, live.
+    struct Slider {
+        const char* key;
+        const char* fileKey;
+        const char* field;
+        const char* german;
+    };
+    const Slider sliders[] = {
+        {"dbgvlsun", "dbg_vl_sun", "pendingDbgVlSun", "VL Sonne %"},
+        {"dbgvlmoon", "dbg_vl_moon", "pendingDbgVlMoon", "VL Mond %"},
+        {"dbgvllights", "dbg_vl_lights", "pendingDbgVlLights", "VL Lichter %"},
+    };
+    const std::string io = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    for (const Slider& s : sliders) {
+        INFO(s.key);
+        const auto* r = row(s.key);
+        REQUIRE(r != nullptr);
+        CHECK(r->kind == wowee::ui::SettingKind::Int);
+        CHECK(r->minValue == 0.0f);
+        CHECK(r->maxValue == 400.0f);
+        CHECK(r->step == 5.0f);
+        CHECK(r->defaultValue == 100.0f);
+        CHECK(std::string(r->category) == "Debug Glow");
+        CHECK(std::string(r->enabledWhen) == "volumetriclight");
+        const auto* de = wowee::ui::germanSettingText(s.key);
+        REQUIRE(de != nullptr);
+        REQUIRE(de->label != nullptr);
+        CHECK(std::string(de->label) == s.german);
+        CHECK(characters(de->label) <= 24);
+        REQUIRE(de->tooltip != nullptr);
+        CHECK(std::string(de->tooltip).size() > 40);
+        // Saved, loaded clamped to the row's range, bound, applied live.
+        CHECK(io.find(std::string("out << \"") + s.fileKey + "=\" << settingsPanel_." + s.field) != std::string::npos);
+        CHECK(io.find(std::string("key == \"") + s.fileKey + "\") settingsPanel_." + s.field +
+                      " = std::clamp(std::stoi(val), 0, 400)") != std::string::npos);
+        CHECK(panel.find(std::string("{.key = \"") + s.key + "\", .asInt = &SettingsPanel::" + s.field + "}") !=
+              std::string::npos);
+        CHECK(panel.find(std::string("key == \"") + s.key + "\"") != std::string::npos);
+    }
+    CHECK(panel.find("t.volumetricSun = pct(static_cast<float>(pendingDbgVlSun));") != std::string::npos);
+    CHECK(panel.find("t.volumetricMoon = pct(static_cast<float>(pendingDbgVlMoon));") != std::string::npos);
+    CHECK(panel.find("t.volumetricLights = pct(static_cast<float>(pendingDbgVlLights));") != std::string::npos);
+}
+
+TEST_CASE("volumetric light: 100 % leaves each term as it is, others scale it", "[volumetric_light]") {
+    // The slider's percent over 100, as applyLightingTune makes it.
+    const float hundred = 100.0f / 100.0f;
+    for (const vl::Quality q : {vl::Quality::Low, vl::Quality::High}) {
+        const vl::Scatter s = vl::scatterFor(q);
+        CHECK(vl::tunedScatter(s.body, hundred) == s.body);
+        CHECK(vl::tunedScatter(s.body * vl::kMoonScatterShare, hundred) == s.body * vl::kMoonScatterShare);
+        CHECK(vl::tunedScatter(s.lamp, hundred) == s.lamp);
+        CHECK(vl::tunedScatter(s.lamp, 0.0f) == 0.0f);
+        CHECK(vl::tunedScatter(s.lamp, 4.0f) == Catch::Approx(4.0f * s.lamp));
+        CHECK(vl::tunedScatter(s.body, 0.5f) == Catch::Approx(0.5f * s.body));
+        CHECK(vl::tunedScatter(s.body, -1.0f) == 0.0f);
+    }
+    // The renderer scales each term by its own slider only.
+    const std::string r = wowee::test::slurp("src/rendering/renderer.cpp");
+    CHECK(r.find("tunedScatter(bodyScatter, lightingTune_.volumetricSun)") != std::string::npos);
+    CHECK(r.find("tunedScatter(bodyScatter, lightingTune_.volumetricMoon)") != std::string::npos);
+    CHECK(r.find("tunedScatter(scatter.lamp, lightingTune_.volumetricLights)") != std::string::npos);
+}

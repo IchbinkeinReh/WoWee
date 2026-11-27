@@ -291,6 +291,21 @@ constexpr SettingGerman kGerman[] = {
      "Mehr kostet Zeit beim Raytracing. Nicht im "
      "ursprünglichen Client.",
      nullptr, nullptr, nullptr},
+    {"dbgvlsun",
+     "VL Sonne %",
+     "Wie viel Licht die Sonne der Luft gibt, wenn das volumetrische Licht an ist (Details). "
+     "100 wie bisher, 0 keines, 400 das Vierfache.",
+     nullptr, nullptr, nullptr},
+    {"dbgvlmoon",
+     "VL Mond %",
+     "Wie viel Licht der Mond der Luft gibt, wenn das volumetrische Licht an ist (Details). "
+     "100 wie bisher, 0 keines, 400 das Vierfache.",
+     nullptr, nullptr, nullptr},
+    {"dbgvllights",
+     "VL Lichter %",
+     "Wie viel Licht Lampen, Feuer und Lava der Luft um sich geben, wenn das volumetrische "
+     "Licht an ist (Details). 100 wie bisher, 0 keines, 400 das Vierfache.",
+     nullptr, nullptr, nullptr},
     {"rtunitshadowreach",
      "Figurenschattenweite (m)",
      "Wie weit vom Körper der Schatten einer Figur oder Kreatur von einer Lampe, einem Feuer "
@@ -1471,6 +1486,7 @@ constexpr Pair kSections[] = {
     {"Updates and data", "Aktualisierung und Daten"},
     {"View", "Ansicht"},
     {"Voices", "Stimmen"},
+    {"Volumetric light", "Volumetrisches Licht"},
     {"Water", "Wasser"},
     {"What glows", "Was leuchtet"},
     {"Windows", "Fenster"},

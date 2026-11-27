@@ -1042,6 +1042,11 @@ public:
         float occlusion = 1.0f;         ///< ray traced: ambient occlusion
         float bakedTerrainShadow = 1.0f;  ///< how much of the terrain's painted shadow (MCSH) shows
         float blobShadow = 1.0f;        ///< the round shadows under units (shadows off, ray tracing off)
+        // The volumetric light (volumetric_light::tunedScatter): the sun's,
+        // the moon's and the lamps' scatter, 1 as it is.
+        float volumetricSun = 1.0f;
+        float volumetricMoon = 1.0f;
+        float volumetricLights = 1.0f;
     };
     void setLightingTune(const LightingTune& tune) { lightingTune_ = tune; }
     const LightingTune& lightingTune() const { return lightingTune_; }

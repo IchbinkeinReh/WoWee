@@ -660,6 +660,19 @@ constexpr SettingDesc kSchema[] = {
      "a lamp's flame - is placed the same way along its flames.\n"
      "More costs trace time. Not in the original client.", "", 1,
      "raytracedlighting"},
+    // The volumetric light's three terms (Details, "Volumetric light"), each
+    // a percent of its scatter as volumetric_light::scatterFor has it
+    // (volumetric_light::tunedScatter): 100 is the look as it is.
+    {"dbgvlsun", "Volumetric light: sun (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "Volumetric light",
+     "How much light the sun gives the air with the volumetric light\n"
+     "on (Details). 100 as it is, 0 none, 400 four times.", "", 100, "volumetriclight"},
+    {"dbgvlmoon", "Volumetric light: moon (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "",
+     "How much light the moon gives the air with the volumetric light\n"
+     "on (Details). 100 as it is, 0 none, 400 four times.", "", 100, "volumetriclight"},
+    {"dbgvllights", "Volumetric light: lights (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "",
+     "How much light lamps, fires and lava give the air around them\n"
+     "with the volumetric light on (Details). 100 as it is, 0 none,\n"
+     "400 four times.", "", 100, "volumetriclight"},
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"
