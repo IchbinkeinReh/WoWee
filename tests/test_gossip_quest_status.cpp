@@ -31,6 +31,12 @@ TEST_CASE("the server's icons sort quests into offered and taken", "[gossip_ques
     CHECK_FALSE(iconIsActive(0));
 }
 
+// The interface's lists: 3 and 4 active, all else available (0x0058a5d0).
+TEST_CASE("the window's lists take 3 and 4 as active", "[gossip_quest]") {
+    for (uint32_t icon : {3u, 4u}) CHECK((listIsActive(icon) && !listIsAvailable(icon)));
+    for (uint32_t icon : {0u, 1u, 2u, 5u, 6u, 7u, 8u, 10u}) CHECK((listIsAvailable(icon) && !listIsActive(icon)));
+}
+
 TEST_CASE("a finished quest sent as icon 4 is complete by the quest log", "[gossip_quest]") {
     // What AzerothCore / TrinityCore send for QUEST_STATUS_COMPLETE.
     CHECK(activeQuestIsComplete(4, /*inLog=*/true, /*logComplete=*/true));

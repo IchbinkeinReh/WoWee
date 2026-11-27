@@ -192,6 +192,32 @@ TEST_CASE("GetItemInfo of a link keeps what it rolled", "[replay][interface]") {
     CHECK(ui.is("strfind(select(2, GetItemInfo(12047)), 'item:12047:0:0:0:0:0:0:0:', 1) ~= nil"));
 }
 
+// 0x0058a5d0 / 0x0058a6c0: a gossip quest with icon 3 or 4 is active, any
+// other icon available - the counts and the lists split them alike.
+TEST_CASE("the gossip quest lists split by icons 3 and 4", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet gossip(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_MESSAGE));
+    gossip.writeUInt64(0xF130000BEC00150Full);
+    for (uint32_t v : {0u, 1u, 0u}) gossip.writeUInt32(v);
+    const std::pair<uint32_t, const char*> quests[] = {{2, "Offered"}, {3, "Taken"}, {4, "Taken too"}, {0, "Plain"}};
+    gossip.writeUInt32(4);
+    uint32_t id = 900;
+    for (const auto& [icon, title] : quests) {
+        for (uint32_t v : {id++, icon, 10u, 0u}) gossip.writeUInt32(v);
+        gossip.writeUInt8(0);
+        gossip.writeString(title);
+    }
+    s.receive(gossip);
+    CHECK(ui.is("GetNumGossipAvailableQuests() == 2"));
+    CHECK(ui.is("GetNumGossipActiveQuests() == 2"));
+    CHECK(ui.is("select(6, GetGossipAvailableQuests()) == 'Plain'"));
+    CHECK(ui.is("select(5, GetGossipActiveQuests()) == 'Taken too'"));
+    CHECK(ui.is("select('#', GetGossipAvailableQuests()) == 10"));
+    CHECK(ui.is("select('#', GetGossipActiveQuests()) == 8"));
+}
+
 // P56: 0x0062f9e0 gives the tooltip the attachment's property and seed, as
 // every tooltip of an item is given what it rolled (0x006277f0).
 TEST_CASE("a letter's attachment is named and read with what it rolled", "[replay][interface]") {

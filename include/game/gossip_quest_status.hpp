@@ -33,6 +33,14 @@ namespace wowee::game::gossip_quest {
     return iconIsIncomplete(icon) || iconIsCompletable(icon);
 }
 
+/// Which of the interface's two lists a quest of the gossip or greeting
+/// window goes in, as 12340 splits them: icon 3 or 4 is the active list,
+/// every other icon the available one (gossip 0x0058a5d0 / 0x0058a6c0 and
+/// their walks 0x0058a660 / 0x0058a750; greeting 0x006d0240). The finer
+/// reading above is only for the markers over the giver's head.
+[[nodiscard]] constexpr bool listIsActive(uint32_t icon) { return icon == 3 || icon == 4; }
+[[nodiscard]] constexpr bool listIsAvailable(uint32_t icon) { return !listIsActive(icon); }
+
 /// Whether an active quest of the list is drawn as ready to hand in: the icon
 /// says so, or the quest log has the quest and its slot says complete.
 [[nodiscard]] constexpr bool activeQuestIsComplete(uint32_t icon, bool inLog, bool logComplete) {

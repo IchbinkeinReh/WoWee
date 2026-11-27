@@ -1459,9 +1459,9 @@ constexpr uint32_t kQuestFlagsDaily = 0x1000;
 /// the number is the whole answer and the reason is the comment.
 constexpr uint32_t kTypeFlagForceGossip = 0x08000000;
 
-bool gossipQuestIsAvailable(uint32_t icon) { return game::gossip_quest::iconIsAvailable(icon); }
+bool gossipQuestIsAvailable(uint32_t icon) { return game::gossip_quest::listIsAvailable(icon); }
 /// Taken already, finished or not - which is one list in the gossip window.
-bool gossipQuestIsActive(uint32_t icon) { return game::gossip_quest::iconIsActive(icon); }
+bool gossipQuestIsActive(uint32_t icon) { return game::gossip_quest::listIsActive(icon); }
 
 /// Whether a taken quest of the list is ready to hand in: the yellow "?"
 /// rather than the grey one. A 3.3.5 server sends the same icon for both, so
@@ -4551,19 +4551,16 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetNumGossipAvailableQuests", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) { return luaReturnZero(L); }
-            int count = 0;
-            for (const auto& q : gh->getCurrentGossip().quests)
-                if (q.questIcon != 4) ++count; // 4 = active/in-progress
-            lua_pushnumber(L, count);
+            // 0x0058a960 -> 0x0058a5d0: every icon but 3 and 4, the same split
+            // as the list itself (the count left icon 3 in both lists).
+            lua_pushnumber(L, countGossipQuests(L, /*available=*/true));
             return 1;
         }},
                 {"GetNumGossipActiveQuests", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) { return luaReturnZero(L); }
-            int count = 0;
-            for (const auto& q : gh->getCurrentGossip().quests)
-                if (q.questIcon == 4) ++count;
-            lua_pushnumber(L, count);
+            // 0x0058a9a0 -> 0x0058a6c0: icon 3 or 4.
+            lua_pushnumber(L, countGossipQuests(L, /*available=*/false));
             return 1;
         }},
                 {"CloseGossip", [](lua_State* L) -> int {
