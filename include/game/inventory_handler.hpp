@@ -89,7 +89,7 @@ public:
     // ---- Item text (books / readable items) ----
     bool isItemTextOpen() const { return itemTextOpen_; }
     const std::string& getItemText() const { return itemText_; }
-    void closeItemText();
+    void dropItemText();
     void queryItemText(uint64_t itemGuid);
 
     // ---- Trade ----

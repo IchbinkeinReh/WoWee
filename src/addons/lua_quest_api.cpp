@@ -5115,13 +5115,8 @@ void registerQuestLuaAPI(lua_State* L) {
                 // Closing is a state change this client owns, and the frame
                 // calls it on hide as well as from its close button.
                 {"CloseItemText", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) {
-                gh->closeItemText();
-                // The pages go with the book, and so does the place in it -
-                // left behind, the next book opens at whatever page the last
-                // one was left on and shows nothing until it is paged back.
-                gh->clearBook();
-            }
+            // 0x0058a400: GameHandler::closeItemText is 0x0058a1a0(0, 0).
+            if (auto* gh = getGameHandler(L)) gh->closeItemText();
             return 0;
         }},
                 {"SelectQuestLogEntry",     lua_SelectQuestLogEntry},

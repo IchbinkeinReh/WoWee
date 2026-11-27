@@ -6111,13 +6111,10 @@ void InventoryHandler::queryItemText(uint64_t itemGuid) {
     owner_.fireAddonEvent("ITEM_TEXT_BEGIN", {});
 }
 
-void InventoryHandler::closeItemText() {
-    if (!itemTextOpen_) return;
+void InventoryHandler::dropItemText() {
+    // ITEM_TEXT_CLOSED is GameHandler::closeItemText's: it is one event for the
+    // letter's text and the book together (0x0058a1a0).
     itemTextOpen_ = false;
-    // Announced so the interface's window closes with this client's own. Only
-    // when it was open: the frame calls this from OnHide as well as from its
-    // close button, and firing on an already-closed book would bounce.
-    owner_.fireAddonEvent("ITEM_TEXT_CLOSED", {});
 }
 
 void InventoryHandler::handleItemTextQueryResponse(network::Packet& packet) {

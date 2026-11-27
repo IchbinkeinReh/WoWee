@@ -4401,8 +4401,7 @@ void GameHandler::closeInteractionWindow(go_interaction::Window window) {
         case Window::Book:
             // ITEM_TEXT_CLOSED (0x0058a1a0, event 0x117), and the book is
             // let go (0xbfc948 = 0); nothing is sent.
-            if (isItemTextOpen()) closeItemText();
-            clearBook();
+            closeItemText();
             break;
         case Window::Quest: {
             // The quest window (0x0058ca70): one a player offered is declined

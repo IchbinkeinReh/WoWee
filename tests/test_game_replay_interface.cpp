@@ -6027,3 +6027,26 @@ TEST_CASE("GetSpellTabInfo out of range: nil name and texture, zero counts", "[r
                 "return n == nil and t == nil and o == 0 and c == 0 and ho == 0 and hc == 0 end)()"));
     CHECK(ui.is("select('#', GetSpellTabInfo(9)) == 6"));
 }
+
+// T427: CloseItemText is 0x0058a400 -> 0x0058a1a0(0, 0): a book used from the
+// bags is let go and ITEM_TEXT_CLOSED (0x117) goes out, once - closed again
+// with nothing open it is silent.
+TEST_CASE("CloseItemText closes a book read from the bags", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("closed = 0; local f = CreateFrame('Frame'); f:RegisterEvent('ITEM_TEXT_CLOSED');"
+           "f:SetScript('OnEvent', function() closed = closed + 1 end)");
+    s.handler().openBook(77, 0x4000000000000123ull);
+    wowee::network::Packet page(wowee::game::wireOpcode(Opcode::SMSG_PAGE_TEXT_QUERY_RESPONSE));
+    page.writeUInt32(77);
+    page.writeString("Page one");
+    page.writeUInt32(0);
+    s.receive(page);
+    REQUIRE(ui.is("ItemTextGetText() == 'Page one'"));
+    ui.run("CloseItemText()");
+    CHECK(ui.is("closed == 1"));
+    CHECK(ui.is("ItemTextGetText() == ''"));
+    ui.run("CloseItemText()");
+    CHECK(ui.is("closed == 1"));
+}

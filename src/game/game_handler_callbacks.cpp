@@ -1529,8 +1529,19 @@ void GameHandler::turnBookPage(bool on) {
 }
 
 void GameHandler::closeItemText() {
-    if (inventoryHandler_) inventoryHandler_->closeItemText();
+    // 0x0058a1a0 with guid 0: whatever is read - a letter's text, a book used
+    // from the bags or a plaque's pages - is let go (0x00518d50) and then
+    // ITEM_TEXT_CLOSED goes out (event 0x117), once; with nothing open it is
+    // silent, which is what keeps the frame's OnHide from bouncing. A book
+    // used from the bags is not a letter's text, and was closed without the
+    // event: CloseItemText left its window up and empty (T427).
+    const bool open = isItemTextOpen() || book_.isOpen();
+    if (inventoryHandler_) inventoryHandler_->dropItemText();
     else itemTextOpen_ = false;
+    // The pages go with the book, and so does the place in it - left behind,
+    // the next book opens at whatever page the last one was left on.
+    clearBook();
+    if (open) fireAddonEvent("ITEM_TEXT_CLOSED", {});
 }
 
 // Loot
