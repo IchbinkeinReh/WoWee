@@ -2461,17 +2461,6 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         if (attackStreak_.note(owner_.tutorials().flagged(5), attack)) owner_.triggerTutorial(0x3b);
     }
 
-    // Auto Shot and the wand's Shoot keep going once started, and the action
-    // button flashes for as long as they do. The stop half comes from the
-    // server on SMSG_CANCEL_AUTO_REPEAT; this is the start.
-    constexpr uint32_t kAutoShot = 75, kShoot = 5019;
-    // A spell with AttributesEx2 0x20 repeats: +0xa38 0x200 while it does
-    // (0x007fa2e0), which the ranged readies read (0x00714f90).
-    if ((owner_.getSpellAttributesEx2(spellId) & 0x20u) != 0) owner_.startAutoRepeat(spellId);
-    if ((spellId == kAutoShot || spellId == kShoot) && owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("START_AUTOREPEAT_SPELL", {});
-    }
-
     // Attack routes to auto-attack instead of cast
     if (spellId == SPELL_ID_ATTACK) {
         if (unit_target::askedNoUnit(targetGuid)) return;
@@ -2603,6 +2592,19 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         }
     }
     if (!castChecksPass(spellId, targetGuid)) return;
+    // Auto Shot and the wand's Shoot keep going once started, and the action
+    // button flashes for as long as they do. The stop half comes from the
+    // server on SMSG_CANCEL_AUTO_REPEAT; this is the start - only for a cast
+    // that passed 0x0080cce0's checks: START_AUTOREPEAT_SPELL (0x1ad) comes
+    // from 0x007fe140 as the repeat runs (0x006e2be0), never for a Shoot
+    // refused for want of its wand (V581 c).
+    constexpr uint32_t kAutoShot = 75, kShoot = 5019;
+    // A spell with AttributesEx2 0x20 repeats: +0xa38 0x200 while it does
+    // (0x007fa2e0), which the ranged readies read (0x00714f90).
+    if ((owner_.getSpellAttributesEx2(spellId) & 0x20u) != 0) owner_.startAutoRepeat(spellId);
+    if ((spellId == kAutoShot || spellId == kShoot) && owner_.addonEventCallbackRef()) {
+        owner_.addonEventCallbackRef()("START_AUTOREPEAT_SPELL", {});
+    }
     playCastActivateSound(spellId, 0);
 
     // A spell that wants a place on the ground waits for it (0x0080c790).

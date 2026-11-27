@@ -4547,6 +4547,27 @@ TEST_CASE("a spell whose reagent is not carried is refused before it is sent (T4
     s.receive(more);
     ui.run("CastSpellByID(" + std::to_string(kStrike) + ")");
     CHECK(casts() == 1);
+    // A wand's Shoot refused for the wand it lacks starts no repeat:
+    // START_AUTOREPEAT_SPELL comes from 0x007fe140 as the repeat runs
+    // (0x006e2be0), not from the press (V581 c).
+    constexpr uint32_t kShoot = 5019;
+    auto& shoot = s.handler().spellNameCacheRef()[kShoot];
+    shoot.name = "Shoot";
+    shoot.attrEx2 = 0x20;
+    shoot.equippedItemClass = 2;
+    shoot.equippedItemSubClassMask = 0x80000u;
+    wowee::network::Packet wand(wowee::game::wireOpcode(Opcode::SMSG_INITIAL_SPELLS));
+    wand.writeUInt8(0);
+    wand.writeUInt16(1);
+    wand.writeUInt32(kShoot);
+    wand.writeUInt16(0);
+    wand.writeUInt16(0);
+    s.receive(wand);
+    ui.run("rep = 0 local r = CreateFrame('Frame') r:RegisterEvent('START_AUTOREPEAT_SPELL') "
+           "r:SetScript('OnEvent', function() rep = rep + 1 end)");
+    ui.run("CastSpellByID(" + std::to_string(kShoot) + ")");
+    CHECK(casts() == 1);
+    CHECK(ui.is("rep == 0"));
 }
 
 // FIXER W (found in code): IsSpellKnown(id, isPet) also finds a spell on a
