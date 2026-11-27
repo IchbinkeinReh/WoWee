@@ -7147,8 +7147,10 @@ static int lua_IsInLFGDungeon(lua_State* L) {
 // LFGTeleport(out) - out to the dungeon's entrance, or back in.
 // LFGTeleport([out]) (0x00556bc0): the argument is whether to leave the
 // dungeon - LFDFrame's "teleport out" passes true. Refused, with the error
-// line, in combat, dead, falling, under someone else's control or with the
-// fatigue timer run out; more than two calls inside ten seconds answer
+// line, in combat, dead or a ghost (vtable +0x128), falling, on a transport
+// (0x0054a430: vtable +0x40, the transport's guid - 0x00717c50 looks it up
+// as a game object) or with the fatigue timer running down (0x00513f20(0)
+// +0xc, its scale, below 0); more than two calls inside ten seconds answer
 // false silently. True once it is sent.
 static int lua_LFGTeleport(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -7169,13 +7171,12 @@ static int lua_LFGTeleport(lua_State* L) {
         return 1;
     };
     if (gh->isInCombat()) return refuse("ERR_NOT_IN_COMBAT", "You can't do that while in combat");
-    if (gh->isPlayerDead()) return refuse("ERR_PLAYER_DEAD", "You can't do that when you're dead.");
+    if (gh->isPlayerDead() || gh->isPlayerGhost())
+        return refuse("ERR_PLAYER_DEAD", "You can't do that when you're dead.");
     if (gh->getMovementInfo().flags & 0x1000u) return refuse("ERR_NOT_WHILE_FALLING", "You can't do that while jumping or falling");
-    const uint16_t charmedBy = game::fieldIndex(game::UF::UNIT_FIELD_CHARMEDBY);
-    if (charmedBy != 0xFFFF && (me->getField(charmedBy) | me->getField(static_cast<uint16_t>(charmedBy + 1))))
+    if (gh->getPlayerTransportGuid() != 0 || gh->getMovementInfo().transportGuid != 0)
         return refuse("ERR_CLIENT_LOCKED_OUT", "You can't do that right now.");
-    const auto& fatigue = gh->getMirrorTimer(0);
-    if (fatigue.active() && fatigue.value < 0)
+    if (gh->getMirrorTimer(0).scale < 0)
         return refuse("ERR_NOT_WHILE_FATIGUED", "You can't do that while fatigued");
     gh->lfgTeleport(!luaClientSwitchArg(L, 1, false));
     lua_pushboolean(L, 1);

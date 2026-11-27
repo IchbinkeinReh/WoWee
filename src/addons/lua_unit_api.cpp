@@ -4563,6 +4563,35 @@ void registerUnitLuaAPI(lua_State* L) {
             // StaticPopup's 'Abbrechen' passes 0, which lua_toboolean took for
             // a yes and so ported the player in (T393).
             const bool accept = luaClientSwitchArg(L, 2, false);
+            // An acceptance outside a battleground (Map.dbc InstanceType 3,
+            // 0x0054a700) is refused, said on the error line, nothing sent
+            // and nil answered: UNIT_FLAG 0x800 (0x1c2 ERR_NOT_IN_COMBAT),
+            // dead or a ghost (vtable +0x128, 0x87 ERR_PLAYER_DEAD), falling
+            // (movement 0x1000, 0x296 ERR_NOT_WHILE_FALLING), on a transport
+            // (vtable +0x40 via 0x0054a430, 0x88 ERR_CLIENT_LOCKED_OUT), the
+            // fatigue timer running down (0x00513f20(0) scale < 0, 0x297
+            // ERR_NOT_WHILE_FATIGUED).
+            if (gh && accept && gh->currentMapInstanceType() != 3) {
+                if (const auto me = gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+                    const auto refuse = [&](const char* key, const char* enUS) {
+                        gh->playGameErrorSound(key);
+                        gh->addUIError(game::interfaceString(key, enUS));
+                        lua_pushnil(L);
+                        return 1;
+                    };
+                    const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+                    if (flags != 0xFFFF && (me->getField(flags) & 0x800u) != 0)
+                        return refuse("ERR_NOT_IN_COMBAT", "You can't do that while in combat");
+                    if (gh->isPlayerDead() || gh->isPlayerGhost())
+                        return refuse("ERR_PLAYER_DEAD", "You can't do that when you're dead.");
+                    if ((gh->getMovementInfo().flags & 0x1000u) != 0)
+                        return refuse("ERR_NOT_WHILE_FALLING", "You can't do that while jumping or falling");
+                    if (gh->getPlayerTransportGuid() != 0 || gh->getMovementInfo().transportGuid != 0)
+                        return refuse("ERR_CLIENT_LOCKED_OUT", "You can't do that right now.");
+                    if (gh->getMirrorTimer(0).scale < 0)
+                        return refuse("ERR_NOT_WHILE_FATIGUED", "You can't do that while fatigued");
+                }
+            }
             if (gh) {
                 if (accept) gh->acceptBattlefield(slot);
                 else gh->declineBattlefield(slot);

@@ -4516,6 +4516,56 @@ TEST_CASE("a multisell posts the next stack on the realm's answer (T411)", "[rep
     ui.run("ClearCursor()");
 }
 
+// Y's open item (FIXER Z): AcceptBattlefieldPort's acceptance outside a
+// battleground is refused before anything is sent (0x0054da10 -> 0x005216f0):
+// UNIT_FLAG 0x800 is ERR_NOT_IN_COMBAT, the fatigue timer running down
+// (scale below 0, 0x00513f20(0) +0xc) ERR_NOT_WHILE_FATIGUED; it answers nil.
+// A refusal of the invitation is not checked.
+TEST_CASE("AcceptBattlefieldPort refuses an acceptance the player cannot make (0x0054da10)",
+          "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_FLAGS, 0x800}});
+    Interface ui(s);
+    s.receive(bgStatus(0, kWarsongRecord, 2, 489));
+    ui.run("portErrors = {} local f = CreateFrame('Frame') f:RegisterEvent('UI_ERROR_MESSAGE') "
+           "f:SetScript('OnEvent', function(_, _, a) portErrors[#portErrors + 1] = a end)");
+    ui.run("portAnswer = AcceptBattlefieldPort(1, 1)");
+    CHECK(ui.is("portAnswer == nil"));
+    CHECK(ui.is("#portErrors == 1"));
+    CHECK(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).empty());
+
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0}}));
+    wowee::network::Packet fatigue(wowee::game::wireOpcode(Opcode::SMSG_START_MIRROR_TIMER));
+    fatigue.writeUInt32(0);        // EXHAUSTION
+    fatigue.writeUInt32(60000);
+    fatigue.writeUInt32(60000);
+    fatigue.writeUInt32(static_cast<uint32_t>(-1));   // running down
+    fatigue.writeUInt8(0);
+    fatigue.writeUInt32(0);
+    s.receive(fatigue);
+    ui.run("portAnswer = AcceptBattlefieldPort(1, 1)");
+    CHECK(ui.is("portAnswer == nil"));
+    CHECK(ui.is("#portErrors == 2"));
+    CHECK(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).empty());
+    // The refusal of the invitation goes all the same.
+    ui.run("portAnswer = AcceptBattlefieldPort(1, nil)");
+    CHECK(ui.is("portAnswer == 1"));
+    CHECK(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).size() == 1);
+
+    // LFGTeleport (0x00556bc0) asks the same timer by its scale too; the
+    // value was asked, which is never below 0.
+    ui.run("lfgAnswer = LFGTeleport(true)");
+    CHECK(ui.is("lfgAnswer == false"));
+    CHECK(s.sent().of(Opcode::CMSG_LFG_TELEPORT).empty());
+
+    wowee::network::Packet stop(wowee::game::wireOpcode(Opcode::SMSG_STOP_MIRROR_TIMER));
+    stop.writeUInt32(0);
+    s.receive(stop);
+    ui.run("portAnswer = AcceptBattlefieldPort(1, 1)");
+    CHECK(ui.is("portAnswer == 1"));
+    CHECK(s.sent().of(Opcode::CMSG_BATTLEFIELD_PORT).size() == 2);
+}
+
 // T413 (FIXER Z): every world load clears the battleground score state
 // (0x006e7f50 -> 0x00528010 -> 0x0054ca50): no rows, no winner, both
 // factions. After the realm's port home the scoreboard reopened itself from
