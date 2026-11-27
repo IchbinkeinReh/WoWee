@@ -384,3 +384,15 @@ TEST_CASE("a box as wide as its text shows it", "[text_wrap]") {
     wrapText(plain("Anglerwettbewerb"), pieces("Anglerwettbewerb") - 0.1f, false, pieces, 0.0f, &stopped);
     CHECK_FALSE(stopped);
 }
+
+// 0x006c7b10 lays out no line for the breaks that end a text (V563).
+TEST_CASE("trailing breaks that 0x006c7b10 does not lay out", "[text_wrap]") {
+    using wowee::ui::trailingBreakLinesDropped;
+    CHECK(trailingBreakLinesDropped("A") == 0);
+    CHECK(trailingBreakLinesDropped("A\n") == 1);
+    CHECK(trailingBreakLinesDropped("A\n\n") == 2);
+    CHECK(trailingBreakLinesDropped("\nA\nB\n\n") == 2);
+    CHECK(trailingBreakLinesDropped("A\n\n\n") == 2);
+    CHECK(trailingBreakLinesDropped("\n") == 2);
+    CHECK(trailingBreakLinesDropped("") == 0);
+}

@@ -315,4 +315,16 @@ inline float justifyOffset(const char* justifyH, float boxWidth, float lineWidth
     return 0.0f;
 }
 
+/// Lines wrapText makes at the end of a text that 0x006c7b10 does not lay
+/// out. Its loop stops when the line it just took ends the text (the next
+/// line would start at the terminator), and it drops a line with no glyphs
+/// whose break is the text's last character. wrapText opens a line after
+/// every '\n', so "A\n" is one line there and two here, "A\n\n" and "\n"
+/// one and none there, three and two here.
+inline int trailingBreakLinesDropped(std::string_view text) {
+    if (text.empty() || text.back() != '\n') return 0;
+    const bool emptyBefore = text.size() == 1 || text[text.size() - 2] == '\n';
+    return emptyBefore ? 2 : 1;
+}
+
 }  // namespace wowee::ui
