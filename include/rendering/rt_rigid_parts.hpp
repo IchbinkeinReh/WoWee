@@ -113,4 +113,31 @@ inline std::vector<Part> splitByBone(std::span<const std::array<uint8_t, 4>> bon
     return parts;
 }
 
+/// Which bones never move: neither the bone nor any bone above it has a
+/// transform track or turns to the camera (`moves`, one per bone). A piece
+/// on such a bone stands where the model stands in every pose, so it can be
+/// traced as part of the model's own mesh at every distance rather than
+/// placed by its bone near the camera only. A Teldrassil tree whose wisp
+/// hangs on a turning bone is an animated model; its trunk and its 260-yard
+/// canopy are on the root, and left out past 60 yards they cast nothing
+/// (T447). A bone whose parent is out of range counts as a root; a parent
+/// chain that loops counts as moving.
+inline std::vector<bool> steadyBones(std::span<const int16_t> parents, const std::vector<bool>& moves) {
+    const size_t n = parents.size();
+    std::vector<bool> steady(n, false);
+    for (size_t b = 0; b < n; ++b) {
+        bool still = true;
+        bool ended = false;
+        size_t cur = b;
+        for (size_t steps = 0; steps <= n; ++steps) {
+            if (cur < moves.size() && moves[cur]) { still = false; break; }
+            const int16_t p = parents[cur];
+            if (p < 0 || static_cast<size_t>(p) >= n) { ended = true; break; }
+            cur = static_cast<size_t>(p);
+        }
+        steady[b] = still && ended;
+    }
+    return steady;
+}
+
 }  // namespace wowee::rendering::rt_parts

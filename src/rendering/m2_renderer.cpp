@@ -2508,10 +2508,32 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     for (size_t b = 0; b < model.bones.size(); ++b) parents[b] = model.bones[b].parentBone;
     constexpr uint32_t kMinPieceTriangles = 16;
     const auto parts = rt_parts::splitByBone(boneIdx, boneWgt, src.indices, parents, kMinPieceTriangles);
-    std::vector<uint32_t> remap(src.positions.size(), RtScene::kInvalid);
+    // The parts on bones that never move are the model as it stands in every
+    // pose: one mesh, placed with the instance like any unanimated model's
+    // and traced at every distance (syncOne). Only the parts that move are
+    // pieces, placed by their bones near the camera. Cut all into pieces, a
+    // Teldrassil tree - animated for its wisp's turning bone - cast its
+    // trunk and its 260-yard canopy only within 60 yards of the camera, and
+    // the traced sun came through where the canopy stands (T447).
+    std::vector<bool> moves(model.bones.size(), false);
+    for (size_t b = 0; b < model.bones.size(); ++b) {
+        const auto& bone = model.bones[b];
+        moves[b] = bone.translation.hasData() || bone.rotation.hasData() || bone.scale.hasData() ||
+                   (bone.flags & kM2BoneAnyBillboard) != 0;
+    }
+    const std::vector<bool> steady = rt_parts::steadyBones(parents, moves);
+    // The still mesh numbers its vertices once across all its parts, so it
+    // keeps a numbering of its own; each moving piece starts afresh.
+    std::vector<uint32_t> movingRemap(src.positions.size(), RtScene::kInvalid);
+    std::vector<uint32_t> stillRemap(src.positions.size(), RtScene::kInvalid);
+    RtScene::MeshSource still;
+    still.flags = src.flags;
     for (const auto& part : parts) {
-        RtScene::MeshSource piece;
-        piece.flags = src.flags;
+        const bool partSteady = part.bone < steady.size() && steady[part.bone];
+        RtScene::MeshSource movingPiece;
+        movingPiece.flags = src.flags;
+        RtScene::MeshSource& piece = partSteady ? still : movingPiece;
+        std::vector<uint32_t>& remap = partSteady ? stillRemap : movingRemap;
         for (uint32_t t : part.triangles) {
             for (int c = 0; c < 3; ++c) {
                 const uint32_t v = src.indices[t * 3 + c];
@@ -2528,11 +2550,18 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             piece.masks.push_back(src.masks[t]);
             piece.details.push_back(src.details[t]);
         }
+        if (partSteady) continue;
         for (uint32_t t : part.triangles) {
             for (int c = 0; c < 3; ++c) remap[src.indices[t * 3 + c]] = RtScene::kInvalid;
         }
         const uint32_t mesh = rtScene_->addMesh(std::move(piece));
         if (mesh != RtScene::kInvalid) gpuModel.rtPieces.push_back({part.bone, mesh});
+    }
+    if (!still.indices.empty()) {
+        gpuModel.rtMesh = rtScene_->addMesh(std::move(still));
+        for (const auto& [mid, gm] : models) {
+            if (&gm == &gpuModel) { rtModelsToResettle_.insert(mid); break; }
+        }
     }
 }
 

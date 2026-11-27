@@ -113,3 +113,37 @@ TEST_CASE("bone indices past the skeleton are not followed", "[rt][parts]") {
     CHECK(parts[1].bone == 1);
     CHECK(allTriangles(parts).size() == 18);
 }
+
+// T447: a Teldrassil tree is animated only for its wisp's turning bone; the
+// trunk and the canopy on the root never move, and are traced as the
+// model's own mesh at every distance.
+TEST_CASE("a bone is steady when neither it nor anything above it moves", "[rt][parts]") {
+    // 0 root (still), 1 under 0 (turns - the wisp), 2 under 1 (still, but
+    // carried by 1), 3 under 0 (still).
+    const std::vector<int16_t> parents = {-1, 0, 1, 0};
+    const std::vector<bool> moves = {false, true, false, false};
+    const auto steady = steadyBones(parents, moves);
+    REQUIRE(steady.size() == 4);
+    CHECK(steady[0]);
+    CHECK_FALSE(steady[1]);
+    CHECK_FALSE(steady[2]);
+    CHECK(steady[3]);
+}
+
+TEST_CASE("a moving root makes every bone below it move", "[rt][parts]") {
+    const std::vector<int16_t> parents = {-1, 0, 1};
+    const std::vector<bool> moves = {true, false, false};
+    const auto steady = steadyBones(parents, moves);
+    CHECK_FALSE(steady[0]);
+    CHECK_FALSE(steady[1]);
+    CHECK_FALSE(steady[2]);
+}
+
+TEST_CASE("a parent out of range is a root, a loop is not steady", "[rt][parts]") {
+    const std::vector<int16_t> parents = {7, 2, 1};
+    const std::vector<bool> moves = {false, false, false};
+    const auto steady = steadyBones(parents, moves);
+    CHECK(steady[0]);
+    CHECK_FALSE(steady[1]);
+    CHECK_FALSE(steady[2]);
+}
