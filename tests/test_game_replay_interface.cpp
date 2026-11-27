@@ -4933,6 +4933,19 @@ TEST_CASE("a multisell's source items are locked while it runs (T411, 0x0059aaa0
     CHECK(ui.is("select(3, GetContainerItemInfo(0, 2)) == nil"));
 }
 
+// Trade skill review (found by AA in code): GetTradeskillRepeatCount
+// (0x005da270) answers the count left only for the selected recipe
+// (0x00c235a8), else 1; DoTradeSkill (0x005dac00) wants a number first.
+TEST_CASE("the trade skill repeat count is the selected recipe's (0x005da270)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.handler().startCraftQueue(2329, 5);
+    REQUIRE(s.handler().getCraftQueueRemaining() == 5);
+    CHECK(ui.is("GetTradeskillRepeatCount() == 1"));   // no recipe selected
+    CHECK(ui.is("select(2, pcall(DoTradeSkill)):find('Usage: DoTradeSkill%(index %[, repeat%]%)') ~= nil"));
+}
+
 // T415 (FIXER AA): SetBattlefieldScoreFaction (0x0054c120) and
 // SortBattlefieldScoreData (0x0054de00 -> 0x0054cee0) end in 0x0054aa30 -
 // the board sorted over the 17-key list (0x0054a740, killing blows first
@@ -5005,6 +5018,41 @@ TEST_CASE("the scoreboard is sorted and announced as 12340 does (T415, 0x0054aa3
     ui.run("SortBattlefieldScoreData('bogus')");
     order();
     CHECK(ui.is("order == 'Anna;Carl;Bert;'"));
+}
+
+// Achievement review (found by AA in code): GetAchievementInfoFromCriteria
+// (0x005b1720) wants a number - the usage line, not a silent nil.
+TEST_CASE("GetAchievementInfoFromCriteria wants a number (0x005b1720)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select(2, pcall(GetAchievementInfoFromCriteria)):find('Usage: GetAchievementInfoFromCriteria%(criteriaID%)') ~= nil"));
+    CHECK(ui.is("select('#', GetAchievementInfoFromCriteria(987654)) == 0"));
+}
+
+// Talent review (found by AA in code): LearnTalent (0x005c80e0) wants two
+// numbers - the usage line - and sends nothing for a talent it cannot find.
+TEST_CASE("LearnTalent wants a tab and an index (0x005c80e0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select(2, pcall(LearnTalent, 1)):find('Usage: LearnTalent%(tabIndex, talentIndex%[, isPet%]%)') ~= nil"));
+    ui.run("LearnTalent(1, 1)");
+    CHECK(s.sent().of(Opcode::CMSG_LEARN_TALENT).empty());
+}
+
+// Glyph review (found by AA in code): RemoveGlyphFromSocket (0x005b7660)
+// sends CMSG_REMOVE_GLYPH only for a socket holding a glyph
+// (PLAYER_FIELD_GLYPHS, +0x1230); an empty one sent it too.
+TEST_CASE("RemoveGlyphFromSocket asks only for a socket with a glyph (0x005b7660)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FIELD_GLYPHS_1, 165}});
+    Interface ui(s);
+    ui.run("RemoveGlyphFromSocket(2)");
+    CHECK(s.sent().of(Opcode::CMSG_REMOVE_GLYPH).empty());
+    ui.run("RemoveGlyphFromSocket(1)");
+    REQUIRE(s.sent().of(Opcode::CMSG_REMOVE_GLYPH).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_REMOVE_GLYPH).back().readUInt32() == 0);
 }
 
 // Z's open guild bank items (FIXER AA): opening sends CMSG_GUILD_BANKER_ACTIVATE

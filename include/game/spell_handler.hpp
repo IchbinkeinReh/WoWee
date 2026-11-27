@@ -292,6 +292,9 @@ public:
     void cancelCraftQueue();
     [[nodiscard]] int getCraftQueueRemaining() const { return craftQueueRemaining_; }
     [[nodiscard]] uint32_t getCraftQueueSpellId() const { return craftQueueSpellId_; }
+    /// DoTradeSkill on the recipe already repeating (0x005d9fa0): only the
+    /// count left is set, no new cast.
+    void setCraftQueueRemaining(int count) { craftQueueRemaining_ = count; }
 
     // Crafting window (client-side; opened by casting a profession spell
     // like Cooking or First Aid - see tradeskillOpenerSkillLine)

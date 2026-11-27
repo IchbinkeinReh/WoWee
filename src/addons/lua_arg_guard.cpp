@@ -111,6 +111,7 @@ constexpr ArgGuard kGuards[] = {
     {"CancelAuction", "n", "Usage: SetSelectedAuctionItem(index)"},
     {"GetAchievementComparisonInfo", "n", "Usage: GetAchievementComparisonInfo(achievementID)"},
     {"GetAchievementInfo", "n", "Usage: GetAchievementInfo(achievementID)"},
+    {"GetAchievementInfoFromCriteria", "n", "Usage: GetAchievementInfoFromCriteria(criteriaID)"},
     {"GetActionCooldown", "n", "Usage: GetActionCooldown(slot)"},
     {"GetAddOnInfo", "s", "Usage: GetAddOnInfo(index or \"name\")"},
     {"GetAttackPowerForStat", "nn", "Usage: Script_GetAttackPowerForStat(stat, value)"},

@@ -4063,21 +4063,42 @@ static int lua_LearnPreviewTalents(lua_State* L) {
 // non-pet branch, the pet's (DAT_00c21028) in the pet branch. So the panel
 // passing a group here is the interface being uniform, not an argument with a
 // reader, and the same goes for the point being spent on the active spec alone.
+/// The highest rank a talent has - the last of its rank spells that is set,
+/// counted from zero, -1 for none (0x005c80e0's walk down the nine).
+static int talentTopRankIndex(const game::GameHandler::TalentEntry& t) {
+    for (int i = static_cast<int>(std::size(t.rankSpells)) - 1; i >= 0; --i)
+        if (t.rankSpells[i] != 0) return i;
+    return -1;
+}
+
 static int lua_LearnTalent(lua_State* L) {
+    // 0x005c80e0: both numbers or the usage line, rounded; a rank is asked
+    // for only below the talent's last (the record's +0x1c against the
+    // highest rank spell set) - at the top nothing is sent.
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: LearnTalent(tabIndex, talentIndex[, isPet])");
     auto* gh = getGameHandler(L);
+    const int tab = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 2)));
     // Pet talents are not modelled, and this is the argument that made that
     // dangerous rather than merely blank: clicking in a pet tree resolved the
     // same tab and index against the *player's* trees and spent a point there.
     if (wantsPetTalents(L, 3)) {
         // 0x005c80e0's pet branch: the pet's list, CMSG_PET_LEARN_TALENT.
-        const auto* talent = petTalentAt(gh, false, static_cast<int>(luaL_optnumber(L, 1, 0)),
-                                         static_cast<int>(luaL_optnumber(L, 2, 0)));
-        if (gh && talent) gh->learnPetTalent(talent->talentId, gh->getPetTalentRank(talent->talentId) + 1u);
+        const auto* talent = petTalentAt(gh, false, tab, index);
+        if (!gh || !talent) return 0;
+        const int have = static_cast<int>(gh->getPetTalentRank(talent->talentId)) - 1;
+        if (have < talentTopRankIndex(*talent))
+            gh->learnPetTalent(talent->talentId, static_cast<uint32_t>(have + 2));
         return 0;
     }
-    const uint32_t id = resolveTalentId(gh, static_cast<int>(luaL_optnumber(L, 1, 0)),
-                                            static_cast<int>(luaL_optnumber(L, 2, 0)));
-    if (gh && id != 0) gh->learnTalent(id, gh->getTalentRank(id) + 1);
+    const uint32_t id = resolveTalentId(gh, tab, index);
+    if (!gh || id == 0) return 0;
+    const auto& all = gh->getAllTalents();
+    const auto it = all.find(id);
+    const int have = static_cast<int>(gh->getTalentRank(id)) - 1;
+    if (it != all.end() && have >= talentTopRankIndex(it->second)) return 0;
+    gh->learnTalent(id, static_cast<uint32_t>(have + 2));
     return 0;
 }
 
@@ -5579,8 +5600,15 @@ void registerQuestLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: RemoveGlyphFromSocket(index)");
             auto* gh = getGameHandler(L);
-            const int socket = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (gh && socket >= 1 && socket <= game::GameHandler::MAX_GLYPH_SLOTS)
+            // Rounded; sent only for a socket of the six holding a glyph -
+            // PLAYER_FIELD_GLYPHS (+0x1230) of the player object - else
+            // nothing (CMSG_REMOVE_GLYPH went for an empty socket too).
+            const int socket = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            std::array<uint32_t, 6> slotIds{}, inFields{};
+            uint32_t enabled = 0;
+            if (gh && socket >= 1 && socket <= game::GameHandler::MAX_GLYPH_SLOTS &&
+                gh->getGlyphSocketFields(slotIds, inFields, enabled) &&
+                inFields[static_cast<size_t>(socket - 1)] != 0)
                 gh->removeGlyphFromSocket(static_cast<uint32_t>(socket - 1));
             return 0;
         }},
@@ -5842,9 +5870,12 @@ void registerQuestLuaAPI(lua_State* L) {
                 // using it - one press per craft is not the same as a queue,
                 // because each craft has to wait for the last to finish.
                 {"DoTradeSkill", [](lua_State* L) -> int {
+            // 0x005dac00: a number or the usage line; the count rounded, one
+            // when not given.
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: DoTradeSkill(index [, repeat])");
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            int count = static_cast<int>(luaL_optnumber(L, 2, 1));
+            int count = lua_isnumber(L, 2) ? static_cast<int>(std::lround(lua_tonumber(L, 2))) : 1;
             if (!gh) return 0;
             const auto* rec = tradeSkillRecipeAt(gh, i);
             // Says what a press of Create resolved to, once per press. A craft
@@ -5868,12 +5899,23 @@ void registerQuestLuaAPI(lua_State* L) {
             // No more than there are reagents for.
             if (rec->canMake >= 0) count = std::min(count, rec->canMake);
             if (count < 1) count = 1;
+            // The recipe already repeating (0x005d9fa0 with 0x00c235d4): its
+            // count left is set and UPDATE_TRADESKILL_RECAST raised - no new
+            // cast, which would have been refused mid-cast and ended the run.
+            if (auto* spells = gh->getSpellHandler();
+                spells && spells->getCraftQueueSpellId() == rec->spellId && spells->getCraftQueueRemaining() > 0) {
+                spells->setCraftQueueRemaining(count);
+                gh->fireAddonEvent("UPDATE_TRADESKILL_RECAST", {});
+                return 0;
+            }
             // 0x005dac00 -> 0x0080da40: the craft's cast asks the taint check
             // - kind 6, a trade skill, so a hardware event is enough.
             if (!spellCastAllowed(L, gh, rec->spellId)) return 0;
             LOG_WARNING("DoTradeSkill: row ", i, " '", rec->name,
                         "' spell=", rec->spellId, " count=", count);
             gh->startCraftQueue(rec->spellId, count);
+            // 0x005d9fa0 raises it for a new recipe too.
+            gh->fireAddonEvent("UPDATE_TRADESKILL_RECAST", {});
             return 0;
         }},
                 {"CloseTradeSkill", [](lua_State* L) -> int {
@@ -6298,8 +6340,12 @@ void registerQuestLuaAPI(lua_State* L) {
                 // asked for none however many the player typed. One when no
                 // queue is running, which is what a fresh selection should show.
                 {"GetTradeskillRepeatCount", [](lua_State* L) -> int {
+            // 0x005da270: the count left only for the selected recipe
+            // (0x00c235a8) - the one repeating or the one about to - else 1.
             auto* gh = getGameHandler(L);
-            const int left = gh ? gh->getCraftQueueRemaining() : 0;
+            const bool selected = gh && gh->getCraftQueueSpellId() != 0 &&
+                                  gh->getCraftQueueSpellId() == tradeSkillWindow().selected;
+            const int left = selected ? gh->getCraftQueueRemaining() : 0;
             lua_pushnumber(L, left > 1 ? left : 1);
             return 1;
         }},
