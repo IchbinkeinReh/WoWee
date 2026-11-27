@@ -3242,17 +3242,23 @@ void registerSocialLuaAPI(lua_State* L) {
                 // The bit rides along with the group list, same as the main
                 // tank and main assist flags read above.
                 {"UnitIsRaidOfficer", [](lua_State* L) -> int {
+            // 0x0060c8a0: the unit's raid roster row (0x00549670) with a rank
+            // above 0 - an assistant (1) or the leader (2), as
+            // GetRaidRosterInfo ranks them. Only the other members' rows were
+            // searched, by their assistant flag: the leader and the player
+            // were never officers.
             auto* gh = getGameHandler(L);
             const char* unit = luaL_optstring(L, 1, "");
             if (!gh || !unit || !*unit) return luaReturnNil(L);
             std::string uid(unit);
             toLowerInPlace(uid);
             const uint64_t guid = resolveUnitGuid(gh, uid);
-            if (guid == 0) return luaReturnNil(L);
-            for (const auto& mem : gh->getPartyData().members) {
-                if (mem.guid == guid) { luaPushOneOrNil(L, (mem.flags & 0x01) ? 1 : 0); return 1; }
-            }
-            return luaReturnNil(L);
+            const int row = guid != 0 ? gh->raidRosterIndex(guid) : 0;
+            const auto member = row != 0 ? gh->raidRosterMember(row) : std::nullopt;
+            if (!member) return luaReturnNil(L);
+            const bool officer = member->guid == gh->getPartyData().leaderGuid || (member->flags & 0x01) != 0;
+            luaPushOneOrNil(L, officer ? 1 : 0);
+            return 1;
         }},
                 // ---- Loot rules and party assignments ----
                 //

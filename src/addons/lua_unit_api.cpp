@@ -4245,13 +4245,24 @@ void registerUnitLuaAPI(lua_State* L) {
             return 4;
         }},
                 {"UnitIsPartyLeader", [](lua_State* L) -> int {
+            // 0x0060c770: a player whose PLAYER_FLAGS carry GROUP_LEADER
+            // (0x1, descriptor +0x1008 +8), or the guid the group list names
+            // its leader (0x00bd1968) - the flag answers for a stranger who
+            // leads a group of their own, which the list cannot. The guid
+            // compare is plain: a token naming nobody (guid 0) while there
+            // is no leader (0) answers 1 there as well.
             auto* gh = getGameHandler(L);
             const char* uid = luaL_optstring(L, 1, "");
             std::string uidStr(uid);
             toLowerInPlace(uidStr);
             const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
-            luaPushOneOrNil(L, (gh && guid != 0 &&
-                                gh->getPartyData().leaderGuid == guid) ? 1 : 0);
+            bool leader = gh && gh->getPartyData().leaderGuid == guid;
+            if (!leader && gh && guid != 0) {
+                const auto entity = gh->getEntityManager().getEntity(guid);
+                leader = entity && entity->getType() == game::ObjectType::PLAYER &&
+                         (entity->getField(game::fieldIndex(game::UF::PLAYER_FLAGS)) & 0x1u) != 0;
+            }
+            luaPushOneOrNil(L, leader ? 1 : 0);
             return 1;
         }},
                 // Whether the token names a corpse object (0x0060c6f0: the

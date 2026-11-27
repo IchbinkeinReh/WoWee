@@ -6679,3 +6679,45 @@ TEST_CASE("GetShapeshiftFormCooldown answers the place's spell by id", "[replay]
     CHECK(ui.is("(function() local a, b, c = GetShapeshiftFormCooldown(-1) return a == 0 and b == 0 and c == 1 end)()"));
     CHECK(ui.is("not pcall(GetShapeshiftFormCooldown, 'x')"));
 }
+
+// 0x0060c8a0: an officer is a raid roster row of rank 1 or 2 - the player's
+// own and the leader's too. 0x0052c270: the leader's place among the four
+// party slots, none for one in another subgroup.
+TEST_CASE("raid officers and the party leader's place", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto roster = [&](uint64_t leader) {
+        wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+        g.writeUInt8(2);      // a raid
+        g.writeUInt8(0);      // own subgroup
+        g.writeUInt8(0x01);   // own flags: assistant
+        g.writeUInt8(0);      // own roles
+        g.writeUInt64(0x1234);
+        g.writeUInt32(1);
+        g.writeUInt32(2);
+        const std::pair<const char*, uint64_t> members[] = {{"Achiles", 0x1001}, {"Bea", 0x1002}};
+        for (size_t i = 0; i < 2; ++i) {
+            g.writeString(members[i].first);
+            g.writeUInt64(members[i].second);
+            g.writeUInt8(1);
+            g.writeUInt8(static_cast<uint8_t>(i));   // Achiles in the player's subgroup, Bea in the next
+            g.writeUInt8(0);
+            g.writeUInt8(0);
+        }
+        g.writeUInt64(leader);
+        for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+        s.receive(g);
+    };
+    roster(0x1002);
+    REQUIRE(ui.is("GetNumRaidMembers() == 3"));
+    CHECK(ui.is("UnitIsRaidOfficer('player') == 1"));
+    CHECK(ui.is("IsRaidOfficer() == 1"));
+    CHECK(ui.is("UnitIsRaidOfficer('raid2') == 1"));   // the leader
+    CHECK(ui.is("UnitIsRaidOfficer('raid1') == nil"));
+    CHECK(ui.is("GetPartyLeaderIndex() == 0"));
+    roster(0x1001);
+    CHECK(ui.is("GetPartyLeaderIndex() == 1"));
+    CHECK(ui.is("UnitIsPartyLeader('party1') == 1"));
+    CHECK(ui.is("UnitIsPartyLeader('player') == nil"));
+}

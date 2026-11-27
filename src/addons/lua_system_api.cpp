@@ -9100,18 +9100,23 @@ void registerSystemLuaAPI(lua_State* L) {
                 // was leading it - while partyData has carried leaderGuid all
                 // along.
                 {"GetPartyLeaderIndex", [](lua_State* L) -> int {
+            // 0x0052c270: 0x00acc6c4 + 1, the leader's place among the four
+            // party slots (0x00bd1948) as 0x0052bc80 finds it, -1 when the
+            // leader is in none - the player, or in a raid another subgroup.
+            // Every other member was counted, so a raid leader outside the
+            // player's subgroup answered a place past 4.
+            // Kept: 12340's emptier (0x0052d6e0) leaves 0, so after a group
+            // it answers 1; this answers 0 without a group.
             auto* gh = getGameHandler(L);
             if (!gh) { lua_pushnumber(L, 0); return 1; }
             const auto& pd = gh->getPartyData();
-            if (pd.leaderGuid == 0 || pd.leaderGuid == gh->getPlayerGuid()) {
-                lua_pushnumber(L, 0);
-                return 1;
-            }
-            int slot = 0;
-            for (const auto& m : pd.members) {
-                if (m.guid == gh->getPlayerGuid()) continue;
-                ++slot;
-                if (m.guid == pd.leaderGuid) { lua_pushnumber(L, slot); return 1; }
+            if (pd.leaderGuid != 0) {
+                for (int slot = 1; slot <= 4; ++slot) {
+                    if (game::partySlotGuid(pd, gh->getPlayerGuid(), slot) == pd.leaderGuid) {
+                        lua_pushnumber(L, slot);
+                        return 1;
+                    }
+                }
             }
             lua_pushnumber(L, 0);
             return 1;
@@ -9910,17 +9915,18 @@ void registerSystemLuaAPI(lua_State* L) {
                 // with IsPartyLeader beside it, whether the chat frame offers
                 // to send a raid warning at all.
                 {"IsRaidOfficer", [](lua_State* L) -> int {
+            // 0x00573b00: the player's raid roster row (0x00549670) with a
+            // rank above 0 - assistant or leader. The member rows were
+            // searched for the player, who is never among them, so this was
+            // always nil and a raid assistant's raid frame buttons stayed off.
             auto* gh = getGameHandler(L);
             if (!gh) { luaPushOneOrNil(L, 0); return 1; }
             const uint64_t self = gh->getPlayerGuid();
+            const int row = gh->raidRosterIndex(self);
+            const auto member = row != 0 ? gh->raidRosterMember(row) : std::nullopt;
             constexpr uint8_t kMemberFlagAssistant = 0x01;
-            for (const auto& mem : gh->getPartyData().members) {
-                if (mem.guid == self) {
-                    luaPushOneOrNil(L, (mem.flags & kMemberFlagAssistant) ? 1 : 0);
-                    return 1;
-                }
-            }
-            luaPushOneOrNil(L, 0);
+            luaPushOneOrNil(L, member && (gh->getPartyData().leaderGuid == self ||
+                                          (member->flags & kMemberFlagAssistant) != 0) ? 1 : 0);
             return 1;
         }},
                 // IsReferAFriendLinked moved to lua_unit_api.cpp: it is one bit
