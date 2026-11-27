@@ -3153,6 +3153,11 @@ public:
     /// The local join record and what changes it - see SocialHandler.
     const LfgLocalJoin* getLfgLocalJoin() const;
     const std::vector<uint32_t>* getLfgQueuedSlots() const;
+    /// The server's queue record for the side the player is on (see
+    /// SocialHandler::getLfgServerRecord), or null without a handler.
+    const LfgUpdateBody* getLfgServerRecord() const;
+    double   getLfgQueuedSince() const;
+    uint32_t getLfgQueueStatusDungeon() const;
     void lfgAddSlot(uint32_t slot);
     void lfgRemoveSlot(uint32_t slot);
     void lfgClearSlots();

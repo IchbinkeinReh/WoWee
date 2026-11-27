@@ -6373,30 +6373,27 @@ static int lua_GetLFGProposal(lua_State* L) {
 }
 
 // GetLFGInfoServer() → inParty, joined, queued, noPartialClear, achievements,
-//                      lfgComment, slotCount
+//                      lfgComment, slotCount, and three bytes
+//
+// 0x00552f30 reads the server's record for the player's side - the party's
+// in a group (0x00acdac0), the player's otherwise (0x00acd9a0): +0 joined,
+// +2 queued, +4, +5, the comment (+0x1c), the dungeon count (+0x18) and the
+// bytes +6..+8. WoWee answered its own queue state for both flags, an empty
+// comment, one slot and three zeros.
 static int lua_GetLFGInfoServer(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const bool queued = gh && gh->isLfgQueued();
-    // Answers, not blanks. LFRFrame_OnEvent does
-    // `LFRQueueFrameComment:SetText(lfgComment)` and then `strtrim(lfgComment)`
-    // whenever it is told the queue was joined, and nil there raised inside
-    // strtrim - once for every LFG_UPDATE, which the server prompts every few
-    // seconds while queued. The whole handler died with it each time, so the
-    // raid browser's comment box was never updated and the log filled up.
-    //
-    // This client keeps no listing comment: an empty string is what it has,
-    // and it is the value the interface tests for anyway.
     const bool inParty = gh && gh->isInGroup();
-    lua_pushboolean(L, inParty ? 1 : 0);   // 1: inParty
-    lua_pushboolean(L, queued ? 1 : 0);    // 2: joined
-    lua_pushboolean(L, queued ? 1 : 0);    // 3: queued
-    lua_pushboolean(L, 0);                 // 4: noPartialClear
-    lua_pushboolean(L, 0);                 // 5: achievements
-    lua_pushstring(L, "");                 // 6: lfgComment
-    lua_pushnumber(L, queued ? 1 : 0);     // 7: slotCount
-    // 8-10: three bytes the client keeps beside the flags (+6..+8 of its
-    // LFG state, 0x00552f30), which nothing here sets.
-    for (int i = 0; i < 3; ++i) lua_pushnumber(L, 0);
+    static const game::LfgUpdateBody kNone;
+    const game::LfgUpdateBody* rec = gh ? gh->getLfgServerRecord() : nullptr;
+    if (!rec) rec = &kNone;
+    lua_pushboolean(L, inParty ? 1 : 0);                                 // 1: inParty
+    lua_pushboolean(L, rec->extraInfo ? 1 : 0);                          // 2: joined
+    lua_pushboolean(L, rec->queued ? 1 : 0);                             // 3: queued
+    lua_pushboolean(L, rec->unk1 ? 1 : 0);                               // 4: noPartialClear
+    lua_pushboolean(L, rec->unk2 ? 1 : 0);                               // 5: achievements
+    lua_pushstring(L, rec->comment.c_str());                             // 6: lfgComment
+    lua_pushnumber(L, static_cast<double>(rec->dungeons.size()));        // 7: slotCount
+    for (uint8_t b : rec->partyBytes) lua_pushnumber(L, b);              // 8-10
     return 10;
 }
 
@@ -6412,8 +6409,9 @@ static int lua_GetLFGInfoServer(lua_State* L) {
 // the group size behind the count the handler used to stop at.
 static int lua_GetLFGRoleUpdate(lua_State* L) {
     auto* gh = getGameHandler(L);
+    // 0x00554610: a boolean, false when no check runs (was nil).
     const bool checking = gh && gh->getLfgState() == game::LfgState::RoleCheck;
-    if (checking) lua_pushboolean(L, 1); else lua_pushnil(L);
+    lua_pushboolean(L, checking ? 1 : 0);
     lua_pushnumber(L, gh ? static_cast<double>(gh->getLfgRoleCheckDungeons().size()) : 0.0);
     lua_pushnumber(L, gh ? gh->getLfgRoleCheckMembers() : 0);
     return 3;

@@ -4,6 +4,7 @@
 
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_engine.hpp"
+#include "core/app_clock.hpp"
 #include "core/env.hpp"
 #include "core/input.hpp"
 #include "core/preview_dressing.hpp"
@@ -5124,4 +5125,76 @@ TEST_CASE("an auction command result raises no PLAYER_MONEY (T417, 0x0059ffb0)",
     r.writeUInt32(0);   // taken
     s.receive(r);
     CHECK(ui.is("money == 0"));
+}
+
+// T418 (FIXER AB): SMSG_LFG_QUEUE_STATUS (0x0055bdc0 case 0x365) raises
+// LFG_QUEUE_STATUS_UPDATE alone and leaves the queue state to the update
+// packets; its first wait is the player's own, the second the average, and
+// the time queued becomes a moment when it comes. GetLFGQueueStats
+// (0x00553f90) answers nothing unless the server's record says joined and
+// queued; GetLFGInfoServer (0x00552f30) reads that record.
+TEST_CASE("the dungeon finder queue status is read as 12340 reads it (T418, 0x0055bdc0)", "[replay][interface][lfg]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("seen = {} local f = CreateFrame('Frame') f:RegisterEvent('LFG_UPDATE') "
+           "f:RegisterEvent('LFG_QUEUE_STATUS_UPDATE') "
+           "f:SetScript('OnEvent', function(self, e) seen[#seen + 1] = e end)");
+    const auto status = [&](uint32_t queuedFor) {
+        wowee::network::Packet q(wowee::game::wireOpcode(Opcode::SMSG_LFG_QUEUE_STATUS));
+        q.writeUInt32(261);   // dungeon
+        q.writeUInt32(111);   // the player's own wait
+        q.writeUInt32(222);   // the average
+        q.writeUInt32(static_cast<uint32_t>(-1));   // tanks: not known
+        q.writeUInt32(44);
+        q.writeUInt32(55);
+        q.writeUInt8(0); q.writeUInt8(0); q.writeUInt8(0);   // nobody needed
+        q.writeUInt32(queuedFor);
+        s.receive(q);
+    };
+    status(60);
+    auto& gh = s.handler();
+    CHECK(gh.getLfgMyWaitSec() == 111);
+    CHECK(gh.getLfgAvgWaitSec() == 222);
+    CHECK(gh.getLfgWaitTank() == -1);
+    CHECK(gh.getLfgNeedDps() == 1);
+    CHECK(ui.is("#seen == 1 and seen[1] == 'LFG_QUEUE_STATUS_UPDATE'"));
+    CHECK(ui.is("select('#', GetLFGQueueStats()) == 0"));   // the record says nothing yet
+    CHECK(ui.is("select(3, GetLFGInfoServer()) == false"));
+
+    // SMSG_LFG_UPDATE_PLAYER: joined (extra info) and queued, one dungeon.
+    wowee::network::Packet u(wowee::game::wireOpcode(Opcode::SMSG_LFG_UPDATE_PLAYER));
+    u.writeUInt8(wowee::game::lfg_update_type::kAddedToQueue);
+    u.writeUInt8(1);   // extra info
+    u.writeUInt8(1);   // queued
+    u.writeUInt8(0); u.writeUInt8(1);
+    u.writeUInt8(1);
+    u.writeUInt32(261u | (1u << 24));
+    u.writeString("hi");
+    s.receive(u);
+    CHECK(ui.is("select('#', GetLFGQueueStats()) == 13"));
+    CHECK(ui.is("select(5, GetLFGQueueStats()) == 1"));
+    ui.run("local i = {GetLFGInfoServer()} info = i");
+    CHECK(ui.is("info[2] == true and info[3] == true and info[4] == false and info[5] == true"));
+    CHECK(ui.is("info[6] == 'hi' and info[7] == 1"));
+    ui.run("seen = {}");
+    status(60);
+    CHECK(ui.is("#seen == 1 and seen[1] == 'LFG_QUEUE_STATUS_UPDATE'"));
+    const double since = gh.getLfgQueuedSince();
+    CHECK(since == Catch::Approx(wowee::core::appTimeSeconds() - 60.0).margin(1.0));
+}
+
+// LFG review (found by AB in code): GetLFGRoleUpdate answers a boolean first,
+// false without a role check (0x00554610, was nil); UnitHasLFGDeserter /
+// UnitHasLFGRandomCooldown of a unit naming nobody answer nothing
+// (0x00555840 / 0x00555760, was false).
+TEST_CASE("LFG answers of an idle player are 12340's (0x00554610, 0x00555840)", "[replay][interface][lfg]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("GetLFGRoleUpdate() == false"));
+    CHECK(ui.is("select('#', GetLFGRoleUpdate()) == 3"));
+    CHECK(ui.is("select('#', UnitHasLFGDeserter('party3')) == 0"));
+    CHECK(ui.is("select('#', UnitHasLFGRandomCooldown('party3')) == 0"));
+    CHECK(ui.is("UnitHasLFGDeserter('player') == false"));
 }

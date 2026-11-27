@@ -2936,6 +2936,18 @@ const std::vector<uint32_t>* GameHandler::getLfgQueuedSlots() const {
     return socialHandler_ ? &socialHandler_->getLfgQueuedSlots(socialHandler_->isInGroup()) : nullptr;
 }
 
+const LfgUpdateBody* GameHandler::getLfgServerRecord() const {
+    return socialHandler_ ? &socialHandler_->getLfgServerRecord(socialHandler_->isInGroup()) : nullptr;
+}
+
+double GameHandler::getLfgQueuedSince() const {
+    return socialHandler_ ? socialHandler_->getLfgQueuedSince() : 0.0;
+}
+
+uint32_t GameHandler::getLfgQueueStatusDungeon() const {
+    return socialHandler_ ? socialHandler_->getLfgQueueStatusDungeon() : 0;
+}
+
 void GameHandler::lfgAddSlot(uint32_t slot) {
     if (!socialHandler_) return;
     // 0x0052bd10: how many others the party holds.

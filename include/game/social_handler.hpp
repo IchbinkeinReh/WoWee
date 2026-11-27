@@ -750,6 +750,16 @@ public:
     [[nodiscard]] int32_t  getLfgMyWaitSec()       const { return lfgMyWaitSec_; }
     /// How long this player has been in the queue, in seconds.
     [[nodiscard]] uint32_t getLfgQueuedSeconds()   const { return lfgQueuedSeconds_; }
+    /// The moment on the GetTime clock the queue was entered, as the last
+    /// SMSG_LFG_QUEUE_STATUS put it (0x00beaa48).
+    [[nodiscard]] double   getLfgQueuedSince()     const { return lfgQueuedSince_; }
+    /// The dungeon of the last queue status (0x00beaa28), 0 before one.
+    [[nodiscard]] uint32_t getLfgQueueStatusDungeon() const { return lfgQueueStatusDungeon_; }
+    /// The server's queue record: the party's in a group (0x00acdac0), the
+    /// player's otherwise (0x00acd9a0).
+    [[nodiscard]] const LfgUpdateBody& getLfgServerRecord(bool inGroup) const {
+        return inGroup ? lfgPartyUpdate_ : lfgPlayerUpdate_;
+    }
     [[nodiscard]] uint32_t getLfgBootVotes()       const { return lfgBootVotes_; }
     [[nodiscard]] uint32_t getLfgBootTotal()       const { return lfgBootTotal_; }
     [[nodiscard]] uint32_t getLfgBootTimeLeft()    const { return lfgBootTimeLeft_; }
@@ -1243,6 +1253,8 @@ private:
     int32_t  lfgAvgWaitSec_   = -1;
     int32_t  lfgMyWaitSec_    = -1;
     uint32_t lfgQueuedSeconds_= 0;
+    double   lfgQueuedSince_ = 0.0;
+    uint32_t lfgQueueStatusDungeon_ = 0;
     uint32_t lfgBootVotes_    = 0;
     uint32_t lfgBootTotal_    = 0;
     uint32_t lfgBootTimeLeft_ = 0;

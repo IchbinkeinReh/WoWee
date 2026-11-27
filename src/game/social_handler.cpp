@@ -5332,55 +5332,34 @@ void SocialHandler::handleLfgPartyInfo(network::Packet& packet) {
 }
 
 void SocialHandler::handleLfgQueueStatus(network::Packet& packet) {
-    // Thirty-one bytes, not thirty-three: dungeon, five wait times, three
-    // one-byte "needed" counts, and the time queued. The old length check was
-    // longer than the packet the server sends, so this returned before reading
-    // anything and the queue status never updated at all - no wait times, no
-    // time in queue.
+    // Thirty-one bytes: dungeon, five wait times, three one-byte "needed"
+    // counts, and the time queued (0x0055bdc0 case 0x365).
     if (!packet.hasRemaining(31)) return;
-    lfgDungeonId_ = packet.readUInt32();
-    // Two different numbers, and the panel shows them in two different places:
-    // the average across everyone queued for this dungeon, and the estimate for
-    // this player in the role they picked. They were being collapsed into one.
-    lfgAvgWaitSec_ = static_cast<int32_t>(packet.readUInt32());
+    lfgQueueStatusDungeon_ = packet.readUInt32();          // 0x00beaa28
+    lfgDungeonId_ = lfgQueueStatusDungeon_;
+    // The first wait is the player's own (0x00beaa2c, GetLFGQueueStats' 12th
+    // value), the second the average (0x00beaa30, its 8th, and the "Wait" of
+    // the client's LFGMessage line). They were read the other way round.
     lfgMyWaitSec_  = static_cast<int32_t>(packet.readUInt32());
+    lfgAvgWaitSec_ = static_cast<int32_t>(packet.readUInt32());
     lfgWaitTank_   = static_cast<int32_t>(packet.readUInt32());
     lfgWaitHealer_ = static_cast<int32_t>(packet.readUInt32());
     lfgWaitDps_    = static_cast<int32_t>(packet.readUInt32());
-    // Three of these, one per role, and only one was being read - so the time
-    // in queue came from two bytes of the needed-counts and two of its own.
     lfgNeedTank_   = packet.readUInt8();
     lfgNeedHealer_ = packet.readUInt8();
     lfgNeedDps_    = packet.readUInt8();
-    // Seconds, not milliseconds. Every time on this packet is a difference of
-    // two time_t values on the server, and all three were being divided by a
-    // thousand on the way in - so the queue timer read 0:00 for the whole wait
-    // and the average wait time came out as zero, which the interface prints
-    // through SecondsToTime as an empty string. A wait estimate that is missing
-    // rather than wrong is this division.
-    //
-    // -1 is the server saying it does not know yet, and it is kept: the panel
-    // tests for it and says so, where a zero claims the group is instant.
+    // Nobody needed at all reads as one damage dealer needed.
+    if (lfgNeedTank_ == 0 && lfgNeedHealer_ == 0 && lfgNeedDps_ == 0) lfgNeedDps_ = 1;
+    // Seconds already waited. 12340 turns them into a moment on the GetTime
+    // clock when the packet comes (0x00beaa48 = now - seconds * 1000), so the
+    // queue timer counts on between packets.
     lfgQueuedSeconds_ = packet.readUInt32();
-    lfgState_ = LfgState::Queued;
-    // Read and then kept to itself. The wait time is what the queue window
-    // counts up, and LFDSearchStatus_Update is reached from this event and no
-    // other - so the numbers above changed every few seconds and the display
-    // built on them never moved.
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("LFG_QUEUE_STATUS_UPDATE", {});
-        // The queue state is set two lines above, and LFG_QUEUE_STATUS_UPDATE
-        // is not the event that re-reads it: the minimap's dungeon eye is shown
-        // by MiniMapLFG_UpdateIsShown, which asks GetLFGMode - which asks
-        // GetLFGInfoServer - and is reached from LFG_UPDATE and nowhere else.
-        //
-        // SMSG_LFG_UPDATE_PLAYER usually arrives alongside this and does fire
-        // it, which is why the eye appears at all. The case that has nothing
-        // else behind it is a login or a reconnect already in the queue, where
-        // this packet is what says so: the state was right and the eye was
-        // never shown.
-        owner_.addonEventCallbackRef()("LFG_UPDATE", {});
-    }
+    lfgQueuedSince_ = core::appTimeSeconds() - static_cast<double>(lfgQueuedSeconds_);
+    // The queue state is not touched here and LFG_QUEUE_STATUS_UPDATE is the
+    // only event (T418): LFG_UPDATE comes from SMSG_LFG_UPDATE_PLAYER/PARTY
+    // and SMSG_LFG_DISABLED alone. WoWee had set the state to queued and
+    // raised LFG_UPDATE on every status, every few seconds while queued.
+    owner_.fireAddonEvent("LFG_QUEUE_STATUS_UPDATE");
 }
 
 namespace {
@@ -6809,6 +6788,8 @@ void SocialHandler::resetForWorldEntry() {
     lfgProposalMembers_.clear();
     lfgAvgWaitSec_ = lfgMyWaitSec_ = -1;
     lfgQueuedSeconds_ = 0;
+    lfgQueuedSince_ = 0.0;
+    lfgQueueStatusDungeon_ = 0;
     lfgBootVotes_ = lfgBootTotal_ = lfgBootTimeLeft_ = lfgBootNeeded_ = 0;
     lfgRoleCheckDungeons_.clear();
     lfgRoleCheckMembers_ = 0;

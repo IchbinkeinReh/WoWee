@@ -180,13 +180,12 @@ int lua_UnitHasLfgDebuff(lua_State* L) {
     else if (uid == "target") auras = &gh->getTargetAuras();
     else if (const uint64_t guid = resolveUnitGuid(gh, uid); guid != 0)
         auras = gh->getUnitAuras(guid);
-    if (auras) {
-        for (const auto& aura : *auras) {
-            if (aura.spellId == spellId) { lua_pushboolean(L, 1); return 1; }
-        }
+    else
+        return 0;   // 0x00555840 / 0x00555760: a unit naming nobody answers nothing
+    if (!auras) return luaReturnFalse(L);
+    for (const auto& aura : *auras) {
+        if (aura.spellId == spellId) { lua_pushboolean(L, 1); return 1; }
     }
-    // A unit whose auras have never arrived is answered no, which is what an
-    // empty aura list means everywhere else in this file.
     return luaReturnFalse(L);
 }
 
@@ -713,45 +712,38 @@ void registerLfgLuaAPI(lua_State* L) {
     //   dpsNeeds, instanceType, instanceName, averageWait, tankWait,
     //   healerWait, damageWait, myWait, queuedTime
     //
-    // This answered nil because the numbers never arrived: the queue-status
-    // handler required a longer packet than the server sends and returned
-    // before reading any of it. With that fixed the whole row is real - how
-    // many of each role the queue still wants, and how long each has been
-    // waiting.
+    // 0x00553f90: nothing at all unless the server's record for the player's
+    // side says joined (+0) and queued (+2) and a queue status has named a
+    // dungeon (0x00beaa28). The waits pass as the server sent them (-1
+    // included); a dungeon without an LFGDungeons row answers its eight
+    // values nil. queuedTime is the moment fixed when the status came.
     {"GetLFGQueueStats", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
-        if (!gh || !gh->isLfgQueued()) { lua_pushboolean(L, 0); return 1; }
-        const uint32_t dungeonId = gh->getLfgDungeonId();
+        const game::LfgUpdateBody* rec = gh ? gh->getLfgServerRecord() : nullptr;
+        if (!rec || !rec->extraInfo || !rec->queued || gh->getLfgQueueStatusDungeon() == 0)
+            return 0;
+        const uint32_t dungeonId = gh->getLfgQueueStatusDungeon();
         const game::LfgDungeon* d = nullptr;
         for (const auto& e : gh->getLfgDungeons()) {
             if (e.id == dungeonId) { d = &e; break; }
         }
-        // Seconds on the wire; the panel prints them with SecondsToTime.
-        auto wait = [](int32_t v) { return v >= 0 ? static_cast<double>(v) : 0.0; };
-
         lua_pushboolean(L, 1);                                   // 1: hasData
         lua_pushnumber(L, 0);                                    // 2: leaderNeeds
         lua_pushnumber(L, gh->getLfgNeedTank());                 // 3: tankNeeds
         lua_pushnumber(L, gh->getLfgNeedHealer());               // 4: healerNeeds
         lua_pushnumber(L, gh->getLfgNeedDps());                  // 5: dpsNeeds
-        lua_pushnumber(L, d ? d->typeId : 1);                    // 6: instanceType
-        lua_pushstring(L, d ? d->name.c_str() : "");             // 7: instanceName
+        if (!d) {
+            for (int i = 0; i < 8; ++i) lua_pushnil(L);
+            return 13;
+        }
+        lua_pushnumber(L, d->typeId);                            // 6: instanceType
+        lua_pushstring(L, d->name.c_str());                      // 7: instanceName
         lua_pushnumber(L, gh->getLfgAvgWaitSec());               // 8: averageWait
-        lua_pushnumber(L, wait(gh->getLfgWaitTank()));           // 9: tankWait
-        lua_pushnumber(L, wait(gh->getLfgWaitHealer()));         // 10: healerWait
-        lua_pushnumber(L, wait(gh->getLfgWaitDps()));            // 11: damageWait
-        // The player's own estimate, which is the one the panel prints as
-        // "Average Wait Time" - it was being given the time already waited, so
-        // the line described the past rather than the wait. -1 passes through:
-        // the panel hides the line for it, which is what the server not
-        // knowing yet should look like.
+        lua_pushnumber(L, gh->getLfgWaitTank());                 // 9: tankWait
+        lua_pushnumber(L, gh->getLfgWaitHealer());               // 10: healerWait
+        lua_pushnumber(L, gh->getLfgWaitDps());                  // 11: damageWait
         lua_pushnumber(L, gh->getLfgMyWaitSec());                // 12: myWait
-        // A moment, not a duration: LFDSearchStatus_Update computes
-        // GetTime() - queuedTime for the timer it counts up. Handed the
-        // duration, it subtracted a minute from the clock and reported a queue
-        // entered when the client started.
-        lua_pushnumber(L, luaGetTimeNow() -
-                          static_cast<double>(gh->getLfgQueuedSeconds())); // 13: queuedTime
+        lua_pushnumber(L, gh->getLfgQueuedSince());              // 13: queuedTime
         return 13;
     }},
 
