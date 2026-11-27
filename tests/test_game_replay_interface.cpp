@@ -4798,8 +4798,22 @@ TEST_CASE("the barber's skin row is nothing for a race without one (T404)", "[re
     };
     services.barberCanAlterSkin = [&] { return skins; };
     ui.engine.setLuaServices(services);
+    // Out of the chair: nothing, not even the usage line (0x0052e850 asks
+    // DAT_00bd19b8 first).
+    CHECK(ui.is("select('#', GetBarberShopStyleInfo(3)) == 0"));
+    CHECK(ui.is("pcall(GetBarberShopStyleInfo, 'x') == true"));
+    {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ENABLE_BARBER_SHOP));
+        s.receive(p);
+    }
+    REQUIRE(s.handler().isBarberShopOpen());
     CHECK(ui.is("select('#', GetBarberShopStyleInfo(4)) == 0"));
     CHECK(ui.is("select('#', GetBarberShopStyleInfo(3)) == 4"));
+    // Rounded, 1 to 4, and a non-number is the usage line.
+    CHECK(ui.is("select('#', GetBarberShopStyleInfo(2.6)) == 4"));
+    CHECK(ui.is("select('#', GetBarberShopStyleInfo(0.4)) == 0"));
+    CHECK(ui.is("select('#', GetBarberShopStyleInfo(5)) == 0"));
+    CHECK(ui.is("select(2, pcall(GetBarberShopStyleInfo, 'x')):find('Usage: GetBarberShopInfo%(type%)') ~= nil"));
     skins = true;
     CHECK(ui.is("select('#', GetBarberShopStyleInfo(4)) == 4"));
 }

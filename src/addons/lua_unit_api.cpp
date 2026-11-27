@@ -3071,7 +3071,14 @@ static int lua_CanAlterSkin(lua_State* L) {
 /// fourth through select(4, ...) - so all four have to be there for the index
 /// to land on the right one.
 static int lua_GetBarberShopStyleInfo(lua_State* L) {
-    const int selector = static_cast<int>(luaL_optinteger(L, 1, 0));
+    // 0x0052e850: nothing out of the chair (DAT_00bd19b8), asked before the
+    // argument; in it a number or the usage line (its own text names
+    // GetBarberShopInfo, 0x00a08150), rounded, 1 to 4.
+    auto* gh = getGameHandler(L);
+    if (!gh || !gh->isBarberShopOpen()) return 0;
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBarberShopInfo(type)");
+    const int selector = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+    if (selector < 1 || selector > 4) return 0;
     auto* svc = getLuaServices(L);
     // The skin's 4 only where the race has skin styles to go through
     // (0x0052e850: DAT_00bd19b4, as SetNextBarberShopStyle asks) - nothing
