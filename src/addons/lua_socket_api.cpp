@@ -182,16 +182,32 @@ int lua_SocketContainerItem(lua_State* L) {
     return 0;
 }
 
+/// What the prismatic enchantment on an item adds to its sockets (0x00708140):
+/// the amount of the enchantment's effect of type 8 (prismatic socket), 0
+/// without one. SpellItemEnchantment's three effect types are its fields 2-4
+/// and their amounts 5-7, as 0x00708140 reads the record (+8, +0x14).
+static uint32_t prismaticSockets(game::GameHandler* gh, uint64_t itemGuid) {
+    const uint32_t enchant = gh && itemGuid != 0 ? gh->getItemPrismaticEnchant(itemGuid) : 0;
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (enchant == 0 || !am || !am->isInitialized()) return 0;
+    const auto dbc = am->loadDBC("SpellItemEnchantment.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 8) return 0;
+    const int32_t row = dbc->findRecordById(enchant);
+    if (row < 0) return 0;
+    for (uint32_t k = 0; k < 3; ++k) {
+        if (dbc->getUInt32(static_cast<uint32_t>(row), 2 + k) == 8)
+            return dbc->getUInt32(static_cast<uint32_t>(row), 5 + k);
+    }
+    return 0;
+}
+
 int lua_GetNumSockets(lua_State* L) {
+    // 0x005c4af0 -> 0x007094e0: the template's set colours, each counted,
+    // and the sockets a prismatic enchantment adds - a belt buckle's (T454).
     auto* gh = getGameHandler(L);
     const auto* info = socketItemInfo(gh);
     int count = 0;
-    if (info) {
-        // Count sockets, not filled ones, and stop at the first empty colour:
-        // the template lists them in order and a gap would mean a socket that
-        // is not there.
-        for (int i = 0; i < 3 && info->socketColor[i] != 0; ++i) ++count;
-    }
+    if (info) count = game::item_stats::socketCount(info->socketColor, prismaticSockets(gh, gh->getSocketItemGuid()));
     lua_pushnumber(L, count);
     return 1;
 }

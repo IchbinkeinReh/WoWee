@@ -26,6 +26,16 @@ inline constexpr int kFirstSocket = 69;
 /// The socket colours as the client names them, in its files and to the interface.
 inline constexpr const char* kSocketColours[4] = {"Meta", "Red", "Yellow", "Blue"};
 
+/// How many sockets an item has (0x007094e0): each of the template's three
+/// socket colours that is set, counted one by one (a gap does not end the
+/// count), plus what its prismatic enchantment adds (0x00708140: the amount
+/// of that enchantment's effect of type 8, a belt buckle's 1).
+inline int socketCount(const std::array<uint32_t, 3>& colours, uint32_t prismaticAdds) {
+    int n = 0;
+    for (uint32_t c : colours) n += c != 0 ? 1 : 0;
+    return n + static_cast<int>(prismaticAdds);
+}
+
 struct Summary {
     float dps = 0.0f;
     std::array<int32_t, kSlots> v{};

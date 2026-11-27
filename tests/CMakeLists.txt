@@ -4412,6 +4412,12 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# -- test_item_socket_count
+# The socket count of the socketing window: template colours plus a
+# prismatic enchantment (0x007094e0, 0x00708140). Header-only.
+wowee_add_test(test_item_socket_count
+    SOURCES test_item_socket_count.cpp)
+
 # ── test_stat_tables ─────────────────────────────────────────
 wowee_add_test(test_stat_tables
     SOURCES test_stat_tables.cpp)
