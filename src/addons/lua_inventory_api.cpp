@@ -305,8 +305,10 @@ static int lua_SpellCanTargetItem(lua_State* L) {
 /// gets that order by sorting the ring slots by their own timestamp fields
 /// (0x00584bb0), which is what reconcileBuybackSlots now does to the mirror.
 static int lua_GetBuybackItemInfo(lua_State* L) {
+    // 0x00585070: a number, else its usage line; the slot rounded.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBuybackItemInfo(slot)");
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_checknumber(L, 1));
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
     if (!gh) { return luaReturnNil(L); }
     const auto* row = index < 1 ? nullptr : gh->buybackRowAt(static_cast<uint32_t>(index - 1));
     if (!row) {
@@ -450,8 +452,11 @@ static int lua_GetMerchantItemMaxStack(lua_State* L) {
     if (!gh || index < 1) { lua_pushnumber(L, 1); return 1; }
     const auto& items = gh->getVendorItems().items;
     if (index > static_cast<int>(items.size())) { lua_pushnumber(L, 1); return 1; }
+    // 0x005842d0: only a row sold one at a time (its count, +0x18, under 2)
+    // answers the template's stack size (+0x5c); a bundle answers 1.
+    if (items[index - 1].stackCount >= 2) { lua_pushnumber(L, 1); return 1; }
     const auto* info = gh->getItemInfo(items[index - 1].itemId);
-    lua_pushnumber(L, (info && info->maxStack > 0) ? info->maxStack : 1);
+    lua_pushnumber(L, info ? info->maxStack : 1);
     return 1;
 }
 
@@ -543,7 +548,7 @@ static int lua_GetMerchantItemCostInfo(lua_State* L) {
     }
     int items = 0;
     for (int j = 0; j < 5; ++j) {
-        if (cost->itemId[j] != 0 && cost->itemCount[j] != 0) ++items;
+        if (cost->itemId[j] != 0) ++items;   // 0x005846e0: the non-zero ids
     }
     lua_pushnumber(L, cost->honorPoints);
     lua_pushnumber(L, cost->arenaPoints);
@@ -562,18 +567,28 @@ static int lua_GetMerchantItemCostItem(lua_State* L) {
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const int which = static_cast<int>(luaL_optnumber(L, 2, 0));
     const auto* cost = merchantCost(L, index);
-    if (!gh || !cost || which < 1) { return luaReturnNil(L); }
+    // 0x00584820: nil and 0 where the merchant row, its cost or the item'th
+    // cost item is not there; the cost items counted over the non-zero ids
+    // of ItemExtendedCost (+0x10..), their counts (+0x24..) as they are.
+    const auto none = [L](uint32_t count) {
+        lua_pushnil(L);
+        lua_pushnumber(L, count);
+        return 2;
+    };
+    if (!gh || !cost || which < 1) return none(0);
 
     int seen = 0;
     for (int j = 0; j < 5; ++j) {
-        if (cost->itemId[j] == 0 || cost->itemCount[j] == 0) continue;
+        if (cost->itemId[j] == 0) continue;
         if (++seen != which) continue;
 
         // Asked for by id, because a cost item is often one the player has
         // never seen and so was never sent with the vendor list.
         gh->ensureItemInfo(cost->itemId[j]);
         const auto* info = gh->getItemInfo(cost->itemId[j]);
-        lua_pushstring(L, info ? gh->getItemIconPath(info->displayInfoId).c_str() : "");
+        // Not cached yet: nil and the count.
+        if (!info) return none(cost->itemCount[j]);
+        lua_pushstring(L, gh->getItemIconPath(info->displayInfoId).c_str());
         lua_pushnumber(L, cost->itemCount[j]);
         if (info && !info->name.empty()) {
     const std::string link = game::itemChatLink(cost->itemId[j], static_cast<uint32_t>(info->quality), info->name,
@@ -584,7 +599,7 @@ static int lua_GetMerchantItemCostItem(lua_State* L) {
         }
         return 3;
     }
-    return luaReturnNil(L);
+    return none(0);
 }
 
 

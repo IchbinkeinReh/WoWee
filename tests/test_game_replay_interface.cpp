@@ -555,6 +555,9 @@ TEST_CASE("the item tooltip setters answer as the client's do", "[replay][interf
     CHECK(ui.is("answers(tip:SetQuestLogSpecialItem(1)) == 0"));
     CHECK(ui.is("not pcall(tip.SetBackpackToken, tip)"));
     CHECK(ui.is("answers(tip:SetBackpackToken(1)) == 0"));
+    // GetMerchantItemCostItem (0x00584820): nil and 0 with no such cost item.
+    CHECK(ui.is("(function(n, a, b) return n == 2 and a == nil and b == 0 end)(answers(GetMerchantItemCostItem(1, 1)))"));
+    CHECK(ui.is("not pcall(GetBuybackItemInfo, 'x')"));
 }
 
 // 0x0051c2e0 with includeCharges: an item that does not stack counts the charges left on
