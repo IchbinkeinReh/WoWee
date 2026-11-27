@@ -38,7 +38,7 @@ inline Quality qualityFromIndex(int index) {
 /// The rays to the lamps were nearly all of the cost (VL5: 51 ms of a 92 ms
 /// frame in Brill at night, High): each sample of a lamp's glow asked one.
 /// Now a lamp's samples are all weighed, unshadowed, and only `lampRays` of
-/// them ask whether the lamp is in sight (lampRaySamples) - the samples are
+/// them ask whether the lamp is in sight (lampRaysFor) - the samples are
 /// a few instructions each, the rays the time.
 struct Budget {
     unsigned divisor = 0;     ///< the march's image is the screen's size over this

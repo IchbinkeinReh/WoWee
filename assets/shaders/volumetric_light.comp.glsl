@@ -86,7 +86,7 @@ layout(set = 1, binding = 0) uniform VLParams {
     mat4 invViewProj;   // clip (reversed depth) to world
     mat4 viewProj;
     vec4 camPos;        // xyz = the eye, w = how far the sky body's light is gathered
-    vec4 camForward;    // xyz = the view's forward axis, w = rays per lamp (lampRaySamples)
+    vec4 camForward;    // xyz = the view's forward axis, w = rays per lamp (lampRaysFor)
     vec4 bodyDir;       // xyz = toward the sun or moon, w = its share (0: none this frame)
     vec4 bodyColor;     // rgb = its light, w = the forward lobe's share (1)
     vec4 air;           // x = sky body scatter per yard, y = lamp scatter per yard,
@@ -423,7 +423,7 @@ void main() {
         // samples (vl.camForward.w of them, every stride-th, which ones
         // moving from frame to frame and from lamp to lamp), their glow-
         // weighted share in sight standing for the whole stretch
-        // (volumetric_light::lampRaySamples). Where nothing shades the lamp
+        // (volumetric_light::lampRaysFor, lampGlowSeen). Where nothing shades the lamp
         // that is exact; at a shadow's edge in the air the history gathers
         // the other samples' rays over the next frames.
         int stride = max(lampSteps / lampRays, 1);
