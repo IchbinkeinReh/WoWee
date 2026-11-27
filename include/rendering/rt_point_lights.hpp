@@ -77,6 +77,12 @@ struct PointLight {
     /// What its glow card's pulse (rt_glow_pulse.hpp) multiplied it by, for
     /// the diagnostics; 1 where none did.
     float cardPulse = 1.0f;
+    /// The visible flame it is a part of (rt_lights::flameVolumeAt): while
+    /// the lights shadow themselves its shadow rays are taken from a box
+    /// this wide either side of it, from it up by the rise. Zero: from its
+    /// point. Not sent for a light with a storey (the same place carries it).
+    float flameRadius = 0.0f;
+    float flameRise = 0.0f;
 };
 
 /// What the shader reads per light (std430): position and end, colour and
@@ -94,12 +100,15 @@ static_assert(sizeof(PointLightGPU) == 48, "PointLightGPU is uploaded as std430"
 
 inline constexpr float kOpenCeiling = 1e30f;
 
+/// Without a storey (z below 0.5) x and y carry the flame volume
+/// (PointLight::flameRadius, flameRise) for rt_trace's shadow ray.
 inline PointLightGPU toGpu(const PointLight& l) {
     return {glm::vec4(l.position, l.baked ? -l.attenuationEnd : l.attenuationEnd),
             glm::vec4(l.color, l.attenuationStart),
             l.hasStorey ? glm::vec4(l.storeyFloor, std::min(l.storeyCeiling, kOpenCeiling), 1.0f,
                                     static_cast<float>(l.source))
-                        : glm::vec4(0.0f, 0.0f, l.carried ? -1.0f : 0.0f, static_cast<float>(l.source))};
+                        : glm::vec4(std::max(l.flameRadius, 0.0f), std::max(l.flameRise, 0.0f),
+                                    l.carried ? -1.0f : 0.0f, static_cast<float>(l.source))};
 }
 
 /// How much of a light reaches `distance` yards: all of it within the start,
@@ -204,6 +213,18 @@ inline PointLight mergedLight(const std::vector<const PointLight*>& parts) {
     out.attenuationStart = start;
     out.attenuationEnd = end;
     out.groupPart = parts.front()->groupPart;
+    // The flame volume (flameRadius, flameRise) the widest of theirs, up to
+    // the highest of their flames' tops.
+    float flameTop = -1e30f;
+    bool anyFlame = false;
+    out.flameRadius = 0.0f;
+    for (const PointLight* p : parts) {
+        if (!(p->flameRadius > 0.0f) && !(p->flameRise > 0.0f)) continue;
+        anyFlame = true;
+        out.flameRadius = std::max(out.flameRadius, p->flameRadius);
+        flameTop = std::max(flameTop, p->position.z + p->flameRise);
+    }
+    out.flameRise = anyFlame ? std::max(flameTop - out.position.z, 0.0f) : 0.0f;
     return out;
 }
 
@@ -415,16 +436,29 @@ void keepOneLightPerPlace(std::vector<Light>& lights) {
 /// a brazier's three parts a tenth of a yard apart came and went as their
 /// spacing crossed kCoincidentLights - every brazier of the model at once, on
 /// their shared global sequence (T443). Summed, the split stays the one light.
+/// A part summed onto another keeps the flame volume (PointLight::flameRadius,
+/// flameRise) that takes in both.
+inline void joinFlameVolume(PointLight& into, const PointLight& part) {
+    if (!(part.flameRadius > 0.0f) && !(part.flameRise > 0.0f)) return;
+    const float top = std::max(into.position.z + into.flameRise, part.position.z + part.flameRise);
+    into.flameRadius = std::max(into.flameRadius, part.flameRadius);
+    into.flameRise = std::max(top - into.position.z, 0.0f);
+}
+template <class Light>
+void joinFlameVolume(Light&, const Light&) {}
+
 template <class Light>
 size_t addSplitPart(std::vector<Light>& out, size_t splitFirst, std::optional<size_t> anchor, const Light& part) {
     const float strength = std::max(part.color.r, std::max(part.color.g, part.color.b));
     if (anchor && *anchor < out.size() && strength < kMinParticlePartStrength) {
         out[*anchor].color += part.color;
+        joinFlameVolume(out[*anchor], part);
         return *anchor;
     }
     for (size_t k = splitFirst; k < out.size(); ++k) {
         if (coincide(out[k].position, part.position)) {
             out[k].color += part.color;
+            joinFlameVolume(out[k], part);
             return k;
         }
     }

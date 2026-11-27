@@ -680,6 +680,20 @@ void main() {
             radius = min(radius, RT_SELF_SHADOW_SOURCE_RADIUS);
         }
         vec3 jitter = (vec3(rtRandom(rng), rtRandom(rng), rtRandom(rng)) * 2.0 - 1.0) * radius;
+        // A fire's light part with its visible flame (storey x, y without a
+        // storey: PointLight::flameRadius, flameRise; U24): taken from
+        // anywhere in that flame - a box its width either side of the part,
+        // from the part up to the flame's top - so the light leaves the fire
+        // where its flames show, between and above the logs or the bowl
+        // round them. Its point sat among the Durotar campfire's logs, and
+        // they took its whole pool. The fixture still casts by its faces
+        // turned toward the light; the light's place stays the part's.
+        if (selfShadow && int(light.storey.w + 0.5) != RT_LIGHT_KIND_PARTICLE && light.storey.z < 0.5 &&
+            (light.storey.x > 0.0 || light.storey.y > 0.0)) {
+            jitter = vec3((rtRandom(rng) * 2.0 - 1.0) * light.storey.x, (rtRandom(rng) * 2.0 - 1.0) * light.storey.x,
+                          rtRandom(rng) * light.storey.y);
+            radius = 0.0;
+        }
         // Lifted off its triangle toward the smooth surface as the sun's ray
         // is (RT_TERMINATOR_LIFT): a lamp low over a rounded floor or a
         // hillside laid the same hard triangles over its light.

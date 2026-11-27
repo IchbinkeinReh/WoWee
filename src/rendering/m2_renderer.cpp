@@ -3041,10 +3041,14 @@ void M2Renderer::pushAlongParticles(const rt_lights::PointLight& light, const M2
     bool anyFlame = false;
     for (const auto& em : model.particleEmitters) anyFlame = anyFlame || (on(em) && rt_lights::isFlameEmitter(em));
     std::vector<ParticleMeanPath> paths;
+    std::vector<size_t> pathEmitter;
     for (size_t ei = 0; ei < model.particleEmitters.size(); ++ei) {
         const auto& em = model.particleEmitters[ei];
         if (!on(em) || (anyFlame && !rt_lights::isFlameEmitter(em))) continue;
-        if (auto path = particleMeanPath(inst, model, ei)) paths.push_back(*path);
+        if (auto path = particleMeanPath(inst, model, ei)) {
+            paths.push_back(*path);
+            pathEmitter.push_back(ei);
+        }
     }
     if (paths.empty()) {
         if (rtNoteNow_) rtNoteNow_->noEmitterOn = true;
@@ -3059,12 +3063,40 @@ void M2Renderer::pushAlongParticles(const rt_lights::PointLight& light, const M2
     // one too faint for the trace (selectLights) gives its share to its
     // path's first - so all of them together stay the one light.
     const size_t splitFirst = out.size();
-    for (const ParticleMeanPath& path : paths) {
+    for (size_t pi = 0; pi < paths.size(); ++pi) {
+        const ParticleMeanPath& path = paths[pi];
+        const auto& em = model.particleEmitters[pathEmitter[pi]];
+        // The flame's own size in the world (rt_lights::flameVolumeAt), for a
+        // flame's path only: its area by the emitter's world matrix, a
+        // particle's half size by it where flagged 0x20 (as the particles
+        // are drawn).
+        const float frameScale = glm::length(glm::vec3(path.toWorld[0]));
+        const float sizeScale = (em.flags & 0x20) ? frameScale : 1.0f;
+        const auto track = [&](const pipeline::M2AnimationTrack& t) {
+            return m2_track::sampleFloat(t, inst.currentSequenceIndex, inst.animTime, inst.globalSequenceTime,
+                                         model.globalSequenceDurations, 0.0f);
+        };
+        const float areaL = std::fabs(track(em.emissionAreaLength));
+        const float areaW = std::fabs(track(em.emissionAreaWidth));
+        const float areaHalf = (em.emitterType == 2 ? std::max(areaL, areaW)
+                                : em.emitterType == 1 ? 0.5f * std::max(areaL, areaW) : 0.0f) * frameScale;
+        const auto halfSize = [&](float age) {
+            const float lifeShare = path.life > 0.0f ? age / path.life : 0.0f;
+            return rt_lights::overLife(em.particleScale.timestamps, em.particleScale.floatValues, lifeShare, 1.0f) *
+                   sizeScale;
+        };
+        const auto at = [&](float age) { return path.at(age); };
         std::optional<size_t> anchor;
         for (int k = 0; k < static_cast<int>(weights.size()); ++k) {
             rt_lights::PointLight part = light;
-            part.position = path.at(rt_lights::particleLightAge(k, static_cast<int>(weights.size()), path.life));
+            const float age = rt_lights::particleLightAge(k, static_cast<int>(weights.size()), path.life);
+            part.position = path.at(age);
             part.color = light.color * (weights[static_cast<size_t>(k)] * share);
+            if (rt_lights::isFlameEmitter(em)) {
+                const rt_lights::FlameVolume v = rt_lights::flameVolumeAt(at, halfSize, areaHalf, age, path.life);
+                part.flameRadius = v.radius;
+                part.flameRise = v.rise;
+            }
             const size_t before = out.size();
             const size_t at = rt_lights::addSplitPart(out, splitFirst, anchor, part);
             if (rtNoteNow_ && out.size() == before) ++rtNoteNow_->partsSummed;

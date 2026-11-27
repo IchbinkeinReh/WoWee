@@ -119,4 +119,45 @@ inline glm::vec3 meanDisplacement(const glm::vec3& v0, float gravity, float drag
     return d;
 }
 
+/// The visible flame a fire's light part stands in (U24): how far its
+/// particles reach out to the side of the part (`radius`, yards: half the
+/// emitter's area plus a particle's half size at the part's age) and up
+/// from it to the flame's top (`rise`: the highest a particle's quad
+/// reaches from that age to the end of its life). The shadow rays of a
+/// light that shadows itself are taken from this volume, not from the
+/// part's point: a flame burning among its fixture's logs lights the floor
+/// through what of it shows between and above them, as its drawn flames
+/// show - the Durotar campfire's point sat inside its logs, and its whole
+/// pool was gone wherever the logs were in the traced scene. The light's
+/// own place (its falloff, its facing) stays the part's.
+struct FlameVolume {
+    float radius = 0.0f;
+    float rise = 0.0f;
+};
+/// The most a flame volume reaches, in yards: a bonfire's, not more.
+inline constexpr float kMaxFlameRadius = 3.0f;
+inline constexpr float kMaxFlameRise = 4.0f;
+
+/// `at(age)`: the particles' mean place at an age (world); `halfSize(age)`:
+/// a particle's half size there (world yards); `areaHalf`: half the
+/// emitter's area, world yards; the part's `age` of a `life`. The flame's
+/// top is sampled over the ages from the part's on.
+template <class At, class HalfSize>
+FlameVolume flameVolumeAt(At&& at, HalfSize&& halfSize, float areaHalf, float age, float life) {
+    FlameVolume v;
+    if (!(life > 0.0f) || !std::isfinite(life)) return v;
+    age = std::clamp(age, 0.0f, life);
+    const float z = at(age).z;
+    float top = z + std::max(halfSize(age), 0.0f);
+    constexpr int kSteps = 8;
+    for (int i = 1; i <= kSteps; ++i) {
+        const float a = age + (life - age) * static_cast<float>(i) / static_cast<float>(kSteps);
+        top = std::max(top, at(a).z + std::max(halfSize(a), 0.0f));
+    }
+    const float radius = std::max(areaHalf, 0.0f) + std::max(halfSize(age), 0.0f);
+    v.radius = std::isfinite(radius) ? std::min(radius, kMaxFlameRadius) : 0.0f;
+    v.rise = std::isfinite(top) ? std::clamp(top - z, 0.0f, kMaxFlameRise) : 0.0f;
+    return v;
+}
+
 }  // namespace wowee::rendering::rt_lights

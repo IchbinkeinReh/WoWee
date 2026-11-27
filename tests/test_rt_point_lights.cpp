@@ -7,13 +7,17 @@
 #include <catch_amalgamated.hpp>
 
 #include "pipeline/m2_loader.hpp"
+#include "rendering/rt_fire_color.hpp"
+#include "rendering/rt_particle_lights.hpp"
 #include "rendering/rt_point_lights.hpp"
+#include "test_support.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 using namespace wowee;
@@ -843,4 +847,89 @@ TEST_CASE("lightsPerSource fills the budget evenly", "[rt][lights][u21]") {
     // A small source keeps all of its own; the room goes to the larger.
     CHECK(lightsPerSource({1, 6, 6}, 9, {0, 1, 2}) == std::vector<size_t>{1, 4, 4});
     CHECK(lightsPerSource({1, 6, 6}, 8, {2, 1, 0}) == std::vector<size_t>{1, 3, 4});
+}
+
+// U24: the Durotar campfire (OrcBrazier_LightpostBarrens.m2) burns among a
+// bundle of logs standing over a rock pile; its light's point (the flame's
+// mean path at half its life, z 1.86) sat inside the logs, and wherever they
+// were in the traced scene they took the whole pool round it. Its shadow rays
+// are now taken from the visible flame: the emitter's area (0.91 x 0.83,
+// plane) plus a particle's half size (0.45 / 0.39 / 0.003 over its life),
+// from the part up to the flame's top (the path's end, z 2.48).
+TEST_CASE("A fire's light part carries its visible flame for the shadow rays (U24)", "[rt_lights][fire]") {
+    const float life = 2.23f;
+    const float speed = 0.5555556f;
+    const auto at = [&](float age) { return glm::vec3(-0.06f, 0.29f, 1.2441511f + speed * age); };
+    const std::vector<float> times = {0.0f, 0.5f, 1.0f};
+    const std::vector<float> sizes = {0.4528056f, 0.3888889f, 0.0027778f};
+    const auto halfSize = [&](float age) { return overLife(times, sizes, age / life, 1.0f); };
+    const float areaHalf = 0.5f * 0.9133334f;
+    // One light (the user's default): at half the life.
+    const FlameVolume mid = flameVolumeAt(at, halfSize, areaHalf, 0.5f * life, life);
+    CHECK(mid.radius == Catch::Approx(0.4567f + 0.3889f).margin(0.01f));
+    // The top: the path's end, 2.48 (+0.003), above the part at 1.86.
+    CHECK(mid.rise == Catch::Approx(0.62f).margin(0.02f));
+    // The first of three, at a quarter: wider and from lower up to the same top.
+    const FlameVolume first = flameVolumeAt(at, halfSize, areaHalf, 0.25f * life, life);
+    CHECK(first.radius > mid.radius);
+    CHECK(at(0.25f * life).z + first.rise == Catch::Approx(at(0.5f * life).z + mid.rise).margin(0.02f));
+    // Nothing for a path without a life; a bonfire's held to its most.
+    CHECK(flameVolumeAt(at, halfSize, areaHalf, 0.0f, 0.0f).radius == 0.0f);
+    const auto huge = [](float) { return 50.0f; };
+    CHECK(flameVolumeAt(at, huge, 40.0f, 0.0f, life).radius == kMaxFlameRadius);
+    CHECK(flameVolumeAt(at, huge, 40.0f, 0.0f, life).rise == kMaxFlameRise);
+
+    // Sent to the shader in the storey's place where there is no storey; a
+    // storey keeps its own.
+    PointLight l;
+    l.position = glm::vec3(1.0f, 2.0f, 3.0f);
+    l.attenuationEnd = 12.0f;
+    l.flameRadius = mid.radius;
+    l.flameRise = mid.rise;
+    CHECK(toGpu(l).storey == glm::vec4(mid.radius, mid.rise, 0.0f, 0.0f));
+    l.carried = true;
+    CHECK(toGpu(l).storey.z == -1.0f);
+    l.carried = false;
+    l.hasStorey = true;
+    l.storeyFloor = 1.0f;
+    l.storeyCeiling = 4.0f;
+    CHECK(toGpu(l).storey == glm::vec4(1.0f, 4.0f, 1.0f, 0.0f));
+
+    // Parts summed into one, and lights merged for the budget, keep a
+    // volume that takes in all of their flames.
+    PointLight a, b;
+    a.position = glm::vec3(0.0f, 0.0f, 1.0f);
+    a.color = glm::vec3(0.5f);
+    a.flameRadius = 0.5f;
+    a.flameRise = 1.0f;
+    b = a;
+    b.position.z = 1.05f;
+    b.flameRadius = 0.8f;
+    b.flameRise = 1.5f;
+    std::vector<PointLight> out;
+    const size_t at0 = addSplitPart(out, 0, std::nullopt, a);
+    CHECK(addSplitPart(out, 0, at0, b) == at0);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].flameRadius == 0.8f);
+    CHECK(out[0].flameRise == Catch::Approx(1.55f));
+    b.position.z = 3.0f;
+    const PointLight merged = mergedLight({&a, &b});
+    CHECK(merged.flameRadius == 0.8f);
+    CHECK(merged.position.z + merged.flameRise == Catch::Approx(4.5f));
+}
+
+TEST_CASE("The trace takes a flame's light from its flame while lights shadow themselves (U24)", "[rt_lights][fire]") {
+    const std::string trace = wowee::test::slurp("assets/shaders/rt_trace.comp.glsl");
+    REQUIRE_FALSE(trace.empty());
+    const size_t sel = trace.find("bool selfShadow = pass.tune5.x > 0.5;");
+    REQUIRE(sel != std::string::npos);
+    const size_t toLight = trace.find("vec3 toLight = rtLightAim(light) + jitter - lampOrigin;", sel);
+    REQUIRE(toLight != std::string::npos);
+    const std::string block = trace.substr(sel, toLight - sel);
+    // Only without a storey, for a fixed light's parts, from the part up.
+    CHECK(block.find("light.storey.z < 0.5") != std::string::npos);
+    CHECK(block.find("rtRandom(rng) * light.storey.y") != std::string::npos);
+    CHECK(block.find("* light.storey.x") != std::string::npos);
+    // The fixture is never passed by: its faces still stop the ray.
+    CHECK(trace.find("rtFixtureFacesOnly = true;", toLight) != std::string::npos);
 }
