@@ -10546,8 +10546,11 @@ void registerSystemLuaAPI(lua_State* L) {
                 // running.
                 {"GetRuneCooldown", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
-            if (!gh || id < 1 || id > game::runes::kMax) return 0;
+            // A slot past the eight is the error 'Invalid slot', asked before
+            // the player is (0x00613053 -> 0x00613113); no player, nothing.
+            const long long id = luaTruncated(lua_tonumber(L, 1));
+            if (id < 1 || id > game::runes::kMax) return luaL_error(L, "Invalid slot");
+            if (!gh || !gh->isInWorld()) return 0;
             const auto& runes = gh->getPlayerRunes();
             const auto i = static_cast<size_t>(id) - 1;
             const float rate = gh->runeRegen()[runes.type[i] & 3];
@@ -10558,9 +10561,13 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // GetRuneCount(id) (0x00613140): 1 for a ready rune, else 0.
                 {"GetRuneCount", [](lua_State* L) -> int {
+            // No player: nothing, before the slot is looked at; then the
+            // usage line for a non-number; a slot past the eight, nothing.
             auto* gh = getGameHandler(L);
-            const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
-            if (!gh || id < 1 || id > game::runes::kMax) return 0;
+            if (!gh || !gh->isInWorld()) return 0;
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetRuneCount(slot)");
+            const long long id = luaTruncated(lua_tonumber(L, 1));
+            if (id < 1 || id > game::runes::kMax) return 0;
             lua_pushnumber(L, (gh->getPlayerRunes().ready & (1u << (id - 1))) != 0 ? 1.0 : 0.0);
             return 1;
         }},

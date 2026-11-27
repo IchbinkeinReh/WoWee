@@ -1183,6 +1183,20 @@ TEST_CASE("GetSkillLineInfo of no skill answers as the client", "[replay][interf
     CHECK(ui.is("not pcall(GetSkillLineInfo)"));
 }
 
+// 0x00613020 / 0x00613140: eight rune slots; past them GetRuneCooldown is
+// the error 'Invalid slot', GetRuneCount nothing; a non-number its usage line.
+TEST_CASE("rune slots as the client checks them", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("(function() local ok, e = pcall(GetRuneCooldown, 9) return not ok and e:find('Invalid slot') ~= nil end)()"));
+    CHECK(ui.is("not pcall(GetRuneCooldown, 0)"));
+    CHECK(ui.is("select('#', GetRuneCooldown(8)) == 3"));
+    CHECK(ui.is("(function() local ok, e = pcall(GetRuneCount, 'x') "
+                "return not ok and e:find('Usage: GetRuneCount%(slot%)') ~= nil end)()"));
+    CHECK(ui.is("select('#', GetRuneCount(9)) == 0 and select('#', GetRuneCount(8)) == 1"));
+}
+
 // P73: by name as the client compares names - the groups (0x005d1710) and the
 // factions in each (0x005d02f0), these before the groups in it. The table's
 // places are the other way round, and a byte compare puts the accented last.
