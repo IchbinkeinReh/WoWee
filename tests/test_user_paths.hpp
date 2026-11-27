@@ -19,6 +19,14 @@
 #include <system_error>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <shlobj.h>
+#else
+#include <pwd.h>
+#include <unistd.h>
+#endif
+
 namespace wowee::test {
 
 namespace fs = std::filesystem;
@@ -28,10 +36,30 @@ inline std::string envOr(const char* name) {
     return v ? std::string(v) : std::string();
 }
 
+#ifdef _WIN32
+/// A shell folder as the user's profile names it (SHGetFolderPathW reads the
+/// registry, not APPDATA/LOCALAPPDATA, which ctest has pointed at a sandbox).
+inline std::string profileFolder(int csidl) {
+    wchar_t buf[MAX_PATH] = {};
+    if (FAILED(SHGetFolderPathW(nullptr, csidl, nullptr, SHGFP_TYPE_CURRENT, buf))) return {};
+    return fs::path(buf).string();
+}
+#else
+/// The user's home as the password database has it (not HOME, which ctest
+/// has pointed at a sandbox).
+inline std::string profileHome() {
+    if (const passwd* pw = getpwuid(getuid()); pw && pw->pw_dir) return pw->pw_dir;
+    return {};
+}
+#endif
+
 /// The folders the client keeps per user - its config root, its data and log
-/// folders - as the environment names them for the player. Under ctest the
-/// environment is already the sandbox's, so the configure step hands the real
-/// ones over in WOWEE_TEST_REAL_USER_ROOTS (separated by |).
+/// folders - for the player. Under ctest the environment is already the
+/// sandbox's, so the configure step hands the real ones over in
+/// WOWEE_TEST_REAL_USER_ROOTS (separated by |); where that came out empty (a
+/// configure from a shell without APPDATA/LOCALAPPDATA/HOME) the operating
+/// system's own record of the user's folders is asked, never the environment
+/// the run was given - that was the sandbox compared with itself.
 inline std::vector<fs::path> realUserRoots() {
     std::vector<fs::path> roots;
     const std::string given = envOr("WOWEE_TEST_REAL_USER_ROOTS");
@@ -47,10 +75,10 @@ inline std::vector<fs::path> realUserRoots() {
         return roots;
     }
 #ifdef _WIN32
-    if (const std::string a = envOr("APPDATA"); !a.empty()) roots.push_back(fs::path(a) / "wowee");
-    if (const std::string l = envOr("LOCALAPPDATA"); !l.empty()) roots.push_back(fs::path(l) / "Wowee");
+    if (const std::string a = profileFolder(CSIDL_APPDATA); !a.empty()) roots.push_back(fs::path(a) / "wowee");
+    if (const std::string l = profileFolder(CSIDL_LOCAL_APPDATA); !l.empty()) roots.push_back(fs::path(l) / "Wowee");
 #else
-    if (const std::string h = envOr("HOME"); !h.empty()) {
+    if (const std::string h = profileHome(); !h.empty()) {
         roots.push_back(fs::path(h) / ".wowee");
         roots.push_back(fs::path(h) / ".local" / "share" / "wowee");
         roots.push_back(fs::path(h) / ".local" / "state" / "wowee");

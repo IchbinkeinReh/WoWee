@@ -17,14 +17,25 @@
 set(WOWEE_TEST_SANDBOX_ROOT "${CMAKE_BINARY_DIR}/test_sandbox")
 
 # The player's folders as this configure sees them: what the guard watches.
+# A shell without APPDATA/LOCALAPPDATA (a bare MSYS2 login) still has the
+# profile folder; the tests ask the OS themselves when this comes out empty
+# (tests/test_user_paths.hpp).
 set(_wowee_real_roots "")
 if(WIN32)
-    if(DEFINED ENV{APPDATA})
-        file(TO_CMAKE_PATH "$ENV{APPDATA}/wowee" _r)
+    set(_appdata "$ENV{APPDATA}")
+    set(_localappdata "$ENV{LOCALAPPDATA}")
+    if(NOT _appdata AND DEFINED ENV{USERPROFILE})
+        set(_appdata "$ENV{USERPROFILE}/AppData/Roaming")
+    endif()
+    if(NOT _localappdata AND DEFINED ENV{USERPROFILE})
+        set(_localappdata "$ENV{USERPROFILE}/AppData/Local")
+    endif()
+    if(_appdata)
+        file(TO_CMAKE_PATH "${_appdata}/wowee" _r)
         list(APPEND _wowee_real_roots "${_r}")
     endif()
-    if(DEFINED ENV{LOCALAPPDATA})
-        file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}/Wowee" _r)
+    if(_localappdata)
+        file(TO_CMAKE_PATH "${_localappdata}/Wowee" _r)
         list(APPEND _wowee_real_roots "${_r}")
     endif()
 elseif(DEFINED ENV{HOME})

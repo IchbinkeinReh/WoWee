@@ -36,6 +36,14 @@ void requireOutsideRealRoots(const std::filesystem::path& p, const char* what) {
 TEST_CASE("a test's per-user folders are none of the player's", "[user_paths]") {
     CHECK(std::getenv("WOWEE_TEST_SANDBOX") != nullptr);
     REQUIRE_FALSE(realUserRoots().empty());
+    // The player's folders are not the sandbox's own: compared with itself
+    // every check below would fail (or, the other way round, pass for nothing).
+    if (const char* box = std::getenv("WOWEE_TEST_SANDBOX")) {
+        for (const auto& root : realUserRoots()) {
+            INFO("the player's folder " << root.string() << ", the sandbox " << box);
+            CHECK_FALSE(pathIsUnder(root, box));
+        }
+    }
 
     const std::string config = wowee::core::getConfigRoot();
     requireOutsideRealRoots(config, "getConfigRoot()");
