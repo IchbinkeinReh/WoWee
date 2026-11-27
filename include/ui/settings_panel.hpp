@@ -117,8 +117,9 @@ public:
     int pendingRtPointRays = 1;
     int pendingRtBounceRays = 1;
     /// Settings > Debug Graphics: the view the surfaces show instead
-    /// (0-10, Renderer::setRtDebugView) and the lighting's strengths in
-    /// percent (Renderer::LightingTune).
+    /// (0-18, Renderer::setRtDebugView; 18 the volumetric light alone) and
+    /// the lighting's strengths in percent (Renderer::LightingTune). The view
+    /// is for the session only - never saved.
     int pendingDbgView = 0;
     int pendingDbgAmbient = 100;
     int pendingDbgSun = 100;
@@ -163,9 +164,6 @@ public:
     int pendingDbgVlSun = 200;
     int pendingDbgVlMoon = 200;
     int pendingDbgVlLights = 200;
-    /// Debug Glow: the volumetric light alone over black, for the session
-    /// only (Renderer::setVolumetricLightDebugView) - never saved.
-    bool pendingDbgVlOnly = false;
     int pendingDbgGlowAnim = 100;      ///< Debug Glow: glow colour animation strength, percent
     int pendingDbgLightCountLimit = 512;
     int pendingRtParticleLights = 1;  ///< lights per particle emitter (rt_particle_lights.hpp)

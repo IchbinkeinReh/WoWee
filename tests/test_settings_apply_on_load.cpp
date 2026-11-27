@@ -526,14 +526,13 @@ TEST_CASE("Super-Ultra alone sets the Debug pages, and never the debug view", "[
         CHECK(std::string(r->category).rfind("Debug", 0) == 0);
         // A diagnostic picture would make the game look broken.
         CHECK(std::string(e.key) != "dbgview");
-        CHECK(std::string(e.key) != "dbgvlonly");
     }
     // Every Debug-page row the settings file keeps (all but the view).
     for (std::size_t i = 0; i < count; ++i) {
         if (std::string(schema[i].category).rfind("Debug", 0) != 0) continue;
         const std::string key = schema[i].key;
         INFO(key);
-        CHECK((key == "dbgview" || key == "dbgvlonly" || keys.count(key) == 1));
+        CHECK((key == "dbgview" || keys.count(key) == 1));
     }
     // The panel applies them under Super-Ultra only.
     const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
@@ -681,8 +680,8 @@ TEST_CASE("every setting the panel binds is written down and read back", "[setti
     // Kept for the session on purpose: a debug view saved came back at the
     // next start and was taken for a lighting bug (the "Probe light ratio"
     // view drawing a night outdoors flat grey).
-    // The volumetric light's debug view (dbgvlonly, U23) likewise.
-    const std::set<std::string> sessionOnly = {"dbgview", "dbgvlonly"};
+    // The volumetric light's debug view (U23) is one of its entries.
+    const std::set<std::string> sessionOnly = {"dbgview"};
     for (const auto& [key, field] : bindings) {
         if (sessionOnly.count(key)) {
             INFO(key << " is meant to last only for the session, but is saved");

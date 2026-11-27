@@ -266,7 +266,7 @@ bool VolumetricLight::ensureCompositePipeline() {
         .setRenderPass(ctx_->getOverlayRenderPass())
         .setDynamicStates({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
         .build(device, ctx_->getPipelineCache());
-    // The debug view "VL only" (dbgvlonly): the light over black, written
+    // The debug view "Volumetric light only" (dbgview, Renderer::kVolumetricLightOnlyView): the light over black, written
     // over the picture without a blend.
     VkPipelineColorBlendAttachmentState over{};
     over.blendEnable = VK_FALSE;

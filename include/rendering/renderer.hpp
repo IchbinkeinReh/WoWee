@@ -959,13 +959,13 @@ public:
     /// openings and the glow round lamps, fires and lava. 0 off, 1 low, 2
     /// high (volumetric_light::Quality). See VolumetricLight.
     void setVolumetricLightQuality(int quality);
-    /// The debug view "VL only" (Debug Glow, dbgvlonly): the volumetric
-    /// light alone over black, ten times as bright
+    /// Whether the debug view "Volumetric light only" (Debug Graphics, "Show
+    /// instead of the picture", kVolumetricLightOnlyView) is on screen: the
+    /// volumetric light alone over black, ten times as bright
     /// (volumetric_light::debugViewColor), the interface and minimap as they
     /// are. Nothing while the volumetric light is off. The names over heads
     /// are world text: while the view is shown they are left out, or their
     /// depth ended the light's rays and they stood black in it.
-    void setVolumetricLightDebugView(bool on) { volumetricLightDebugView_ = on; }
     [[nodiscard]] bool volumetricLightDebugViewShown() const;
     /// Ray traced lighting: 0 off, 1 sun shadows, 2 + ambient occlusion,
     /// 3 + multi-bounce diffuse from a probe volume. See RtLighting.
@@ -1064,7 +1064,12 @@ public:
     /// 1-4 the probe volume's, 5 the traced sun, 6 the point lights, 7 the
     /// traced occlusion, 8 the length of the traced history, 9 how well each
     /// pixel found its own surface in the trace. WOWEE_GI_DEBUG, when set, wins.
-    void setRtDebugView(int view) { rtDebugView_ = view; }
+    /// kVolumetricLightOnlyView is no traced view: it shows the volumetric
+    /// light alone (volumetricLightDebugViewShown) and the surfaces as they are.
+    void setRtDebugView(int view) {
+        volumetricLightDebugView_ = view == kVolumetricLightOnlyView;
+        rtDebugView_ = volumetricLightDebugView_ ? 0 : view;
+    }
     /// The view of the lights' kinds (rt_light_kinds.hpp): whether it is
     /// shown, and this frame's traced lights - where each is and what gave
     /// it (rt_lights::Source) - for the interface's dots and legend.
@@ -1563,6 +1568,9 @@ public:
     // The reflection as the scene's triangles give it, the frame's colour
     // not taken where the hit is on screen: what is traced, and textured.
     static constexpr int kRtWaterTracedOnlyView = 17;
+    /// The volumetric light alone over black, ten times as bright (the last
+    /// entry of "Show instead of the picture"; for the session only).
+    static constexpr int kVolumetricLightOnlyView = 18;
     void setRtWater(bool on) { rtWater_ = on; }
     /// The swimmer's small waves on the traced water (swim_wave.hpp).
     void setRtSwimWaves(bool on) { rtSwimWaves_ = on; }

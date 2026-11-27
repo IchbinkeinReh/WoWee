@@ -489,7 +489,7 @@ constexpr SettingDesc kSchema[] = {
     // are the user's tuned look (some lamps and fires stronger and farther
     // reaching, building lights and glow weaker, darker interiors and
     // shadows). Two pages, as one does not fit in two columns.
-    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 17, 1, "Debug Graphics", "View",
+    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 18, 1, "Debug Graphics", "View",
      "Replace the picture with one part of the ray traced lighting.\n"
      "The traced views work in every ray tracing mode; the probe views\n"
      "need Shadows, occlusion and bounce light; what a building's baked\n"
@@ -510,13 +510,17 @@ constexpr SettingDesc kSchema[] = {
      "legend naming the colours. The ray traced water's views show its\n"
      "reflection alone, what comes through it alone, and the reflection\n"
      "as traced - not the picture's own colour where it is on screen.\n"
-     "WOWEE_GI_DEBUG, when set, wins.",
+     "Volumetric light only shows the light the volumetric light adds,\n"
+     "over black and ten times as bright so its faint light shows (1%\n"
+     "of white shows as 10%), bright light brought softly under white;\n"
+     "the interface and the minimap stay; nothing with the volumetric\n"
+     "light off (Details). WOWEE_GI_DEBUG, when set, wins.",
      "Off|Probe light ratio (grey = open field)|Probe irradiance|Ambient with the probes|"
      "Probe cascades|Traced sun visibility|Point lights' light|Traced occlusion|"
      "Traced history length|How each pixel found its traced surface|Baked shade|Depth edges|"
      "Point light added|Baked colour factor|Kind of each light|"
      "Ray traced water: reflection|Ray traced water: what comes through|"
-     "Ray traced water: reflection, traced only", 0},
+     "Ray traced water: reflection, traced only|Volumetric light only (x10)", 0},
     {"dbgsplitrt", "Split: left half ray traced", SettingKind::Bool, 0, 0, 0, "Debug Graphics", "",
      "Draw the left half of the picture with the ray traced lighting\n"
      "and the right half as without it, to compare the two side by\n"
@@ -674,13 +678,6 @@ constexpr SettingDesc kSchema[] = {
      "How much light lamps, fires and lava give the air around them\n"
      "with the volumetric light on (Details). 100 the base, 0 none,\n"
      "400 four times. Default 200.", "", 200, "volumetriclight"},
-    // The debug view of the volumetric light (U23): for the session only,
-    // as the Debug Graphics view (dbgview) - never saved.
-    {"dbgvlonly", "Volumetric light only", SettingKind::Bool, 0, 0, 0, "Debug Glow", "",
-     "Shows only the light the volumetric light adds, over black: ten\n"
-     "times as bright so its faint light shows (1% of white shows as\n"
-     "10%), bright light brought softly under white. The interface\n"
-     "and the minimap stay. For this session only.", "", 0, "volumetriclight"},
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"

@@ -301,13 +301,6 @@ constexpr SettingGerman kGerman[] = {
      "Wie viel Licht der Mond der Luft gibt, wenn das volumetrische Licht an ist (Details). "
      "100 die Grundstärke, 0 keines, 400 das Vierfache. Standard 200.",
      nullptr, nullptr, nullptr},
-    {"dbgvlonly",
-     "VL nur Zusatzlicht",
-     "Zeigt nur das Licht, das das volumetrische Licht hinzufügt, auf Schwarz: zehnfach "
-     "verstärkt, damit auch schwaches Licht sichtbar wird (1 % Weiß erscheint als 10 %), "
-     "helles Licht weich unter Weiß gehalten. Oberfläche und Minikarte bleiben. Nur für "
-     "diese Sitzung, wird nicht gespeichert.",
-     nullptr, nullptr, nullptr},
     {"dbgvllights",
      "VL Lichter %",
      "Wie viel Licht Lampen, Feuer und Lava der Luft um sich geben, wenn das volumetrische "
@@ -391,13 +384,17 @@ constexpr SettingGerman kGerman[] = {
      "Gebäude, Einheit, Modell, Partikel - mit einem Punkt an jedem Licht und einer Legende der "
      "Farben. Die Ansichten des Wassers mit Raytracing zeigen seine Spiegelung allein, was "
      "hindurchkommt allein, und die Spiegelung wie verfolgt - nicht die eigene Farbe des Bildes, "
-     "wo sie auf dem Schirm ist. WOWEE_GI_DEBUG, wenn gesetzt, hat Vorrang.",
+     "wo sie auf dem Schirm ist. Nur volumetrisches Licht zeigt nur das Licht, das das "
+     "volumetrische Licht hinzufügt, auf Schwarz: zehnfach verstärkt, damit auch schwaches "
+     "Licht sichtbar wird (1 % Weiß erscheint als 10 %), helles Licht weich unter Weiß "
+     "gehalten; Oberfläche und Minikarte bleiben; nichts bei ausgeschaltetem volumetrischem "
+     "Licht (Details). WOWEE_GI_DEBUG, wenn gesetzt, hat Vorrang.",
      "Aus|Verhältnis des Sondenlichts (grau = offenes Feld)|Sondeneinstrahlung|Umgebungslicht mit "
      "Sonden|Sondenstufen|Verfolgte Sonnensicht|Licht der Punktlichter|Verfolgte Verdeckung|Länge "
      "des verfolgten Verlaufs|Wie jedes Pixel seine Fläche fand|Eingebrannte "
      "Schattierung|Tiefenkanten|Hinzugefügtes Punktlicht|Faktor der eingebrannten Farbe|Art jedes "
      "Lichts|Wasser mit Raytracing: Spiegelung|Wasser mit Raytracing: was hindurchkommt|Wasser mit "
-     "Raytracing: Spiegelung, nur verfolgt", nullptr, nullptr},
+     "Raytracing: Spiegelung, nur verfolgt|Nur volumetrisches Licht (x10)", nullptr, nullptr},
     {"dbgambient",
      "Umgebungslicht (%)",
      "Das Umgebungslicht der Zone, die Grundlage, von der jede Fläche vor Sonne und Lampen "

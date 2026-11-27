@@ -127,7 +127,7 @@ public:
         /// leaves it out (ScreenEffects::FrameInputs::keepRect).
         glm::vec4 keepRect{0.0f};
 
-        /// The debug view "VL only" (dbgvlonly): the light alone over black
+        /// The debug view "Volumetric light only" (dbgview, Renderer::kVolumetricLightOnlyView): the light alone over black
         /// (volumetric_light::debugViewColor).
         bool debugView = false;
     };

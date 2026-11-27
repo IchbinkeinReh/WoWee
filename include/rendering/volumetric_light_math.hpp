@@ -358,7 +358,7 @@ inline bool historyDepthAgrees(float expected, float kept) {
     return std::abs(expected - kept) <= 0.05f * std::max(expected, kept) + 0.1f;
 }
 
-/// The debug view "VL only" (dbgvlonly): the volumetric light alone over
+/// The debug view "Volumetric light only" (dbgview, Renderer::kVolumetricLightOnlyView): the volumetric light alone over
 /// black, ten times as bright so its faint light shows, brought under white
 /// by the composite's own shoulder (compositeShoulder).
 inline constexpr float kDebugViewGain = 10.0f;

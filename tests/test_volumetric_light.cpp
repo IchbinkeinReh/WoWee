@@ -409,31 +409,56 @@ TEST_CASE("volumetric light: the shaders say what the arithmetic says", "[volume
     CHECK(cpp.find("volumetric_light_temporal.comp.spv") != std::string::npos);
 }
 
-TEST_CASE("volumetric light: the debug view is a Debug Glow row for the session only",
+TEST_CASE("volumetric light: the debug view is the last entry of the Debug Graphics view",
           "[volumetric_light][settings]") {
-    const auto* r = row("dbgvlonly");
+    // User 2026-11-27: not a check box of its own but one of the views
+    // "Show instead of the picture" offers, for the session like the others.
+    const auto split = [](const std::string& s) {
+        std::vector<std::string> out(1);
+        for (char c : s) {
+            if (c == '|') out.emplace_back();
+            else out.back() += c;
+        }
+        return out;
+    };
+    const auto* r = row("dbgview");
     REQUIRE(r != nullptr);
-    CHECK(r->kind == wowee::ui::SettingKind::Bool);
-    CHECK(r->defaultValue == 0.0f);
-    CHECK(std::string(r->category) == "Debug Glow");
-    CHECK(std::string(r->enabledWhen) == "volumetriclight");
-    CHECK(std::string(r->tooltip).find("ten") != std::string::npos);
-    const auto* de = wowee::ui::germanSettingText("dbgvlonly");
+    CHECK(r->kind == wowee::ui::SettingKind::Enum);
+    CHECK(r->maxValue == 18.0f);
+    const auto en = split(r->choices);
+    REQUIRE(en.size() == 19);
+    CHECK(en[18] == "Volumetric light only (x10)");
+    CHECK(std::string(r->tooltip).find("ten times") != std::string::npos);
+    const auto* de = wowee::ui::germanSettingText("dbgview");
     REQUIRE(de != nullptr);
-    REQUIRE(de->label != nullptr);
-    CHECK(std::string(de->label) == "VL nur Zusatzlicht");
-    CHECK(characters(de->label) <= 24);
+    REQUIRE(de->choices != nullptr);
+    const auto deChoices = split(de->choices);
+    REQUIRE(deChoices.size() == 19);
+    CHECK(deChoices[18] == "Nur volumetrisches Licht (x10)");
     REQUIRE(de->tooltip != nullptr);
-    // Says how it is scaled.
     CHECK(std::string(de->tooltip).find("zehnfach") != std::string::npos);
-    // Bound, applied live, and never written to the settings file.
+    // The old check box is gone: no row, no German text, no binding, no
+    // field, not in the list applied at startup.
+    CHECK(row("dbgvlonly") == nullptr);
+    CHECK(wowee::ui::germanSettingText("dbgvlonly") == nullptr);
     const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
-    CHECK(panel.find("{.key = \"dbgvlonly\", .asBool = &SettingsPanel::pendingDbgVlOnly}") != std::string::npos);
-    CHECK(panel.find("renderer->setVolumetricLightDebugView(pendingDbgVlOnly);") != std::string::npos);
-    CHECK(panel.find("key == \"dbgvlonly\"") != std::string::npos);
+    const std::string panelHeader = wowee::test::slurp("include/ui/settings_panel.hpp");
+    CHECK(panel.find("dbgvlonly") == std::string::npos);
+    CHECK(panel.find("pendingDbgVlOnly") == std::string::npos);
+    CHECK(panelHeader.find("pendingDbgVlOnly") == std::string::npos);
     const std::string io = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
-    CHECK(io.find("pendingDbgVlOnly") == std::string::npos);
-    for (const auto& e : wowee::ui::kSuperUltraDebugValues) CHECK(std::string(e.key) != "dbgvlonly");
+    CHECK(io.find("dbgvlonly") == std::string::npos);
+    // The view number reaches the renderer as the others do; the renderer
+    // turns this one into the volumetric light's view and traces no view.
+    CHECK(panel.find("renderer->setRtDebugView(pendingDbgView);") != std::string::npos);
+    const std::string rendererHeader = wowee::test::slurp("include/rendering/renderer.hpp");
+    CHECK(rendererHeader.find("static constexpr int kVolumetricLightOnlyView = 18;") != std::string::npos);
+    CHECK(rendererHeader.find("volumetricLightDebugView_ = view == kVolumetricLightOnlyView;") != std::string::npos);
+    CHECK(rendererHeader.find("rtDebugView_ = volumetricLightDebugView_ ? 0 : view;") != std::string::npos);
+    CHECK(rendererHeader.find("setVolumetricLightDebugView") == std::string::npos);
+    // Its gain is the one it had.
+    const std::string cppVl = wowee::test::slurp("src/rendering/volumetric_light.cpp");
+    CHECK(cppVl.find("volumetric_light::kDebugViewGain") != std::string::npos);
     // Drawn after the eye's exposure, under the interface.
     const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
     const size_t exposure = renderer.find("eyeAdaptation_->composite(currentCmd");
