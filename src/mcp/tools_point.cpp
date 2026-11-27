@@ -459,7 +459,20 @@ void interact(ToolContext& context, const json& args, Script& script) {
     auto walked = std::make_shared<json>();
     const auto within = static_cast<float>(args.value("within", 4.0));
     script.then(wantKeysFree(context));
-    if (args.value("approach", true)) {
+    // A fishing bobber is right-clicked where it floats: walking up to it
+    // breaks the channel that holds it (tester's wish), so approach is off
+    // for one unless asked for.
+    bool bobber = false;
+    if (auto* gh = context.app.getGameHandler()) {
+        const auto e = gh->getEntityManager().getEntity(guid);
+        if (e && e->getType() == game::ObjectType::GAMEOBJECT) {
+            const auto* info =
+                gh->getCachedGameObjectInfo(static_cast<const game::GameObject&>(*e).getEntry());
+            constexpr uint32_t kFishingNode = 17;   // GAMEOBJECT_TYPE_FISHINGNODE
+            bobber = info && info->type == kFishingNode;
+        }
+    }
+    if (args.value("approach", !bobber)) {
         struct Walk {
             static Script::Fn make(ToolContext& context, std::function<std::optional<glm::vec3>()> here,
                                    std::shared_ptr<json> walked, float within, int left) {
@@ -575,7 +588,8 @@ void addPointTools(Toolbox& box) {
         target));
     Tool i = handsTool(
         "interact",
-        "Right-click an entity in the world: talk to, loot, use, attack. Walks up to it first unless approach is false.",
+        "Right-click an entity in the world: talk to, loot, use, attack. Walks up to it first unless approach is false "
+        "(a fishing bobber: clicked where it floats unless approach is true).",
         object({optional("guid", guid("0x...")), optional("name", text("the nearest with this in its name", 64)),
                 optional("state", choice("of those with the name", {"alive", "dead", "lootable"})),
                 optional("unit", text("target, npc, ...", 16)), optional("approach", flag("true by default")),

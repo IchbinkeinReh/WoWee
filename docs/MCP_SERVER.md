@@ -80,7 +80,7 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 | Tool | |
 |---|---|
 | `move`, `jump`, `stop`, `turn`, `walk_to`, `camera` | the movement keys, the turn keys or a drag, the wheel. `walk_to` plans a way over the loaded ground and walks it by keys, jumping or stepping back where it is stuck |
-| `target`, `interact` | a click on an entity in the world, where the client's own picker finds it - turned to, and looked at from elsewhere, where it is out of the window; `interact` walks up to it first. `target` with `which` presses the key bound to it, or types the slash command where none is |
+| `target`, `interact` | a click on an entity in the world, where the client's own picker finds it - turned to, and looked at from elsewhere, where it is out of the window; `interact` walks up to it first (a fishing bobber it clicks where it floats). `target` with `which` presses the key bound to it, or types the slash command where none is |
 | `click_ui`, `hover`, `mouse` | the mouse on a frame by name, or by pixels. A button of a dialog (StaticPopup1-4) is pressed only with `popup` naming the dialog's `which` (`state` lists it under popups), and not when another dialog shows |
 | `key`, `binding`, `type_text`, `slash` | a key, the key a command is bound to, text into an edit box, a slash command through the chat box |
 | `use_action`, `use_item` | an action button by its key or a click, an item in its bag |

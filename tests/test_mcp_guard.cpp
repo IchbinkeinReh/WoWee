@@ -220,6 +220,10 @@ TEST_CASE("what cannot be had back is not done, whatever is allowed", "[mcp][gua
     CHECK(judgeSend("CMSG_PET_ACTION", abandon.b, charming).allowed());
     charming.charmGuid = 0xF140000000000002ULL;
     CHECK(judgeSend("CMSG_PET_ACTION", abandon.b, charming).kind == Verdict::Kind::Never);
+    // A summoned pet that is no hunter's is only unsummoned: let go of.
+    GuardContext summoned = context(kSocialAll);
+    summoned.summonedPetGuid = 0xF140000000000001ULL;
+    CHECK(judgeSend("CMSG_PET_ACTION", abandon.b, summoned).allowed());
     Bytes attack;
     attack.u64(0xF140000000000001ULL).u32(0x07000002u).u64(kWolf);
     CHECK(sends("CMSG_PET_ACTION", attack));

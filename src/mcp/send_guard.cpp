@@ -313,7 +313,10 @@ Verdict judgeSend(std::string_view opcode, std::span<const uint8_t> payload, con
         if ((action >> 24) == kCommand && (action & 0x00FFFFFFu) == kAbandon) {
             // A charmed creature let go of is the realm's again, not a pet
             // lost (tester's wish: PetDismiss of an enslaved demon).
-            if (pet == 0 || pet != context.charmGuid) return never("abandoning a pet cannot be had back");
+            // A summoned pet that is no hunter's is only unsummoned (tester's
+            // wish: PetDismiss of the warlock's imp).
+            if (pet == 0 || (pet != context.charmGuid && pet != context.summonedPetGuid))
+                return never("abandoning a pet cannot be had back");
             return {};
         }
         return judgeAim(guid, context);

@@ -47,6 +47,12 @@ struct GuardContext {
     /// The creature the character charms (UNIT_FIELD_CHARM), 0 for none: let
     /// go of, it is not lost for good.
     uint64_t charmGuid = 0;
+    /// The character's summoned pet where it is no hunter's (a warlock's
+    /// demon, a death knight's ghoul, a mage's elemental), 0 otherwise: the
+    /// realm only unsummons such a pet on COMMAND_ABANDON, a hunter's pet it
+    /// deletes (AzerothCore HandlePetActionHelper: PET_SAVE_AS_DELETED for
+    /// HUNTER_PET only).
+    uint64_t summonedPetGuid = 0;
     /// Whether a guid is another player's pet, totem or guardian.
     std::function<bool(uint64_t)> belongsToOtherPlayer;
 };

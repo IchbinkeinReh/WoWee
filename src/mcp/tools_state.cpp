@@ -12,6 +12,7 @@
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
 #include "game/zone_area.hpp"
+#include "mcp/ui_view.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/lua_json.hpp"
 #include "mcp/schema.hpp"
@@ -256,6 +257,8 @@ json stateOf(ToolContext& context, const json& args) {
         errors.push_back({{"seq", e.seq}, {"text", e.value.text.substr(0, 200)}});
     }
     out["recent_errors"] = std::move(errors);
+    // The dialogs up, with their which (docs; `ui` lists them too).
+    if (json p = popups(context); !p.empty()) out["popups"] = std::move(p);
     out["settings_changed"] = settingsChanged(context);
     if (json held = settingsHeld(context); !held.empty()) out["settings_not_sent_up"] = std::move(held);
     out["cursors"] = {{"log", context.log.last()},
