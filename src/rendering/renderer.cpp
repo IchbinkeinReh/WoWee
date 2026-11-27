@@ -7477,6 +7477,7 @@ void Renderer::recordRtLighting() {
                                            .attenuationStart = l.attenuationStart,
                                            .attenuationEnd = l.attenuationEnd,
                                            .flameShare = l.flameShare,
+                                           .cardPulse = l.cardPulse,
                                            .group = l.group,
                                            .source = static_cast<uint8_t>(l.source)});
         }

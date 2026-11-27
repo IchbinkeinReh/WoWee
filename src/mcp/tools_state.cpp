@@ -313,6 +313,7 @@ json rtLightsOf(ToolContext& context, const json& args) {
                   {"rank", e.rank}};
         if (e.merged) l["merged"] = true;
         if (e.flameShare >= 0.0f) l["flame_share"] = rounded(e.flameShare, 3);
+        if (e.cardPulse != 1.0f) l["card_pulse"] = rounded(e.cardPulse, 3);
         if (e.group != 0) {
             char g[16];
             std::snprintf(g, sizeof(g), "0x%08x", e.group);
@@ -340,7 +341,7 @@ void addStateTools(Toolbox& box) {
     box.push_back(lookTool("rt_lights",
                            "The ray traced point lights near the camera as the last frame had them, nearest first: "
                            "kind, model, place, distance, final strength and colour, reach, a fire's visible flame "
-                           "share, and whether the light budget kept it (rank) or merged it into its source's one "
+                           "share and glow-card pulse, and whether the light budget kept it (rank) or merged it into its source's one "
                            "light; with the eye adaptation's exposure. Empty without ray tracing.",
                            schema::object({schema::optional("radius",
                                                             schema::number("yards round the camera, at most 60", 1, 60))}),

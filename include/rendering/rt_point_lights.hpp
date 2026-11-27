@@ -73,6 +73,9 @@ struct PointLight {
     /// A fire's light: the share of its flames drawn this moment
     /// (visibleFlameShare), for the diagnostics; below 0 for any other.
     float flameShare = -1.0f;
+    /// What its glow card's pulse (rt_glow_pulse.hpp) multiplied it by, for
+    /// the diagnostics; 1 where none did.
+    float cardPulse = 1.0f;
 };
 
 /// What the shader reads per light (std430): position and end, colour and

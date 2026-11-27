@@ -3115,6 +3115,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             }
             // In the colour of its glass and flames (rt_lights::lampColor).
             l.color *= lampTint(*model) * fade * cardPulse;
+            l.cardPulse = cardPulse;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
             // Not a game object's: a server's object (Hallow's End's lit
@@ -3136,7 +3137,10 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             // In the colour of its own flames (rt_fire_color.hpp), as strong as
             // what of them is drawn this moment (visibleFlameShare: the
             // twinkle's sizes; the user's answer to V417).
-            l.flameShare = rt_lights::visibleFlameShare(model->particleEmitters, inst.particles);
+            // WOWEE_RT_FLAME_SHARE=0: the share left at 1, to tell whether
+            // it is what makes fires' light jump (T443) or fall off near (U24).
+            static const bool flameShare = core::envFlagEnabled("WOWEE_RT_FLAME_SHARE", true);
+            l.flameShare = flameShare ? rt_lights::visibleFlameShare(model->particleEmitters, inst.particles) : 1.0f;
             l.color *= fireTint(*model) * l.flameShare;
             // At its flames where it has any (rt_lights::flameCentre).
             if (const auto flame = rt_lights::flameCentre(
@@ -3146,6 +3150,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 l.position = *flame;
             }
             l.color *= fade * cardPulse;
+            l.cardPulse = cardPulse;
             pushAlongParticles(l, *model, inst, out);
             continue;
         }
@@ -3220,6 +3225,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             if (cardPulse != 1.0f && !rt_lights::trackMoves(light.diffuseColor) &&
                 !rt_lights::trackMoves(light.diffuseIntensity)) {
                 l->color *= cardPulse;
+                l->cardPulse = cardPulse;
             }
             // Carried: it meets the fixtures, as a character's own lights do.
             l->carried = inst.rtMoved;

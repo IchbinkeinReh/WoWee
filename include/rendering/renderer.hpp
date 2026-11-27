@@ -1076,6 +1076,7 @@ public:
         float attenuationStart = 0.0f;
         float attenuationEnd = 0.0f;
         float flameShare = -1.0f;
+        float cardPulse = 1.0f;
         uint32_t group = 0;
         uint8_t source = 0;
         int rank = -1;
