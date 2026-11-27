@@ -7494,6 +7494,11 @@ void Renderer::recordRtLighting() {
                                 rt_lights::lightLimit(lightingTune_.lightCountLimit),
                                 [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
         rtLightDiag_.kept = lightScratch.size();
+        // selectLights merges a source's lights only where there are more
+        // than the limit; within it a light not kept was dropped (too faint,
+        // out of the view), not merged - V591 saw a cauldron's lights called
+        // merged at a limit of 2048.
+        const bool merging = rtLightDiag_.gathered > rtLightDiag_.limit;
         for (RtLightDiagEntry& e : rtLightDiag_.lights) {
             for (size_t k = 0; k < lightScratch.size(); ++k) {
                 if (lightScratch[k].position == e.position && lightScratch[k].group == e.group) {
@@ -7501,7 +7506,7 @@ void Renderer::recordRtLighting() {
                     e.merged = false;
                     break;
                 }
-                if (e.group != 0 && lightScratch[k].group == e.group && e.rank < 0) {
+                if (merging && e.group != 0 && lightScratch[k].group == e.group && e.rank < 0) {
                     e.rank = static_cast<int>(k);
                     e.merged = true;
                 }
