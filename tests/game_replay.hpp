@@ -78,6 +78,11 @@ struct GameHandlerTestAccess {
         gh.achievementCategoryCache_[id] = category;
         gh.achievementUiOrderCache_[id] = uiOrder;
     }
+    // Achievement.dbc rows in the file's order, as the loader keeps them.
+    static void setAchievementRows(GameHandler& gh, std::vector<AchievementRow> rows) {
+        gh.achievementRows_ = std::move(rows);
+        gh.achievementCategoriesLoaded_ = true;
+    }
     static void setAchievementCategory(GameHandler& gh, uint32_t id, int32_t parent, bool statistic) {
         GameHandler::AchievementCategoryInfo info;
         info.parentId = parent;

@@ -2395,6 +2395,10 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
             if (it->second.stackCount != val) {
                 it->second.stackCount = val;
                 inventoryChanged = true;
+                if (auto* inv = owner_.getInventoryHandler()) {
+                    const auto* info = owner_.getItemInfo(it->second.entry);
+                    inv->itemStackChanged(block.guid, it->second.entry, info && info->maxStack > 1);
+                }
             }
         } else if (key == itemDurField && isItemInInventory) {
             if (it->second.curDurability != val) {
@@ -2707,7 +2711,10 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         owner_.clearBattlefieldScore();
         // ...and the old player object's end (0x006e1bb0 -> 0x005a7760): the
         // guild bank's slots and flags start again.
-        if (auto* inv = owner_.getInventoryHandler()) inv->resetGuildBankForNewPlayer();
+        if (auto* inv = owner_.getInventoryHandler()) {
+            inv->resetGuildBankForNewPlayer();
+            inv->forgetItemsAwaitingRealm();
+        }
         // The time played, asked for quietly (0x006e6b40): what is refundable
         // and what an item says of it count from the answer. The earlier
         // clients' answer has no byte that keeps it from the chat.

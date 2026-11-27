@@ -7353,12 +7353,19 @@ void registerQuestLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GetNextAchievement(achievementID)");
             auto* gh = getGameHandler(L);
-            const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            // The next id, with true after it when it is earned; nothing for
-            // none (0x005b3ef0).
-            if (!gh || id == 0) return 0;
+            // The id truncated (0x0088b9c0); the next is the FIRST row in
+            // the file's order whose Supercedes is that id - so 0 answers
+            // the first row that follows nothing, and of two rows following
+            // one id the earlier. With true after it when it is earned;
+            // nothing for none (0x005b3ef0).
+            const double d = lua_tonumber(L, 1);
+            const uint32_t id = (d > -2147483649.0 && d < 2147483648.0)
+                                    ? static_cast<uint32_t>(static_cast<int32_t>(d)) : 0x80000000u;
+            if (!gh) return 0;
             gh->ensureAchievementCategoriesLoaded();
-            const uint32_t next = gh->getAchievementSupercededBy(id);
+            uint32_t next = 0;
+            for (const auto& row : gh->getAchievementRows())
+                if (row.previous == id) { next = row.id; break; }
             if (next == 0) return 0;
             lua_pushnumber(L, next);
             if (gh->getEarnedAchievements().count(next) == 0) return 1;

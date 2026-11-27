@@ -352,9 +352,10 @@ static void setCursorType(lua_State* L, CursorType type) {
     // bank's update to free (0x00513800).
     bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
     if (releasedBankSlot && s_guildBankMoveSent) {
-        if (auto* gh = getGameHandler(L))
-            guildBankMovedSlots().push_back({guildBankCursorSlot().tab, guildBankCursorSlot().slot,
-                                             gh->guildBankListCount()});
+        auto* gh = getGameHandler(L);
+        if (auto* inv = gh ? gh->getInventoryHandler() : nullptr)
+            inv->lockGuildBankSlotForMove(static_cast<uint32_t>(guildBankCursorSlot().tab - 1),
+                                          static_cast<uint32_t>(guildBankCursorSlot().slot - 1), s_cursorId);
         releasedBankSlot = false;
         guildBankCursorSlot() = {};
     }
@@ -2098,13 +2099,7 @@ static int lua_PickupGuildBankItem(lua_State* L) {
     // slot is locked by a move on its way (0x005137a0).
     const auto* it = gh->getGuildBankData().slotAt(tab0, slot0);
     if (!it) return 0;
-    {
-        auto& moved = guildBankMovedSlots();
-        const uint32_t lists = gh->guildBankListCount();
-        std::erase_if(moved, [lists](const GuildBankMovedSlot& mv) { return mv.list != lists; });
-        for (const auto& mv : moved)
-            if (mv.tab == tab && mv.slot == slot) return 0;
-    }
+    if (const auto* inv = gh->getInventoryHandler(); inv && inv->guildBankSlotMoveLocked(tab0, slot0)) return 0;
     const uint32_t entry = it->itemEntry;
     // A spell waiting for a target is put down first (0x007fd620 ->
     // 0x00809a60). (12340 then needs the item's Item.dbc row, 0x0065c290,
@@ -2233,26 +2228,66 @@ static bool cursorWireSlot(uint8_t& bag, uint8_t& slot) {
 
 /// An item's lock changing, as 12340 says it (0x00706fe0 / 0x00707020 ->
 /// 0x0060bfe0): ITEM_LOCK_CHANGED, then ITEM_LOCKED or ITEM_UNLOCKED, both
-/// with the same place - a worn slot alone, else container and slot.
-static void announceItemLock(game::GameHandler* gh, const CursorItemSlot& at, bool locked) {
+/// with the same place - a worn slot alone, else container and slot. The
+/// GameUI wrappers around both (0x00513740 / 0x00513770) then rewrite the
+/// action bars' usability at once (0x005aa470): ACTIONBAR_UPDATE_USABLE
+/// right after, when a slot's answer moved with the lock.
+static void announceItemLock(lua_State* L, const CursorItemSlot& at, bool locked) {
+    auto* gh = getGameHandler(L);
     if (!gh || at.slot <= 0) return;
     std::vector<std::string> args;
     if (at.equipped) args = {std::to_string(at.slot)};
     else args = {std::to_string(at.bag), std::to_string(at.slot)};
     gh->fireAddonEvent("ITEM_LOCK_CHANGED", args);
     gh->fireAddonEvent(locked ? "ITEM_LOCKED" : "ITEM_UNLOCKED", args);
+    if (gh->isInWorld() && rescanActionUsability(L)) gh->fireAddonEvent("ACTIONBAR_UPDATE_USABLE", {});
 }
+
+/// The held item a move just went out for (heldItemSent), or 0.
+static uint64_t s_heldItemSent = 0;
 
 /// The item on the cursor put down: its slot is free again (ClearCursor
 /// 0x00519280 case 1 -> 0x00513770 -> 0x00707020), announced before the
 /// cursor's own CURSOR_UPDATE, with the cursor no longer naming the slot.
 static void releaseHeldItemLock(lua_State* L) {
     const CursorItemSlot held = cursorItemSlot();
+    const uint64_t sent = std::exchange(s_heldItemSent, 0);
     if (s_cursorType != CursorType::ITEM || held.slot <= 0) return;
     cursorItemSlot() = {};
     s_cursorSlot = 0;
     s_cursorBag = -1;
-    announceItemLock(getGameHandler(L), held, false);
+    // Put down after a move went out: 12340 drops the cursor without the
+    // unlock (0x006df890 -> ClearCursor(0, 1)) - the item stays locked, now
+    // as one waiting for the realm, and nothing is announced.
+    auto* gh = getGameHandler(L);
+    if (const auto* inv = gh ? gh->getInventoryHandler() : nullptr; inv && inv->itemAwaitsRealm(sent)) {
+        lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
+        auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
+        lua_pop(L, 1);
+        if (engine) engine->adoptItemLock(sent);
+        return;
+    }
+    announceItemLock(L, held, false);
+}
+
+/// A move of the held item went out (0x006df890's send): unless it was
+/// parked for EQUIP_BIND_CONFIRM, the item waits for the realm's answer
+/// locked, and the cursor's put-down does not unlock it.
+static void heldItemSent(lua_State* L, uint64_t guid, size_t parkedBefore) {
+    if (guid == 0 || parkedEquipMoves(L) > parkedBefore) return;
+    auto* gh = getGameHandler(L);
+    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+    // Nothing went out without a realm to send it to.
+    if (!inv || !gh->isInWorld()) return;
+    inv->lockItemUntilRealmAnswers(guid);
+    s_heldItemSent = guid;
+}
+
+/// The item at a wire bag and slot, for heldItemSent.
+static uint64_t itemAtWire(lua_State* L, uint8_t bag, uint8_t slot) {
+    auto* gh = getGameHandler(L);
+    const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+    return inv ? inv->itemGuidAtWire(bag, slot) : 0;
 }
 
 /// Put the cursor down.
@@ -2453,7 +2488,7 @@ static void pickupFromContainerSlot(lua_State* L, game::GameHandler* gh,
         cursorItemSlot() = {bag, slot, false};
         // The slot draws greyed while its item is on the cursor, which is how a
         // bag shows that something has been picked up out of it.
-        announceItemLock(gh, cursorItemSlot(), true);
+        announceItemLock(L, cursorItemSlot(), true);
         LOG_WARNING("FrameXML pickup: bag ", bag, " slot ", slot,
                     " item ", itemSlot->item.itemId);
     } else {
@@ -2635,6 +2670,7 @@ static int lua_PickupContainerItem(lua_State* L) {
         // one, and is parked for EQUIP_BIND: kept in the hand while the
         // question is open (dropCursorAfterMove, T352).
         const size_t parked = parkedEquipMoves(L);
+        const uint64_t heldGuid = itemAtWire(L, srcBag, srcSlot);
         // Part of a stack moves as a split rather than a swap: a swap would
         // send the whole thing, which is not what was picked up.
         if (s_cursorSplit > 0) {
@@ -2643,6 +2679,7 @@ static int lua_PickupContainerItem(lua_State* L) {
         } else {
             gh->swapContainerItems(srcBag, srcSlot, dstBag, dstSlot);
         }
+        heldItemSent(L, heldGuid, parked);
         if (parkedEquipMoves(L) > parked) return 0;
         // Put down: the source's unlock is announced there - a worn slot by
         // its slot alone, as 12340 names an inventory slot's lock
@@ -2883,8 +2920,10 @@ static int lua_PickupBagFromSlot(lua_State* L) {
             // screen do not have to wait for the server to agree.
             gh->swapBagSlots(srcWorn, wornIndex);
         } else {
+            const uint64_t heldGuid = itemAtWire(L, srcBag, srcSlot);
             gh->swapContainerItems(srcBag, srcSlot, 0xFF,
                                    static_cast<uint8_t>(game::slots::toWireSlot(slot)));
+            heldItemSent(L, heldGuid, parked);
         }
         // Held while a bind-on-equip bag's question is open (T351).
         dropCursorAfterMove(L, parked);
@@ -2933,7 +2972,7 @@ static int lua_PickupBagFromSlot(lua_State* L) {
     // reads the same s_cursorSlot this just set - but nothing asks again
     // without this, so the square greyed only on the next unrelated redraw.
     // One argument, because the paperdoll's handler tests `not arg2`.
-    announceItemLock(gh, cursorItemSlot(), true);
+    announceItemLock(L, cursorItemSlot(), true);
     return 0;
 }
 
@@ -3038,8 +3077,10 @@ static int lua_PickupInventoryItem(lua_State* L) {
         // CURSOR_UPDATE - no item held - hid the dialog the moment it opened,
         // and its OnHide cancelled the equip (T352).
         const size_t parked = parkedEquipMoves(L);
+        const uint64_t heldGuid = itemAtWire(L, srcBag, srcSlot);
         gh->swapContainerItems(srcBag, srcSlot, 0xFF,
                                static_cast<uint8_t>(slot - 1));
+        heldItemSent(L, heldGuid, parked);
         dropCursorAfterMove(L, parked);
         return 0;
     }
@@ -3069,7 +3110,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
         // `if ( not arg2 and arg1 == self:GetID() )`, so an equipment lock is
         // the slot alone. A second argument makes that test fail and the square
         // never greys.
-        announceItemLock(gh, cursorItemSlot(), true);
+        announceItemLock(L, cursorItemSlot(), true);
         LOG_WARNING("FrameXML pickup: equipment slot ", slot,
                     " item ", eq.item.itemId);
     } else {
@@ -3249,7 +3290,9 @@ static int lua_EquipCursorItem(lua_State* L) {
             cursorWireSlot(srcBag, srcSlot)) {
             if (!taint::allowed(L, 0x16)) return 0;   // SwapItems, 0x006df890
             const size_t parked = parkedEquipMoves(L);
+            const uint64_t heldGuid = itemAtWire(L, srcBag, srcSlot);
             gh->swapContainerItems(srcBag, srcSlot, 0xFF, static_cast<uint8_t>(slot - 1));
+            heldItemSent(L, heldGuid, parked);
             dropCursorAfterMove(L, parked);   // T352
             return 0;
         }

@@ -875,8 +875,9 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         uint32_t arg = 0;
         uint8_t bagSlot = 0xFF;
         if (packet.hasRemaining(17)) {
-            packet.readUInt64();
-            packet.readUInt64();
+            // Both items named are let go (0x006e2e90 -> 0x00513770 twice).
+            std::erase(awaitingRealm_, packet.readUInt64());
+            std::erase(awaitingRealm_, packet.readUInt64());
             bagSlot = packet.readUInt8();
             if ((error == 1 || error == 87 || error == 84 || error == 85 || error == 89) &&
                 packet.hasRemaining(4))
@@ -4916,6 +4917,9 @@ uint32_t InventoryHandler::getBankBagSlotPrice(int slotIndex) {
 }
 
 void InventoryHandler::slotItemChanged(uint64_t before, uint64_t after) {
+    // The item now in the slot is let go (0x006dedd0: 0x00513770 on the new
+    // value when it differs from the old).
+    if (before != after && after != 0) std::erase(awaitingRealm_, after);
     if (before == after || pendingMoveEntry_ == 0) return;
     if (pendingMoveGuid_ == 0 || pendingMoveGuid_ == before || pendingMoveGuid_ == after) {
         const auto* info = owner_.getItemInfo(pendingMoveEntry_);
@@ -5120,10 +5124,11 @@ const std::string& InventoryHandler::getGuildBankTabText(uint8_t tabId) const {
 void InventoryHandler::setGuildBankTabInfo(uint8_t tabId, const std::string& name,
                                            const std::string& icon) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (guildBankerGuid_ == 0) return;
-    // Both or neither: the server tests them before it does anything, so a
-    // half-filled request is a packet that changes nothing and says nothing.
-    if (name.empty() || icon.empty()) return;
+    // 0x005a5a00: at a banker, for a tab the guild has bought. The name may
+    // be empty (the check before passes it); the icon is always there
+    // (0x005a6a00 calls only with an icon of the list).
+    if (guildBankerGuid_ == 0 || tabId >= guildBankTabCount_) return;
+    if (icon.empty()) return;
     network::Packet p(wireOpcode(Opcode::CMSG_GUILD_BANK_UPDATE_TAB));
     p.writeUInt64(guildBankerGuid_);
     p.writeUInt8(tabId);
@@ -5364,7 +5369,6 @@ void InventoryHandler::requestGuildBankWithdrawMoney() {
 
 void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     if (!GuildBankListParser::parse(packet, guildBankData_)) return;
-    ++guildBankListCount_;
     // 0x005a7250, in its order. The item templates the last list still
     // waited on are not waited on any more.
     guildBankItemWaitCount_ = 0;
@@ -5387,6 +5391,10 @@ void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     const auto& held = addons::guildBankCursorSlot();
     for (const auto& slot : guildBankData_.listed) {
         if (held.tab == guildBankData_.tabId + 1 && held.slot == slot.slotId + 1) owner_.dropCursor();
+        // The slot record rewritten: a move's lock on it gone (+0x24 = 0).
+        std::erase_if(guildBankMoveLocks_, [&](const GuildBankMoveLock& m) {
+            return m.tab == guildBankData_.tabId && m.slot == slot.slotId;
+        });
         if (slot.itemEntry == 0) continue;
         if (!owner_.itemInfoCacheRef().count(slot.itemEntry)) {
             owner_.ensureItemInfo(slot.itemEntry);
@@ -5439,6 +5447,38 @@ void InventoryHandler::resetGuildBankForNewPlayer() {
     guildBankTextStale_.fill(true);
     guildBankItemWaitCount_ = 0;
     guildBankItemWaits_.clear();
+    guildBankMoveLocks_.clear();
+}
+
+void InventoryHandler::lockItemUntilRealmAnswers(uint64_t guid) {
+    if (guid == 0 || itemAwaitsRealm(guid)) return;
+    awaitingRealm_.push_back(guid);
+}
+
+bool InventoryHandler::itemAwaitsRealm(uint64_t guid) const {
+    return guid != 0 && std::find(awaitingRealm_.begin(), awaitingRealm_.end(), guid) != awaitingRealm_.end();
+}
+
+void InventoryHandler::itemStackChanged(uint64_t guid, uint32_t entry, bool stackable) {
+    std::erase_if(awaitingRealm_, [&](uint64_t g) {
+        if (g == guid) return true;
+        if (!stackable) return false;
+        const auto found = owner_.onlineItemsRef().find(g);
+        return found != owner_.onlineItemsRef().end() && found->second.entry == entry;
+    });
+}
+
+void InventoryHandler::lockGuildBankSlotForMove(uint32_t tab, uint32_t slot, uint32_t entry) {
+    std::erase_if(guildBankMoveLocks_, [&](const GuildBankMoveLock& m) { return m.tab == tab && m.slot == slot; });
+    guildBankMoveLocks_.push_back({tab, slot, entry});
+}
+
+bool InventoryHandler::guildBankSlotMoveLocked(uint32_t tab, uint32_t slot) const {
+    const auto* item = guildBankData_.slotAt(tab, slot);
+    if (!item) return false;
+    for (const auto& m : guildBankMoveLocks_)
+        if (m.tab == tab && m.slot == slot) return m.entry == item->itemEntry;
+    return false;
 }
 
 // ============================================================

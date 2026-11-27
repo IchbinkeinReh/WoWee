@@ -631,6 +631,17 @@ TEST_CASE("A column header makes its key primary, and a second click reverses it
     applyLfgSortKey(keys, lfg_sort_key::kTank);
     CHECK_FALSE(keys[0].descending);
 
+    // (found by AC in code) The moved key's direction goes into slot 0 before the
+    // shift (0x0055d2b0:10686), so the old front key moves down carrying it: a
+    // turned column loses its turn when another header is clicked.
+    applyLfgSortKey(keys, lfg_sort_key::kTank);
+    REQUIRE(keys[0].descending);
+    applyLfgSortKey(keys, lfg_sort_key::kLevel);
+    CHECK(keys[1].key == lfg_sort_key::kTank);
+    CHECK_FALSE(keys[1].descending);
+    applyLfgSortKey(keys, lfg_sort_key::kTank);
+    CHECK_FALSE(keys[0].descending);
+
     // "group" never reaches the key list at all: the client tests it first and swaps
     // the two arrays of rows instead, sorting nothing (:10645, :10709-10711).
     auto before = keys;

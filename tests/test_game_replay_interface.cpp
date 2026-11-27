@@ -10,6 +10,7 @@
 #include "core/preview_dressing.hpp"
 #include "game/dressing_room.hpp"
 #include "game/inventory_handler.hpp"
+#include "game/name_rules.hpp"
 #include "game/player_display_flags.hpp"
 #include "game/chat_gesture.hpp"
 #include "game/client_text_copy.hpp"
@@ -5016,10 +5017,38 @@ TEST_CASE("the scoreboard is sorted and announced as 12340 does (T415, 0x0054aa3
     ui.run("SortBattlefieldScoreData('name')");
     order();
     CHECK(ui.is("order == 'Carl;Bert;Anna;'"));
-    // Back to killing blows: it keeps the direction it was turned to.
+    // Back to killing blows (V536 b, 0x0054cee0): the moved key's direction
+    // goes into the front slot before the shift, so kills comes with the 0
+    // that 'class' left on it (most first again, its earlier turn lost) and
+    // the turned 'name' is pushed to the second place carrying that 0.
     ui.run("SortBattlefieldScoreData('bogus')");
     order();
-    CHECK(ui.is("order == 'Anna;Carl;Bert;'"));
+    CHECK(ui.is("order == 'Bert;Carl;Anna;'"));
+    ui.run("SortBattlefieldScoreData('name')");
+    order();
+    CHECK(ui.is("order == 'Anna;Bert;Carl;'"));
+}
+
+// AB's open item (FIXER AC): GetNextAchievement (0x005b3ef0) walks the
+// Achievement rows in the file's order and answers the first whose
+// Supercedes (field 3) is the id - the earlier of two rows following one
+// id, and for 0 the first row that follows nothing. WoWee kept a map whose
+// later row won and answered nothing for 0.
+TEST_CASE("GetNextAchievement answers the first row that follows the id (0x005b3ef0)", "[replay][interface]") {
+    using wowee::game::AchievementRow;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::game::GameHandlerTestAccess::setAchievementRows(s.handler(), {{.id = 6, .previous = 0},
+                                                             {.id = 7, .previous = 6},
+                                                             {.id = 1200, .previous = 6},
+                                                             {.id = 8, .previous = 7}});
+    CHECK(ui.is("GetNextAchievement(6) == 7"));
+    CHECK(ui.is("select('#', GetNextAchievement(6)) == 1"));
+    CHECK(ui.is("GetNextAchievement(7.9) == 8"));
+    CHECK(ui.is("GetNextAchievement(0) == 6"));
+    CHECK(ui.is("select('#', GetNextAchievement(8)) == 0"));
+    CHECK(ui.is("select(2, pcall(GetNextAchievement)):find('Usage: GetNextAchievement') ~= nil"));
 }
 
 // Achievement review (found by AA in code): GetAchievementInfoFromCriteria
@@ -5214,6 +5243,102 @@ TEST_CASE("an item's lock is announced as 12340 announces it (0x0060bfe0)", "[re
     CHECK(ui.is("#seen == 3"));
 }
 
+// AB's open item (FIXER AC): the GameUI wrappers around an item's lock and
+// unlock (0x00513740 / 0x00513770) rewrite the action bars' usability right
+// after it (0x005aa470), so ACTIONBAR_UPDATE_USABLE follows ITEM_LOCKED /
+// ITEM_UNLOCKED in the same call when a slot's answer moved - here an
+// equipment set whose item is picked up. WoWee only found it at its next
+// tenth-of-a-second rescan.
+TEST_CASE("a lock that changes an action's use announces it at once (0x005aa470)", "[replay][interface]") {
+    using wowee::game::ActionBarSlot;
+    constexpr uint64_t kCloth = 0x4000000000000C21ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    auto& gh = s.handler();
+    carryForAuction(s, 0, kCloth, 2589, 5);
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_EQUIPMENT_SET_LIST));
+    list.writeUInt32(1);
+    list.writePackedGuid(0x70);
+    list.writeUInt32(0);
+    list.writeString("Tank");
+    list.writeString("INV_Shield_06");
+    for (int slot = 0; slot < 19; ++slot) list.writePackedGuid(slot == 0 ? kCloth : 0);
+    s.receive(list);
+    gh.setActionBarSlot(3, ActionBarSlot::EQUIPMENT_SET, 0);
+    ui.run("SetCVar('equipmentManager', '1')");
+    REQUIRE(ui.is("IsUsableAction(4) == 1"));
+    // Once round, so the remembered answers are this session's.
+    ui.run("PickupContainerItem(0, 1) ClearCursor()");
+    ui.run("seen = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'ITEM_LOCKED', 'ITEM_UNLOCKED', 'ACTIONBAR_UPDATE_USABLE'}) do "
+           "f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(self, e) seen[#seen + 1] = e .. ' ' .. tostring(IsUsableAction(4)) end)");
+    ui.run("PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    CHECK(ui.is("seen[1] == 'ITEM_LOCKED nil'"));
+    CHECK(ui.is("seen[2] == 'ACTIONBAR_UPDATE_USABLE nil'"));
+    CHECK(ui.is("#seen == 2"));
+    ui.run("seen = {} ClearCursor()");
+    CHECK(ui.is("seen[1] == 'ITEM_UNLOCKED 1'"));
+    CHECK(ui.is("seen[2] == 'ACTIONBAR_UPDATE_USABLE 1'"));
+    CHECK(ui.is("#seen == 2"));
+    // A lock that moves no answer says nothing more.
+    gh.setActionBarSlot(3, ActionBarSlot::EMPTY, 0);
+    ui.run("PickupContainerItem(0, 1) ClearCursor()");
+    ui.run("seen = {} PickupContainerItem(0, 1)");
+    CHECK(ui.is("#seen == 1"));
+    ui.run("ClearCursor()");
+}
+
+// AB's open item (FIXER AC): an item put down by a move 12340 sends stays
+// locked - 0x006df890 drops the cursor with ClearCursor(0, 1), no unlock -
+// until the realm answers: the slot field that now holds it (0x006dedd0 ->
+// 0x00513770), a stack change (0x00707720) or SMSG_INVENTORY_CHANGE_FAILURE
+// naming it (0x006e2e90). WoWee unlocked it at the drop.
+TEST_CASE("a moved item stays locked until the realm answers (0x006df890)", "[replay][interface]") {
+    constexpr uint64_t kLinen = 0x4000000000000B01ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    carryForAuction(s, 0, kLinen, 2589, 5);
+    ui.engine.dispatchOnUpdate(0.0f);
+    ui.run("seen = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'ITEM_LOCKED', 'ITEM_UNLOCKED'}) do f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(self, e, a, b) seen[#seen + 1] = e .. ' ' .. a .. ' ' .. b end)");
+    ui.run("PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("seen[1] == 'ITEM_LOCKED 0 1'"));
+    ui.run("seen = {} PickupContainerItem(0, 3)");
+    REQUIRE(s.sent().of(Opcode::CMSG_SWAP_ITEM).size() == 1);
+    CHECK(ui.is("not CursorHasItem()"));
+    CHECK(ui.is("#seen == 0"));                    // no unlock at the drop
+    ui.engine.dispatchOnUpdate(0.0f);
+    CHECK(ui.is("#seen == 0"));                    // nor a second lock
+    CHECK(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
+    // The realm moves it: slot 1 empty, slot 3 holds it.
+    const auto pack = static_cast<uint16_t>(wowee::game::fieldIndex(UF::PLAYER_FIELD_PACK_SLOT_1));
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid,
+                                      {{pack, 0u}, {static_cast<uint16_t>(pack + 1), 0u},
+                                       {static_cast<uint16_t>(pack + 4), static_cast<uint32_t>(kLinen)},
+                                       {static_cast<uint16_t>(pack + 5), static_cast<uint32_t>(kLinen >> 32)}}));
+    CHECK_FALSE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
+    ui.engine.dispatchOnUpdate(0.0f);
+    CHECK(ui.is("seen[1] == 'ITEM_UNLOCKED 0 3'"));
+    // Refused: the failure's items are let go.
+    ui.run("PickupContainerItem(0, 3)");
+    ui.run("seen = {} PickupContainerItem(0, 5)");
+    REQUIRE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
+    wowee::network::Packet failure(wowee::game::wireOpcode(Opcode::SMSG_INVENTORY_CHANGE_FAILURE));
+    failure.writeUInt8(22);       // EQUIP_ERR_ITEM_LOCKED, any refusal
+    failure.writeUInt64(kLinen);
+    failure.writeUInt64(0);
+    failure.writeUInt8(0);
+    s.receive(failure);
+    CHECK_FALSE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
+}
+
 namespace {
 // One SMSG_GUILD_BANK_LIST of tab 1 (not full) naming the given slots.
 void listGuildBankSlots(Session& s, const std::vector<std::array<uint32_t, 3>>& slots) {
@@ -5276,9 +5401,6 @@ TEST_CASE("a guild bank list lets the held slot go, a new player starts the bank
     s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
     Interface ui(s);
     openTestGuildBank(s);
-    // A list more, so a slot an earlier test left "moved" (the static moved
-    // list counts lists per session) is no longer taken for locked.
-    listGuildBankSlots(s, {{10, 0, 0}});
     ui.run("PickupGuildBankItem(1, 1)");
     REQUIRE(ui.is("CursorHasItem() == 1"));
     listGuildBankSlots(s, {{1, 2589, 18}});   // another slot: still held
@@ -5302,6 +5424,57 @@ TEST_CASE("a guild bank list lets the held slot go, a new player starts the bank
     s.handler().getInventoryHandler()->openGuildBank(0x77);
     ui.run("QueryGuildBankTab(1)");
     CHECK(fullByte() == 1);
+}
+
+// AB's open item (FIXER AC): a moved slot's lock is the slot record's +0x24
+// (0x005a5410 leaves it set, 0x005a4c40 reads it for the slot's own item).
+// A list clears it only for the slots it names (0x005a7250 writes +0x24 = 0
+// per listed slot), the player object made anew frees every slot
+// (0x005a7760). WoWee kept the moves in a process-wide list that any list
+// emptied - another slot's list unlocked the slot, and a move left in it
+// leaked into the next session.
+TEST_CASE("a moved guild bank slot stays locked until a list names it (0x005a7250)", "[replay][interface]") {
+    // (GetGuildBankItemInfo answers nothing here - no icons without the
+    // client's files - so the lock is read from the handler and from the
+    // pickup it refuses, 0x005137a0.)
+    const auto locked = [](Session& s) {
+        return s.handler().getInventoryHandler()->guildBankSlotMoveLocked(0, 0);
+    };
+    {
+        Session s;
+        s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+        Interface ui(s);
+        openTestGuildBank(s);
+        ui.run("PickupGuildBankItem(1, 1)");
+        ui.run("PickupGuildBankItem(1, 50)");         // a move to an empty slot
+        REQUIRE(s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS).size() == 1);
+        CHECK(locked(s));
+        listGuildBankSlots(s, {{10, 0, 0}});         // another slot: still locked
+        CHECK(locked(s));
+        ui.run("PickupGuildBankItem(1, 1)");
+        CHECK(ui.is("not CursorHasItem()"));
+        listGuildBankSlots(s, {{0, 2589, 5}});        // this one: free again
+        CHECK_FALSE(locked(s));
+        ui.run("PickupGuildBankItem(1, 1)");
+        CHECK(ui.is("CursorHasItem() == 1"));
+        // Locked again, then the player object made anew: every slot freed.
+        ui.run("PickupGuildBankItem(1, 50)");
+        CHECK(locked(s));
+        s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+        openTestGuildBank(s);
+        CHECK_FALSE(locked(s));
+        ui.run("ClearCursor() PickupGuildBankItem(1, 1)");
+        ui.run("PickupGuildBankItem(1, 50)");         // left locked at the end
+        CHECK(locked(s));
+    }
+    // A new session knows nothing of the last one's moves.
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    openTestGuildBank(s);
+    CHECK_FALSE(locked(s));
+    ui.run("PickupGuildBankItem(1, 1)");
+    CHECK(ui.is("CursorHasItem() == 1"));
 }
 
 // AA's open guild bank item (FIXER AB): tab names and texts are kept as
@@ -5337,6 +5510,49 @@ TEST_CASE("guild bank tab names and texts are taken as 0x007e1830 takes them", "
     CHECK(wowee::game::clientTextCopy("x\ny", 16, 64, true) == "x");
     CHECK(wowee::game::clientTextCopy("x\\ny", 16, 64, true) == "x");
     CHECK(wowee::game::clientTextCopy(std::string(100, 'a'), 0x800, 0x40, false).size() == 63);
+}
+
+// AB's open item (FIXER AC): SetGuildBankTabInfo (0x005a6a00 -> 0x005a5a00)
+// puts the name through 0x007e1fb0 - letters of one alphabet, spaces and
+// digits, the apostrophe/space/three-letter rules off, so an empty name
+// passes - and a refused one is worded on the error line (0x005218c0) with
+// nothing sent; the request goes only for a bought tab. WoWee sent any name
+// (an underscore too) and refused the empty one.
+TEST_CASE("a guild bank tab name passes 0x007e1fb0 before it is sent", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    openTestGuildBank(s);
+    ui.run("GetMacroIconInfo = function(i) if i == 1 then return 'Interface\\\\Icons\\\\INV_Misc_Herb_01' end end");
+    ui.run("errors = {} local f = CreateFrame('Frame') f:RegisterEvent('UI_ERROR_MESSAGE') "
+           "f:SetScript('OnEvent', function(self, e, a) errors[#errors + 1] = a end)");
+    const auto names = [&] {
+        std::vector<std::string> out;
+        for (auto p : s.sent().of(Opcode::CMSG_GUILD_BANK_UPDATE_TAB)) {
+            p.readUInt64();
+            p.readUInt8();
+            out.push_back(p.readString());
+        }
+        return out;
+    };
+    ui.run("SetGuildBankTabInfo(1, 'Kr\\195\\164uter 2', 1)");
+    REQUIRE(names().size() == 1);
+    CHECK(names().back() == "Kr\xC3\xA4uter 2");
+    ui.run("SetGuildBankTabInfo(1, 'Tab_1', 1)");      // '_' is not allowed
+    CHECK(names().size() == 1);
+    CHECK(ui.is("#errors == 1"));
+    ui.run("SetGuildBankTabInfo(1, 'Fooo  ', 1)");     // the strict rules are off
+    REQUIRE(names().size() == 2);
+    CHECK(names().back() == "Fooo  ");
+    ui.run("SetGuildBankTabInfo(2, '', 1)");           // empty passes
+    REQUIRE(names().size() == 3);
+    CHECK(names().back().empty());
+    ui.run("SetGuildBankTabInfo(4, 'Vier', 1)");       // three tabs bought
+    ui.run("SetGuildBankTabInfo(1, 'Tab_1', 2)");      // no such icon: not even checked
+    CHECK(names().size() == 3);
+    CHECK(ui.is("#errors == 1"));
+    CHECK(wowee::game::name_rules::checkGuildBankTabName(std::string(17, 'a')) == wowee::game::name_rules::kTooLong);
+    CHECK(wowee::game::name_rules::checkGuildBankTabName("a'b") == wowee::game::name_rules::kInvalidCharacter);
 }
 
 // LFG review (found by AB in code): GetLFGRoleUpdate answers a boolean first,

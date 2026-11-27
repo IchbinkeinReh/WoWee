@@ -552,8 +552,27 @@ public:
     void checkInbox();
     uint32_t mailTotalCount() const { return mailTotalCount_; }
     void openMailbox(uint64_t guid);
-    /// How many guild bank lists have arrived (SMSG_GUILD_BANK_LIST).
-    uint32_t guildBankListCount() const { return guildBankListCount_; }
+    /// A guild bank slot whose item went out with a move stays locked (the
+    /// slot record's +0x24, 0x005a5410 leaves it set) until a list names
+    /// that slot (0x005a7250 writes +0x24 = 0) or the player object is made
+    /// anew (0x005a7760). The lock holds only while the slot still has the
+    /// item it was set for (0x005a4c40 compares the entry). Tab and slot
+    /// from zero.
+    void lockGuildBankSlotForMove(uint32_t tab, uint32_t slot, uint32_t entry);
+    /// An item put down by a move the realm has not answered yet: 12340
+    /// drops the cursor without unlocking it (0x006df890 ends in
+    /// ClearCursor(0, 1)), and the lock goes when the realm puts the item
+    /// in a slot (the slot field's callback, 0x006dedd0 / 0x006e01a0 ->
+    /// 0x00513770), changes its stack (0x00707720) or refuses the move
+    /// (SMSG_INVENTORY_CHANGE_FAILURE, both items, 0x006e2e90).
+    void lockItemUntilRealmAnswers(uint64_t guid);
+    bool itemAwaitsRealm(uint64_t guid) const;
+    const std::vector<uint64_t>& itemsAwaitingRealm() const { return awaitingRealm_; }
+    /// A stack count changed: that item, and for a stackable one every item
+    /// of its entry, let go (0x00707720 -> 0x00754d90).
+    void itemStackChanged(uint64_t guid, uint32_t entry, bool stackable);
+    void forgetItemsAwaitingRealm() { awaitingRealm_.clear(); }
+    bool guildBankSlotMoveLocked(uint32_t tab, uint32_t slot) const;
     bool equipmentSetListReceived() const { return equipmentSetListReceived_; }
     /// A character entered: no set list yet (0x005ae1b0).
     void forgetEquipmentSetList() { equipmentSetListReceived_ = false; }
@@ -1454,7 +1473,9 @@ private:
     // DurabilityQuality.dbc: [id] -> quality_mod float
     mutable std::unordered_map<uint32_t, float> durabilityQuality_;
     void loadRepairDbc() const;
-    uint32_t guildBankListCount_ = 0;
+    struct GuildBankMoveLock { uint32_t tab = 0; uint32_t slot = 0; uint32_t entry = 0; };
+    std::vector<GuildBankMoveLock> guildBankMoveLocks_;
+    std::vector<uint64_t> awaitingRealm_;
 };
 
 } // namespace game

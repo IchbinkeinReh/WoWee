@@ -91,7 +91,10 @@ inline uint16_t fold(uint16_t c) {
 inline uint32_t check(const std::string& name, const std::u16string& allowed, bool relaxed,
                       size_t* length = nullptr) {
     if (length) *length = 0;
-    if (name.empty()) return kNoName;
+    // An empty text is not a missing one (only a null pointer answers 2 at
+    // once); it ends the walk at once, and only the strict rules' length
+    // test (len < 2 -> 2 or 3) refuses it.
+    if (name.empty()) return relaxed ? kOk : kNoName;
     std::vector<uint16_t> s;
     if (!detail::toUtf16(name, s)) return kInvalid;
     int script = -1;
@@ -153,6 +156,17 @@ inline uint32_t checkCharterName(const std::string& name) {
     size_t length = 0;
     const uint32_t r = check(name, u" ", false, &length);
     if (r == kOk && length > 24) return kTooLong;
+    return r;
+}
+
+/// A guild bank tab's name as SetGuildBankTabInfo checks it (0x007e1fb0):
+/// spaces and digits besides the letters, none of the apostrophe, space and
+/// repeated-letter rules (its ninth argument set) - so an empty name passes -
+/// and no more than 16 characters.
+inline uint32_t checkGuildBankTabName(const std::string& name) {
+    size_t length = 0;
+    const uint32_t r = check(name, u" 1234567890", true, &length);
+    if (r == kOk && length > 16) return kTooLong;
     return r;
 }
 

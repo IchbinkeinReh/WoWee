@@ -3732,18 +3732,21 @@ static std::array<BgSortKey, 17>& battlefieldSortKeys() {
 }
 
 /// 0x0054cee0: the key to the front of the list - at the front already, its
-/// direction turned; else with the direction it last had.
+/// direction turned; else with the direction it last had. 12340 writes that
+/// direction into the front slot (0x00bea2c4) BEFORE it shifts the entries
+/// down, so the old front key moves to the second place carrying the moved
+/// key's direction, not its own - its own turn is lost (V536 b).
 static void battlefieldSortBy(int key) {
     auto& keys = battlefieldSortKeys();
     for (size_t i = 0; i < keys.size(); ++i) {
         if (keys[i].key != key) continue;
-        BgSortKey front = keys[i];
+        keys[0].turned = keys[i].turned;
         if (i == 0) {
-            front.turned = front.turned == 0 ? 1 : 0;
+            keys[0].turned = keys[0].turned == 0 ? 1 : 0;
         } else {
             for (size_t j = i; j > 0; --j) keys[j] = keys[j - 1];
         }
-        keys[0] = front;
+        keys[0].key = key;
         return;
     }
 }

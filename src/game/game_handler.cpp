@@ -1700,9 +1700,6 @@ void GameHandler::updateAttachedTransportChildren(float deltaTime) {
 // Mail System
 // ============================================================
 
-uint32_t GameHandler::guildBankListCount() const {
-    return inventoryHandler_ ? inventoryHandler_->guildBankListCount() : 0u;
-}
 
 void GameHandler::openMailbox(uint64_t guid) {
     if (inventoryHandler_) inventoryHandler_->openMailbox(guid);
@@ -2878,7 +2875,6 @@ void GameHandler::ensureAchievementCategoriesLoaded() {
                                     .order = getAchievementUiOrder(id)});
         if (supercedes != 0) {
             achievementSupercedes_[id] = supercedes;
-            achievementSupercededBy_[supercedes] = id;
         }
     }
 

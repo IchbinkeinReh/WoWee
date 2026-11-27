@@ -34,6 +34,7 @@
 #include "game/item_tooltip_rules.hpp"
 #include "game/reputation_standing.hpp"
 #include "game/server_notices.hpp"
+#include "game/name_rules.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <optional>
@@ -5210,8 +5211,12 @@ std::vector<uint64_t> lockedItems(game::GameHandler* gh) {
     auctionSellItemSlot(gh, &selling);
     add(selling);
     // T411: a multisell's sources, from its start to its end (0x0059aaa0).
-    if (const auto* inv = gh->getInventoryHandler())
+    if (const auto* inv = gh->getInventoryHandler()) {
         for (const uint64_t guid : inv->auctionMultisellSourceGuids()) add(guid);
+        // Put down by a move the realm has not answered (0x006df890).
+        for (const uint64_t guid : inv->itemsAwaitingRealm())
+            if (placeOfItem(gh, guid)) add(guid);
+    }
     if (gh->isSocketingOpen()) {
         add(gh->getSocketItemGuid());
         for (int i = 0; i < 3; ++i) add(gh->getSocketPendingGemGuid(i));
@@ -7408,10 +7413,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             // a move until the bank's next list unlocks it (0x00513800).
             const auto& held = guildBankCursorSlot();
             bool locked = held.tab == tab && held.slot == slot;
-            auto& moved = guildBankMovedSlots();
-            const uint32_t lists = gh->guildBankListCount();
-            std::erase_if(moved, [lists](const GuildBankMovedSlot& m) { return m.list != lists; });
-            for (const auto& m : moved) locked = locked || (m.tab == tab && m.slot == slot);
+            if (const auto* inv = gh->getInventoryHandler())
+                locked = locked || inv->guildBankSlotMoveLocked(static_cast<uint32_t>(tab - 1),
+                                                                static_cast<uint32_t>(slot - 1));
             luaPushOneOrNil(L, locked ? 1 : 0);
             return 3;
         }},
@@ -7719,6 +7723,14 @@ void registerInventoryLuaAPI(lua_State* L) {
             // The name as 0x005a5a00 takes it (0x007e1830: 16 characters,
             // one line, no '|').
             const std::string kept = game::clientTextCopy(name ? name : "", 0x10, 0x40, true);
+            // An index past the icon list: nothing (0x005a6a00). Then the
+            // name rules (0x007e1fb0): a refused name is worded on the error
+            // line (0x005218c0) and nothing is sent.
+            if (icon.empty()) return 0;
+            if (const uint32_t reason = game::name_rules::checkGuildBankTabName(kept)) {
+                if (gh) gh->showNameError(reason);
+                return 0;
+            }
             if (gh && tab >= 1 && !icon.empty())
                 gh->setGuildBankTabInfo(static_cast<uint8_t>(tab - 1), kept.c_str(), icon.c_str());
             return 0;

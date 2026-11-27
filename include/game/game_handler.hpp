@@ -4567,17 +4567,13 @@ public:
     /// The achievement this one supersedes, or zero - Achievement.dbc's
     /// Supercedes column, which chains "Level 20" behind "Level 10" and
     /// "Expert Cook" behind "Journeyman Cook". The achievement panel walks it
-    /// backwards to build a completed chain and forwards to find the step in
-    /// progress, so both directions are kept.
+    /// backwards to build a completed chain; forwards, GetNextAchievement
+    /// walks the rows in their order (0x005b3ef0).
     /// Achievement.dbc in its own order (ensureAchievementCategoriesLoaded).
     const std::vector<AchievementRow>& getAchievementRows() const { return achievementRows_; }
     uint32_t getAchievementSupercedes(uint32_t achievementId) const {
         auto it = achievementSupercedes_.find(achievementId);
         return it != achievementSupercedes_.end() ? it->second : 0u;
-    }
-    uint32_t getAchievementSupercededBy(uint32_t achievementId) const {
-        auto it = achievementSupercededBy_.find(achievementId);
-        return it != achievementSupercededBy_.end() ? it->second : 0u;
     }
     const std::unordered_map<uint32_t, std::vector<AchievementCriterion>>& getAchievementCriteriaMap() const {
         return achievementCriteria_;
@@ -5278,7 +5274,6 @@ public:
     void setMailComposeShowing(bool showing);
     bool hasNewMail() const;
     void openMailbox(uint64_t guid);
-    uint32_t guildBankListCount() const;
     void closeMailbox();
     void sendMail(const std::string& recipient, const std::string& subject,
                   const std::string& body, uint64_t money, uint64_t cod = 0);
@@ -7809,7 +7804,6 @@ private:
     std::vector<uint32_t> statisticCategoryOrder_;
     std::vector<AchievementRow> achievementRows_;
     std::unordered_map<uint32_t, uint32_t> achievementSupercedes_;
-    std::unordered_map<uint32_t, uint32_t> achievementSupercededBy_;
     bool achievementCategoriesLoaded_ = false;
     bool glyphPropertiesLoaded_ = false;
     std::unordered_map<uint32_t, uint32_t> glyphSpellCache_;

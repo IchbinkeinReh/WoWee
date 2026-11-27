@@ -432,6 +432,11 @@ public:
     void noteLuaError(const std::string& message);
     void writeLuaErrorReport() const;
 
+    /// An item's lock taken over without an announcement - the cursor's
+    /// lock becoming a move's that waits for the realm (0x006df890) - so the
+    /// next look at the locks (noteItemLocks) does not report it as new.
+    void adoptItemLock(uint64_t guid);
+
 private:
     lua_State* L_ = nullptr;
     uint32_t stateGeneration_ = 0;

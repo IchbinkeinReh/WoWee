@@ -923,11 +923,11 @@ void registerLfgLuaAPI(lua_State* L) {
     // (0x0055d2b0:10645, 10709-10711); any other word moves that key to the front of
     // the seven, and reverses it if it was already front (:10684-10705). With no word
     // at all the client answers `Usage: SearchLFGSort("type")` and changes nothing
-    // (:10638-10642), which is what happens here too - the printer being the one thing
-    // still missing.
+    // (:10638-10642), which is what happens here too.
     {"SearchLFGSort", [](lua_State* L) -> int {
+        if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SearchLFGSort(\"type\")");
         auto* gh = getGameHandler(L);
-        if (!gh || !lua_isstring(L, 1)) return 0;
+        if (!gh) return 0;
         gh->sortLfgBrowser(lua_tostring(L, 1));
         return 0;
     }},

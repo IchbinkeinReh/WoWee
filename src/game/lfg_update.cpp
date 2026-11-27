@@ -456,6 +456,10 @@ void applyLfgSortKey(std::vector<LfgSortEntry>& keys, uint32_t key) {
     // client's loop runs to slot 6 and, finding nothing, resorts unchanged - the same
     // outcome as a list already holding the key, so the search below is allowed to
     // fall through.
+    //
+    // The direction goes into slot 0 (0x00bea824) BEFORE the shift, so the old
+    // front key moves down carrying the moved key's direction and its own turn is
+    // lost - the same as the scoreboard's 0x0054cee0.
     for (size_t i = 0; i < keys.size(); ++i) {
         if (keys[i].key != key) continue;
         const bool descending = keys[i].descending;
@@ -463,6 +467,7 @@ void applyLfgSortKey(std::vector<LfgSortEntry>& keys, uint32_t key) {
             keys[0].descending = !descending;
             return;
         }
+        keys[0].descending = descending;
         for (size_t k = i; k > 0; --k) keys[k] = keys[k - 1];
         keys[0] = LfgSortEntry{key, descending};
         return;

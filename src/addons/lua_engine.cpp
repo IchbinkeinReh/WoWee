@@ -20046,6 +20046,12 @@ void LuaEngine::refreshUnitTooltip() {
 
 void LuaEngine::noteAttributesAllowed(uint32_t wid) { attributesAllowed_.push_back(wid); }
 
+void LuaEngine::adoptItemLock(uint64_t guid) {
+    if (guid == 0) return;
+    const auto at = std::lower_bound(lockedItems_.begin(), lockedItems_.end(), guid);
+    if (at == lockedItems_.end() || *at != guid) lockedItems_.insert(at, guid);
+}
+
 void LuaEngine::noteItemLocks() {
     auto* gh = wowee::addons::getGameHandler(L_);
     auto now = wowee::addons::lockedItems(gh);
@@ -20064,6 +20070,9 @@ void LuaEngine::noteItemLocks() {
         else args = {std::to_string(place->bag), std::to_string(place->slot)};
         fireEvent("ITEM_LOCK_CHANGED", args);
         fireEvent(locked ? "ITEM_LOCKED" : "ITEM_UNLOCKED", args);
+        // ...and the action bars' usability rewritten at once (0x00513740 /
+        // 0x00513770 -> 0x005aa470), not at the next rescan.
+        if (gh && gh->isInWorld() && wowee::addons::rescanActionUsability(L_)) fireEvent("ACTIONBAR_UPDATE_USABLE", {});
     }
     lockedItems_ = std::move(now);
 }
