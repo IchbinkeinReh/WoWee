@@ -10,6 +10,7 @@
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
 #include "game/transport_manager.hpp"
+#include "mcp/entity_kind.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/schema.hpp"
 #include "mcp/tool_context.hpp"
@@ -23,15 +24,14 @@ std::string lower(std::string s) {
     return s;
 }
 
-bool kindWanted(game::ObjectType type, const std::string& kind) {
-    using T = game::ObjectType;
-    if (kind == "units") return type == T::UNIT;
-    if (kind == "players") return type == T::PLAYER;
-    if (kind == "objects") return type == T::GAMEOBJECT;
-    if (kind == "corpses") return type == T::CORPSE;
-    if (kind == "dynamic") return type == T::DYNAMICOBJECT;
-    return type == T::UNIT || type == T::PLAYER || type == T::GAMEOBJECT || type == T::CORPSE ||
-           type == T::DYNAMICOBJECT;
+/// The guids of the battleground scoreboard's rows: bots the realm plays
+/// as players are among them (mcp/entity_kind.hpp).
+std::vector<uint64_t> scoredGuids(const game::GameHandler& gh) {
+    std::vector<uint64_t> out;
+    if (const auto* board = gh.getBgScoreboard()) {
+        for (const auto& row : board->players) out.push_back(row.guid);
+    }
+    return out;
 }
 
 /// Whether it answers a filter's question, by its own description.
@@ -72,6 +72,7 @@ json entities(ToolContext& context, const json& args) {
 
     const glm::vec3 me = playerAt(context);
     std::vector<std::pair<float, std::shared_ptr<game::Entity>>> sorted;
+    const std::vector<uint64_t> scored = scoredGuids(*gh);
     size_t total = 0;
     for (const auto& [guid, entity] : gh->getEntityManager().getEntities()) {
         if (!entity || guid == gh->getPlayerGuid()) continue;
@@ -80,7 +81,7 @@ json entities(ToolContext& context, const json& args) {
             // zeppelins, the tram (tester's wish, session 14).
             auto* manager = gh->getTransportManager();
             if (entity->getType() != game::ObjectType::GAMEOBJECT || !manager || !manager->getTransport(guid)) continue;
-        } else if (!kindWanted(entity->getType(), kind)) {
+        } else if (!kindWanted(*entity, kind, scored)) {
             continue;
         }
         const float d = glm::length(entityAt(context, *entity) - me);
@@ -94,6 +95,7 @@ json entities(ToolContext& context, const json& args) {
     size_t kept = 0;
     for (const auto& [d, entity] : sorted) {
         json e = entityJson(context, *entity, false);
+        if (realmPlayedUnit(*entity, scored)) e["realm_player"] = true;
         if (!filter.empty() && !filterKeeps(e, filter)) continue;
         ++kept;
         if (list.size() >= limit) continue;
@@ -122,7 +124,8 @@ void addEntityTools(Toolbox& box) {
         "entities",
         "What the client has round the player, nearest first: guid, name, distance in yards, bearing in degrees "
         "clockwise from the facing (0 ahead, 90 right), level, health, reaction, npc roles, quest mark (! or ?), "
-        "lootable, usable.",
+        "lootable, usable. kind players also lists the units the realm plays as players (battleground bots: "
+        "realm_player true).",
         object({optional("kind", choice("which kind", {"all", "units", "players", "objects", "corpses", "dynamic", "transports"})),
                 optional("radius", number("yards, 60 by default", 1, 500)),
                 optional("limit", integer("how many, 20 by default", 1, 500)),

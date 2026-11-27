@@ -4,6 +4,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "game_replay.hpp"
+#include "mcp/entity_kind.hpp"
 #include "mcp/owner_guid.hpp"
 #include "mcp/send_guard.hpp"
 
@@ -53,4 +54,54 @@ TEST_CASE("what a player made, summoned or left is theirs", "[replay][mcp]") {
     // A corpse's is the field after OBJECT's own six, as a game object's maker.
     s.receive(UpdateObject().create(kBones, ObjectType::CORPSE, {{UF::GAMEOBJECT_FIELD_CREATED_BY, lo}}));
     CHECK(ownerOf(s, kBones) == kOther);
+}
+
+// The entities tool's kind "players" (mcp/entity_kind.hpp): a battleground's
+// bots are creatures the realm plays as players; the scoreboard lists them
+// and they were left out (tester's wish, session 23).
+TEST_CASE("the realm's bots are players to the entities tool", "[replay][mcp]") {
+    Session s;
+    constexpr uint64_t kBot = 0xF130000000000101ull, kMob = 0xF130000000000102ull, kDressed = 0xF130000000000103ull,
+                       kImage = 0xF130000000000104ull, kMan = 0x0000000000000778ull;
+    const uint32_t lo = static_cast<uint32_t>(kOther), hi = static_cast<uint32_t>(kOther >> 32);
+    s.receive(UpdateObject().create(kBot, ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100u}}));
+    s.receive(UpdateObject().create(kMob, ObjectType::UNIT, {{UF::UNIT_FIELD_HEALTH, 100u}}));
+    s.receive(UpdateObject().create(kDressed, ObjectType::UNIT, {{UF::UNIT_FIELD_FLAGS_2, 0x10u}}));
+    s.receive(UpdateObject().create(kImage, ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_FLAGS_2, 0x10u},
+                                     {UF::UNIT_FIELD_SUMMONEDBY_LO, lo},
+                                     {UF::UNIT_FIELD_SUMMONEDBY_HI, hi}}));
+    s.receive(UpdateObject().create(kMan, ObjectType::PLAYER, {{UF::UNIT_FIELD_HEALTH, 100u}}));
+    const auto scored = [&s] {
+        std::vector<uint64_t> out;
+        if (const auto* board = s.handler().getBgScoreboard()) {
+            for (const auto& row : board->players) out.push_back(row.guid);
+        }
+        return out;
+    };
+    const auto is = [&](uint64_t guid, const char* kind) {
+        const auto entity = s.handler().getEntityManager().getEntity(guid);
+        REQUIRE(entity);
+        return wowee::mcp::kindWanted(*entity, kind, scored());
+    };
+    CHECK(is(kMan, "players"));
+    CHECK_FALSE(is(kMan, "units"));
+    CHECK_FALSE(is(kBot, "players"));
+    CHECK(is(kDressed, "players"));   // drawn as a player, nobody's
+    CHECK_FALSE(is(kImage, "players"));   // a mage's mirror image
+    // The scoreboard names the bot.
+    wowee::network::Packet log(wowee::game::wireOpcode(wowee::game::Opcode::MSG_PVP_LOG_DATA));
+    log.writeUInt8(0);
+    log.writeUInt8(0);
+    log.writeUInt32(1);
+    log.writeUInt64(kBot);
+    for (int k = 0; k < 6; ++k) log.writeUInt32(1);
+    log.writeUInt32(0);
+    s.receive(log);
+    CHECK(is(kBot, "players"));
+    CHECK(is(kBot, "units"));
+    CHECK(is(kBot, "all"));
+    CHECK_FALSE(is(kMob, "players"));
+    CHECK(is(kMob, "units"));
+    CHECK_FALSE(is(kBot, "objects"));
 }
