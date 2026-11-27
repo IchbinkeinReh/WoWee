@@ -5379,3 +5379,30 @@ TEST_CASE("equipment set names and the set list gate are 12340's (0x005af9c0)", 
     p.readUInt32();
     CHECK(p.readString() == "TanknSet");
 }
+
+// T419: an empty script element clears the handler, the template's too
+// (12340's script loader 0x0048fef0 lets the old one go and leaves the slot
+// empty with nothing to compile); a named function that is not one does the
+// same after its warning. Blizzard_AuctionUI.xml's AuctionProgressBar turns
+// CastingBarFrameTemplate's OnEvent/OnShow/OnUpdate off so - WoWee skipped
+// the empty elements and the casting bar's handlers ran on every multisell.
+TEST_CASE("an empty script element clears the inherited handler (T419, 0x0048fef0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::ui::XmlNode root;
+    std::string error;
+    REQUIRE(wowee::ui::parseXml(
+        "<Ui><Frame name=\"PlayBarTemplate\" virtual=\"true\"><Scripts>"
+        "<OnShow>shownBy = 'template'</OnShow><OnUpdate>ticks = (ticks or 0) + 1</OnUpdate>"
+        "<OnHide>hiddenBy = 'template'</OnHide></Scripts></Frame>"
+        "<Frame name=\"PlayBar\" inherits=\"PlayBarTemplate\" hidden=\"true\"><Scripts>"
+        "<OnShow></OnShow><OnUpdate function=\"PlayNoSuchFunction\"/></Scripts></Frame></Ui>",
+        root, error));
+    CHECK(ui.engine.buildElements(wowee::ui::emitFrameXml(root), "t.xml", [](const auto&) {}));
+    CHECK(ui.is("PlayBar:GetScript('OnShow') == nil"));
+    CHECK(ui.is("PlayBar:GetScript('OnUpdate') == nil"));
+    CHECK(ui.is("type(PlayBar:GetScript('OnHide')) == 'function'"));
+    ui.run("PlayBar:Show()");
+    CHECK(ui.is("shownBy == nil"));
+}

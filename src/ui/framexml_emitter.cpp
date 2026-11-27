@@ -301,13 +301,27 @@ struct Emitter {
             if (const std::string* fn = s.attr("function"); fn && !fn->empty()) {
                 line("do local __fn = rawget(_G, " + quote(*fn) + ") if type(__fn) == \"function\" then");
                 guarded(s.name, var + ":SetScript(" + quote(s.name) + ", __fn)");
-                line("elseif __WoweeLogWarning then __WoweeLogWarning(\"Frame \" .. tostring(" + var +
+                line("else");
+                // ...and the element's handler cleared all the same (the
+                // loader empties the slot after the warning, 0x00490092).
+                guarded(s.name, var + ":SetScript(" + quote(s.name) + ", nil)");
+                line("if __WoweeLogWarning then __WoweeLogWarning(\"Frame \" .. tostring(" + var +
                      ".GetName and " + var + ":GetName()) .. \": Unknown function " + *fn +
-                     " in element " + s.name + "\") end end");
+                     " in element " + s.name + "\") end end end");
                 continue;
             }
             std::string body = s.text;
-            if (body.find_first_not_of(" \t\r\n") == std::string::npos) continue;
+            // An element with no text clears the handler, an inherited one
+            // too (T419): 12340's script loader (0x0048fef0) lets the old
+            // handler go and, with nothing to compile and no function named,
+            // leaves the slot empty; a body of blanks is compiled like any
+            // other (an empty function). Blizzard_AuctionUI.xml's
+            // AuctionProgressBar switches CastingBarFrameTemplate's
+            // OnEvent/OnShow/OnUpdate off this way.
+            if (body.empty()) {
+                guarded(s.name, var + ":SetScript(" + quote(s.name) + ", nil)");
+                continue;
+            }
             // Each handler's arguments have names, and the body uses them
             // directly without declaring them: an OnUpdate says `elapsed`, an
             // OnClick says `button`. Passing them positionally as arg1..argN
