@@ -552,9 +552,7 @@ void TerrainRenderer::bindChunkTextures(TerrainChunkGPU& gpuChunk,
     // its own). A file that is not there is the loader's green stand-in.
     const auto layerTexture = [&](const std::string& path) -> VkTexture* {
         if (!specular_) return loadTexture(path);
-        const size_t dot = path.find_last_of('.');
-        const std::string specPath = (dot == std::string::npos ? path : path.substr(0, dot)) + "_s.blp";
-        VkTexture* t = loadTexture(specPath);
+        VkTexture* t = loadTexture(specularTexturePath(path));
         return t == whiteTexture.get() ? greenTexture() : t;
     };
 

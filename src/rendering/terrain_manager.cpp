@@ -993,6 +993,16 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
         // normal-map source below still decodes: it reads the pixels.
         pending->preloadedTextures[texPath] = assetManager->loadTexture(texPath, true);
     }
+    // With the 'specular' option the chunks draw each tileset texture's
+    // "_s.blp" (TerrainRenderer::bindChunkTextures). Read here as well: on
+    // the main thread at finalize a streamed one was a wait for the server.
+    if (terrainRenderer && terrainRenderer->specular()) {
+        for (const auto& texPath : pending->terrain.textures) {
+            const std::string specPath = TerrainRenderer::specularTexturePath(texPath);
+            if (pending->preloadedTextures.count(specPath)) continue;
+            pending->preloadedTextures[specPath] = assetManager->loadTexture(specPath, true);
+        }
+    }
 
     // Where a slow tile's time went; the worker logs the total.
     const double totalMs = msSince(tStart);

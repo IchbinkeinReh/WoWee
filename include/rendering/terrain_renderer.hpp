@@ -2,6 +2,7 @@
 
 #include "rendering/memory_report.hpp"
 
+#include <atomic>
 #include <cmath>
 
 #include "rendering/vk_shader.hpp"
@@ -178,7 +179,14 @@ public:
     /// The client's 'specular' option (off by default): tileset textures are
     /// loaded as their "_s.blp" versions, whose alpha the highlight is
     /// masked by (0x007d6980). Takes effect for chunks loaded after it.
-    void setSpecular(bool on) { specular_ = on; }
+    void setSpecular(bool on) { specular_.store(on); }
+    /// Read by the terrain workers, which read a tile's "_s.blp" files ahead.
+    [[nodiscard]] bool specular() const { return specular_.load(); }
+    /// A tileset texture's "_s.blp" (its extension replaced).
+    [[nodiscard]] static std::string specularTexturePath(const std::string& path) {
+        const size_t dot = path.find_last_of('.');
+        return (dot == std::string::npos ? path : path.substr(0, dot)) + "_s.blp";
+    }
     [[nodiscard]] bool isFogEnabled() const { return fogEnabled; }
     void setViewDistance(float distance) { maxViewDistance_ = std::clamp(distance, 183.33333f, 1583.3334f); }
 
@@ -307,7 +315,7 @@ private:
     std::unordered_map<std::string, CubeTexture> cubeCache_;
     CubeTexture blankCube_;          // bound where a chunk has no env layer
     VkSampler cubeSampler_ = VK_NULL_HANDLE;
-    bool specular_ = false;
+    std::atomic<bool> specular_{false};
     const CubeTexture* loadCube(const std::string& path);
     /// The texture loader's stand-in for a file it cannot open (0x004b9550
     /// with 0xac3354): one opaque green texel.
