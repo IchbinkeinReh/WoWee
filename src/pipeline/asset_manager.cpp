@@ -819,13 +819,6 @@ void AssetManager::noteStreamWait(const std::string& normalized, std::chrono::st
     }
 }
 
-std::vector<uint8_t> AssetManager::readFileNoWait(const std::string& path, bool& pending) const {
-    stream_wait::NoWait noWait;
-    std::vector<uint8_t> data = readFile(path);
-    pending = data.empty() && noWait.deferred();
-    return data;
-}
-
 BLPImage AssetManager::loadTextureNoWait(const std::string& path, bool keepCompressed, bool& pending) {
     stream_wait::NoWait noWait;
     BLPImage image = loadTexture(path, keepCompressed);

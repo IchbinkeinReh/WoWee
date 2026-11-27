@@ -161,9 +161,6 @@ public:
      */
     [[nodiscard]] std::vector<uint8_t> readFile(const std::string& path) const;
 
-    /// readFile that never waits for the network (see loadTextureNoWait).
-    [[nodiscard]] std::vector<uint8_t> readFileNoWait(const std::string& path, bool& pending) const;
-
     /**
      * Read optional file data without warning spam.
      * Intended for probe-style lookups (e.g. external .anim variants).
