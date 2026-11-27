@@ -87,6 +87,7 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 | `record` | the client's own recording, as `/record` makes it: start, stop, status; the answer has the file |
 | `gm` | a game master's command for the own character, whispered to itself |
 | `enter_world`, `quit` | from the character selection; out of the game. Logging in is left to the user (or to `WOWEE_AUTO_LOGIN`), also after `/logout` |
+| `enter_realm` | at the realm list (the world server refused the connection): the realm chosen before, or the one named, entered as its Enter Realm button does, then the wait for the character list |
 | `lua` | only with `--mcp-lua` |
 
 Every acting tool answers with what came of it: the interface's events, error and info messages, system chat lines,
@@ -131,7 +132,8 @@ creatures. In water it swims straight at its goal.
 - No tool reads a file or runs a program, and none is given the name of one to write: a recording goes where `/record`
   puts it, under a name of the client's. Every string of an answer is held against the account's name, the streaming
   key and the token, and blanked where it has one. No pictures are taken of the login and set-up screens.
-- Nothing is pressed on the screens for logging in, realms, new characters and set-up.
+- Nothing is pressed on the screens for logging in, realms, new characters and set-up (`enter_realm` calls the realm
+  list's own Enter Realm; no key or click reaches it and nothing is typed).
 - Lua runs only with `--mcp-lua`; without it `/run`, `/script`, `/dump` and macros that run Lua do nothing while the
   server acts.
 

@@ -69,6 +69,13 @@ public:
      */
     [[nodiscard]] bool hasSelection() const { return realmSelected; }
 
+    /// Enter a realm again as its Enter Realm button does: the one named, or,
+    /// with no name, the one picked before (else the only one, else the one
+    /// with characters). False, with why, when there is none to enter or it
+    /// is locked. For the MCP server's way back after the world server
+    /// refused the connection; nothing is typed.
+    bool enterRealmAgain(auth::AuthHandler& authHandler, const std::string& name, std::string& why);
+
     /**
      * Get selected realm info
      */

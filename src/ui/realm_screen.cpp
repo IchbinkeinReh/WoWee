@@ -256,6 +256,41 @@ void RealmScreen::render(auth::AuthHandler& authHandler) {
     ui_.end();
 }
 
+bool RealmScreen::enterRealmAgain(auth::AuthHandler& authHandler, const std::string& name, std::string& why) {
+    const auto& realms = authHandler.getRealms();
+    int index = -1;
+    for (size_t i = 0; i < realms.size(); ++i) {
+        if (name.empty() ? realms[i].name == selectedRealmName : realms[i].name == name) {
+            index = static_cast<int>(i);
+            break;
+        }
+    }
+    if (index < 0 && name.empty()) {
+        if (selectedRealmIndex >= 0 && selectedRealmIndex < static_cast<int>(realms.size())) index = selectedRealmIndex;
+        else if (realms.size() == 1) index = 0;
+        else {
+            for (size_t i = 0; i < realms.size() && index < 0; ++i)
+                if (realms[i].characters > 0) index = static_cast<int>(i);
+        }
+    }
+    if (index < 0) {
+        why = realms.empty() ? "no realm list" : "no such realm";
+        return false;
+    }
+    const auto& realm = realms[static_cast<size_t>(index)];
+    if (realm.lock) {
+        why = "the realm is locked";
+        return false;
+    }
+    selectedRealmIndex = index;
+    realmSelected = true;
+    selectedRealmName = realm.name;
+    selectedRealmAddress = realm.address;
+    setStatus("Connecting to realm: " + realm.name);
+    if (onRealmSelected) onRealmSelected(selectedRealmName, selectedRealmAddress);
+    return true;
+}
+
 void RealmScreen::setStatus(const std::string& message) {
     statusMessage = message;
 }

@@ -8,6 +8,8 @@
 #include "addons/lua_engine.hpp"
 #include "core/application.hpp"
 #include "core/window.hpp"
+#include "ui/realm_screen.hpp"
+#include "ui/ui_manager.hpp"
 #include "game/game_handler.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/hands.hpp"
@@ -55,6 +57,31 @@ void enterWorld(ToolContext& context, const json& args, Script& script) {
         }
         return out;
     }));
+}
+
+// From the realm list back to the character selection (tester's wish: the
+// world server refused the connection, and the client sat at realm_select).
+// The realm is entered as its Enter Realm button would; no key or click
+// reaches the screen, nothing is typed.
+void enterRealm(ToolContext& context, const json& args, Script& script) {
+    const Aftermath after(context);
+    const std::string name = args.value("realm", std::string());
+    script.then([&context, name](Script& s) {
+        if (clientState(context) != "realm_select") return s.fail("at " + clientState(context) + ", not at the realm list");
+        auto* ui = context.app.getUIManager();
+        auto* auth = context.app.getAuthHandler();
+        if (!ui || !auth) return s.fail("no realm list");
+        std::string why;
+        if (!ui->getRealmScreen().enterRealmAgain(*auth, name, why)) return s.fail(why);
+        return Script::Step::Next;
+    });
+    script.then([&context](Script& s) {
+        auto* gh = context.app.getGameHandler();
+        if (clientState(context) == "char_select" && gh && !gh->getCharacters().empty()) return Script::Step::Next;
+        if (s.elapsed() > 30.0) return s.fail("no character list after 30 s; at " + clientState(context));
+        return Script::Step::Again;
+    });
+    script.then(finishWith(context, after, [&context] { return json{{"client", clientState(context)}}; }));
 }
 
 void quit(ToolContext& context, const json& args, Script& script) {
@@ -113,6 +140,11 @@ void addClientTools(Toolbox& box) {
                        Tool::Where::Anywhere);
     e.patienceOf = [](const json& a) { return a.value("timeout", 90.0) + 15.0; };
     box.push_back(std::move(e));
+    box.push_back(handsTool("enter_realm",
+                            "At the realm list (e.g. after the world server refused the connection): enter the realm "
+                            "chosen before, or the one named, and wait for the character list.",
+                            object({optional("realm", text("the realm's name; the one chosen before by default", 64))}),
+                            enterRealm, 40.0, Tool::Where::Anywhere));
     box.push_back(handsTool("quit", "End the client: logged out first, or at once.",
                             object({optional("now", flag("do not wait for the realm's logout"))}), quit, 10.0,
                             Tool::Where::Anywhere));
