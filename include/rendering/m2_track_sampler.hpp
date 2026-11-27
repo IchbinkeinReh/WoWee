@@ -115,6 +115,77 @@ inline glm::vec3 sampleVec3(const pipeline::M2AnimationTrack& track,
         : safe(keys.vec3Values[lower]);
 }
 
+/// A light's track as a loop with no jump where it wraps (U19/U20, the
+/// user's wish for the traced lights; the model's own drawing keeps
+/// sampleFloat/sampleVec3). The time is moved on by `phaseMs` - a light's
+/// own, so lights loaded together do not flicker in step - and taken modulo
+/// the loop: the global sequence's length, else `sequenceLoopMs` (none: the
+/// time as it is, no wrap). Past the last key it runs on to the first key's
+/// value at the loop's end instead of holding the last one and jumping back;
+/// a last key at the loop's end itself stands for the first. Discrete tracks
+/// (type 0) are as they are.
+template <class T, class Values, class Sample>
+inline T sampleLooped(const pipeline::M2AnimationTrack& track, int animationSequenceIndex, float animationTimeMs,
+                      float globalTimeMs, const std::vector<uint32_t>& globalSequenceDurations,
+                      const T& defaultValue, float sequenceLoopMs, float phaseMs, Values&& values,
+                      Sample&& plain) {
+    const bool global = track.globalSequence >= 0 &&
+                        static_cast<size_t>(track.globalSequence) < globalSequenceDurations.size();
+    const float loop = global ? static_cast<float>(globalSequenceDurations[static_cast<size_t>(track.globalSequence)])
+                              : sequenceLoopMs;
+    if (!(loop > 0.0f)) return plain(animationTimeMs, globalTimeMs);   // no loop to move along
+    float time = std::fmod((global ? globalTimeMs : animationTimeMs) + phaseMs, loop);
+    if (time < 0.0f) time += loop;
+    const int timeline = resolveTimeline(track, global ? 0 : animationSequenceIndex);
+    if (timeline < 0) return defaultValue;
+    const auto& keys = track.sequences[static_cast<size_t>(timeline)];
+    const auto& vals = values(keys);
+    size_t count = std::min(keys.timestamps.size(), vals.size());
+    if (count == 0) return defaultValue;
+    if (count == 1 || track.interpolationType == 0) return plain(global ? animationTimeMs : time, global ? time : globalTimeMs);
+    const auto stamp = [&](size_t i) { return static_cast<float>(keys.timestamps[i]); };
+    // A last key at (or past) the loop's end is the first key again.
+    const bool endKey = stamp(count - 1) >= loop && stamp(0) <= 0.0f;
+    const size_t last = endKey ? count - 2 : count - 1;
+    const float tFirst = stamp(0), tLast = stamp(last);
+    const float wrapEnd = endKey ? loop : loop + tFirst;   // where the first key comes round again
+    if (time >= tLast || time < tFirst) {
+        const float gap = wrapEnd - tLast;
+        const float at = time >= tLast ? time - tLast : time + loop - tLast;
+        const float f = gap > 0.0f ? std::clamp(at / gap, 0.0f, 1.0f) : 0.0f;
+        return glm::mix(vals[last], vals[0], f);
+    }
+    const size_t lower = lowerKeyIndex(keys.timestamps, last + 1, time);
+    const float t0 = stamp(lower), t1 = stamp(lower + 1);
+    const float f = t1 > t0 ? std::clamp((time - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+    return glm::mix(vals[lower], vals[lower + 1], f);
+}
+
+inline float sampleFloatLooped(const pipeline::M2AnimationTrack& track, int animationSequenceIndex,
+                               float animationTimeMs, float globalTimeMs,
+                               const std::vector<uint32_t>& globalSequenceDurations, float defaultValue,
+                               float sequenceLoopMs, float phaseMs) {
+    return sampleLooped<float>(
+        track, animationSequenceIndex, animationTimeMs, globalTimeMs, globalSequenceDurations, defaultValue,
+        sequenceLoopMs, phaseMs, [](const auto& k) -> const std::vector<float>& { return k.floatValues; },
+        [&](float t, float g) {
+            return sampleFloat(track, animationSequenceIndex, t, g, globalSequenceDurations, defaultValue);
+        });
+}
+
+inline glm::vec3 sampleVec3Looped(const pipeline::M2AnimationTrack& track, int animationSequenceIndex,
+                                  float animationTimeMs, float globalTimeMs,
+                                  const std::vector<uint32_t>& globalSequenceDurations, const glm::vec3& defaultValue,
+                                  float sequenceLoopMs, float phaseMs) {
+    const glm::vec3 v = sampleLooped<glm::vec3>(
+        track, animationSequenceIndex, animationTimeMs, globalTimeMs, globalSequenceDurations, defaultValue,
+        sequenceLoopMs, phaseMs, [](const auto& k) -> const std::vector<glm::vec3>& { return k.vec3Values; },
+        [&](float t, float g) {
+            return sampleVec3(track, animationSequenceIndex, t, g, globalSequenceDurations, defaultValue);
+        });
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) ? v : defaultValue;
+}
+
 /// The mean of a float or vec3 track over the timeline `animationSequenceIndex`
 /// reads (a global sequence's own), weighted by time between its keys as
 /// they are interpolated linearly: what a flickering light gives on

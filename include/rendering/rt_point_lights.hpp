@@ -240,6 +240,29 @@ inline constexpr float kMinM2LightReach = 3.0f;
 /// nine and a half yards up with a reach of nine).
 inline constexpr float kWorldReachScale = 1.5f;
 
+/// A light's own place in its flicker, from where it stands (U19, the user's
+/// wish): a stable hash of its position to a tenth of a yard, as a fraction
+/// in [0, 1). The same fire keeps it over reloads; neighbours differ.
+[[nodiscard]] inline float lightPhase01(const glm::vec3& at) {
+    const auto q = [](float v) { return static_cast<uint32_t>(static_cast<int32_t>(std::floor(v * 10.0f))); };
+    uint32_t h = 2166136261u;
+    for (const uint32_t v : {q(at.x), q(at.y), q(at.z)}) {
+        for (int b = 0; b < 4; ++b) {
+            h ^= (v >> (8 * b)) & 0xffu;
+            h *= 16777619u;
+        }
+    }
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    return static_cast<float>(h & 0xffffffu) / 16777216.0f;
+}
+/// That phase as a time offset into an M2 light's tracks (a minute's span,
+/// taken modulo each loop) and as an angle for fireLight.
+inline constexpr float kLightPhaseSpanMs = 60000.0f;
+[[nodiscard]] inline float lightPhaseMs(const glm::vec3& at) { return lightPhase01(at) * kLightPhaseSpanMs; }
+[[nodiscard]] inline float lightPhaseRadians(const glm::vec3& at) { return lightPhase01(at) * 6.2831853f; }
+
 /// An M2 light as it is this frame: the diffuse colour times its intensity,
 /// the attenuation window, and the position carried by its bone into the
 /// world. None for a directional light, one switched off by its visibility
@@ -250,15 +273,18 @@ inline std::optional<PointLight> evaluateM2Light(const pipeline::M2Light& light,
                                                  const std::vector<uint32_t>& globalSequenceDurations,
                                                  const glm::mat4& modelMatrix,
                                                  const std::vector<glm::mat4>& bones,
-                                                 float flickerStrength = 1.0f) {
+                                                 float flickerStrength = 1.0f, float sequenceLoopMs = 0.0f,
+                                                 float phaseMs = 0.0f) {
     if (light.type != 1) return std::nullopt;
     const auto& gs = globalSequenceDurations;
     if (m2_track::sampleFloat(light.visibility, sequence, timeMs, globalTimeMs, gs, 1.0f) == 0.0f)
         return std::nullopt;
-    const glm::vec3 color = m2_track::sampleVec3(light.diffuseColor, sequence, timeMs, globalTimeMs, gs,
-                                                 glm::vec3(0.0f));
-    const float intensity =
-        m2_track::sampleFloat(light.diffuseIntensity, sequence, timeMs, globalTimeMs, gs, 0.0f);
+    // Colour and strength as loops without a jump at the wrap, at the light's
+    // own phase (U19/U20; m2_track::sampleLooped).
+    const glm::vec3 color = m2_track::sampleVec3Looped(light.diffuseColor, sequence, timeMs, globalTimeMs, gs,
+                                                       glm::vec3(0.0f), sequenceLoopMs, phaseMs);
+    const float intensity = m2_track::sampleFloatLooped(light.diffuseIntensity, sequence, timeMs, globalTimeMs, gs,
+                                                        0.0f, sequenceLoopMs, phaseMs);
     PointLight out;
     out.color = glm::max(color, glm::vec3(0.0f)) * std::max(intensity, 0.0f);
     // Debug Glow, "Model light flicker strength": the tracks' swing about

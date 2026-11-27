@@ -583,3 +583,76 @@ TEST_CASE("a fire's light goes among its particles, not into its coals", "[rt][l
     REQUIRE(at);
     CHECK(at->z == Catch::Approx(1.5f));
 }
+
+// U20: a light's track loops without a jump where it wraps - past its last
+// key it runs on to the first key's value at the loop's end.
+TEST_CASE("a light's flicker track has no jump at its wrap (U20)", "[rt][lights]") {
+    namespace m2t = wowee::rendering::m2_track;
+    pipeline::M2AnimationTrack t;
+    t.interpolationType = 1;
+    t.globalSequence = 0;
+    t.sequences.resize(1);
+    t.sequences[0].timestamps = {0, 400, 700};
+    t.sequences[0].floatValues = {1.0f, 3.0f, 2.0f};
+    const std::vector<uint32_t> globals = {1000};
+    const auto at = [&](float g) { return m2t::sampleFloatLooped(t, 0, 0.0f, g, globals, 0.0f, 0.0f, 0.0f); };
+    // Inside the keys as before.
+    CHECK(at(200.0f) == Catch::Approx(2.0f));
+    CHECK(at(550.0f) == Catch::Approx(2.5f));
+    // From the last key (700) to the loop's end (1000) on to the first value.
+    CHECK(at(850.0f) == Catch::Approx(1.5f));
+    CHECK(at(999.9f) == Catch::Approx(1.0f).margin(0.01));
+    CHECK(at(1000.0f) == Catch::Approx(1.0f));
+    // No step anywhere along a lap: neighbouring samples stay close.
+    float worst = 0.0f;
+    for (float g = 0.0f; g < 3000.0f; g += 5.0f) worst = std::max(worst, std::abs(at(g + 5.0f) - at(g)));
+    CHECK(worst < 0.05f);
+    // A last key at the loop's end stands for the first.
+    t.sequences[0].timestamps = {0, 500, 1000};
+    t.sequences[0].floatValues = {1.0f, 3.0f, 5.0f};
+    CHECK(at(750.0f) == Catch::Approx(2.0f));
+    CHECK(at(999.0f) == Catch::Approx(1.0f).margin(0.01));
+    // The model's own sampler holds the last key and jumps (unchanged).
+    t.sequences[0].timestamps = {0, 400, 700};
+    t.sequences[0].floatValues = {1.0f, 3.0f, 2.0f};
+    CHECK(m2t::sampleFloat(t, 0, 0.0f, 850.0f, globals, 0.0f) == Catch::Approx(2.0f));
+}
+
+// U19: lights loaded together get phases of their own, the same light
+// always the same one.
+TEST_CASE("each light has its own stable flicker phase (U19)", "[rt][lights]") {
+    const glm::vec3 a(1600.0f, -4380.0f, 12.0f), b(1603.0f, -4380.0f, 12.0f);
+    CHECK(lightPhase01(a) == lightPhase01(a));
+    CHECK(lightPhase01(a) != lightPhase01(b));
+    for (const glm::vec3& p : {a, b}) {
+        CHECK(lightPhase01(p) >= 0.0f);
+        CHECK(lightPhase01(p) < 1.0f);
+    }
+    // Spread: a row of ten torches a yard apart does not share one phase.
+    std::vector<float> phases;
+    for (int i = 0; i < 10; ++i) phases.push_back(lightPhase01(glm::vec3(10.0f * i, 0.0f, 0.0f)));
+    std::sort(phases.begin(), phases.end());
+    CHECK(phases.back() - phases.front() > 0.3f);
+    // Through an M2 light: two lights of one model at their own phases read
+    // their tracks at different places.
+    pipeline::M2Light l;
+    l.type = 1;
+    l.diffuseColor.sequences.resize(1);
+    l.diffuseColor.sequences[0].timestamps = {0};
+    l.diffuseColor.sequences[0].vec3Values = {glm::vec3(1.0f)};
+    l.diffuseIntensity.interpolationType = 1;
+    l.diffuseIntensity.globalSequence = 0;
+    l.diffuseIntensity.sequences.resize(1);
+    l.diffuseIntensity.sequences[0].timestamps = {0, 500};
+    l.diffuseIntensity.sequences[0].floatValues = {0.5f, 1.5f};
+    l.attenuationEnd.sequences.resize(1);
+    l.attenuationEnd.sequences[0].timestamps = {0};
+    l.attenuationEnd.sequences[0].floatValues = {5.0f};
+    const std::vector<uint32_t> globals = {1000};
+    const auto one = evaluateM2Light(l, 0, 0.0f, 0.0f, globals, glm::mat4(1.0f), {}, 1.0f, 0.0f, 0.0f);
+    const auto two = evaluateM2Light(l, 0, 0.0f, 0.0f, globals, glm::mat4(1.0f), {}, 1.0f, 0.0f, 250.0f);
+    REQUIRE(one.has_value());
+    REQUIRE(two.has_value());
+    CHECK(one->color.r == Catch::Approx(0.5f));
+    CHECK(two->color.r == Catch::Approx(1.0f));
+}

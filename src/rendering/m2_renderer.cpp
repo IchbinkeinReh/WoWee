@@ -3109,7 +3109,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
                                                            inst.globalSequenceTime,
-                                                           static_cast<float>(inst.id % 97u), rtFireFlickerStrength_);
+                                                           rt_lights::lightPhaseRadians(glm::vec3(inst.modelMatrix[3])),
+                                                           rtFireFlickerStrength_);
             // In the colour of its own flames (rt_fire_color.hpp), as strong as
             // what of them is drawn this moment (visibleFlameShare: the
             // twinkle's sizes; the user's answer to V417).
@@ -3187,7 +3188,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 light, inst.currentSequenceIndex, inst.animTime, inst.globalSequenceTime,
                 model->globalSequenceDurations,
                 turned ? rtSteadyCarried(*model, inst, static_cast<uint32_t>(light.bone)) : inst.modelMatrix,
-                turned ? kNoBones : inst.boneMatrices, rtModelFlickerStrength_);
+                turned ? kNoBones : inst.boneMatrices, rtModelFlickerStrength_, inst.animDuration,
+                rt_lights::lightPhaseMs(glm::vec3(inst.modelMatrix[3])));
             if (!l) continue;
             l->color *= fade;
             // A light whose own colour and strength hold still pulses with
