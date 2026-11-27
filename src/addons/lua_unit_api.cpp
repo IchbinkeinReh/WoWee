@@ -775,6 +775,11 @@ static int lua_UnitGroupRolesAssigned(lua_State* L) {
                          (m.roles & kRoleHealer) != 0,
                          (m.roles & kRoleDamager) != 0);
     }
+    // The player is not among the members: its own role is the group list's
+    // own byte (0x0060c810 -> 0x0052c860 answers 0x00bd198a for the player's
+    // guid), which the player frame's role icon reads.
+    if (guid == gh->getPlayerGuid())
+        return pushRoles((pd.roles & 0x02) != 0, (pd.roles & 0x04) != 0, (pd.roles & 0x08) != 0);
     // Not in the party, or in no party at all: no role, and the icon is hidden
     // rather than guessed at.
     return pushRoles(false, false, false);

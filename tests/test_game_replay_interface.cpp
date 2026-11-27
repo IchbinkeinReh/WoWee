@@ -3917,6 +3917,34 @@ TEST_CASE("raid group moves within one group send nothing", "[replay][interface]
     CHECK(sent(Opcode::CMSG_GROUP_SWAP_SUB_GROUP) == 1);
 }
 
+// 0x0060c810 -> 0x0052c860: the player's own role is the group list's own
+// byte, a member's its row's.
+TEST_CASE("UnitGroupRolesAssigned answers the player's own role", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+    g.writeUInt8(0);      // a party
+    g.writeUInt8(0);      // own subgroup
+    g.writeUInt8(0);      // own flags
+    g.writeUInt8(0x04);   // own roles: healer
+    g.writeUInt64(0x1234);
+    g.writeUInt32(1);
+    g.writeUInt32(1);
+    g.writeString("Achiles");
+    g.writeUInt64(0x1001);
+    g.writeUInt8(1);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0x02);   // tank
+    g.writeUInt64(Session::kPlayerGuid);
+    for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+    s.receive(g);
+    CHECK(ui.is("select(2, UnitGroupRolesAssigned('player')) == true"));
+    CHECK(ui.is("UnitGroupRolesAssigned('player') == false"));
+    CHECK(ui.is("UnitGroupRolesAssigned('party1') == true"));
+}
+
 // T385: the answer that ends a ready check is still readable at its
 // READY_CHECK_CONFIRM - 0x005744f0 ends the check (deadline into the past)
 // only after its member loop raised the event.
