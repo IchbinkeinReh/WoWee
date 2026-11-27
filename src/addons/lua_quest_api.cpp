@@ -1238,16 +1238,8 @@ static game::QuestPoiQuestState questPoiState(game::GameHandler* gh,
     }
     if (q->failed) return st;
 
-    bool anyKill = false, onlyStartItem = true;
-    for (const auto& kill : q->killObjectives) anyKill = anyKill || kill.npcOrGoId != 0;
-    for (const auto& item : q->itemObjectives) {
-        if (game::isListedItemObjective(*q, item)) onlyStartItem = false;
-    }
-    const bool special = (q->questFlags & 6u) != 0;
-    const bool noRep = q->repObjectiveFaction == 0 && q->repObjectiveFaction2 == 0;
     // 0x005e10b0: nothing to do but hand it in.
-    st.noObjectives = !anyKill && onlyStartItem && q->playersSlain == 0 && !special && noRep &&
-                      q->rewardMoney >= 0;
+    st.noObjectives = game::questHasNoObjectives(*q);
     // 0x005e0ea0(index, 1): a quest with no requirement at all is never
     // "complete" here, however the log has it.
     st.complete = q->complete && !game::questRequiresNothing(*q);
@@ -1275,7 +1267,7 @@ static game::QuestPoiQuestState questPoiState(game::GameHandler* gh,
         if (source == 0 || source == q->sourceItemId) continue;
         if (gh->countItemInBags(source) == 0) mask |= 1u << (i + 10);
     }
-    if (special) mask |= 0x10000u;
+    if ((q->questFlags & 6u) != 0) mask |= 0x10000u;
     st.objectiveMask = mask;
     return st;
 }

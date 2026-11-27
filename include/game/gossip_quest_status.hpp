@@ -41,12 +41,8 @@ namespace wowee::game::gossip_quest {
 [[nodiscard]] constexpr bool listIsActive(uint32_t icon) { return icon == 3 || icon == 4; }
 [[nodiscard]] constexpr bool listIsAvailable(uint32_t icon) { return !listIsActive(icon); }
 
-/// Whether an active quest of the list is drawn as ready to hand in: the icon
-/// says so, or the quest log has the quest and its slot says complete.
-[[nodiscard]] constexpr bool activeQuestIsComplete(uint32_t icon, bool inLog, bool logComplete) {
-    if (!iconIsActive(icon)) return false;
-    return iconIsCompletable(icon) || (inLog && logComplete);
-}
+/// Whether an active quest of the list is drawn as ready to hand in is the
+/// quest log's answer alone (questReadyToHandIn, quest_objectives.hpp).
 
 /// What the list may write back into the quest log's complete flag: only a
 /// completable icon is news. 4 is sent for finished and unfinished alike, so

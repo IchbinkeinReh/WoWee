@@ -6,6 +6,7 @@
 #include "game/packed_time.hpp"
 #include "game/gossip_icon.hpp"
 #include "game/gossip_quest_status.hpp"
+#include "game/quest_objectives.hpp"
 #include "game/name_rules.hpp"
 #include "game/spell_mods.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -1467,17 +1468,15 @@ bool gossipQuestIsActive(uint32_t icon) { return game::gossip_quest::listIsActiv
 /// rather than the grey one. A 3.3.5 server sends the same icon for both, so
 /// the quest log's complete flag decides (gossip_quest_status.hpp).
 bool gossipQuestIsComplete(game::GameHandler* gh, const game::GossipQuestItem& q) {
-    bool inLog = false;
-    bool logComplete = false;
-    if (gh) {
-        for (const auto& entry : gh->getQuestLog()) {
-            if (entry.questId != q.questId) continue;
-            inLog = true;
-            logComplete = entry.complete;
-            break;
-        }
+    // 0x0058b490 / 0x0058bcb0: the quest's place in the log (0x005deeb0), none
+    // for one not there, and then 0x005e0ea0(index, 1) || 0x005e10b0(index) -
+    // the icon is not asked. A quest with nothing to do but hand it in is
+    // ready whatever its slot's complete bit says.
+    if (!gh) return false;
+    for (const auto& entry : gh->getQuestLog()) {
+        if (entry.questId == q.questId) return game::questReadyToHandIn(entry);
     }
-    return game::gossip_quest::activeQuestIsComplete(q.questIcon, inLog, logComplete);
+    return false;
 }
 
 /// The i-th quest of one kind, or null past the end. One walk shared by

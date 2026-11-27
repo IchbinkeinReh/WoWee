@@ -37,24 +37,6 @@ TEST_CASE("the window's lists take 3 and 4 as active", "[gossip_quest]") {
     for (uint32_t icon : {0u, 1u, 2u, 5u, 6u, 7u, 8u, 10u}) CHECK((listIsAvailable(icon) && !listIsActive(icon)));
 }
 
-TEST_CASE("a finished quest sent as icon 4 is complete by the quest log", "[gossip_quest]") {
-    // What AzerothCore / TrinityCore send for QUEST_STATUS_COMPLETE.
-    CHECK(activeQuestIsComplete(4, /*inLog=*/true, /*logComplete=*/true));
-    // The same icon for one still under way.
-    CHECK_FALSE(activeQuestIsComplete(4, true, false));
-    // Not in the log at all: nothing says it is done.
-    CHECK_FALSE(activeQuestIsComplete(4, false, false));
-}
-
-TEST_CASE("an icon that says completable is complete whatever the log", "[gossip_quest]") {
-    CHECK(activeQuestIsComplete(5, false, false));
-    CHECK(activeQuestIsComplete(10, true, false));
-}
-
-TEST_CASE("an offered quest is never drawn as complete", "[gossip_quest]") {
-    CHECK_FALSE(activeQuestIsComplete(2, true, true));
-}
-
 TEST_CASE("icon 4 leaves the log's complete flag as it was", "[gossip_quest]") {
     // Reading 4 as "not complete" cleared the slot's bit on every talk.
     CHECK(logCompleteAfterList(4, true));

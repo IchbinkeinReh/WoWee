@@ -65,6 +65,31 @@ inline bool questRequiresNothing(const QuestHandler::QuestLogEntry& q) {
     return true;
 }
 
+/// 0x005e10b0: nothing to do but hand it in - no kill or object, no item but the
+/// quest's own one wanted once, no players slain, no exploration or event flag,
+/// no reputation and no money to pay. Only once the quest's record is there
+/// (0x0067de90 answers none before; level 0 is a record not yet arrived).
+inline bool questHasNoObjectives(const QuestHandler::QuestLogEntry& q) {
+    if (q.failed || q.level == 0) return false;
+    for (const auto& kill : q.killObjectives) {
+        if (kill.npcOrGoId != 0) return false;
+    }
+    for (const auto& item : q.itemObjectives) {
+        if (isListedItemObjective(q, item)) return false;
+    }
+    return q.playersSlain == 0 && (q.questFlags & 6u) == 0 && q.repObjectiveFaction == 0 &&
+           q.repObjectiveFaction2 == 0 && q.rewardMoney >= 0;
+}
+
+/// What the gossip and greeting lists draw as ready to hand in (GetGossipActiveQuests
+/// 0x0058b490, GetActiveTitle 0x0058bcb0): the quest's log slot answers
+/// 0x005e0ea0(index, 1) - met, and not a quest that requires nothing - or
+/// 0x005e10b0. Read from the log alone, whatever icon the list gave it.
+inline bool questReadyToHandIn(const QuestHandler::QuestLogEntry& q) {
+    if (q.failed) return false;
+    return (q.complete && !questRequiresNothing(q)) || questHasNoObjectives(q);
+}
+
 /// How many lines questObjectives answers, without asking for any names. Note
 /// that this counts lines, not things there is to do: the client's own "does this
 /// quest have any objectives" test (0x005e0ea0) looks only at the kill and item

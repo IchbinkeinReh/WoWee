@@ -14,6 +14,7 @@
 #include "game/player_display_flags.hpp"
 #include "game/chat_gesture.hpp"
 #include "game/client_text_copy.hpp"
+#include "game/quest_handler.hpp"
 #include "game/quest_link.hpp"
 #include "game_replay.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -216,6 +217,41 @@ TEST_CASE("the gossip quest lists split by icons 3 and 4", "[replay][interface]"
     CHECK(ui.is("select(5, GetGossipActiveQuests()) == 'Taken too'"));
     CHECK(ui.is("select('#', GetGossipAvailableQuests()) == 10"));
     CHECK(ui.is("select('#', GetGossipActiveQuests()) == 8"));
+}
+
+// 0x0058b490: an active gossip quest's isComplete is its log slot's
+// 0x005e0ea0(index, 1) || 0x005e10b0(index) - never the icon, which a 3.3.5
+// server sends as 4 for finished and unfinished alike. A quest with nothing to
+// do but hand it in is ready (found by AG in code).
+TEST_CASE("GetGossipActiveQuests asks the quest log whether a quest is done", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto* quests = s.handler().getQuestHandler();
+    for (uint32_t id : {901u, 902u, 903u}) quests->addQuestToLocalLogIfMissing(id, "Quest", "");
+    for (auto& q : quests->questLogRef()) {
+        if (q.questId == 901 || q.questId == 902) {
+            q.killObjectives[0].npcOrGoId = 299;
+            q.killObjectives[0].required = 8;
+        }
+        q.complete = q.questId == 901;
+        q.level = 10;
+    }
+    wowee::network::Packet gossip(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_MESSAGE));
+    gossip.writeUInt64(0xF130000BEC00150Full);
+    for (uint32_t v : {0u, 1u, 0u}) gossip.writeUInt32(v);
+    gossip.writeUInt32(4);
+    for (uint32_t id : {901u, 902u, 903u, 904u}) {
+        for (uint32_t v : {id, 4u, 10u, 0u}) gossip.writeUInt32(v);
+        gossip.writeUInt8(0);
+        gossip.writeString("Taken");
+    }
+    s.receive(gossip);
+    REQUIRE(ui.is("select('#', GetGossipActiveQuests()) == 16"));
+    CHECK(ui.is("select(4, GetGossipActiveQuests()) == 1"));
+    CHECK(ui.is("select(8, GetGossipActiveQuests()) == nil"));
+    CHECK(ui.is("select(12, GetGossipActiveQuests()) == 1"));
+    CHECK(ui.is("select(16, GetGossipActiveQuests()) == nil"));
 }
 
 // P56: 0x0062f9e0 gives the tooltip the attachment's property and seed, as
