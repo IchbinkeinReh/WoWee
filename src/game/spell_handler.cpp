@@ -8497,9 +8497,21 @@ void SpellHandler::extractSkillFields(const FlatFieldMap& fields) {
             }
         }
     }
+    // Any of a skill's three fields moving runs 0x006da4a0, which ends in
+    // 0x005dd5a0(0): with a trade skill window open its list is made again
+    // and TRADE_SKILL_UPDATE raised (event 300 at 0x005de0da), so the rank
+    // bar shows a skill-up at once (T446) - not only at the next bag change.
+    bool fieldsMoved = skillsChanged;
+    for (const auto& [id, sk] : newSkills) {
+        if (fieldsMoved) break;
+        const auto it = owner_.playerSkillsRef().find(id);
+        fieldsMoved = it->second.maxValue != sk.maxValue || it->second.step != sk.step ||
+                      it->second.bonusTemp != sk.bonusTemp || it->second.bonusPerm != sk.bonusPerm;
+    }
     owner_.playerSkillsRef() = std::move(newSkills);
     if (skillsChanged)
         owner_.fireAddonEvent("SKILL_LINES_CHANGED", {});
+    if (fieldsMoved && !firstRead && craftingWindowOpen_) owner_.fireAddonEvent("TRADE_SKILL_UPDATE", {});
 }
 
 void SpellHandler::extractExploredZoneFields(const FlatFieldMap& fields) {

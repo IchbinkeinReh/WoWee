@@ -6473,3 +6473,30 @@ TEST_CASE("a chat window's own lines are told to the MCP server once", "[replay]
     REQUIRE(chatWindowLines().size() == 2);
     CHECK(chatWindowLines()[1].second == "z");
 }
+
+// T446: a skill field moving runs 0x006da4a0, which ends in 0x005dd5a0(0) -
+// TRADE_SKILL_UPDATE while a trade skill window is open - so the window's
+// rank bar shows the skill-up at once.
+TEST_CASE("a skill-up redraws an open trade skill window (T446)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto skill = static_cast<uint16_t>(wowee::game::fieldIndex(UF::PLAYER_SKILL_INFO_START));
+    constexpr uint32_t kMining = 186;
+    const auto rank = [&](uint32_t value, uint32_t max) {
+        s.receive(UpdateObject().valuesAt(Session::kPlayerGuid,
+                                          {{skill, kMining}, {static_cast<uint16_t>(skill + 1), value | (max << 16)}}));
+    };
+    rank(5, 75);
+    ui.run("updates = 0 local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_UPDATE') "
+           "f:SetScript('OnEvent', function() updates = updates + 1 end)");
+    rank(6, 75);
+    CHECK(ui.is("updates == 0"));  // no window open
+    s.handler().getSpellHandler()->openCraftingWindow(kMining, 2656);
+    REQUIRE(s.handler().isCraftingWindowOpen());
+    ui.run("updates = 0");
+    rank(7, 75);
+    CHECK(ui.is("updates == 1"));
+    rank(7, 150);  // the most moving too
+    CHECK(ui.is("updates == 2"));
+}
