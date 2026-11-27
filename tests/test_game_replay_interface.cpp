@@ -5184,6 +5184,35 @@ TEST_CASE("the dungeon finder queue status is read as 12340 reads it (T418, 0x00
     CHECK(since == Catch::Approx(wowee::core::appTimeSeconds() - 60.0).margin(1.0));
 }
 
+// ITEM_LOCKED / ITEM_UNLOCKED (FIXER AB, AA's open item): 12340 raises
+// ITEM_LOCK_CHANGED and then ITEM_LOCKED or ITEM_UNLOCKED, with the same
+// place, whenever an item's lock bit changes (0x00706fe0 / 0x00707020 ->
+// 0x0060bfe0); ClearCursor unlocks the held item before its CURSOR_UPDATE
+// (0x00519280 case 1 -> 0x00513770). WoWee raised neither event, and a held
+// bag item put down with ClearCursor raised no lock change at all.
+TEST_CASE("an item's lock is announced as 12340 announces it (0x0060bfe0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    carry(s, 1251, 0, 0);
+    ui.run("seen = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'ITEM_LOCK_CHANGED', 'ITEM_LOCKED', 'ITEM_UNLOCKED', 'CURSOR_UPDATE'}) do "
+           "f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(self, e, a, b) "
+           "seen[#seen + 1] = e .. ' ' .. tostring(a) .. ' ' .. tostring(b) .. ' ' .. "
+           "tostring(select(3, GetContainerItemInfo(0, 1))) end)");
+    ui.run("PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    CHECK(ui.is("seen[#seen - 1] == 'ITEM_LOCK_CHANGED 0 1 1' and seen[#seen] == 'ITEM_LOCKED 0 1 1'"));
+    ui.run("seen = {} ClearCursor()");
+    INFO(ui.is("seen[1] == 'ITEM_LOCK_CHANGED 0 1 nil'"));
+    CHECK(ui.is("seen[1] == 'ITEM_LOCK_CHANGED 0 1 nil'"));
+    CHECK(ui.is("seen[2] == 'ITEM_UNLOCKED 0 1 nil'"));
+    CHECK(ui.is("seen[3] ~= nil and seen[3]:sub(1, 13) == 'CURSOR_UPDATE'"));
+    CHECK(ui.is("#seen == 3"));
+}
+
 // LFG review (found by AB in code): GetLFGRoleUpdate answers a boolean first,
 // false without a role check (0x00554610, was nil); UnitHasLFGDeserter /
 // UnitHasLFGRandomCooldown of a unit naming nobody answer nothing

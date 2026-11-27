@@ -239,6 +239,7 @@ void askToDeleteCursorItem(lua_State* L) {
 /// because the sites that put the cursor down come first in the file, and each
 /// of them used to clear only part of what a pickup sets.
 static void clearCursorItem(lua_State* L);
+static void releaseHeldItemLock(lua_State* L);
 /// The equipment set of an id, and its icon. Defined beside the set pickup.
 static const game::EquipmentSetInfo* equipmentSetById(game::GameHandler* gh, uint32_t setId);
 static std::string equipmentSetIcon(const game::EquipmentSetInfo* set);
@@ -1841,6 +1842,9 @@ static void pickupSlotAction(lua_State* L, game::GameHandler* gh, int slot,
         pickupEquipmentSet(L, gh, action.id);
         return;
     }
+    // A bag item held is put down first (the client's ClearCursor before the
+    // pickup), and its slot unlocked.
+    releaseHeldItemLock(L);
     setCursorType(L, action.kind == Kind::Spell  ? CursorType::SPELL
                      : action.kind == Kind::Item ? CursorType::ITEM
                                                  : CursorType::MACRO);
@@ -2213,10 +2217,35 @@ static bool cursorWireSlot(uint8_t& bag, uint8_t& slot) {
     return true;
 }
 
+/// An item's lock changing, as 12340 says it (0x00706fe0 / 0x00707020 ->
+/// 0x0060bfe0): ITEM_LOCK_CHANGED, then ITEM_LOCKED or ITEM_UNLOCKED, both
+/// with the same place - a worn slot alone, else container and slot.
+static void announceItemLock(game::GameHandler* gh, const CursorItemSlot& at, bool locked) {
+    if (!gh || at.slot <= 0) return;
+    std::vector<std::string> args;
+    if (at.equipped) args = {std::to_string(at.slot)};
+    else args = {std::to_string(at.bag), std::to_string(at.slot)};
+    gh->fireAddonEvent("ITEM_LOCK_CHANGED", args);
+    gh->fireAddonEvent(locked ? "ITEM_LOCKED" : "ITEM_UNLOCKED", args);
+}
+
+/// The item on the cursor put down: its slot is free again (ClearCursor
+/// 0x00519280 case 1 -> 0x00513770 -> 0x00707020), announced before the
+/// cursor's own CURSOR_UPDATE, with the cursor no longer naming the slot.
+static void releaseHeldItemLock(lua_State* L) {
+    const CursorItemSlot held = cursorItemSlot();
+    if (s_cursorType != CursorType::ITEM || held.slot <= 0) return;
+    cursorItemSlot() = {};
+    s_cursorSlot = 0;
+    s_cursorBag = -1;
+    announceItemLock(getGameHandler(L), held, false);
+}
+
 /// Put the cursor down.
 static void clearCursorItem(lua_State* L) {
     // 0x00519280 ends gift wrapping too (0x006cef80).
     if (auto* gh = getGameHandler(L)) gh->cancelWrapping();
+    releaseHeldItemLock(L);
     s_cursorMoney = 0;
     s_cursorSplit = 0;
     setCursorType(L, CursorType::NONE);
@@ -2410,8 +2439,7 @@ static void pickupFromContainerSlot(lua_State* L, game::GameHandler* gh,
         cursorItemSlot() = {bag, slot, false};
         // The slot draws greyed while its item is on the cursor, which is how a
         // bag shows that something has been picked up out of it.
-        gh->fireAddonEvent("ITEM_LOCK_CHANGED",
-                           {std::to_string(bag), std::to_string(slot)});
+        announceItemLock(gh, cursorItemSlot(), true);
         LOG_WARNING("FrameXML pickup: bag ", bag, " slot ", slot,
                     " item ", itemSlot->item.itemId);
     } else {
@@ -2582,18 +2610,13 @@ static int lua_PickupContainerItem(lua_State* L) {
         // the bank, so dropping the helm on bank slot one read as putting it
         // back where it came from and quietly did nothing.
         if (s_cursorBag == bag && s_cursorSlot == slot && !cursorItemSlot().equipped) {
-            const int sameBag = bag, sameSlot = slot;
-            clearCursorItem(L);
-            gh->fireAddonEvent("ITEM_LOCK_CHANGED",
-                               {std::to_string(sameBag), std::to_string(sameSlot)});
+            clearCursorItem(L);   // announces the slot unlocked
             return 0;
         }
 
         // CGPlayer_C::SwapItems asks the taint check (0x006df890, kind 0x16):
         // insecure code moves nothing in combat lockdown.
         if (!taint::allowed(L, 0x16)) return 0;
-        const int wasBag = s_cursorBag, wasSlot = s_cursorSlot;
-        const bool wasWorn = cursorItemSlot().equipped;
         // A worn piece dropped on a bind-on-equip one in a bag equips that
         // one, and is parked for EQUIP_BIND: kept in the hand while the
         // question is open (dropCursorAfterMove, T352).
@@ -2607,15 +2630,11 @@ static int lua_PickupContainerItem(lua_State* L) {
             gh->swapContainerItems(srcBag, srcSlot, dstBag, dstSlot);
         }
         if (parkedEquipMoves(L) > parked) return 0;
-        clearCursorItem(L);
-        // A worn slot is named by its slot alone, as 12340 names an inventory
-        // slot's lock (PaperDollItemSlotButton_OnEvent: `not arg2 and arg1 ==
+        // Put down: the source's unlock is announced there - a worn slot by
+        // its slot alone, as 12340 names an inventory slot's lock
+        // (PaperDollItemSlotButton_OnEvent: `not arg2 and arg1 ==
         // self:GetID()`); bag -1 is the bank's container to the interface.
-        if (wasWorn)
-            gh->fireAddonEvent("ITEM_LOCK_CHANGED", {std::to_string(wasSlot)});
-        else
-            gh->fireAddonEvent("ITEM_LOCK_CHANGED",
-                               {std::to_string(wasBag), std::to_string(wasSlot)});
+        clearCursorItem(L);
         gh->fireAddonEvent("ITEM_LOCK_CHANGED",
                            {std::to_string(bag), std::to_string(slot)});
         return 0;
@@ -2900,7 +2919,7 @@ static int lua_PickupBagFromSlot(lua_State* L) {
     // reads the same s_cursorSlot this just set - but nothing asks again
     // without this, so the square greyed only on the next unrelated redraw.
     // One argument, because the paperdoll's handler tests `not arg2`.
-    gh->fireAddonEvent("ITEM_LOCK_CHANGED", {std::to_string(slot)});
+    announceItemLock(gh, cursorItemSlot(), true);
     return 0;
 }
 
@@ -3036,7 +3055,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
         // `if ( not arg2 and arg1 == self:GetID() )`, so an equipment lock is
         // the slot alone. A second argument makes that test fail and the square
         // never greys.
-        gh->fireAddonEvent("ITEM_LOCK_CHANGED", {std::to_string(slot)});
+        announceItemLock(gh, cursorItemSlot(), true);
         LOG_WARNING("FrameXML pickup: equipment slot ", slot,
                     " item ", eq.item.itemId);
     } else {

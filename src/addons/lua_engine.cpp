@@ -20053,13 +20053,19 @@ void LuaEngine::noteItemLocks() {
     std::vector<uint64_t> changed;
     std::set_symmetric_difference(now.begin(), now.end(), lockedItems_.begin(), lockedItems_.end(),
                                   std::back_inserter(changed));
-    lockedItems_ = std::move(now);
     for (const uint64_t guid : changed) {
         const auto place = wowee::addons::placeOfItem(gh, guid);
         if (!place) continue;
-        if (place->worn) fireEvent("ITEM_LOCK_CHANGED", {std::to_string(place->slot)});
-        else fireEvent("ITEM_LOCK_CHANGED", {std::to_string(place->bag), std::to_string(place->slot)});
+        // 0x00706fe0 / 0x00707020 -> 0x0060bfe0: ITEM_LOCK_CHANGED, then
+        // ITEM_LOCKED or ITEM_UNLOCKED with the same place.
+        const bool locked = std::binary_search(now.begin(), now.end(), guid);
+        std::vector<std::string> args;
+        if (place->worn) args = {std::to_string(place->slot)};
+        else args = {std::to_string(place->bag), std::to_string(place->slot)};
+        fireEvent("ITEM_LOCK_CHANGED", args);
+        fireEvent(locked ? "ITEM_LOCKED" : "ITEM_UNLOCKED", args);
     }
+    lockedItems_ = std::move(now);
 }
 
 void LuaEngine::dispatchOnUpdate(float elapsed) {
