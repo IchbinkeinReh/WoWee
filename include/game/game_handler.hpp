@@ -1711,6 +1711,9 @@ public:
     /// UNIT_FIELD_SUMMON: 0x0060abf0, 0x0060bb70) - not the pet of
     /// SMSG_PET_SPELLS, which comes before those fields.
     [[nodiscard]] uint64_t petUnitGuid() const;
+    /// The player's UNIT_FIELD_CHARM alone: a creature it holds for a while
+    /// (an enslaved demon, a mind control), 0 for none.
+    [[nodiscard]] uint64_t playerCharmGuid() const;
 
     // ---- Pet state (populated by SMSG_PET_SPELLS / SMSG_PET_MODE) ----
     // 10 action bar slots; each entry is a packed uint32:

@@ -3328,6 +3328,12 @@ uint64_t GameHandler::petUnitGuid() const {
     return charm != 0 ? charm : guidFieldOf(*player, UF::UNIT_FIELD_SUMMON);
 }
 
+uint64_t GameHandler::playerCharmGuid() const {
+    if (fieldIndex(UF::UNIT_FIELD_CHARM) == 0xFFFF) return 0;
+    const auto player = getEntityManager().getEntity(playerGuid);
+    return player ? guidFieldOf(*player, UF::UNIT_FIELD_CHARM) : 0;
+}
+
 std::optional<std::pair<uint64_t, int>> GameHandler::petPulse() const {
     const uint64_t pet = petUnitGuid();
     const auto entity = pet != 0 ? getEntityManager().getEntity(pet) : nullptr;

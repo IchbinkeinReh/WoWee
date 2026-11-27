@@ -44,6 +44,9 @@ struct GuardContext {
     uint64_t selectedOnRealm = 0;
     /// The vehicle the character sits in, 0 for none.
     uint64_t vehicleGuid = 0;
+    /// The creature the character charms (UNIT_FIELD_CHARM), 0 for none: let
+    /// go of, it is not lost for good.
+    uint64_t charmGuid = 0;
     /// Whether a guid is another player's pet, totem or guardian.
     std::function<bool(uint64_t)> belongsToOtherPlayer;
 };
@@ -80,6 +83,13 @@ Verdict judgeGmCommand(std::string_view text, const GuardContext& context);
 /// other is about whoever is selected, where it names nobody, and the
 /// character itself is selected for it.
 bool gmCommandOnlyTells(std::string_view text);
+
+/// Why click_ui does not press `name`, a button of the dialog `popup` that shows
+/// `which` now ("" for none), when `expected` is the dialog the caller named
+/// ("" for none given); empty when it is pressed. A dialog's button is pressed
+/// only for the dialog meant: another may have taken its place.
+std::string popupPressRefusal(const std::string& name, const std::string& popup, const std::string& which,
+                              const std::string& expected);
 
 /// Whom a CMSG_SET_SELECTION selects, where the packet is one.
 std::optional<uint64_t> selectionOf(std::string_view opcode, std::span<const uint8_t> payload);

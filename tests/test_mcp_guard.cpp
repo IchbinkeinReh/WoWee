@@ -213,6 +213,13 @@ TEST_CASE("what cannot be had back is not done, whatever is allowed", "[mcp][gua
     Bytes abandon;
     abandon.u64(0xF140000000000001ULL).u32(0x07000003u).u64(0);
     CHECK(judgeSend("CMSG_PET_ACTION", abandon.b, context(kSocialAll)).kind == Verdict::Kind::Never);
+    // A charmed creature is let go of: it is the realm's again (PetDismiss of an
+    // enslaved demon). Another pet still not.
+    GuardContext charming = context(kSocialAll);
+    charming.charmGuid = 0xF140000000000001ULL;
+    CHECK(judgeSend("CMSG_PET_ACTION", abandon.b, charming).allowed());
+    charming.charmGuid = 0xF140000000000002ULL;
+    CHECK(judgeSend("CMSG_PET_ACTION", abandon.b, charming).kind == Verdict::Kind::Never);
     Bytes attack;
     attack.u64(0xF140000000000001ULL).u32(0x07000002u).u64(kWolf);
     CHECK(sends("CMSG_PET_ACTION", attack));
@@ -385,6 +392,31 @@ TEST_CASE("a guild is made for the character itself and only its own deleted", "
     // Never with another player selected: create would make them the leader.
     c.targetGuid = kOther;
     CHECK_FALSE(gives(".guild create \"Lockis Bank\"", c));
+}
+
+TEST_CASE("an arena team is made for the character itself", "[mcp][gm]") {
+    GuardContext c = context();
+    for (const char* command : {".arena create \"Lockis Team\" 2", ".arena create Locki \"Lockis Team\" 3",
+                                ".ARENA CREATE \"x\" 5"}) {
+        INFO(command);
+        CHECK(gives(command, c));
+    }
+    for (const char* command : {".arena create Other \"Team\" 2", ".arena create \"Team\"", ".arena create \"Team\" 4",
+                                ".arena create Team 2", ".arena create", ".arena disband 1", ".arena rename \"a\" \"b\"",
+                                ".arena captain 1 Other"}) {
+        INFO(command);
+        CHECK_FALSE(gives(command, c));
+    }
+    c.targetGuid = kOther;
+    CHECK_FALSE(gives(".arena create \"Lockis Team\" 2", c));
+}
+
+TEST_CASE("a dialog's button is pressed only for the dialog meant", "[mcp][guard]") {
+    CHECK(popupPressRefusal("UIParent", "", "", "").empty());
+    CHECK(popupPressRefusal("StaticPopup1Button1", "StaticPopup1", "CONFIRM_LOOT_ROLL", "CONFIRM_LOOT_ROLL").empty());
+    CHECK_FALSE(popupPressRefusal("StaticPopup1Button1", "StaticPopup1", "WOWEE_RT_MEMORY", "CONFIRM_LOOT_ROLL").empty());
+    CHECK_FALSE(popupPressRefusal("StaticPopup1Button1", "StaticPopup1", "CONFIRM_LOOT_ROLL", "").empty());
+    CHECK_FALSE(popupPressRefusal("StaticPopup1Button1", "StaticPopup1", "", "CONFIRM_LOOT_ROLL").empty());
 }
 
 TEST_CASE("no command is given with another player selected", "[mcp][gm]") {

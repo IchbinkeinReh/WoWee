@@ -16,6 +16,7 @@
 #include "mcp/hands.hpp"
 #include "mcp/lua_json.hpp"
 #include "mcp/schema.hpp"
+#include "mcp/send_guard.hpp"
 #include "mcp/tool_context.hpp"
 #include "mcp/ui_view.hpp"
 #include "rendering/camera_controller.hpp"
@@ -69,6 +70,25 @@ std::optional<glm::vec2> clickPointNow(ToolContext& context, const std::string& 
     return at;
 }
 
+/// The dialog (StaticPopup1-4) a frame is part of, or "" when none.
+std::string popupOf(ToolContext& context, const ui::Widget* w) {
+    auto* tree = widgetTree(context);
+    for (int depth = 0; w && tree && depth < 16; ++depth) {
+        if (w->name.size() == 12 && w->name.rfind("StaticPopup", 0) == 0 && w->name[11] >= '1' &&
+            w->name[11] <= '4')
+            return w->name;
+        w = w->parent != 0 ? tree->get(w->parent) : nullptr;
+    }
+    return {};
+}
+
+/// Which dialog a StaticPopup frame shows now (StaticPopup_Show's `which`), "" for none.
+std::string popupWhich(ToolContext& context, const std::string& popup) {
+    const json which = tryQueryLua(context, "local f = _G[" + luaQuote(popup) +
+                                                "] return f and f:IsShown() and f.which or nil");
+    return which.is_string() ? which.get<std::string>() : std::string();
+}
+
 void clickUi(ToolContext& context, const json& args, Script& script) {
     const Aftermath after(context);
     const std::string name = args["name"].get<std::string>();
@@ -76,6 +96,19 @@ void clickUi(ToolContext& context, const json& args, Script& script) {
     const int clicks = args.value("clicks", 1);
     auto landed = std::make_shared<std::string>();
     Script* self = &script;
+    // A dialog's button only for the dialog meant (tester's wish: the RT
+    // memory dialog's first button turns ray tracing off, and a click meant
+    // for another dialog that it took the place of pressed it): `popup` names
+    // its which, and the click is refused when another is shown - looked at
+    // again where the pointer has arrived, just before the press.
+    const std::string expected = args.value("popup", std::string());
+    const auto popupCheck = [&context, name, expected](Script& s) {
+        const std::string popup = popupOf(context, widgetNamed(context, name));
+        if (popup.empty()) return Script::Step::Next;
+        const std::string why = popupPressRefusal(name, popup, popupWhich(context, popup), expected);
+        return why.empty() ? Script::Step::Next : s.fail(why);
+    };
+    script.then(popupCheck);
     for (auto& fn : movePointer(context, [&context, name, self] { return clickPointNow(context, name, *self); })) {
         script.then(std::move(fn));
     }
@@ -83,6 +116,14 @@ void clickUi(ToolContext& context, const json& args, Script& script) {
     script.then([&context, landed](Script&) {
         if (const auto* w = widgetAt(context, context.input.pointer())) *landed = widgetLabel(*w);
         return Script::Step::Next;
+    });
+    script.then(popupCheck);
+    // And what is under the pointer is no other dialog's button.
+    script.then([&context, name](Script& s) {
+        const std::string popup = popupOf(context, widgetAt(context, context.input.pointer()));
+        if (popup.empty() || popupOf(context, widgetNamed(context, name)) == popup) return Script::Step::Next;
+        return s.fail("the pointer is on a button of the dialog " + popup + " (" + popupWhich(context, popup) +
+                      "), not on " + name + ": not pressed");
     });
     for (auto& fn : pressButton(context, button, modsOf(args), clicks)) script.then(std::move(fn));
     script.then(Script::seconds(args.value("settle", 0.25)));
@@ -499,6 +540,9 @@ void addPointTools(Toolbox& box) {
                             "Click a frame of the interface by name (or #id): the pointer is moved onto it and the "
                             "button pressed, as a player does.",
                             object({required("name", text("the frame", 96)), optional("button", button),
+                                    optional("popup", text("for a button of a StaticPopup: the dialog's which "
+                                                           "(state/ui popups list it); refused when another shows",
+                                                           64)),
                                     optional("clicks", integer("2 for a double click", 1, 2)),
                                     optional("modifiers", modifiers),
                                     optional("settle", number("seconds to wait for what comes of it", 0, 10))}),

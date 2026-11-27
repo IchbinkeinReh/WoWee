@@ -303,7 +303,7 @@ Verdict judgeSend(std::string_view opcode, std::span<const uint8_t> payload, con
     }
     if (opcode == "CMSG_PET_ACTION") {
         Reader r(payload);
-        r.skip(8);
+        const uint64_t pet = r.u64();
         const uint32_t action = r.u32();
         const uint64_t guid = r.u64();
         if (!r.ok()) return never("a pet's order that could not be read");
@@ -311,7 +311,10 @@ Verdict judgeSend(std::string_view opcode, std::span<const uint8_t> payload, con
         constexpr uint32_t kCommand = 0x07;
         constexpr uint32_t kAbandon = 3;
         if ((action >> 24) == kCommand && (action & 0x00FFFFFFu) == kAbandon) {
-            return never("abandoning a pet cannot be had back");
+            // A charmed creature let go of is the realm's again, not a pet
+            // lost (tester's wish: PetDismiss of an enslaved demon).
+            if (pet == 0 || pet != context.charmGuid) return never("abandoning a pet cannot be had back");
+            return {};
         }
         return judgeAim(guid, context);
     }
@@ -416,6 +419,14 @@ bool gmWordsAllowed(const std::vector<std::string>& w, const std::string& ownNam
         }
         return false;
     }
+    // An arena team for the character itself to captain (tester's wish, V529):
+    // `.arena create "Name" 2|3|5`, or with the own name before the team's.
+    if (verb == "arena") {
+        if (sub != "create" || args < 3 || !isOneOf(w.back(), {"2", "3", "5"})) return false;
+        std::vector<std::string> rest(w.begin(), w.end() - 1);
+        if (quotedName(rest, 2)) return true;
+        return args >= 4 && sameName(w[2], ownName) && quotedName(rest, 3).has_value();
+    }
     if (isOneOf(verb, {"gps", "revive", "die", "dismount", "demorph", "combatstop", "maxskill", "cooldown", "levelup",
                        "respawn", "save", "distance"})) {
         return args == 0 || (args == 1 && sameName(sub, ownName));
@@ -474,6 +485,20 @@ bool gmCommandOnlyTells(std::string_view text) {
     if (words[0] == "npc") return isOneOf(sub, {"info", "near"});
     if (words[0] == "gobject" || words[0] == "gobj") return isOneOf(sub, {"info", "near", "target"});
     return false;
+}
+
+std::string popupPressRefusal(const std::string& name, const std::string& popup, const std::string& which,
+                              const std::string& expected) {
+    if (popup.empty()) return {};
+    if (expected.empty()) {
+        return name + " is a button of the dialog " + popup + " (" + (which.empty() ? "hidden" : which) +
+               "): give popup=<its which> to press it";
+    }
+    if (which != expected) {
+        return popup + " shows " + (which.empty() ? std::string("nothing") : which) + ", not " + expected +
+               ": not pressed";
+    }
+    return {};
 }
 
 std::optional<uint64_t> selectionOf(std::string_view opcode, std::span<const uint8_t> payload) {

@@ -297,6 +297,7 @@ bool Server::sendAllowed(uint16_t wireOpcode, std::span<const uint8_t> payload) 
         guard.ownGuid = gh->getPlayerGuid();
         guard.targetGuid = gh->getTargetGuid();
         if (const auto seat = gh->vehicleRoster().passenger(guard.ownGuid)) guard.vehicleGuid = seat->vehicleGuid;
+        guard.charmGuid = gh->playerCharmGuid();
         if (const auto* c = gh->getActiveCharacter()) guard.ownName = c->name;
         guard.ownGuildName = gh->getGuildName();
         guard.belongsToOtherPlayer = [gh](uint64_t guid) {

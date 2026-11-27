@@ -224,6 +224,14 @@ void WorldSocket::closeSocketNoJoin() {
 }
 
 void WorldSocket::recordRecentPacket(bool outbound, uint16_t opcode, uint16_t payloadLen) {
+    // Every packet's opcode and size at info level, for a trace without the
+    // whole debug log (tester's wish): WOWEE_PACKET_LOG=1. Names and sizes
+    // only - what is in them stays out of the log.
+    static const bool kPacketLog = core::envFlagEnabled("WOWEE_PACKET_LOG", false);
+    if (kPacketLog) {
+        LOG_INFO("WS ", outbound ? "TX" : "RX", " opcode=0x", std::hex, opcode, std::dec,
+                 " logical=", opcodeNameForTrace(opcode), " payload=", payloadLen);
+    }
     const auto now = std::chrono::steady_clock::now();
     recentPacketHistory_.push_back(RecentPacketTrace{now, outbound, opcode, payloadLen});
     while (!recentPacketHistory_.empty() &&

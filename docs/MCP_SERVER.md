@@ -81,7 +81,7 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 |---|---|
 | `move`, `jump`, `stop`, `turn`, `walk_to`, `camera` | the movement keys, the turn keys or a drag, the wheel. `walk_to` plans a way over the loaded ground and walks it by keys, jumping or stepping back where it is stuck |
 | `target`, `interact` | a click on an entity in the world, where the client's own picker finds it - turned to, and looked at from elsewhere, where it is out of the window; `interact` walks up to it first. `target` with `which` presses the key bound to it, or types the slash command where none is |
-| `click_ui`, `hover`, `mouse` | the mouse on a frame by name, or by pixels |
+| `click_ui`, `hover`, `mouse` | the mouse on a frame by name, or by pixels. A button of a dialog (StaticPopup1-4) is pressed only with `popup` naming the dialog's `which` (`state` lists it under popups), and not when another dialog shows |
 | `key`, `binding`, `type_text`, `slash` | a key, the key a command is bound to, text into an edit box, a slash command through the chat box |
 | `use_action`, `use_item` | an action button by its key or a click, an item in its bag |
 | `record` | the client's own recording, as `/record` makes it: start, stop, status; the answer has the file |
@@ -151,14 +151,16 @@ A whisper to the own character goes out. One that is a game master's command has
 on|off|fly|visible`, `.modify ...`, `.quest add|complete|remove|reward ID`, `.npc info|near`, `.gobject
 info|near|target`, `.cast ID|self|back`, `.lookup` (not `player`), `.server info|motd`, `.instance listbinds|unbind`,
 `.guild create "NAME"` (or with the own name before the quoted guild name; the character leads it), `.guild delete
-"NAME"` only for the guild the character is in, `.help`, `.commands`. None of them with another player, or their pet, selected; and with anything else selected but the
+"NAME"` only for the guild the character is in, `.arena create "NAME" 2|3|5` (or with the own name before the quoted
+team name; the character captains it), `.help`, `.commands`. None of them with another player, or their pet, selected; and with anything else selected but the
 character itself - a creature, a mount, its own pet - only those that tell and do nothing: `.npc info|near`, `.gobject
 info|near|target`, `.gps`, `.lookup`, `.distance`, `.help`, `.commands`, `.server`. Selected is what the client has
 selected and what the last `CMSG_SET_SELECTION` told the realm, both. The packet is where it is decided, so `.aura` by
 `slash`, a macro or an addon is refused like `gm`'s; `gm` selects the character itself before (above) and is judged by
 that.
 
-Never sent, whatever is allowed: deleting, creating or renaming characters, destroying items, abandoning a pet,
+Never sent, whatever is allowed: deleting, creating or renaming characters, destroying items, abandoning a pet (a
+charmed creature - an enslaved demon - is let go of: it is the realm's again),
 unlearning a profession, the game masters' and developers' own packets. Quitting from inside the game is refused; the
 `quit` tool does it.
 
@@ -193,3 +195,6 @@ here is put to 0), and the account's CVars are put back as they were when the cl
   read the file.
 - The rules are written for 3.3.5a. On the older expansions casts are judged by the selected target.
 - Whoever may call it can spend the character's money at vendors, sell, drop quests and die.
+
+A packet log at info level, opcode and size of every packet both ways (no contents): start the client with
+`WOWEE_PACKET_LOG=1`.

@@ -218,7 +218,11 @@ json popups(ToolContext& context) {
         if (!w || !w->visible) continue;
         json buttons = json::array();
         for (const auto* c : controlsUnder(context, w->id, 12)) buttons.push_back(widgetJson(context, *c));
-        out.push_back({{"name", name}, {"text", widgetText(context, *w)}, {"controls", std::move(buttons)}});
+        json entry = {{"name", name}, {"text", widgetText(context, *w)}, {"controls", std::move(buttons)}};
+        // Its which, what click_ui's popup names.
+        if (const json which = tryQueryLua(context, "return " + name + ".which"); which.is_string())
+            entry["which"] = which;
+        out.push_back(std::move(entry));
     }
     return out;
 }

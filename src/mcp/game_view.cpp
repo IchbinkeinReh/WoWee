@@ -14,6 +14,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "core/application.hpp"
 #include "core/coordinates.hpp"
+#include "game/chr_names.hpp"
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
 #include "game/protocol_constants.hpp"
@@ -22,6 +23,7 @@
 #include "mcp/object_kind.hpp"
 #include "mcp/tool_context.hpp"
 #include "mcp/world_probe.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "core/entity_spawner.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/character_renderer.hpp"
@@ -338,6 +340,25 @@ json entityJson(ToolContext& context, const game::Entity& entity, bool detail) {
         if (u.getUnitFlags() & game::UNIT_FLAG_IN_COMBAT) out["combat"] = true;
         if (u.getUnitFlags() & game::UNIT_FLAG_NOT_SELECTABLE) out["selectable"] = false;
         if (u.getNpcFlags() != 0) out["roles"] = npcRoles(u.getNpcFlags());
+        // A creature's kind and family, by the template (tester's wish): the
+        // names the interface shows (CreatureType.dbc, CreatureFamily.dbc).
+        if (entity.getType() == game::ObjectType::UNIT) {
+            auto* assets = gh->services().assetManager;
+            if (const uint32_t type = gh->getCreatureType(u.getEntry()); type != 0) {
+                std::string name;
+                if (auto types = assets && assets->isInitialized() ? assets->loadDBCOptional("CreatureType.dbc")
+                                                                   : nullptr;
+                    types && types->isLoaded() && types->getFieldCount() > 1) {
+                    if (const int32_t r = types->findRecordById(type); r >= 0)
+                        name = types->getString(static_cast<uint32_t>(r), 1);
+                }
+                out["creature_type"] = name.empty() ? json(type) : json(name);
+            }
+            if (const uint32_t family = gh->getCreatureFamily(u.getEntry()); family != 0) {
+                const std::string name = game::creatureFamilyName(assets, family);
+                out["family"] = name.empty() ? json(family) : json(name);
+            }
+        }
         if (u.getNpcFlags() & game::NPC_FLAG_QUESTGIVER) {
             if (const char* mark = questMark(gh->getQuestGiverStatus(entity.getGuid()))) out["quest"] = mark;
         }

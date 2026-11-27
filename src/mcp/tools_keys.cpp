@@ -450,7 +450,7 @@ void addKeyTools(Toolbox& box) {
     box.push_back(handsTool("gm",
                             "A game master's command for the own character, whispered to itself: .revive, .gps, "
                             ".go xyz, .tele, .gm on/off, .modify ..., .additem id, .guild create \"Name\" (and .guild "
-                            "delete \"Name\" of its own guild). Only a list of harmless ones "
+                            "delete \"Name\" of its own guild), .arena create \"Name\" 2|3|5. Only a list of harmless ones "
                             "(docs/MCP_SERVER.md), and never on anybody else: but for those that only tell (.npc info, "
                             ".gps, .lookup ...) they are given with the character selected, and what was selected is "
                             "selected again after; on=target with anything else selected is refused. A dialog may be "
