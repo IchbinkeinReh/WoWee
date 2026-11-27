@@ -2725,9 +2725,12 @@ void Renderer::updatePlayerArea() {
     // PLAYER_ENTERING_WORLD is raised (0x006e7f50 -> 0x00528010) - so the
     // first ZONE_CHANGED_NEW_AREA of a map comes after it. Asked from the
     // load's own frames, the event came twenty seconds before it, with
-    // the loading screen still up.
+    // the loading screen still up. Nor while WoWee keeps the loading screen
+    // over a world already drawn behind it (Application::beginWorldSettle):
+    // 12340 has taken its loading screen down when the check first runs, and
+    // ZoneText.lua's 3.5-s fade ran out unseen behind ours (T445).
     if (const auto* loader = core::Application::getInstance().getWorldLoader();
-        loader && loader->isWorldEntryUnderway()) {
+        (loader && loader->isWorldEntryUnderway()) || core::Application::getInstance().loadingScreenUp()) {
         return;
     }
     if (!terrainManager || !zoneManager) return;

@@ -485,3 +485,17 @@ TEST_CASE("MCVP, a transport's convex volume, is read (0x007d7470)", "[wmo][mcvp
     CHECK(model.convexVolumePlanes[1].x == Catch::Approx(0.992f));
     CHECK(model.convexVolumePlanes[1].w == Catch::Approx(-43.88f));
 }
+
+// T445: the zone texts' first check waits for the loading screen WoWee keeps
+// over a world already drawn (Application::beginWorldSettle); 12340 has taken
+// its loading screen down when 0x006d7bb0 first runs, and ZoneText.lua's fade
+// (GetTime from FadingFrame_Show) ran out unseen behind ours.
+TEST_CASE("the area check waits while the loading screen is up (T445)", "[zone][loading]") {
+    const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
+    REQUIRE(renderer.size() > 1000);
+    const size_t underway = renderer.find("loader && loader->isWorldEntryUnderway()");
+    REQUIRE(underway != std::string::npos);
+    const size_t back = renderer.find("return;", underway);
+    REQUIRE(back != std::string::npos);
+    CHECK(renderer.substr(underway, back - underway).find("loadingScreenUp()") != std::string::npos);
+}
