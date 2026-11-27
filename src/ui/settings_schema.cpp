@@ -678,6 +678,13 @@ constexpr SettingDesc kSchema[] = {
      "How much light lamps, fires and lava give the air around them\n"
      "with the volumetric light on (Details). 100 the base, 0 none,\n"
      "400 four times. Default 200.", "", 200, "volumetriclight"},
+    // How many frames the volumetric light's history averages over
+    // (volumetric_light::historyWeight; user 2026-11-27: five were too few).
+    {"dbgvlhistory", "Volumetric light: smoothing (frames)", SettingKind::Int, 1, 60, 1, "Debug Glow", "",
+     "Over how many frames the volumetric light is averaged: more is\n"
+     "calmer and less grainy, but a lamp that moves or flickers takes\n"
+     "longer to show it. 1 is no smoothing. Starts afresh after a\n"
+     "teleport, a cut or a loading screen. Default 20.", "", 20, "volumetriclight"},
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"

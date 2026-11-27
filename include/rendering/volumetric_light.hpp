@@ -44,10 +44,12 @@ class VkContext;
  *           seen from it - a traced ray with the ray traced lighting, a few
  *           steps against the scene's depth without (volumetric_light.comp.glsl);
  *   blur    a 5x5 blur kept to like depths (volumetric_light_blur.comp.glsl);
- *   history this frame's light blended into the last frames' at 0.2, found
+ *   history this frame's light blended into the last frames' as a running
+ *           average over N of them (volumetric_light::historyWeight; Debug
+ *           Glow "VL Glättung (Bilder)", 1-60, 20 by default), found
  *           again where the same air was last frame and held to this
  *           frame's light round it (volumetric_light_temporal.comp.glsl;
- *           U23, the user allowed the light the last ~5 frames);
+ *           U23, the user allowed the light the last frames);
  *
  * and in the overlay pass, ahead of the interface and the eye's exposure,
  * the result is screened over the picture (volumetric_light_composite.frag),
@@ -127,9 +129,14 @@ public:
         /// leaves it out (ScreenEffects::FrameInputs::keepRect).
         glm::vec4 keepRect{0.0f};
 
-        /// The debug view "Volumetric light only" (dbgview, Renderer::kVolumetricLightOnlyView): the light alone over black
+        /// The debug view "Volumetric light only" (dbgview,
+        /// Renderer::kVolumetricLightOnlyView): the light alone over black
         /// (volumetric_light::debugViewColor).
         bool debugView = false;
+
+        /// How many frames the history averages over, 1-60 (1 none;
+        /// volumetric_light::historyWeight).
+        int historyFrames = volumetric_light::kHistoryFramesDefault;
     };
 
     VolumetricLight() = default;
@@ -182,6 +189,9 @@ private:
     /// The last record drew the light into these targets: the next may
     /// build on it (volumetric_light::historyUsable).
     bool historyValid_ = false;
+    /// How many frames the history holds since it last started afresh
+    /// (volumetric_light::historyWeight).
+    uint32_t historyHeld_ = 0;
     glm::mat4 prevViewProj_{1.0f};
     glm::vec3 prevCamPos_{0.0f};
     uint32_t frameNumber_ = 0;  // moves the march's pattern, 0..1023

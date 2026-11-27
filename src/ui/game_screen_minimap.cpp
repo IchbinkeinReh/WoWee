@@ -2016,6 +2016,7 @@ void GameScreen::saveSettings() {
     out << "dbg_vl_sun=" << settingsPanel_.pendingDbgVlSun << "\n";
     out << "dbg_vl_moon=" << settingsPanel_.pendingDbgVlMoon << "\n";
     out << "dbg_vl_lights=" << settingsPanel_.pendingDbgVlLights << "\n";
+    out << "dbg_vl_history=" << settingsPanel_.pendingDbgVlHistory << "\n";
     out << "dbg_shadow_darkness=" << settingsPanel_.pendingDbgShadowDarkness << "\n";
     out << "dbg_traced_sun_shadow=" << settingsPanel_.pendingDbgTracedSunShadow << "\n";
     out << "dbg_map_sun_shadow=" << settingsPanel_.pendingDbgMapSunShadow << "\n";
@@ -2390,6 +2391,7 @@ void GameScreen::loadSettings() {
             else if (key == "dbg_vl_sun") settingsPanel_.pendingDbgVlSun = std::clamp(std::stoi(val), 0, 400);
             else if (key == "dbg_vl_moon") settingsPanel_.pendingDbgVlMoon = std::clamp(std::stoi(val), 0, 400);
             else if (key == "dbg_vl_lights") settingsPanel_.pendingDbgVlLights = std::clamp(std::stoi(val), 0, 400);
+            else if (key == "dbg_vl_history") settingsPanel_.pendingDbgVlHistory = std::clamp(std::stoi(val), 1, 60);
             else if (key == "dbg_shadow_darkness") settingsPanel_.pendingDbgShadowDarkness = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_traced_sun_shadow") settingsPanel_.pendingDbgTracedSunShadow = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_map_sun_shadow") settingsPanel_.pendingDbgMapSunShadow = std::clamp(std::stoi(val), 0, 100);

@@ -29,7 +29,7 @@
 // The samples are spread by a pattern over the screen that moves on every
 // frame (screen.z, the frame's number): the blur that follows
 // (volumetric_light_blur.comp.glsl) evens it out within the frame, and the
-// history (volumetric_light_temporal.comp.glsl) over the last five or so
+// history (volumetric_light_temporal.comp.glsl) over the last frames
 // (U23: the user allowed it; the lamps' glow was grainy).
 //
 // Built three ways: as it is (the shadow map and the depth only), with

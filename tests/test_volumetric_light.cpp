@@ -296,38 +296,80 @@ TEST_CASE("volumetric light: the sky body's light only beside shade", "[volumetr
     }
 }
 
-TEST_CASE("volumetric light: the history blends about five frames and starts afresh on a cut",
+TEST_CASE("volumetric light: the history averages the slider's frames and starts afresh on a cut",
           "[volumetric_light]") {
-    // U23 (user 2026-11-27): the light may be smoothed over the last ~5 frames.
-    CHECK(vl::kHistoryWeight == Catch::Approx(0.2f));
-    // A light that has stood still is the light.
-    const glm::vec3 still(0.3f, 0.2f, 0.1f);
-    glm::vec3 h = vl::historyBlend(still, still, true);
-    CHECK(h.r == Catch::Approx(still.r));
-    // A step from dark to lit: one frame takes a fifth of it, five about two
-    // thirds, twenty nearly all.
-    h = glm::vec3(0.0f);
-    const glm::vec3 lit(1.0f);
-    h = vl::historyBlend(h, lit, true);
-    CHECK(h.r == Catch::Approx(0.2f));
-    for (int i = 1; i < 5; ++i) h = vl::historyBlend(h, lit, true);
-    CHECK(h.r == Catch::Approx(1.0f - std::pow(0.8f, 5.0f)));
-    CHECK(h.r > 0.6f);
-    CHECK(h.r < 0.75f);
-    // Noise of a frame's grain (alternating 0 and 2 round 1) is cut to a
-    // ninth or so of its swing once the history has settled.
-    h = glm::vec3(1.0f);
-    float lo = 10.0f, hi = -10.0f;
-    for (int i = 0; i < 40; ++i) {
-        h = vl::historyBlend(h, glm::vec3(i % 2 == 0 ? 0.0f : 2.0f), true);
-        if (i >= 20) {
-            lo = std::min(lo, h.r);
-            hi = std::max(hi, h.r);
+    // U23 (user 2026-11-27): the light may be smoothed over the last frames;
+    // how many is a Debug Glow slider, 1-60, 20 by default.
+    CHECK(vl::kHistoryFramesMin == 1);
+    CHECK(vl::kHistoryFramesMax == 60);
+    CHECK(vl::kHistoryFramesDefault == 20);
+    CHECK(vl::clampHistoryFrames(0) == 1);
+    CHECK(vl::clampHistoryFrames(-5) == 1);
+    CHECK(vl::clampHistoryFrames(1) == 1);
+    CHECK(vl::clampHistoryFrames(37) == 37);
+    CHECK(vl::clampHistoryFrames(60) == 60);
+    CHECK(vl::clampHistoryFrames(61) == 60);
+    CHECK(vl::clampHistoryFrames(1000) == 60);
+    // The weight: the plain mean while the history fills, then 1/N; 1 (no
+    // history) when it holds nothing or the count is 1; the count clamped.
+    CHECK(vl::historyWeight(20, 0) == 1.0f);
+    CHECK(vl::historyWeight(20, 1) == Catch::Approx(0.5f));
+    CHECK(vl::historyWeight(20, 3) == Catch::Approx(0.25f));
+    CHECK(vl::historyWeight(20, 19) == Catch::Approx(0.05f));
+    CHECK(vl::historyWeight(20, 500) == Catch::Approx(0.05f));
+    CHECK(vl::historyWeight(5, 500) == Catch::Approx(0.2f));
+    CHECK(vl::historyWeight(60, 500) == Catch::Approx(1.0f / 60.0f));
+    CHECK(vl::historyWeight(1, 500) == 1.0f);
+    CHECK(vl::historyWeight(0, 500) == 1.0f);
+    CHECK(vl::historyWeight(200, 500) == Catch::Approx(1.0f / 60.0f));
+    // While it fills the history is the true mean of the frames so far.
+    {
+        const float frames[] = {4.0f, 0.0f, 2.0f, 6.0f};
+        glm::vec3 h(0.0f);
+        float sum = 0.0f;
+        for (uint32_t i = 0; i < 4; ++i) {
+            h = vl::historyBlend(h, glm::vec3(frames[i]), vl::historyWeight(20, i));
+            sum += frames[i];
+            CHECK(h.r == Catch::Approx(sum / static_cast<float>(i + 1)));
         }
     }
-    CHECK(hi - lo < 2.0f * 0.25f);
+    // A light that has stood still is the light.
+    const glm::vec3 still(0.3f, 0.2f, 0.1f);
+    glm::vec3 h = vl::historyBlend(still, still, vl::historyWeight(20, 100));
+    CHECK(h.r == Catch::Approx(still.r));
+    // Noise of a frame's grain (alternating 0 and 2 round 1): the settled
+    // swing is 2w/(2-w) of it, so more frames, a calmer light - five frames
+    // leave about a ninth, twenty about a fortieth, sixty a hundred-twentieth.
+    const auto swing = [](int frames) {
+        glm::vec3 x(1.0f);
+        float lo = 10.0f, hi = -10.0f;
+        for (int i = 0; i < 400; ++i) {
+            x = vl::historyBlend(x, glm::vec3(i % 2 == 0 ? 0.0f : 2.0f), vl::historyWeight(frames, 1000));
+            if (i >= 300) {
+                lo = std::min(lo, x.r);
+                hi = std::max(hi, x.r);
+            }
+        }
+        return hi - lo;
+    };
+    CHECK(swing(5) < 2.0f * 0.25f);
+    CHECK(swing(20) < 2.0f * 0.06f);
+    CHECK(swing(60) < 2.0f * 0.02f);
+    CHECK(swing(20) < swing(5));
+    CHECK(swing(60) < swing(20));
+    // 1 frame: no history, the frame's own light.
+    CHECK(swing(1) == Catch::Approx(2.0f));
+    // A step from dark to lit with 20 frames: after 20 frames about two
+    // thirds, after 60 nearly all.
+    h = glm::vec3(0.0f);
+    const glm::vec3 lit(1.0f);
+    for (int i = 0; i < 20; ++i) h = vl::historyBlend(h, lit, vl::historyWeight(20, 1000));
+    CHECK(h.r > 0.6f);
+    CHECK(h.r < 0.7f);
+    for (int i = 20; i < 60; ++i) h = vl::historyBlend(h, lit, vl::historyWeight(20, 1000));
+    CHECK(h.r > 0.95f);
     // Without a usable history the frame's own light, at once.
-    h = vl::historyBlend(glm::vec3(5.0f), lit, false);
+    h = vl::historyBlend(glm::vec3(5.0f), lit, 1.0f);
     CHECK(h.r == 1.0f);
     // When the history is usable: the last frame drew into the same targets
     // and the camera did not jump.
@@ -394,7 +436,9 @@ TEST_CASE("volumetric light: the shaders say what the arithmetic says", "[volume
     CHECK(vl::kInAirMargin == 0.1f);
 
     const std::string temporal = wowee::test::slurp("assets/shaders/volumetric_light_temporal.comp.glsl");
-    CHECK(temporal.find("const float kHistoryWeight = 0.2;") != std::string::npos);
+    // The weight comes from the CPU (historyWeight), not a constant.
+    CHECK(temporal.find("kHistoryWeight") == std::string::npos);
+    CHECK(temporal.find("result = history + (current - history) * vl.prevCamPos.w;") != std::string::npos);
     CHECK(temporal.find("const float kSkyDistance = 60000.0;") != std::string::npos);
     CHECK(temporal.find("return abs(expected - kept) <= 0.05 * max(expected, kept) + 0.1;") != std::string::npos);
     CHECK(temporal.find("history = clamp(history, lo, hi);") != std::string::npos);
@@ -405,6 +449,8 @@ TEST_CASE("volumetric light: the shaders say what the arithmetic says", "[volume
     CHECK(composite.find("light *= push.mode.y;") != std::string::npos);
     const std::string cpp = wowee::test::slurp("src/rendering/volumetric_light.cpp");
     CHECK(cpp.find("volumetric_light::kDebugViewGain") != std::string::npos);
+    CHECK(cpp.find("volumetric_light::historyWeight(in.historyFrames, historyHeld_)") != std::string::npos);
+    CHECK(cpp.find("params.prevCamPos = glm::vec4(prevCamPos_, historyBlendWeight);") != std::string::npos);
     CHECK(cpp.find("volumetric_light::historyUsable(") != std::string::npos);
     CHECK(cpp.find("volumetric_light_temporal.comp.spv") != std::string::npos);
 }
@@ -689,6 +735,61 @@ TEST_CASE("volumetric light: three Debug Glow sliders, 200 % by default", "[volu
     CHECK(panel.find("t.volumetricSun = pct(static_cast<float>(pendingDbgVlSun));") != std::string::npos);
     CHECK(panel.find("t.volumetricMoon = pct(static_cast<float>(pendingDbgVlMoon));") != std::string::npos);
     CHECK(panel.find("t.volumetricLights = pct(static_cast<float>(pendingDbgVlLights));") != std::string::npos);
+}
+
+TEST_CASE("volumetric light: the smoothing slider, 1-60 frames, 20 by default", "[volumetric_light][settings]") {
+    // User request 2026-11-27 (VL5): five frames were too few for the grain.
+    const auto* r = row("dbgvlhistory");
+    REQUIRE(r != nullptr);
+    CHECK(r->kind == wowee::ui::SettingKind::Int);
+    CHECK(r->minValue == static_cast<float>(vl::kHistoryFramesMin));
+    CHECK(r->maxValue == static_cast<float>(vl::kHistoryFramesMax));
+    CHECK(r->step == 1.0f);
+    CHECK(r->defaultValue == static_cast<float>(vl::kHistoryFramesDefault));
+    // Beside the three VL sliders on Debug Glow.
+    CHECK(std::string(r->category) == "Debug Glow");
+    CHECK(std::string(r->enabledWhen) == "volumetriclight");
+    std::size_t count = 0;
+    const auto* schema = wowee::ui::clientSettingsSchema(count);
+    std::size_t lights = count, history = count;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (std::string(schema[i].key) == "dbgvllights") lights = i;
+        if (std::string(schema[i].key) == "dbgvlhistory") history = i;
+    }
+    CHECK(history == lights + 1);
+    const auto* de = wowee::ui::germanSettingText("dbgvlhistory");
+    REQUIRE(de != nullptr);
+    REQUIRE(de->label != nullptr);
+    CHECK(std::string(de->label) == "VL Glättung (Bilder)");
+    CHECK(characters(de->label) <= 24);
+    REQUIRE(de->tooltip != nullptr);
+    CHECK(std::string(de->tooltip).find("Standard 20") != std::string::npos);
+    // The panel's field opens at the default when the file has none; saved,
+    // loaded clamped to 1-60, bound, applied live; Super-Ultra sets 20.
+    const std::string header = wowee::test::slurp("include/ui/settings_panel.hpp");
+    CHECK(header.find("int pendingDbgVlHistory = 20;") != std::string::npos);
+    const std::string io = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
+    CHECK(io.find("out << \"dbg_vl_history=\" << settingsPanel_.pendingDbgVlHistory") != std::string::npos);
+    CHECK(io.find("key == \"dbg_vl_history\") settingsPanel_.pendingDbgVlHistory = std::clamp(std::stoi(val), 1, 60)") !=
+          std::string::npos);
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    CHECK(panel.find("{.key = \"dbgvlhistory\", .asInt = &SettingsPanel::pendingDbgVlHistory}") != std::string::npos);
+    CHECK(panel.find("key == \"dbgvlhistory\"") != std::string::npos);
+    CHECK(panel.find("t.volumetricHistoryFrames = pendingDbgVlHistory;") != std::string::npos);
+    bool inPreset = false;
+    for (const auto& e : wowee::ui::kSuperUltraDebugValues) {
+        if (std::string(e.key) == "dbgvlhistory") {
+            inPreset = true;
+            CHECK(e.value == 20.0f);
+        }
+    }
+    CHECK(inPreset);
+    // The renderer clamps what it hands on, and its own default agrees.
+    const std::string rendererHeader = wowee::test::slurp("include/rendering/renderer.hpp");
+    CHECK(rendererHeader.find("int volumetricHistoryFrames = 20;") != std::string::npos);
+    const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
+    CHECK(renderer.find("in.historyFrames = volumetric_light::clampHistoryFrames(lightingTune_.volumetricHistoryFrames);") !=
+          std::string::npos);
 }
 
 TEST_CASE("volumetric light: 100 % leaves each term as it is, others scale it", "[volumetric_light]") {

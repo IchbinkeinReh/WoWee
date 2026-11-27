@@ -266,7 +266,7 @@ bool VolumetricLight::ensureCompositePipeline() {
         .setRenderPass(ctx_->getOverlayRenderPass())
         .setDynamicStates({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
         .build(device, ctx_->getPipelineCache());
-    // The debug view "Volumetric light only" (dbgview, Renderer::kVolumetricLightOnlyView): the light over black, written
+    // The debug view "Volumetric light only" (dbgview): the light over black, written
     // over the picture without a blend.
     VkPipelineColorBlendAttachmentState over{};
     over.blendEnable = VK_FALSE;
@@ -462,6 +462,12 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
     // with the camera not moved past a cut (a teleport, a load).
     const bool historyUsable = volumetric_light::historyUsable(
         lastFrameDrew, sameTargets, glm::length(in.cameraPos - prevCamPos_));
+    // This frame's weight in it: the running average over the slider's
+    // frames (Debug Glow "VL Glättung (Bilder)"); 1, this frame alone, with
+    // no history or a count of 1.
+    const float historyBlendWeight =
+        historyUsable ? volumetric_light::historyWeight(in.historyFrames, historyHeld_) : 1.0f;
+    const bool historyBlends = historyBlendWeight < 1.0f;
 
     // Which march: the traced one only when the scene can be bound and its
     // pipeline built; otherwise the plain one, the traced occlusions falling
@@ -507,9 +513,9 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
     params.modes = glm::ivec4(static_cast<int>(lampCount), static_cast<int>(body), static_cast<int>(lamps),
                               in.sceneHasContent ? 1 : 0);
     params.screen = glm::vec4(static_cast<float>(targetExtent_.width), static_cast<float>(targetExtent_.height),
-                              static_cast<float>(frameNumber_), historyUsable ? 1.0f : 0.0f);
+                              static_cast<float>(frameNumber_), historyBlends ? 1.0f : 0.0f);
     params.prevViewProj = prevViewProj_;
-    params.prevCamPos = glm::vec4(prevCamPos_, 0.0f);
+    params.prevCamPos = glm::vec4(prevCamPos_, historyBlendWeight);
     std::memcpy(paramsMapped_[frame], &params, sizeof(params));
 
     {
@@ -653,6 +659,9 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
 
     historyWrite_ = histWrite;
     historyValid_ = true;
+    // How many frames the history now holds (volumetric_light::historyWeight);
+    // past the slider's top the count no longer matters.
+    historyHeld_ = historyBlends ? std::min<uint32_t>(historyHeld_ + 1u, 1000u) : 1u;
     prevViewProj_ = viewProj;
     prevCamPos_ = in.cameraPos;
     frameNumber_ = (frameNumber_ + 1u) % 1024u;

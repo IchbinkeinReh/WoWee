@@ -306,6 +306,13 @@ constexpr SettingGerman kGerman[] = {
      "Wie viel Licht Lampen, Feuer und Lava der Luft um sich geben, wenn das volumetrische "
      "Licht an ist (Details). 100 die Grundstärke, 0 keines, 400 das Vierfache. Standard 200.",
      nullptr, nullptr, nullptr},
+    {"dbgvlhistory",
+     "VL Glättung (Bilder)",
+     "Über wie viele Bilder das volumetrische Licht gemittelt wird: mehr ist ruhiger und "
+     "weniger körnig, aber eine Lampe, die sich bewegt oder flackert, zeigt es später. 1 ist "
+     "keine Glättung. Beginnt nach einem Teleport, einem Schnitt oder einem Ladebildschirm neu. "
+     "Standard 20.",
+     nullptr, nullptr, nullptr},
     {"rtunitshadowreach",
      "Figurenschattenweite (m)",
      "Wie weit vom Körper der Schatten einer Figur oder Kreatur von einer Lampe, einem Feuer "

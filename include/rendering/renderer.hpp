@@ -1056,6 +1056,9 @@ public:
         float volumetricSun = 2.0f;
         float volumetricMoon = 2.0f;
         float volumetricLights = 2.0f;
+        // How many frames the volumetric light's history averages over,
+        // 1-60 (volumetric_light::historyWeight; Debug Glow dbgvlhistory).
+        int volumetricHistoryFrames = 20;
     };
     void setLightingTune(const LightingTune& tune) { lightingTune_ = tune; }
     const LightingTune& lightingTune() const { return lightingTune_; }

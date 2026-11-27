@@ -8665,6 +8665,7 @@ void Renderer::recordVolumetricLight() {
             in.keepRect = minimap->screenUvRect(window->getWidth(), window->getHeight());
         }
         in.debugView = volumetricLightDebugView_;
+        in.historyFrames = volumetric_light::clampHistoryFrames(lightingTune_.volumetricHistoryFrames);
 
         if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
             in.depthImage = postProcessPipeline_->getSceneDepthImage();

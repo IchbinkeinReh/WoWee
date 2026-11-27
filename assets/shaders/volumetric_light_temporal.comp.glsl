@@ -15,11 +15,14 @@
 //   held      the old light kept inside the range of this frame's light in
 //             the 3x3 round the texel, so a lamp carried away or a head
 //             turned leaves no trail;
-//   blended   at volumetric_light::kHistoryWeight, 0.2: about five frames.
+//   blended   at prevCamPos.w (volumetric_light::historyWeight): the mean
+//             of the frames held while the history fills, then 1/N for the
+//             Debug Glow slider "VL Glaettung (Bilder)" (dbgvlhistory, N
+//             1-60, 20 by default).
 //
 // With no history to build on (screen.w 0: the first frame, after a cut or
-// a teleport, a new size or quality - volumetric_light::historyUsable) the
-// light is this frame's alone. Beside its light each texel keeps the
+// a teleport, a new size or quality - volumetric_light::historyUsable - or
+// N = 1) the light is this frame's alone. Beside its light each texel keeps the
 // distance from this frame's eye to what it shows (the sky's
 // kHistorySkyDistance), for the next frame's test. See volumetric_light.hpp.
 
@@ -45,7 +48,7 @@ layout(set = 1, binding = 0) uniform VLParams {
     vec4 screen;        // xy = the march's size, z = the frame's number, w = history usable
     VLLight lights[32];
     mat4 prevViewProj;  // last frame's
-    vec4 prevCamPos;    // last frame's eye
+    vec4 prevCamPos;    // xyz = last frame's eye, w = this frame's weight in the history
 } vl;
 
 layout(set = 1, binding = 3, r32f) uniform readonly image2D uLowDepth;
@@ -53,7 +56,6 @@ layout(set = 1, binding = 5, rgba16f) uniform readonly image2D uBlurred;
 layout(set = 1, binding = 6, rgba16f) uniform readonly image2D uHistoryIn;
 layout(set = 1, binding = 7, rgba16f) uniform writeonly image2D uHistoryOut;
 
-const float kHistoryWeight = 0.2;          // volumetric_light::kHistoryWeight
 const float kSkyDistance = 60000.0;        // volumetric_light::kHistorySkyDistance
 
 vec3 unproject(vec2 uv, float depth) {
@@ -128,7 +130,7 @@ void main() {
                     }
                     history = clamp(history, lo, hi);
                     // volumetric_light::historyBlend.
-                    result = history + (current - history) * kHistoryWeight;
+                    result = history + (current - history) * vl.prevCamPos.w;
                 }
             }
         }

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -31,8 +32,8 @@ inline Quality qualityFromIndex(int index) {
 /// ray, every lamp the ray passes through in a fixed number more, and at most
 /// so many lamps. Each lit step of the sky body's light asks a second point
 /// beside it (shaftRadius), so its steps cost up to two lookups each; the
-/// steps move from frame to frame and the history (kHistoryWeight) gathers
-/// about five frames of them (VL4: 16/8 steps where VL had 24/12).
+/// steps move from frame to frame and the history (historyWeight) gathers
+/// the last frames of them (VL4: 16/8 steps where VL had 24/12).
 struct Budget {
     unsigned divisor = 0;     ///< the march's image is the screen's size over this
     unsigned sunSteps = 0;    ///< samples of the sky body's light along a ray
@@ -316,13 +317,31 @@ inline BodyShares bodyShares(float sunHeight, float moonHeight) {
 }
 
 /// The history (U23, user 2026-11-27: the light may be smoothed over the
-/// last ~5 frames): each frame's light is blended into what the frames
-/// before left at this weight - 0.2, so the last five frames carry two
-/// thirds of it - after the old light is found again where the same air was
+/// last frames; how many is the Debug Glow slider "VL Glättung (Bilder)",
+/// dbgvlhistory, 1-60): each frame's light is blended into what the frames
+/// before left - after the old light is found again where the same air was
 /// last frame (reprojected through the scene's depth) and held to the range
 /// of this frame's light round it, so a moving lamp or a turned head leaves
-/// no trail.
-inline constexpr float kHistoryWeight = 0.2f;
+/// no trail. 1 is no history. 20 by default: five (the first value) left
+/// the lamps' glow grainy.
+inline constexpr int kHistoryFramesMin = 1;
+inline constexpr int kHistoryFramesMax = 60;
+inline constexpr int kHistoryFramesDefault = 20;
+
+inline int clampHistoryFrames(int frames) {
+    return std::clamp(frames, kHistoryFramesMin, kHistoryFramesMax);
+}
+
+/// This frame's weight in the history: a running average over the last
+/// `frames` frames - the plain mean, 1 / (held + 1), while the history
+/// holds fewer (`held` frames since it last started afresh), then 1 /
+/// frames, an exponential blend whose last `frames` frames carry about two
+/// thirds of it. Only one image is kept, whatever the count. 1 (this
+/// frame's light alone) when the history holds nothing.
+inline float historyWeight(int frames, uint32_t held) {
+    const uint32_t n = std::min<uint32_t>(held + 1u, static_cast<uint32_t>(clampHistoryFrames(frames)));
+    return 1.0f / static_cast<float>(n);
+}
 
 /// The camera moved this far in one frame: a teleport, a cut, a load - the
 /// old light is of another place and is dropped. Flying at full speed at
@@ -336,11 +355,11 @@ inline bool historyUsable(bool lastFrameDrew, bool sameTargets, float cameraMove
     return lastFrameDrew && sameTargets && cameraMoved <= kHistoryCutDistance;
 }
 
-/// This frame's light blended into the history: the new light alone when
-/// there is none to build on.
-inline glm::vec3 historyBlend(const glm::vec3& history, const glm::vec3& current, bool usable) {
-    if (!usable) return current;
-    return history + (current - history) * kHistoryWeight;
+/// This frame's light blended into the history at `weight`
+/// (historyWeight): the new light alone at 1.
+inline glm::vec3 historyBlend(const glm::vec3& history, const glm::vec3& current, float weight) {
+    if (!(weight < 1.0f)) return current;
+    return history + (current - history) * weight;
 }
 
 /// The distance the history keeps beside its light for the sky, which has no

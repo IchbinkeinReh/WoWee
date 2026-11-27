@@ -164,6 +164,9 @@ public:
     int pendingDbgVlSun = 200;
     int pendingDbgVlMoon = 200;
     int pendingDbgVlLights = 200;
+    /// Debug Glow: how many frames the volumetric light's history averages
+    /// over, 1-60 (Renderer::LightingTune::volumetricHistoryFrames).
+    int pendingDbgVlHistory = 20;
     int pendingDbgGlowAnim = 100;      ///< Debug Glow: glow colour animation strength, percent
     int pendingDbgLightCountLimit = 512;
     int pendingRtParticleLights = 1;  ///< lights per particle emitter (rt_particle_lights.hpp)
