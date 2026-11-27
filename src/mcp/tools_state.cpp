@@ -7,6 +7,9 @@
 #include <string>
 #include <utility>
 
+#include "pipeline/chunk_cache.hpp"
+#include "pipeline/data_stream.hpp"
+#include "pipeline/stream_wait.hpp"
 #include "core/application.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
@@ -191,6 +194,16 @@ json stateOf(ToolContext& context, const json& args) {
     // In the world for the realm, and behind a loading screen for the player:
     // nothing of it can be seen, pointed at or walked on yet.
     out["loading"] = app.loadingScreenUp();
+    // Streaming mode: reads the main thread did not wait for (filled in the
+    // background), those it did wait for in play (each a frozen frame), and
+    // ranges still being fetched.
+    if (pipeline::DataStream::instance().active()) {
+        namespace sw = pipeline::stream_wait;
+        out["stream"] = {{"deferred_reads", sw::deferredReads()},
+                         {"main_thread_waits", sw::mainThreadWaits()},
+                         {"main_thread_wait_ms", sw::mainThreadWaitMs()},
+                         {"background_pending", pipeline::ChunkCache::backgroundPending()}};
+    }
 
     auto* renderer = app.getRenderer();
     const auto& mi = gh->getMovementInfo();

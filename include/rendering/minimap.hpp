@@ -217,6 +217,8 @@ private:
     // compositeSpan_ say where it is, in render axes.
     std::optional<minimap_indoor::Scene> indoorScene_;
     bool indoorDirty_ = false;
+    // A picture asked for was still coming from the streaming server.
+    bool picturesPending_ = false;
     bool compositeIndoors_ = false;
     glm::vec2 compositeCenter_{0.0f};
     float compositeSpan_ = 1.0f;

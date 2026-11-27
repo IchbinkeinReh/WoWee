@@ -79,7 +79,17 @@ public:
     /// Makes [offset, offset + length) present locally, fetching the missing
     /// chunks (consecutive ones in one request, up to maxRequestBytes). True
     /// when all of it is present. Thread-safe; blocks while fetching.
+    ///
+    /// Under a stream_wait::NoWait on this thread it never blocks: true when
+    /// all of it is here already; otherwise the range is handed to the
+    /// background fetch (also when another reader is fetching part of it -
+    /// that is not waited for either), the read is marked deferred
+    /// (stream_wait::deferredNow) and false comes back at once.
     bool ensure(uint64_t offset, uint64_t length);
+
+    /// Ranges handed to the background fetch (ensure under a NoWait) and not
+    /// fetched yet, in all caches.
+    static size_t backgroundPending();
 
     [[nodiscard]] const std::string& path() const { return path_; }
     [[nodiscard]] uint64_t size() const { return size_; }

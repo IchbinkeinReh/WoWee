@@ -4,6 +4,7 @@
 #include "pipeline/base_fallback.hpp"
 #include "pipeline/dds_loader.hpp"
 #include "pipeline/mpq_archive_set.hpp"
+#include "pipeline/stream_wait.hpp"
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
 #include "core/profiler.hpp"
@@ -357,6 +358,8 @@ BLPImage AssetManager::loadTexture(const std::string& path, bool keepCompressed)
     }
 
     std::vector<uint8_t> blpData = readFile(normalizedPath);
+    // Being fetched for a read that did not wait (loadTextureNoWait): not missing.
+    if (blpData.empty() && stream_wait::deferredNow()) return BLPImage();
     if (blpData.empty()) {
         static std::mutex logMtx;
         static std::unordered_set<std::string> loggedMissingTextures;
@@ -775,7 +778,10 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
     std::vector<uint8_t> data;
     if (fsPath.empty()) {
         if (!mpq_) return {};
+        const uint64_t fetchesBefore = stream_wait::threadFetches();
+        const auto readStart = std::chrono::steady_clock::now();
         data = mpq_->read(normalized);
+        if (stream_wait::threadFetches() != fetchesBefore) noteStreamWait(normalized, readStart);
         if (data.empty()) return data;
     } else {
         data = LooseFileReader::readFile(fsPath);
@@ -797,6 +803,34 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
     }
 
     return data;
+}
+
+void AssetManager::noteStreamWait(const std::string& normalized, std::chrono::steady_clock::time_point start) {
+    // Streaming mode: a read on the main thread waited for the server. Behind
+    // a loading screen that is what the screen is for; in play it is a frozen
+    // frame, named here so the read can be made one that does not wait.
+    if (!stream_wait::onMainThread() || stream_wait::loadingScreenUp()) return;
+    const auto ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
+    stream_wait::noteMainThreadWait(ms);
+    const uint64_t n = stream_wait::mainThreadWaits();
+    if (n <= 50 || n % 100 == 0) {
+        LOG_WARNING("STREAM: the main thread waited ", ms, " ms in play for ", normalized, " (", n, " such waits)");
+    }
+}
+
+std::vector<uint8_t> AssetManager::readFileNoWait(const std::string& path, bool& pending) const {
+    stream_wait::NoWait noWait;
+    std::vector<uint8_t> data = readFile(path);
+    pending = data.empty() && noWait.deferred();
+    return data;
+}
+
+BLPImage AssetManager::loadTextureNoWait(const std::string& path, bool keepCompressed, bool& pending) {
+    stream_wait::NoWait noWait;
+    BLPImage image = loadTexture(path, keepCompressed);
+    pending = !image.isValid() && noWait.deferred();
+    return image;
 }
 
 std::vector<std::string> AssetManager::listFiles(const std::string& prefix) const {

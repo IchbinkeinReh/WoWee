@@ -15,6 +15,7 @@
 #include "ui/text_markup.hpp"
 #include "ui/text_wrap.hpp"
 #include "ui/stream_progress.hpp"
+#include "pipeline/stream_wait.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_vulkan.h>
@@ -48,6 +49,8 @@ bool LoadingScreen::initialize(pipeline::AssetManager* assets, uint32_t mapId) {
     if (!holdsWorldSound_) {
         audio::AudioEngine::instance().beginWorldSoundHold();
         holdsWorldSound_ = true;
+        // Behind it the main thread may wait for streamed data.
+        pipeline::stream_wait::loadingScreenShown(true);
     }
     namespace ls = loading_screen;
     // 0x0040ad50: a crossing that can be drawn is the whole screen - the
@@ -120,6 +123,7 @@ void LoadingScreen::shutdown() {
     if (holdsWorldSound_) {
         holdsWorldSound_ = false;
         audio::AudioEngine::instance().endWorldSoundHold();
+        pipeline::stream_wait::loadingScreenShown(false);
     }
     if (!vkCtx) return;
     bool any = picture_.image || bar_[0].image || bar_[1].image || dynamicElements_.image;

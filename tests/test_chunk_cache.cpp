@@ -16,6 +16,9 @@
 #include <vector>
 
 #include "pipeline/chunk_cache.hpp"
+#include "pipeline/stream_wait.hpp"
+
+#include <chrono>
 
 using wowee::pipeline::ChunkBitmap;
 using wowee::pipeline::ChunkCache;
@@ -28,6 +31,8 @@ struct Remote {
     std::atomic<int> requests{0};
     std::atomic<uint64_t> sent{0};
     std::atomic<bool> broken{false};
+    // A slow server: each request takes this long (a throttled connection).
+    std::atomic<int> delayMs{0};
     std::vector<std::pair<uint64_t, uint64_t>> asked;
     std::mutex askedMutex;
 
@@ -40,6 +45,7 @@ struct Remote {
                 err = "connection refused";
                 return false;
             }
+            if (delayMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delayMs.load()));
             ++requests;
             sent += len;
             {
@@ -414,4 +420,123 @@ TEST_CASE("Past the disk limit, chunks are held in memory only", "[chunks][limit
     CHECK(r.requests == before + 1);
     CHECK(readLocal(local, 2 * kChunk, kChunk) ==
           std::vector<uint8_t>(r.bytes.begin() + 2 * kChunk, r.bytes.begin() + 3 * kChunk));
+}
+
+// ---- reads that may not wait (stream_wait.hpp) ------------------------------
+
+namespace {
+using Clock = std::chrono::steady_clock;
+double msSince(Clock::time_point t) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
+}
+/// Polls `done` as a frame loop would, every few milliseconds, for up to
+/// `limitMs`; true when it came true.
+template <class Done>
+bool arrivesWithin(double limitMs, Done done) {
+    const auto start = Clock::now();
+    while (msSince(start) < limitMs) {
+        if (done()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return done();
+}
+}  // namespace
+
+TEST_CASE("A read that may not wait does not; the background brings the data", "[chunks][nowait]") {
+    namespace sw = wowee::pipeline::stream_wait;
+    Dir d;
+    Remote r(64 * kChunk);
+    r.delayMs = 300;
+    ChunkCache cache;
+    REQUIRE(cache.open((d.root / "t.MPQ").string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+
+    const uint64_t deferredBefore = sw::deferredReads();
+    {
+        sw::NoWait noWait;
+        const auto t = Clock::now();
+        CHECK_FALSE(cache.ensure(5 * kChunk + 3, 2 * kChunk));
+        CHECK(msSince(t) < 100.0);   // not the server's 300 ms
+        CHECK(noWait.deferred());
+        CHECK(sw::deferredNow());
+    }
+    CHECK_FALSE(sw::deferredNow());   // outside every scope nothing is deferred
+    CHECK(sw::deferredReads() == deferredBefore + 1);
+
+    // The frames go on; the range comes in behind them.
+    bool here = arrivesWithin(10000.0, [&] {
+        sw::NoWait noWait;
+        return cache.ensure(5 * kChunk + 3, 2 * kChunk);
+    });
+    REQUIRE(here);
+    CHECK(readLocal(d.root / "t.MPQ", 5 * kChunk, 3 * kChunk) ==
+          std::vector<uint8_t>(r.bytes.begin() + 5 * kChunk, r.bytes.begin() + 8 * kChunk));
+    CHECK(arrivesWithin(2000.0, [] { return ChunkCache::backgroundPending() == 0; }));
+
+    // Here now: a read that may not wait reads it, deferring nothing.
+    sw::NoWait noWait;
+    CHECK(cache.ensure(5 * kChunk, 3 * kChunk));
+    CHECK_FALSE(noWait.deferred());
+}
+
+TEST_CASE("A read that may not wait does not wait for another reader's fetch either", "[chunks][nowait]") {
+    namespace sw = wowee::pipeline::stream_wait;
+    Dir d;
+    Remote r(16 * kChunk);
+    r.delayMs = 400;
+    ChunkCache cache;
+    REQUIRE(cache.open((d.root / "t.MPQ").string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+    // A worker (a terrain tile being read) fetching the range, and waiting.
+    std::thread worker([&] { CHECK(cache.ensure(0, 4 * kChunk)); });
+    // Under way by now: it sleeps 400 ms in the server.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    {
+        sw::NoWait noWait;
+        const auto t = Clock::now();
+        CHECK_FALSE(cache.ensure(kChunk, kChunk));
+        CHECK(msSince(t) < 100.0);
+        CHECK(noWait.deferred());
+    }
+    worker.join();
+    sw::NoWait noWait;
+    CHECK(arrivesWithin(5000.0, [&] { return cache.ensure(kChunk, kChunk); }));
+}
+
+TEST_CASE("Nested scopes: the outer one learns of the inner one's deferred reads", "[chunks][nowait]") {
+    namespace sw = wowee::pipeline::stream_wait;
+    Dir d;
+    Remote r(8 * kChunk);
+    r.delayMs = 50;
+    ChunkCache cache;
+    REQUIRE(cache.open((d.root / "t.MPQ").string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+    sw::NoWait outer;
+    CHECK_FALSE(outer.deferred());
+    {
+        sw::NoWait inner;
+        CHECK_FALSE(cache.ensure(0, kChunk));
+        CHECK(inner.deferred());
+    }
+    CHECK(outer.deferred());
+    {
+        sw::NoWait inner;   // a scope of its own starts clean
+        CHECK_FALSE(inner.deferred());
+    }
+    CHECK(arrivesWithin(5000.0, [] { return ChunkCache::backgroundPending() == 0; }));
+}
+
+TEST_CASE("A cache that goes away with background fetches queued is not touched after", "[chunks][nowait]") {
+    namespace sw = wowee::pipeline::stream_wait;
+    Dir d;
+    Remote r(64 * kChunk);
+    r.delayMs = 100;
+    for (int round = 0; round < 3; ++round) {
+        auto cache = std::make_unique<ChunkCache>();
+        REQUIRE(cache->open((d.root / ("t" + std::to_string(round) + ".MPQ")).string(), r.bytes.size(), kChunk,
+                            "v1", r.fetcher()));
+        {
+            sw::NoWait noWait;
+            for (uint64_t c = 0; c < 32; c += 2) CHECK_FALSE(cache->ensure(c * kChunk, kChunk));
+        }
+        cache.reset();   // waits out the fetch under way, drops the rest
+    }
+    CHECK(arrivesWithin(2000.0, [] { return ChunkCache::backgroundPending() == 0; }));
 }

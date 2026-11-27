@@ -5,6 +5,7 @@
 #include "pipeline/asset_manifest.hpp"
 #include "pipeline/loose_file_reader.hpp"
 #include "pipeline/mpq_archive_set.hpp"
+#include <chrono>
 #include <atomic>
 #include <memory>
 #include <string>
@@ -76,6 +77,12 @@ public:
     /// keepCompressed asks the loader to leave a DXT texture in its blocks.
     /// A PNG override is decoded regardless - it has no blocks to keep.
     BLPImage loadTexture(const std::string& path, bool keepCompressed = false);
+
+    /// loadTexture for the main thread in play: never waits for the network
+    /// (streaming mode, pipeline/stream_wait.hpp). Invalid with `pending` set
+    /// when the file is still being fetched in the background - not missing,
+    /// to be asked for again; invalid without it when it is missing.
+    BLPImage loadTextureNoWait(const std::string& path, bool keepCompressed, bool& pending);
 
     /**
      * Set expansion-specific data path for CSV DBC lookup.
@@ -154,6 +161,9 @@ public:
      */
     [[nodiscard]] std::vector<uint8_t> readFile(const std::string& path) const;
 
+    /// readFile that never waits for the network (see loadTextureNoWait).
+    [[nodiscard]] std::vector<uint8_t> readFileNoWait(const std::string& path, bool& pending) const;
+
     /**
      * Read optional file data without warning spam.
      * Intended for probe-style lookups (e.g. external .anim variants).
@@ -208,6 +218,8 @@ public:
     [[nodiscard]] std::string resolveFile(const std::string& normalizedPath) const;
 
 private:
+    /// A read on the main thread in play that waited for the streaming server.
+    static void noteStreamWait(const std::string& normalized, std::chrono::steady_clock::time_point start);
     bool initialized = false;
     std::string dataPath;
     std::string expansionDataPath_;  // e.g. "Data/expansions/wotlk"

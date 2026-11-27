@@ -279,6 +279,10 @@ TEST_CASE("A damaged size in the block table reads as a missing file, not an all
 // ---- streaming mode: the same archives read through a chunk cache -------------
 
 #include "pipeline/chunk_cache.hpp"
+#include "pipeline/stream_wait.hpp"
+
+#include <chrono>
+#include <thread>
 
 #include <map>
 #include <memory>
@@ -385,7 +389,7 @@ struct StreamedCopy {
     std::map<std::string, wowee::pipeline::ChunkCache*> byPath;
 
     StreamedCopy(const fs::path& remote, const fs::path& mirror, const std::vector<std::string>& rels,
-                 uint32_t chunk, uint64_t padTo = 0) {
+                 uint32_t chunk, uint64_t padTo = 0, int delayMs = 0) {
         using wowee::pipeline::ChunkCache;
         for (const auto& rel : rels) {
             const fs::path src = remote / rel;
@@ -394,7 +398,10 @@ struct StreamedCopy {
             auto c = std::make_unique<ChunkCache>();
             const std::string srcPath = src.string();
             REQUIRE(c->open((mirror / rel).string(), size, chunk, "v1",
-                            [srcPath, real](uint64_t off, uint64_t len, std::vector<uint8_t>& out, std::string&) {
+                            [srcPath, real, delayMs](uint64_t off, uint64_t len, std::vector<uint8_t>& out,
+                                                     std::string&) {
+                                // A slow server, each request this long.
+                                if (delayMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
                                 out.assign(static_cast<size_t>(len), 0);
                                 if (off < real) {
                                     std::ifstream in(srcPath, std::ios::binary);
@@ -428,6 +435,49 @@ struct StreamedCopy {
     }
 };
 }  // namespace
+
+TEST_CASE("Streaming: a read that may not wait is filled in the background, not failed",
+          "[mpq][stream][nowait]") {
+    // Travel in streaming mode: the main thread asks for a file that is not
+    // here yet (a minimap picture of the ground ahead). It is not waited for
+    // and not taken for a missing file; the frames go on and it reads whole
+    // once the background has fetched it.
+    namespace sw = wowee::pipeline::stream_wait;
+    using Clock = std::chrono::steady_clock;
+    TempData remote;
+    const fs::path mirror = remote.root.parent_path() / (remote.root.filename().string() + "_nowaitmirror");
+    std::error_code ec;
+    fs::remove_all(mirror, ec);
+    {
+        StreamedCopy copy(remote.root, mirror, {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"},
+                          512, 0, 150);
+        MpqArchiveSet set;
+        REQUIRE(set.open(mirror.string()));   // the tables: read behind the start's screen
+        const uint64_t failuresBefore = set.stats().failures;
+        int frames = 0;
+        double longestFrameMs = 0.0;
+        std::vector<uint8_t> got;
+        const auto start = Clock::now();
+        while (got.empty() && std::chrono::duration<double>(Clock::now() - start).count() < 20.0) {
+            const auto frame = Clock::now();
+            {
+                sw::NoWait noWait;
+                got = set.read("a\\crc.bin");
+                if (got.empty()) CHECK(noWait.deferred());
+            }
+            longestFrameMs = std::max(longestFrameMs,
+                                      std::chrono::duration<double, std::milli>(Clock::now() - frame).count());
+            ++frames;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(got == pattern(10000));
+        CHECK(frames > 1);                 // it came later, the frames went on
+        CHECK(longestFrameMs < 100.0);     // none waited for the 150 ms server
+        CHECK(set.stats().failures == failuresBefore);   // never counted as missing
+        set.close();
+    }
+    fs::remove_all(mirror, ec);
+}
 
 TEST_CASE("Streaming past the disk limit: what is held in memory reads through the archives",
           "[mpq][stream][limit]") {

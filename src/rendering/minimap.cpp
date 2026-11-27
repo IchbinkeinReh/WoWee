@@ -475,7 +475,15 @@ VkTexture* Minimap::loadTrsTexture(const std::string& key) {
 
     // Load from MPQ
     std::string blpPath = "Textures\\Minimap\\" + hash + ".blp";
-    auto blpImage = assetManager->loadTexture(blpPath);
+    // Never waited for in play: a picture still coming from the streaming
+    // server is drawn as no data and asked for again at the next refresh
+    // (pipeline/stream_wait.hpp), not marked as failed.
+    bool pending = false;
+    auto blpImage = assetManager->loadTextureNoWait(blpPath, false, pending);
+    if (pending) {
+        picturesPending_ = true;
+        return nullptr;
+    }
     if (!blpImage.isValid()) {
         return tileTextures_.add(hash, nullptr);  // Marked as failed
     }
@@ -763,7 +771,9 @@ void Minimap::compositeIndoor(VkCommandBuffer cmd) {
     compositeCenter_ = center;
     compositeSpan_ = span;
     compositeIndoors_ = true;
-    indoorDirty_ = false;
+    // A picture still being fetched: drawn again until it is in.
+    indoorDirty_ = picturesPending_;
+    picturesPending_ = false;
     hasCachedFrame = true;
     // The terrain's picture is gone; coming back out draws it again.
     lastCenterTileX = -1;

@@ -1,9 +1,13 @@
 #include "pipeline/chunk_cache.hpp"
 
 #include "core/logger.hpp"
+#include "pipeline/stream_wait.hpp"
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -178,7 +182,92 @@ bool ChunkBitmap::load(const std::string& path, uint64_t fileSize, uint32_t chun
 
 // ---- cache ---------------------------------------------------------------------
 
+namespace {
+// The background fetch of ranges a read under a NoWait did not wait for
+// (stream_wait.hpp). The newest first: what was asked for last is nearest to
+// where the player is now. Never destroyed - a cache going away waits here
+// for a fetch of its own to finish (forget), and that may be at exit.
+class Filler {
+public:
+    static Filler& get() {
+        static Filler* filler = new Filler();
+        return *filler;
+    }
+
+    void add(ChunkCache* cache, uint64_t offset, uint64_t length) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (auto it = jobs_.begin(); it != jobs_.end(); ++it) {
+                if (it->cache == cache && it->offset == offset && it->length == length) {
+                    jobs_.erase(it);
+                    break;
+                }
+            }
+            jobs_.push_front({cache, offset, length});
+            // A long flight asks for more than can come; what was asked for
+            // longest ago is furthest behind and is asked for again if wanted.
+            while (jobs_.size() > kMaxJobs) jobs_.pop_back();
+            if (threads_.empty()) {
+                busy_.assign(kThreads, nullptr);
+                for (size_t i = 0; i < kThreads; ++i) threads_.emplace_back([this, i] { run(i); });
+                for (auto& t : threads_) t.detach();
+            }
+        }
+        wake_.notify_one();
+    }
+
+    /// Drops the jobs of a cache going away and waits out its fetch.
+    void forget(ChunkCache* cache) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        for (auto it = jobs_.begin(); it != jobs_.end();) {
+            if (it->cache == cache) it = jobs_.erase(it);
+            else ++it;
+        }
+        idle_.wait(lock, [&] { return std::find(busy_.begin(), busy_.end(), cache) == busy_.end(); });
+    }
+
+    size_t pending() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        size_t n = jobs_.size();
+        for (ChunkCache* c : busy_) n += c ? 1 : 0;
+        return n;
+    }
+
+private:
+    struct Job {
+        ChunkCache* cache;
+        uint64_t offset, length;
+    };
+    static constexpr size_t kThreads = 2;
+    static constexpr size_t kMaxJobs = 1024;
+
+    void run(size_t index) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        for (;;) {
+            wake_.wait(lock, [&] { return !jobs_.empty(); });
+            const Job job = jobs_.front();
+            jobs_.pop_front();
+            busy_[index] = job.cache;
+            lock.unlock();
+            (void)job.cache->ensure(job.offset, job.length);
+            lock.lock();
+            busy_[index] = nullptr;
+            idle_.notify_all();
+        }
+    }
+
+    std::mutex mutex_;
+    std::condition_variable wake_, idle_;
+    std::deque<Job> jobs_;
+    std::vector<ChunkCache*> busy_;
+    std::vector<std::thread> threads_;
+};
+}  // namespace
+
+size_t ChunkCache::backgroundPending() { return Filler::get().pending(); }
+
 ChunkCache::~ChunkCache() {
+    Filler::get().forget(this);
     g_diskBytes -= diskCounted_;
     uint64_t memory = 0;
     for (const auto& [c, bytes] : memory_) memory += bytes.size();
@@ -395,6 +484,18 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
             useDirty_ = true;
         }
     }
+    if (stream_wait::noWait()) {
+        // Not waited for, neither a fetch of its own nor one another reader
+        // has under way: whatever is missing goes to the background fetch.
+        for (uint64_t c = first; c <= last; ++c) {
+            if (present(c)) continue;
+            lock.unlock();
+            Filler::get().add(this, offset, length);
+            stream_wait::noteDeferred();
+            return false;
+        }
+        return true;
+    }
     for (;;) {
         // The first chunk still missing that nobody is fetching: claim the
         // run of missing chunks from there and fetch it without the lock, so
@@ -451,6 +552,7 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
         for (uint64_t k = c; k <= end; ++k) inFlight_.erase(k);
         if (ok) {
             ++t_fetches;
+            stream_wait::noteFetch();
             ++requests_;
             fetched_ += bytes.size();
             if (toMemory) {

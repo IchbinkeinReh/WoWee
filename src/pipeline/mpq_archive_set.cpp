@@ -1,4 +1,5 @@
 #include "pipeline/mpq_archive_set.hpp"
+#include "pipeline/stream_wait.hpp"
 #include "core/logger.hpp"
 #include "core/platform.hpp"
 
@@ -677,6 +678,9 @@ std::vector<uint8_t> MpqArchiveSet::read(const std::string& normalizedPath) cons
         LOG_ERROR("MPQ: no memory for ", normalizedPath, " (", h.archive->blocks[h.block].fsize, " bytes)");
     }
     if (!ok) {
+        // Not missing: being fetched in the background for a read that did
+        // not wait (stream_wait.hpp); its caller asks again.
+        if (stream_wait::deferredNow()) return {};
         const uint64_t n = counters_->failures.fetch_add(1, std::memory_order_relaxed) + 1;
         // Each one up to fifty, then every five hundredth: with the stream's
         // server gone every read of a zone fails, and a line each buried the

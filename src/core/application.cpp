@@ -118,6 +118,7 @@
 #include "core/data_paths.hpp"
 #include "core/data_prompt.hpp"
 #include "pipeline/data_stream.hpp"
+#include "pipeline/stream_wait.hpp"
 #include "core/env.hpp"
 #include "ui/ui_services.hpp"
 #include "auth/auth_handler.hpp"
@@ -901,6 +902,8 @@ bool Application::worldComing() const {
 
 bool Application::initialize() {
     LOG_INFO("Initializing Wowee Native Client");
+    // The thread whose waits for streamed data are frozen frames.
+    pipeline::stream_wait::markMainThread();
 
     // Initialize memory monitoring for dynamic cache sizing
     core::MemoryMonitor::getInstance().initialize();

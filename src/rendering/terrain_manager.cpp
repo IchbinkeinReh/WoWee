@@ -2309,7 +2309,11 @@ TerrainManager::getTerrainTextureTones(const std::string& texturePath) {
 
     TerrainTextureTones tones;  // greys, which tint nothing much either way
     if (assetManager) {
-        const pipeline::BLPImage blp = assetManager->loadTexture(texturePath, false);
+        // On the main thread: a texture still coming from the streaming
+        // server gives the greys this once and is asked for again.
+        bool pending = false;
+        const pipeline::BLPImage blp = assetManager->loadTextureNoWait(texturePath, false, pending);
+        if (pending) return tones;
         if (blp.isValid() && !blp.data.empty()) {
             // Every sixteenth pixel, sorted by luminance. Percentiles rather
             // than a mean because a grass texture is blades over earth, and
