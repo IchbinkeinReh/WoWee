@@ -6916,17 +6916,22 @@ static int lua_WoweeTooltipItemBuilt(lua_State* L) {
 /// The three lists are the browse results, the player's own auctions and the
 /// ones they have bid on, named as GetAuctionItemInfo names them.
 int lua_Tooltip_SetAuctionItem(lua_State* L) {
+    // 0x0062fcf0: a type text and an index number, else the usage line; a
+    // type other than owner/bidder/list, or a row with no item, answers nil.
+    if (!lua_isstring(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: %s:SetAuctionItem(\"type\", index)", usageName(L, 1));
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    const char* list = luaL_optstring(L, 2, "list");
-    const int index = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || index < 1) { luaPushOneOrNil(L, 0); return 1; }
-
-    const std::string which(list ? list : "list");
+    const std::string which = lua_tostring(L, 2);
+    const long index = std::lround(lua_tonumber(L, 3));
+    if (!w || !gh || index < 1 || (which != "owner" && which != "bidder" && which != "list")) {
+        luaPushOneOrNil(L, 0);
+        return 1;
+    }
     const auto& results = (which == "owner")  ? gh->getAuctionOwnerResults()
                         : (which == "bidder") ? gh->getAuctionBidderResults()
                                               : gh->getAuctionBrowseResults();
-    if (index > static_cast<int>(results.auctions.size())) {
+    if (index > static_cast<long>(results.auctions.size()) || results.auctions[index - 1].itemEntry == 0) {
         luaPushOneOrNil(L, 0);
         return 1;
     }
@@ -6945,7 +6950,9 @@ int lua_Tooltip_SetAuctionItem(lua_State* L) {
                                      [&] { return fillItemTooltipById(L, gh, row.itemEntry); });
     lua_pushnil(L);
     lua_setglobal(L, "__WoweeTooltipNoPrice");
-    luaPushOneOrNil(L, filled ? 1 : 0);
+    // What 0x006277f0 answered: 1 for a line that counts down (a lock, a
+    // duration), else nil - not whether it was filled.
+    luaPushOneOrNil(L, filled && w->tooltipTimedLine ? 1 : 0);
     return 1;
 }
 
@@ -7260,10 +7267,10 @@ int lua_Tooltip_SetQuestLogSpecialItem(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh) return 0;
     const auto item = wowee::addons::questSpecialItemAt(gh, index);
-    lua_pushboolean(L, fillItemTooltipById(L, gh, item.itemId) ? 1 : 0);
-    return 1;
+    fillItemTooltipById(L, gh, item.itemId);
+    return 0;   // 0x00630990 answers nothing
 }
 
 /// SetCurrencyToken(index) - a row of the currency list.
@@ -7273,6 +7280,7 @@ int lua_Tooltip_SetQuestLogSpecialItem(lua_State* L) {
 /// frame's OnEnter with it. A currency is an item held in the bags, so its
 /// tooltip is the item's.
 int lua_Tooltip_SetBackpackToken(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetBackpackToken(index)", usageName(L, 1));   // 0x006307e0
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
     // 0x006307e0 answers nothing; the tooltip is the item's.
@@ -7287,10 +7295,10 @@ int lua_Tooltip_SetCurrencyToken(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh) return 0;
     const uint32_t itemId = wowee::addons::currencyListItemId(L, index);
-    lua_pushboolean(L, fillItemTooltipById(L, gh, itemId) ? 1 : 0);
-    return 1;
+    fillItemTooltipById(L, gh, itemId);
+    return 0;   // 0x00630620 answers nothing
 }
 
 /// SetBagItem(bag, slot) - the same for something in the bags.
@@ -7317,21 +7325,27 @@ static int lua_Tooltip_SetAuctionSellItem(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const auto* held = gh && widgetOf(L, 1) ? wowee::addons::auctionSellHeldItem(gh) : nullptr;
     if (!held || held->empty()) { luaPushOneOrNil(L, 0); return 1; }
-    luaPushOneOrNil(L, fillItemTooltipById(L, gh, held->item.itemId, &held->item) ? 1 : 0);
+    // What 0x006277f0 answered: 1 for a line that counts down, else nil.
+    auto* w = widgetOf(L, 1);
+    const bool filled = fillItemTooltipById(L, gh, held->item.itemId, &held->item);
+    luaPushOneOrNil(L, filled && w->tooltipTimedLine ? 1 : 0);
     return 1;
 }
 
 /// SetSendMailItem(index) (0x0062f8b0): the attachment's full tooltip, from
-/// the item itself - 1 when filled.
+/// the item itself. One value always: 1 when 0x006277f0 put a line that
+/// counts down, else nil. A non-number is the first slot; past 16, nil.
 static int lua_Tooltip_SetSendMailItem(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
-    const long index = std::lround(luaL_optnumber(L, 2, 0));
-    if (!gh || index < 1) return 0;
+    auto* w = widgetOf(L, 1);
+    const long index = lua_isnumber(L, 2) ? std::lround(lua_tonumber(L, 2)) : 1;
+    if (!gh || !w || index < 1 || index > 16) { luaPushOneOrNil(L, 0); return 1; }
     const auto& attachments = gh->getMailAttachments();
-    if (index > static_cast<long>(attachments.size())) return 0;
+    if (index > static_cast<long>(attachments.size())) { luaPushOneOrNil(L, 0); return 1; }
     const auto& att = attachments[static_cast<size_t>(index) - 1];
-    if (!att.occupied()) return 0;
-    luaPushOneOrNil(L, fillItemTooltipById(L, gh, att.item.itemId, &att.item) ? 1 : 0);
+    if (!att.occupied()) { luaPushOneOrNil(L, 0); return 1; }
+    const bool filled = fillItemTooltipById(L, gh, att.item.itemId, &att.item);
+    luaPushOneOrNil(L, filled && w->tooltipTimedLine ? 1 : 0);
     return 1;
 }
 
@@ -15186,15 +15200,17 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         // The merchant item's index rides along while its link is drawn, so
         // the item tooltip can say the arena rating its cost asks for.
+        // 0x0062ed70: a number or its error line; answers nothing.
         "function __WoweeFrameMT:SetMerchantItem(index)\n"
+        "    if type(index) ~= 'number' and not tonumber(index) then error('Invalid merchant slot in SetMerchantItem', 0) end\n"
         "    self:ClearLines()\n"
         "    local link = GetMerchantItemLink and GetMerchantItemLink(index)\n"
         "    if link then\n"
         "        __WoweeTooltipMerchantIndex = index\n"
-        "        local ok, r1, r2 = pcall(self.__WoweeSetLink, self, link)\n"
+        "        local ok, r1 = pcall(self.__WoweeSetLink, self, link)\n"
         "        __WoweeTooltipMerchantIndex = nil\n"
         "        if not ok then error(r1, 0) end\n"
-        "        return r1, r2\n"
+        "        return\n"
         "    end\n"
         "    local name = GetMerchantItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
@@ -15262,17 +15278,24 @@ void LuaEngine::registerCoreAPI() {
         "    elseif kind == 'spell' then self:SetSpellByID(id, pet) end\n"
         "end\n"
         "function __WoweeFrameMT:SetAuctionSellItem() return __WoweeTooltipSetAuctionSellItem(self) end\n"
+        // 0x0062e790: a type text and an index number with an item behind
+        // them, else its error line; answers nothing.
         "function __WoweeFrameMT:SetQuestLogItem(itemType, index)\n"
+        "    if not __WoweeIsText(itemType) or (type(index) ~= 'number' and not tonumber(index)) then\n"
+        "        error('Invalid quest item in SetQuestLogItem(\"type\", index)', 0)\n"
+        "    end\n"
         "    self:ClearLines()\n"
         "    local link = GetQuestLogItemLink and GetQuestLogItemLink(itemType, index)\n"
         "    if link then\n"
         "        local count\n"
         "        if itemType == 'choice' then count = select(3, GetQuestLogChoiceInfo(index))\n"
         "        else count = select(3, GetQuestLogRewardInfo(index)) end\n"
-        "        return __WoweeSetHyperlinkCounted(self, link, count)\n"
+        "        __WoweeSetHyperlinkCounted(self, link, count)\n"
+        "        return\n"
         "    end\n"
         "    local name = GetQuestItemInfo(itemType, index)\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
+        "    if not name then error('Invalid quest item in SetQuestLogItem(\"type\", index)', 0) end\n"
+        "    self:SetText(name, 1, 1, 1)\n"
         "end\n"
         // And a quest reward's count (0x0062e670).
         "function __WoweeFrameMT:SetQuestItem(itemType, index)\n"
@@ -15299,10 +15322,12 @@ void LuaEngine::registerCoreAPI() {
         "    if not ok then error(r1, 0) end\n"
         "    return r1, r2\n"
         "end\n"
+        // 0x0062eff0 / 0x0062f1e0: a number or the error line; answer nothing.
         "function __WoweeFrameMT:SetTradePlayerItem(index)\n"
+        "    if type(index) ~= 'number' and not tonumber(index) then error('Invalid trade slot in SetTradePlayerItem', 0) end\n"
         "    self:ClearLines()\n"
         "    local link = GetTradePlayerItemLink and GetTradePlayerItemLink(index)\n"
-        "    if link then return __WoweeTradeTooltip(self, link, select(3, GetTradePlayerItemInfo(index))) end\n"
+        "    if link then __WoweeTradeTooltip(self, link, select(3, GetTradePlayerItemInfo(index))) return end\n"
         "    local name = GetTradePlayerItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -15310,10 +15335,11 @@ void LuaEngine::registerCoreAPI() {
         // and its twin was not, so hovering your own offer named the item and
         // hovering theirs said nothing - an asymmetry rather than a decision.
         "function __WoweeFrameMT:SetTradeTargetItem(index)\n"
+        "    if type(index) ~= 'number' and not tonumber(index) then error('Invalid trade slot in SetTradeTargetItem', 0) end\n"
         "    self:ClearLines()\n"
         "    local link = GetTradeTargetItemLink and GetTradeTargetItemLink(index)\n"
         "    local _, _, count, _, _, proposed = GetTradeTargetItemInfo(index)\n"
-        "    if link then return __WoweeTradeTooltip(self, link, count, nil, proposed, __WoweeTradeTargetInstance(index)) end\n"
+        "    if link then __WoweeTradeTooltip(self, link, count, nil, proposed, __WoweeTradeTargetInstance(index)) return end\n"
         "    local name = GetTradeTargetItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -15345,7 +15371,11 @@ void LuaEngine::registerCoreAPI() {
         // What a vendor wants besides coin - badges, marks, a token. The
         // money frame draws one of these per cost item and the tooltip is the
         // only place the item is named.
+        // 0x0062ee70: two numbers or its error line; answers nothing.
         "function __WoweeFrameMT:SetMerchantCostItem(index, costIndex)\n"
+        "    if (type(index) ~= 'number' and not tonumber(index)) or (type(costIndex) ~= 'number' and not tonumber(costIndex)) then\n"
+        "        error('Invalid merchant slot in SetMerchantCostItem', 0)\n"
+        "    end\n"
         "    self:ClearLines()\n"
         "    local _, value, link = GetMerchantItemCostItem(index, costIndex)\n"
         "    if link then\n"

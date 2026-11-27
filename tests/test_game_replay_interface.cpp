@@ -521,6 +521,40 @@ TEST_CASE("the item tooltip setters answer as the client's do", "[replay][interf
     CHECK(ui.is("tip:NumLines() > 0"));
     CHECK(ui.is("answers(tip:SetGuildBankItem(1, 1)) == 0"));
     CHECK(ui.is("not pcall(tip.SetGuildBankItem, tip, 'x', 1)"));
+    // SetAuctionItem (0x0062fcf0): one value, 0x006277f0's flag - not whether
+    // it drew; a type it does not know, nil; no type or index, the usage line.
+    wowee::game::AuctionEntry row;
+    row.auctionId = 1;
+    row.itemEntry = 24021;
+    s.handler().auctionBrowseResultsRef().auctions.push_back(row);
+    CHECK(ui.is("answers(tip:SetAuctionItem('list', 1)) == 1"));
+    CHECK(ui.is("tip:SetAuctionItem('list', 1) == nil"));
+    CHECK(ui.is("tip:NumLines() > 0"));
+    s.handler().itemInfoCacheRef()[24021].itemDuration = 3600;
+    CHECK(ui.is("tip:SetAuctionItem('list', 1) == 1"));
+    s.handler().itemInfoCacheRef()[24021].itemDuration = 0;
+    CHECK(ui.is("answers(tip:SetAuctionItem('else', 1)) == 1"));
+    CHECK(ui.is("answers(tip:SetAuctionItem('owner', 1)) == 1"));
+    CHECK(ui.is("not pcall(tip.SetAuctionItem, tip, 'list')"));
+    CHECK(ui.is("not pcall(tip.SetAuctionItem, tip, nil, 1)"));
+    // The sell slot and a mail attachment: one value each (0x0062fc20, 0x0062f8b0).
+    CHECK(ui.is("answers(tip:SetAuctionSellItem()) == 1"));
+    CHECK(ui.is("answers(tip:SetSendMailItem(1)) == 1"));
+    CHECK(ui.is("answers(tip:SetSendMailItem(17)) == 1"));
+    // Merchant, trade, quest log and token setters answer nothing, and say
+    // which argument was wrong (0x0062ed70, 0x0062ee70, 0x0062eff0, 0x0062f1e0,
+    // 0x0062e790, 0x00630620, 0x006307e0, 0x00630990).
+    CHECK(ui.is("answers(tip:SetMerchantItem(1)) == 0"));
+    CHECK(ui.is("select(2, pcall(tip.SetMerchantItem, tip, 'x')) == 'Invalid merchant slot in SetMerchantItem'"));
+    CHECK(ui.is("select(2, pcall(tip.SetMerchantCostItem, tip, 1)) == 'Invalid merchant slot in SetMerchantCostItem'"));
+    CHECK(ui.is("answers(tip:SetTradePlayerItem(1)) == 0"));
+    CHECK(ui.is("select(2, pcall(tip.SetTradePlayerItem, tip, 'x')) == 'Invalid trade slot in SetTradePlayerItem'"));
+    CHECK(ui.is("select(2, pcall(tip.SetTradeTargetItem, tip)) == 'Invalid trade slot in SetTradeTargetItem'"));
+    CHECK(ui.is("select(2, pcall(tip.SetQuestLogItem, tip, 'reward')) == 'Invalid quest item in SetQuestLogItem(\"type\", index)'"));
+    CHECK(ui.is("answers(tip:SetCurrencyToken(1)) == 0"));
+    CHECK(ui.is("answers(tip:SetQuestLogSpecialItem(1)) == 0"));
+    CHECK(ui.is("not pcall(tip.SetBackpackToken, tip)"));
+    CHECK(ui.is("answers(tip:SetBackpackToken(1)) == 0"));
 }
 
 // 0x0051c2e0 with includeCharges: an item that does not stack counts the charges left on
