@@ -2005,9 +2005,16 @@ void WorldMapFacade::syncToPlayer(const glm::vec3& playerRenderPos) {
 }
 
 uint32_t WorldMapFacade::currentWorldMapAreaId() const {
-    // Zero unless a zone is being shown. The interface branches on exactly
-    // that: a continent has no area of its own to name, and the caller falls
-    // back to asking which continent instead.
+    // The WorldMapArea row shown (GetCurrentMapAreaID 0x00544e10 answers it
+    // plus one): a zone's, or with no zone the continent's own row (record
+    // +4 of the continent the map is on, 0x00544e10's DAT_00accf08 < 0
+    // branch - Kalimdor 13); zero with no continent (world, cosmic).
+    if (impl_->viewState.currentLevel() == ViewLevel::CONTINENT) {
+        const int continent = currentContinentIndex();
+        const auto& list = impl_->continents();
+        if (continent < 1 || continent > static_cast<int>(list.size())) return 0;
+        return list[static_cast<size_t>(continent) - 1].wmaId;
+    }
     if (impl_->viewState.currentLevel() != ViewLevel::ZONE) return 0;
     const int idx = impl_->viewState.currentZoneIdx();
     const auto& zones = impl_->data.zones();

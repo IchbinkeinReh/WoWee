@@ -3250,11 +3250,10 @@ static int lua_GetBuildInfo(lua_State* L) {
 }
 
 static int lua_GetCurrentMapAreaID(lua_State* L) {
-    // One past the WorldMapArea id, which is what 3.3.5 answers here. The
-    // interface's own arithmetic says so and is the authority: it takes this
-    // minus one and hands the result to SetMapByID, and treats a negative
-    // result as "no zone, ask which continent instead". So zero means a
-    // continent is showing, and every other value is an id plus one.
+    // One past the WorldMapArea id shown (0x00544e10): the zone's, or on a
+    // continent the continent's own row (Kalimdor 14), and 0 with no
+    // continent shown (world, cosmic). The interface takes this minus one
+    // and hands it to SetMapByID.
     //
     // The physical map id was answered instead - 0 for Eastern Kingdoms, 571
     // for Northrend - which is a different number in a different space. It
