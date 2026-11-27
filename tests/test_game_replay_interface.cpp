@@ -3548,6 +3548,28 @@ TEST_CASE("a loot slot answers five values and the coin goes at once (0x00588570
     CHECK(s.sent().of(Opcode::CMSG_LOOT_MONEY).size() == 1);
 }
 
+// FIXER AT: IsFishingLoot (0x005888e0) is the loot type SMSG_LOOT_RESPONSE
+// carried (0x006d53b0 -> 0x005896b0, 0x00bfa68c) being 3, LOOT_FISHING; a
+// pickpocket's (2) is not.
+TEST_CASE("IsFishingLoot answers loot type 3, not pickpocketing (0x005888e0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto open = [&](uint8_t type) {
+        wowee::network::Packet loot(wowee::game::wireOpcode(Opcode::SMSG_LOOT_RESPONSE));
+        loot.writeUInt64(0xF130000BEC001510ull);
+        loot.writeUInt8(type);
+        loot.writeUInt32(25);   // coin
+        loot.writeUInt8(0);     // no items
+        s.receive(loot);
+        REQUIRE(s.handler().isLootWindowOpen());
+    };
+    open(3);
+    CHECK(ui.is("IsFishingLoot() == 1"));
+    open(2);
+    CHECK(ui.is("IsFishingLoot() == nil"));
+}
+
 // FIXER R (re-read of 0x0058cd20): AcceptQuest sends CMSG_QUESTGIVER_ACCEPT_QUEST
 // (0x006d4ca0) to the details' second guid (0xc0d650, a sharer) where there is
 // one, else to the giver.

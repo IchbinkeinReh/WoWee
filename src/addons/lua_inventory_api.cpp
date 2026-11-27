@@ -6083,9 +6083,12 @@ static int lua_LootSlotIsItem(lua_State* L) {
 // IsFishingLoot() → whether this came out of the water
 static int lua_IsFishingLoot(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // LOOT_TYPE_FISHING, as the server sends it.
+    // 0x005888e0: the loot type SMSG_LOOT_RESPONSE carried (0x006d53b0 reads
+    // the byte after the guid and 0x005896b0 keeps it, 0x00bfa68c) is 3,
+    // LOOT_FISHING. 2 is pickpocketing: a pickpocket's loot frame took the
+    // fishing look and sound, a catch the plain one.
     const bool fishing = gh && gh->isLootWindowOpen() &&
-                         gh->getCurrentLoot().lootType == 2;
+                         gh->getCurrentLoot().lootType == 3;
     luaPushOneOrNil(L, fishing ? 1 : 0);
     return 1;
 }
