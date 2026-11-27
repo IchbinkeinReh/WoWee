@@ -849,7 +849,9 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     lua_pushstring(L, forPlayer(L, q.title).c_str());  // 1: title
     // The level is tracked - the query response carries it - and was being
     // answered as a flat zero beside a comment saying it was not.
-    lua_pushnumber(L, q.level);          // 2: level
+    // A quest of level -1 is the player's level (0x005e0d20: UNIT_FIELD_LEVEL
+    // where the quest's is -1), as the quest log colours and sorts it.
+    lua_pushnumber(L, q.level == -1 ? static_cast<double>(gh->getPlayerLevel()) : q.level);  // 2: level
     // 3: questTag, the quest's QuestInfo name (0x005e0070); 4: its
     // suggested group (0x005ded30).
     if (const std::string& tag = gh->questTagName(q.questId); !tag.empty()) lua_pushstring(L, tag.c_str());

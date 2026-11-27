@@ -255,6 +255,20 @@ TEST_CASE("GetGossipActiveQuests asks the quest log whether a quest is done", "[
     CHECK(ui.is("select(16, GetGossipActiveQuests()) == nil"));
 }
 
+// T449: 0x005e5cc0 takes the level from 0x005e0d20 - the player's
+// UNIT_FIELD_LEVEL for a quest of level -1.
+TEST_CASE("GetQuestLogTitle answers a level -1 quest at the player's level", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    Interface ui(s);
+    auto* quests = s.handler().getQuestHandler();
+    for (uint32_t id : {911u, 912u}) quests->addQuestToLocalLogIfMissing(id, "Quest", "");
+    for (auto& q : quests->questLogRef()) q.level = q.questId == 911 ? -1 : 78;
+    ui.run("levels = {} for i = 1, GetNumQuestLogEntries() do local t, l, _, _, h, _, _, _, id = GetQuestLogTitle(i) "
+           "if not h then levels[id] = l end end");
+    CHECK(ui.is("levels[911] == 80 and levels[912] == 78"));
+}
+
 // P56: 0x0062f9e0 gives the tooltip the attachment's property and seed, as
 // every tooltip of an item is given what it rolled (0x006277f0).
 TEST_CASE("a letter's attachment is named and read with what it rolled", "[replay][interface]") {
