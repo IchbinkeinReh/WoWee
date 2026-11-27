@@ -2445,43 +2445,33 @@ static int skillHeaderSetCollapsed(lua_State* L, bool collapsed) {
 // GetSkillLineInfo(index) → skillName, isHeader, isExpanded, skillRank, numTempPoints, skillModifier, skillMaxRank, isAbandonable, stepCost, rankCost, minLevel, skillCostType
 static int lua_GetSkillLineInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // optnumber, not checknumber: a nil index is a question this can answer
-    // with nil, and raising instead takes down whatever file asked. SkillFrame
-    // calls SkillDetailFrame_SetStatusBar with no selection during its own
-    // load, which is exactly that question.
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    // An index with no skill behind it answers as an empty skill rather than a
-    // single nil. SkillFrame_UpdateSkills passes GetSelectedSkill() straight in
-    // and adds two of the results together on the next line, and before the
-    // server has sent any skills there is nothing selected - so a bare nil
-    // there is arithmetic on nothing and the file is lost. An empty row is the
-    // truthful answer and it costs no more than a blank line in the list.
+    // A non-number is the usage line (lua_arg_guard.cpp, as 0x005cde20);
+    // the index truncated as the client's fistp.
+    const long long index = luaTruncated(lua_tonumber(L, 1));
+    // No skill at that row (or no skill line record for it): nil, nil, nil,
+    // 0, 0, 0, 0, nil, nil, nil, 0, 0, nil - thirteen values (0x005ce229).
+    // The rank and the modifier are numbers, so SkillFrame_UpdateSkills
+    // adding them for no selection still adds zeros.
+    const auto none = [L] {
+        for (int i = 0; i < 3; ++i) lua_pushnil(L);
+        for (int i = 0; i < 4; ++i) lua_pushnumber(L, 0);
+        for (int i = 0; i < 3; ++i) lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
+        lua_pushnil(L);
+        return 13;
+    };
     // Short-circuit rather than a ternary: binding a reference across both arms
     // would copy the whole skill map on every call.
     const auto rows = gh ? skillRows(gh) : std::vector<SkillRow>{};
-    if (!gh || index < 1 || index > static_cast<int>(rows.size())) {
-        lua_pushstring(L, "");                          // 1: skillName
-        luaPushOneOrNil(L, 0);                          // 2: isHeader
-        luaPushOneOrNil(L, 1);                          // 3: isExpanded
-        for (int i = 4; i <= 7; ++i) lua_pushnumber(L, 0);   // rank, temp, mod, max
-        lua_pushnil(L);                                 // 8: isAbandonable
-        // stepCost and rankCost nil for the same reason they are nil below:
-        // zero is true in Lua, so a zero here sends the empty row down the
-        // "Learn <skill>" branch. The fix went in on the real path and this
-        // fallback kept its zeros, which is how a fix half-lands.
-        lua_pushnil(L);                                 // 9: stepCost
-        lua_pushnil(L);                                 // 10: rankCost
-        lua_pushnumber(L, 0);                           // 11: minLevel
-        lua_pushnumber(L, 0);                           // 12: skillCostType
-        lua_pushstring(L, "");                          // 13: skillDescription
-        return 13;
-    }
+    if (!gh || index < 1 || index > static_cast<long long>(rows.size())) return none();
     const auto& row = rows[static_cast<size_t>(index) - 1];
     if (row.isHeader) {
         // A heading carries its name and its open/closed state and nothing
-        // else. The costs stay nil for the same reason they are nil below -
-        // zero is true in Lua and would send the heading down the
-        // "Learn <skill>" branch.
+        // else: name, 1, isExpanded, 0, 0, 0, 0, nil, nil, nil, 0, 0 - twelve,
+        // no description (0x005cdf83 returns 12). The costs stay nil - zero
+        // is true in Lua and would send the heading down the "Learn <skill>"
+        // branch.
         lua_pushstring(L, gh->getSkillCategoryName(row.categoryId).c_str());
         luaPushOneOrNil(L, 1);                          // 2: isHeader
         luaPushOneOrNil(L, gh->isSkillCategoryCollapsed(row.categoryId) ? 0 : 1);
@@ -2491,12 +2481,11 @@ static int lua_GetSkillLineInfo(lua_State* L) {
         lua_pushnil(L);                                 // 10: rankCost
         lua_pushnumber(L, 0);                           // 11: minLevel
         lua_pushnumber(L, 0);                           // 12: skillCostType
-        lua_pushstring(L, "");                          // 13: skillDescription
-        return 13;
+        return 12;
     }
     const auto& skills = gh->getPlayerSkills();
     const auto found = skills.find(row.skillId);
-    if (found == skills.end()) { return luaReturnNil(L); }
+    if (found == skills.end()) return none();
     const auto& skill = found->second;
     std::string name = gh->getSkillName(skill.skillId);
     if (name.empty()) name = "Skill " + std::to_string(skill.skillId);

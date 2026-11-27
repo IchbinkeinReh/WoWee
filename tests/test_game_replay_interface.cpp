@@ -1167,6 +1167,22 @@ TEST_CASE("GetFactionInfo and GetFactionInfoByID answer as the client", "[replay
     CHECK(none("GetFactionInfoByID(0)"));
 }
 
+// 0x005cde20: a row with no skill behind it is nil, nil, nil, 0, 0, 0, 0,
+// nil, nil, nil, 0, 0, nil - thirteen values, the numbers numbers.
+TEST_CASE("GetSkillLineInfo of no skill answers as the client", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    for (const char* index : {"1", "0", "99"}) {
+        const std::string call = std::string("GetSkillLineInfo(") + index + ")";
+        CHECK(ui.is("(function() local t = {" + call + "} return select('#', " + call +
+                    ") == 13 and t[1] == nil and t[2] == nil and t[3] == nil and t[4] == 0 and t[5] == 0 "
+                    "and t[6] == 0 and t[7] == 0 and t[8] == nil and t[9] == nil and t[10] == nil "
+                    "and t[11] == 0 and t[12] == 0 and t[13] == nil end)()"));
+    }
+    CHECK(ui.is("not pcall(GetSkillLineInfo)"));
+}
+
 // P73: by name as the client compares names - the groups (0x005d1710) and the
 // factions in each (0x005d02f0), these before the groups in it. The table's
 // places are the other way round, and a byte compare puts the accented last.
