@@ -3321,7 +3321,9 @@ int lua_Tooltip_AddLine(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     wowee::ui::Widget::TooltipLine line;
-    line.left = luaL_optstring(L, 2, "");
+    // 0x00620340: the text only where lua_isstring holds - anything else is
+    // no text, not an argument error.
+    if (lua_isstring(L, 2)) line.left = lua_tostring(L, 2);
     if (line.left.empty()) return 0;   // 0x0061fec0
     tooltipLineColour(L, 3, line.lc);
     tooltipLineColour(L, 3, line.rc);
@@ -3446,8 +3448,9 @@ int lua_Tooltip_AddDoubleLine(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     wowee::ui::Widget::TooltipLine line;
-    line.left  = luaL_optstring(L, 2, "");
-    line.right = luaL_optstring(L, 3, "");
+    // 0x006203f0: each text only where lua_isstring holds.
+    if (lua_isstring(L, 2)) line.left = lua_tostring(L, 2);
+    if (lua_isstring(L, 3)) line.right = lua_tostring(L, 3);
     if (line.left.empty() && line.right.empty()) return 0;   // 0x0061fec0
     tooltipLineColour(L, 4, line.lc);
     tooltipLineColour(L, 7, line.rc);

@@ -6721,3 +6721,18 @@ TEST_CASE("raid officers and the party leader's place", "[replay][interface]") {
     CHECK(ui.is("UnitIsPartyLeader('party1') == 1"));
     CHECK(ui.is("UnitIsPartyLeader('player') == nil"));
 }
+
+// 0x00620340 / 0x006203f0: a text that is not a string is no text, and no
+// argument error.
+TEST_CASE("tooltip lines take what is not a string as no text", "[replay][interface][tooltip]") {
+    Session s;
+    Interface ui(s);
+    ui.run("tip = CreateFrame('GameTooltip', 'AddTip', UIParent) tip:SetOwner(UIParent, 'ANCHOR_NONE')");
+    CHECK(ui.is("pcall(tip.AddLine, tip, true)"));
+    CHECK(ui.is("pcall(tip.AddLine, tip, {})"));
+    CHECK(ui.is("tip:NumLines() == 0"));
+    CHECK(ui.is("pcall(tip.AddDoubleLine, tip, false, 'rechts')"));
+    CHECK(ui.is("tip:NumLines() == 1"));
+    CHECK(ui.is("pcall(tip.AddLine, tip, 12)"));
+    CHECK(ui.is("tip:NumLines() == 2"));
+}
