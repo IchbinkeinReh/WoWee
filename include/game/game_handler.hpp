@@ -960,6 +960,10 @@ public:
     using BgScoreboardData = game::BgScoreboardData;
     void requestPvpLog();
     const BgScoreboardData* getBgScoreboard() const override;
+    /// SetBattlefieldScoreFaction's filter (0x00acd170): -1 both, 0, 1.
+    int& battlefieldScoreFactionRef();
+    /// 0x00528010 -> 0x0054ca50: the score state cleared on a world load.
+    void clearBattlefieldScore();
 
     // BG flag carrier positions (aliased from handler_types.hpp)
     using BgPlayerPosition = game::BgPlayerPosition;

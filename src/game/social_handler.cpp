@@ -6701,6 +6701,13 @@ void SocialHandler::respondInstanceLock(bool accept) {
     owner_.fireAddonEvent("INSTANCE_LOCK_STOP", {});
 }
 
+void SocialHandler::clearBattlefieldScore() {
+    bgScoreboard_ = BgScoreboardData{};
+    ++bgScoreGeneration_;   // a name answer for the old board changes nothing
+    bgScorePending_ = 0;
+    bgScoreFaction_ = -1;
+}
+
 void SocialHandler::resetForWorldEntry() {
     // The server tells a character of its group only when it has one, so the
     // last character's party and raid stayed on the frames of one with none.

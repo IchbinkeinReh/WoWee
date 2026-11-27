@@ -2702,6 +2702,9 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         // The active player made: 0x006e6150 -> 0x00528010 -> 0x005cb900,
         // the guild rights asked for with PLAYER_GUILDID now known.
         owner_.onPlayerEnteredWorldGuild();
+        // ...and 0x00528010 -> 0x0054ca50: the battleground score of the map
+        // left behind is gone - no rows, no winner, both factions (T413).
+        owner_.clearBattlefieldScore();
         // The time played, asked for quietly (0x006e6b40): what is refundable
         // and what an item says of it count from the answer. The earlier
         // clients' answer has no byte that keeps it from the chat.

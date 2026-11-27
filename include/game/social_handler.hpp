@@ -275,6 +275,11 @@ public:
     /// battlefield queues (0x0054e720), the arena teams (0x005a40e0) and the
     /// dungeon finder (0x0055d440).
     void resetForWorldEntry();
+    /// 0x00528010 -> 0x0054ca50 on every world load: the scoreboard's rows,
+    /// winner and counts gone, the faction filter back to both (-1).
+    void clearBattlefieldScore();
+    /// SetBattlefieldScoreFaction's filter (0x00acd170): -1 both, 0, 1.
+    int& battlefieldScoreFactionRef() { return bgScoreFaction_; }
     void clearGuildMembership() {
         inGuild_ = false;
         joinedGuildName_.clear();
@@ -1117,6 +1122,7 @@ private:
     /// scoreboard, and which one that was.
     uint32_t bgScorePending_ = 0;
     uint32_t bgScoreGeneration_ = 0;
+    int bgScoreFaction_ = -1;
     std::vector<BgPlayerPosition> bgPlayerPositions_;
     std::chrono::steady_clock::time_point lastBgPositionRequest_{};
     std::chrono::steady_clock::time_point lastContactListRequest_{};

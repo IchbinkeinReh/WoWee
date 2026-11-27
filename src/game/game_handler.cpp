@@ -5414,6 +5414,15 @@ const GameHandler::BgScoreboardData* GameHandler::getBgScoreboard() const {
     return socialHandler_ ? socialHandler_->getBgScoreboard() : nullptr;
 }
 
+int& GameHandler::battlefieldScoreFactionRef() {
+    static int none = -1;
+    return socialHandler_ ? socialHandler_->battlefieldScoreFactionRef() : none;
+}
+
+void GameHandler::clearBattlefieldScore() {
+    if (socialHandler_) socialHandler_->clearBattlefieldScore();
+}
+
 const std::vector<GameHandler::BgPlayerPosition>& GameHandler::getBgPlayerPositions() const {
     if (socialHandler_) return socialHandler_->getBgPlayerPositions();
     static const std::vector<BgPlayerPosition> empty;

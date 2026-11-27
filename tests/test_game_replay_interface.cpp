@@ -4430,3 +4430,68 @@ TEST_CASE("the minimap mail senders are named as the inbox names them (T412)", "
     CHECK(ui.is("select(3, GetLatestThreeSenders()) ~= nil"));
     CHECK(ui.is("select(3, GetLatestThreeSenders()) ~= 'Unknown'"));
 }
+
+// T410 (FIXER Z): a battleground row has no side on the wire; 12340 gives
+// it one from the name cache (0x0054aa30: unknown player 0, else its race's
+// faction group) and the faction tabs count only that side's rows. Both
+// tabs listed every row.
+TEST_CASE("the scoreboard's faction tabs split a battleground's rows (T410)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet log(wowee::game::wireOpcode(Opcode::MSG_PVP_LOG_DATA));
+    log.writeUInt8(0);    // a battleground
+    log.writeUInt8(0);    // no winner yet
+    log.writeUInt32(2);
+    for (uint64_t guid : {0xF130000000000101ull, 0xF130000000000102ull}) {
+        log.writeUInt64(guid);
+        for (int k = 0; k < 6; ++k) log.writeUInt32(1);   // kb, hk, deaths, honour, damage, healing
+        log.writeUInt32(0);   // no objectives
+    }
+    s.receive(log);
+    ui.run("SetBattlefieldScoreFaction(nil)");
+    REQUIRE(ui.is("GetNumBattlefieldScores() == 2"));
+    CHECK(ui.is("select(6, GetBattlefieldScore(1)) == 0"));
+    ui.run("SetBattlefieldScoreFaction(1)");
+    CHECK(ui.is("GetNumBattlefieldScores() == 0"));
+    ui.run("SetBattlefieldScoreFaction(0)");
+    CHECK(ui.is("GetNumBattlefieldScores() == 2"));
+    ui.run("SetBattlefieldScoreFaction(nil)");
+}
+
+// T413 (FIXER Z): every world load clears the battleground score state
+// (0x006e7f50 -> 0x00528010 -> 0x0054ca50): no rows, no winner, both
+// factions. After the realm's port home the scoreboard reopened itself from
+// the old winner (WorldStateScoreFrame_Update) and asked for scores each frame.
+TEST_CASE("the battleground score is gone after a world load (T413)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    const auto board = [](bool won) {
+        wowee::network::Packet log(wowee::game::wireOpcode(Opcode::MSG_PVP_LOG_DATA));
+        log.writeUInt8(0);
+        log.writeUInt8(won ? 1 : 0);
+        if (won) log.writeUInt8(1);
+        log.writeUInt32(1);
+        log.writeUInt64(0xF130000000000201ull);
+        for (int k = 0; k < 6; ++k) log.writeUInt32(1);
+        log.writeUInt32(0);
+        return log;
+    };
+    s.receive(board(true));
+    REQUIRE(ui.is("GetBattlefieldWinner() == 1"));
+    REQUIRE(ui.is("GetNumBattlefieldScores() == 1"));
+    ui.run("SetBattlefieldScoreFaction(1)");
+    s.handler().setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    for (const float v : {-1431.29f, -68.57f, 156.87f, 0.4f}) world.writeFloat(v);
+    s.receive(world);
+    s.handler().setWorldEntryCallback({});
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    CHECK(ui.is("GetBattlefieldWinner() == nil"));
+    CHECK(ui.is("GetNumBattlefieldScores() == 0"));
+    // The filter is both again: a new board's row is counted.
+    s.receive(board(false));
+    CHECK(ui.is("GetNumBattlefieldScores() == 1"));
+}

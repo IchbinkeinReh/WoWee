@@ -1,6 +1,7 @@
 // lua_unit_api.cpp - Unit query, stats, party/raid, and player state Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "ui/portrait_claims.hpp"
+#include "game/battleground_rules.hpp"
 #include "game/movement_handler.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/battleground_flag.hpp"
@@ -3707,9 +3708,9 @@ static int lua_UnitReaction(lua_State* L) {
 
 /// Which side the battlefield scoreboard is showing: 1 Alliance, 0 Horde,
 /// -1 both. Set by the frame's tabs through SetBattlefieldScoreFaction.
-static int& battlefieldScoreFaction() {
-    static int faction = -1;
-    return faction;
+static int& battlefieldScoreFaction(game::GameHandler* gh) {
+    static int none = -1;
+    return gh ? gh->battlefieldScoreFactionRef() : none;
 }
 
 /// Which column the scoreboard is sorted by, and which way.
@@ -3731,16 +3732,38 @@ static bool& battlefieldSortDescending() {
 /// Pointers into the scoreboard rather than copies: this is rebuilt on every
 /// GetBattlefieldScore call, once per row per redraw, and a battleground holds
 /// forty players.
+/// A scoreboard row's side as 12340 keeps it (+0x20): an arena's from the
+/// packet; a battleground's, which the packet does not carry, from the race
+/// the name cache holds (0x0054aa30) - 0 Horde, 1 Alliance, -1 neither, and
+/// 0 for a player the cache does not know.
+static int bgScoreRowSide(game::GameHandler* gh, const game::BgPlayerScore& p) {
+    if (p.hasTeam) return p.team;
+    const uint8_t race = gh ? gh->lookupPlayerRace(p.guid) : 0;
+    uint32_t group = 0;
+    if (race != 0) {
+        auto* am = gh->services().assetManager;
+        if (am && am->isInitialized()) {
+            auto races = am->loadDBCOptional("ChrRaces.dbc");
+            auto templates = am->loadDBCOptional("FactionTemplate.dbc");
+            if (races && races->isLoaded() && templates && templates->isLoaded() &&
+                races->getFieldCount() > 2 && templates->getFieldCount() > 3) {
+                const int32_t r = races->findRecordById(race);
+                const int32_t t = r >= 0 ? templates->findRecordById(races->getUInt32(static_cast<uint32_t>(r), 2)) : -1;
+                if (t >= 0) group = templates->getUInt32(static_cast<uint32_t>(t), 3);
+            }
+        }
+    }
+    return game::battleground_rules::scoreRowSide(race != 0, group);
+}
+
 static std::vector<const game::BgPlayerScore*>
-filteredBgScores(const game::BgScoreboardData& sb) {
+filteredBgScores(game::GameHandler* gh, const game::BgScoreboardData& sb) {
     std::vector<const game::BgPlayerScore*> rows;
     rows.reserve(sb.players.size());
-    const int want = battlefieldScoreFaction();
+    const int want = battlefieldScoreFaction(gh);
     for (const auto& p : sb.players) {
-        // A row with no team on the wire cannot be filtered out of a faction
-        // tab - a battleground sends none, so every row shows on both tabs
-        // rather than all of them landing on Horde because zero is Horde.
-        if (want < 0 || !p.hasTeam || static_cast<int>(p.team) == want)
+        // 0x0054aa30 counts the rows of the chosen side (0x00acd170, -1 both).
+        if (want < 0 || bgScoreRowSide(gh, p) == want)
             rows.push_back(&p);
     }
 
@@ -4345,10 +4368,11 @@ void registerUnitLuaAPI(lua_State* L) {
                 // The rows are filtered as they are read, so the list follows
                 // at once, as 0x0054aa30's refilter does.
                 {"SetBattlefieldScoreFaction", [](lua_State* L) -> int {
-            if (!lua_isnumber(L, 1)) { battlefieldScoreFaction() = -1; return 0; }
+            auto* gh = getGameHandler(L);
+            if (!lua_isnumber(L, 1)) { battlefieldScoreFaction(gh) = -1; return 0; }
             const int faction = static_cast<int>(lua_tonumber(L, 1));
             if (faction != -1 && (faction < 0 || faction > 1)) return 0;
-            battlefieldScoreFaction() = faction;
+            battlefieldScoreFaction(gh) = faction;
             return 0;
         }},
                 // SortBattlefieldScoreData(column) - order the rows.
@@ -4374,7 +4398,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"GetNumBattlefieldScores", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto* sb = gh ? gh->getBgScoreboard() : nullptr;
-            lua_pushnumber(L, sb ? static_cast<double>(filteredBgScores(*sb).size()) : 0.0);
+            lua_pushnumber(L, sb ? static_cast<double>(filteredBgScores(gh, *sb).size()) : 0.0);
             return 1;
         }},
                 {"GetBattlefieldScore", [](lua_State* L) -> int {
@@ -4383,7 +4407,7 @@ void registerUnitLuaAPI(lua_State* L) {
             int index = static_cast<int>(luaL_checknumber(L, 1));
             const auto* sb = gh ? gh->getBgScoreboard() : nullptr;
             if (!sb) return luaReturnNil(L);
-            const auto rows = filteredBgScores(*sb);
+            const auto rows = filteredBgScores(gh, *sb);
             if (index < 1 || index > static_cast<int>(rows.size())) {
                 return luaReturnNil(L);
             }
@@ -4393,7 +4417,7 @@ void registerUnitLuaAPI(lua_State* L) {
             lua_pushnumber(L, p.honorableKills);    // honorableKills
             lua_pushnumber(L, p.deaths);            // deaths
             lua_pushnumber(L, p.bonusHonor);        // honorGained
-            lua_pushnumber(L, p.team);              // faction (0=Horde,1=Alliance)
+            lua_pushnumber(L, bgScoreRowSide(gh, p));   // faction (0 Horde, 1 Alliance, -1)
             lua_pushnumber(L, 0);                   // rank
             // race, class and classToken from the name cache (0x0054be90):
             // the race's name, then class and token, nil and nil while the

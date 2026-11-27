@@ -32,4 +32,13 @@ struct Bracket {
     return false;
 }
 
+/// A battleground scoreboard row's side (0x0054aa30; the packet has none):
+/// 0 when the name cache has no entry for the row's player; else by the
+/// group mask (FactionTemplate +0xc) of its race's faction template
+/// (ChrRaces +8) - Horde (4) is 0, then Alliance (2) is 1, else -1.
+[[nodiscard]] inline int scoreRowSide(bool nameCached, uint32_t factionGroupMask) {
+    if (!nameCached || (factionGroupMask & 4u) != 0) return 0;
+    return (factionGroupMask & 2u) != 0 ? 1 : -1;
+}
+
 }  // namespace wowee::game::battleground_rules
