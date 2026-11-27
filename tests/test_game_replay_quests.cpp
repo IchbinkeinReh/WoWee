@@ -7,6 +7,7 @@
 #include "game/quest_objectives.hpp"
 
 #include <algorithm>
+#include <ctime>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -558,4 +559,68 @@ TEST_CASE("the quest frame closes once, when the realm says so", "[replay][quest
     CHECK(finished == 2);
     CHECK_FALSE(s.handler().isQuestOfferRewardOpen());
     s.handler().setAddonEventCallback(nullptr);
+}
+
+// 0x005e6240: a timer that has run out is marked failed by the client itself
+// (0x005e57e0, the row's 0x00c237bc that IsCurrentQuestFailed 0x005e43f0 and
+// GetQuestLogTitle read), named in chat and left out of the timers; the
+// realm's FAILEDTIMER after it says nothing more (0x006d8030 case 0x197/0x196).
+TEST_CASE("a quest timer that runs out fails the quest in the log", "[replay][quest]") {
+    std::vector<std::string> events;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    const auto now = static_cast<uint32_t>(std::time(nullptr));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 9387}}));
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 4, 5), now + 100}}));
+    s.receive(questAnswer(9387, "wotlk"));
+    auto* quests = s.handler().getQuestHandler();
+    REQUIRE(questOf(s, 9387));
+    auto timers = quests->getQuestTimers();
+    REQUIRE(timers.size() == 1);
+    CHECK(timers[0].second >= 98);
+    CHECK(timers[0].second <= 99);   // less the time now less one
+    s.handler().setAddonEventCallback(
+        [&](const std::string& name, const std::vector<std::string>&) { events.push_back(name); });
+    quests->expireQuestTimers();
+    CHECK(events.empty());
+    CHECK_FALSE(questOf(s, 9387)->failedInLog());
+
+    const size_t chat = s.handler().getChatHistory().size();
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 4, 5), now - 5}}));
+    events.clear();
+    CHECK(quests->getQuestTimers().empty());   // run out: not listed
+    quests->expireQuestTimers();
+    CHECK(questOf(s, 9387)->timerFailed);
+    CHECK_FALSE(questOf(s, 9387)->failed);
+    CHECK(std::count(events.begin(), events.end(), std::string("QUEST_LOG_UPDATE")) == 1);
+    CHECK(s.handler().getChatHistory().size() == chat + 1);
+    events.clear();
+    quests->expireQuestTimers();   // once
+    CHECK(events.empty());
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTUPDATE_FAILEDTIMER));
+    p.writeUInt32(9387);
+    s.receive(p);
+    CHECK(s.handler().getChatHistory().size() == chat + 1);
+    // Set again in the future, the timer runs anew.
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 1, 5), 0}, {slotField(0, 4, 5), now + 50}}));
+    CHECK_FALSE(questOf(s, 9387)->failedInLog());
+    CHECK(quests->getQuestTimers().size() == 1);
+}
+
+// 0x005e57e0 / 0x005e5840 leave a complete quest unmarked.
+TEST_CASE("a complete quest's timer does not fail it", "[replay][quest]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    const auto now = static_cast<uint32_t>(std::time(nullptr));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_QUEST_LOG_START, 9387}}));
+    s.receive(UpdateObject().valuesAt(Session::kPlayerGuid, {{slotField(0, 1, 5), 1}, {slotField(0, 4, 5), now - 5}}));
+    auto* quests = s.handler().getQuestHandler();
+    REQUIRE(questOf(s, 9387));
+    REQUIRE(questOf(s, 9387)->complete);
+    quests->expireQuestTimers();
+    CHECK_FALSE(questOf(s, 9387)->timerFailed);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTUPDATE_FAILEDTIMER));
+    p.writeUInt32(9387);
+    s.receive(p);
+    CHECK_FALSE(questOf(s, 9387)->timerFailed);
 }

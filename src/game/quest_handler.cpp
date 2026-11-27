@@ -553,12 +553,14 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         if (packet.hasRemaining(4)) {
             uint32_t questId = packet.readUInt32();
             std::string questTitle;
+            bool already = false;
             for (const auto& q : questLog_)
-                if (q.questId == questId && !q.title.empty()) { questTitle = q.title; break; }
+                if (q.questId == questId) { questTitle = q.title; already = q.failedInLog(); break; }
             // ERR_QUEST_FAILED_S with the title, in chat (0x006d8030, case
-            // 0x196); nothing for a quest whose title is not known. This was
-            // English: '"X" failed!'.
-            if (!questTitle.empty()) {
+            // 0x196); nothing for a quest whose title is not known, nor for
+            // one already failed - by its row's mark (0x005dee60) or its
+            // slot's failed bit. This was English: '"X" failed!'.
+            if (!questTitle.empty() && !already) {
                 owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
                 owner_.playGameErrorSound("ERR_QUEST_FAILED_S");
             }
@@ -573,12 +575,20 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         if (packet.hasRemaining(4)) {
             uint32_t questId = packet.readUInt32();
             std::string questTitle;
-            for (const auto& q : questLog_)
-                if (q.questId == questId && !q.title.empty()) { questTitle = q.title; break; }
+            bool already = false;
+            for (auto& q : questLog_) {
+                if (q.questId != questId) continue;
+                questTitle = q.title;
+                already = q.failedInLog();
+                // 0x005e5840: the row is marked failed unless it is complete.
+                if (!q.complete) q.timerFailed = true;
+                break;
+            }
             // The same ERR_QUEST_FAILED_S as a failed quest: case 0x197 of
-            // 0x006d8030 stops the timer and falls into 0x196. This was
-            // English: '"X" has timed out.'.
-            if (!questTitle.empty()) {
+            // 0x006d8030 marks the row and falls into 0x196, which says
+            // nothing of a quest that was failed before. This was English:
+            // '"X" has timed out.'.
+            if (!questTitle.empty() && !already) {
                 owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
                 owner_.playGameErrorSound("ERR_QUEST_FAILED_S");
             }
@@ -1802,17 +1812,55 @@ std::vector<std::pair<uint32_t, uint32_t>> QuestHandler::getQuestTimers() const 
             const uint16_t timeField = static_cast<uint16_t>(idField + qStride - 1);
             auto tIt = owner_.lastPlayerFieldsRef().find(timeField);
             if (tIt == owner_.lastPlayerFieldsRef().end() || tIt->second == 0) break;
-            // 0x005e4320, 0x005e6240: none of one that has failed.
-            if (q.failed) break;
+            // 0x005e4320, 0x005e6240: none of one that has failed, by the
+            // slot's state bit or the row's own mark.
+            if (q.failedInLog()) break;
             const auto expiry = static_cast<uint64_t>(tIt->second);
-            // An expired timer is reported as zero rather than dropped, so the
-            // row stays put until the server removes the quest.
-            timers.emplace_back(q.questId,
-                                expiry > now ? static_cast<uint32_t>(expiry - now) : 0u);
+            // 0x005e6240 / 0x005e4fb0: the expiry less the time now less one,
+            // and a timer that has run out (under zero) is not listed - it
+            // was listed as zero, so the frame kept a row at 0:00.
+            if (expiry <= now) break;
+            timers.emplace_back(q.questId, static_cast<uint32_t>(expiry - now - 1));
             break;
         }
     }
     return timers;
+}
+
+void QuestHandler::expireQuestTimers() {
+    const auto& fields = owner_.lastPlayerFieldsRef();
+    if (fields.empty()) return;
+    const uint16_t ufQuestStart = fieldIndex(UF::PLAYER_QUEST_LOG_START);
+    const uint8_t qStride = owner_.getPacketParsers() ? owner_.getPacketParsers()->questLogStride() : 5;
+    if (qStride == 0 || ufQuestStart == 0xFFFF) return;
+    const auto now = static_cast<uint64_t>(std::time(nullptr));
+    const uint16_t maxSlots = static_cast<uint16_t>(maxQuestLogSlots());
+    bool marked = false;
+    for (auto& q : questLog_) {
+        if (q.questId == 0 || q.failedInLog()) continue;
+        for (uint16_t slot = 0; slot < maxSlots; ++slot) {
+            const uint16_t idField = ufQuestStart + slot * qStride;
+            auto idIt = fields.find(idField);
+            if (idIt == fields.end() || idIt->second != q.questId) continue;
+            auto tIt = fields.find(static_cast<uint16_t>(idField + qStride - 1));
+            // 0x005e6240: (expiry - now - 1) < 0, and 0x005e57e0 marks only a
+            // quest 0x005e0ea0 does not call complete.
+            if (tIt != fields.end() && tIt->second != 0 && static_cast<uint64_t>(tIt->second) <= now &&
+                !q.complete) {
+                q.timerFailed = true;
+                marked = true;
+                // ERR_QUEST_FAILED_S (0x94) with the quest's name from the
+                // quest cache (0x0067de90); nothing while it is not known.
+                if (!q.title.empty()) {
+                    owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", q.title));
+                    owner_.playGameErrorSound("ERR_QUEST_FAILED_S");
+                }
+            }
+            break;
+        }
+    }
+    // 0x00615020(0x125) once after the walk.
+    if (marked && owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
 }
 
 std::optional<uint32_t> QuestHandler::questSlotTimeLeft(int slot) const {
@@ -2075,6 +2123,13 @@ void QuestHandler::applyQuestStateFromFields(const FlatFieldMap& fields) {
         for (auto& quest : questLog_) {
             if (quest.questId != questId) continue;
             quest.failed = isQuestSlotFailed(qStride, stateIt->second);
+            // The log rebuild (0x005e6940) marks a row afresh from its timer:
+            // a timer the server set again in the future is not run out.
+            if (quest.timerFailed) {
+                const auto tIt = fields.find(static_cast<uint16_t>(idField + qStride - 1));
+                if (tIt != fields.end() && static_cast<int64_t>(tIt->second) > static_cast<int64_t>(std::time(nullptr)))
+                    quest.timerFailed = false;
+            }
             if (quest.complete != serverComplete) {
                 quest.complete = serverComplete;
                 LOG_INFO("Quest ", questId, " complete=", serverComplete,

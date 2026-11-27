@@ -326,13 +326,14 @@ static const game::GameHandler::QuestLogEntry* selectedLogEntry(game::GameHandle
 
 // Whether the quest being looked at has been failed.
 //
-// The quest slot's state field carries it beside completion - the server names
-// the two bits QUEST_STATE_COMPLETE and QUEST_STATE_FAIL - and the field was
-// already being read for the first of them.
+// 0x005e43f0: the selected row's slot state bit 2 (QUEST_STATE_FAIL), or else
+// the row's own mark 0x00c237bc (0x005e00e0) that a run-out timer or
+// SMSG_QUESTUPDATE_FAILEDTIMER sets - only the bit was read, so a quest
+// whose timer ran out read as not failed until the server's field came.
 static int lua_IsCurrentQuestFailed(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* q = selectedLogEntry(gh);
-    luaPushOneOrNil(L, (q && q->failed) ? 1 : 0);
+    luaPushOneOrNil(L, (q && q->failedInLog()) ? 1 : 0);
     return 1;
 }
 
@@ -740,6 +741,9 @@ static int lua_GetQuestLogSpecialItemCooldown(lua_State* L) {
 static int lua_GetQuestTimers(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    // 0x005e6240 marks each timer that has run out failed before it lists
+    // the rest.
+    if (auto* quests = gh->getQuestHandler()) quests->expireQuestTimers();
     const auto timers = gh->getQuestTimers();
     // One per timed quest, against Lua's twenty guaranteed slots. A log holds
     // twenty-five.
@@ -866,8 +870,9 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     // type turned a quiet wrong answer into an error on the quest tracker.
     //
     // Failed is tested first: the server can set both bits, and a quest whose
-    // timer ran out is failed whatever else is true of it.
-    if (q.failed)        lua_pushnumber(L, -1);
+    // timer ran out is failed whatever else is true of it - by the slot's bit
+    // or the row's own mark (0x005e5cc0's 0x00c237bc test).
+    if (q.failedInLog()) lua_pushnumber(L, -1);
     else if (q.complete) lua_pushnumber(L, 1);
     else                 lua_pushnil(L);                        // 7: isComplete
     luaPushOneOrNil(L, (q.questFlags & 0x1000) != 0);   // 8: isDaily (0x005decc0)

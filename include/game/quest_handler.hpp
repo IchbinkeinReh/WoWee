@@ -181,6 +181,13 @@ public:
         /// A timed quest that ran out, or one the server failed. Read from the
         /// bit beside `complete` in the same quest-slot field.
         bool failed = false;
+        /// The quest log row's own failed mark (0x00c237bc): set by the client
+        /// when GetQuestTimers finds the timer run out (0x005e6240 ->
+        /// 0x005e57e0) or SMSG_QUESTUPDATE_FAILEDTIMER names it (0x005e5840),
+        /// never for a complete quest. IsCurrentQuestFailed and
+        /// GetQuestLogTitle read it beside the state bit.
+        bool timerFailed = false;
+        [[nodiscard]] bool failedInLog() const { return failed || timerFailed; }
         std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> killCounts;
         std::unordered_map<uint32_t, uint32_t> itemCounts;
         std::unordered_map<uint32_t, uint32_t> requiredItemCounts;
@@ -252,6 +259,11 @@ public:
     // order. The last field of each PLAYER_QUEST_LOG slot is when the quest
     // fails, as a Unix timestamp; zero means the quest is not timed.
     [[nodiscard]] std::vector<std::pair<uint32_t, uint32_t>> getQuestTimers() const;
+    // 0x005e6240's first half: each timed quest (no failed bit, not marked)
+    // whose timer has run out and that is not complete is marked failed
+    // (timerFailed), ERR_QUEST_FAILED_S names it, and QUEST_LOG_UPDATE
+    // follows once if any was. GetQuestTimers calls this before it reads.
+    void expireQuestTimers();
     // 0x005e4320: the seconds left on one PLAYER_QUEST_LOG slot's timer, less
     // one and never under zero; none where the slot has no timer or its state
     // says failed (bit 2).
