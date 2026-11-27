@@ -1401,14 +1401,14 @@ TEST_CASE("an item's comparison shows what is worn", "[replay][interface]") {
     // Asked before it has an owner, as GameTooltip_ShowCompareItem does, and again with one.
     CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1)"));
     ui.run("tip:SetOwner(anchor, 'ANCHOR_NONE')");
-    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1)"));
+    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1) == 1"));   // T441: 1, not true
     REQUIRE(w->tooltipLines.size() >= 2);
     CHECK(w->tooltipLines[1].left == "Sword");
     CHECK(ui.is("tip:IsShown()"));
     for (const auto& line : w->tooltipLines) CHECK(line.left.find("|T") == std::string::npos);
     // Nothing worn there: gone.
     ui.run("GetInventoryItemLink = function() end");
-    CHECK(ui.is("not tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1) and not tip:IsShown()"));
+    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 1) == nil and not tip:IsShown()"));
     // The script has it.
     ui.run("tip:SetScript('OnTooltipAddMoney', function(self, m) money = m end) tip:SetOwner(anchor, 'ANCHOR_NONE') "
            "GetInventoryItemLink = function(u, slot) if slot == 16 then return 'item:24022:0:0:0:0:0:0:0' end end "

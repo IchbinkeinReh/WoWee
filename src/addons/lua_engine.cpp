@@ -15035,7 +15035,8 @@ void LuaEngine::registerCoreAPI() {
         "        __cmpSaid[why] = true\n"
         "        __WoweeLogWarning('item compare refused: ' .. why)\n"
         "    end\n"
-        "    return false\n"
+        // 0x00631b60: nil where nothing was built (0x0084e280), 1 where it was.
+        "    return nil\n"
         "end\n"
         "function __WoweeFrameMT:SetHyperlinkCompareItem(link, index, shift, anchor)\n"
         "    if not __WoweeIsText(link) then\n"   // 0x00631b60
@@ -15109,7 +15110,7 @@ void LuaEngine::registerCoreAPI() {
         "        for _, line in ipairs(deltas) do self:AddLine(line, 1, 1, 1) end\n"
         "    end\n"
         "    self:Show()\n"
-        "    return true\n"
+        "    return 1\n"
         "end\n"
         // 0x0061ef10 / 0x0061f0f0: nothing when the tooltip shows none;
         // a spell is its name, rank and id.
