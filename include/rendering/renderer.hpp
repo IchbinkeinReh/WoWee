@@ -959,6 +959,11 @@ public:
     /// openings and the glow round lamps, fires and lava. 0 off, 1 low, 2
     /// high (volumetric_light::Quality). See VolumetricLight.
     void setVolumetricLightQuality(int quality);
+    /// The debug view "VL only" (Debug Glow, dbgvlonly): the volumetric
+    /// light alone over black, ten times as bright
+    /// (volumetric_light::debugViewColor), the interface and minimap as they
+    /// are. Nothing while the volumetric light is off.
+    void setVolumetricLightDebugView(bool on) { volumetricLightDebugView_ = on; }
     /// Ray traced lighting: 0 off, 1 sun shadows, 2 + ambient occlusion,
     /// 3 + multi-bounce diffuse from a probe volume. See RtLighting.
     void setRtLightingMode(int mode);
@@ -1638,6 +1643,7 @@ private:
     // picture right after them. See VolumetricLight.
     std::unique_ptr<VolumetricLight> volumetricLight_;
     int volumetricLightQuality_ = 0;  // opt-in: the original client has none
+    bool volumetricLightDebugView_ = false;  // the session's, never saved
     void recordVolumetricLight();
     void recordEyeAdaptation();
 

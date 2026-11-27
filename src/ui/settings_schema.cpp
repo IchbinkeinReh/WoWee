@@ -673,6 +673,13 @@ constexpr SettingDesc kSchema[] = {
      "How much light lamps, fires and lava give the air around them\n"
      "with the volumetric light on (Details). 100 as it is, 0 none,\n"
      "400 four times.", "", 100, "volumetriclight"},
+    // The debug view of the volumetric light (U23): for the session only,
+    // as the Debug Graphics view (dbgview) - never saved.
+    {"dbgvlonly", "Volumetric light only", SettingKind::Bool, 0, 0, 0, "Debug Glow", "",
+     "Shows only the light the volumetric light adds, over black: ten\n"
+     "times as bright so its faint light shows (1% of white shows as\n"
+     "10%), bright light brought softly under white. The interface\n"
+     "and the minimap stay. For this session only.", "", 0, "volumetriclight"},
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"

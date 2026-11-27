@@ -12,7 +12,11 @@
 //                  only where the sun (moon) itself reaches that point - the
 //                  shadow map's cascades, or with the ray traced lighting on
 //                  ray queries a ray to it - so whatever is opaque cuts the
-//                  shafts, and a room lit by no opening has none;
+//                  shafts, and a room lit by no opening has none; and a lit
+//                  one counts only while a point beside it, across the
+//                  light, lies in shade and in the air the eye sees
+//                  (volumetric_light::shaftRadius, besideInAir): the shafts
+//                  beside the shade, nothing in the open;
 //   each lamp      where the ray runs through the lamp's reach, a fixed
 //                  number of samples over that stretch, placed as densely as
 //                  the glow is bright (volumetric_light::glowSample), each
@@ -22,9 +26,11 @@
 //                  lighting, otherwise a few steps toward it against the
 //                  scene's depth.
 //
-// The samples are spread by a fixed pattern over the screen, not moved from
-// frame to frame: nothing here is carried over from an earlier frame. The
-// blur that follows (volumetric_light_blur.comp.glsl) evens the pattern out.
+// The samples are spread by a pattern over the screen that moves on every
+// frame (screen.z, the frame's number): the blur that follows
+// (volumetric_light_blur.comp.glsl) evens it out within the frame, and the
+// history (volumetric_light_temporal.comp.glsl) over the last five or so
+// (U23: the user allowed it; the lamps' glow was grainy).
 //
 // Built three ways: as it is (the shadow map and the depth only), with
 // VL_TRACE (the compute tracer, rt_trace_sw.glsli) and with VL_TRACE and
@@ -80,12 +86,12 @@ layout(set = 1, binding = 0) uniform VLParams {
     vec4 camPos;        // xyz = the eye, w = how far the sky body's light is gathered
     vec4 camForward;    // xyz = the view's forward axis
     vec4 bodyDir;       // xyz = toward the sun or moon, w = its share (0: none this frame)
-    vec4 bodyColor;     // rgb = its light, w = the forward lobe's share (lobeShare)
+    vec4 bodyColor;     // rgb = its light, w = the forward lobe's share (1)
     vec4 air;           // x = sky body scatter per yard, y = lamp scatter per yard,
                         // z = sky body samples, w = samples per lamp
     ivec4 modes;        // x = lamps, y = sky body occlusion (0 none, 1 shadow map, 2 traced),
                         // z = lamp occlusion (1 the depth, 2 traced), w = the traced scene has content
-    vec4 screen;        // xy = the march's size
+    vec4 screen;        // xy = the march's size, z = the frame's number (0..1023), w = history usable
     VLLight lights[32];
 } vl;
 
@@ -117,17 +123,37 @@ vec2 cascadeTileCoord(int c, vec2 uv) {
     return (uv - rect.xy) / (rect.zw - rect.xy) * 2.0 - 1.0;
 }
 
-// Whether the sun (moon) reaches p, off the shadow map the surfaces use: the
-// finest cascade whose tile holds it, one tap. The mist's sunVisibility,
-// except that a point the map does not cover is dark rather than lit: with
-// no word on what stands between it and the sky, it takes none of the sky's
-// light (the user's rule: sun and moon only where they reach).
-//
-// Toward the edge of the outer cascade the light fades out smoothly
+// What the shadow map the surfaces use says of p: the finest cascade whose
+// tile holds it, one tap - 1 lit, 0 shaded - with `held` false where no
+// cascade holds it. Above everything the map holds (in front of its near
+// plane) nothing stands between the point and the sky, as the surfaces' own
+// shadow lookup takes it.
+float mapLookup(vec3 p, out bool held) {
+    held = false;
+    if (shadowParams.x < 0.5) return 0.0;
+    int count = min(int(cascadeInfo.x + 0.5), 4);
+    for (int c = 0; c < count; ++c) {
+        vec4 ls = cascadeMatrix[c] * vec4(p, 1.0);
+        vec3 proj = ls.xyz / ls.w;
+        vec2 tile = abs(cascadeTileCoord(c, proj.xy));
+        vec2 inset = 2.0 * cascadeTexel[c].yz / (cascadeRect[c].zw - cascadeRect[c].xy);
+        if (tile.x > 1.0 - inset.x || tile.y > 1.0 - inset.y) continue;
+        held = true;
+        if (proj.z < 0.0) return 1.0;
+        if (proj.z > 1.0) return 0.0;
+        float stored = textureLod(uShadowDepth, proj.xy, 0.0).r;
+        return (proj.z - 0.0005 <= stored) ? 1.0 : 0.0;
+    }
+    return 0.0;
+}
+
+// Whether the sun (moon) reaches p, off the shadow map. The mist's
+// sunVisibility, except that a point the map does not cover is dark rather
+// than lit: with no word on what stands between it and the sky, it takes
+// none of the sky's light (the user's rule: sun and moon only where they
+// reach). Toward the edge of the outer cascade the light fades out smoothly
 // (volumetric_light::coverageFade) rather than stopping on a line: the cut
-// drew a hard-edged cone round the moon (T434). Above everything the map
-// holds (in front of its near plane) nothing stands between the point and
-// the sky, as the surfaces' own shadow lookup takes it.
+// drew a hard-edged cone round the moon (T434).
 float mapVisibility(vec3 p) {
     if (shadowParams.x < 0.5) return 0.0;
     int count = min(int(cascadeInfo.x + 0.5), 4);
@@ -136,21 +162,23 @@ float mapVisibility(vec3 p) {
     vec4 lsOuter = cascadeMatrix[last] * vec4(p, 1.0);
     vec2 outer = abs(cascadeTileCoord(last, lsOuter.xy / lsOuter.w));
     float edge = max(outer.x, outer.y);
+    if (edge >= 1.0) return 0.0;
     float t = clamp((edge - 0.8) / 0.2, 0.0, 1.0);
     float cover = 1.0 - t * t * (3.0 - 2.0 * t);
     if (cover <= 0.0) return 0.0;
-    for (int c = 0; c < count; ++c) {
-        vec4 ls = cascadeMatrix[c] * vec4(p, 1.0);
-        vec3 proj = ls.xyz / ls.w;
-        vec2 tile = abs(cascadeTileCoord(c, proj.xy));
-        vec2 inset = 2.0 * cascadeTexel[c].yz / (cascadeRect[c].zw - cascadeRect[c].xy);
-        if (tile.x > 1.0 - inset.x || tile.y > 1.0 - inset.y) continue;
-        if (proj.z < 0.0) return cover;
-        if (proj.z > 1.0) return 0.0;
-        float stored = textureLod(uShadowDepth, proj.xy, 0.0).r;
-        return (proj.z - 0.0005 <= stored) ? cover : 0.0;
-    }
-    return 0.0;
+    bool held;
+    float lit = mapLookup(p, held);
+    return held ? lit * cover : 0.0;
+}
+
+// How shaded p is by the map: 1 where a cascade holds it and something
+// stands between it and the sky, 0 where it is lit - and 0 where nothing
+// holds it, which says nothing of shade (else the map's own edge would wear
+// a rim of light).
+float mapShade(vec3 p) {
+    bool held;
+    float lit = mapLookup(p, held);
+    return held ? 1.0 - lit : 0.0;
 }
 
 // volumetric_light::phaseHG.
@@ -159,11 +187,47 @@ float phaseHG(float cosTheta, float g) {
     return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4), 1.5);
 }
 
-// volumetric_light::bodyPhase.
+// volumetric_light::bodyPhase (kBodyLobeG, kBodyLobeCap).
 float vlBodyPhase(float cosTheta) {
-    const float cap = 8.0;
-    float p = phaseHG(cosTheta, 0.7);
+    const float cap = 16.0;
+    float p = phaseHG(cosTheta, 0.8);
     return cap * p / (cap + p);
+}
+
+// volumetric_light::shaftRadius.
+float vlShaftRadius(float t) {
+    return clamp(0.1 * t, 2.0, 8.0);
+}
+
+// volumetric_light::besideInAir: whether q is air the eye sees, in front of
+// what the screen shows there. Inside the ground, a wall or a crown it is in
+// their shade without standing for shade in the air; off the screen or
+// behind the eye nothing is known.
+bool besideInAir(vec3 q) {
+    vec4 clip = vl.viewProj * vec4(q, 1.0);
+    if (clip.w <= 0.05) return false;
+    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
+    ivec2 size = ivec2(vl.screen.xy);
+    ivec2 texel = clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1);
+    float d = imageLoad(uLowDepth, texel).r;
+    float pointDepth = dot(q - vl.camPos.xyz, vl.camForward.xyz);
+    if (!(pointDepth > 0.0)) return false;
+    if (d <= 0.0) return true;  // sky
+    vec3 s = unproject((vec2(texel) + 0.5) / vec2(size), d);
+    float sceneDepth = dot(s - vl.camPos.xyz, vl.camForward.xyz);
+    return pointDepth < sceneDepth - 0.1;
+}
+
+// A hash to 0..1 for the turning of the point beside each step.
+float vlHash(uvec3 v) {
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z;
+    return float(v.x & 0x00FFFFFFu) / 16777216.0;
 }
 
 // volumetric_light::glowCore.
@@ -227,10 +291,13 @@ void main() {
     vec3 dir = toSurface / dist;
 
     // The same fraction of a step for every sample of this texel, from a
-    // fixed pattern over the screen (interleaved gradient noise).
-    float offset = fract(52.9829189 * fract(dot(vec2(pixel), vec2(0.06711056, 0.00583715))));
+    // pattern over the screen (interleaved gradient noise) moved on by the
+    // golden ratio every frame, so the history gathers other places.
+    uint frameNo = uint(vl.screen.z + 0.5);
+    float offset = fract(52.9829189 * fract(dot(vec2(pixel), vec2(0.06711056, 0.00583715))) +
+                         0.61803399 * float(frameNo));
 #ifdef VL_TRACE
-    uint rng = rtHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + 26699u);
+    uint rng = rtHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + 26699u + frameNo * 7919u);
 #endif
 
     vec3 light = vec3(0.0);
@@ -241,17 +308,22 @@ void main() {
         int steps = max(int(vl.air.z + 0.5), 1);
         float dt = reach / float(steps);
         vec3 toBody = normalize(vl.bodyDir.xyz);
+        // Across the light: the plane square to the way to the sky body.
+        vec3 across1 = cross(toBody, vec3(0.0, 0.0, 1.0));
+        across1 = dot(across1, across1) > 1e-4 ? normalize(across1) : vec3(1.0, 0.0, 0.0);
+        vec3 across2 = cross(across1, toBody);
         // Mostly forward, as off dust and haze: toward the sun the air takes
         // many times the light it does seen from the side, and seen from
         // the side or with the back to it next to none - no even floor
-        // under it, which laid a veil over the whole picture (T434). The
-        // lobe shrinks while the disc itself is hidden from the eye
-        // (bodyColor.w). Its peak held smoothly under eight times even
+        // under it, which laid a veil over the whole picture (T434). Its
+        // peak held smoothly under sixteen times even
         // (volumetric_light::bodyPhase): no flat top with a ring round it.
         float phase = vlBodyPhase(dot(dir, toBody)) * vl.bodyColor.w;
-        float lit = 0.0;
+        float spin = vlHash(uvec3(uint(pixel.x), uint(pixel.y), frameNo));
+        float shown = 0.0;
         for (int i = 0; i < steps; ++i) {
-            vec3 p = eye + dir * ((float(i) + offset) * dt);
+            float t = (float(i) + offset) * dt;
+            vec3 p = eye + dir * t;
             float v;
 #ifdef VL_TRACE
             if (vl.modes.y == 2) {
@@ -263,14 +335,27 @@ void main() {
             {
                 v = mapVisibility(p);
             }
-            lit += v;
+            if (v <= 0.0) continue;
+            // Lit: does shade lie beside it? One point across the light, its
+            // direction turned from step to step and frame to frame
+            // (volumetric_light::shaftStep). Open air has none beside it and
+            // adds nothing - no veil over the open sky or a plain (T434);
+            // a gap in a crown, a window, a ridge before a low sun do.
+            float angle = 6.28318530718 * fract(spin + 0.61803399 * float(i));
+            vec3 q = p + (cos(angle) * across1 + sin(angle) * across2) * vlShaftRadius(t);
+            if (!besideInAir(q)) continue;
+            float shade;
+#ifdef VL_TRACE
+            if (vl.modes.y == 2) {
+                shade = rtOccluded(q, toBody, 2000.0, rng) ? 1.0 : 0.0;
+            } else
+#endif
+            {
+                shade = mapShade(q);
+            }
+            shown += v * shade;
         }
-        // Only where part of the ray lies in shade: evenly lit air is the
-        // fog's and the sky's already (volumetric_light::shaftWeight).
-        float share = lit / float(steps);
-        float ts = clamp((share - 0.5) / 0.5, 0.0, 1.0);
-        float shown = 1.0 - ts * ts * (3.0 - 2.0 * ts);
-        light += vl.bodyColor.rgb * (phase * lit * dt * vl.air.x * vl.bodyDir.w * shown);
+        light += vl.bodyColor.rgb * (phase * shown * dt * vl.air.x * vl.bodyDir.w);
     }
 
     // The lamps.

@@ -27,7 +27,7 @@ class VkContext;
  * than in it. The mist is a medium over the whole view, built before the
  * scene and read by every surface, and carries its cells over from frame to
  * frame; this is the light alone, in clear air, gathered after the scene
- * against the scene's own depth and from nothing but this frame. With the
+ * against the scene's own depth, and smoothed over the last few frames. With the
  * mist on, the sun's shafts are the mist's and this adds the moon's and the
  * lamps'.
  *
@@ -44,14 +44,19 @@ class VkContext;
  *           seen from it - a traced ray with the ray traced lighting, a few
  *           steps against the scene's depth without (volumetric_light.comp.glsl);
  *   blur    a 5x5 blur kept to like depths (volumetric_light_blur.comp.glsl);
+ *   history this frame's light blended into the last frames' at 0.2, found
+ *           again where the same air was last frame and held to this
+ *           frame's light round it (volumetric_light_temporal.comp.glsl;
+ *           U23, the user allowed the light the last ~5 frames);
  *
  * and in the overlay pass, ahead of the interface and the eye's exposure,
  * the result is screened over the picture (volumetric_light_composite.frag),
  * the minimap's disc left out where it was drawn with the scene.
  *
- * Faint by design (volumetric_light::scatterFor): clear air near the eye
- * scatters next to nothing, so the sky body's light shows as a glow toward
- * it and as shafts where something shades part of the air, never as a veil;
+ * Faint by design (volumetric_light::scatterFor): the sky body's light counts
+ * only in lit air with shade beside it (volumetric_light::shaftRadius), so it
+ * shows as shafts where something shades part of the air - strongest toward
+ * the sun - and never as a veil over the open sky or a plain;
  * a lamp's as a soft glow round its flame in its own colour, fainter by day.
  *
  * The lamps are the ones the ray traced lighting shades with, gathered the
@@ -81,8 +86,7 @@ public:
         glm::vec3 cameraPos{0.0f};
 
         /// Toward the sun or the moon, unit length; its share of light (0
-        /// gathers none) and colour, and the forward lobe's share
-        /// (volumetric_light::lobeShare).
+        /// gathers none) and colour, and the forward lobe's share (1).
         glm::vec3 bodyDir{0.0f, 0.0f, 1.0f};
         float bodyShare = 0.0f;
         glm::vec3 bodyColor{0.0f};
@@ -122,6 +126,10 @@ public:
         /// which is interface and no air (T435), as the screen's glow
         /// leaves it out (ScreenEffects::FrameInputs::keepRect).
         glm::vec4 keepRect{0.0f};
+
+        /// The debug view "VL only" (dbgvlonly): the light alone over black
+        /// (volumetric_light::debugViewColor).
+        bool debugView = false;
     };
 
     VolumetricLight() = default;
@@ -143,8 +151,12 @@ public:
     /// last one has closed. Returns whether composite() has something to add.
     bool record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D extent, const FrameInputs& in);
 
-    /// Screen it over the picture. Inside the overlay pass, viewport set.
+    /// Screen it over the picture - or, in the debug view, draw it over
+    /// black in its place. Inside the overlay pass, viewport set.
     void composite(VkCommandBuffer cmd, uint32_t frame);
+    /// This frame slot's light is the debug view: composited after the
+    /// eye's exposure, so the view is the light as it is.
+    [[nodiscard]] bool debugViewDrawn(uint32_t frame) const;
 
 private:
     static constexpr uint32_t MAX_FRAMES = 2;
@@ -163,6 +175,17 @@ private:
     ScreenTarget lowDepth_[MAX_FRAMES];
     ScreenTarget march_[MAX_FRAMES];
     ScreenTarget blurred_[MAX_FRAMES];
+    /// Two histories, not one a frame slot: each frame reads the one the
+    /// frame before wrote and writes the other (historyWrite_).
+    ScreenTarget history_[2];
+    uint32_t historyWrite_ = 0;
+    /// The last record drew the light into these targets: the next may
+    /// build on it (volumetric_light::historyUsable).
+    bool historyValid_ = false;
+    glm::mat4 prevViewProj_{1.0f};
+    glm::vec3 prevCamPos_{0.0f};
+    uint32_t frameNumber_ = 0;  // moves the march's pattern, 0..1023
+    bool debugView_[MAX_FRAMES] = {};
     ScreenTarget dummyShadow_;  // 1x1, read when there is no shadow map
     VkExtent2D targetExtent_{.width = 0, .height = 0};
     VkExtent2D sourceExtent_{.width = 0, .height = 0};
@@ -184,6 +207,7 @@ private:
     VkPipeline depthPipelineMs_ = VK_NULL_HANDLE;
     VkPipeline marchPipeline_ = VK_NULL_HANDLE;
     VkPipeline blurPipeline_ = VK_NULL_HANDLE;
+    VkPipeline temporalPipeline_ = VK_NULL_HANDLE;
 
     VkDescriptorSetLayout tracedSceneLayout_ = VK_NULL_HANDLE;  // the scene's, which these were built for
     VkPipelineLayout tracedLayout_ = VK_NULL_HANDLE;
@@ -195,6 +219,7 @@ private:
     VkDescriptorSetLayout compositeSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout compositeLayout_ = VK_NULL_HANDLE;
     VkPipeline compositePipeline_ = VK_NULL_HANDLE;
+    VkPipeline debugPipeline_ = VK_NULL_HANDLE;  // the debug view: no blend
     VkFormat compositeFormat_ = VK_FORMAT_UNDEFINED;
 
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;

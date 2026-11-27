@@ -2124,7 +2124,11 @@ void Renderer::endFrame() {
         // the glow and death passes, then the shafts screened over it.
         if (screenEffects_) screenEffects_->composite(currentCmd, vkCtx->getCurrentFrame());
         if (sunShafts_) sunShafts_->composite(currentCmd, vkCtx->getCurrentFrame());
-        if (volumetricLight_) volumetricLight_->composite(currentCmd, vkCtx->getCurrentFrame());
+        // The debug view "VL only" is drawn after the eye's exposure instead,
+        // so it shows the light as it is.
+        if (volumetricLight_ && !volumetricLight_->debugViewDrawn(vkCtx->getCurrentFrame())) {
+            volumetricLight_->composite(currentCmd, vkCtx->getCurrentFrame());
+        }
         vkCtx->gpuMark(currentCmd, "effects composite");
         // The eye's exposure over all of it, the interface left out. It is
         // not a plain multiply - white times an exposure under one is grey,
@@ -2157,6 +2161,11 @@ void Renderer::endFrame() {
             vkCmdSetScissor(currentCmd, 0, 1, &sc);
             if (copied) eyeAdaptation_->composite(currentCmd, vkCtx->getCurrentFrame());
             vkCtx->gpuMark(currentCmd, "eye adaptation composite");
+        }
+        // The volumetric light's debug view over black, under the interface
+        // (and the minimap drawn here) - VolumetricLight::composite.
+        if (volumetricLight_ && volumetricLight_->debugViewDrawn(vkCtx->getCurrentFrame())) {
+            volumetricLight_->composite(currentCmd, vkCtx->getCurrentFrame());
         }
 
         // After the water's capture of the finished frame, or the traced
@@ -8555,12 +8564,15 @@ void Renderer::recordVolumetricLight() {
         if (shares.sun > 0.0f && !volumetricThisFrame_) {
             in.bodyDir = sunDir;
             in.bodyShare = shares.sun;
-            in.lobe = volumetric_light::lobeShare(1.0f - glm::clamp(sunOcclusion_, 0.0f, 1.0f));
+            // The whole lobe whether the disc is seen or not (U23): behind
+            // leaves or a roof is where the shafts are, and each sample's
+            // own line to the sun says where it is lit.
+            in.lobe = 1.0f;
             bodyScatter = volumetric_light::tunedScatter(bodyScatter, lightingTune_.volumetricSun);
         } else if (shares.moon > 0.0f) {
             in.bodyDir = moonDir;
             in.bodyShare = shares.moon;
-            in.lobe = volumetric_light::lobeShare(1.0f - glm::clamp(moonOcclusionState_.eased, 0.0f, 1.0f));
+            in.lobe = 1.0f;
             bodyScatter *= volumetric_light::kMoonScatterShare;
             bodyScatter = volumetric_light::tunedScatter(bodyScatter, lightingTune_.volumetricMoon);
         }
@@ -8623,6 +8635,7 @@ void Renderer::recordVolumetricLight() {
             window->getHeight() > 0) {
             in.keepRect = minimap->screenUvRect(window->getWidth(), window->getHeight());
         }
+        in.debugView = volumetricLightDebugView_;
 
         if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
             in.depthImage = postProcessPipeline_->getSceneDepthImage();

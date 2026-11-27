@@ -301,6 +301,13 @@ constexpr SettingGerman kGerman[] = {
      "Wie viel Licht der Mond der Luft gibt, wenn das volumetrische Licht an ist (Details). "
      "100 wie bisher, 0 keines, 400 das Vierfache.",
      nullptr, nullptr, nullptr},
+    {"dbgvlonly",
+     "VL nur Zusatzlicht",
+     "Zeigt nur das Licht, das das volumetrische Licht hinzufügt, auf Schwarz: zehnfach "
+     "verstärkt, damit auch schwaches Licht sichtbar wird (1 % Weiß erscheint als 10 %), "
+     "helles Licht weich unter Weiß gehalten. Oberfläche und Minikarte bleiben. Nur für "
+     "diese Sitzung, wird nicht gespeichert.",
+     nullptr, nullptr, nullptr},
     {"dbgvllights",
      "VL Lichter %",
      "Wie viel Licht Lampen, Feuer und Lava der Luft um sich geben, wenn das volumetrische "

@@ -162,6 +162,9 @@ public:
     int pendingDbgVlSun = 100;
     int pendingDbgVlMoon = 100;
     int pendingDbgVlLights = 100;
+    /// Debug Glow: the volumetric light alone over black, for the session
+    /// only (Renderer::setVolumetricLightDebugView) - never saved.
+    bool pendingDbgVlOnly = false;
     int pendingDbgGlowAnim = 100;      ///< Debug Glow: glow colour animation strength, percent
     int pendingDbgLightCountLimit = 512;
     int pendingRtParticleLights = 1;  ///< lights per particle emitter (rt_particle_lights.hpp)

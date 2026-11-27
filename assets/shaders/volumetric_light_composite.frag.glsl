@@ -10,8 +10,15 @@ layout(set = 0, binding = 0) uniform sampler2D uLight;
 // The minimap's place when it was drawn with the scene (uv x, y, w, h; w 0
 // for none): interface, not air, so the light is left off it (T435) - as
 // the screen's glow leaves it (screen_effects_composite.frag.glsl).
+//
+// mode.x 1 is the debug view "VL only" (dbgvlonly, U23): the light alone,
+// drawn over the picture with no blend - black where there is none - times
+// mode.y (volumetric_light::kDebugViewGain, ten) so faint light shows,
+// through the same shoulder (volumetric_light::debugViewColor). The minimap's
+// disc is then left as it was drawn.
 layout(push_constant) uniform Push {
     vec4 keepRect;
+    vec4 mode;
 } push;
 
 layout(location = 0) in vec2 TexCoord;
@@ -36,9 +43,12 @@ void main() {
         vec2 centre = push.keepRect.xy + push.keepRect.zw * 0.5;
         vec2 d = (TexCoord - centre) / (push.keepRect.zw * 0.5);
         if (dot(d, d) <= 1.0) {
+            if (push.mode.x > 0.5) discard;
             outColor = vec4(0.0);
             return;
         }
     }
-    outColor = vec4(shoulder(max(texture(uLight, TexCoord).rgb, vec3(0.0))), 0.0);
+    vec3 light = max(texture(uLight, TexCoord).rgb, vec3(0.0));
+    if (push.mode.x > 0.5) light *= push.mode.y;
+    outColor = vec4(shoulder(light), 0.0);
 }

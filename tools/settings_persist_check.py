@@ -50,6 +50,9 @@ EXPECTED = {
     # the "Probe light ratio" view came back at the next start and was taken
     # for a grey, fogged night.
     "dbgview": "a debug view lasts for the session",
+    # The volumetric light's debug view (U23), the same: the light alone over
+    # black, for the session it is picked in.
+    "dbgvlonly": "a debug view lasts for the session",
 }
 
 

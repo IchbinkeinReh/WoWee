@@ -226,26 +226,35 @@ TEST_CASE("volumetric light: faint by default, Low fainter than High", "[volumet
     CHECK(low.body <= 0.7f * high.body);
     CHECK(low.lamp <= 0.7f * high.lamp);
     CHECK(low.body >= 0.4f * high.body);
-    // A fifth of V572's sun and of its lamps at most.
-    CHECK(high.body <= 0.001f / 5.0f);
+    // The lamps a fifth of V572's at most.
     CHECK(high.lamp <= 0.03f / 5.0f);
-    // Open air lit end to end adds nothing, whichever way one looks (T434).
-    CHECK(vl::shaftWeight(1.0f) == 0.0f);
-    // The worst a ray seen from the side can take, half in shade, in the
-    // thickest air and a white sun: a few steps of 255 - no veil.
-    float worst = 0.0f;
-    for (float f = 0.0f; f <= 1.0f; f += 0.01f) worst = std::max(worst, f * vl::shaftWeight(f));
-    const float side = high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(0.0f) * worst;
-    CHECK(side < 3.0f / 255.0f);
-    // With the back to it, less still.
-    CHECK(high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(-1.0f) * worst < side);
-    // A shaft toward the sun through a gap, twenty yards of lit air in shade
-    // otherwise, clear air: seen, but not a white wall.
-    const float shaft = high.body * 20.0f * vl::bodyPhase(1.0f) * vl::shaftWeight(20.0f / vl::kSunReach);
-    CHECK(shaft > 4.0f / 255.0f);
-    CHECK(shaft < 0.15f);
-    // The moon less than the sun for the same light.
-    CHECK(vl::kMoonScatterShare < 1.0f);
+    // The sky body's light counts only lit air with shade beside it
+    // (shaftStep): open air lit end to end adds nothing, whichever way one
+    // looks (T434).
+    CHECK(vl::shaftStep(1.0f, true, 0.0f) == 0.0f);
+    // The worst a ray seen from the side can take - every yard of it lit
+    // beside shade, the thickest air, a white sun - a faint haze, no wall;
+    // with the back to the sun a few steps of 255.
+    const float side = high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(0.0f);
+    CHECK(side < 0.1f);
+    const float back = high.body * vl::kMaxAirFactor * vl::kSunReach * vl::bodyPhase(-1.0f);
+    CHECK(back < 0.04f);
+    // In clear air, a forest's sideways haze with half of it beside shade:
+    // a few steps of 255.
+    CHECK(high.body * vl::kSunReach * 0.5f * vl::bodyPhase(0.0f) < 6.0f / 255.0f);
+    // U23: toward the sun through a crown, ten yards of lit air beside the
+    // shade, clear air: plainly seen (VL2 gave about 1/100 even at 400 %),
+    // not a white wall.
+    const float shaft = high.body * 10.0f * vl::bodyPhase(1.0f);
+    CHECK(shaft > 0.1f);
+    CHECK(shaft < 0.4f);
+    // VL2's figure for the same, to keep the reason on record: its scatter,
+    // its lobe of 0.4 behind leaves and its per-ray weight at half shade.
+    const float vl2 = 2.0e-4f * 10.0f * (8.0f * 12.9f / (8.0f + 12.9f)) * 0.4f;
+    CHECK(vl2 < 0.01f);
+    CHECK(shaft > 15.0f * vl2);
+    // The moon's share: her light colour is the night's, already dim.
+    CHECK(vl::kMoonScatterShare <= 1.0f);
     CHECK(vl::kMoonScatterShare > 0.0f);
     // A lamp's glow through its middle at night, High, clear air: a soft
     // glow of a fraction of its colour.
@@ -260,17 +269,181 @@ TEST_CASE("volumetric light: faint by default, Low fainter than High", "[volumet
 }
 
 TEST_CASE("volumetric light: the sky body's light only beside shade", "[volumetric_light]") {
-    CHECK(vl::shaftWeight(0.0f) == Catch::Approx(1.0f));
-    CHECK(vl::shaftWeight(0.5f) == Catch::Approx(1.0f));
-    CHECK(vl::shaftWeight(1.0f) == Catch::Approx(0.0f));
-    float last = 1.0f;
-    for (float f = 0.0f; f <= 1.0f; f += 0.005f) {
-        const float w = vl::shaftWeight(f);
-        INFO("lit share " << f);
-        CHECK(w <= last + 1e-6f);
-        CHECK(last - w < 0.02f);  // smooth: no edge where a ray's last sample turns lit
-        last = w;
+    // U23: a lit step counts as much as the point beside it is shaded, and
+    // only when that point is air the eye sees.
+    CHECK(vl::shaftStep(1.0f, true, 1.0f) == 1.0f);
+    CHECK(vl::shaftStep(1.0f, true, 0.0f) == 0.0f);
+    CHECK(vl::shaftStep(0.0f, true, 1.0f) == 0.0f);   // in shade itself
+    CHECK(vl::shaftStep(1.0f, false, 1.0f) == 0.0f);  // beside it: ground, wall, off screen
+    CHECK(vl::shaftStep(0.5f, true, 1.0f) == Catch::Approx(0.5f));  // the map's fading edge
+    CHECK(vl::shaftStep(1.0f, true, 3.0f) == 1.0f);
+    // The point beside: air in front of what the screen shows, or sky.
+    CHECK(vl::besideInAir(true, false, 10.0f, 20.0f));
+    CHECK_FALSE(vl::besideInAir(true, false, 20.0f, 10.0f));  // inside the ground or a wall
+    CHECK_FALSE(vl::besideInAir(true, false, 10.0f, 10.05f));  // on its face
+    CHECK(vl::besideInAir(true, true, 500.0f, 0.0f));
+    CHECK_FALSE(vl::besideInAir(false, true, 10.0f, 0.0f));  // off the screen
+    CHECK_FALSE(vl::besideInAir(true, true, -1.0f, 0.0f));   // behind the eye
+    // The span across the light: a tenth of the way, two to eight yards.
+    CHECK(vl::shaftRadius(0.0f) == Catch::Approx(2.0f));
+    CHECK(vl::shaftRadius(50.0f) == Catch::Approx(5.0f));
+    CHECK(vl::shaftRadius(500.0f) == Catch::Approx(8.0f));
+    float last = 0.0f;
+    for (float t = 0.0f; t <= vl::kSunReach; t += 0.5f) {
+        const float r = vl::shaftRadius(t);
+        CHECK(r >= last);
+        last = r;
     }
+}
+
+TEST_CASE("volumetric light: the history blends about five frames and starts afresh on a cut",
+          "[volumetric_light]") {
+    // U23 (user 2026-11-27): the light may be smoothed over the last ~5 frames.
+    CHECK(vl::kHistoryWeight == Catch::Approx(0.2f));
+    // A light that has stood still is the light.
+    const glm::vec3 still(0.3f, 0.2f, 0.1f);
+    glm::vec3 h = vl::historyBlend(still, still, true);
+    CHECK(h.r == Catch::Approx(still.r));
+    // A step from dark to lit: one frame takes a fifth of it, five about two
+    // thirds, twenty nearly all.
+    h = glm::vec3(0.0f);
+    const glm::vec3 lit(1.0f);
+    h = vl::historyBlend(h, lit, true);
+    CHECK(h.r == Catch::Approx(0.2f));
+    for (int i = 1; i < 5; ++i) h = vl::historyBlend(h, lit, true);
+    CHECK(h.r == Catch::Approx(1.0f - std::pow(0.8f, 5.0f)));
+    CHECK(h.r > 0.6f);
+    CHECK(h.r < 0.75f);
+    // Noise of a frame's grain (alternating 0 and 2 round 1) is cut to a
+    // ninth or so of its swing once the history has settled.
+    h = glm::vec3(1.0f);
+    float lo = 10.0f, hi = -10.0f;
+    for (int i = 0; i < 40; ++i) {
+        h = vl::historyBlend(h, glm::vec3(i % 2 == 0 ? 0.0f : 2.0f), true);
+        if (i >= 20) {
+            lo = std::min(lo, h.r);
+            hi = std::max(hi, h.r);
+        }
+    }
+    CHECK(hi - lo < 2.0f * 0.25f);
+    // Without a usable history the frame's own light, at once.
+    h = vl::historyBlend(glm::vec3(5.0f), lit, false);
+    CHECK(h.r == 1.0f);
+    // When the history is usable: the last frame drew into the same targets
+    // and the camera did not jump.
+    CHECK(vl::historyUsable(true, true, 0.0f));
+    CHECK(vl::historyUsable(true, true, 3.0f));             // flying fast
+    CHECK(vl::historyUsable(true, true, vl::kHistoryCutDistance));
+    CHECK_FALSE(vl::historyUsable(true, true, 40.0f));      // a teleport
+    CHECK_FALSE(vl::historyUsable(false, true, 0.0f));      // the light was off, a loading screen
+    CHECK_FALSE(vl::historyUsable(true, false, 0.0f));      // new size or quality
+    // The kept distance: the same surface agrees, a unit walked in front
+    // does not, the sky agrees only with the sky.
+    CHECK(vl::historyDepthAgrees(20.0f, 20.0f));
+    CHECK(vl::historyDepthAgrees(20.0f, 20.8f));
+    CHECK_FALSE(vl::historyDepthAgrees(20.0f, 15.0f));
+    CHECK(vl::historyDepthAgrees(0.5f, 0.58f));
+    CHECK(vl::historyDepthAgrees(vl::kHistorySkyDistance, vl::kHistorySkyDistance));
+    CHECK_FALSE(vl::historyDepthAgrees(vl::kHistorySkyDistance, 3000.0f));
+    CHECK_FALSE(vl::historyDepthAgrees(20.0f, 0.0f));  // nothing kept
+    // A half float holds the sky's distance.
+    CHECK(vl::kHistorySkyDistance < 65504.0f);
+}
+
+TEST_CASE("volumetric light: the debug view shows faint light ten times as bright", "[volumetric_light]") {
+    CHECK(vl::kDebugViewGain == Catch::Approx(10.0f));
+    // Nothing is black.
+    CHECK(vl::debugViewColor(glm::vec3(0.0f)) == glm::vec3(0.0f));
+    // A hundredth of white shows as a tenth.
+    CHECK(vl::debugViewColor(glm::vec3(0.01f)).r == Catch::Approx(0.1f));
+    // Bright light comes under white without a flat top, its hue kept.
+    const glm::vec3 warm(0.2f, 0.1f, 0.05f);
+    const glm::vec3 shown = vl::debugViewColor(warm);
+    CHECK(shown.r < 1.0f);
+    CHECK(shown.r > 0.4f);
+    CHECK(shown.g / shown.r == Catch::Approx(0.5f));
+    float last = 0.0f;
+    for (float x = 0.0f; x <= 1.0f; x += 0.002f) {
+        const float y = vl::debugViewColor(glm::vec3(x)).r;
+        CHECK(y >= last);
+        CHECK(y < 1.0f);
+        last = y;
+    }
+    // The composite's shoulder leaves light under its knee as it is.
+    CHECK(vl::compositeShoulder(glm::vec3(0.3f)).r == Catch::Approx(0.3f));
+}
+
+TEST_CASE("volumetric light: the shaders say what the arithmetic says", "[volumetric_light]") {
+    // Canaries: the GLSL mirrors of volumetric_light_math.hpp.
+    const std::string march = wowee::test::slurp("assets/shaders/volumetric_light.comp.glsl");
+    CHECK(march.find("const float cap = 16.0;") != std::string::npos);
+    CHECK(march.find("float p = phaseHG(cosTheta, 0.8);") != std::string::npos);
+    CHECK(march.find("return clamp(0.1 * t, 2.0, 8.0);") != std::string::npos);
+    CHECK(march.find("return pointDepth < sceneDepth - 0.1;") != std::string::npos);
+    CHECK(march.find("shown += v * shade;") != std::string::npos);
+    // The march's pattern moves from frame to frame, so the history gathers.
+    CHECK(march.find("0.61803399 * float(frameNo)") != std::string::npos);
+    // VL2's per-ray weight is gone.
+    CHECK(march.find("(share - 0.5) / 0.5") == std::string::npos);
+    const float r = vl::shaftRadius(50.0f);
+    CHECK(r == Catch::Approx(vl::kShaftRadiusShare * 50.0f));
+    CHECK(vl::kShaftRadiusMin == 2.0f);
+    CHECK(vl::kShaftRadiusMax == 8.0f);
+    CHECK(vl::kBodyLobeG == 0.8f);
+    CHECK(vl::kBodyLobeCap == 16.0f);
+    CHECK(vl::kInAirMargin == 0.1f);
+
+    const std::string temporal = wowee::test::slurp("assets/shaders/volumetric_light_temporal.comp.glsl");
+    CHECK(temporal.find("const float kHistoryWeight = 0.2;") != std::string::npos);
+    CHECK(temporal.find("const float kSkyDistance = 60000.0;") != std::string::npos);
+    CHECK(temporal.find("return abs(expected - kept) <= 0.05 * max(expected, kept) + 0.1;") != std::string::npos);
+    CHECK(temporal.find("history = clamp(history, lo, hi);") != std::string::npos);
+    CHECK(vl::kHistorySkyDistance == 60000.0f);
+
+    const std::string composite = wowee::test::slurp("assets/shaders/volumetric_light_composite.frag.glsl");
+    CHECK(composite.find("const float knee = 0.4;") != std::string::npos);
+    CHECK(composite.find("light *= push.mode.y;") != std::string::npos);
+    const std::string cpp = wowee::test::slurp("src/rendering/volumetric_light.cpp");
+    CHECK(cpp.find("volumetric_light::kDebugViewGain") != std::string::npos);
+    CHECK(cpp.find("volumetric_light::historyUsable(") != std::string::npos);
+    CHECK(cpp.find("volumetric_light_temporal.comp.spv") != std::string::npos);
+}
+
+TEST_CASE("volumetric light: the debug view is a Debug Glow row for the session only",
+          "[volumetric_light][settings]") {
+    const auto* r = row("dbgvlonly");
+    REQUIRE(r != nullptr);
+    CHECK(r->kind == wowee::ui::SettingKind::Bool);
+    CHECK(r->defaultValue == 0.0f);
+    CHECK(std::string(r->category) == "Debug Glow");
+    CHECK(std::string(r->enabledWhen) == "volumetriclight");
+    CHECK(std::string(r->tooltip).find("ten") != std::string::npos);
+    const auto* de = wowee::ui::germanSettingText("dbgvlonly");
+    REQUIRE(de != nullptr);
+    REQUIRE(de->label != nullptr);
+    CHECK(std::string(de->label) == "VL nur Zusatzlicht");
+    CHECK(characters(de->label) <= 24);
+    REQUIRE(de->tooltip != nullptr);
+    // Says how it is scaled.
+    CHECK(std::string(de->tooltip).find("zehnfach") != std::string::npos);
+    // Bound, applied live, and never written to the settings file.
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    CHECK(panel.find("{.key = \"dbgvlonly\", .asBool = &SettingsPanel::pendingDbgVlOnly}") != std::string::npos);
+    CHECK(panel.find("renderer->setVolumetricLightDebugView(pendingDbgVlOnly);") != std::string::npos);
+    CHECK(panel.find("key == \"dbgvlonly\"") != std::string::npos);
+    const std::string io = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
+    CHECK(io.find("pendingDbgVlOnly") == std::string::npos);
+    for (const auto& e : wowee::ui::kSuperUltraDebugValues) CHECK(std::string(e.key) != "dbgvlonly");
+    // Drawn after the eye's exposure, under the interface.
+    const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
+    const size_t exposure = renderer.find("eyeAdaptation_->composite(currentCmd");
+    const size_t debug = renderer.find("volumetricLight_ && volumetricLight_->debugViewDrawn(vkCtx->getCurrentFrame())) {");
+    const size_t ui = renderer.find("ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), currentCmd);");
+    REQUIRE(exposure != std::string::npos);
+    REQUIRE(debug != std::string::npos);
+    REQUIRE(ui != std::string::npos);
+    CHECK(exposure < debug);
+    CHECK(debug < ui);
 }
 
 TEST_CASE("volumetric light: a lamp's glow fainter by day", "[volumetric_light]") {
@@ -293,8 +466,10 @@ TEST_CASE("volumetric light: a building's own light does not glow in the air", "
 TEST_CASE("volumetric light: the shadow map's light fades out at its edge", "[volumetric_light]") {
     CHECK(vl::coverageFade(0.0f) == Catch::Approx(1.0f));
     CHECK(vl::coverageFade(0.8f) == Catch::Approx(1.0f));
-    CHECK(vl::coverageFade(1.0f) == Catch::Approx(0.0f));
-    CHECK(vl::coverageFade(1.5f) == Catch::Approx(0.0f));
+    CHECK(vl::coverageFade(1.0f) == Catch::Approx(0.0f).margin(1e-6));
+    CHECK(vl::coverageFade(1.5f) == Catch::Approx(0.0f).margin(1e-6));
+    // Exactly nothing at the edge, on every compiler (macOS CI at 726e08daf).
+    CHECK(vl::coverageFade(1.0f) == 0.0f);
     float last = 1.0f;
     for (float e = 0.0f; e <= 1.2f; e += 0.005f) {
         const float f = vl::coverageFade(e);
@@ -338,7 +513,7 @@ TEST_CASE("volumetric light: the stretch of a ray inside a lamp's reach", "[volu
     // Standing inside it: from the eye.
     s = vl::segmentThroughSphere(eye, forward, 100.0f, glm::vec3(1.0f, 0.0f, 0.0f), 5.0f);
     REQUIRE(s.has_value());
-    CHECK(s->first == Catch::Approx(0.0f));
+    CHECK(s->first == Catch::Approx(0.0f).margin(1e-6));
     CHECK(s->second == Catch::Approx(6.0f));
     // Behind the eye, or beside the ray: nothing.
     CHECK_FALSE(vl::segmentThroughSphere(eye, forward, 100.0f, glm::vec3(-10.0f, 0.0f, 0.0f), 5.0f).has_value());
@@ -349,7 +524,7 @@ TEST_CASE("volumetric light: the sky body's light only from a body that is up", 
     // Noon: the sun's, no moon.
     vl::BodyShares s = vl::bodyShares(0.8f, 0.5f);
     CHECK(s.sun == Catch::Approx(1.0f));
-    CHECK(s.moon == Catch::Approx(0.0f));
+    CHECK(s.moon == Catch::Approx(0.0f).margin(1e-6));
     // Night with the moon up: hers alone.
     s = vl::bodyShares(-0.3f, 0.4f);
     CHECK(s.sun == 0.0f);
@@ -366,10 +541,10 @@ TEST_CASE("volumetric light: the sky body's light only from a body that is up", 
         CHECK(s.sun >= 0.0f);
         CHECK(s.moon >= 0.0f);
     }
-    // The forward lobe: whole while the disc is seen, reduced while hidden.
-    CHECK(vl::lobeShare(1.0f) == Catch::Approx(1.0f));
-    CHECK(vl::lobeShare(0.0f) == Catch::Approx(vl::kHiddenLobe));
-    CHECK(vl::lobeShare(2.0f) == Catch::Approx(1.0f));
+    // The forward lobe whole whether the disc is seen or not (U23): behind
+    // leaves is where the shafts are.
+    const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
+    CHECK(renderer.find("lobeShare(") == std::string::npos);
 }
 
 TEST_CASE("volumetric light: the phase function is the mist's", "[volumetric_light]") {
@@ -481,6 +656,7 @@ TEST_CASE("volumetric light: 100 % leaves each term as it is, others scale it", 
     // The renderer scales each term by its own slider only.
     const std::string r = wowee::test::slurp("src/rendering/renderer.cpp");
     CHECK(r.find("tunedScatter(bodyScatter, lightingTune_.volumetricSun)") != std::string::npos);
+    CHECK(r.find("in.debugView = volumetricLightDebugView_;") != std::string::npos);
     CHECK(r.find("tunedScatter(bodyScatter, lightingTune_.volumetricMoon)") != std::string::npos);
     CHECK(r.find("tunedScatter(scatter.lamp, lightingTune_.volumetricLights)") != std::string::npos);
 }

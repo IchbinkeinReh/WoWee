@@ -16,6 +16,7 @@ namespace {
 constexpr VkFormat kDepthFormat = VK_FORMAT_R32_SFLOAT;
 constexpr VkFormat kLightFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr uint32_t kGroup = 8;  // 8x8, every pass
+constexpr uint32_t kSetBindings = 8;
 
 /// Must match VLParams in volumetric_light.comp.glsl (std140).
 struct VLParamsGPU {
@@ -27,11 +28,19 @@ struct VLParamsGPU {
     glm::vec4 bodyColor;   // w = the forward lobe's share
     glm::vec4 air;         // x, y = scatter per yard (body, lamps), z, w = samples (body, per lamp)
     glm::ivec4 modes;      // x = lamps, y = body occlusion, z = lamp occlusion, w = scene has content
-    glm::vec4 screen;      // xy = the march's size
+    glm::vec4 screen;      // xy = the march's size, z = the frame's number, w = history usable
     rt_lights::PointLightGPU lights[volumetric_light::kMaxLights];
+    glm::mat4 prevViewProj;  // last drawn frame's, for the history (volumetric_light_temporal.comp.glsl)
+    glm::vec4 prevCamPos;    // last drawn frame's eye
 };
-static_assert(sizeof(VLParamsGPU) == 2 * 64 + 7 * 16 + volumetric_light::kMaxLights * 48,
+static_assert(sizeof(VLParamsGPU) == 3 * 64 + 8 * 16 + volumetric_light::kMaxLights * 48,
               "VLParamsGPU is uploaded as std140");
+
+/// The composite's push constants (volumetric_light_composite.frag.glsl).
+struct CompositePush {
+    glm::vec4 keepRect;
+    glm::vec4 mode;  // x 1 = the debug view, y its gain
+};
 
 }  // namespace
 
@@ -74,20 +83,23 @@ bool VolumetricLight::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
     pointSampler_ = ctx_->getOrCreateSampler(sampCI);
     if (linearSampler_ == VK_NULL_HANDLE || pointSampler_ == VK_NULL_HANDLE) return false;
 
-    // Set 1, shared by the three compute passes; each reads what it names.
+    // Set 1, shared by the four compute passes; each reads what it names.
     //   0  VLParams
     //   1  the shadow map (or the 1x1 stand-in)
     //   2  the scene's depth
     //   3  the depth at the march's size
     //   4  the march's light
     //   5  the blurred light
-    const VkDescriptorType types[6] = {
+    //   6  the history of the frames before
+    //   7  the history with this frame's light in it
+    const VkDescriptorType types[kSetBindings] = {
         VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
     };
     std::vector<VkDescriptorSetLayoutBinding> bindings;
-    for (uint32_t i = 0; i < 6; i++) {
+    for (uint32_t i = 0; i < kSetBindings; i++) {
         bindings.push_back({.binding = i, .descriptorType = types[i], .descriptorCount = 1,
                             .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = nullptr});
     }
@@ -102,7 +114,7 @@ bool VolumetricLight::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
     }
     baseLayout_ = createPipelineLayout(device, {perFrameLayout_, setLayout_});
     const VkPushConstantRange keepRange{.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0,
-                                        .size = sizeof(glm::vec4)};
+                                        .size = sizeof(CompositePush)};
     compositeLayout_ = createPipelineLayout(device, {compositeSetLayout_}, {keepRange});
     if (baseLayout_ == VK_NULL_HANDLE || compositeLayout_ == VK_NULL_HANDLE) {
         LOG_ERROR("VolumetricLight: failed to create pipeline layouts");
@@ -127,14 +139,15 @@ bool VolumetricLight::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
     if (!computePipeline("assets/shaders/volumetric_light_depth.comp.spv", baseLayout_, depthPipeline_) ||
         !computePipeline("assets/shaders/volumetric_light_depth_ms.comp.spv", baseLayout_, depthPipelineMs_) ||
         !computePipeline("assets/shaders/volumetric_light.comp.spv", baseLayout_, marchPipeline_) ||
-        !computePipeline("assets/shaders/volumetric_light_blur.comp.spv", baseLayout_, blurPipeline_)) {
+        !computePipeline("assets/shaders/volumetric_light_blur.comp.spv", baseLayout_, blurPipeline_) ||
+        !computePipeline("assets/shaders/volumetric_light_temporal.comp.spv", baseLayout_, temporalPipeline_)) {
         return false;
     }
 
     VkDescriptorPoolSize sizes[3] = {
         {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = MAX_FRAMES},
         {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES * 3},
-        {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = MAX_FRAMES * 3},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = MAX_FRAMES * 5},
     };
     VkDescriptorPoolCreateInfo poolCI{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolCI.maxSets = MAX_FRAMES * 2;
@@ -214,10 +227,15 @@ bool VolumetricLight::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
 
 bool VolumetricLight::ensureCompositePipeline() {
     const VkFormat format = ctx_->getSwapchainFormat();
-    if (compositePipeline_ != VK_NULL_HANDLE && format == compositeFormat_) return true;
+    if (compositePipeline_ != VK_NULL_HANDLE && debugPipeline_ != VK_NULL_HANDLE && format == compositeFormat_) {
+        return true;
+    }
     VkDevice device = ctx_->getDevice();
-    if (compositePipeline_ != VK_NULL_HANDLE) ::wowee::rendering::deviceWaitIdle(device);
+    if (compositePipeline_ != VK_NULL_HANDLE || debugPipeline_ != VK_NULL_HANDLE) {
+        ::wowee::rendering::deviceWaitIdle(device);
+    }
     destroy(device, compositePipeline_);
+    destroy(device, debugPipeline_);
 
     ShaderPair shaders = loadShaderPair(device, "assets/shaders/postprocess.vert.spv",
                                         "assets/shaders/volumetric_light_composite.frag.spv", "volumetric light");
@@ -248,8 +266,25 @@ bool VolumetricLight::ensureCompositePipeline() {
         .setRenderPass(ctx_->getOverlayRenderPass())
         .setDynamicStates({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
         .build(device, ctx_->getPipelineCache());
-    if (compositePipeline_ == VK_NULL_HANDLE) {
-        LOG_ERROR("VolumetricLight: failed to create the composite pipeline");
+    // The debug view "VL only" (dbgvlonly): the light over black, written
+    // over the picture without a blend.
+    VkPipelineColorBlendAttachmentState over{};
+    over.blendEnable = VK_FALSE;
+    over.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
+    debugPipeline_ = PipelineBuilder()
+        .setShaders(shaders.vertStage, shaders.fragStage)
+        .setVertexInput({}, {})
+        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+        .setNoDepthTest()
+        .setColorBlendAttachment(over)
+        .setMultisample(VK_SAMPLE_COUNT_1_BIT)
+        .setLayout(compositeLayout_)
+        .setRenderPass(ctx_->getOverlayRenderPass())
+        .setDynamicStates({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+        .build(device, ctx_->getPipelineCache());
+    if (compositePipeline_ == VK_NULL_HANDLE || debugPipeline_ == VK_NULL_HANDLE) {
+        LOG_ERROR("VolumetricLight: failed to create the composite pipelines");
         return false;
     }
     compositeFormat_ = format;
@@ -316,8 +351,10 @@ void VolumetricLight::destroyTargets() {
         destroyScreenTarget(*ctx_, lowDepth_[i]);
         destroyScreenTarget(*ctx_, march_[i]);
         destroyScreenTarget(*ctx_, blurred_[i]);
+        destroyScreenTarget(*ctx_, history_[i]);
         drawThisFrame_[i] = false;
     }
+    historyValid_ = false;
     targetExtent_ = {.width = 0, .height = 0};
     sourceExtent_ = {.width = 0, .height = 0};
     targetQuality_ = Quality::Off;
@@ -348,7 +385,8 @@ bool VolumetricLight::ensureTargets(VkExtent2D extent) {
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         if (!createScreenTarget(*ctx_, lowDepth_[i], targetExtent_, kDepthFormat, usage) ||
             !createScreenTarget(*ctx_, march_[i], targetExtent_, kLightFormat, usage) ||
-            !createScreenTarget(*ctx_, blurred_[i], targetExtent_, kLightFormat, usage)) {
+            !createScreenTarget(*ctx_, blurred_[i], targetExtent_, kLightFormat, usage) ||
+            !createScreenTarget(*ctx_, history_[i], targetExtent_, kLightFormat, usage)) {
             LOG_WARNING("VolumetricLight: could not allocate ", targetExtent_.width, "x", targetExtent_.height,
                         " targets - volumetric light off this frame");
             destroyTargets();
@@ -356,10 +394,10 @@ bool VolumetricLight::ensureTargets(VkExtent2D extent) {
         }
     }
 
-    // All three live in GENERAL, each written by one pass and read by the next.
+    // All four live in GENERAL, each written by one pass and read by the next.
     ctx_->immediateSubmit([&](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier2 b[MAX_FRAMES * 3]{};
-        for (uint32_t i = 0; i < MAX_FRAMES * 3; i++) {
+        VkImageMemoryBarrier2 b[MAX_FRAMES * 4]{};
+        for (uint32_t i = 0; i < MAX_FRAMES * 4; i++) {
             b[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             b[i].srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
             b[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -369,28 +407,21 @@ bool VolumetricLight::ensureTargets(VkExtent2D extent) {
             b[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             const uint32_t slot = i % MAX_FRAMES;
-            b[i].image = i < MAX_FRAMES ? lowDepth_[slot].image
-                         : i < MAX_FRAMES * 2 ? march_[slot].image : blurred_[slot].image;
+            b[i].image = i < MAX_FRAMES       ? lowDepth_[slot].image
+                         : i < MAX_FRAMES * 2 ? march_[slot].image
+                         : i < MAX_FRAMES * 3 ? blurred_[slot].image
+                                              : history_[slot].image;
             b[i].subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1,
                                      .baseArrayLayer = 0, .layerCount = 1};
         }
         VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dep.imageMemoryBarrierCount = MAX_FRAMES * 3;
+        dep.imageMemoryBarrierCount = MAX_FRAMES * 4;
         dep.pImageMemoryBarriers = b;
         cmdPipelineBarrier2(cmd, dep);
     });
 
-    for (uint32_t i = 0; i < MAX_FRAMES; i++) {
-        VkDescriptorImageInfo lightIn{.sampler = linearSampler_, .imageView = blurred_[i].view,
-                                      .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet w{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w.dstSet = compositeSets_[i];
-        w.dstBinding = 0;
-        w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w.pImageInfo = &lightIn;
-        vkUpdateDescriptorSets(ctx_->getDevice(), 1, &w, 0, nullptr);
-    }
+    // New targets hold no history: the next frame starts afresh.
+    historyValid_ = false;
     sourceExtent_ = extent;
     targetQuality_ = quality_;
     LOG_INFO("VolumetricLight: ", targetExtent_.width, "x", targetExtent_.height, " targets for a ",
@@ -402,19 +433,35 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
     ZoneScopedN("VolumetricLight::record");
     if (frame >= MAX_FRAMES) return false;
     drawThisFrame_[frame] = false;
+    // A frame without the light breaks the history: the next starts afresh
+    // (volumetric_light::historyUsable).
+    const bool lastFrameDrew = historyValid_;
+    historyValid_ = false;
     if (!usable_ || quality_ == Quality::Off || !in.draw || cmd == VK_NULL_HANDLE ||
         in.depthImage == VK_NULL_HANDLE || in.perFrameSet == VK_NULL_HANDLE || extent.width < 8 ||
         extent.height < 8) {
         return false;
     }
-    if (!ensureTargets(extent) || !ensureCompositePipeline()) return false;
+    // ensureTargets drops the history when it makes new targets.
+    historyValid_ = lastFrameDrew;
+    const bool targetsReady = ensureTargets(extent);
+    const bool sameTargets = historyValid_;
+    historyValid_ = false;
+    if (!targetsReady || !ensureCompositePipeline()) return false;
+    const uint32_t histRead = historyWrite_;
+    const uint32_t histWrite = historyWrite_ ^ 1u;
     if (sets_[frame] == VK_NULL_HANDLE || compositeSets_[frame] == VK_NULL_HANDLE ||
         lowDepth_[frame].view == VK_NULL_HANDLE || march_[frame].view == VK_NULL_HANDLE ||
-        blurred_[frame].view == VK_NULL_HANDLE || paramsMapped_[frame] == nullptr) {
+        blurred_[frame].view == VK_NULL_HANDLE || history_[histRead].view == VK_NULL_HANDLE ||
+        history_[histWrite].view == VK_NULL_HANDLE || paramsMapped_[frame] == nullptr) {
         return false;
     }
     const VkImageView depthView = depthView_.viewFor(*ctx_, in.depthImage, in.depthGeneration);
     if (depthView == VK_NULL_HANDLE) return false;
+    // The history only from a frame that drew the light into these targets,
+    // with the camera not moved past a cut (a teleport, a load).
+    const bool historyUsable = volumetric_light::historyUsable(
+        lastFrameDrew, sameTargets, glm::length(in.cameraPos - prevCamPos_));
 
     // Which march: the traced one only when the scene can be bound and its
     // pipeline built; otherwise the plain one, the traced occlusions falling
@@ -459,7 +506,10 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
     for (size_t i = 0; i < lampCount; ++i) params.lights[i] = in.lamps[i];
     params.modes = glm::ivec4(static_cast<int>(lampCount), static_cast<int>(body), static_cast<int>(lamps),
                               in.sceneHasContent ? 1 : 0);
-    params.screen = glm::vec4(static_cast<float>(targetExtent_.width), static_cast<float>(targetExtent_.height), 0.0f, 0.0f);
+    params.screen = glm::vec4(static_cast<float>(targetExtent_.width), static_cast<float>(targetExtent_.height),
+                              static_cast<float>(frameNumber_), historyUsable ? 1.0f : 0.0f);
+    params.prevViewProj = prevViewProj_;
+    params.prevCamPos = glm::vec4(prevCamPos_, 0.0f);
     std::memcpy(paramsMapped_[frame], &params, sizeof(params));
 
     {
@@ -475,9 +525,14 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
                                        .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo blurImg{.sampler = VK_NULL_HANDLE, .imageView = blurred_[frame].view,
                                       .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
-        const VkDescriptorImageInfo* images[6] = {nullptr, &shadow, &depth, &low, &marchImg, &blurImg};
-        VkWriteDescriptorSet w[6]{};
-        for (uint32_t b = 0; b < 6; b++) {
+        VkDescriptorImageInfo histIn{.sampler = VK_NULL_HANDLE, .imageView = history_[histRead].view,
+                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorImageInfo histOut{.sampler = VK_NULL_HANDLE, .imageView = history_[histWrite].view,
+                                      .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        const VkDescriptorImageInfo* images[kSetBindings] = {nullptr, &shadow, &depth,  &low,
+                                                             &marchImg, &blurImg, &histIn, &histOut};
+        VkWriteDescriptorSet w[kSetBindings + 1]{};
+        for (uint32_t b = 0; b < kSetBindings; b++) {
             w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[b].dstSet = sets_[frame];
             w[b].dstBinding = b;
@@ -488,7 +543,18 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
             if (b == 0) w[b].pBufferInfo = &ubo;
             else w[b].pImageInfo = images[b];
         }
-        vkUpdateDescriptorSets(ctx_->getDevice(), 6, w, 0, nullptr);
+        // The composite reads the history this frame writes. This slot's set
+        // was last read by its frame two frames ago, which has finished.
+        VkDescriptorImageInfo lightIn{.sampler = linearSampler_, .imageView = history_[histWrite].view,
+                                      .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet& c = w[kSetBindings];
+        c.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        c.dstSet = compositeSets_[frame];
+        c.dstBinding = 0;
+        c.descriptorCount = 1;
+        c.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        c.pImageInfo = &lightIn;
+        vkUpdateDescriptorSets(ctx_->getDevice(), kSetBindings + 1, w, 0, nullptr);
     }
 
     const auto barrier = [&](VkImage image, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
@@ -563,26 +629,55 @@ bool VolumetricLight::record(VkCommandBuffer cmd, uint32_t frame, VkExtent2D ext
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
     // The blur.
-    barrier(blurred_[frame].image, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
+    barrier(blurred_[frame].image, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, 0,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, blurPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, baseLayout_, 0, 2, baseSets, 0, nullptr);
     vkCmdDispatch(cmd, gx, gy, 1);
     barrier(blurred_[frame].image, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
+    // The history (volumetric_light_temporal.comp.glsl). The one it writes
+    // was last read by the composite two frames ago and by the last frame's
+    // history pass; the one it reads was written by the last frame's, whose
+    // barrier made it readable here.
+    const VkPipelineStageFlags2 histReaders = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    barrier(history_[histWrite].image, histReaders, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_WRITE_BIT);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, temporalPipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, baseLayout_, 0, 2, baseSets, 0, nullptr);
+    vkCmdDispatch(cmd, gx, gy, 1);
+    barrier(history_[histWrite].image, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+            histReaders, VK_ACCESS_2_SHADER_READ_BIT);
+
+    historyWrite_ = histWrite;
+    historyValid_ = true;
+    prevViewProj_ = viewProj;
+    prevCamPos_ = in.cameraPos;
+    frameNumber_ = (frameNumber_ + 1u) % 1024u;
     drawThisFrame_[frame] = true;
     keepRect_[frame] = in.keepRect;
+    debugView_[frame] = in.debugView;
     return true;
 }
 
 void VolumetricLight::composite(VkCommandBuffer cmd, uint32_t frame) {
-    if (frame >= MAX_FRAMES || !drawThisFrame_[frame] || compositePipeline_ == VK_NULL_HANDLE) return;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_);
+    if (frame >= MAX_FRAMES || !drawThisFrame_[frame]) return;
+    const bool debug = debugView_[frame];
+    const VkPipeline pipeline = debug ? debugPipeline_ : compositePipeline_;
+    if (pipeline == VK_NULL_HANDLE) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositeLayout_, 0, 1, &compositeSets_[frame], 0,
                             nullptr);
-    vkCmdPushConstants(cmd, compositeLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4), &keepRect_[frame]);
+    const CompositePush push{.keepRect = keepRect_[frame],
+                             .mode = glm::vec4(debug ? 1.0f : 0.0f, volumetric_light::kDebugViewGain, 0.0f, 0.0f)};
+    vkCmdPushConstants(cmd, compositeLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
+bool VolumetricLight::debugViewDrawn(uint32_t frame) const {
+    return frame < MAX_FRAMES && drawThisFrame_[frame] && debugView_[frame];
 }
 
 void VolumetricLight::shutdown() {
@@ -604,7 +699,9 @@ void VolumetricLight::shutdown() {
     destroy(device, depthPipelineMs_);
     destroy(device, marchPipeline_);
     destroy(device, blurPipeline_);
+    destroy(device, temporalPipeline_);
     destroy(device, compositePipeline_);
+    destroy(device, debugPipeline_);
     destroy(device, baseLayout_);
     destroy(device, compositeLayout_);
     destroy(device, setLayout_);
