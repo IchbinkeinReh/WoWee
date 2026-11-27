@@ -2352,6 +2352,15 @@ public:
     spell_history::History::Cooldown petSpellCooldown(uint32_t spellId) const;
     /// 0x00809030: an item's, its use spell's as cast from it.
     spell_history::History::Cooldown itemCooldown(uint32_t itemId) const;
+    /// 0x005a86b0 -> 0x008090c0 for an item without a use spell of its own:
+    /// the copy the player wears (0x00754a20 with 0xa1, then 0x81 - the
+    /// equipment slots, one whose spell is there first), or the one with
+    /// `guid`, and the spell 0x00707c60 finds on it - the first of its
+    /// enchantments that is used (SpellItemEnchantment type 7), 0 for none
+    /// or with the item's record not cached. Nothing when none is worn.
+    std::optional<uint32_t> wornItemEnchantUseSpell(uint32_t itemId, uint64_t guid = 0) const;
+    /// 0x00807980: a spell's cooldown as cast from the item `itemId`.
+    spell_history::History::Cooldown itemSpellCooldown(uint32_t spellId, uint32_t itemId) const;
 
     // Weather state (updated by SMSG_WEATHER)
     // weatherType: the Weather.dbc row id (the server's WeatherState)

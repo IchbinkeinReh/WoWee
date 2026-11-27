@@ -6290,6 +6290,9 @@ spell_history::History::Cooldown GameHandler::petSpellCooldown(uint32_t spellId)
 spell_history::History::Cooldown GameHandler::itemCooldown(uint32_t itemId) const {
     return spellHandler_ ? spellHandler_->itemCooldown(itemId) : spell_history::History::Cooldown{};
 }
+spell_history::History::Cooldown GameHandler::itemSpellCooldown(uint32_t spellId, uint32_t itemId) const {
+    return spellHandler_ ? spellHandler_->historyCooldown(spellId, itemId, false) : spell_history::History::Cooldown{};
+}
 bool GameHandler::showTalentWipeConfirmDialog() const {
     return spellHandler_ ? spellHandler_->showTalentWipeConfirmDialog() : false;
 }

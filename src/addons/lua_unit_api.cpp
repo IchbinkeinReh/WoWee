@@ -2803,15 +2803,16 @@ static int lua_GetUnitMaxHealthModifier(lua_State* L) {
 }
 
 /// GetInventoryItemCooldown(unit, slot) → start, duration, enable
-/// (0x005e7e60): the player's item there, with a use spell, as that spell
-/// cast from it (0x008090c0); else 0, 0, 0.
+/// (0x005e7e60): the player's item there, its use spell or its used
+/// enchantment's as cast from it (0x008090c0), 0, 0, 1 with neither; an
+/// empty slot 0, 0, 0.
 static int lua_GetInventoryItemCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (gh && slot >= 1 && slot <= 19) {
         const auto& sl = gh->getInventory().getEquipSlot(
             static_cast<game::EquipSlot>(slot - 1));
-        if (!sl.empty()) return pushItemCooldown(L, gh, sl.item.itemId);
+        if (!sl.empty()) return pushItemCooldown(L, gh, sl.item.itemId, sl.item.guid);
     }
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 0);

@@ -181,6 +181,37 @@ std::pair<std::string, uint32_t> GameHandler::lockCursor(const GameObject& go,
     return {dbc->getString(static_cast<uint32_t>(row), kCursorNameField), lock->index[0]};
 }
 
+std::optional<uint32_t> GameHandler::wornItemEnchantUseSpell(uint32_t itemId, uint64_t guid) const {
+    if (itemId == 0) return std::nullopt;
+    // 0x00707c60(0) on a copy: with the record not cached, 0; else its own
+    // use spell (the callers have none) and then its enchantments' type 7.
+    const ItemQueryResponseData* info = getItemInfo(itemId);
+    const auto& useSpells = enchantUseSpells(services_.assetManager);
+    const auto spellOf = [&](uint64_t g) -> uint32_t {
+        if (!info || !info->valid) return 0;
+        const auto online = onlineItems_.find(g);
+        if (online == onlineItems_.end()) return 0;
+        for (const uint32_t enchant : online->second.enchantIds) {
+            if (const auto it = useSpells.find(enchant); enchant != 0 && it != useSpells.end() && it->second != 0)
+                return it->second;
+        }
+        return 0;
+    };
+    // 0x00754a20 with 0xa1, then 0x81: flag 1 is the equipment slots 0-18
+    // alone (0x00753a50); 0x20 keeps the first pass to a copy with a spell.
+    const Inventory& inv = getInventory();
+    std::optional<uint32_t> any;
+    for (int e = 0; e < 19; ++e) {
+        const auto& sl = inv.getEquipSlot(static_cast<EquipSlot>(e));
+        if (sl.empty() || sl.item.itemId != itemId) continue;
+        if (guid != 0 && sl.item.guid != guid) continue;
+        const uint32_t spell = spellOf(sl.item.guid);
+        if (spell != 0) return spell;
+        if (!any) any = 0u;
+    }
+    return any;
+}
+
 std::optional<GameHandler::CarriedItem> GameHandler::findCarriedItem(uint32_t itemId) const {
     // 0x00754a20: the item anywhere the player carries it.
     const Inventory& inv = getInventory();
