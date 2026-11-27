@@ -14,6 +14,7 @@
 #include <zlib.h>
 
 #include "pipeline/mpq_archive_set.hpp"
+#include "pipeline/background_warm.hpp"
 #include "pipeline/no_wait_reads.hpp"
 
 using wowee::pipeline::MpqArchiveSet;
@@ -545,6 +546,61 @@ TEST_CASE("NoWaitReads on a local install reads every clip at the first ask", "[
     CHECK(reads.ready(paths, [&](const std::string& p) { return set.read(p); }));
     CHECK(reads.take("a\\crc.bin") == pattern(10000));
     CHECK(reads.take("a\\nothere.wav").empty());
+}
+
+TEST_CASE("Streaming: files warmed in the background read on the main thread without waiting",
+          "[mpq][stream][nowait][warm]") {
+    // A table first opened in play (AssetManager::warmDbcsInBackground): read
+    // once on a thread of its own, early, its chunks are on the disk, and the
+    // later read on the main thread - which cannot be put off, two hundred
+    // places expect a DBC at once - is a disk read, not a wait for the server.
+    namespace sw = wowee::pipeline::stream_wait;
+    using Clock = std::chrono::steady_clock;
+    TempData remote;
+    {
+        MpqArchiveSet local;
+        REQUIRE(local.open(remote.root.string()));
+        CHECK_FALSE(local.streamed());   // nothing to warm on a local install
+    }
+    const fs::path mirror = remote.root.parent_path() / (remote.root.filename().string() + "_warmmirror");
+    std::error_code ec;
+    fs::remove_all(mirror, ec);
+    {
+        StreamedCopy copy(remote.root, mirror, {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"},
+                          512, 0, 150);
+        MpqArchiveSet set;
+        REQUIRE(set.open(mirror.string()));
+        CHECK(set.streamed());
+        std::vector<std::string> listed;
+        wowee::pipeline::BackgroundWarm warm;
+        warm.start([&]() { listed = set.list("a\\"); return listed; },
+                   [&](const std::string& p) { (void)set.read(p); });
+        const auto start = Clock::now();
+        while (!warm.done() && std::chrono::duration<double>(Clock::now() - start).count() < 30.0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        REQUIRE(warm.done());
+        REQUIRE(listed.size() == 3);   // stored, zipped, crc - the deleted one is not there
+        CHECK(warm.warmed() == listed.size());
+        for (const std::string& p : listed) {
+            const auto t = Clock::now();
+            sw::NoWait noWait;
+            const auto data = set.read(p);
+            CHECK_FALSE(noWait.deferred());   // all on the disk now
+            CHECK_FALSE(data.empty());
+            CHECK(std::chrono::duration<double, std::milli>(Clock::now() - t).count() < 100.0);
+        }
+        CHECK(set.read("a\\crc.bin") == pattern(10000));
+
+        // Cut short: stop() ends the thread without reading the rest.
+        wowee::pipeline::BackgroundWarm cut;
+        cut.start([&]() { return std::vector<std::string>(1000, "a\\nothere.bin"); },
+                  [](const std::string&) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); });
+        cut.stop();
+        CHECK(cut.warmed() < 1000);
+        set.close();
+    }
+    fs::remove_all(mirror, ec);
 }
 
 TEST_CASE("Streaming past the disk limit: what is held in memory reads through the archives",

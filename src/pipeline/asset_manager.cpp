@@ -189,6 +189,8 @@ void AssetManager::shutdown() {
 
     LOG_INFO("Shutting down asset manager");
 
+    dbcWarm_.stop();
+
     if (fileCacheHits + fileCacheMisses > 0) {
         float hitRate = static_cast<float>(fileCacheHits) / (fileCacheHits + fileCacheMisses) * 100.0f;
         LOG_INFO("File cache stats: ", fileCacheHits, " hits, ", fileCacheMisses, " misses (",
@@ -824,6 +826,30 @@ BLPImage AssetManager::loadTextureNoWait(const std::string& path, bool keepCompr
     BLPImage image = loadTexture(path, keepCompressed);
     pending = !image.isValid() && noWait.deferred();
     return image;
+}
+
+void AssetManager::warmDbcsInBackground() {
+    if (!initialized || !mpq_ || !mpq_->streamed()) return;
+    // The tables already open stay open (loadDBC keeps them); the rest are
+    // named by the archives' listfiles, which the thread reads first. Their
+    // bytes come straight from the archives, past the file cache: nothing
+    // here is kept in memory, the stream's chunk cache holds them.
+    std::unordered_set<std::string> open;
+    {
+        std::shared_lock<std::shared_mutex> lock(cacheMutex);
+        for (const auto& [name, dbc] : dbcCache) open.insert(normalizePath("DBFilesClient\\" + name));
+    }
+    const MpqArchiveSet* set = mpq_.get();
+    dbcWarm_.start(
+        [set, open = std::move(open)]() {
+            std::vector<std::string> paths;
+            for (std::string& p : set->list("dbfilesclient\\")) {
+                if (!open.count(p)) paths.push_back(std::move(p));
+            }
+            LOG_INFO("STREAM: reading ", paths.size(), " DBCs not opened yet in the background");
+            return paths;
+        },
+        [set](const std::string& path) { (void)set->read(path); });
 }
 
 std::vector<std::string> AssetManager::listFiles(const std::string& prefix) const {

@@ -572,6 +572,13 @@ MpqArchiveSet::Hit MpqArchiveSet::find(const std::string& name) const {
     return {};
 }
 
+bool MpqArchiveSet::streamed() const {
+    for (const auto& a : archives_) {
+        if (a->stream) return true;
+    }
+    return false;
+}
+
 bool MpqArchiveSet::contains(const std::string& normalizedPath) const {
     return find(normalizedPath).archive != nullptr;
 }

@@ -5531,6 +5531,9 @@ void GameHandler::preloadDBCCaches() const {
         // The rows the renderer walks for what a model lacks (0x00826350,
         // 0x007176f0).
         if (animDbc) rendering::anim::setAnimationData(rendering::anim::loadAnimationData(*animDbc));
+        // Streaming: the tables first opened in play read ahead in the
+        // background, so opening one is not a wait for the server.
+        am->warmDbcsInBackground();
     }
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

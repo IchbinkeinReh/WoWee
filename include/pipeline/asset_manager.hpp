@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pipeline/background_warm.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manifest.hpp"
@@ -203,6 +204,14 @@ public:
     /// since what holds one expects it to.
     void clearFileCache();
 
+    /// Streaming mode: every DBC this session has not opened yet read once on
+    /// a thread of its own (pipeline/background_warm.hpp), so that one first
+    /// opened in play - on the main thread, where two hundred places expect
+    /// it at once - is a disk read as on a local install, not a wait for the
+    /// server. The bytes are not kept; the stream's chunk cache holds them.
+    /// Nothing outside streaming. Started at world entry.
+    void warmDbcsInBackground();
+
 
     /**
      * Resolve a normalized WoW path to its on-disk location. Checks the
@@ -241,6 +250,8 @@ private:
     // a plain mutable: nothing orders against this and a torn count would be
     // a data race for a diagnostic.
     mutable std::atomic<uint64_t> baseFallbackHits_{0};
+
+    BackgroundWarm dbcWarm_;
 
     // (resolveFile moved to public - declaration above.)
 

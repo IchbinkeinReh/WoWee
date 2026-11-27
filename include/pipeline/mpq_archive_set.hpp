@@ -84,6 +84,9 @@ public:
     [[nodiscard]] const std::string& archiveDir() const { return archiveDir_; }
     [[nodiscard]] const std::string& locale() const { return locale_; }
     [[nodiscard]] size_t archiveCount() const { return archives_.size(); }
+    /// Whether any archive is a streamed copy filled from the server
+    /// (setRangeSource when it was opened) rather than all on disk.
+    [[nodiscard]] bool streamed() const;
 
     /// Whether the newest archive that names the file holds it (not a
     /// deletion marker).
