@@ -6,6 +6,7 @@
 #include "catch_amalgamated.hpp"
 #include "ui/text_wrap.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -385,14 +386,33 @@ TEST_CASE("a box as wide as its text shows it", "[text_wrap]") {
     CHECK_FALSE(stopped);
 }
 
-// 0x006c7b10 lays out no line for the breaks that end a text (V563).
+// 0x006c7b10 lays out no line after a text's last break; a break at the start
+// of a line is a blank line (V563, T444).
 TEST_CASE("trailing breaks that 0x006c7b10 does not lay out", "[text_wrap]") {
     using wowee::ui::trailingBreakLinesDropped;
     CHECK(trailingBreakLinesDropped("A") == 0);
     CHECK(trailingBreakLinesDropped("A\n") == 1);
-    CHECK(trailingBreakLinesDropped("A\n\n") == 2);
-    CHECK(trailingBreakLinesDropped("\nA\nB\n\n") == 2);
-    CHECK(trailingBreakLinesDropped("A\n\n\n") == 2);
-    CHECK(trailingBreakLinesDropped("\n") == 2);
+    CHECK(trailingBreakLinesDropped("A\n\n") == 1);
+    CHECK(trailingBreakLinesDropped("\nA\nB\n\n") == 1);
+    CHECK(trailingBreakLinesDropped("A\n\n\n") == 1);
+    CHECK(trailingBreakLinesDropped("\n") == 1);
     CHECK(trailingBreakLinesDropped("") == 0);
+}
+
+// T444: Grelin Weissbarts Tagebuch, page 1 21 lines, page 2 20, each set as
+// "\n"..text.."\n\n" into ItemTextPageText (font 15, 15 below the scroll
+// child's top) in the 355-high ItemTextScrollFrame. 12340 lays out 1 + n + 1
+// lines, so page 1 reaches 15 + 23 * 15 = 360 (range 5, 0x0096b4c0) and the
+// last line can be scrolled to, page 2 345 (range 0).
+TEST_CASE("a book page's scroll range from its laid-out lines (T444)", "[text_wrap]") {
+    using wowee::ui::trailingBreakLinesDropped;
+    const auto range = [](int textLines) {
+        std::string text = "\n";
+        for (int i = 0; i < textLines; ++i) text += i ? "\nline" : "line";
+        text += "\n\n";
+        const int laid = static_cast<int>(lines(text, 40.0f).size()) - trailingBreakLinesDropped(text);
+        return std::max(0, 15 + laid * 15 - 355);
+    };
+    CHECK(range(21) == 5);
+    CHECK(range(20) == 0);
 }

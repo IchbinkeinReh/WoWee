@@ -316,15 +316,16 @@ inline float justifyOffset(const char* justifyH, float boxWidth, float lineWidth
 }
 
 /// Lines wrapText makes at the end of a text that 0x006c7b10 does not lay
-/// out. Its loop stops when the line it just took ends the text (the next
-/// line would start at the terminator), and it drops a line with no glyphs
-/// whose break is the text's last character. wrapText opens a line after
-/// every '\n', so "A\n" is one line there and two here, "A\n\n" and "\n"
-/// one and none there, three and two here.
+/// out. A break at the start of a line is a blank line of its own (0x006bd5a0
+/// answers 3 for '\n' and the loop counts a line), a line that ends in a
+/// break takes the break with it (0x006c1d40 steps past it), and the loop
+/// stops when the next line would start at the terminator. So only the line
+/// wrapText opens after the text's last '\n' is not there: "A\n" is one line
+/// there, "A\n\n" two (A and a blank), "\n" one. ItemTextFrame's
+/// "\n"..text.."\n\n" is the text's lines with a blank one above and below
+/// (T444; V563's two dropped lines took page 1's scroll range to 0).
 inline int trailingBreakLinesDropped(std::string_view text) {
-    if (text.empty() || text.back() != '\n') return 0;
-    const bool emptyBefore = text.size() == 1 || text[text.size() - 2] == '\n';
-    return emptyBefore ? 2 : 1;
+    return !text.empty() && text.back() == '\n' ? 1 : 0;
 }
 
 }  // namespace wowee::ui

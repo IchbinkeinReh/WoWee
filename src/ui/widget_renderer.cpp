@@ -940,9 +940,9 @@ void WidgetRenderer::sizeSimpleHtmlWidget(WidgetTree& tree, Widget* w) {
             const float size = interfaceFontSize(w->fontHeight) * ws;
             height = drawMarkupText(nullptr, font, size, w->effScale, ImVec2(0.0f, 0.0f), 0u, 1.0f,
                                     w->text, boxW > size ? boxW : 0.0f, false, w->justifyH.c_str());
-            // ItemTextFrame sets "\n"..text.."\n\n"; 0x006c7b10 lays no line
-            // out for the breaks that end it (V563: the page that fits had a
-            // scroll range of 5).
+            // ItemTextFrame sets "\n"..text.."\n\n"; 0x006c7b10 lays out no
+            // line after the last break, the one before it is a blank line:
+            // the page that fits has range 0, a longer one scrolls (V563, T444).
             height = std::max(0.0f, height - static_cast<float>(trailingBreakLinesDropped(w->text)) * size);
         }
         height /= s;
