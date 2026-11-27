@@ -2075,6 +2075,131 @@ TEST_CASE("a buff the spell marks for it is to be consolidated", "[replay][inter
     CHECK(ui.is("select(11, UnitAura('player', 'Power Word: Shield')) == 17"));
 }
 
+// Found by AD in code: UnitAura's eighth value is the caster's unit token
+// as 0x0060b420 finds it - also for a caster that is a totem or guardian of
+// someone with a token (CREATEDBY / CHARMEDBY), here the player's own totem
+// -> "player"; WoWee knew player/target/focus/pet only, so the player's
+// totem buffs read nil. An aura not found answers no value (0x006147c0
+// returns 0; WoWee pushed a nil).
+TEST_CASE("an aura's caster answers by its token or its maker's (0x0060b420)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    auto& gh = s.handler();
+    constexpr uint64_t kTotem = 0xF130000F5A000001ull, kWolf = 0xF130000299000002ull, kStray = 0xF130000299000003ull;
+    const uint32_t lo = static_cast<uint32_t>(Session::kPlayerGuid), hi = static_cast<uint32_t>(Session::kPlayerGuid >> 32);
+    s.receive(UpdateObject().create(kTotem, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 5}, {UF::UNIT_FIELD_MAXHEALTH, 5},
+                                     {UF::UNIT_FIELD_CREATEDBY, lo}}));
+    REQUIRE(hi == 0);   // the maker's guid is its low half alone
+    s.receive(UpdateObject().create(kWolf, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 5}, {UF::UNIT_FIELD_MAXHEALTH, 5}}));
+    s.receive(UpdateObject().create(kStray, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 5}, {UF::UNIT_FIELD_MAXHEALTH, 5}}));
+    constexpr uint32_t kStrength = 8076, kHowl = 1002, kBite = 1003;
+    gh.spellNameCacheRef()[kStrength].name = "Strength of Earth";
+    gh.spellNameCacheRef()[kHowl].name = "Howl";
+    gh.spellNameCacheRef()[kBite].name = "Bite";
+    Interface ui(s);
+    gh.setTarget(kWolf);
+    const auto aura = [&](uint8_t slot, uint32_t spell, uint64_t caster) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt8(slot);
+        p.writeUInt32(spell);
+        p.writeUInt8(0x10 | 0x01);   // no 0x08: the caster's guid follows
+        p.writeUInt8(80);
+        p.writeUInt8(0);
+        p.writePackedGuid(caster);
+        s.receive(p);
+    };
+    aura(0, kStrength, kTotem);
+    aura(1, kHowl, kWolf);
+    aura(2, kBite, kStray);
+    CHECK(ui.is("select(8, UnitAura('player', 'Strength of Earth')) == 'player'"));
+    CHECK(ui.is("select(8, UnitAura('player', 'Howl')) == 'target'"));
+    CHECK(ui.is("select(8, UnitAura('player', 'Bite')) == nil"));
+    CHECK(ui.is("select('#', UnitAura('player', 'Nothing')) == 0"));
+    CHECK(ui.is("select('#', UnitBuff('player', 9)) == 0"));
+}
+
+// Found by AD in code: CancelUnitBuff (0x00804220) finds the aura as UnitAura
+// does - index or name and rank, and the filter - and cancels only one whose
+// aura flags say cancelable (0x10) or of a channelled spell (AttributesEx
+// 0x4). WoWee cancelled any buff and ignored rank and filter.
+TEST_CASE("CancelUnitBuff takes only a cancelable aura, by the filter (0x00804220)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    s.setConnected(true);
+    auto& gh = s.handler();
+    constexpr uint32_t kKings = 20217, kFixed = 20218, kWeak = 6788, kDrain = 5138;
+    gh.spellNameCacheRef()[kKings].name = "Blessing of Kings";
+    gh.spellNameCacheRef()[kFixed].name = "Fixed";
+    gh.spellNameCacheRef()[kWeak].name = "Weakened Soul";
+    gh.spellNameCacheRef()[kDrain].name = "Drain Mana";
+    gh.spellNameCacheRef()[kDrain].attrEx = 0x4;   // channelled
+    Interface ui(s);
+    const auto aura = [&](uint8_t slot, uint32_t spell, uint8_t flags) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt8(slot);
+        p.writeUInt32(spell);
+        p.writeUInt8(flags);
+        p.writeUInt8(80);
+        p.writeUInt8(0);
+        s.receive(p);
+    };
+    aura(0, kFixed, 0x08 | 0x01);          // not cancelable
+    aura(1, kKings, 0x10 | 0x08 | 0x01);
+    aura(2, kWeak, 0x80 | 0x08 | 0x01);    // a debuff, not cancelable
+    aura(3, kDrain, 0x08 | 0x01);          // channelled
+    const auto cancels = [&] { return s.sent().of(Opcode::CMSG_CANCEL_AURA).size(); };
+    const size_t before = cancels();
+    ui.run("CancelUnitBuff('player', 'Fixed')");                     // not cancelable
+    ui.run("CancelUnitBuff('player', 'Weakened Soul', nil, 'HARMFUL')");
+    ui.run("CancelUnitBuff('player', 'Blessing of Kings', 'Rank 9')");  // the rank does not match
+    ui.run("CancelUnitBuff('player', 'Weakened Soul')");             // HELPFUL by default: none
+    CHECK(cancels() == before);
+    ui.run("CancelUnitBuff('player', 'Drain Mana')");                // channelled
+    REQUIRE(cancels() == before + 1);
+    CHECK(s.sent().of(Opcode::CMSG_CANCEL_AURA).back().readUInt32() == kDrain);
+    ui.run("CancelUnitBuff('player', 'blessing of kings')");
+    REQUIRE(cancels() == before + 2);
+    CHECK(s.sent().of(Opcode::CMSG_CANCEL_AURA).back().readUInt32() == kKings);
+}
+
+// Found by AD in code: GetBindingKey (0x0055e9b0) pushes the keys bound to
+// the command and nothing else - no value for an unbound one, one for a
+// command with one key; WoWee always answered a pair padded with nils.
+TEST_CASE("GetBindingKey answers only the keys there are (0x0055e9b0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select('#', GetBindingKey('AD_NOTHING_BOUND')) == 0"));
+    ui.run("SetBinding('CTRL-F9', 'TOGGLEWORLDSTATESCORES')");
+    CHECK(ui.is("GetBindingKey('TOGGLEWORLDSTATESCORES') == 'CTRL-F9'"));
+    CHECK(ui.is("select('#', GetBindingKey('TOGGLEWORLDSTATESCORES')) == 1"));
+}
+
+// Found by AD in code (AC's note): GetFriendInfo (0x006b4130) and
+// GetIgnoreName (0x006b4620) round the index to nearest (fistp), and a
+// friend's name is found without case (0x006b3570 -> 0x0076ea40); WoWee
+// truncated the index and compared the name exactly.
+TEST_CASE("friend and ignore indices round, friend names match without case", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    auto& gh = s.handler();
+    wowee::game::ContactEntry a, b, c;
+    a.guid = 0x101; a.name = "Anna"; a.flags = 0x1; a.level = 10;
+    b.guid = 0x102; b.name = "Bert"; b.flags = 0x1; b.level = 20;
+    c.guid = 0x103; c.name = "Cleo"; c.flags = 0x2;
+    gh.contactsRef() = {a, b, c};
+    Interface ui(s);
+    CHECK(ui.is("GetFriendInfo(1.6) == 'Bert'"));
+    CHECK(ui.is("GetFriendInfo(1.2) == 'Anna'"));
+    CHECK(ui.is("select(2, GetFriendInfo('bERT')) == 20"));
+    CHECK(ui.is("GetIgnoreName(0.7) == 'Cleo'"));
+}
+
 // UnitAura's ninth value (0x0053d680): a buff on a unit the player may attack
 // that the player's spellsteal could take. The dispel types come from the
 // last spell learned whose first effect is STEAL_BENEFICIAL_BUFF (126) at

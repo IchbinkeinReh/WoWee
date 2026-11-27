@@ -5032,6 +5032,8 @@ public:
     std::optional<uint32_t> moveSplineFlags(uint64_t guid);
     /// The unit's kept move spline's flags, 0x400 once run out (+0xbc).
     std::optional<uint32_t> keptMoveSplineFlags(uint64_t guid) const;
+    /// A spell's AttributesEx (Spell.dbc +0x14).
+    [[nodiscard]] uint32_t getSpellAttributesEx(uint32_t spellId) const;
     /// A spell's AttributesEx2.
     [[nodiscard]] uint32_t getSpellAttributesEx2(uint32_t spellId) const;
     /// A spell's AttributesEx7 (column 11, +0x2c).

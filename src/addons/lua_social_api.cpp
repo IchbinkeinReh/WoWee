@@ -482,15 +482,22 @@ static int lua_GetNumFriends(lua_State* L) {
 static int lua_GetFriendInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const bool byName = lua_isstring(L, 1) && !lua_isnumber(L, 1);
-    const std::string wanted = byName ? lua_tostring(L, 1) : std::string();
-    const int index = byName ? 0 : static_cast<int>(luaL_optnumber(L, 1, 0));
+    std::string wanted = byName ? lua_tostring(L, 1) : std::string();
+    toLowerInPlace(wanted);
+    // 0x006b4130: the index rounded as the FPU rounds (fistp, to nearest),
+    // a name compared without case (0x006b3570 -> 0x0076ea40).
+    const int index = byName ? 0 : static_cast<int>(std::lrint(luaL_optnumber(L, 1, 0)));
     if (!gh || (!byName && index < 1)) {
         return luaReturnNil(L);
     }
+    const auto sameName = [&wanted](std::string name) {
+        toLowerInPlace(name);
+        return name == wanted;
+    };
     int found = 0;
     for (const auto& c : gh->getContacts()) {
         if (!c.isFriend()) continue;
-        if (byName ? (c.name == wanted) : (++found == index)) {
+        if (byName ? sameName(c.name) : (++found == index)) {
             lua_pushstring(L, c.name.c_str());      // 1: name
             lua_pushnumber(L, c.level);              // 2: level
 
@@ -995,7 +1002,8 @@ static int lua_GetNumIgnores(lua_State* L) {
 /// different mask, right down to their tails, so this is one function and the
 /// two bindings name the mask.
 static int pushContactNameAt(lua_State* L, uint32_t listMask) {
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    // Rounded to nearest as 0x006b4620 reads it (fistp).
+    const int index = static_cast<int>(std::lrint(luaL_optnumber(L, 1, 0)));
     const auto rows = contactRows(getGameHandler(L), listMask);
     if (index >= 1 && index <= static_cast<int>(rows.size()) && !rows[index - 1]->name.empty()) {
         const auto& name = rows[index - 1]->name;

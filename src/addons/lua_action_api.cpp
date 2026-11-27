@@ -4126,17 +4126,23 @@ static int lua_GetBindingKey(lua_State* L) {
     seedBindingDefaults();
     const std::string command = luaL_checkstring(L, 1);
     auto it = bindingKeys().find(command);
+    // 0x0055e9b0 pushes each key bound to the command (0x0055e750 by index
+    // until none) and nothing else: no value at all for an unbound command,
+    // one for a command with one key - not a pair padded with nils.
     if (auto live = liveKeyFor(command); live && (it == bindingKeys().end() ||
                                                   (it->second[0] != *live && it->second[1] != *live))) {
         lua_pushstring(L, live->c_str());
-        lua_pushnil(L);
-        return 2;
+        return 1;
     }
-    if (it == bindingKeys().end()) { lua_pushnil(L); lua_pushnil(L); return 2; }
+    if (it == bindingKeys().end()) return 0;
+    if (!lua_checkstack(L, static_cast<int>(it->second.size()))) return 0;
+    int pushed = 0;
     for (const std::string& key : it->second) {
-        if (key.empty()) lua_pushnil(L); else lua_pushstring(L, key.c_str());
+        if (key.empty()) continue;
+        lua_pushstring(L, key.c_str());
+        ++pushed;
     }
-    return 2;
+    return pushed;
 }
 
 // GetBindingAction(key[, checkOverride]) → command, or "" for a key that

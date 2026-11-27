@@ -1202,6 +1202,13 @@ std::optional<uint32_t> GameHandler::keptMoveSplineFlags(uint64_t guid) const {
     return movementHandler_ ? movementHandler_->keptMoveSplineFlags(guid) : std::nullopt;
 }
 
+uint32_t GameHandler::getSpellAttributesEx(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    return it != spellNameCache_.end() ? it->second.attrEx : 0u;
+}
+
 uint32_t GameHandler::getSpellAttributesEx2(uint32_t spellId) const {
     if (spellId == 0) return 0;
     loadSpellNameCache();
