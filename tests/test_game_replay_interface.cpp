@@ -3454,6 +3454,11 @@ TEST_CASE("GetTalentInfo answers no talent as 12340 does (0x005c7800)", "[replay
     CHECK(ui.is("select('#', GetTalentInfo(99, 99)) == 10"));
     CHECK(ui.is("not pcall(GetTalentInfo, 'x', 1)"));
     CHECK(ui.is("GetUnspentTalentPoints(true) == 0"));
+    // T455: 0x005c9590 wants three numbers.
+    CHECK(ui.is("not pcall(AddPreviewTalentPoints, 1, 1)"));
+    CHECK(ui.is("select(2, pcall(AddPreviewTalentPoints, 'x', 1, 1)) == "
+                "'Usage: AddPreviewTalentPoints(tabIndex, talentIndex, points[, isPet[, groupIndex]])'"));
+    CHECK(ui.is("pcall(AddPreviewTalentPoints, 1, 1, 1)"));
 }
 
 // T381: SetQuestRewardSpell (0x006263e0) describes the quest frame's reward

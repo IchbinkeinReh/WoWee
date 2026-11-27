@@ -2895,7 +2895,7 @@ TalentTooltipFacts talentLinkFacts(game::GameHandler* gh, uint32_t talentId, int
 }
 
 TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int talentIndex, bool inspect,
-                                      bool pet, int group, bool preview) {
+                                      bool pet, int group, bool preview, int askDelta) {
     TalentTooltipFacts f;
     if (!gh) return f;
     const auto* t = pet ? petTalentAt(gh, inspect, tabIndex, talentIndex)
@@ -2962,17 +2962,11 @@ TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int t
     // 0x00622800: only in the group the player stands in, never another's.
     const bool activeRecord = pet ? (!inspect && hasRecord)
                                   : (!inspect && group == static_cast<int>(gh->getActiveTalentSpec()));
-    // Learnable as the tooltip has it: a talent with a rank shown always is.
-    if (!activeRecord || (f.shownIdx < 0 && !f.learnable)) return f;
     int stagedTotal = 0;
     for (const auto& [id, n] : pet ? petPreviewPoints() : previewPoints()) { (void)id; stagedTotal += n; }
     const int unspent = pet ? static_cast<int>(gh->getPetUnspentTalentPoints())
                             : static_cast<int>(gh->getUnspentTalentPoints(gh->getActiveTalentSpec()));
-    if (!preview) {
-        f.learnHint = unspent != 0 && f.learnedIdx != f.maxIdx;
-        return f;
-    }
-    // 0x005c73d0 for a step of one: the tier reached and every
+    // 0x005c73d0 for a step of `delta`: the tier reached and every
     // prerequisite at its rank, staged ranks counted; adding wants a point
     // not yet staged and a rank left, taking back a staged rank that
     // nothing staged above it leans on.
@@ -2997,10 +2991,19 @@ TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int t
         int below = 0;
         for (size_t tier = 0; tier < tierSum.size(); ++tier) {
             if (tier > t->row && tierSum[tier] > 0 && below < perTier * static_cast<int>(tier)) return false;
-            below += tierSum[tier] - (tier == t->row ? 1 : 0);
+            below += tierSum[tier] + (tier == t->row ? next - now : 0);
         }
         return true;
     };
+    // AddPreviewTalentPoints (0x005c9590 -> 0x005c94f0 -> 0x005c73d0): the
+    // active record's preview only.
+    if (askDelta != 0 && activeRecord && preview && hasRecord) f.askAllowed = stepAllowed(askDelta);
+    // Learnable as the tooltip has it: a talent with a rank shown always is.
+    if (!activeRecord || (f.shownIdx < 0 && !f.learnable)) return f;
+    if (!preview) {
+        f.learnHint = unspent != 0 && f.learnedIdx != f.maxIdx;
+        return f;
+    }
     f.addHint = stepAllowed(1);
     f.removeHint = stepAllowed(-1);
     return f;
@@ -3739,15 +3742,22 @@ static void firePreviewChanged(game::GameHandler* gh, bool pet, int talent, int 
 
 // AddPreviewTalentPoints(tabIndex, talentIndex, delta, pet, group)
 static int lua_AddPreviewTalentPoints(lua_State* L) {
+    // 0x005c9590: three numbers or the usage line, each truncated (0x0084e070).
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: AddPreviewTalentPoints(tabIndex, talentIndex, points[, isPet[, groupIndex]])");
     auto* gh = getGameHandler(L);
-    const int tab   = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
-    const int delta = static_cast<int>(luaL_optnumber(L, 3, 1));
+    const int tab   = static_cast<int>(lua_tonumber(L, 1));
+    const int index = static_cast<int>(lua_tonumber(L, 2));
+    const int delta = static_cast<int>(lua_tonumber(L, 3));
+    if (!gh || delta == 0) return 0;
     // The pet's tree stages in its own record, bounded by its talent's cap and
     // the pet's own unspent points; PREVIEW_PET_TALENT_POINTS_CHANGED (0x275).
     if (wantsPetTalents(L, 4)) {
         const auto* talent = petTalentAt(gh, false, tab, index);
         if (!talent) return 0;
+        // 0x005c73d0 with 3 points a tier: the tier open, the prerequisites
+        // met, nothing above leaning on what is taken back.
+        if (!talentTooltipFacts(gh, tab, index, false, true, 0, true, delta).askAllowed) return 0;
         const int before = petPreviewTotal();
         int& staged = petPreviewPoints()[talent->talentId];
         int upper = static_cast<int>(talent->maxRank) - gh->getPetTalentRank(talent->talentId);
@@ -3774,7 +3784,14 @@ static int lua_AddPreviewTalentPoints(lua_State* L) {
         return 0;
     }
     const uint32_t id = resolveTalentId(gh, tab, index);
-    if (!gh || id == 0) return 0;
+    if (id == 0) return 0;
+    // 0x005c73d0: 5 points a tier spent or staged in the tab, every
+    // prerequisite at its rank (learned or staged), and a step back refused
+    // while a talent or a tier above still needs it. Only the ranks and the
+    // pool were bounded, so a locked tier took points (T455).
+    if (!talentTooltipFacts(gh, tab, index, false, false, static_cast<int>(gh->getActiveTalentSpec()), true, delta)
+             .askAllowed)
+        return 0;
 
     const uint8_t have = gh->getTalentRank(id);
     uint8_t maxRank = 0;

@@ -1645,10 +1645,14 @@ struct TalentTooltipFacts {
     bool learnHint = false;
     bool addHint = false;
     bool removeHint = false;
+    /// 0x005c73d0 asked for `askDelta` points in the active record's
+    /// preview: whether it stages anything.
+    bool askAllowed = false;
 };
-/// SetTalent's arguments (0x0062f740), group zero-based.
+/// SetTalent's arguments (0x0062f740), group zero-based. `askDelta` != 0 also
+/// answers askAllowed for that many points (AddPreviewTalentPoints).
 TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int talentIndex, bool inspect,
-                                      bool pet, int group, bool preview);
+                                      bool pet, int group, bool preview, int askDelta = 0);
 /// A talent link's (0x0062dae0 -> 0x00626e20): of no record, at the rank it names - the
 /// index of the rank's spell, -1 for none.
 TalentTooltipFacts talentLinkFacts(game::GameHandler* gh, uint32_t talentId, int rank);
