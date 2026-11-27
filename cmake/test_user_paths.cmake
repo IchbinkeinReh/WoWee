@@ -6,6 +6,11 @@
 #   MODE=check  record them again; any file added, removed or changed fails
 #               the run and is named. Nothing in ROOTS is ever written.
 
+# Run with cmake -P, where no project sets the policies: without this a CMake
+# 3.x leaves CMP0057 unset and `IN_LIST` below is "Unknown arguments" (the
+# Linux CI); CMake 4 only has the new behaviour, which hid it on Windows.
+cmake_minimum_required(VERSION 3.15)
+
 string(REPLACE "|" ";" _roots "${ROOTS}")
 set(_snapshot "${SANDBOX}.user_roots.txt")
 
