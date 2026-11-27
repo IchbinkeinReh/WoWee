@@ -146,6 +146,21 @@ void hover(ToolContext& context, const json& args, Script& script) {
     if (args.contains("name")) {
         const std::string name = args["name"].get<std::string>();
         where = [&context, name, self] { return clickPointNow(context, name, *self); };
+        // A frame the pointer is on already: off it first, so it is left and
+        // entered again (OnLeave, then OnEnter) as a hand moving away and back
+        // does - moved onto the same spot, nothing would run.
+        script.then([&context, name](Script&) {
+            const auto* w = widgetNamed(context, name);
+            if (!w || !w->visible || !context.input.pointerHeld()) return Script::Step::Next;
+            const glm::vec4 r = widgetRect(context, *w);
+            const glm::vec2 p = context.input.pointer();
+            if (p.x < r.x || p.y < r.y || p.x > r.x + r.z || p.y > r.y + r.w) return Script::Step::Next;
+            glm::vec2 off(r.x - 4.0f, r.y - 4.0f);
+            if (off.x < 0.0f || off.y < 0.0f) off = glm::vec2(r.x + r.z + 4.0f, r.y + r.w + 4.0f);
+            context.input.moveTo(off);
+            return Script::Step::Next;
+        });
+        script.then(Script::frames(3));
     } else if (args.contains("guid")) {
         const uint64_t guid = guidFromText(args["guid"].get<std::string>());
         where = [&context, guid] { return clickPointOf(context, guid); };

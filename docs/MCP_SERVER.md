@@ -71,7 +71,7 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 | `inventory`, `spellbook`, `action_bars`, `quest_log`, `character`, `map` | asked of the interface's own functions |
 | `log`, `events`, `chat`, `combat_log` | since a cursor: pass the `next` of the last answer as `since` |
 | `sounds` | the sounds going on, and those begun in the last seconds: file, place, volume, whether heard |
-| `screenshot` | the frame, a part of it or one window, as JPEG or PNG |
+| `screenshot` | the frame, a part of it or one window, as JPEG or PNG; with `boxes` the mean colour and luma of each box under `means` (`picture=false`: the means alone) |
 | `wait` | for an event, a window, a text, a chat line or a state, or for a time |
 | `server_info` | what the server may do and what it has refused |
 | `rt_lights` | the ray traced point lights near the camera as the last frame had them: kind, model, place, final strength, reach, a fire's visible flame share, kept by the light budget or merged into its source's one light; the eye adaptation's exposure |
@@ -84,6 +84,7 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 | `target`, `interact` | a click on an entity in the world, where the client's own picker finds it - turned to, and looked at from elsewhere, where it is out of the window; `interact` walks up to it first (a fishing bobber it clicks where it floats). `target` with `which` presses the key bound to it, or types the slash command where none is |
 | `click_ui`, `hover`, `mouse` | the mouse on a frame by name, or by pixels. A button of a dialog (StaticPopup1-4) is pressed only with `popup` naming the dialog's `which` (`state` lists it under popups), and not when another dialog shows |
 | `key`, `binding`, `type_text`, `slash` | a key, the key a command is bound to, text into an edit box, a slash command through the chat box |
+| `key_down`, `key_up` | a key pressed and left held (the call answers at once), and let go of again; `stop` and a failed call let go of every held key too |
 | `use_action`, `use_item` | an action button by its key or a click, an item in its bag |
 | `record` | the client's own recording, as `/record` makes it: start, stop, status; the answer has the file |
 | `gm` | a game master's command for the own character, whispered to itself |

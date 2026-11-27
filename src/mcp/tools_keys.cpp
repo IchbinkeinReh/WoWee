@@ -81,6 +81,58 @@ void key(ToolContext& context, const json& args, Script& script) {
     script.then(finishWith(context, after, [&context] { return windowsNow(context); }));
 }
 
+/// A key pressed and left down: the call answers at once, the key stays held
+/// (a movement key walks) until key_up, `stop`, or a call that fails.
+void keyDown(ToolContext& context, const json& args, Script& script) {
+    const Aftermath after(context);
+    SDL_Scancode code = SDL_SCANCODE_UNKNOWN;
+    SDL_Keymod mods = SDL_KMOD_NONE;
+    const std::string chord = args["key"].get<std::string>();
+    if (screenIsTheUsers(context)) return failNow(script, "no keys on the screen " + clientState(context));
+    if (!parseChord(chord, code, mods)) return failNow(script, "no such key: " + chord);
+    if (code == SDL_SCANCODE_F4 && (mods & SDL_KMOD_LALT)) return failNow(script, "the quit tool ends the client");
+    if (context.input.keyHeld(code)) return failNow(script, chord + " is held already");
+    script.then([&context, code, mods](Script&) {
+        if (mods != SDL_KMOD_NONE) context.input.modifiers(mods, true);
+        context.input.keyDown(code);
+        return Script::Step::Next;
+    });
+    // Seen down in a frame before the answer.
+    script.then(Script::frames(2));
+    script.then(Script::seconds(args.value("settle", 0.0)));
+    script.then(finishWith(context, after, [&context, chord] {
+        json out = windowsNow(context);
+        out["held"] = chord;
+        return out;
+    }));
+}
+
+/// A key key_down left held, let go of (its modifiers a frame after it).
+void keyUp(ToolContext& context, const json& args, Script& script) {
+    const Aftermath after(context);
+    SDL_Scancode code = SDL_SCANCODE_UNKNOWN;
+    SDL_Keymod mods = SDL_KMOD_NONE;
+    const std::string chord = args["key"].get<std::string>();
+    if (!parseChord(chord, code, mods)) return failNow(script, "no such key: " + chord);
+    if (!context.input.keyHeld(code)) return failNow(script, chord + " is not held");
+    script.then([&context, code](Script&) {
+        context.input.keyUp(code);
+        return Script::Step::Next;
+    });
+    script.then(Script::frames(1));
+    script.then([&context, mods](Script&) {
+        if (mods != SDL_KMOD_NONE) context.input.modifiers(mods, false);
+        return Script::Step::Next;
+    });
+    script.then(Script::frames(2));
+    script.then(Script::seconds(args.value("settle", 0.0)));
+    script.then(finishWith(context, after, [&context, chord] {
+        json out = windowsNow(context);
+        out["released"] = chord;
+        return out;
+    }));
+}
+
 void binding(ToolContext& context, const json& args, Script& script) {
     const Aftermath after(context);
     const std::string command = args["command"].get<std::string>();
@@ -427,6 +479,16 @@ void addKeyTools(Toolbox& box) {
                        key, 30.0, Tool::Where::Anywhere);
     k.patienceOf = [](const json& a) { return (a.value("seconds", 0.05) + 1.0) * a.value("times", 1) + 15.0; };
     box.push_back(std::move(k));
+    box.push_back(handsTool("key_down",
+                            "Press a key and leave it held; answers at once. key_up (or stop, or a call that fails) "
+                            "lets it go. Same names as key.",
+                            object({required("key", text("the key, with ALT-, CTRL-, SHIFT- before it", 32)),
+                                    optional("settle", number("seconds to wait before answering", 0, 10))}),
+                            keyDown, 15.0, Tool::Where::Anywhere));
+    box.push_back(handsTool("key_up", "Let go of a key that key_down holds.",
+                            object({required("key", text("the key as it was given to key_down", 32)),
+                                    optional("settle", number("seconds to wait before answering", 0, 10))}),
+                            keyUp, 15.0, Tool::Where::Anywhere));
     box.push_back(handsTool("binding",
                             "Press the key bound to a command: TOGGLEBACKPACK, OPENALLBAGS, TOGGLESPELLBOOK, "
                             "TOGGLEQUESTLOG, TOGGLECHARACTER0, TOGGLETALENTS, TOGGLEWORLDMAP, TOGGLEGAMEMENU, "

@@ -7474,7 +7474,7 @@ void Renderer::recordRtLighting() {
         frustum.extractFromMatrix(in.viewProj);
         // The lights near the camera before the budget, for the MCP
         // server's rt_lights (U24); matched with what is kept below.
-        constexpr float kLightDiagRadius = 60.0f;
+        constexpr float kLightDiagRadius = 120.0f;
         ++rtLightDiag_.frame;
         rtLightDiag_.eye = in.cameraPos;
         rtLightDiag_.range = kLightRange;

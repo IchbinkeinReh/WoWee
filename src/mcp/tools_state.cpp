@@ -344,7 +344,7 @@ void addStateTools(Toolbox& box) {
                            "share and glow-card pulse, and whether the light budget kept it (rank) or merged it into its source's one "
                            "light; with the eye adaptation's exposure. Empty without ray tracing.",
                            schema::object({schema::optional("radius",
-                                                            schema::number("yards round the camera, at most 60", 1, 60))}),
+                                                            schema::number("yards round the camera, at most 120", 1, 120))}),
                            rtLightsOf));
     box.push_back(lookTool("state",
                            "Overview of the client and the player: login / char select / in world / dead, whether a "
