@@ -102,57 +102,10 @@ static std::unordered_set<uint32_t> makeFallbackStateEmoteIds() {
     return {10, 12, 13, 26, 28, 64, 65, 68, 69, 173, 213, 214, 233, 234, 379, 383};
 }
 
-// Fills an EmotesTextData template. The English client writes "%s waves at
-// %s." and takes the arguments in order; other locales reorder them with
-// positional specifiers ("%1$s nickt %2$s zu."), which the plain scan left in
-// the line as written. 'sequential' feeds the bare %s, 'positional' is what
-// %N$s indexes (1 = sender, 2 = target); a slot with no name fills with nothing.
-static std::string fillEmoteTemplate(const std::string& text,
-                                     const std::vector<const std::string*>& sequential,
-                                     const std::vector<const std::string*>& positional) {
-    if (text.empty()) return text;
-    auto name = [](const std::vector<const std::string*>& v, size_t i) -> const std::string* {
-        return i < v.size() ? v[i] : nullptr;
-    };
-    std::string out;
-    out.reserve(text.size() + 16);
-    size_t next = 0;
-    for (size_t i = 0; i < text.size(); ++i) {
-        if (text[i] != '%' || i + 1 >= text.size()) {
-            out.push_back(text[i]);
-            continue;
-        }
-        const char c = text[i + 1];
-        if (c == '%') {
-            out.push_back('%');
-            ++i;
-        } else if (c == 's') {
-            if (const std::string* n = name(sequential, next++)) out += *n;
-            ++i;
-        } else if (std::isdigit(static_cast<unsigned char>(c))) {
-            size_t j = i + 1;
-            size_t index = 0;
-            while (j < text.size() && std::isdigit(static_cast<unsigned char>(text[j]))) {
-                index = index * 10 + static_cast<size_t>(text[j] - '0');
-                ++j;
-            }
-            if (j + 1 < text.size() && text[j] == '$' && text[j + 1] == 's' && index >= 1) {
-                if (const std::string* n = name(positional, index - 1)) out += *n;
-                i = j + 1;
-            } else {
-                out.push_back(text[i]);
-            }
-        } else {
-            out.push_back(text[i]);
-        }
-    }
-    return out;
-}
-
 static std::string replacePlaceholders(const std::string& text, const std::string* targetName) {
-    // The player's own line: the sender is "you" and is not in the text, so
-    // %2$s is the target and %1$s has no name to give.
-    return fillEmoteTemplate(text, {targetName}, {nullptr, targetName});
+    // The player's own line: the sender is "you" and is not in the text; the
+    // target is its one name (0x00503660).
+    return game::fillTextEmoteTemplate(text, {targetName});
 }
 
 // ── EmoteRegistry implementation ─────────────────────────────────────────────
@@ -259,9 +212,21 @@ void EmoteRegistry::loadFromDbc() {
         if (auto it = textData.find(othersTargetTextId); it != textData.end()) oTarget = it->second;
         if (auto it = textData.find(othersNoTargetTextId); it != textData.end()) oNoTarget = it->second;
 
+        // All sixteen, for 0x00503660's choice: the four above are slots 4,
+        // 0, 6 and 2 of them; 1 is another's emote at the player, 8-15 the
+        // same for a female sender.
+        game::EmoteTextSlots slots;
+        const uint32_t firstText = etL ? (*etL)["OthersTargetTextID"] : 3;
+        for (uint32_t i = 0; i < slots.size(); ++i) {
+            if (firstText + i >= emotesTextDbc->getFieldCount()) break;
+            if (auto it = textData.find(emotesTextDbc->getUInt32(r, firstText + i)); it != textData.end())
+                slots[i] = it->second;
+        }
+
         for (const std::string& cmd : parseEmoteCommands(cmdRaw)) {
             if (cmd.empty()) continue;
             EmoteInfo info;
+            info.slots = slots;
             info.animId = animId;
             info.dbcId = recordId;
             info.loop = isLoopingEmote(cmd);
@@ -412,13 +377,6 @@ std::string EmoteRegistry::textFor(const std::string& emoteName,
     return "";
 }
 
-std::string EmoteRegistry::selfTextByDbcId(uint32_t dbcId,
-                                           const std::string* targetName) const {
-    auto it = emoteByDbcId_.find(dbcId);
-    if (it == emoteByDbcId_.end()) return "";
-    return textFor(it->second->command, targetName);
-}
-
 uint32_t EmoteRegistry::dbcIdFor(const std::string& emoteName) const {
     auto it = emoteTable_.find(emoteName);
     if (it != emoteTable_.end()) {
@@ -427,24 +385,14 @@ uint32_t EmoteRegistry::dbcIdFor(const std::string& emoteName) const {
     return 0;
 }
 
-std::string EmoteRegistry::textByDbcId(uint32_t dbcId,
+std::string EmoteRegistry::lineByDbcId(uint32_t dbcId, bool senderIsMe,
                                        const std::string& senderName,
-                                       const std::string* targetName) const {
+                                       const std::string& targetName,
+                                       const std::string& playerName, bool female) const {
     auto it = emoteByDbcId_.find(dbcId);
     if (it == emoteByDbcId_.end()) return "";
-
-    const EmoteInfo& info = *it->second;
-
-    // As the self text (0x00503660): the target's text, else the plain one,
-    // else no line (T453).
-    if (targetName && !targetName->empty() && !info.othersTarget.empty()) {
-        return fillEmoteTemplate(info.othersTarget, {&senderName, targetName},
-                                 {&senderName, targetName});
-    }
-    if (!info.othersNoTarget.empty()) {
-        return fillEmoteTemplate(info.othersNoTarget, {&senderName}, {&senderName});
-    }
-    return "";
+    return game::textEmoteLine(it->second->slots, senderIsMe, senderName, targetName,
+                               playerName, female);
 }
 
 } // namespace rendering

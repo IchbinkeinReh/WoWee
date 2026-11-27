@@ -4130,6 +4130,11 @@ wowee_add_test(test_client_periodic_triggers
 wowee_add_test(test_dialog_emotes
     SOURCES test_dialog_emotes.cpp)
 
+# ── test_text_emote_line ─────────────────────────────────────
+# A text emote's chat line from its EmotesText slots (game/text_emote_line.hpp).
+wowee_add_test(test_text_emote_line
+    SOURCES test_text_emote_line.cpp)
+
 # ── test_corpse_look ─────────────────────────────────────────
 # What a corpse's fields say it looks like (game/corpse_look.hpp).
 wowee_add_test(test_corpse_look

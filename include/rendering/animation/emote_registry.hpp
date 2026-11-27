@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/text_emote_line.hpp"
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -28,6 +30,9 @@ struct EmoteInfo {
     std::string othersNoTarget;
     std::string othersTarget;
     std::string command;
+    /// EmotesText fields 3-18, the sixteen texts 0x00503660 picks from
+    /// (game/text_emote_line.hpp); empty for the built-in fallback list.
+    game::EmoteTextSlots slots;
 };
 
 class EmoteRegistry {
@@ -69,15 +74,13 @@ public:
     /// Get DBC ID for an emote command.
     [[nodiscard]] uint32_t dbcIdFor(const std::string& emoteName) const;
 
-    /// Get third-person emote text by DBC ID.
-    std::string textByDbcId(uint32_t dbcId,
+    /// The chat line of a text emote by its EmotesText id, as 0x00503660
+    /// makes it: the slot for who sent it, at whom and the sender's gender,
+    /// with its fallbacks; "" when the row has no text for it (no line).
+    std::string lineByDbcId(uint32_t dbcId, bool senderIsMe,
                             const std::string& senderName,
-                            const std::string* targetName = nullptr) const;
-
-    /// The first-person text by DBC ID - "You wave." - for the server's echo
-    /// of the player's own emote, which is the line the chat shows for it.
-    std::string selfTextByDbcId(uint32_t dbcId,
-                                const std::string* targetName = nullptr) const;
+                            const std::string& targetName,
+                            const std::string& playerName, bool female) const;
 
 
 private:

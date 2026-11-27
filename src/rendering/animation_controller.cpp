@@ -80,17 +80,13 @@ uint32_t AnimationController::getEmoteDbcId(const std::string& emoteName) {
     return registry.dbcIdFor(emoteName);
 }
 
-std::string AnimationController::getEmoteTextByDbcId(uint32_t dbcId, const std::string& senderName,
-                                                      const std::string* targetName) {
+std::string AnimationController::getEmoteLineByDbcId(uint32_t dbcId, bool senderIsMe,
+                                                     const std::string& senderName,
+                                                     const std::string& targetName,
+                                                     const std::string& playerName, bool female) {
     auto& registry = EmoteRegistry::instance();
     registry.loadFromDbc();
-    return registry.textByDbcId(dbcId, senderName, targetName);
-}
-std::string AnimationController::getSelfEmoteTextByDbcId(uint32_t dbcId,
-                                                          const std::string* targetName) {
-    auto& registry = EmoteRegistry::instance();
-    registry.loadFromDbc();
-    return registry.selfTextByDbcId(dbcId, targetName);
+    return registry.lineByDbcId(dbcId, senderIsMe, senderName, targetName, playerName, female);
 }
 
 uint32_t AnimationController::getEmoteAnimByEmotesId(uint32_t emoteId) {

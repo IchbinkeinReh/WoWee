@@ -1592,12 +1592,27 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
     // the line had been made when the emote was sent. It is not any more: the
     // interface sends emotes through DoEmote, which makes no line, so the
     // player's own emotes never appeared at all.
+    // 0x00503660 picks the row's slot by who sent it, whether it is aimed at
+    // the player (the target's name against the player's) and the sender's
+    // gender as the name cache has it (+0x144: 1 female).
+    const Character* ac = owner_.getActiveCharacter();
+    const std::string playerName = ac ? ac->name : std::string{};
+    const bool playerFemale = ac && ac->gender == Gender::FEMALE;
+    const auto femaleSender = [this, playerFemale](uint64_t guid) {
+        if (guid == owner_.getPlayerGuid()) return playerFemale;
+        uint8_t gender = owner_.lookupPlayerGender(guid);
+        if (gender > 1) {
+            uint8_t race = 0, facial = 0;
+            uint32_t bytes = 0;
+            if (!owner_.getPlayerAppearance(guid, race, gender, bytes, facial)) gender = 0;
+        }
+        return gender == 1;
+    };
     if (data.senderGuid == owner_.getPlayerGuid() && data.senderGuid != 0) {
-        const std::string* target = data.targetName.empty() ? nullptr : &data.targetName;
-        std::string text =
-            rendering::AnimationController::getSelfEmoteTextByDbcId(data.textEmoteId, target);
+        std::string text = rendering::AnimationController::getEmoteLineByDbcId(
+            data.textEmoteId, true, playerName, data.targetName, playerName,
+            femaleSender(data.senderGuid));
         if (text.empty()) return;
-        const Character* ac = owner_.getActiveCharacter();
         MessageChatData chatMsg;
         chatMsg.type = ChatType::TEXT_EMOTE;
         chatMsg.language = ChatLanguage::UNIVERSAL;
@@ -1632,9 +1647,12 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
     }
 
     // The narration, once there is a name to put in it.
-    const auto narrate = [this, data](const std::string& senderName) {
-        const std::string* targetPtr = data.targetName.empty() ? nullptr : &data.targetName;
-        std::string emoteText = rendering::AnimationController::getEmoteTextByDbcId(data.textEmoteId, senderName, targetPtr);
+    // The gender is read as the line is made: for a sender not yet named the
+    // name query that names it brings it too.
+    const auto narrate = [this, data, playerName, femaleSender](const std::string& senderName) {
+        std::string emoteText = rendering::AnimationController::getEmoteLineByDbcId(
+            data.textEmoteId, false, senderName, data.targetName, playerName,
+            femaleSender(data.senderGuid));
         // An emote with no text for it makes no line (0x00503660 jumps past
         // the chat line when every slot it tries is empty, T453); its voice
         // line below still plays.

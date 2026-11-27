@@ -52,11 +52,11 @@ public:
     static std::string getEmoteText(const std::string& emoteName,
                                     const std::string* targetName = nullptr);
     static uint32_t getEmoteDbcId(const std::string& emoteName);
-    static std::string getEmoteTextByDbcId(uint32_t dbcId,
+    /// A text emote's chat line (EmoteRegistry::lineByDbcId, 0x00503660).
+    static std::string getEmoteLineByDbcId(uint32_t dbcId, bool senderIsMe,
                                            const std::string& senderName,
-                                           const std::string* targetName = nullptr);
-    static std::string getSelfEmoteTextByDbcId(uint32_t dbcId,
-                                               const std::string* targetName = nullptr);
+                                           const std::string& targetName,
+                                           const std::string& playerName, bool female);
     static uint32_t getEmoteAnimByEmotesId(uint32_t emoteId);
     /// The Emotes.dbc row a chat speaker gestures with (EmoteRegistry::
     /// chatGestureEmote; 0x00ca1224).
