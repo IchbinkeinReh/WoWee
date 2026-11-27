@@ -3557,6 +3557,56 @@ TEST_CASE("bindings without their arguments give 12340's usage lines", "[replay]
     ui.run("ClearCursor()");
 }
 
+// 0x005e5cc0: nine values; the tenth only for a CVar displayQuestID that is on.
+TEST_CASE("GetQuestLogTitle answers nine values", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select('#', GetQuestLogTitle(1)) == 9"));
+    CHECK(ui.is("select('#', GetQuestLogTitle(0)) == 9"));
+}
+
+// 0x00573b50 / 0x00573c90: the usage line for what is not two numbers or a
+// group past 8, and nothing sent for a move within one group.
+TEST_CASE("raid group moves within one group send nothing", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+    g.writeUInt8(2);   // a raid
+    for (int i = 0; i < 3; ++i) g.writeUInt8(0);
+    g.writeUInt64(0x1234);
+    g.writeUInt32(1);
+    g.writeUInt32(2);
+    const std::tuple<const char*, uint64_t, uint8_t> members[] = {{"Achiles", 0x1001, 0}, {"Bea", 0x1002, 1}};
+    for (const auto& [name, guid, group] : members) {
+        g.writeString(name);
+        g.writeUInt64(guid);
+        g.writeUInt8(1);
+        g.writeUInt8(group);
+        g.writeUInt8(0);
+        g.writeUInt8(0);
+    }
+    g.writeUInt64(Session::kPlayerGuid);
+    for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+    s.receive(g);
+    ui.run("at = {} for i = 1, GetNumRaidMembers() do local n, _, grp = GetRaidRosterInfo(i) "
+           "if n then at[n] = i end end");
+    REQUIRE(ui.is("at.Achiles ~= nil and at.Bea ~= nil"));
+    CHECK(ui.is("not pcall(SetRaidSubgroup)"));
+    CHECK(ui.is("not pcall(SetRaidSubgroup, at.Achiles, 9)"));
+    CHECK(ui.is("not pcall(SwapRaidSubgroup, at.Achiles)"));
+    const auto sent = [&](Opcode o) { return s.sent().of(o).size(); };
+    ui.run("SetRaidSubgroup(at.Achiles, 1)");
+    CHECK(sent(Opcode::CMSG_GROUP_CHANGE_SUB_GROUP) == 0);
+    ui.run("SetRaidSubgroup(at.Achiles, 3)");
+    CHECK(sent(Opcode::CMSG_GROUP_CHANGE_SUB_GROUP) == 1);
+    ui.run("SwapRaidSubgroup(at.Bea, at.Bea)");
+    CHECK(sent(Opcode::CMSG_GROUP_SWAP_SUB_GROUP) == 0);
+    ui.run("SwapRaidSubgroup(at.Achiles, at.Bea)");
+    CHECK(sent(Opcode::CMSG_GROUP_SWAP_SUB_GROUP) == 1);
+}
+
 // T385: the answer that ends a ready check is still readable at its
 // READY_CHECK_CONFIRM - 0x005744f0 ends the check (deadline into the past)
 // only after its member loop raised the event.

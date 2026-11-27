@@ -3489,25 +3489,35 @@ void registerSocialLuaAPI(lua_State* L) {
                 // short. The wire is zero-based; the conversion is just already
                 // done a layer down.
                 {"SetRaidSubgroup", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const int idx   = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const int group = static_cast<int>(luaL_optnumber(L, 2, 0));
-            // 0x00573b50 and 0x00573c90 ask the taint check (kind 0xb: not
-            // insecure code in combat lockdown).
+            // 0x00573b50: two numbers or the usage line; then the taint
+            // check (kind 0xb: not insecure code in combat lockdown); a group
+            // outside 1-8 is the usage line again. A member already in that
+            // group is not sent.
+            constexpr const char* kUsage = "Usage: SetRaidSubgroup(index, subgroup)";
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, kUsage);
             if (!taint::allowed(L, 0xb)) return 0;
+            auto* gh = getGameHandler(L);
+            const int idx   = static_cast<int>(lua_tonumber(L, 1));
+            const int group = static_cast<int>(lua_tonumber(L, 2));
+            if (group < 1 || group > 8) return luaL_error(L, kUsage);
             if (!gh || idx < 1) return 0;
-            if (const auto member = gh->raidRosterMember(idx))
+            if (const auto member = gh->raidRosterMember(idx); member && member->subGroup + 1 != group)
                 gh->setRaidSubgroup(member->name, static_cast<uint8_t>(group));
             return 0;
         }},
                 {"SwapRaidSubgroup", [](lua_State* L) -> int {
+            // 0x00573c90: two numbers or the usage line, the taint check, and
+            // nothing sent for two members of one group.
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: SwapRaidSubgroup(index1, index2)");
+            if (!taint::allowed(L, 0xb)) return 0;
             auto* gh = getGameHandler(L);
-            const int a = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const int b = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (!taint::allowed(L, 0xb)) return 0;   // see SetRaidSubgroup
+            const int a = static_cast<int>(lua_tonumber(L, 1));
+            const int b = static_cast<int>(lua_tonumber(L, 2));
             if (!gh || a < 1 || b < 1) return 0;
             const auto first = gh->raidRosterMember(a), second = gh->raidRosterMember(b);
-            if (first && second) gh->swapRaidSubgroup(first->name, second->name);
+            if (first && second && first->subGroup != second->subGroup)
+                gh->swapRaidSubgroup(first->name, second->name);
             return 0;
         }},
                 // Which raid member the roster has highlighted, kept by guid

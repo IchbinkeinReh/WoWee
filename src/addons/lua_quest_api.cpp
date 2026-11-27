@@ -778,6 +778,11 @@ static int lua_GetQuestIndexForTimer(lua_State* L) {
     return luaReturnNil(L);
 }
 
+/// GetQuestLogTitle's tail (0x005e5cc0): a tenth value only where a CVar
+/// displayQuestID exists and is on - 0x00767440 finds none, since the client
+/// never registers it - so nine values.
+static int pushDisplayQuestId(lua_State*) { return 9; }
+
 static int lua_GetQuestLogTitle(lua_State* L) {
     // 0x005e5cc0
     if (!lua_isnumber(L, 1))
@@ -802,8 +807,7 @@ static int lua_GetQuestLogTitle(lua_State* L) {
         lua_pushnil(L);                                                    // 7: isComplete
         luaPushOneOrNil(L, 0);                                             // 8: isDaily
         lua_pushnumber(L, 0);                                              // 9: questID
-        luaPushOneOrNil(L, 0);                                             // 10: displayQuestID
-        return 10;
+        return pushDisplayQuestId(L);                                      // 10: displayQuestID
     }
     // An index off either end gets an empty row, not a bare nil.
     //
@@ -834,8 +838,7 @@ static int lua_GetQuestLogTitle(lua_State* L) {
         lua_pushnil(L);          // 7: isComplete
         luaPushOneOrNil(L, 0);   // 8: isDaily
         lua_pushnumber(L, 0);    // 9: questID
-        luaPushOneOrNil(L, 0);   // 10: displayQuestID
-        return 10;
+        return pushDisplayQuestId(L);
     }
     const auto& q = *qp;
     // The client's ten, in its order:
@@ -875,10 +878,8 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     // Not the id again: this is the developer switch that asks for the id to
     // be *shown*, and the quest log writes "26102 - Wolves Across the Border"
     // when it is set. An id is a large number and therefore true, so every
-    // quest in the log wore its own number. Off is what the real client
-    // ships.
-    luaPushOneOrNil(L, 0);               // 10: displayQuestID
-    return 10;
+    // quest in the log wore its own number.
+    return pushDisplayQuestId(L);
 }
 
 // GetQuestLogQuestText(index) → description, objectives (0x005df190)
