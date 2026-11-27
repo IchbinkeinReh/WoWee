@@ -361,6 +361,32 @@ TEST_CASE("the commands that reach further are not", "[mcp][gm]") {
     }
 }
 
+// The user, 2026-11-27: a guild for the character itself (the guild bank),
+// and deleted again - only its own.
+TEST_CASE("a guild is made for the character itself and only its own deleted", "[mcp][gm]") {
+    GuardContext c = context();
+    for (const char* command : {".guild create \"Lockis Bank\"", ".guild create Locki \"Lockis Bank\"",
+                                ".guild create LOCKI \"Bank\"", ".GUILD CREATE \"x\""}) {
+        INFO(command);
+        CHECK(gives(command, c));
+    }
+    for (const char* command : {".guild create Other \"Lockis Bank\"", ".guild create", ".guild create Locki",
+                                ".guild create Lockis Bank", ".guild create \"a\" \"b\"", ".guild create \"\"",
+                                ".guild create Locki Other \"x\"", ".guild delete \"Lockis Bank\"",
+                                ".guild delete", ".guild rank Locki 1", ".guild uninvite Other", ".guild rename \"a\" \"b\""}) {
+        INFO(command);
+        CHECK_FALSE(gives(command, c));
+    }
+    c.ownGuildName = "Lockis  Bank";
+    CHECK(gives(".guild delete \"Lockis Bank\"", c));
+    CHECK(gives(".guild delete \"lockis bank\"", c));
+    CHECK_FALSE(gives(".guild delete \"Other Guild\"", c));
+    CHECK_FALSE(gives(".guild delete Lockis Bank", c));
+    // Never with another player selected: create would make them the leader.
+    c.targetGuid = kOther;
+    CHECK_FALSE(gives(".guild create \"Lockis Bank\"", c));
+}
+
 TEST_CASE("no command is given with another player selected", "[mcp][gm]") {
     GuardContext c = context();
     c.targetGuid = kOther;

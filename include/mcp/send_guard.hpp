@@ -29,6 +29,9 @@ struct GuardContext {
     /// The character's own name and guid, for a whisper or a spell at itself.
     std::string ownName;
     uint64_t ownGuid = 0;
+    /// The guild the character is in, "" for none: the only one `.guild
+    /// delete` may name.
+    std::string ownGuildName;
     /// --mcp-allow.
     uint32_t allow = 0;
     /// The 3.3.5a wire, whose casts are read for their target. On another the

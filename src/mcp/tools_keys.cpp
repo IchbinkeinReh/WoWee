@@ -40,6 +40,7 @@ GuardContext guardOf(ToolContext& context) {
     if (!gh) return g;
     g.ownGuid = gh->getPlayerGuid();
     if (const auto* c = gh->getActiveCharacter()) g.ownName = c->name;
+    g.ownGuildName = gh->getGuildName();
     g.targetGuid = gh->getTargetGuid();
     g.selectedOnRealm = context.selectedOnRealm;
     g.allow = context.options.allow;
@@ -448,7 +449,8 @@ void addKeyTools(Toolbox& box) {
                             slash));
     box.push_back(handsTool("gm",
                             "A game master's command for the own character, whispered to itself: .revive, .gps, "
-                            ".go xyz, .tele, .gm on/off, .modify ..., .additem id. Only a list of harmless ones "
+                            ".go xyz, .tele, .gm on/off, .modify ..., .additem id, .guild create \"Name\" (and .guild "
+                            "delete \"Name\" of its own guild). Only a list of harmless ones "
                             "(docs/MCP_SERVER.md), and never on anybody else: but for those that only tell (.npc info, "
                             ".gps, .lookup ...) they are given with the character selected, and what was selected is "
                             "selected again after; on=target with anything else selected is refused. A dialog may be "

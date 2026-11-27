@@ -372,10 +372,50 @@ bool isNumberOrLink(std::string_view s) {
 /// Many of them take a player's name, or the number of one, and are then
 /// about that player wherever they are - so those are taken bare, or with the
 /// character's own name.
-bool gmWordsAllowed(const std::vector<std::string>& w, const std::string& ownName) {
+/// The words from `from` on as one name in double quotes ("Die Gilde"), its
+/// inside in lower case; nothing when they are not that. A guild's name is
+/// always quoted here, so it cannot be read as a player's.
+std::optional<std::string> quotedName(const std::vector<std::string>& w, size_t from) {
+    if (from >= w.size()) return std::nullopt;
+    std::string joined;
+    for (size_t i = from; i < w.size(); ++i) joined += (i > from ? " " : "") + w[i];
+    if (joined.size() < 3 || joined.front() != '"' || joined.back() != '"') return std::nullopt;
+    std::string inside = joined.substr(1, joined.size() - 2);
+    if (inside.find('"') != std::string::npos) return std::nullopt;
+    return inside;
+}
+
+/// A name as the words of a command have it: lower case, single spaces.
+std::string asWords(std::string_view s) {
+    std::string out;
+    for (const char c : lower(s)) {
+        if (c == ' ' && (out.empty() || out.back() == ' ')) continue;
+        out += c;
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+bool gmWordsAllowed(const std::vector<std::string>& w, const std::string& ownName, const std::string& ownGuild) {
     const std::string& verb = w[0];
     const std::string sub = w.size() > 1 ? w[1] : std::string();
     const size_t args = w.size() - 1;
+    // A guild for the character itself to lead (the user, 2026-11-27, for
+    // the guild bank): `.guild create "Name"` (the leader is the selected
+    // player or the character - and nothing but the character may be
+    // selected), or with the own name before it. Deleted only the guild the
+    // character is in, by its name.
+    if (verb == "guild") {
+        if (sub == "create") {
+            if (quotedName(w, 2)) return true;
+            return args >= 3 && sameName(w[2], ownName) && quotedName(w, 3).has_value();
+        }
+        if (sub == "delete") {
+            const auto name = quotedName(w, 2);
+            return name && !ownGuild.empty() && *name == asWords(ownGuild);
+        }
+        return false;
+    }
     if (isOneOf(verb, {"gps", "revive", "die", "dismount", "demorph", "combatstop", "maxskill", "cooldown", "levelup",
                        "respawn", "save", "distance"})) {
         return args == 0 || (args == 1 && sameName(sub, ownName));
@@ -465,7 +505,7 @@ Verdict judgeGmCommand(std::string_view text, const GuardContext& context) {
             }
         }
     }
-    if (!gmWordsAllowed(words, context.ownName)) {
+    if (!gmWordsAllowed(words, context.ownName, context.ownGuildName)) {
         return never("the command ." + words[0] + (words.size() > 1 ? " " + words[1] : std::string()) +
                      " is not one the MCP server gives like that (docs/MCP_SERVER.md lists them)");
     }

@@ -150,7 +150,8 @@ A whisper to the own character goes out. One that is a game master's command has
 .unaura .learn .unlearn ID|all`, `.additem ID`, `.morph ID`, `.go xyz|creature|gameobject|...`, `.tele PLACE`, `.gm
 on|off|fly|visible`, `.modify ...`, `.quest add|complete|remove|reward ID`, `.npc info|near`, `.gobject
 info|near|target`, `.cast ID|self|back`, `.lookup` (not `player`), `.server info|motd`, `.instance listbinds|unbind`,
-`.help`, `.commands`. None of them with another player, or their pet, selected; and with anything else selected but the
+`.guild create "NAME"` (or with the own name before the quoted guild name; the character leads it), `.guild delete
+"NAME"` only for the guild the character is in, `.help`, `.commands`. None of them with another player, or their pet, selected; and with anything else selected but the
 character itself - a creature, a mount, its own pet - only those that tell and do nothing: `.npc info|near`, `.gobject
 info|near|target`, `.gps`, `.lookup`, `.distance`, `.help`, `.commands`, `.server`. Selected is what the client has
 selected and what the last `CMSG_SET_SELECTION` told the realm, both. The packet is where it is decided, so `.aura` by
