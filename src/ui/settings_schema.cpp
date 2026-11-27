@@ -662,17 +662,18 @@ constexpr SettingDesc kSchema[] = {
      "raytracedlighting"},
     // The volumetric light's three terms (Details, "Volumetric light"), each
     // a percent of its scatter as volumetric_light::scatterFor has it
-    // (volumetric_light::tunedScatter): 100 is the look as it is.
+    // (volumetric_light::tunedScatter): 100 is the base. 200 by default
+    // (user 2026-11-27).
     {"dbgvlsun", "Volumetric light: sun (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "Volumetric light",
      "How much light the sun gives the air with the volumetric light\n"
-     "on (Details). 100 as it is, 0 none, 400 four times.", "", 100, "volumetriclight"},
+     "on (Details). 100 the base, 0 none, 400 four times. Default 200.", "", 200, "volumetriclight"},
     {"dbgvlmoon", "Volumetric light: moon (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "",
      "How much light the moon gives the air with the volumetric light\n"
-     "on (Details). 100 as it is, 0 none, 400 four times.", "", 100, "volumetriclight"},
+     "on (Details). 100 the base, 0 none, 400 four times. Default 200.", "", 200, "volumetriclight"},
     {"dbgvllights", "Volumetric light: lights (%)", SettingKind::Int, 0, 400, 5, "Debug Glow", "",
      "How much light lamps, fires and lava give the air around them\n"
-     "with the volumetric light on (Details). 100 as it is, 0 none,\n"
-     "400 four times.", "", 100, "volumetriclight"},
+     "with the volumetric light on (Details). 100 the base, 0 none,\n"
+     "400 four times. Default 200.", "", 200, "volumetriclight"},
     // The debug view of the volumetric light (U23): for the session only,
     // as the Debug Graphics view (dbgview) - never saved.
     {"dbgvlonly", "Volumetric light only", SettingKind::Bool, 0, 0, 0, "Debug Glow", "",

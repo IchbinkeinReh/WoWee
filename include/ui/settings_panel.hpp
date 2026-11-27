@@ -159,9 +159,10 @@ public:
     int pendingDbgModelFlicker = 100;  ///< Debug Glow: model light flicker strength, percent
     /// Debug Glow: the volumetric light's sun, moon and lamp terms, percent
     /// (Renderer::LightingTune::volumetricSun/Moon/Lights).
-    int pendingDbgVlSun = 100;
-    int pendingDbgVlMoon = 100;
-    int pendingDbgVlLights = 100;
+    /// 200 by default (user 2026-11-27): a file that has none opens there.
+    int pendingDbgVlSun = 200;
+    int pendingDbgVlMoon = 200;
+    int pendingDbgVlLights = 200;
     /// Debug Glow: the volumetric light alone over black, for the session
     /// only (Renderer::setVolumetricLightDebugView) - never saved.
     bool pendingDbgVlOnly = false;

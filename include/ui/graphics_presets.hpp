@@ -208,8 +208,8 @@ inline constexpr GraphicsPresetExtra kSuperUltraDebugValues[] = {
     {"dbgglowpulse", 100.0f},              {"dbgfireflicker", 100.0f},
     {"dbgmodelflicker", 100.0f},           {"dbgglowanim", 100.0f},
     {"rtparticlelights", 3.0f},
-    {"dbgvlsun", 100.0f},       {"dbgvlmoon", 100.0f},
-    {"dbgvllights", 100.0f},
+    {"dbgvlsun", 200.0f},       {"dbgvlmoon", 200.0f},
+    {"dbgvllights", 200.0f},
     // Debug Shadows
     {"dbgshadowdarkness", 70.0f},    {"rtunitselfshadow", 1.0f},
     {"dbgtracedsunshadow", 100.0f},  {"dbgpointshadow", 100.0f},

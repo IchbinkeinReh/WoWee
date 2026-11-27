@@ -1051,10 +1051,11 @@ public:
         float bakedTerrainShadow = 1.0f;  ///< how much of the terrain's painted shadow (MCSH) shows
         float blobShadow = 1.0f;        ///< the round shadows under units (shadows off, ray tracing off)
         // The volumetric light (volumetric_light::tunedScatter): the sun's,
-        // the moon's and the lamps' scatter, 1 as it is.
-        float volumetricSun = 1.0f;
-        float volumetricMoon = 1.0f;
-        float volumetricLights = 1.0f;
+        // the moon's and the lamps' scatter, 1 the base, 2 by default as
+        // the Debug Glow sliders (user 2026-11-27).
+        float volumetricSun = 2.0f;
+        float volumetricMoon = 2.0f;
+        float volumetricLights = 2.0f;
     };
     void setLightingTune(const LightingTune& tune) { lightingTune_ = tune; }
     const LightingTune& lightingTune() const { return lightingTune_; }

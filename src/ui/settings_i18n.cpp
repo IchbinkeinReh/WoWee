@@ -294,12 +294,12 @@ constexpr SettingGerman kGerman[] = {
     {"dbgvlsun",
      "VL Sonne %",
      "Wie viel Licht die Sonne der Luft gibt, wenn das volumetrische Licht an ist (Details). "
-     "100 wie bisher, 0 keines, 400 das Vierfache.",
+     "100 die Grundstärke, 0 keines, 400 das Vierfache. Standard 200.",
      nullptr, nullptr, nullptr},
     {"dbgvlmoon",
      "VL Mond %",
      "Wie viel Licht der Mond der Luft gibt, wenn das volumetrische Licht an ist (Details). "
-     "100 wie bisher, 0 keines, 400 das Vierfache.",
+     "100 die Grundstärke, 0 keines, 400 das Vierfache. Standard 200.",
      nullptr, nullptr, nullptr},
     {"dbgvlonly",
      "VL nur Zusatzlicht",
@@ -311,7 +311,7 @@ constexpr SettingGerman kGerman[] = {
     {"dbgvllights",
      "VL Lichter %",
      "Wie viel Licht Lampen, Feuer und Lava der Luft um sich geben, wenn das volumetrische "
-     "Licht an ist (Details). 100 wie bisher, 0 keines, 400 das Vierfache.",
+     "Licht an ist (Details). 100 die Grundstärke, 0 keines, 400 das Vierfache. Standard 200.",
      nullptr, nullptr, nullptr},
     {"rtunitshadowreach",
      "Figurenschattenweite (m)",

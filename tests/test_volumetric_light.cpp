@@ -605,9 +605,10 @@ TEST_CASE("volumetric light: the most important lamps that reach the view", "[vo
     CHECK(vl::pickLights(edge, glm::vec3(0.0f), 80.0f, 32).size() == 1);
 }
 
-TEST_CASE("volumetric light: three Debug Glow sliders, 100 % by default", "[volumetric_light][settings]") {
+TEST_CASE("volumetric light: three Debug Glow sliders, 200 % by default", "[volumetric_light][settings]") {
     // User request 2026-11-27 (VL3): the sun's, the moon's and the lamps'
-    // part each as a percent of today's, live.
+    // part each as a percent of today's, live. 200 by default (user
+    // 2026-11-27), also for a settings file that has none of them.
     struct Slider {
         const char* key;
         const char* fileKey;
@@ -621,6 +622,7 @@ TEST_CASE("volumetric light: three Debug Glow sliders, 100 % by default", "[volu
     };
     const std::string io = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
     const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    const std::string header = wowee::test::slurp("include/ui/settings_panel.hpp");
     for (const Slider& s : sliders) {
         INFO(s.key);
         const auto* r = row(s.key);
@@ -629,9 +631,20 @@ TEST_CASE("volumetric light: three Debug Glow sliders, 100 % by default", "[volu
         CHECK(r->minValue == 0.0f);
         CHECK(r->maxValue == 400.0f);
         CHECK(r->step == 5.0f);
-        CHECK(r->defaultValue == 100.0f);
+        CHECK(r->defaultValue == 200.0f);
         CHECK(std::string(r->category) == "Debug Glow");
         CHECK(std::string(r->enabledWhen) == "volumetriclight");
+        // The panel opens there when the file has no value, and Super-Ultra
+        // sets the same.
+        CHECK(header.find(std::string("int ") + s.field + " = 200;") != std::string::npos);
+        bool inPreset = false;
+        for (const auto& e : wowee::ui::kSuperUltraDebugValues) {
+            if (std::string(e.key) == s.key) {
+                inPreset = true;
+                CHECK(e.value == 200.0f);
+            }
+        }
+        CHECK(inPreset);
         const auto* de = wowee::ui::germanSettingText(s.key);
         REQUIRE(de != nullptr);
         REQUIRE(de->label != nullptr);
@@ -639,6 +652,7 @@ TEST_CASE("volumetric light: three Debug Glow sliders, 100 % by default", "[volu
         CHECK(characters(de->label) <= 24);
         REQUIRE(de->tooltip != nullptr);
         CHECK(std::string(de->tooltip).size() > 40);
+        CHECK(std::string(de->tooltip).find("Standard 200") != std::string::npos);
         // Saved, loaded clamped to the row's range, bound, applied live.
         CHECK(io.find(std::string("out << \"") + s.fileKey + "=\" << settingsPanel_." + s.field) != std::string::npos);
         CHECK(io.find(std::string("key == \"") + s.fileKey + "\") settingsPanel_." + s.field +
