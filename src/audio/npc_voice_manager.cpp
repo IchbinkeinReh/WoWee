@@ -232,7 +232,15 @@ bool NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, size_t slo
     // those units say nothing: 0x00746900 answers -1 where the row or its first
     // line is missing, 0x00720860 refuses where the row is.
     const auto kit = kitSlot(displayId, slot);
-    if (kit.first == nullptr) return false;
+    if (kit.first == nullptr) {
+        static int toldNone = 0;
+        if (toldNone < 20) {
+            ++toldNone;
+            LOG_INFO("NPC voice: nothing for display ", displayId, " slot ", slot,
+                     kitIdByDisplay_.count(displayId) ? " (kit without a clip here, or still read)" : " (no kit)");
+        }
+        return false;
+    }
     const auto& clips = *kit.first;
     size_t chosen = 0;
     if (variant >= 0) {
@@ -295,6 +303,18 @@ bool NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, size_t slo
 
     if (success)
         lineHandle_[npcGuid] = handle;
+    // Said for the first plays of a session: whether a line went out, and if
+    // the engine refused it, what it had to go on (T456: lines not seen).
+    static int told = 0;
+    if (told < 40) {
+        ++told;
+        const auto& engine = AudioEngine::instance();
+        const glm::vec3 d = position - engine.getListenerPosition();
+        LOG_INFO("NPC voice: ", sample->path, success ? " played" : " NOT played", " (slot ", slot,
+                 ", display ", displayId, ", distance ", glm::length(d), " of reach ", maxDistance,
+                 ", volume ", volume, ", master ", engine.getMasterVolume(),
+                 ", world sound held ", engine.isWorldSoundHeld() ? 1 : 0, ")");
+    }
     return success;
 }
 
