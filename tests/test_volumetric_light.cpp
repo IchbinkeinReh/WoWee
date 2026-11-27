@@ -444,6 +444,18 @@ TEST_CASE("volumetric light: the debug view is a Debug Glow row for the session 
     REQUIRE(ui != std::string::npos);
     CHECK(exposure < debug);
     CHECK(debug < ui);
+    // The names over heads are world text with depth: under the debug view
+    // they ended the light's rays and stood black in it (V594 note), so both
+    // places that draw them leave them out while it is shown.
+    size_t names = 0, guarded = 0;
+    for (size_t at = renderer.find("worldText_->render("); at != std::string::npos;
+         at = renderer.find("worldText_->render(", at + 1)) {
+        ++names;
+        const size_t line = renderer.rfind('\n', at);
+        if (renderer.substr(line, at - line).find("!volumetricLightDebugViewShown()") != std::string::npos) ++guarded;
+    }
+    CHECK(names == 2);
+    CHECK(guarded == names);
 }
 
 TEST_CASE("volumetric light: a lamp's glow fainter by day", "[volumetric_light]") {

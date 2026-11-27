@@ -962,8 +962,11 @@ public:
     /// The debug view "VL only" (Debug Glow, dbgvlonly): the volumetric
     /// light alone over black, ten times as bright
     /// (volumetric_light::debugViewColor), the interface and minimap as they
-    /// are. Nothing while the volumetric light is off.
+    /// are. Nothing while the volumetric light is off. The names over heads
+    /// are world text: while the view is shown they are left out, or their
+    /// depth ended the light's rays and they stood black in it.
     void setVolumetricLightDebugView(bool on) { volumetricLightDebugView_ = on; }
+    [[nodiscard]] bool volumetricLightDebugViewShown() const;
     /// Ray traced lighting: 0 off, 1 sun shadows, 2 + ambient occlusion,
     /// 3 + multi-bounce diffuse from a probe volume. See RtLighting.
     void setRtLightingMode(int mode);

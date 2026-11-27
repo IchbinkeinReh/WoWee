@@ -5143,8 +5143,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(cmd, perFrameSet);
             if (blobShadowRenderer && camera) blobShadowRenderer->renderSpellTarget(cmd, perFrameSet);
             // The names over heads, a world string batch: in the scene,
-            // tested against its depth (0x007e5640, 0x006c53a0).
-            if (worldText_ && camera) worldText_->render(cmd, perFrameSet);
+            // tested against its depth (0x007e5640, 0x006c53a0). Not under
+            // the volumetric light's debug view (volumetricLightDebugViewShown).
+            if (worldText_ && camera && !volumetricLightDebugViewShown()) worldText_->render(cmd, perFrameSet);
             sceneMark(cmd, kMarkSelection, "selection circle");
             vkEndCommandBuffer(cmd);
         }
@@ -5390,7 +5391,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // The circle under the target, on the finished world (0x004f6f90).
         if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(currentCmd, perFrameSet);
         if (blobShadowRenderer && camera) blobShadowRenderer->renderSpellTarget(currentCmd, perFrameSet);
-        if (worldText_ && camera) worldText_->render(currentCmd, perFrameSet);
+        if (worldText_ && camera && !volumetricLightDebugViewShown()) worldText_->render(currentCmd, perFrameSet);
         sceneMark(currentCmd, kMarkSelection, "selection circle");
     }
 
@@ -8507,6 +8508,10 @@ void Renderer::recordPreviewComposites() {
 void Renderer::setVolumetricLightQuality(int quality) {
     volumetricLightQuality_ = std::clamp(quality, 0, 2);
     if (volumetricLight_) volumetricLight_->setQuality(volumetric_light::qualityFromIndex(volumetricLightQuality_));
+}
+
+bool Renderer::volumetricLightDebugViewShown() const {
+    return volumetricLightDebugView_ && volumetricLightQuality_ > 0 && volumetricLight_ && volumetricLight_->usable();
 }
 
 void Renderer::recordVolumetricLight() {
