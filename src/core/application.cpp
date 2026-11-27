@@ -1586,6 +1586,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             return wmap ? wmap->currentMapFolder() : std::string();
         };
+        luaSvc.getMapInfoHeight = [r = renderer.get()]() -> uint32_t {
+            auto* wmap = r ? r->getWorldMap() : nullptr;
+            return wmap ? wmap->currentMapInfoHeight() : 0u;
+        };
         luaSvc.getMapOverlays = [this, r = renderer.get()]() {
             std::vector<addons::LuaServices::MapOverlay> out;
             auto* wmap = r ? r->getWorldMap() : nullptr;

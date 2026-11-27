@@ -298,3 +298,23 @@ TEST_CASE("findZoneByAreaId: exact, and -1 for unknown or zero",
     // 0 is "no zone", not the continent entry, whose areaID is also 0.
     REQUIRE(findZoneByAreaId(zones, 0) == -1);
 }
+
+// GetMapInfo's heights (0x00543cd0 / 0x00544ca0).
+TEST_CASE("mapInfoHeight rounds the extents into the 1002-wide frame", "[world_map]") {
+    // A zone's rectangle 1.5:1 -> 668.
+    CHECK(mapInfoHeight(3000.0f, 2000.0f) == 668u);
+    CHECK(mapInfoHeight(0.0f, 2000.0f) == 0u);
+    CHECK(mapInfoHeight(3000.0f, 0.0f) == 0u);
+    // A continent grid, e.g. 48 by 32 cells: 32 * 1002 / 48 = 668.
+    CHECK(mapInfoHeight(48.0f, 32.0f) == 668u);
+    CHECK(mapInfoHeight(3.0f, 1.0f) == 334u);
+}
+
+TEST_CASE("mapInfoPaddedHeight raises the low byte to a power of two", "[world_map]") {
+    CHECK(mapInfoPaddedHeight(668u) == 768u);    // 0x29c -> 0x200 + 0x100
+    CHECK(mapInfoPaddedHeight(0x300u) == 0x300u);
+    CHECK(mapInfoPaddedHeight(0x240u) == 0x240u);
+    CHECK(mapInfoPaddedHeight(0x105u) == 0x108u);
+    CHECK(mapInfoPaddedHeight(0u) == 0u);
+    CHECK(mapInfoPaddedHeight(0x1ffu) == 0x200u);
+}

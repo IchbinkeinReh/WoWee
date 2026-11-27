@@ -713,6 +713,7 @@ void DataRepository::buildCosmicView(int /*expLevel*/) {
 void DataRepository::buildAzerothView(pipeline::AssetManager& assetManager) {
     azerothRegions_.clear();
     worldContinents_.clear();
+    continentGrids_.clear();
 
     // The continents on the Azeroth map are where WorldMapContinent puts them
     // (0x00547eb0): each row's grid bounds (Left, Right, Top, Bottom, +8..+0x14)
@@ -730,6 +731,11 @@ void DataRepository::buildAzerothView(pipeline::AssetManager& assetManager) {
         return;
     }
     for (uint32_t r = 0; r < wmc->getRecordCount(); ++r) {
+        continentGrids_.push_back({.mapId = wmc->getUInt32(r, 1),
+                                   .left = static_cast<int32_t>(wmc->getUInt32(r, 2)),
+                                   .right = static_cast<int32_t>(wmc->getUInt32(r, 3)),
+                                   .top = static_cast<int32_t>(wmc->getUInt32(r, 4)),
+                                   .bottom = static_cast<int32_t>(wmc->getUInt32(r, 5))});
         if (wmc->getUInt32(r, 13) == 0) continue;
         worldContinents_.push_back({.mapId = wmc->getUInt32(r, 1), .offsetX = wmc->getFloat(r, 6),
                                     .offsetY = wmc->getFloat(r, 7), .scale = wmc->getFloat(r, 8)});

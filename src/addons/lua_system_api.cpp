@@ -3,6 +3,7 @@
 #include <array>
 #include "addons/lua_text_functions.hpp"
 #include "rendering/m2_renderer.hpp"
+#include "rendering/world_map/coordinate_projection.hpp"
 #include "game/battleground_rules.hpp"
 #include "game/spell_visual_choice.hpp"
 #include <chrono>
@@ -5361,24 +5362,24 @@ static int lua_ResetChatColors(lua_State* L) {
 /// the caller takes the branch it would take on a client where that feature is
 /// switched off.
 static int lua_GetMapInfo(lua_State* L) {
-    // mapFileName, textureHeight, textureWidth. WorldMapFrame builds every
-    // detail tile's path out of the first: "Interface\\WorldMap\\"..name
-    // .."\\"..name..i. Answered as an empty string, that came out as
-    // "Interface\\WorldMap\\\\1" and the map was drawn with no background
-    // at all - and because "" is true in Lua, the interface's own fallback to
-    // the world map never ran either. Nil is what it wants when there is no
-    // zone map, which is how a continent reaches that fallback.
+    // mapFileName, textureHeight, textureWidth - always three (0x00544ca0).
+    // WorldMapFrame builds every detail tile's path out of the first:
+    // "Interface\\WorldMap\\"..name.."\\"..name..i. Answered as an empty
+    // string, that came out as "Interface\\WorldMap\\\\1" and the map was
+    // drawn with no background at all - and because "" is true in Lua, the
+    // interface's own fallback to the world map never ran either. Nil
+    // (0x00543c60: no WorldMapArea row, Azeroth's and the cosmic map) is what
+    // it wants there.
     auto* svc = getLuaServices(L);
     const std::string name = (svc && svc->getMapFileName) ? svc->getMapFileName()
                                                           : std::string();
-    if (name.empty()) return luaReturnNil(L);
-
-    lua_pushstring(L, name.c_str());
-    // The detail frame is 1002 by 668 and sliced into 256-pixel tiles, which
-    // is fixed for every zone map of this era. Only the name is read back out
-    // of here by the interface; these two are shadowed before they are used.
-    lua_pushnumber(L, 668.0);
-    lua_pushnumber(L, 1002.0);
+    if (name.empty()) lua_pushnil(L);
+    else lua_pushstring(L, name.c_str());
+    // The second is the map's height in the 1002-wide frame (0x00543cd0), the
+    // third that with its low byte raised to a power of two: 668 -> 768.
+    const uint32_t height = (svc && svc->getMapInfoHeight) ? svc->getMapInfoHeight() : 0u;
+    lua_pushnumber(L, static_cast<double>(height));
+    lua_pushnumber(L, static_cast<double>(rendering::world_map::mapInfoPaddedHeight(height)));
     return 3;
 }
 

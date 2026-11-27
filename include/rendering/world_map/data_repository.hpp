@@ -71,6 +71,14 @@ public:
         float offsetX = 0.0f, offsetY = 0.0f, scale = 0.0f;
     };
     [[nodiscard]] const std::vector<WorldContinent>& worldContinents() const { return worldContinents_; }
+    /// WorldMapContinent's grid bounds (Left, Right, Top, Bottom, +8..+0x14),
+    /// every row in the file's order, Outland's too: what GetMapInfo sizes a
+    /// continent's map by (0x00543cd0).
+    struct ContinentGrid {
+        uint32_t mapId = 0;
+        int32_t left = 0, right = 0, top = 0, bottom = 0;
+    };
+    [[nodiscard]] const std::vector<ContinentGrid>& continentGrids() const { return continentGrids_; }
     [[nodiscard]] const std::unordered_map<uint32_t, std::string>& areaNameByAreaId() const { return areaNameByAreaId_; }
     /// The map an AreaTable row is on, or 0 if unknown.
     [[nodiscard]] uint32_t mapIdForArea(uint32_t areaId) const {
@@ -137,6 +145,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> exploreFlagByAreaId_;
     std::unordered_map<uint32_t, int32_t> explorationLevelByAreaId_;
     std::vector<WorldContinent> worldContinents_;
+    std::vector<ContinentGrid> continentGrids_;
     std::unordered_map<uint32_t, std::string> areaNameByAreaId_;
     std::unordered_map<uint32_t, uint32_t> mapIdByAreaId_;
     int cosmicIdx_ = -1;

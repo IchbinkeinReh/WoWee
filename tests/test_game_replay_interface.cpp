@@ -2503,6 +2503,31 @@ TEST_CASE("the full screen glow's box turns the glow", "[replay][interface]") {
     CHECK(ui.is("GetCVar('ffxGlow') == '1'"));
 }
 
+// GetMapInfo (0x00544ca0) answers three values everywhere: the WorldMapArea
+// name or nil, the height 0x00543cd0 gives, and that with its low byte raised
+// to a power of two. WoWee answered one nil at Azeroth level and a fixed
+// 668, 1002 elsewhere.
+TEST_CASE("GetMapInfo answers the map's name and its two heights", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    std::string name;
+    uint32_t height = 0;
+    wowee::addons::LuaServices services;
+    services.getMapFileName = [&] { return name; };
+    services.getMapInfoHeight = [&] { return height; };
+    ui.engine.setLuaServices(services);
+    CHECK(ui.is("select('#', GetMapInfo()) == 3"));
+    CHECK(ui.is("(function(n, h, w) return n == nil and h == 0 and w == 0 end)(GetMapInfo())"));
+    name = "Barrens";
+    height = 668;
+    CHECK(ui.is("(function(n, h, w) return n == 'Barrens' and h == 668 and w == 768 end)(GetMapInfo())"));
+    height = 0x300;   // a low byte of 0 stays
+    CHECK(ui.is("select(3, GetMapInfo()) == 768"));
+    height = 0x105;   // 5 -> 8
+    CHECK(ui.is("select(3, GetMapInfo()) == 264"));
+}
+
 // T344: CancelItemTempEnchantment(hand) asks for the hand's equipment slot
 // (0x008021d0 -> 0x006d7120: hand + 14, 15 the main hand, 16 the off hand),
 // and only where a weapon there has a temporary enchant. 0 and 1 went out,

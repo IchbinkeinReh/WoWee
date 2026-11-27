@@ -144,6 +144,8 @@ struct LuaServices {
     /// The folder the shown map's art lives in, which is what GetMapInfo
     /// answers with and what the interface builds every tile path from.
     std::function<std::string()> getMapFileName;
+    /// GetMapInfo's height (0x00543cd0); 0 where the map has no row.
+    std::function<uint32_t()> getMapInfoHeight;
 
     struct MapLandmark {
         std::string name;

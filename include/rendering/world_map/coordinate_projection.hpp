@@ -5,6 +5,8 @@
 
 #include "rendering/world_map/world_map_types.hpp"
 #include <glm/glm.hpp>
+#include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace wowee {
@@ -90,6 +92,33 @@ inline const ZoneBounds& shownBounds(const Zone& zone, int floorRowId) {
     for (const DungeonFloor& floor : zone.dungeonFloors)
         if (floorRowId > 0 && static_cast<int>(floor.rowId) == floorRowId) return floor.bounds;
     return zone.bounds;
+}
+
+/// GetMapInfo's second value (0x00543cd0): the shown map's height in the
+/// 1002-pixel-wide frame, round(across-down extent * 1002 / across extent),
+/// 0 when either extent is 0. A zone or floor gives its rectangle's
+/// (left - right, top - bottom); a continent WorldMapContinent's grid,
+/// (right - left + 1, bottom - top + 1).
+[[nodiscard]] inline uint32_t mapInfoHeight(float across, float down) {
+    if (across == 0.0f || down == 0.0f) return 0;
+    return static_cast<uint32_t>(static_cast<int64_t>(
+        std::nearbyint(static_cast<double>(down) * 1002.0 / static_cast<double>(across))));
+}
+
+/// GetMapInfo's third value (0x00544ca0): the height with its low byte
+/// raised to the next power of two (668 = 0x29c -> 0x200 + 0x100 = 768).
+[[nodiscard]] constexpr uint32_t mapInfoPaddedHeight(uint32_t height) {
+    uint32_t low = height & 0xffu;
+    const uint32_t high = height - low;
+    if ((low & (low - 1u)) != 0) {
+        for (int bit = 7; bit > 0; --bit) {
+            if (low & (1u << bit)) {
+                low = 1u << (bit + 1);
+                break;
+            }
+        }
+    }
+    return high + low;
 }
 
 /// What the shown map spans (0x00544140): a zone's rectangle on a zone's map,

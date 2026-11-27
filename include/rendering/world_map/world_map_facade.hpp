@@ -119,6 +119,10 @@ public:
     /// also what GetMapInfo answers with. Empty at continent and cosmic level,
     /// where the interface has names of its own for those.
     [[nodiscard]] std::string currentMapFolder() const;
+    /// GetMapInfo's height (0x00543cd0) for the shown map: a zone's or the
+    /// selected floor's rectangle, a continent's WorldMapContinent grid; 0 at
+    /// Azeroth and cosmic level, which have no row.
+    [[nodiscard]] uint32_t currentMapInfoHeight() const;
 
     /// One area POI, already projected into the [0,1] map space the interface
     /// places its pins in.

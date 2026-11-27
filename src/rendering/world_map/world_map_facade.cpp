@@ -1025,6 +1025,28 @@ std::string WorldMapFacade::currentMapFolder() const {
     return zones[static_cast<size_t>(idx)].areaName;
 }
 
+uint32_t WorldMapFacade::currentMapInfoHeight() const {
+    const ViewLevel level = impl_->viewState.currentLevel();
+    if (level == ViewLevel::COSMIC || level == ViewLevel::WORLD) return 0;
+    const int idx = impl_->viewState.currentZoneIdx();
+    const auto& zones = impl_->data.zones();
+    if (idx < 0 || idx >= static_cast<int>(zones.size())) return 0;
+    const Zone& zone = zones[static_cast<size_t>(idx)];
+    if (zone.areaID == 0) {
+        // A continent: the first WorldMapContinent row of its map, none -> 0.
+        for (const auto& grid : impl_->data.continentGrids()) {
+            if (grid.mapId != zone.mapID) continue;
+            return mapInfoHeight(static_cast<float>(grid.right - grid.left + 1),
+                                 static_cast<float>(grid.bottom - grid.top + 1));
+        }
+        return 0;
+    }
+    // A zone, or the DungeonMap floor shown of it (+0x10 - +0xc, +0x18 - +0x14
+    // = the same left - right, top - bottom as WorldMapArea's).
+    const ZoneBounds& b = shownBounds(zone, impl_->shownFloorRow(zone));
+    return mapInfoHeight(b.locLeft - b.locRight, b.locTop - b.locBottom);
+}
+
 std::vector<OverlayEntry> WorldMapFacade::currentOverlays() const {
     // Azeroth's map and the cosmic one have none, whatever zone was shown before
     // (0x00546310).
