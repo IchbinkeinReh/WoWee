@@ -152,6 +152,7 @@ TEST_CASE("An item picked up off the action bar names no source slot",
     REQUIRE_FALSE(cursorSourceIsInventory(kCursorNoSource));
 
     // The three kinds that do name a place, and still do.
+    REQUIRE(cursorSourceIsInventory(-2));   // the keyring (T422)
     REQUIRE(cursorSourceIsInventory(-1));   // the paperdoll
     REQUIRE(cursorSourceIsInventory(0));    // the backpack
     for (int bag = 1; bag <= kWornBagCount; ++bag) {
@@ -164,7 +165,7 @@ TEST_CASE("The no-source marker is not a container number", "[cursor][slots]") {
     // It has to sit outside every value a real source can take, or it would
     // read as one of them - which is exactly how the paperdoll came to stand
     // in for the action bar.
-    for (int bag = -1; bag <= kWornBagCount; ++bag) {
+    for (int bag = -2; bag <= 11; ++bag) {   // keyring, bank, backpack, bags, bank bags
         INFO("source " << bag);
         REQUIRE(kCursorNoSource != bag);
     }

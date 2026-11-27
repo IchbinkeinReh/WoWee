@@ -132,12 +132,17 @@ inline int firstBankBagInventorySlot() { return toInventorySlot(bankBagWireSlot(
 /// its action slot read as an equipment slot, so dropping it in a bag sent a
 /// swap for whatever was worn one below its button. Food on the ninth button
 /// moved the player's bracers into the bag.
-inline constexpr int kCursorNoSource = -2;
+///
+/// Not -2: that is the keyring's container (KEYRING_CONTAINER), and a key
+/// lifted off the keyring read as one off the action bar - the drop put it
+/// back and nothing was sent (T422).
+inline constexpr int kCursorNoSource = -1000;
 
 /// Whether an item on the cursor came from somewhere a swap can name as its
-/// source. Only ask it of a cursor that is holding an item.
+/// source: the keyring (-2), the paperdoll or the bank (-1), the backpack and
+/// the bags. Only ask it of a cursor that is holding an item.
 inline constexpr bool cursorSourceIsInventory(int cursorBag) {
-    return cursorBag >= -1;
+    return cursorBag >= -2;
 }
 
 /// A position "on the character" for the bind-on-equip ask of a swap

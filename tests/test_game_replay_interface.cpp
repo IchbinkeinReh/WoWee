@@ -5464,6 +5464,65 @@ TEST_CASE("a moved item stays locked until the realm answers (0x006df890)", "[re
     CHECK_FALSE(s.handler().getInventoryHandler()->itemAwaitsRealm(kLinen));
 }
 
+// T423 (FIXER AD): an item's use goes out through the cast routine
+// (0x0080ac90: CMSG_USE_ITEM, then the tail CMSG_CAST_SPELL shares), which
+// fires UNIT_SPELLCAST_SENT with the spell's name and rank; WoWee raised it
+// for spell casts only.
+TEST_CASE("using an item raises UNIT_SPELLCAST_SENT (T423)", "[replay][interface]") {
+    constexpr uint64_t kWater = 0x4000000000000B31ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    auto& gh = s.handler();
+    carryForAuction(s, 0, kWater, 159, 5);
+    auto& info = gh.itemInfoCacheRef()[159];
+    info.spells[0].spellId = 430;
+    info.spells[0].spellTrigger = 0;
+    gh.spellNameCacheRef()[430].name = "Drink";
+    ui.run("sent = nil local f = CreateFrame('Frame') f:RegisterEvent('UNIT_SPELLCAST_SENT') "
+           "f:SetScript('OnEvent', function(self, e, u, name, rank, target) sent = u .. '/' .. name .. '/' .. target end)");
+    ui.run("UseContainerItem(0, 1)");
+    REQUIRE(s.sent().of(Opcode::CMSG_USE_ITEM).size() == 1);
+    CHECK(ui.is("sent ~= nil and sent:sub(1, 13) == 'player/Drink/'"));
+}
+
+// T422 (FIXER AD): a key lifted off the keyring (container -2) read as an
+// item off the action bar - the no-source marker was -2 too - so the drop
+// put it back and nothing was sent. 0x005d7ff0 swaps it like any bag item
+// (CMSG_SWAP_ITEM, the keyring's slots 86.. of the player's slot array).
+TEST_CASE("a key moves inside the keyring (T422)", "[replay][interface]") {
+    constexpr uint64_t kKey = 0x4000000000000B21ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    auto& gh = s.handler();
+    auto& info = gh.itemInfoCacheRef()[7146];
+    info.entry = 7146;
+    info.valid = true;
+    info.name = "Key";
+    wowee::game::ItemDef key;
+    key.itemId = 7146;
+    key.name = "Key";
+    key.guid = kKey;
+    key.stackCount = 1;
+    REQUIRE(gh.inventoryRef().setKeyringSlot(0, key));
+    gh.keyringSlotGuidsRef()[0] = kKey;
+    gh.onlineItemsRef()[kKey].entry = 7146;
+    ui.run("PickupContainerItem(-2, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    ui.run("PickupContainerItem(-2, 2)");
+    const auto swaps = s.sent().of(Opcode::CMSG_SWAP_ITEM);
+    REQUIRE(swaps.size() == 1);
+    auto p = swaps.front();
+    CHECK(p.readUInt8() == 0xFF);   // destination: the player's slots
+    CHECK(p.readUInt8() == 87);     // keyring slot 2
+    CHECK(p.readUInt8() == 0xFF);
+    CHECK(p.readUInt8() == 86);     // from keyring slot 1
+    CHECK(ui.is("not CursorHasItem()"));
+}
+
 // T420 (FIXER AD): a split's source (0x005d7ff0 -> 0x006db9d0, then
 // ClearCursor(0, 1), no unlock) waits for its new count. AzerothCore sends
 // that count in a CREATE block of the known item, which 12340 reads as a

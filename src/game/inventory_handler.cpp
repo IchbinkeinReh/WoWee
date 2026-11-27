@@ -2747,6 +2747,20 @@ void InventoryHandler::sendUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t ite
              " selected=", owner_.getTargetGuid() != 0 ? 1 : 0,
              " packetSize=", packet.getSize());
     owner_.getSocket()->send(packet);
+    // T423: the use goes out through the cast routine (0x0080ac90 builds
+    // CMSG_USE_ITEM and jumps to the tail CMSG_CAST_SPELL shares), which
+    // ends with UNIT_SPELLCAST_SENT ("player", the spell's name and rank,
+    // the unit target's name or ""). The cast-sequence manager advances on
+    // it, so a /castsequence holding an item's spell never moved past it.
+    if (spellId != 0 && owner_.addonEventCallbackRef()) {
+        // A spell aimed at its caster (TARGET_UNIT_CASTER) carries no unit
+        // in its targets, so its SENT names nobody, as a spell's does.
+        const bool atCaster = targetGuid == owner_.getPlayerGuid() && owner_.getSpellImplicitTargetA(spellId) == 1;
+        const std::string targetName =
+            targetGuid != 0 && !atCaster ? owner_.lookupName(targetGuid) : std::string();
+        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT",
+            {"player", owner_.getSpellName(spellId), owner_.getSpellRank(spellId), targetName});
+    }
 }
 
 bool InventoryHandler::isAwaitingUnitTarget() const {
