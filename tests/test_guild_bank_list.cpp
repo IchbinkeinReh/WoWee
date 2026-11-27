@@ -215,3 +215,48 @@ TEST_CASE("the guild permissions are the rank, its rights and six tab pairs") {
     CHECK_FALSE(GuildPermissionsParser::parse(packet, data));
     CHECK(data.rankId == 7u);
 }
+
+// Guild bank review (found by Z in code): 0x005a7250 writes only the slots a
+// list names and keeps the rest of the tab - the realms send a deposit's or a
+// withdrawal's slot alone. Every list emptied the tab first, so after any
+// move the open tab showed one or two items until it was asked for again.
+TEST_CASE("a guild bank list changes only the slots it names (0x005a7250)", "[guildbank]") {
+    GuildBankData data;
+    const auto apply = [&data](Writer& w) {
+        wowee::network::Packet packet(0, std::move(w.bytes));
+        REQUIRE(GuildBankListParser::parse(packet, data));
+    };
+    Writer full = header(0, true, {"Eins", "Zwei"});
+    full.u8(2);
+    full.item(0, 6948, 1);
+    full.item(1, 4306, 20);
+    apply(full);
+    REQUIRE(data.tabItems.size() == 2);
+
+    Writer change = header(0, false, {});
+    change.u8(2);
+    change.u8(1);      // slot 1 emptied
+    change.u32(0);
+    change.item(2, 2589, 5);
+    apply(change);
+    const auto has = [&data](uint8_t slot, uint32_t entry) {
+        for (const auto& s : data.tabItems)
+            if (s.slotId == slot) return s.itemEntry == entry;
+        return false;
+    };
+    CHECK(has(0, 6948));
+    CHECK(has(1, 0));
+    CHECK(has(2, 2589));
+
+    // Another tab, then back: the first tab's slots are where it left them.
+    Writer second = header(1, false, {});
+    second.u8(1);
+    second.item(7, 2592, 3);
+    apply(second);
+    CHECK(data.tabItems.size() == 1);
+    Writer back = header(0, false, {});
+    back.u8(0);
+    apply(back);
+    CHECK(has(0, 6948));
+    CHECK(has(2, 2589));
+}

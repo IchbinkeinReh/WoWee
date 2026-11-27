@@ -4710,3 +4710,22 @@ TEST_CASE("the arena roster sorts by a column list as 0x005a2e80", "[replay][int
     order();
     CHECK(ui.is("order == 'Carl;Bert;Anna;'"));
 }
+
+// Guild bank review (found by Z in code): guild event 0x10 gives the tab its
+// new name and icon before GUILDBANK_UPDATE_TABS (0x006d92d0 -> 0x005a4220);
+// the tab kept its old name until the next full list.
+TEST_CASE("a renamed guild bank tab shows its new name at once (0x005a4220)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.handler().setGuildBankTabCount(1);
+    wowee::network::Packet event(wowee::game::wireOpcode(Opcode::SMSG_GUILD_EVENT));
+    event.writeUInt8(0x10);
+    event.writeUInt8(3);
+    event.writeString("0");
+    event.writeString("Kräuter");
+    event.writeString("INV_Misc_Herb_01");
+    s.receive(event);
+    CHECK(ui.is("GetGuildBankTabInfo(1) == 'Kräuter'"));
+    CHECK(ui.is("select(2, GetGuildBankTabInfo(1)):find('INV_Misc_Herb_01') ~= nil"));
+}

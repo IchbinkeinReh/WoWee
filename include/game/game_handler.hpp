@@ -5360,6 +5360,8 @@ public:
     /// The tabs the guild has bought (0x00c1dc0c), and setting it.
     uint8_t getGuildBankTabCount() const;
     void setGuildBankTabCount(uint8_t count);
+    /// Guild event 0x10 (0x005a4220): a tab's new name and icon.
+    void storeGuildBankTabInfo(uint8_t tab, const std::string& name, const std::string& icon);
     uint8_t getGuildBankActiveTab() const;
     void setGuildBankActiveTab(uint8_t tab);
 

@@ -783,6 +783,13 @@ public:
     /// next and the one BuyGuildBankTab buys all count from it.
     uint8_t getGuildBankTabCount() const { return guildBankTabCount_; }
     void setGuildBankTabCount(uint8_t count) { guildBankTabCount_ = count; }
+    /// Guild event 0x10 (0x005a4220): a tab's new name and icon.
+    void storeGuildBankTabInfo(uint8_t tab, const std::string& name, const std::string& icon) {
+        if (tab >= 6) return;
+        if (guildBankData_.tabs.size() <= tab) guildBankData_.tabs.resize(tab + 1u);
+        guildBankData_.tabs[tab].tabName = name;
+        guildBankData_.tabs[tab].tabIcon = icon;
+    }
 
     // ---- Auction House ----
     void openAuctionHouse(uint64_t guid);

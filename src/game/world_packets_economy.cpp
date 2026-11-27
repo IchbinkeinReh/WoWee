@@ -538,7 +538,15 @@ bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
     if (!packet.hasRemaining(14)) return false;
 
     data.money = packet.readUInt64();
+    // 0x005a7250 keeps every tab's 98 slots and writes only the slots a list
+    // names - the realms send a changed slot alone to whoever looks at the
+    // tab. The open tab's slots go back to their tab before another is read.
+    const uint8_t previousTab = data.tabId;
+    if (previousTab < data.tabs.size()) data.tabs[previousTab].items = data.tabItems;
     data.tabId = packet.readUInt8();
+    if (data.tabId != previousTab)
+        data.tabItems = data.tabId < data.tabs.size() ? data.tabs[data.tabId].items
+                                                      : std::vector<GuildBankItemSlot>{};
     data.withdrawAmount = static_cast<int32_t>(packet.readUInt32());
     uint8_t fullUpdate = packet.readUInt8();
 
@@ -577,12 +585,15 @@ bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
 
     if (!packet.hasRemaining(1)) {
         LOG_WARNING("GuildBankListParser: truncated before numSlots");
-        data.tabItems.clear();
         return true;
     }
 
     uint8_t numSlots = packet.readUInt8();
-    data.tabItems.clear();
+    // A slot written replaces what that slot held (an empty one as entry 0).
+    const auto store = [&data](const GuildBankItemSlot& slot) {
+        std::erase_if(data.tabItems, [&slot](const GuildBankItemSlot& s) { return s.slotId == slot.slotId; });
+        data.tabItems.push_back(slot);
+    };
     for (uint8_t i = 0; i < numSlots; ++i) {
         // Validate minimum bytes before reading slot (slotId(1) + itemEntry(4) = 5)
         if (!packet.hasRemaining(5)) {
@@ -633,7 +644,7 @@ bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
                 packet.readUInt32();  // socket enchantment
             }
         }
-        data.tabItems.push_back(slot);
+        store(slot);
     }
     return true;
 }

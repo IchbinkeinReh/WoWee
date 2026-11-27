@@ -1778,6 +1778,10 @@ void GameHandler::setGuildBankTabCount(uint8_t count) {
     if (inventoryHandler_) inventoryHandler_->setGuildBankTabCount(count);
 }
 
+void GameHandler::storeGuildBankTabInfo(uint8_t tab, const std::string& name, const std::string& icon) {
+    if (inventoryHandler_) inventoryHandler_->storeGuildBankTabInfo(tab, name, icon);
+}
+
 void GameHandler::setGuildBankMoney(uint64_t money) {
     if (inventoryHandler_) inventoryHandler_->setGuildBankMoney(money);
     else guildBankData_.money = money;

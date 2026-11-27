@@ -3752,7 +3752,18 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             owner_.setGuildBankTabCount(static_cast<uint8_t>(owner_.getGuildBankTabCount() + 1));
             break;
         case GuildEvent::BANK_BAG_SLOTS_CHANGED:
+            // 0x006d92d0 case 0xe -> 0x005a5800: the open tab asked for again
+            // (with a banker), then GUILDBANKBAGSLOTS_CHANGED below.
+            owner_.queryGuildBankTab(owner_.getGuildBankActiveTab());
+            break;
         case GuildEvent::BANK_TAB_UPDATED:
+            // Case 0x10 -> 0x005a4220: the tab (string 0) takes its new name
+            // (1) and icon (2), then GUILDBANK_UPDATE_TABS below.
+            if (data.numStrings >= 3)
+                owner_.storeGuildBankTabInfo(
+                    static_cast<uint8_t>(std::strtol(data.strings[0].c_str(), nullptr, 10)),
+                    data.strings[1], data.strings[2]);
+            break;
         case GuildEvent::BANK_TEXT_CHANGED:
         case GuildEvent::RANK_DELETED:
             // Silent here; the interface events they mean are fired below.
