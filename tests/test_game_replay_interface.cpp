@@ -173,6 +173,25 @@ void rollsGorilla(Session& s) {
 
 }  // namespace
 
+// T425: GetItemInfo 0x00516c60 reads a link whole (0x0050f630) and names the
+// item and its link with the link's property (0x00706d70, 0x0061e290).
+TEST_CASE("GetItemInfo of a link keeps what it rolled", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    rollsGorilla(s);
+    answerItem(s, 12047, "Spectral Necklace");
+    ui.run("n, l, _, _, _, _, _, _, _, tex = GetItemInfo('|cff1eff00|Hitem:12047:5:6:7:8:9:-24:35:80|h[x]|h|r')");
+    CHECK(ui.is("n == 'Spectral Necklace of the Gorilla'"));
+    CHECK(ui.is("strfind(l, 'item:12047:5:6:7:8:0:%-24:35:', 1) ~= nil"));
+    CHECK(ui.is("strfind(l, '[Spectral Necklace of the Gorilla]', 1, true) ~= nil"));
+    CHECK(ui.is("type(tex) == 'string'"));
+    // An id or a link without a property: the plain name.
+    CHECK(ui.is("GetItemInfo(12047) == 'Spectral Necklace'"));
+    CHECK(ui.is("GetItemInfo('item:12047:0:0:0:0:0:0:0:80') == 'Spectral Necklace'"));
+    CHECK(ui.is("strfind(select(2, GetItemInfo(12047)), 'item:12047:0:0:0:0:0:0:0:', 1) ~= nil"));
+}
+
 // P56: 0x0062f9e0 gives the tooltip the attachment's property and seed, as
 // every tooltip of an item is given what it rolled (0x006277f0).
 TEST_CASE("a letter's attachment is named and read with what it rolled", "[replay][interface]") {

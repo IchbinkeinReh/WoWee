@@ -835,6 +835,36 @@ static int lua_CanMerchantRepair(lua_State* L) {
 
 // UnitStat(unit, statIndex) → base, effective, posBuff, negBuff
 
+/// The instance numbers of an "item:" link as 0x0050f630 reads them: the
+/// enchant, the first three gems, the suffix and the seed (the unique id).
+struct LinkedInstance {
+    uint32_t enchant = 0;
+    uint32_t gems[3] = {0, 0, 0};
+    int32_t suffix = 0;
+    uint32_t seed = 0;
+};
+
+static bool linkedInstance(const std::string& text, LinkedInstance& out) {
+    const auto pos = text.find("item:");
+    if (pos == std::string::npos) return false;
+    // id:enchant:gem1:gem2:gem3:gem4:suffix:unique
+    long v[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    const char* p = text.c_str() + pos + 5;
+    for (int i = 0; i < 8; ++i) {
+        char* end = nullptr;
+        v[i] = std::strtol(p, &end, 10);
+        if (*end != ':') break;
+        p = end + 1;
+    }
+    out.enchant = static_cast<uint32_t>(v[1]);
+    out.gems[0] = static_cast<uint32_t>(v[2]);
+    out.gems[1] = static_cast<uint32_t>(v[3]);
+    out.gems[2] = static_cast<uint32_t>(v[4]);
+    out.suffix = static_cast<int32_t>(v[6]);
+    out.seed = static_cast<uint32_t>(v[7]);
+    return true;
+}
+
 /// An item id from an id, an "item:" link or the name of a cached item,
 /// compared without case (0x00709de0) - what every one of these functions
 /// is documented to accept.
@@ -861,6 +891,23 @@ static uint32_t itemIdFromArg(lua_State* L, int index) {
     return 0;
 }
 
+// The icon of a display as 0x0070a910 names it: StringLookups row 3, a
+// backslash and ItemDisplayInfo's icon, INV_Misc_QuestionMark when the
+// display has none ("%s%s%s" in GetItemIcon 0x00517020 and GetItemInfo
+// 0x00516c60).
+static std::string itemIconTexture(game::GameHandler* gh, uint32_t displayId) {
+    std::string path = displayId ? gh->getItemIconPath(displayId) : std::string();
+    if (path.empty()) path = "Interface\\Icons\\INV_Misc_QuestionMark";
+    const std::string dir = stringLookup(gh, 3);
+    if (!dir.empty()) {
+        // The resolver answers under Interface\Icons; the client builds the
+        // same path from the lookup row.
+        const auto slash = path.find_last_of('\\');
+        path = dir + "\\" + path.substr(slash == std::string::npos ? 0 : slash + 1);
+    }
+    return path;
+}
+
 // GetItemIcon(item) (0x00517020): the icon of Item.dbc's display (+0x14) for
 // the item - a number, or an "item:" link or the name of a cached item
 // (0x00709de0, names compared without case) - as StringLookups row 3, a
@@ -876,16 +923,7 @@ static int lua_GetItemIcon(lua_State* L) {
     const int32_t row = items->findRecordById(static_cast<uint32_t>(itemId));
     if (row < 0) return 0;
     const uint32_t displayId = items->getUInt32(static_cast<uint32_t>(row), 5);
-    std::string path = gh->getItemIconPath(displayId);
-    if (path.empty()) path = "Interface\\Icons\\INV_Misc_QuestionMark";
-    const std::string dir = stringLookup(gh, 3);
-    if (!dir.empty()) {
-        // The resolver answers under Interface\Icons; the client builds the
-        // same path from the lookup row.
-        const auto slash = path.find_last_of('\\');
-        path = dir + "\\" + path.substr(slash == std::string::npos ? 0 : slash + 1);
-    }
-    lua_pushstring(L, path.c_str());
+    lua_pushstring(L, itemIconTexture(gh, displayId).c_str());
     return 1;
 }
 
@@ -1136,11 +1174,25 @@ static int lua_GetItemInfo(lua_State* L) {
         return luaReturnNil(L);
     }
 
-    lua_pushstring(L, info->name.c_str());          // 1: name
-    // Build item link with quality-colored text
-    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name,
-                                 {}, gh->getPlayerLevel());
-    lua_pushstring(L, link.c_str());                         // 2: link
+    // 0x00516c60 reads a link whole (0x0050f630): the enchant, three gems, the
+    // random property and the unique id go into the link it answers
+    // (0x0061e290, the fourth gem written 0, the level the player's own), and
+    // the property names the item in both (0x00706d70: ITEM_SUFFIX_TEMPLATE
+    // with ItemRandomProperties' name, a negative id ItemRandomSuffix's). An id
+    // or a name has none of them.
+    game::ItemLinkInstance inst;
+    LinkedInstance linked;
+    if (!lua_isnumber(L, 1) && lua_isstring(L, 1) && linkedInstance(lua_tostring(L, 1), linked)) {
+        inst.enchantId = linked.enchant;
+        for (size_t i = 0; i < 3; ++i) inst.gems[i] = linked.gems[i];
+        inst.randomPropertyId = linked.suffix;
+        inst.seed = linked.seed;
+    }
+    const std::string name = gh->itemNameWithProperty(info->name, inst.randomPropertyId);
+    lua_pushstring(L, name.c_str());                 // 1: name
+    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), name,
+                                 inst, gh->getPlayerLevel());
+    lua_pushstring(L, link.c_str());                 // 2: link
     lua_pushnumber(L, info->quality);                // 3: quality
     lua_pushnumber(L, info->itemLevel);              // 4: iLevel
     lua_pushnumber(L, info->requiredLevel);          // 5: requiredLevel
@@ -1171,14 +1223,9 @@ static int lua_GetItemInfo(lua_State* L) {
         uint32_t invType = info->inventoryType;
         lua_pushstring(L, invType < kNumInvTypes ? kLuaInvTypes[invType] : "");
     }
-    // 10: texture (icon path from ItemDisplayInfo.dbc)
-    if (info->displayInfoId != 0) {
-        std::string iconPath = gh->getItemIconPath(info->displayInfoId);
-        if (!iconPath.empty()) lua_pushstring(L, iconPath.c_str());
-        else lua_pushnil(L);
-    } else {
-        lua_pushnil(L);
-    }
+    // 10: texture - always a path, the question mark for a display without
+    // an icon (0x0070a910).
+    lua_pushstring(L, itemIconTexture(gh, info->displayInfoId).c_str());
     lua_pushnumber(L, info->sellPrice);              // 11: vendorPrice
     return 11;
 }
@@ -2969,36 +3016,6 @@ struct CarriedItem {
     int bag = -1;
     int slot = -1;
 };
-
-/// The instance numbers of an "item:" link as 0x0050f630 reads them: the
-/// enchant, the first three gems, the suffix and the seed (the unique id).
-struct LinkedInstance {
-    uint32_t enchant = 0;
-    uint32_t gems[3] = {0, 0, 0};
-    int32_t suffix = 0;
-    uint32_t seed = 0;
-};
-
-static bool linkedInstance(const std::string& text, LinkedInstance& out) {
-    const auto pos = text.find("item:");
-    if (pos == std::string::npos) return false;
-    // id:enchant:gem1:gem2:gem3:gem4:suffix:unique
-    long v[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-    const char* p = text.c_str() + pos + 5;
-    for (int i = 0; i < 8; ++i) {
-        char* end = nullptr;
-        v[i] = std::strtol(p, &end, 10);
-        if (*end != ':') break;
-        p = end + 1;
-    }
-    out.enchant = static_cast<uint32_t>(v[1]);
-    out.gems[0] = static_cast<uint32_t>(v[2]);
-    out.gems[1] = static_cast<uint32_t>(v[3]);
-    out.gems[2] = static_cast<uint32_t>(v[4]);
-    out.suffix = static_cast<int32_t>(v[6]);
-    out.seed = static_cast<uint32_t>(v[7]);
-    return true;
-}
 
 /// 0x007545d0: a carried item answers a link when each number the link
 /// names - enchant, gems, suffix, seed - is the item's own. An item whose
