@@ -5809,54 +5809,48 @@ TEST_CASE("a guild bank list lets the held slot go, a new player starts the bank
     CHECK(fullByte() == 1);
 }
 
-// AB's open item (FIXER AC): a moved slot's lock is the slot record's +0x24
-// (0x005a5410 leaves it set, 0x005a4c40 reads it for the slot's own item).
-// A list clears it only for the slots it names (0x005a7250 writes +0x24 = 0
-// per listed slot), the player object made anew frees every slot
-// (0x005a7760). WoWee kept the moves in a process-wide list that any list
-// emptied - another slot's list unlocked the slot, and a move left in it
-// leaked into the next session.
-TEST_CASE("a moved guild bank slot stays locked until a list names it (0x005a7250)", "[replay][interface]") {
-    // (GetGuildBankItemInfo answers nothing here - no icons without the
-    // client's files - so the lock is read from the handler and from the
-    // pickup it refuses, 0x005137a0.)
-    const auto locked = [](Session& s) {
-        return s.handler().getInventoryHandler()->guildBankSlotMoveLocked(0, 0);
-    };
-    {
-        Session s;
-        s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
-        Interface ui(s);
-        openTestGuildBank(s);
-        ui.run("PickupGuildBankItem(1, 1)");
-        ui.run("PickupGuildBankItem(1, 50)");         // a move to an empty slot
-        REQUIRE(s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS).size() == 1);
-        CHECK(locked(s));
-        listGuildBankSlots(s, {{10, 0, 0}});         // another slot: still locked
-        CHECK(locked(s));
-        ui.run("PickupGuildBankItem(1, 1)");
-        CHECK(ui.is("not CursorHasItem()"));
-        listGuildBankSlots(s, {{0, 2589, 5}});        // this one: free again
-        CHECK_FALSE(locked(s));
-        ui.run("PickupGuildBankItem(1, 1)");
-        CHECK(ui.is("CursorHasItem() == 1"));
-        // Locked again, then the player object made anew: every slot freed.
-        ui.run("PickupGuildBankItem(1, 50)");
-        CHECK(locked(s));
-        s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
-        openTestGuildBank(s);
-        CHECK_FALSE(locked(s));
-        ui.run("ClearCursor() PickupGuildBankItem(1, 1)");
-        ui.run("PickupGuildBankItem(1, 50)");         // left locked at the end
-        CHECK(locked(s));
-    }
-    // A new session knows nothing of the last one's moves.
+// T430: a guild bank slot's lock (+0x24) is set at the pickup (0x005137d0)
+// and let go by every drop: ClearCursor, and a move's own put-down too -
+// 0x005a5410 ends in 0x00519280(1, 1), which clears +0x24 (0x005a4ce0). A
+// slot put back on itself or dropped stayed locked for good, waiting on a
+// list the realm never sends for nothing moved.
+// T429: 0x005a50c0 refuses a deposit before anything is sent and returns -
+// the item stays on the cursor as it was picked up. Here the tab's deposit
+// right (0x005a41c0 bit 2, game error 0x5f): tab 2 is view only.
+TEST_CASE("a refused guild bank deposit leaves the item on the cursor (0x005a50c0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    openTestGuildBank(s);
+    carry(s, 1251, 0, 0);
+    ui.run("PickupContainerItem(0, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    ui.run("PickupGuildBankItem(2, 10)");
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS).empty());
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("PickupGuildBankItem(1, 10)");            // tab 1 takes it
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS).size() == 1);
+    CHECK(ui.is("not CursorHasItem()"));
+}
+
+TEST_CASE("a guild bank slot is let go by every drop (0x00519280)", "[replay][interface]") {
     Session s;
     s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
     Interface ui(s);
     openTestGuildBank(s);
-    CHECK_FALSE(locked(s));
     ui.run("PickupGuildBankItem(1, 1)");
+    REQUIRE(ui.is("CursorHasItem() == 1"));
+    ui.run("PickupGuildBankItem(1, 1)");               // back on its own slot
+    CHECK(ui.is("not CursorHasItem()"));
+    ui.run("PickupGuildBankItem(1, 1)");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("ClearCursor() PickupGuildBankItem(1, 1)");
+    CHECK(ui.is("CursorHasItem() == 1"));
+    ui.run("PickupGuildBankItem(1, 50)");              // a move to an empty slot
+    REQUIRE(s.sent().of(Opcode::CMSG_GUILD_BANK_SWAP_ITEMS).size() >= 1);
+    CHECK(ui.is("not CursorHasItem()"));
+    ui.run("PickupGuildBankItem(1, 1)");               // no list yet: free all the same
     CHECK(ui.is("CursorHasItem() == 1"));
 }
 

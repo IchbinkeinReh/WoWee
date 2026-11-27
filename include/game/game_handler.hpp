@@ -5341,7 +5341,7 @@ public:
     void withdrawGuildBankMoney(uint32_t amount);
     void guildBankWithdrawItem(uint8_t tabId, uint8_t bankSlot, uint8_t destBag,
                                uint8_t destSlot, uint32_t splitCount = 0);
-    void guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
+    bool guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
     /// Rename a guild bank tab and pick its icon.
     void setGuildBankTabInfo(uint8_t tabId, const std::string& name, const std::string& icon);
     /// Ask for a tab's info text, and read back what arrived.

@@ -5248,13 +5248,6 @@ bool InventoryHandler::guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot) 
     return false;
 }
 
-void InventoryHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return;
-    if (guildBankRefusesDeposit(srcBag, srcSlot)) return;
-    auto packet = GuildBankSwapItemsPacket::buildInventoryToBank(guildBankerGuid_, tabId, bankSlot, srcBag, srcSlot);
-    owner_.getSocket()->send(packet);
-}
-
 namespace {
 /// The player's rank's row for a bank tab: its rights (0x005a41c0) and its
 /// items a day (0x005a41f0), both 0 past the sixth tab or without a row.
@@ -5271,6 +5264,21 @@ void guildBankPermissionError(GameHandler& gh) {
     gh.addSystemChatMessage(interfaceString("ERR_GUILD_PERMISSIONS", "You don't have permission to do that."));
 }
 } // namespace
+
+bool InventoryHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot) {
+    // 0x005a50c0: a refusal says so and returns before anything is sent or
+    // let go - the item stays on the cursor as it was picked up (T429). The
+    // tab's deposit right (0x005a41c0 bit 2) is asked last, game error 0x5f.
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return false;
+    if (guildBankRefusesDeposit(srcBag, srcSlot)) return false;
+    if ((guildBankTabAllowance(owner_, tabId).first & 0x02u) == 0) {
+        guildBankPermissionError(owner_);
+        return false;
+    }
+    auto packet = GuildBankSwapItemsPacket::buildInventoryToBank(guildBankerGuid_, tabId, bankSlot, srcBag, srcSlot);
+    owner_.getSocket()->send(packet);
+    return true;
+}
 
 InventoryHandler::GuildBankMove InventoryHandler::guildBankMoveItem(uint8_t destTab, uint8_t destSlot,
                                                                     uint32_t srcEntry, uint8_t srcTab,
@@ -5405,10 +5413,6 @@ void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     const auto& held = addons::guildBankCursorSlot();
     for (const auto& slot : guildBankData_.listed) {
         if (held.tab == guildBankData_.tabId + 1 && held.slot == slot.slotId + 1) owner_.dropCursor();
-        // The slot record rewritten: a move's lock on it gone (+0x24 = 0).
-        std::erase_if(guildBankMoveLocks_, [&](const GuildBankMoveLock& m) {
-            return m.tab == guildBankData_.tabId && m.slot == slot.slotId;
-        });
         if (slot.itemEntry == 0) continue;
         if (!owner_.itemInfoCacheRef().count(slot.itemEntry)) {
             owner_.ensureItemInfo(slot.itemEntry);
@@ -5461,7 +5465,6 @@ void InventoryHandler::resetGuildBankForNewPlayer() {
     guildBankTextStale_.fill(true);
     guildBankItemWaitCount_ = 0;
     guildBankItemWaits_.clear();
-    guildBankMoveLocks_.clear();
 }
 
 void InventoryHandler::lockItemUntilRealmAnswers(uint64_t guid) {
@@ -5480,19 +5483,6 @@ void InventoryHandler::itemStackChanged(uint64_t guid, uint32_t entry, bool stac
         const auto found = owner_.onlineItemsRef().find(g);
         return found != owner_.onlineItemsRef().end() && found->second.entry == entry;
     });
-}
-
-void InventoryHandler::lockGuildBankSlotForMove(uint32_t tab, uint32_t slot, uint32_t entry) {
-    std::erase_if(guildBankMoveLocks_, [&](const GuildBankMoveLock& m) { return m.tab == tab && m.slot == slot; });
-    guildBankMoveLocks_.push_back({tab, slot, entry});
-}
-
-bool InventoryHandler::guildBankSlotMoveLocked(uint32_t tab, uint32_t slot) const {
-    const auto* item = guildBankData_.slotAt(tab, slot);
-    if (!item) return false;
-    for (const auto& m : guildBankMoveLocks_)
-        if (m.tab == tab && m.slot == slot) return m.entry == item->itemEntry;
-    return false;
 }
 
 // ============================================================

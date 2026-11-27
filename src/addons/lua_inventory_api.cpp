@@ -7426,14 +7426,11 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (icon.empty()) return none();
             lua_pushstring(L, icon.c_str());
             lua_pushnumber(L, it.stackCount);
-            // Locked while its item is on the cursor (0x005137d0), and after
-            // a move until the bank's next list unlocks it (0x00513800).
+            // Locked while its item is on the cursor (0x005137d0 sets +0x24,
+            // 0x005a4c40 reads it); the drop lets it go, a move's as well
+            // (0x005a5410 ends in 0x00519280(1, 1) -> 0x005a4ce0).
             const auto& held = guildBankCursorSlot();
-            bool locked = held.tab == tab && held.slot == slot;
-            if (const auto* inv = gh->getInventoryHandler())
-                locked = locked || inv->guildBankSlotMoveLocked(static_cast<uint32_t>(tab - 1),
-                                                                static_cast<uint32_t>(slot - 1));
-            luaPushOneOrNil(L, locked ? 1 : 0);
+            luaPushOneOrNil(L, held.tab == tab && held.slot == slot ? 1 : 0);
             return 3;
         }},
                 // GetGuildBankItemLink(tab, slot) → hyperlink

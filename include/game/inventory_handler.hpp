@@ -552,13 +552,6 @@ public:
     void checkInbox();
     uint32_t mailTotalCount() const { return mailTotalCount_; }
     void openMailbox(uint64_t guid);
-    /// A guild bank slot whose item went out with a move stays locked (the
-    /// slot record's +0x24, 0x005a5410 leaves it set) until a list names
-    /// that slot (0x005a7250 writes +0x24 = 0) or the player object is made
-    /// anew (0x005a7760). The lock holds only while the slot still has the
-    /// item it was set for (0x005a4c40 compares the entry). Tab and slot
-    /// from zero.
-    void lockGuildBankSlotForMove(uint32_t tab, uint32_t slot, uint32_t entry);
     /// An item put down by a move the realm has not answered yet: 12340
     /// drops the cursor without unlocking it (0x006df890 ends in
     /// ClearCursor(0, 1)), and the lock goes when the realm puts the item
@@ -572,7 +565,6 @@ public:
     /// of its entry, let go (0x00707720 -> 0x00754d90).
     void itemStackChanged(uint64_t guid, uint32_t entry, bool stackable);
     void forgetItemsAwaitingRealm() { awaitingRealm_.clear(); }
-    bool guildBankSlotMoveLocked(uint32_t tab, uint32_t slot) const;
     bool equipmentSetListReceived() const { return equipmentSetListReceived_; }
     /// A character entered: no set list yet (0x005ae1b0).
     void forgetEquipmentSetList() { equipmentSetListReceived_ = false; }
@@ -795,7 +787,8 @@ public:
     [[nodiscard]] bool itemInTrade(uint64_t itemGuid) const;
     /// TRADE_POTENTIAL_BIND_ENCHANT's answer for an item (0x005869a0).
     [[nodiscard]] bool enchantWouldBind(uint64_t itemGuid) const;
-    void guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
+    /// False where it was refused and nothing was sent (0x005a50c0).
+    bool guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
     /// What became of a guild bank item put down inside the bank (0x005a5410).
     enum class GuildBankMove { Ignored, Refused, Dropped, Sent };
     /// A guild bank item held on the cursor (its entry, tab and slot from
@@ -1473,8 +1466,6 @@ private:
     // DurabilityQuality.dbc: [id] -> quality_mod float
     mutable std::unordered_map<uint32_t, float> durabilityQuality_;
     void loadRepairDbc() const;
-    struct GuildBankMoveLock { uint32_t tab = 0; uint32_t slot = 0; uint32_t entry = 0; };
-    std::vector<GuildBankMoveLock> guildBankMoveLocks_;
     std::vector<uint64_t> awaitingRealm_;
 };
 

@@ -2066,8 +2066,8 @@ void GameHandler::guildBankWithdrawItem(uint8_t tabId, uint8_t bankSlot, uint8_t
                                                                    destSlot, splitCount);
 }
 
-void GameHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot) {
-    if (inventoryHandler_) inventoryHandler_->guildBankDepositItem(tabId, bankSlot, srcBag, srcSlot);
+bool GameHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot) {
+    return inventoryHandler_ && inventoryHandler_->guildBankDepositItem(tabId, bankSlot, srcBag, srcSlot);
 }
 
 void GameHandler::queryGuildBankText(uint8_t tabId) {

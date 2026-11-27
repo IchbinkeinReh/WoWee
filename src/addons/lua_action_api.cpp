@@ -331,9 +331,6 @@ static void cursorItemPickedUp(lua_State* L, uint32_t itemId, bool wrapped = fal
     else if (s_cursorItemDisplay != 0) sfx->playItemSound(s_cursorItemDisplay, 0);
 }
 
-/// The cursor's guild bank item has gone out with a move (see setCursorType).
-static bool s_guildBankMoveSent = false;
-
 static void setCursorType(lua_State* L, CursorType type) {
     if (s_cursorType == type) return;
     // Putting anything down forgets the guild bank split. It rides on the
@@ -347,19 +344,10 @@ static void setCursorType(lua_State* L, CursorType type) {
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    // A guild bank item put down lets its slot go (0x00519280 case 0xb) -
-    // unless it went out with a move, which leaves the slot locked for the
-    // bank's update to free (0x00513800).
-    bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
-    if (releasedBankSlot && s_guildBankMoveSent) {
-        auto* gh = getGameHandler(L);
-        if (auto* inv = gh ? gh->getInventoryHandler() : nullptr)
-            inv->lockGuildBankSlotForMove(static_cast<uint32_t>(guildBankCursorSlot().tab - 1),
-                                          static_cast<uint32_t>(guildBankCursorSlot().slot - 1), s_cursorId);
-        releasedBankSlot = false;
-        guildBankCursorSlot() = {};
-    }
-    s_guildBankMoveSent = false;
+    // A guild bank item put down lets its slot go (0x00519280 case 0xb ->
+    // 0x005a4ce0) - after a move's send as well: 0x005a5410 and 0x005a50c0
+    // end in 0x00519280(1, 1), so no slot waits on the realm's list (T430).
+    const bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
     if (releasedBankSlot) guildBankCursorSlot() = {};
     if (!engine) return;
     if (releasedBankSlot) engine->fireEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
@@ -2069,8 +2057,8 @@ static int lua_PickupGuildBankItem(lua_State* L) {
     // Carrying a bag item, so this is the deposit (0x005a50c0).
     uint8_t srcBag = 0, srcSlot = 0;
     if (cursorWireSlot(srcBag, srcSlot)) {
-        gh->guildBankDepositItem(tab0, slot0, srcBag, srcSlot);
-        setCursorType(L, CursorType::NONE);
+        // Refused, the item stays on the cursor (0x005a50c0 returns first).
+        if (gh->guildBankDepositItem(tab0, slot0, srcBag, srcSlot)) setCursorType(L, CursorType::NONE);
         return 0;
     }
     // Carrying a bank item already: a move inside the bank (0x005a5410) -
@@ -2083,9 +2071,8 @@ static int lua_PickupGuildBankItem(lua_State* L) {
                                               static_cast<uint8_t>(s_cursorBag - 1),
                                               static_cast<uint8_t>(s_cursorSlot - 1), s_cursorSplit);
         if (m == Move::Sent) {
-            // The source stays locked until the bank's next list
-            // (0x00519280 after the send), then GUILDBANKBAGSLOTS_CHANGED.
-            s_guildBankMoveSent = true;
+            // The cursor let go with its slot (0x00519280(1, 1)), then
+            // GUILDBANKBAGSLOTS_CHANGED (0x21a).
             setCursorType(L, CursorType::NONE);
             gh->fireAddonEvent("GUILDBANKBAGSLOTS_CHANGED", {});
         } else if (m == Move::Dropped) {
@@ -2095,11 +2082,9 @@ static int lua_PickupGuildBankItem(lua_State* L) {
     }
 
     // Otherwise pick the slot up, if there is anything in it - out of that
-    // tab's own slots (0x005a4c10), not the open tab's - and not while the
-    // slot is locked by a move on its way (0x005137a0).
+    // tab's own slots (0x005a4c10), not the open tab's.
     const auto* it = gh->getGuildBankData().slotAt(tab0, slot0);
     if (!it) return 0;
-    if (const auto* inv = gh->getInventoryHandler(); inv && inv->guildBankSlotMoveLocked(tab0, slot0)) return 0;
     const uint32_t entry = it->itemEntry;
     // A spell waiting for a target is put down first (0x007fd620 ->
     // 0x00809a60). (12340 then needs the item's Item.dbc row, 0x0065c290,
@@ -2618,7 +2603,6 @@ static int lua_PickupContainerItem(lua_State* L) {
         gh->guildBankWithdrawItem(static_cast<uint8_t>(s_cursorBag - 1),
                                   static_cast<uint8_t>(s_cursorSlot - 1),
                                   dstBag, dstSlot, s_cursorSplit);
-        s_guildBankMoveSent = true;
         setCursorType(L, CursorType::NONE);
         return 0;
     }
