@@ -235,7 +235,9 @@ static int lua_GetContainerItemCooldown(lua_State* L) {
         // Through the shared resolver, so the bank and the keyring answer too:
         // BankFrame_UpdateCooldown asks this for every one of its slots.
         const game::ItemSlot* s = containerItemSlot(inv, bag, slot);
-        if (s && !s->empty()) return pushHistoryCooldown(L, gh->itemCooldown(s->item.itemId));
+        // 0x008090c0 on the slot's copy: its use spell or its used
+        // enchantment's, 0, 0, 1 with neither.
+        if (s && !s->empty()) return pushItemCopyCooldown(L, gh, s->item.itemId, s->item.guid, /*noneIsOff=*/false);
     }
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 0);
@@ -5007,8 +5009,10 @@ static int lua_GetContainerItemLink(lua_State* L) {
 // worn or banked bag, and the bank while a banker is open; one 0 for
 // anything else - no bag there, the bank shut, the keyring.
 static int lua_GetContainerNumFreeSlots(lua_State* L) {
+    // 0x005d7590's own line, under the name it gives the function.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetContainerFreeSlots(index)");
     auto* gh = getGameHandler(L);
-    const int container = static_cast<int>(luaL_checknumber(L, 1));
+    const int container = static_cast<int>(lua_tonumber(L, 1));
     if (!gh) return luaReturnZero(L);
     const auto& inv = gh->getInventory();
     // The bag in a worn or bank bag slot, which a bag container must have.
@@ -6737,17 +6741,16 @@ void registerInventoryLuaAPI(lua_State* L) {
                 }
             }
             if (itemId == 0) { lua_pushnil(L); lua_pushnil(L); return 2; }
-            const auto* info = gh->getItemInfo(itemId);
-            if (!info) { lua_pushnil(L); lua_pushnil(L); return 2; }
-            for (const auto& sp : info->spells) {
-                if (sp.spellId == 0 || sp.spellTrigger != 0) continue;
-                const std::string& name = gh->getSpellName(sp.spellId);
-                if (name.empty()) continue;
+            // 0x005a86b0: the item's use spell (0x00706b90), else a worn
+            // copy's used enchantment (0x00707c60) - an engineer's tinker.
+            const uint32_t spell = itemUseSpell(gh, itemId);
+            const std::string name = spell ? gh->getSpellName(spell) : std::string();
+            if (!name.empty()) {
                 lua_pushstring(L, name.c_str());
                 // The spell's rank subtext, the same string the spellbook shows
                 // - empty for the many item spells that carry no rank, the real
-                // "Rank N" for those that do. It is tracked; it was hardcoded "".
-                lua_pushstring(L, gh->getSpellRank(sp.spellId).c_str());
+                // "Rank N" for those that do.
+                lua_pushstring(L, gh->getSpellRank(spell).c_str());
                 return 2;
             }
             { lua_pushnil(L); lua_pushnil(L); return 2; }

@@ -2359,6 +2359,10 @@ public:
     /// enchantments that is used (SpellItemEnchantment type 7), 0 for none
     /// or with the item's record not cached. Nothing when none is worn.
     std::optional<uint32_t> wornItemEnchantUseSpell(uint32_t itemId, uint64_t guid = 0) const;
+    /// 0x00707c60(0) past the item's own use spell, on the copy `guid` of
+    /// `itemId`: its first enchantment of type 7's spell; 0 for none, or
+    /// with the item's record not cached.
+    uint32_t itemCopyEnchantUseSpell(uint32_t itemId, uint64_t guid) const;
     /// 0x00807980: a spell's cooldown as cast from the item `itemId`.
     spell_history::History::Cooldown itemSpellCooldown(uint32_t spellId, uint32_t itemId) const;
 

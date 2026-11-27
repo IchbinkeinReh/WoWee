@@ -78,10 +78,10 @@ ItemEnchantUse itemEnchantUse(game::GameHandler* gh, uint32_t itemId) {
     for (int slot = 0; slot < static_cast<int>(game::EquipSlot::NUM_SLOTS); ++slot) {
         const auto it = gh->onlineItemsRef().find(gh->getEquipSlotGuid(slot));
         if (it == gh->onlineItemsRef().end() || it->second.entry != itemId) continue;
-        const auto& o = it->second;
-        const uint32_t ids[5] = {o.permanentEnchantId, o.temporaryEnchantId, o.socketEnchantIds[0],
-                                 o.socketEnchantIds[1], o.socketEnchantIds[2]};
-        for (const uint32_t id : ids) {
+        // All twelve ITEM_FIELD_ENCHANTMENT slots, as 0x00707c60 walks them
+        // (0xc of three dwords) - the bonus, prismatic and property slots
+        // too, which the five read here before left out.
+        for (const uint32_t id : it->second.enchantIds) {
             const int32_t row = id != 0 ? ench->findRecordById(id) : -1;
             if (row < 0) continue;
             for (uint32_t k = 0; k < 3; ++k) {
@@ -93,8 +93,8 @@ ItemEnchantUse itemEnchantUse(game::GameHandler* gh, uint32_t itemId) {
                 return out;
             }
         }
-        // 0x005a86b0 takes the first such item it finds.
-        return out;
+        // 0x005a86b0's first pass (0x00754a20 with 0xa1) takes a copy with
+        // such a spell; its second any, which has none to give.
     }
     return out;
 }

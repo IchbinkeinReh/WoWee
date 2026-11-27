@@ -1531,9 +1531,8 @@ inline int pushHistoryCooldown(lua_State* L, const game::spell_history::History:
 /// one, a worn copy's (0x005a86b0 -> 0x008090c0): the spell of its used
 /// enchantment - an engineer's tinker on gloves or a belt - cast from the
 /// item, or 0, 0, 1 with none (0x00807980 sets enable before it finds no
-/// spell); 0, 0, 0 with no copy worn. `guid` is the copy to read, for
-/// GetInventoryItemCooldown (0x005e7e60), which has its slot's.
-inline int pushItemCooldown(lua_State* L, game::GameHandler* gh, uint32_t itemId, uint64_t guid = 0) {
+/// spell); 0, 0, 0 with no copy worn.
+inline int pushItemCooldown(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
     const auto* info = gh ? gh->getItemInfo(itemId) : nullptr;
     // An item not known yet is asked for, and the answer that finds it redraws
     // the cooldowns if its use spell turns out to be on one (0x00809030 hands
@@ -1547,12 +1546,32 @@ inline int pushItemCooldown(lua_State* L, game::GameHandler* gh, uint32_t itemId
     for (size_t k = 0; info && info->valid && k < info->spells.size() && !use; ++k)
         use = info->spells[k].spellId != 0 && info->spells[k].spellTrigger == 0;
     if (use) return pushHistoryCooldown(L, gh->itemCooldown(itemId));
-    if (const auto spell = gh ? gh->wornItemEnchantUseSpell(itemId, guid) : std::nullopt)
+    if (const auto spell = gh ? gh->wornItemEnchantUseSpell(itemId) : std::nullopt)
         return pushHistoryCooldown(L, *spell != 0 ? gh->itemSpellCooldown(*spell, itemId)
                                                    : game::spell_history::History::Cooldown{});
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 0);
+    return 3;
+}
+
+/// A slot's own copy, as 0x008090c0 answers for it: the use spell, else
+/// the copy's used enchantment (0x00707c60), cast from the item. With
+/// neither, GetContainerItemCooldown (0x005d7d90) still asks 0x00807980,
+/// which sets enable first - 0, 0, 1 - while GetInventoryItemCooldown
+/// (0x005e7e60) asks 0x00707c60 first and answers 0, 0, 0 (`noneIsOff`).
+inline int pushItemCopyCooldown(lua_State* L, game::GameHandler* gh, uint32_t itemId, uint64_t guid,
+                                bool noneIsOff) {
+    const auto* info = gh ? gh->getItemInfo(itemId) : nullptr;
+    bool use = false;
+    for (size_t k = 0; info && info->valid && k < info->spells.size() && !use; ++k)
+        use = info->spells[k].spellId != 0 && info->spells[k].spellTrigger == 0;
+    if (gh && use) return pushHistoryCooldown(L, gh->itemCooldown(itemId));
+    const uint32_t spell = gh ? gh->itemCopyEnchantUseSpell(itemId, guid) : 0;
+    if (spell != 0) return pushHistoryCooldown(L, gh->itemSpellCooldown(spell, itemId));
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, noneIsOff ? 0 : 1);
     return 3;
 }
 
