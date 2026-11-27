@@ -1197,6 +1197,15 @@ TEST_CASE("rune slots as the client checks them", "[replay][interface]") {
     CHECK(ui.is("select('#', GetRuneCount(9)) == 0 and select('#', GetRuneCount(8)) == 1"));
 }
 
+// 0x005a91c0 -> 0x005a8e40: an empty action slot is 0, 0, 0 - enable too.
+TEST_CASE("GetActionCooldown of an empty slot is 0, 0, 0", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("(function() local a, b, c = GetActionCooldown(2) return a == 0 and b == 0 and c == 0 end)()"));
+    CHECK(ui.is("(function() local a, b, c = GetActionCooldown(200) return a == 0 and b == 0 and c == 0 end)()"));
+}
+
 // P73: by name as the client compares names - the groups (0x005d1710) and the
 // factions in each (0x005d02f0), these before the groups in it. The table's
 // places are the other way round, and a byte compare puts the accented last.

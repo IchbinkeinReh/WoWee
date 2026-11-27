@@ -1490,24 +1490,28 @@ static int lua_GetActionCount(lua_State* L) {
 // 0x005a8e40): a spell's from the player's history, a pet slot's spell from
 // the pet's (0x00809000), an item's as its use spell cast from it
 // (0x00809030).
+// Nothing there (or an item not known yet, a macro showing nothing): 0, 0, 0
+// - 0x005a8e40 zeroes start and duration and the caller's enable starts 0.
 static int lua_GetActionCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 1); return 3; }
+    const auto nothing = [L] {
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
+        return 3;
+    };
+    if (!gh) return nothing();
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
     if (const auto ref = petActionRef(gh, slot)) {
         const uint32_t spell = petSlotSpell(ref->packed);
         return pushHistoryCooldown(L, spell ? gh->petSpellCooldown(spell) : game::spell_history::History::Cooldown{});
     }
     const auto& bar = gh->getActionBar();
-    if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
-        lua_pushnumber(L, 0);
-        lua_pushnumber(L, 0);
-        lua_pushnumber(L, 1);
-        return 3;
-    }
+    if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) return nothing();
     const auto& action = bar[slot];
     if (action.type == game::ActionBarSlot::SPELL) return pushHistoryCooldown(L, gh->playerSpellCooldown(action.id));
-    if (action.type == game::ActionBarSlot::ITEM) return pushHistoryCooldown(L, gh->itemCooldown(action.id));
+    // Its use spell's (trigger 0) as cast from it, 0, 0, 0 without one.
+    if (action.type == game::ActionBarSlot::ITEM) return pushItemCooldown(L, gh, action.id);
     if (action.type == game::ActionBarSlot::MACRO) {
         // What the macro shows (0x005a8c30 -> 0x005a89f0): its item's
         // cooldown, else its spell's.
@@ -1517,10 +1521,7 @@ static int lua_GetActionCooldown(lua_State* L) {
                 return pushHistoryCooldown(L, gh->playerSpellCooldown(static_cast<uint32_t>(m->result.spell)));
         }
     }
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 1);
-    return 3;
+    return nothing();
 }
 
 // UseAction(slot, unit, button) - activate action bar slot (1-indexed)
