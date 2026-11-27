@@ -257,16 +257,13 @@ static std::vector<wowee::game::CalendarDayEntry> calendarRowsFor(
                                               day, info.year, calendarShowFilter(), calendarView(gh));
 }
 
-/// Which of the six kinds of row this event is, as the string the interface
-/// compares against. Guild events carry a flag; everything else the player can
-/// see on their own calendar is theirs.
+/// Which of the kinds of row this event is, as the string the interface
+/// compares against: 0x005b7fd0 of the event's flags (+0x98), as
+/// CalendarGetDayEvent (0x005c1070) and CalendarContextEventGetCalendarType
+/// (0x005bafc0) ask it. Its type (+0x9c: raid, dungeon, PvP, meeting, other)
+/// is not looked at - type 4 is 'other', not an announcement (T440).
 static const char* calendarTypeName(const wowee::game::CalendarEvent& ev) {
-    // CALENDAR_EVENTTYPE_* from the server: 4 is the guild announcement, and
-    // the guild flag distinguishes an event from an announcement.
-    constexpr uint32_t kGuildEventFlag = 0x0400;
-    if (ev.type == 4) return "GUILD_ANNOUNCEMENT";
-    if (ev.flags & kGuildEventFlag) return "GUILD_EVENT";
-    return "PLAYER";
+    return wowee::game::calendarTypeForFlags(ev.flags);
 }
 
 /// Answer the invitation on the menu's row, if that row has one.
