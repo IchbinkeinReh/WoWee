@@ -244,3 +244,26 @@ TEST_CASE("a building's alpha-keyed batches are cut out in the shadow pass", "[w
     const std::string frame = source("src/rendering/renderer.cpp");
     CHECK(frame.find("if (plan.wmo) plan.wmo->beginShadowFrame(plan.frame);") != std::string::npos);
 }
+
+// T457: a WMO a tile was still loading across frames (loadingModels_) held
+// texture pointers into the cache clearAll frees and batch sets from the pool
+// it resets; kept, the next load of that model after a logout / re-entry
+// resumed it and wrote a destroyed texture into a stale set (driver fault).
+TEST_CASE("clearing the WMO renderer drops the models still loading (T457)", "[wmo][lifetime]") {
+    const std::string renderer = source("src/rendering/wmo_renderer.cpp");
+    REQUIRE(!renderer.empty());
+    for (const char* fn : {"void WMORenderer::clearAll()", "void WMORenderer::shutdown()"}) {
+        const size_t begin = renderer.find(fn);
+        REQUIRE(begin != std::string::npos);
+        const size_t end = renderer.find("\n}\n", begin) != std::string::npos
+                               ? renderer.find("\n}", begin)
+                               : renderer.size();
+        const std::string body = renderer.substr(begin, end - begin);
+        INFO(fn);
+        const size_t freed = body.find("for (auto& [id, model] : loadingModels_)");
+        CHECK(freed != std::string::npos);
+        CHECK(body.find("loadingModels_.clear();") != std::string::npos);
+        // Their groups go before the pool is reset / destroyed under them.
+        CHECK(freed < body.find("flushDeferredCleanup()"));
+    }
+}

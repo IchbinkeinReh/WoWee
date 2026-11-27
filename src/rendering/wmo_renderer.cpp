@@ -386,6 +386,9 @@ void WMORenderer::shutdown() {
             destroyGroupGPU(group);
         }
     }
+    for (auto& [id, model] : loadingModels_) {
+        for (auto& group : model.groups) destroyGroupGPU(group);
+    }
 
     // Free cached textures
     for (auto& [path, entry] : textureCache) {
@@ -406,6 +409,7 @@ void WMORenderer::shutdown() {
     if (flatNormalTexture_) { flatNormalTexture_->destroy(device, allocator); flatNormalTexture_.reset(); }
 
     loadedModels.clear();
+    loadingModels_.clear();
     instances.clear();
     spatialGrid.clear();
     instanceIndexById.clear();
@@ -1573,6 +1577,15 @@ void WMORenderer::clearAll() {
                 destroyGroupGPU(group);
             }
         }
+        // And a model a tile was still loading across frames (loadModelIncremental
+        // keeps it in loadingModels_): its texture pointers name the cache freed
+        // below and its batches' sets come from the pool reset below. Kept, the
+        // same model's next load resumed it - after a logout and re-entry the
+        // first batch written wrote a destroyed texture into a set the pool no
+        // longer had, and the driver faulted (T457).
+        for (auto& [id, model] : loadingModels_) {
+            for (auto& group : model.groups) destroyGroupGPU(group);
+        }
 
         // Free cached textures
         for (auto& [path, entry] : textureCache) {
@@ -1594,6 +1607,7 @@ void WMORenderer::clearAll() {
     }
 
     loadedModels.clear();
+    loadingModels_.clear();
     textureCache.clear();
     textureCacheBytes_ = 0;
     textureCacheCounter_ = 0;
