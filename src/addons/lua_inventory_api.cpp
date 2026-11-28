@@ -7381,7 +7381,8 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 {"CancelTrade", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh && gh->isTradeOpen()) gh->cancelTrade();
+            // 0x005109e0 -> 0x00704040: the packet, whatever the state.
+            if (gh) gh->sendCancelTrade();
             return 0;
         }},
                 {"InitiateTrade", [](lua_State* L) -> int {

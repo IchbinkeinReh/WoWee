@@ -175,6 +175,11 @@ public:
     void acceptTrade();
     void unacceptTrade();
     void cancelTrade();
+    /// CancelTrade() (0x005109e0 -> 0x00704040): CMSG_CANCEL_TRADE alone,
+    /// whatever the state; the realm's TRADE_STATUS closes what was open.
+    void sendCancelTrade();
+    /// CloseTrade() (0x00587940), the trade window's OnHide.
+    void closeTrade();
     void setTradeItem(uint8_t tradeSlot, uint8_t srcBag, uint8_t srcSlot);
     void clearTradeItem(uint8_t tradeSlot);
     void setTradeGold(uint64_t amount);
@@ -1138,6 +1143,10 @@ private:
     bool tradeSelfAccepted_ = false;
     bool tradePartnerAccepted_ = false;
     void fireTradeAcceptUpdate();
+    /// The last open window closed by a completed trade (0xbfa678: 1 from
+    /// 0x005870a0's TRADE_COMPLETE close, 0 when one opens or CloseTrade ends
+    /// one); CloseTrade raises PLAYER_TRADE_MONEY only without it.
+    bool        tradeClosedComplete_ = false;
     uint64_t    tradePeerGuid_= 0;
     /// This player asked for the trade (0xca0fe0, set by 0x00703cf0).
     bool        tradeInitiated_ = false;

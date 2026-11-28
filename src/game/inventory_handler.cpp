@@ -6211,6 +6211,30 @@ void InventoryHandler::cancelTrade() {
     resetTradeState();
 }
 
+void InventoryHandler::sendCancelTrade() {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    auto packet = CancelTradePacket::build();
+    owner_.getSocket()->send(packet);
+}
+
+// 0x00587940: PLAYER_TRADE_MONEY unless the last window closed on a completed
+// trade (0xbfa678); with a window open (partner 0xbfa658) it is ended here -
+// the partner let go as the interaction object (0x00518d50), the flag
+// cleared, TRADE_CLOSED (0x132) - and CMSG_CANCEL_TRADE goes in every case
+// (0x00704040), also with no trade at all.
+void InventoryHandler::closeTrade() {
+    if (!tradeClosedComplete_ && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("PLAYER_TRADE_MONEY", {});
+    if (isTradeOpen()) {
+        const uint64_t peer = tradePeerGuid_;
+        resetTradeState();
+        tradeClosedComplete_ = false;
+        if (peer != 0 && owner_.getInteractionObject() == peer) owner_.setInteractionObject(0);
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
+    }
+    sendCancelTrade();
+}
+
 void InventoryHandler::setTradeItem(uint8_t tradeSlot, uint8_t srcBag, uint8_t srcSlot) {
     if (tradeStatus_ != TradeStatus::Open) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
@@ -6415,6 +6439,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
         }
         case 2:   // OPEN_WINDOW
             tradeStatus_ = TradeStatus::Open;
+            tradeClosedComplete_ = false;   // 0x005870a0 with a partner: 0xbfa678 = 0
             tradeStateIndex_[0] = tradeStateIndex_[1] = 1;  // 0x007044a0 case 2
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;
@@ -6490,6 +6515,10 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             // Not reset immediately - SMSG_TRADE_STATUS_EXTENDED may arrive in
             // the same batch and needs the trade state to read the final items
             // and gold from.
+            // 0x005870a0(0, 0, 1): the window closed on a completed trade
+            // (0xbfa678 = 1), so the CloseTrade of its OnHide gives no
+            // PLAYER_TRADE_MONEY.
+            if (isTradeOpen()) tradeClosedComplete_ = true;
             tradeStatus_ = TradeStatus::None;
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;

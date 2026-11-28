@@ -3809,7 +3809,7 @@ static int lua_SetTradeMoney(lua_State* L) {
 }
 
 static int lua_CloseTrade(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->cancelTrade();
+    if (auto* gh = getGameHandler(L)) gh->closeTrade();   // 0x00587940
     return 0;
 }
 

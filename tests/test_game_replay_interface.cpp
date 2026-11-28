@@ -5549,6 +5549,44 @@ TEST_CASE("GUILD_EVENT_LOG_UPDATE waits for the log's names (0x005ca6a0)", "[rep
     CHECK(ui.is("logUpdates == 2"));
 }
 
+// CloseTrade 0x00587940: PLAYER_TRADE_MONEY unless the last window closed on
+// a completed trade (0xbfa678), an open window ended here with TRADE_CLOSED,
+// and CMSG_CANCEL_TRADE in every case (0x00704040). CancelTrade 0x005109e0
+// is that packet alone, whatever the state.
+TEST_CASE("CloseTrade and CancelTrade send the cancel whatever the state (0x00587940)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("seen = {} local f = CreateFrame('Frame') "
+           "for _, e in ipairs({'TRADE_CLOSED', 'PLAYER_TRADE_MONEY'}) do f:RegisterEvent(e) end "
+           "f:SetScript('OnEvent', function(self, event) seen[#seen + 1] = event end)");
+    const auto status = [&](uint32_t code, bool withWord) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_TRADE_STATUS));
+        p.writeUInt32(code);
+        if (withWord) p.writeUInt32(0);
+        s.receive(p);
+    };
+    const auto cancels = [&] { return s.sent().of(Opcode::CMSG_CANCEL_TRADE).size(); };
+    // No trade at all.
+    ui.run("CancelTrade()");
+    CHECK(cancels() == 1);
+    ui.run("CloseTrade()");
+    CHECK(cancels() == 2);
+    CHECK(ui.is("#seen == 1 and seen[1] == 'PLAYER_TRADE_MONEY'"));
+    // An open window is ended here.
+    status(2, true);
+    ui.run("seen = {} CloseTrade()");
+    CHECK(cancels() == 3);
+    CHECK(ui.is("#seen == 2 and seen[1] == 'PLAYER_TRADE_MONEY' and seen[2] == 'TRADE_CLOSED'"));
+    CHECK(ui.is("not seen[3]"));
+    // A completed trade: its window's OnHide gives no PLAYER_TRADE_MONEY.
+    status(2, true);
+    status(8, false);
+    ui.run("seen = {} CloseTrade()");
+    CHECK(cancels() == 4);
+    CHECK(ui.is("#seen == 0"));
+}
+
 // GuildControlAddRank 0x005cb330 sends only below ten ranks and takes the name
 // as 0x007e1830(name, buf, 16, 64, 1); GuildControlDelRank 0x005cb3f0 only
 // above five; GuildControlSaveRank 0x005cb170 only for a rank the guild has.

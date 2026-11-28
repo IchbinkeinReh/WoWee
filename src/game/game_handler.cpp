@@ -2232,6 +2232,14 @@ void GameHandler::cancelTrade() {
     if (inventoryHandler_) inventoryHandler_->cancelTrade();
 }
 
+void GameHandler::sendCancelTrade() {
+    if (inventoryHandler_) inventoryHandler_->sendCancelTrade();
+}
+
+void GameHandler::closeTrade() {
+    if (inventoryHandler_) inventoryHandler_->closeTrade();
+}
+
 void GameHandler::setTradeItem(uint8_t tradeSlot, uint8_t bag, uint8_t bagSlot) {
     if (inventoryHandler_) inventoryHandler_->setTradeItem(tradeSlot, bag, bagSlot);
 }

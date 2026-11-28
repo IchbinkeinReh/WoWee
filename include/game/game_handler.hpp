@@ -3129,6 +3129,8 @@ public:
     void declineTradeRequest();  // respond with CMSG_CANCEL_TRADE
     void acceptTrade();          // lock in offer: CMSG_ACCEPT_TRADE
     void cancelTrade();          // CMSG_CANCEL_TRADE
+    void sendCancelTrade();      // CancelTrade(): the packet alone (0x00704040)
+    void closeTrade();           // CloseTrade() (0x00587940)
     void setTradeItem(uint8_t tradeSlot, uint8_t bag, uint8_t bagSlot);
     void clearTradeItem(uint8_t tradeSlot);
     void setTradeGold(uint64_t copper);
