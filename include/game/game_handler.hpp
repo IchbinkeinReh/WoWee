@@ -5216,6 +5216,9 @@ public:
     void cancelItemTargeting();
     void completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed = false);
     void replaceEnchant();
+    /// BindEnchant / EndRefund(1) / EndBoundTradeable("itemenchant"):
+    /// 0x005210d0(item, 1), REPLACE_ENCHANT still asked.
+    void bindEnchant();
 
     /// Seconds until the server teleports the player out of an instance they
     /// are not valid for, or 0 when no such timer is running. The server sends

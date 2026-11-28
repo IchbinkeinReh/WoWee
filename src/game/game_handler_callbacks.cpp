@@ -5445,6 +5445,10 @@ void GameHandler::replaceEnchant() {
     if (inventoryHandler_) inventoryHandler_->replaceEnchant();
 }
 
+void GameHandler::bindEnchant() {
+    if (inventoryHandler_) inventoryHandler_->replaceEnchant(true);
+}
+
 void GameHandler::openItemBySlot(int backpackIndex) {
     if (inventoryHandler_) inventoryHandler_->openItemBySlot(backpackIndex);
 }

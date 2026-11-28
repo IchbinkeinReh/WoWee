@@ -3337,15 +3337,26 @@ bool itemUseAllowed(lua_State* L, game::GameHandler* gh, uint32_t itemId, bool w
 // How a trinket is clicked on the character sheet. The slot numbers are the
 // interface's, one-based, and the item is used by id the same way the client's
 // own paperdoll uses it.
+//
+// 0x005ea630: the unit argument first (0x0060abf0; a word naming no unit does
+// nothing at all), then 0x005e8a60: the cursor put down (0x00519280(1, 1)),
+// a spell waiting for an item takes this one (0x005210d0), the repair cursor
+// at a vendor repairs it (CMSG_REPAIR_ITEM), and only else is it used
+// (0x00708c20).
 static int lua_UseInventoryItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int slotId = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || slotId < 1 || slotId > 19) return 0;
+    const auto unit = unitUsedOn(L, gh, 2);
+    if (!unit) return 0;
+    clearCursor(L);
+    const uint64_t guid = gh->getEquipSlotGuid(slotId - 1);
     // A weapon that is worn is as good a target as one in a bag, and the
     // paperdoll's right-click arrives here.
-    if (completedItemTarget(L, gh->getEquipSlotGuid(slotId - 1))) return 0;
+    if (completedItemTarget(L, guid)) return 0;
+    if (repairedHeldItem(gh, guid)) return 0;
     const auto& slot = *inventorySlotItem(gh->getInventory(), slotId);
-    if (const auto unit = unitUsedOn(L, gh, 2); unit && !slot.empty() && itemUseAllowed(L, gh, slot.item.itemId, true))
+    if (!slot.empty() && itemUseAllowed(L, gh, slot.item.itemId, true))
         gh->useItemById(slot.item.itemId, *unit);
     return 0;
 }
@@ -7195,11 +7206,12 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // this client does not put there - so it is never fired, and
                 // the shared verb costs nothing.
                 // BindEnchant() - the Okay on "enchanting this will bind it".
-                // The same held request ReplaceEnchant answers: only one
-                // enchant can be waiting, and the two prompts are raised from
-                // the same place for the same pending cast.
+                // The same held request ReplaceEnchant answers, but not the
+                // same answer: BindEnchant (0x00522f70) runs the checks again
+                // as 0x005210d0(item, 1), so REPLACE_ENCHANT can still follow,
+                // while ReplaceEnchant (0x005167a0) casts at once (0x0080bc80).
                 {"BindEnchant", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->replaceEnchant();
+            if (auto* gh = getGameHandler(L)) gh->bindEnchant();
             return 0;
         }},
                 {"ReplaceEnchant", [](lua_State* L) -> int {
@@ -7207,13 +7219,14 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 // EndRefund(n) (0x00523370) - the Okay on END_REFUND: 1
-                // applies the enchant held back for it (0x005210d0 with the
-                // checks passed), 2 the socketing frame's gems (0x005c4ff0).
+                // runs the held enchant's checks again (0x005210d0 with 1:
+                // the replace question still asked), 2 the socketing frame's
+                // gems (0x005c4ff0).
                 {"EndRefund", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return 0;
             auto* gh = getGameHandler(L);
             const int which = static_cast<int>(lua_tonumber(L, 1));
-            if (gh && which == 1) gh->replaceEnchant();
+            if (gh && which == 1) gh->bindEnchant();
             else if (gh && which == 2) gh->acceptSockets();
             return 0;
         }},
@@ -7227,7 +7240,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             toLowerInPlace(type);
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            if (type == "itemenchant" || type == "spellenchant") gh->replaceEnchant();
+            // "itemenchant" is 0x005210d0(item, 1) as BindEnchant.
+            if (type == "itemenchant") gh->bindEnchant();
+            else if (type == "spellenchant") gh->replaceEnchant();
             else if (type == "gem") gh->acceptSockets();
             return 0;
         }},

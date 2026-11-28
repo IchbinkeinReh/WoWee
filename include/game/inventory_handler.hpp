@@ -391,7 +391,12 @@ public:
     void confirmBindOnUse();
 
     /// Apply the enchant that was held back by the replace prompt.
-    void replaceEnchant();
+    /// ReplaceEnchant (0x005167a0) casts it at once (0x0080bc80). With
+    /// askReplace the checks run again as 0x005210d0(item, 1) runs them for
+    /// BindEnchant (0x00522f70), EndRefund(1) and EndBoundTradeable
+    /// ("itemenchant"): the bind, refund and bound-tradeable questions are
+    /// passed, REPLACE_ENCHANT may still be asked.
+    void replaceEnchant(bool askReplace = false);
 
     /// ClickTargetTradeButton(7) with a spell waiting for an item (0x005198a0):
     /// the partner's "will not be traded" slot is what it goes on. A permanent
@@ -460,7 +465,7 @@ public:
     /// sent once the player picks one.
     void beginSpellItemTargeting(uint32_t spellId, const std::string& spellName);
     /// Sends the parked CMSG_USE_ITEM with TARGET_FLAG_ITEM against targetItemGuid.
-    void completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed = false);
+    void completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed = false, bool askReplace = false);
 
     void openItemBySlot(int backpackIndex);
     /// Gift wrapping (0x00708c20 -> 0x006d67e0): using a wrapper puts it on
@@ -1283,6 +1288,9 @@ private:
         uint8_t  wowSlot = 0;
         uint64_t itemGuid = 0;
         ItemDef  item;
+        /// The unit it was used on, kept beside it (0x00ca1128) for the
+        /// confirmed use (0x007093f0 -> 0x00708c20(&0x00ca1128, 1)).
+        uint64_t unitTarget = 0;
     };
     PendingUse pendingUse_;
     /// The enchant held back waiting for an answer, with the request it was

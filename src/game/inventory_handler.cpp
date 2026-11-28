@@ -2546,11 +2546,15 @@ void InventoryHandler::cancelPendingEquip(int index) {
 // Spells that enchant another item (sharpening stones, weightstones, weapon oils)
 // cannot be sent immediately: they need the target item's GUID, so the use is
 // parked and completed by completeItemUseOnItem() once the player picks a target.
+// ConfirmBindOnUse (0x00510db0 -> 0x007093f0): the item held (0x00ca1138)
+// used with the unit kept beside it, confirmed, if it is still there; the
+// held item let go either way.
 void InventoryHandler::confirmBindOnUse() {
     const PendingUse pending = pendingUse_;
     pendingUse_ = PendingUse{};
     if (!pending.active) return;
-    dispatchUseItem(pending.wowBag, pending.wowSlot, pending.itemGuid, pending.item, true);
+    if (pending.itemGuid != 0 && owner_.onlineItemsRef().count(pending.itemGuid) == 0) return;
+    dispatchUseItem(pending.wowBag, pending.wowSlot, pending.itemGuid, pending.item, true, pending.unitTarget);
 }
 
 void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t itemGuid,
@@ -2561,7 +2565,8 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     // Bind-on-use, and not yet bound. Same warning as the equip prompt, one
     // step earlier: using the item is what binds it.
     if (!confirmed && item.bindType == 3 && !item.soulbound) {
-        pendingUse_ = PendingUse{.active = true, .wowBag = wowBag, .wowSlot = wowSlot, .itemGuid = itemGuid, .item = item};
+        pendingUse_ = PendingUse{.active = true, .wowBag = wowBag, .wowSlot = wowSlot, .itemGuid = itemGuid,
+                                 .item = item, .unitTarget = unitTarget};
         if (owner_.addonEventCallbackRef())
             owner_.addonEventCallbackRef()("USE_BIND_CONFIRM", {});
         return;
@@ -2830,14 +2835,14 @@ void InventoryHandler::beginSpellItemTargeting(uint32_t spellId, const std::stri
     // this client's own English.
 }
 
-void InventoryHandler::replaceEnchant() {
+void InventoryHandler::replaceEnchant(bool askReplace) {
     const PendingEnchant pending = pendingEnchant_;
     pendingEnchant_ = PendingEnchant{};
     if (!pending.active) return;
     // Put the request back only to answer it, so a refusal leaves nothing
     // waiting for a target.
     pendingItemTarget_ = pending.request;
-    completeItemUseOnItem(pending.targetItemGuid, true);
+    completeItemUseOnItem(pending.targetItemGuid, true, askReplace);
 }
 
 void InventoryHandler::clickPartnerNonTradedSlot() {
@@ -2887,7 +2892,7 @@ bool InventoryHandler::castPendingAtTradeSlot() {
     return true;
 }
 
-void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed) {
+void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed, bool askReplace) {
     if (!isAwaitingItemTarget()) return;
     const PendingItemTarget pending = *pendingItemTarget_;
 
@@ -3003,14 +3008,16 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
     }
 
     // Something is already on it, and applying this takes its place.
-    if (!confirmed && !destroysTarget) {
+    // askReplace: 0x005210d0 with its third argument set passes the bind,
+    // refund and bound-tradeable questions and still asks the replace one.
+    if ((!confirmed || askReplace) && !destroysTarget) {
         // Enchanting an unbound item binds it. Same family as the equip, use
         // and loot warnings, and the one of the five that was missed: the
         // interface has raised BIND_ENCHANT for it all along and nothing ever
         // fired it.
         const uint32_t targetEntry = owner_.getItemEntryByGuid(targetItemGuid);
         const auto* targetInfo = targetEntry ? owner_.getItemInfo(targetEntry) : nullptr;
-        if (targetInfo && targetInfo->bindType == 2 &&
+        if (!confirmed && targetInfo && targetInfo->bindType == 2 &&
             !owner_.isItemSoulbound(targetItemGuid)) {
             pendingItemTarget_.reset();
             pendingEnchant_ = PendingEnchant{.active = true, .targetItemGuid = targetItemGuid, .request = pending};
@@ -3036,7 +3043,7 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
                 }
             }
         }
-        if (enchanting) {
+        if (enchanting && !confirmed) {
             // The window is two hours of played time (0x1c20 s), as
             // noteMailAttachRefundable counts it.
             const auto* refund = owner_.getItemRefundInfo(targetItemGuid);
