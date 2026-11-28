@@ -2619,7 +2619,13 @@ void Application::run() {
         // A lost GPU device, from the loss until it is rebuilt: the session
         // kept up, nothing drawn or uploaded, and the rebuild tried when
         // there is a window and DeviceRecovery's delay has passed.
-        if (rendering::VkContext* vk = window->getVkContext(); renderer && vk && vk->isDeviceLost()) {
+        //
+        // And the app in the background (iOS, Android): the same session-only
+        // loop. iOS loses the device over any GPU work there, and the full
+        // update finalizes tiles and uploads (U25: two device losses while
+        // backgrounded); the loaders' own submits wait in gpu_park.hpp.
+        if (rendering::VkContext* vk = window->getVkContext();
+            renderer && vk && (vk->isDeviceLost() || vk->inBackground())) {
             runWhileDeviceLost(*vk, deltaTime);
             core::FrameProfiler::get().endFrame();
             continue;
@@ -3660,8 +3666,10 @@ void Application::runWhileDeviceLost(rendering::VkContext& vk, float deltaTime) 
             break;
     }
 
-    handleDeviceLoss(vk);
-    if (!vk.isDeviceLost()) return;
+    if (vk.isDeviceLost()) handleDeviceLoss(vk);
+    // Parked in the background (device still there) or lost: the socket is
+    // read, nothing more, at a pace a phone in a pocket can afford.
+    if (!vk.isDeviceLost() && !vk.inBackground()) return;
 
     // Said once a second, so the log shows a client that is waiting rather
     // than one that has stopped.
@@ -3669,7 +3677,7 @@ void Application::runWhileDeviceLost(rendering::VkContext& vk, float deltaTime) 
     const auto now = std::chrono::steady_clock::now();
     if (now - lastSaid > std::chrono::seconds(1)) {
         lastSaid = now;
-        LOG_INFO("Not drawing: device lost", vk.inBackground() ? ", in the background" : "");
+        LOG_INFO("Not drawing: ", vk.isDeviceLost() ? "device lost" : "parked", vk.inBackground() ? ", in the background" : "");
     }
     // Reading the socket does not need frame rate, and a phone in someone's
     // pocket should not spend a core on it.

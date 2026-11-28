@@ -4,6 +4,7 @@
 #include <mutex>
 #include <memory>
 #include "rendering/vk_context.hpp"
+#include "rendering/gpu_park.hpp"
 #include "core/platform.hpp"
 
 #include <fstream>
@@ -160,6 +161,8 @@ bool VkContext::initialize(SDL_Window* window) {
 
 void VkContext::shutdown() {
     if (!device && !instance) return;  // Already shut down or never initialized
+    // A loader held by the background park must get out to be joined.
+    gpuPark().unpark();
 
     LOG_DEBUG("VkContext::shutdown - vkDeviceWaitIdle...");
     if (device) {
@@ -3059,12 +3062,14 @@ bool VkContext::restoreSurface() {
 
 void VkContext::enterBackground(const char* why) {
     if (lifecycle_.enterBackground()) {
-        LOG_WARNING("App to the background (", why, "): rendering stops");
+        LOG_WARNING("App to the background (", why, "): rendering and uploads stop");
     }
+    gpuPark().park();
     (void)syncSurface();
 }
 
 void VkContext::enterForeground(const char* why) {
+    gpuPark().unpark();
     if (lifecycle_.enterForeground()) {
         LOG_WARNING("App to the foreground (", why, "): native window ",
                     nativeWindowPresent() ? "present" : "not there yet");
@@ -3792,7 +3797,15 @@ std::mutex& queueAccessMutex() {
     return m;
 }
 
+GpuPark& gpuPark() {
+    static GpuPark park;
+    return park;
+}
+
 VkResult queueSubmit(VkQueue queue, uint32_t count, const VkSubmitInfo* submits, VkFence fence) {
+    // In the background no thread but the main one submits (gpu_park.hpp):
+    // iOS loses the device over a command buffer committed there.
+    gpuPark().waitIfParked();
     const std::lock_guard<std::mutex> lock{queueAccessMutex()};
     return vkQueueSubmit(queue, count, submits, fence);
 }

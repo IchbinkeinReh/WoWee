@@ -352,6 +352,11 @@ wowee_add_test(test_data_paths
 wowee_add_test(test_data_prompt
     SOURCES test_data_prompt.cpp)
 
+# ── test_gpu_park ────────────────────────────────────────────
+# GPU submits held while the app is in the background (iOS loses the device).
+wowee_add_test(test_gpu_park
+    SOURCES test_gpu_park.cpp)
+
 # ── test_log_privacy ────────────────────────────────────────
 # The home directory, and with it the account name, written as ~ in the log.
 wowee_add_test(test_log_privacy
