@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -72,6 +73,14 @@ public:
 
 private:
     bool mayRebuild_ = true;
+
+    // T458's probe: the frames this screen drew and its longest wait between
+    // two of them, to the log when it goes (MCP's frame counter counts only
+    // the main loop's frames, not these).
+    std::chrono::steady_clock::time_point lastDrawn_{};
+    uint32_t framesDrawn_ = 0;
+    float longestGapMs_ = 0.0f;
+    void noteDrawn();
 
     struct Texture {
         VkImage image = VK_NULL_HANDLE;

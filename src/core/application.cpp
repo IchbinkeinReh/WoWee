@@ -4763,10 +4763,9 @@ void Application::logMemory(const char* stage, const std::string& what, const st
     core::SlowestStep slowest = core::takeSlowestStep();
     std::vector<rendering::MemoryEntry> owners;
     if (keepScreen) {
-        // T458: inside a map change the report stood 1.5-6 s behind a frozen
-        // loading screen (the heap sums walk every block of every heap, and
-        // the address space walk every page table of the mapped archives).
-        // It is counted on a helper thread while this one keeps drawing the
+        // T458: inside a map change the report stood 1-6 s behind a frozen
+        // loading screen (the heap sums, now left to /mem). What is left is
+        // counted on a helper thread while this one keeps drawing the
         // loading screen; nothing it reads is changed by the loading screen,
         // and the cleanup it is a snapshot for waits for it.
         core::SlowestStep helperSlowest;

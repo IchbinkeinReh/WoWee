@@ -7887,15 +7887,10 @@ std::vector<MemoryEntry> Renderer::memoryOwners(const std::vector<MemoryEntry>& 
     out.push_back({"Process, resident", 0, pm.residentBytes});
     out.push_back({"Process, resident and its own", 0, pm.residentPrivateBytes});
     out.push_back({"Process, resident pages of mapped files", 0, pm.residentSharedBytes});
-    core::MemoryMonitor::HeapUse heap;
-    {
-        // Every heap walked block by block (HeapSummary, under each heap's
-        // lock) and the whole address space by VirtualQuery.
-        WOWEE_STEP_TIMER("memory: heap sums and address space");
-        heap = core::MemoryMonitor::heapUse();
-    }
-    out.push_back({"Heaps, given out", 0, heap.allocatedBytes});
-    out.push_back({"Heaps, held", 0, heap.committedBytes});
+    // No heap sums here (they stay in /mem): HeapSummary walks every block of
+    // every heap under that heap's lock - ~30 ms per million blocks, and the
+    // map change's report took 0.9 s growing to 4.8 s with them (T458, V649:
+    // the timed owners < 2 % of it), every other thread's malloc waiting.
     if (vkCtx && vkCtx->getAllocator()) {
         WOWEE_STEP_TIMER("memory: Vulkan heap budgets");
         const VkPhysicalDeviceMemoryProperties* props = nullptr;

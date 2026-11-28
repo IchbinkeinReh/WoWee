@@ -118,7 +118,24 @@ void LoadingScreen::release(Texture& tex) {
     if (tex.memory) { vkFreeMemory(device, tex.memory, nullptr); tex.memory = VK_NULL_HANDLE; }
 }
 
+void LoadingScreen::noteDrawn() {
+    const auto now = std::chrono::steady_clock::now();
+    if (framesDrawn_ > 0) {
+        const float gapMs = std::chrono::duration<float, std::milli>(now - lastDrawn_).count();
+        if (gapMs > longestGapMs_) longestGapMs_ = gapMs;
+        if (gapMs >= 1000.0f) LOG_WARNING("Loading screen: no frame for ", static_cast<int>(gapMs), " ms");
+    }
+    lastDrawn_ = now;
+    ++framesDrawn_;
+}
+
 void LoadingScreen::shutdown() {
+    if (framesDrawn_ > 0) {
+        LOG_INFO("Loading screen: ", framesDrawn_, " frames drawn, longest wait between two ",
+                 static_cast<int>(longestGapMs_), " ms");
+        framesDrawn_ = 0;
+        longestGapMs_ = 0.0f;
+    }
     // The world is shown: what it asked for while the screen was up starts.
     if (holdsWorldSound_) {
         holdsWorldSound_ = false;
@@ -468,6 +485,7 @@ void LoadingScreen::drawOverlay() {
 }
 
 void LoadingScreen::render() {
+    noteDrawn();
     // If a frame is already in progress (e.g. called from a UI callback),
     // end it before starting our own
     ImGuiContext* ctx = ImGui::GetCurrentContext();
