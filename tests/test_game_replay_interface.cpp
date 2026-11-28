@@ -3271,6 +3271,15 @@ TEST_CASE("a haircut leaves the barber's window open", "[replay][interface]") {
     s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x01020304}}));
     CHECK(std::count(events.begin(), events.end(), "BARBER_SHOP_APPEARANCE_APPLIED") == 1);
     s.handler().setAddonEventCallback(nullptr);
+    // T462: what the unit wears is its fields, whatever a preview wrote to the
+    // character record since - the barber starts from them and puts them
+    // back on leaving the chair.
+    REQUIRE(s.handler().previewPlayerAppearance(0x0A0B0C0D, 7));
+    uint32_t bytes = 0;
+    uint8_t facial = 0xFF;
+    REQUIRE(s.handler().playerAppearanceFromFields(bytes, facial));
+    CHECK(bytes == 0x01020304u);
+    CHECK(facial == 0);
 }
 
 // T364: PickupInventoryItem takes the bank's slots (40-67) and its bags'

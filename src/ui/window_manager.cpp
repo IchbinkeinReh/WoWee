@@ -118,12 +118,16 @@ void WindowManager::ensureBarberState(game::GameHandler& gameHandler) {
     // over - and stale originals would price a change against the wrong hair.
     if (!gameHandler.isBarberShopOpen()) {
         // Out of the chair with the preview still on them - closed by the
-        // server, walked away from, or escaped out of. Put back what they came
-        // in wearing; a style is only theirs once it is paid for.
+        // server, walked away from, or escaped out of. Put back what the unit
+        // wears now (0x0052e9f0 resets the preview to the unit's current
+        // values): a paid style is in PLAYER_BYTES by then, and putting back
+        // what they came in wearing undid it (T462).
         if (barberPreviewActive_) {
             barberPreviewActive_ = false;
-            gameHandler.previewPlayerAppearance(barberOrigAppearanceBytes_,
-                                                barberOrigFacialHair_);
+            uint32_t bytes = barberOrigAppearanceBytes_;
+            uint8_t facial = barberOrigFacialHair_;
+            (void)gameHandler.playerAppearanceFromFields(bytes, facial);
+            gameHandler.previewPlayerAppearance(bytes, facial);
         }
         barberInitialized_ = false;
         return;
@@ -138,12 +142,20 @@ void WindowManager::ensureBarberState(game::GameHandler& gameHandler) {
     // BarberShopStyle IDs, rather than the visible appearance numbers, are the
     // wire values expected by a WotLK server. Build the race/sex-specific lists
     // once each time the chair opens.
-    barberOrigAppearanceBytes_ = ch->appearanceBytes;
+    // The unit's own fields, as 12340 reads the styles it starts from: the
+    // character record can still hold an older appearance (T462).
+    uint32_t wornBytes = ch->appearanceBytes;
+    uint8_t wornFacial = ch->facialFeatures;
+    (void)gameHandler.playerAppearanceFromFields(wornBytes, wornFacial);
+    if (wornBytes != ch->appearanceBytes || wornFacial != ch->facialFeatures) {
+        gameHandler.previewPlayerAppearance(wornBytes, wornFacial);
+    }
+    barberOrigAppearanceBytes_ = wornBytes;
     barberPreviewActive_ = false;
-    barberOrigSkinColor_ = static_cast<uint8_t>(ch->appearanceBytes & 0xFF);
-    barberOrigHairStyle_ = static_cast<uint8_t>((ch->appearanceBytes >> 16) & 0xFF);
-    barberOrigHairColor_ = static_cast<uint8_t>((ch->appearanceBytes >> 24) & 0xFF);
-    barberOrigFacialHair_ = ch->facialFeatures;
+    barberOrigSkinColor_ = static_cast<uint8_t>(wornBytes & 0xFF);
+    barberOrigHairStyle_ = static_cast<uint8_t>((wornBytes >> 16) & 0xFF);
+    barberOrigHairColor_ = static_cast<uint8_t>((wornBytes >> 24) & 0xFF);
+    barberOrigFacialHair_ = wornFacial;
     barberHairStyles_.clear();
     barberFacialStyles_.clear();
     barberSkinStyles_.clear();

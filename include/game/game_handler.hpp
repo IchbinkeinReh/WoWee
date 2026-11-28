@@ -5920,6 +5920,12 @@ public:
         }
         return false;
     }
+    /// What the player's unit wears now, as the realm set it: PLAYER_BYTES
+    /// and PLAYER_BYTES_2's first byte (a field a block left out is zero).
+    /// False before the player's fields have arrived. The barber starts from
+    /// these and puts them back when the chair is left (0x0052e9f0), so a
+    /// paid style stays whatever the character record held.
+    bool playerAppearanceFromFields(uint32_t& appearanceBytes, uint8_t& facialFeatures) const;
     auto& updateFieldTableRef() { return updateFieldTable_; }
     auto& lastPlayerFieldsRef() { return lastPlayerFields_; }
     auto& timeSinceLastPingRef() { return timeSinceLastPing; }

@@ -2400,6 +2400,20 @@ UnitStats GameHandler::playerStats() const {
     return out;
 }
 
+bool GameHandler::playerAppearanceFromFields(uint32_t& appearanceBytes, uint8_t& facialFeatures) const {
+    if (lastPlayerFields_.empty()) return false;
+    const uint16_t bytes = fieldIndex(UF::PLAYER_BYTES);
+    const uint16_t bytes2 = fieldIndex(UF::PLAYER_BYTES_2);
+    if (bytes == 0xFFFF || bytes2 == 0xFFFF) return false;
+    const auto value = [this](uint16_t i) {
+        const auto it = lastPlayerFields_.find(i);
+        return it == lastPlayerFields_.end() ? 0u : it->second;
+    };
+    appearanceBytes = value(bytes);
+    facialFeatures = static_cast<uint8_t>(value(bytes2) & 0xFFu);
+    return true;
+}
+
 UnitStats GameHandler::statsOf(const Unit& unit) {
     const auto field = [&unit](UF f) {
         const uint16_t i = fieldIndex(f);
