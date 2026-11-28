@@ -884,9 +884,9 @@ private:
     void handleGuildPermissions(network::Packet& packet);
     void handleGuildQueryResponse(network::Packet& packet);
     void handleGuildEvent(network::Packet& packet);
-    // Updates a roster member's cached online flag; returns true only on a real change so
-    // the login-time SIGNED_ON flood (state unchanged) is suppressed from guild chat.
-    bool guildMemberOnlineTransition(const std::string& name, bool nowOnline);
+    /// A contact row of `listMask` (1 friends, 2 ignored) by name, case-blind,
+    /// the name cache standing in for a row not yet named; 0 for none.
+    [[nodiscard]] uint64_t contactGuidByName(const std::string& playerName, uint32_t listMask) const;
     void handleGuildInvite(network::Packet& packet);
     void handleGuildCommandResult(network::Packet& packet);
     void handlePetitionShowlist(network::Packet& packet);

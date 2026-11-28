@@ -2629,6 +2629,61 @@ TEST_CASE("friend and ignore indices round, friend names match without case", "[
     CHECK(ui.is("GetIgnoreName(0.7) == 'Cleo'"));
 }
 
+// T476: SMSG_FRIEND_STATUS 0x0f / 0x10 add and remove the ignore row
+// (0x006b73a0); a row the contact list brought before its name is named by
+// the name answer; DelIgnore / RemoveFriend find rows by name without case.
+TEST_CASE("the ignore list follows SMSG_FRIEND_STATUS (0x006b73a0)", "[replay][interface]") {
+    constexpr uint64_t kMuh = 0xA, kToti = 0xB;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    const auto name = [&](uint64_t guid, const char* text) {
+        wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_NAME_QUERY_RESPONSE));
+        answer.writePackedGuid(guid);
+        answer.writeUInt8(0);
+        answer.writeString(text);
+        answer.writeString("");
+        for (int i = 0; i < 4; ++i) answer.writeUInt8(i == 0 ? 2 : 0);
+        s.receive(answer);
+    };
+    const auto status = [&](uint8_t result, uint64_t guid) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_FRIEND_STATUS));
+        p.writeUInt8(result);
+        p.writeUInt64(guid);
+        if (result == 7) p.writeString("");
+        s.receive(p);
+    };
+    // The login list: an ignore whose name is not known yet.
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_CONTACT_LIST));
+    list.writeUInt32(7);
+    list.writeUInt32(1);
+    list.writeUInt64(kMuh);
+    list.writeUInt32(0x2);
+    list.writeString("");
+    s.receive(list);
+    CHECK(ui.is("GetNumIgnores() == 1"));
+    name(kMuh, "Muh");
+    CHECK(ui.is("GetIgnoreName(1) == 'Muh'"));
+    ui.run("DelIgnore('muh')");
+    REQUIRE(s.sent().of(Opcode::CMSG_DEL_IGNORE).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_DEL_IGNORE)[0].readUInt64() == kMuh);
+    CHECK(ui.is("GetNumIgnores() == 1"));      // until the realm says so
+    status(0x10, kMuh);
+    CHECK(ui.is("GetNumIgnores() == 0"));
+    status(0x0F, kMuh);                        // added again
+    CHECK(ui.is("GetNumIgnores() == 1 and GetIgnoreName(1) == 'Muh'"));
+    ui.run("AddOrDelIgnore('MUH')");
+    CHECK(s.sent().of(Opcode::CMSG_DEL_IGNORE).size() == 2);
+    CHECK(s.sent().of(Opcode::CMSG_ADD_IGNORE).empty());
+    // A friend added while its name is still to come is found once it is.
+    status(7, kToti);
+    name(kToti, "Toti");
+    ui.run("RemoveFriend('toti')");
+    REQUIRE(s.sent().of(Opcode::CMSG_DEL_FRIEND).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_DEL_FRIEND)[0].readUInt64() == kToti);
+}
+
 // UnitAura's ninth value (0x0053d680): a buff on a unit the player may attack
 // that the player's spellsteal could take. The dispel types come from the
 // last spell learned whose first effect is STEAL_BENEFICIAL_BUFF (126) at

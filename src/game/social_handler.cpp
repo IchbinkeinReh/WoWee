@@ -1785,12 +1785,12 @@ void SocialHandler::removeFriend(const std::string& playerName) {
     // A name not on the list is ERR_FRIEND_NOT_FOUND, a system line, and the
     // removal itself goes out silently (0x006b6f00). These were English.
     if (playerName.empty()) return;
-    auto it = owner_.friendsCacheRef().find(playerName);
-    if (it == owner_.friendsCacheRef().end()) {
+    const uint64_t guid = contactGuidByName(playerName, 0x1);
+    if (guid == 0) {
         gameError(owner_, ErrTo::Chat, "ERR_FRIEND_NOT_FOUND", "Player not found.");
         return;
     }
-    auto packet = DelFriendPacket::build(it->second);
+    auto packet = DelFriendPacket::build(guid);
     owner_.getSocket()->send(packet);
     LOG_INFO("Sent remove friend request for: ", playerName);
 }
@@ -1800,17 +1800,35 @@ void SocialHandler::setFriendNote(const std::string& playerName, const std::stri
     // As for a removal (0x006b6f70): ERR_FRIEND_NOT_FOUND for a stranger,
     // and nothing for the note being set.
     if (playerName.empty()) return;
-    auto it = owner_.friendsCacheRef().find(playerName);
-    if (it == owner_.friendsCacheRef().end()) {
+    const uint64_t guid = contactGuidByName(playerName, 0x1);
+    if (guid == 0) {
         gameError(owner_, ErrTo::Chat, "ERR_FRIEND_NOT_FOUND", "Player not found.");
         return;
     }
-    auto packet = SetContactNotesPacket::build(it->second, note);
+    auto packet = SetContactNotesPacket::build(guid, note);
     owner_.getSocket()->send(packet);
     LOG_INFO("Set friend note for: ", playerName);
 }
 
 static bool sameMuteName(const std::string& a, const std::string& b);
+
+/// The guid of the row of `listMask` whose name matches, case-blind
+/// (0x0076ea40), the row's own name or the name cache's for its guid; the
+/// exact cache entry first. 0 for none.
+uint64_t SocialHandler::contactGuidByName(const std::string& playerName, uint32_t listMask) const {
+    const auto& cache = listMask == 0x1 ? owner_.friendsCacheRef() : owner_.ignoreCacheRef();
+    if (const auto it = cache.find(playerName); it != cache.end()) return it->second;
+    for (const auto& c : owner_.contactsRef()) {
+        if ((c.flags & listMask) == 0) continue;
+        std::string name = c.name;
+        if (name.empty()) {
+            const auto nit = owner_.getPlayerNameCache().find(c.guid);
+            if (nit != owner_.getPlayerNameCache().end()) name = nit->second;
+        }
+        if (sameMuteName(name, playerName)) return c.guid;
+    }
+    return 0;
+}
 
 // AddIgnore (0x006b5f70): a name already on the ignore list - compared
 // case-blind against each row's name - gets ERR_IGNORE_ALREADY_S naming that
@@ -1842,18 +1860,15 @@ void SocialHandler::removeIgnore(const std::string& playerName) {
     // ERR_IGNORE_NOT_FOUND for a name not on the list (0x006b7040), and
     // nothing for the request going out. These were English.
     if (playerName.empty()) return;
-    auto it = owner_.ignoreCacheRef().find(playerName);
-    if (it == owner_.ignoreCacheRef().end()) {
+    const uint64_t guid = contactGuidByName(playerName, 0x2);
+    if (guid == 0) {
         gameError(owner_, ErrTo::Chat, "ERR_IGNORE_NOT_FOUND", "Player not found.");
         return;
     }
-    auto packet = DelIgnorePacket::build(it->second);
+    auto packet = DelIgnorePacket::build(guid);
     owner_.getSocket()->send(packet);
-    // Don't erase from ignoreCache here - wait for the server's SMSG_IGNORE_LIST
-    // response to confirm. Erasing optimistically desyncs the cache if the server
-    // rejects the request. (Compare with removeFriend which also waits for
-    // SMSG_FRIEND_STATUS before updating its cache.)
-    owner_.ignoreListGuidsRef().erase(it->second);
+    // The list lets the row go when SMSG_FRIEND_STATUS 0x10 says so
+    // (0x006b73a0), not here.
     LOG_INFO("Sent remove ignore request for: ", playerName);
 }
 
@@ -4392,6 +4407,13 @@ void SocialHandler::handleContactList(network::Packet& packet) {
     owner_.lastContactListMaskRef()  = packet.readUInt32();
     owner_.lastContactListCountRef() = packet.readUInt32();
     owner_.contactsRef().clear();
+    // The ignore rows are the ignore list (0x006b7dd0 fills the ignore array
+    // from them): what chat and invites are held against, and what
+    // DelIgnore finds by name (T476).
+    if (owner_.lastContactListMaskRef() & 0x2) {
+        owner_.ignoreListGuidsRef().clear();
+        owner_.ignoreCacheRef().clear();
+    }
     for (uint32_t i = 0; i < owner_.lastContactListCountRef() && rem() >= 8; ++i) {
         uint64_t guid  = packet.readUInt64();
         if (rem() < 4) break;
@@ -4426,6 +4448,10 @@ void SocialHandler::handleContactList(network::Packet& packet) {
         entry.status = status; entry.areaId = areaId; entry.level = level; entry.classId = classId;
         auto nit = owner_.getPlayerNameCache().find(guid);
         if (nit != owner_.getPlayerNameCache().end()) entry.name = nit->second;
+        if (flags & 0x2) {
+            owner_.ignoreListGuidsRef().insert(guid);
+            if (!entry.name.empty()) owner_.ignoreCacheRef()[entry.name] = guid;
+        }
         owner_.contactsRef().push_back(std::move(entry));
     }
     // The one name the client raises for a contact list, 342 again (the ignore
@@ -4478,6 +4504,29 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
         kRemoved = 5, kAddedOnline = 6, kAddedOffline = 7, kAlready = 8,
         kSelf = 9, kEnemy = 10,
     };
+    // 0x006b73a0 cases 0xf / 0x10: the ignore list takes the guid
+    // (0x006b7200(guid, 1)) or lets it go (0x006b3e50, 0x006b6490) before the
+    // line is said (T476: they were only said).
+    constexpr uint8_t kIgnoreAdded = 0x0F, kIgnoreRemoved = 0x10;
+    if (data.status == kIgnoreAdded) {
+        owner_.ignoreListGuidsRef().insert(data.guid);
+        if (!playerName.empty()) owner_.ignoreCacheRef()[playerName] = data.guid;
+        if (cit != owner_.contactsRef().end()) {
+            cit->flags |= 0x2;
+        } else {
+            ContactEntry entry;
+            entry.guid = data.guid; entry.name = playerName; entry.flags = 0x2;
+            owner_.contactsRef().push_back(std::move(entry));
+        }
+    } else if (data.status == kIgnoreRemoved) {
+        owner_.ignoreListGuidsRef().erase(data.guid);
+        for (auto it = owner_.ignoreCacheRef().begin(); it != owner_.ignoreCacheRef().end();)
+            it = it->second == data.guid ? owner_.ignoreCacheRef().erase(it) : std::next(it);
+        if (cit != owner_.contactsRef().end()) {
+            cit->flags &= ~0x2u;
+            if (cit->flags == 0) owner_.contactsRef().erase(cit);
+        }
+    }
     if (data.status == kRemoved) {
         if (cit != owner_.contactsRef().end())
             owner_.contactsRef().erase(cit);
@@ -4499,6 +4548,7 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
             }
             if (!data.note.empty()) cit->note = data.note;
         } else {
+            owner_.friendGuidsRef().insert(data.guid);
             ContactEntry entry;
             entry.guid = data.guid; entry.name = playerName; entry.flags = 0x1;
             entry.status = flags;
@@ -4566,7 +4616,11 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
             } else {
                 const std::string& realm = owner_.getCachedPlayerRealm(guid);
                 const std::string full = realm.empty() ? name : name + "-" + realm;
-                if (row != contacts.end()) row->name = full;
+                if (row != contacts.end()) {
+                    row->name = full;
+                    if (row->isFriend()) owner_.friendsCacheRef()[full] = guid;
+                    if (row->isIgnored()) owner_.ignoreCacheRef()[full] = guid;
+                }
                 emit(full);
             }
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});

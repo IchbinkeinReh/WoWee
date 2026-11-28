@@ -4787,6 +4787,16 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
         if (owner_.friendGuidsRef().count(data.guid)) {
             owner_.friendsCacheRef()[data.name] = data.guid;
         }
+        // The contact rows: 12340 keeps guids only and names a row from the
+        // name cache whenever it is read (0x006b4620, 0x006b5de0 via
+        // 0x0067d770), so a row the list brought before the name is named
+        // now (T476).
+        for (auto& c : owner_.contactsRef()) {
+            if (c.guid != data.guid || !c.name.empty()) continue;
+            c.name = data.name;
+            if (c.isFriend()) owner_.friendsCacheRef()[data.name] = data.guid;
+            if (c.isIgnored()) owner_.ignoreCacheRef()[data.name] = data.guid;
+        }
 
         // Backfill ignore list: SMSG_IGNORE_LIST only contains GUIDs, so
         // ignoreCache (name→guid for UI) is populated here once names resolve.
