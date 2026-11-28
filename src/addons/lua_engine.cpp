@@ -15092,11 +15092,18 @@ void LuaEngine::registerCoreAPI() {
         "        if shift or not __WoweeScalesAtMerchant(id) then return __cmpNo('offset 3: not a scaling item at a merchant', self) end\n"
         "        __WoweeTooltipAtMerchantLevel = true\n"
         "        __WoweeTooltipMerchantIndex = __WoweeMerchantIndexOfItem(id)\n"
-        "        local ok, filled = pcall(self.SetHyperlink, self, link)\n"
+        // Built straight into the tooltip, as 0x00631850 hands 0x006277f0 the
+        // item: not SetHyperlink's toggle (a tooltip already showing the
+        // item would be closed), and answered by whether the item was
+        // known - not by the lines left behind. GameTooltip_ShowCompareItem
+        // asks before it gives the tooltip an owner, and an ownerless
+        // tooltip a setter shows is hidden and emptied at once (0x0061cff0),
+        // so its lines were always gone by then (T464).
+        "        local ok, filled = pcall(self.__WoweeRefillHyperlink, self, link)\n"
         "        __WoweeTooltipAtMerchantLevel = nil\n"
         "        __WoweeTooltipMerchantIndex = nil\n"
         "        if not ok then error(filled, 0) end\n"
-        "        if self:NumLines() == 0 then return __cmpNo('offset 3: no tooltip for the item', self) end\n"
+        "        if not filled then return __cmpNo('offset 3: no tooltip for the item', self) end\n"
         "        self:Show()\n"
         "        return 1\n"
         "    end\n"

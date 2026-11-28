@@ -1514,6 +1514,36 @@ TEST_CASE("an item's comparison shows what is worn", "[replay][interface]") {
     CHECK(ui.is("money == 90"));
 }
 
+// T464: GameTooltip_ShowCompareItem asks all three shopping tooltips before it
+// gives any an owner, so offset 3 (an heirloom at a merchant, 0x00631850 ->
+// 0x006277f0) has to fill a hidden, ownerless tooltip as offsets 1 and 2 do.
+TEST_CASE("the heirloom comparison fills a tooltip without an owner", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    answerItem(s, 24021, "Heirloom", 70);
+    ui.run("local real = GetItemInfo GetItemInfo = function(id) local a, b, q, d, e, f, g, h, _, j, k = real(id) "
+           "  return a, b, q, d, e, f, g, h, 'INVTYPE_2HWEAPON', j, k end "
+           "__WoweeScalesAtMerchant = function() return true end "
+           "tip = CreateFrame('GameTooltip', 'PlayCompareHeirloom', UIParent) anchor = CreateFrame('Frame')");
+    const auto* w = ui.engine.widgets().findByName("PlayCompareHeirloom");
+    REQUIRE(w);
+    ui.run("tip:Hide()");
+    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 3) == 1"));
+    // Then given its owner and asked again, as the FrameXML does, and shown.
+    ui.run("tip:SetOwner(anchor, 'ANCHOR_NONE')");
+    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 3) == 1"));
+    ui.run("tip:Show()");
+    CHECK(ui.is("tip:IsShown()"));
+    REQUIRE_FALSE(w->tooltipLines.empty());
+    CHECK(w->tooltipLines[0].left == "Heirloom");
+    // Asked again while it shows that item: still filled, not toggled shut.
+    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 3) == 1 and tip:IsShown()"));
+    // Not a scaling item at a merchant: refused.
+    ui.run("__WoweeScalesAtMerchant = function() return false end");
+    CHECK(ui.is("tip:SetHyperlinkCompareItem('item:24021:0:0:0:0:0:0:0', 3) == nil"));
+}
+
 // 0x00631850: which worn item each of the three comparison tooltips shows.
 // The hands: off hand first, then main hand, when both hold something; a
 // shield against the off hand or a two-hander; a bag never (its slot bits
