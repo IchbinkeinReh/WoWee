@@ -5722,6 +5722,79 @@ TEST_CASE("Dismount does nothing on a flight path (0x007412e0)", "[replay][inter
     CHECK(s.sent().of(Opcode::CMSG_CANCEL_MOUNT_AURA).size() == 1);
 }
 
+// ClosePetitionVendor (0x005a24f0) shuts the arena registrar only, with
+// PETITION_VENDOR_CLOSED; CloseGuildRegistrar (0x00599f00) the guild one,
+// with GUILD_REGISTRAR_CLOSED. Neither closes the other's window.
+TEST_CASE("each registrar close shuts its own window (0x005a24f0, 0x00599f00)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    ui.run("seen = '' local f = CreateFrame('Frame') f:RegisterEvent('PETITION_VENDOR_CLOSED') "
+           "f:RegisterEvent('GUILD_REGISTRAR_CLOSED') f:SetScript('OnEvent', function(_, e) seen = seen .. e .. ';' end)");
+    const auto offer = [&](uint32_t itemId) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_PETITION_SHOWLIST));
+        p.writeUInt64(0xF130000000000777ull);
+        p.writeUInt8(1);
+        for (uint32_t v : {1u, itemId, 16161u, 1000u, 0u, 9u}) p.writeUInt32(v);
+        s.receive(p);
+    };
+    offer(5863);                               // a guild charter: the guild registrar
+    ui.run("ClosePetitionVendor()");
+    CHECK(ui.is("seen == ''"));
+    CHECK(s.handler().hasPetitionShowlist());
+    ui.run("CloseGuildRegistrar()");
+    CHECK(ui.is("seen == 'GUILD_REGISTRAR_CLOSED;'"));
+    CHECK_FALSE(s.handler().hasPetitionShowlist());
+    offer(23560);                              // an arena charter
+    ui.run("CloseGuildRegistrar()");
+    CHECK(ui.is("seen == 'GUILD_REGISTRAR_CLOSED;'"));
+    ui.run("ClosePetitionVendor()");
+    CHECK(ui.is("seen == 'GUILD_REGISTRAR_CLOSED;PETITION_VENDOR_CLOSED;'"));
+    CHECK_FALSE(s.handler().hasPetitionShowlist());
+}
+
+// 0x00727860, asked by RepopMe (0x006d2950) and UseSoulstone (0x0051add0):
+// an active aura of type 314 (PREVENT_RESURRECTION) refuses with
+// SPELL_FAILED_CUSTOM_ERROR_<misc> through ERR_SPELL_FAILED_S, unless the
+// self-resurrect spell has AttributesEx7 0x08000000.
+TEST_CASE("a prevent-resurrection aura refuses RepopMe (0x00727860)", "[replay][interface]") {
+    constexpr uint32_t kPrevent = 72445, kStone = 20707;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 0}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    auto& e = s.handler().spellNameCacheRef()[kPrevent];
+    e.name = "No Resurrection";
+    e.effectIds[2] = 6;
+    e.effectAuraIds[2] = 314;
+    e.effectMiscValues[2] = 42;
+    s.handler().spellNameCacheRef()[kStone].name = "Soulstone Resurrection";
+    ui.run("errs = {} local g = CreateFrame('Frame') g:RegisterEvent('UI_ERROR_MESSAGE') "
+           "g:SetScript('OnEvent', function(_, _, m) errs[#errs + 1] = m end)");
+    const auto repops = [&] { return s.sent().of(Opcode::CMSG_REPOP_REQUEST).size(); };
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt8(0);
+    p.writeUInt32(kPrevent);
+    p.writeUInt8(0x08 | 0x04);       // effect 2 marked: bitset +0xf47 & 4
+    p.writeUInt8(80);
+    p.writeUInt8(0);
+    s.receive(p);
+    ui.run("RepopMe()");
+    CHECK(repops() == 0);
+    CHECK(ui.is("#errs == 1 and errs[1] == 'SPELL_FAILED_CUSTOM_ERROR_42'"));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_SELF_RES_SPELL, kStone}}));
+    ui.run("RepopMe() UseSoulstone()");     // a self-res spell without the bypass
+    CHECK(repops() == 0);
+    CHECK(s.sent().of(Opcode::CMSG_SELF_RES).empty());
+    CHECK(ui.is("#errs == 3"));
+    s.handler().spellNameCacheRef()[kStone].attrEx7 = 0x08000000;
+    ui.run("RepopMe()");
+    CHECK(repops() == 1);
+    CHECK(ui.is("#errs == 3"));
+}
+
 // ClosePetition 0x005cf020 -> 0x005ceef0(0): someone else's charter, known and
 // not signed, is declined (MSG_PETITION_DECLINE with its guid); a signed or
 // own one is only let go. PETITION_CLOSED either way. SignPetition

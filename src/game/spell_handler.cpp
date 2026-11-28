@@ -4313,6 +4313,30 @@ bool SpellHandler::playerHasActiveAuraType(uint32_t auraType) {
     return false;
 }
 
+std::string SpellHandler::resurrectionRefusal(uint32_t selfResSpellId) {
+    constexpr uint32_t kAuraPreventResurrection = 314;            // 0x13a
+    constexpr uint32_t kAttrEx7BypassNoResurrectAura = 0x08000000; // the self-res spell's +0x2c
+    if (!playerHasActiveAuraType(kAuraPreventResurrection)) return {};
+    const auto& cache = owner_.spellNameCacheRef();
+    if (selfResSpellId != 0) {
+        const auto self = cache.find(selfResSpellId);
+        if (self != cache.end() && (self->second.attrEx7 & kAttrEx7BypassNoResurrectAura) != 0) return {};
+    }
+    // Every slot and all three effects, whatever the slot's effect flags.
+    for (const AuraSlot& aura : playerAuras_) {
+        if (aura.spellId == 0) continue;
+        const auto it = cache.find(aura.spellId);
+        if (it == cache.end()) continue;
+        for (int i = 0; i < 3; ++i) {
+            if (it->second.effectAuraIds[i] != kAuraPreventResurrection) continue;
+            const std::string key = "SPELL_FAILED_CUSTOM_ERROR_" + std::to_string(it->second.effectMiscValues[i]);
+            return chat_channels::luaFormat(interfaceString("ERR_SPELL_FAILED_S", "%s"),
+                                            {interfaceString(key.c_str(), key.c_str())});
+        }
+    }
+    return {};
+}
+
 void SpellHandler::cancelAura(uint32_t spellId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // 0x00802f80: the aura of a form the player is in. The form is left at

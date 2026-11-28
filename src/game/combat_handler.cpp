@@ -2357,8 +2357,20 @@ void CombatHandler::setPvpState(uint8_t state) {
 // Death / Resurrection
 // ============================================================
 
+/// 0x00727860 as RepopMe (0x006d2950) and UseSoulstone (0x0051add0) ask it:
+/// a prevent-resurrection aura refuses, said on screen, and nothing is sent.
+bool CombatHandler::resurrectionRefused() {
+    auto* spells = owner_.getSpellHandler();
+    if (!spells) return false;
+    const std::string refusal = spells->resurrectionRefusal(owner_.getSelfResSpellId());
+    if (refusal.empty()) return false;
+    owner_.raiseUiError(refusal);
+    return true;
+}
+
 void CombatHandler::releaseSpirit() {
     if (owner_.getSocket() && owner_.getState() == WorldState::IN_WORLD) {
+        if (resurrectionRefused()) return;
         auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         if (owner_.repopPendingRef() && now - static_cast<int64_t>(owner_.lastRepopRequestMsRef()) < 1000) {
@@ -2399,6 +2411,8 @@ void CombatHandler::useSelfRes() {
     // clears its own field when the resurrection is spent, and a death popup is
     // gone once its button has been pressed, so there is nothing here to latch.
     if (!owner_.canSelfRes() || !owner_.getSocket()) return;
+    // 0x0051add0 asks 0x00727860 only for the PLAYER_SELF_RES_SPELL half.
+    if (owner_.getSelfResSpellId() != 0 && resurrectionRefused()) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_SELF_RES));
     owner_.getSocket()->send(pkt);
     owner_.selfResAvailableRef() = false;

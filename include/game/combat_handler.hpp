@@ -178,6 +178,8 @@ public:
 
     // --- Death / Resurrection ---
     void releaseSpirit();
+    /// 0x00727860: a prevent-resurrection aura refuses (said on screen).
+    bool resurrectionRefused();
     [[nodiscard]] float getCorpseReclaimDelaySec() const;
     void reclaimCorpse();
     void useSelfRes();

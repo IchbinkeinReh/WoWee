@@ -267,6 +267,15 @@ public:
     /// is +0xf44 & 0x10, the stable reached without a stable master.
     [[nodiscard]] bool playerHasActiveAuraType(uint32_t auraType);
     [[nodiscard]] bool playerHasOpenStableAura() { return playerHasActiveAuraType(292); }
+    /// 0x00727860, asked by RepopMe (0x006d2950) and UseSoulstone (0x0051add0)
+    /// before they send: with an active aura of type 314
+    /// (SPELL_AURA_PREVENT_RESURRECTION, bitset +0xf47 & 4), unless the
+    /// self-resurrect spell (PLAYER_SELF_RES_SPELL) is known and has
+    /// AttributesEx7 0x08000000, the first aura slot whose spell has an effect
+    /// of type 314 refuses: SPELL_FAILED_CUSTOM_ERROR_<its EffectMiscValue>
+    /// through ERR_SPELL_FAILED_S (0x007fef10, game error 0x30). The text of
+    /// that refusal, empty when nothing refuses.
+    [[nodiscard]] std::string resurrectionRefusal(uint32_t selfResSpellId);
 
     // Known spells
     [[nodiscard]] const std::unordered_set<uint32_t>& getKnownSpells() const { return knownSpells_; }
