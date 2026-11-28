@@ -3651,21 +3651,6 @@ void SocialHandler::handleGuildQueryResponse(network::Packet& packet) {
     }
 }
 
-// Returns true only when the member's cached online state actually changes (and updates
-// it), so callers announce genuine online/offline transitions and silently drop the
-// redundant SIGNED_ON flood the server emits at login for already-online members.
-bool SocialHandler::guildMemberOnlineTransition(const std::string& name, bool nowOnline) {
-    for (auto& m : guildRoster_.members) {
-        if (m.name == name) {
-            if (m.online == nowOnline) return false;
-            m.online = nowOnline;
-            m.statusFlags = nowOnline ? static_cast<uint8_t>(m.statusFlags | 0x01) : 0;
-            return true;
-        }
-    }
-    return true;  // not in the cached roster yet - announce rather than swallow
-}
-
 void SocialHandler::handleGuildEvent(network::Packet& packet) {
     GuildEventData data;
     if (!GuildEventParser::parse(packet, data)) return;
@@ -3725,8 +3710,10 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             // anyone on the friends list, whose own notice says it already.
             // The client keeps no idea of a "transition" to hold one back by;
             // the roster's online state is still kept in step.
+            // The roster is not touched (only SMSG_GUILD_ROSTER writes it) and
+            // no GUILD_ROSTER_UPDATE follows: cases 0xc/0xd return before
+            // 0x005ca0f0.
             const bool on = data.eventType == GuildEvent::SIGNED_ON;
-            if (data.numStrings >= 1) (void)guildMemberOnlineTransition(data.strings[0], on);
             // Registered off (0x00510000 "0" - "Receive notification when guild
             // members log on/off"), so the arrival line is the player's to ask
             // for; the friends-list notices above are not behind it.
@@ -3834,46 +3821,12 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
         owner_.addLocalChatMessage(chatMsg);
     }
 
-    // Whether this client is about to ask for a fresh roster itself, which is
-    // the switch at the end of this function. The event's argument is the
-    // negation: "nobody has asked, so you may". Working it out once and using
-    // it in both places is the point - FrameXML requesting when the client
-    // already has costs a second roster for a large guild, and FrameXML not
-    // requesting when the client has not leaves every guild panel drawing from
-    // a copy that no longer says who is online.
-    const bool clientWillRequest = hasGuildRoster_ && (
-        data.eventType == GuildEvent::PROMOTION ||
-        data.eventType == GuildEvent::DEMOTION ||
-        data.eventType == GuildEvent::JOINED ||
-        data.eventType == GuildEvent::LEFT ||
-        data.eventType == GuildEvent::REMOVED ||
-        data.eventType == GuildEvent::LEADER_CHANGED ||
-        // A rank added, renamed or deleted only reaches the client in the
-        // roster: SMSG_GUILD_ROSTER is what carries the rank list, and every
-        // panel that names a rank reads it from there.
-        data.eventType == GuildEvent::RANK_UPDATED ||
-        data.eventType == GuildEvent::RANK_DELETED);
-
     if (owner_.addonEventCallbackRef()) {
         switch (data.eventType) {
             case GuildEvent::MOTD:
                 owner_.addonEventCallbackRef()("GUILD_MOTD", {data.numStrings >= 1 ? data.strings[0] : ""});
                 break;
             case GuildEvent::SIGNED_ON: case GuildEvent::SIGNED_OFF:
-            case GuildEvent::PROMOTION: case GuildEvent::DEMOTION:
-            case GuildEvent::JOINED: case GuildEvent::LEFT:
-            case GuildEvent::REMOVED: case GuildEvent::LEADER_CHANGED:
-            case GuildEvent::DISBANDED:
-            case GuildEvent::RANK_UPDATED: case GuildEvent::RANK_DELETED:
-                // Somebody joined, left, was promoted or signed on, and the
-                // roster this client holds no longer says so. The server sends
-                // the event and not a new roster, so the request has to come
-                // from somewhere. Signing on and off is the case nothing
-                // covered: the switch below does not request for those, so a
-                // member who had just come online stayed grey until something
-                // else asked.
-                owner_.addonEventCallbackRef()("GUILD_ROSTER_UPDATE",
-                                               {eventBool(!clientWillRequest)});
                 break;
             // The bank panel's own events, which are what these types mean.
             // GuildBankFrame_OnEvent returns early unless the frame is
@@ -3900,7 +3853,16 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
         }
     }
 
-    if (clientWillRequest) requestGuildRoster();
+    // 0x006d92d0 ends every other type (0-11 and the default past 19: the
+    // lines, the MOTD, the rank cases) with 0x005ca0f0(1): GuildRoster()'s ten seconds are given up
+    // (0x00c22ac8 = 0) and GUILD_ROSTER_UPDATE (400) is raised with 1, "ask
+    // when you like". The client asks for no roster itself; the interface's
+    // next GuildRoster() does.
+    if (data.eventType <= GuildEvent::RANK_DELETED || data.eventType > GuildEvent::BANK_TEXT_CHANGED) {
+        guildRosterAllowedAt_ = {};
+        if (owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("GUILD_ROSTER_UPDATE", {eventBool(true)});
+    }
 }
 
 void SocialHandler::handleGuildInvite(network::Packet& packet) {

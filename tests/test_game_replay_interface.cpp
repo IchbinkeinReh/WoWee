@@ -6641,6 +6641,44 @@ TEST_CASE("the arena roster sorts by a column list as 0x005a2e80", "[replay][int
     CHECK(ui.is("order == 'Carl;Bert;Anna;'"));
 }
 
+// 0x006d92d0 ends guild events 0-11 (and unknown ones) with 0x005ca0f0(1):
+// GuildRoster()'s ten seconds given up (0x00c22ac8 = 0) and
+// GUILD_ROSTER_UPDATE raised with 1 - no CMSG_GUILD_ROSTER of the client's
+// own. Signing on and off (0xc/0xd) return before it.
+TEST_CASE("a guild event lets the interface ask for the roster (0x005ca0f0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    ui.run("ups = {} local f = CreateFrame('Frame') f:RegisterEvent('GUILD_ROSTER_UPDATE') "
+           "f:SetScript('OnEvent', function(_, _, a) ups[#ups + 1] = a end)");
+    const auto rosters = [&] { return s.sent().of(Opcode::CMSG_GUILD_ROSTER).size(); };
+    const auto event = [&](uint8_t type, const char* name) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_GUILD_EVENT));
+        p.writeUInt8(type);
+        p.writeUInt8(1);
+        p.writeString(name);
+        if (type == 12 || type == 13) p.writeUInt64(0x1001);
+        s.receive(p);
+    };
+    ui.run("GuildRoster() GuildRoster()");
+    REQUIRE(rosters() == 1);
+    event(3, "Anna");                      // joined
+    CHECK(rosters() == 1);
+    CHECK(ui.is("#ups == 1 and (ups[1] == true or ups[1] == 1)"));
+    ui.run("GuildRoster()");               // the ten seconds were given up
+    CHECK(rosters() == 2);
+    event(12, "Anna");                     // signed on: nothing
+    event(13, "Anna");
+    CHECK(ui.is("#ups == 1"));
+    CHECK(rosters() == 2);
+    event(2, "Neue Nachricht");            // the MOTD too
+    CHECK(ui.is("#ups == 2"));
+    event(0x10, "0");                      // a bank event: not
+    CHECK(ui.is("#ups == 2"));
+    CHECK(rosters() == 2);
+}
+
 // Guild bank review (found by Z in code): guild event 0x10 gives the tab its
 // new name and icon before GUILDBANK_UPDATE_TABS (0x006d92d0 -> 0x005a4220);
 // the tab kept its old name until the next full list.
