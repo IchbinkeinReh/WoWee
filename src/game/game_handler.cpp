@@ -6336,6 +6336,10 @@ void GameHandler::cancelPetUnlearn() {
 bool GameHandler::isGossipWindowOpen() const {
     return questHandler_ ? questHandler_->isGossipWindowOpen() : gossipWindowOpen;
 }
+const GossipMessageData& GameHandler::gossipTables() const {
+    static const GossipMessageData none;
+    return questHandler_ ? questHandler_->gossipTables() : none;
+}
 const GossipMessageData& GameHandler::getCurrentGossip() const {
     if (questHandler_) return questHandler_->getCurrentGossip();
     return currentGossip;

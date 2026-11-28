@@ -63,6 +63,14 @@ public:
 
     [[nodiscard]] bool isGossipWindowOpen() const { return gossipWindowOpen_; }
     [[nodiscard]] const GossipMessageData& getCurrentGossip() const { return currentGossip_; }
+    /// The gossip tables as GetNumGossipOptions / GetGossipOptions /
+    /// GetGossipAvailableQuests / GetGossipActiveQuests / GetGossipText read
+    /// them (0x0058a920 / 0x0058a9e0 / 0x0058a5d0... / 0x0058a900): written by
+    /// every SMSG_GOSSIP_MESSAGE (0x0058b1b0), the options and quests emptied
+    /// when an option is chosen (0x0058af10 -> 0x0058a7b0) and on leaving the
+    /// world (0x0058ab20); the window's close, SMSG_GOSSIP_COMPLETE and a quest
+    /// giver's list leave them.
+    [[nodiscard]] const GossipMessageData& gossipTables() const { return gossipTables_; }
     [[nodiscard]] const std::string& getNpcText(uint32_t textId) const;
     /// What a quest giver says over its list of quests, from
     /// SMSG_QUESTGIVER_QUEST_LIST. Empty when the window came from gossip
@@ -424,6 +432,8 @@ public:
         pendingQuestQueryIds_.clear();
         npcQuestStatus_.clear();
         questFrameTexts_ = QuestFrameTexts{};
+        gossipTables_.options.clear();  // 0x0058ab20 -> 0x0058a7b0
+        gossipTables_.quests.clear();
         // 0x0058b940: the slots (0x0058b7d0) and the money to get; the reward
         // money and experience globals stay.
         questFrameRewards_.rewards.clear();
@@ -466,6 +476,7 @@ private:
     /// which counts as an open quest window.
     bool gossipIsQuestGreeting_ = false;
     GossipMessageData currentGossip_;
+    GossipMessageData gossipTables_;
     std::string questGreeting_;
     QuestFrameTexts questFrameTexts_;
     QuestFrameRewards questFrameRewards_;

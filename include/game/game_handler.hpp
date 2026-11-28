@@ -3609,6 +3609,8 @@ public:
     uint64_t getBankBagItemGuid(int bag, int slot) const;
     bool isGossipWindowOpen() const;
     const GossipMessageData& getCurrentGossip() const;
+    /// The gossip tables the Lua calls read (QuestHandler::gossipTables).
+    const GossipMessageData& gossipTables() const;
     const std::string& getNpcText(uint32_t textId) const;
     /// What a quest giver says over its list of quests, when the window came
     /// from SMSG_QUESTGIVER_QUEST_LIST rather than from gossip.

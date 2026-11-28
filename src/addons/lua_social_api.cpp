@@ -1520,7 +1520,7 @@ enum class QuestList { Gossip, Greeting };
 
 const std::vector<game::GossipQuestItem>& questListOf(game::GameHandler* gh, QuestList list) {
     return list == QuestList::Greeting ? gh->questFrameTexts().greetingQuests
-                                       : gh->getCurrentGossip().quests;
+                                       : gh->gossipTables().quests;
 }
 
 /// The i-th quest of one kind, or null past the end. One walk shared by
@@ -4081,7 +4081,7 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"GetNumGossipOptions", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? gh->getCurrentGossip().options.size() : 0);
+            lua_pushnumber(L, gh ? gh->gossipTables().options.size() : 0);   // 0x0058a920
             return 1;
         }},
                 // The gossip window's two quest lists. Both are flat runs of
@@ -4094,11 +4094,11 @@ void registerSocialLuaAPI(lua_State* L) {
             // first: pushing past the stack top corrupts the heap rather than
             // raising.
             if (!lua_checkstack(
-                    L, static_cast<int>(gh->getCurrentGossip().quests.size()) * 5 + 1)) {
+                    L, static_cast<int>(gh->gossipTables().quests.size()) * 5 + 1)) {
                 return 0;
             }
             int n = 0;
-            for (const auto& q : gh->getCurrentGossip().quests) {
+            for (const auto& q : gh->gossipTables().quests) {
                 if (!gossipQuestIsAvailable(q.questIcon)) continue;
                 lua_pushstring(L, q.title.c_str());
                 lua_pushnumber(L, q.questLevel);
@@ -4118,11 +4118,11 @@ void registerSocialLuaAPI(lua_State* L) {
             // first: pushing past the stack top corrupts the heap rather than
             // raising.
             if (!lua_checkstack(
-                    L, static_cast<int>(gh->getCurrentGossip().quests.size()) * 5 + 1)) {
+                    L, static_cast<int>(gh->gossipTables().quests.size()) * 5 + 1)) {
                 return 0;
             }
             int n = 0;
-            for (const auto& q : gh->getCurrentGossip().quests) {
+            for (const auto& q : gh->gossipTables().quests) {
                 if (!gossipQuestIsActive(q.questIcon)) continue;
                 lua_pushstring(L, q.title.c_str());
                 lua_pushnumber(L, q.questLevel);
@@ -4545,10 +4545,10 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetGossipOptions", [](lua_State* L) -> int {
-            // Returns pairs of (text, type) for each option
+            // Returns pairs of (text, type) for each option (0x0058a9e0)
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const auto& opts = gh->getCurrentGossip().options;
+            const auto& opts = gh->gossipTables().options;
             // Two values per option, and the option count is the server's.
             // Room first: pushing past the stack top corrupts the heap rather
             // than raising.
@@ -4585,7 +4585,9 @@ void registerSocialLuaAPI(lua_State* L) {
             // 0x0058af10, in its order: an option with a box asks first;
             // then a coded one with no code typed asks for it, answered or
             // not; then one costing more than the player has is refused.
-            if (!confirmed && (opt.boxMoney > 0 || !opt.boxText.empty())) {
+            // "With a box" is its text: 0x0058b1b0 keeps no pointer for an
+            // empty one (0x00c00bf4 = 0), and a price alone asks nothing.
+            if (!confirmed && !opt.boxText.empty()) {
                 // arg1 is handed straight back to this function as the index,
                 // so it is the position rather than the option's id.
                 gh->fireAddonEvent("GOSSIP_CONFIRM",

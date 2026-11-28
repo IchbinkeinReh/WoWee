@@ -3383,6 +3383,11 @@ struct QuestFrameTexts {
     /// with the texts (0x0058b720). The window's close and a gossip after it
     /// leave them.
     std::vector<GossipQuestItem> greetingQuests;
+    /// The window's subject (0x00c0d648): written by every 0x0058c5a0 call -
+    /// the list and the details, progress and reward packets - and cleared
+    /// only by leaving the world (0x0058b940). GetQuestBackgroundMaterial
+    /// (0x0058c990) asks it for an item's or a game object's page material.
+    uint64_t giver = 0;
 };
 
 /// The quest window's item slots and numbers, as GetNumQuestRewards /

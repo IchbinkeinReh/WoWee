@@ -221,6 +221,41 @@ TEST_CASE("the gossip quest lists split by icons 3 and 4", "[replay][interface]"
     CHECK(ui.is("select('#', GetGossipActiveQuests()) == 8"));
 }
 
+// 0x0058af10: an option asks GOSSIP_CONFIRM (position, box text, price) only
+// when it has a box text - 0x0058b1b0 keeps no pointer for an empty one; a
+// price alone asks nothing.
+TEST_CASE("SelectGossipOption asks only for an option with a box text", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::PLAYER_FIELD_COINAGE, 100000}});
+    Interface ui(s);
+    s.setConnected(true);
+    wowee::network::Packet gossip(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_MESSAGE));
+    gossip.writeUInt64(0xF130000BEC00150Full);
+    gossip.writeUInt32(0);
+    gossip.writeUInt32(1);
+    gossip.writeUInt32(2);
+    const std::pair<uint32_t, const char*> opts[] = {{500, ""}, {700, "Sicher?"}};
+    uint32_t id = 0;
+    for (const auto& [money, box] : opts) {
+        gossip.writeUInt32(id++);
+        gossip.writeUInt8(0);
+        gossip.writeUInt8(0);
+        gossip.writeUInt32(money);
+        gossip.writeString("Option");
+        gossip.writeString(box);
+    }
+    gossip.writeUInt32(0);
+    s.receive(gossip);
+    ui.run("asked = {} local f = CreateFrame('Frame') f:RegisterEvent('GOSSIP_CONFIRM') "
+           "f:SetScript('OnEvent', function(self, e, i, text, cost) asked[#asked + 1] = i .. '|' .. text .. '|' .. cost end)");
+    ui.run("SelectGossipOption(2)");
+    CHECK(ui.is("#asked == 1"));
+    CHECK(ui.is("asked[1] == '2|Sicher?|700'"));
+    ui.run("SelectGossipOption(1)");
+    CHECK(ui.is("#asked == 1"));
+}
+
 // 0x0058b490: an active gossip quest's isComplete is its log slot's
 // 0x005e0ea0(index, 1) || 0x005e10b0(index) - never the icon, which a 3.3.5
 // server sends as 4 for finished and unfinished alike. A quest with nothing to
@@ -4297,6 +4332,73 @@ TEST_CASE("the quest greeting's list outlives the window (0x0058bdd0)", "[replay
     CHECK(ui.is("GetNumAvailableQuests() == 0"));
     CHECK(ui.is("GetNumActiveQuests() == 0"));
     CHECK(ui.is("GetAvailableTitle(1) == nil"));
+    // ...and leaves the gossip's (0x0058a7b0 is not called by the list), as
+    // does closing the gossip (0x0058aa40 -> 0x0058a550).
+    CHECK(ui.is("GetNumGossipActiveQuests() == 1"));
+    ui.run("CloseGossip()");
+    CHECK(ui.is("GetNumGossipActiveQuests() == 1"));
+    CHECK(ui.is("select(1, GetGossipActiveQuests()) == 'Geplauder'"));
+}
+
+// GetQuestBackgroundMaterial (0x0058c990) asks the quest frame's subject
+// 0x00c0d648, which every quest frame packet writes (0x0058c5a0) - a
+// progress page opened from a board names the board, not the last details'
+// giver - and only leaving the world clears.
+TEST_CASE("the quest frame's subject is the last quest packet's (0x00c0d648)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    wowee::network::Packet l(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_LIST));
+    l.writeUInt64(0xF130000C3E000001ull);
+    l.writeString("Hallo");
+    l.writeUInt32(0);
+    l.writeUInt32(0);
+    l.writeUInt8(0);
+    s.receive(l);
+    CHECK(s.handler().questFrameTexts().giver == 0xF130000C3E000001ull);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_REQUEST_ITEMS));
+    p.writeUInt64(0xF1100000AB000002ull);
+    p.writeUInt32(789);
+    p.writeString("Gesucht");
+    p.writeString("Text");
+    s.receive(p);
+    CHECK(s.handler().questFrameTexts().giver == 0xF1100000AB000002ull);
+    ui.run("CloseQuest()");
+    CHECK(s.handler().questFrameTexts().giver == 0xF1100000AB000002ull);
+}
+
+// SMSG_QUEST_CONFIRM_ACCEPT -> 0x0058bc50: QUEST_ACCEPT_CONFIRM (sharer's
+// name, the quest's title) only when the name cache already knows the sharer
+// (0x0067d770 asked with no callback) - never the guid as a name.
+TEST_CASE("QUEST_ACCEPT_CONFIRM needs the sharer's name (0x0058bc50)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    ui.run("confirms = {} local f = CreateFrame('Frame') f:RegisterEvent('QUEST_ACCEPT_CONFIRM') "
+           "f:SetScript('OnEvent', function(self, e, who, title) confirms[#confirms + 1] = who .. '|' .. title end)");
+    const auto share = [&](uint64_t sharer) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUEST_CONFIRM_ACCEPT));
+        p.writeUInt32(4321);
+        p.writeString("Geleitschutz");
+        p.writeUInt64(sharer);
+        s.receive(p);
+    };
+    constexpr uint64_t kSharer = 0x0000000000000777ull;
+    share(kSharer);
+    CHECK(ui.is("#confirms == 0"));
+    wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_NAME_QUERY_RESPONSE));
+    answer.writePackedGuid(kSharer);
+    answer.writeUInt8(0);
+    answer.writeString("Bert");
+    answer.writeString("");
+    for (int i = 0; i < 4; ++i) answer.writeUInt8(i == 0 ? 2 : 0);
+    s.receive(answer);
+    CHECK(ui.is("#confirms == 0"));   // nothing raised later either
+    share(kSharer);
+    CHECK(ui.is("#confirms == 1"));
+    CHECK(ui.is("confirms[1] == 'Bert|Geleitschutz'"));
 }
 
 // GetNumQuestRewards/Choices, GetRewardMoney, GetRewardXP and

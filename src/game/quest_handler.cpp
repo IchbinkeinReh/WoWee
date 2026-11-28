@@ -1247,6 +1247,8 @@ void QuestHandler::selectGossipOption(uint32_t optionId, const std::string& code
     // answer to it. Then the options and quests go (0x0058a7b0).
     currentGossip_.options.clear();
     currentGossip_.quests.clear();
+    gossipTables_.options.clear();
+    gossipTables_.quests.clear();
 }
 
 void QuestHandler::selectGossipQuest(uint32_t questId) {
@@ -2331,6 +2333,7 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
     bool ok = owner_.getPacketParsers() ? owner_.getPacketParsers()->parseGossipMessage(packet, currentGossip_)
                                     : GossipMessageParser::parse(packet, currentGossip_);
     if (!ok) return;
+    gossipTables_ = currentGossip_;  // 0x0058b1b0, whatever the window does next
     closeLeftQuestPage();   // 0x0051fce0 -> 0x00512e60: what it was left for
     if (questDetailsOpen_) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen_ = true;
@@ -2400,6 +2403,7 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
     // run through 0x00579590 first, as every quest text: $N, $C, $R, $G...
     // are the player's (T465).
     questFrameTexts_.greeting = questGreeting_.empty() ? " " : resolveTextTokens(questGreeting_, owner_);
+    questFrameTexts_.giver = data.npcGuid;  // 0x00c0d648
     // The giver's (delay, emote) pair (0x006d0240 -> 0x0071a260).
     std::vector<DialogEmote> listEmotes;
     if (packet.hasRemaining(8)) {
@@ -2814,6 +2818,7 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     }
     currentQuestDetails_ = data;
     questFrameFlags_ = data.questFlags;
+    questFrameTexts_.giver = data.npcGuid;  // 0x00c0d648 (0x0058c5a0)
     questFrameTexts_.title = data.title.empty() ? " " : data.title;
     questFrameTexts_.quest = data.details.empty() ? " " : data.details;
     questFrameTexts_.objective = data.objectives;
@@ -2885,6 +2890,7 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
 
     currentQuestRequestItems_ = data;
     questFrameFlags_ = data.questFlags;
+    questFrameTexts_.giver = data.npcGuid;  // 0x00c0d648 (0x0058c5a0)
     questFrameTexts_.title = data.title.empty() ? " " : data.title;
     questFrameTexts_.progress = data.completionText.empty() ? " " : data.completionText;
     // 0x0058ba80: the required items and the money to get; the reward slots
@@ -2959,6 +2965,7 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     }
     currentQuestOfferReward_ = data;
     questFrameFlags_ = data.questFlags;
+    questFrameTexts_.giver = data.npcGuid;  // 0x00c0d648 (0x0058c5a0)
     questFrameTexts_.title = data.title.empty() ? " " : data.title;
     questFrameTexts_.reward = data.rewardText.empty() ? " " : data.rewardText;
     writeQuestFrameRewards(data.fixedRewards, data.choiceRewards, data.rewardMoney, data.rewardXp,
@@ -3002,14 +3009,16 @@ void QuestHandler::handleQuestConfirmAccept(network::Packet& packet) {
         if (nit != owner_.getPlayerNameCache().end())
             sharedQuestSharerName_ = nit->second;
     }
-    if (sharedQuestSharerName_.empty()) {
-        char tmp[32];
-        std::snprintf(tmp, sizeof(tmp), "0x%llX",
-                      static_cast<unsigned long long>(sharedQuestSharerGuid_));
-        sharedQuestSharerName_ = tmp;
-    }
-
     pendingSharedQuest_ = true;
+    // 0x0058bc50 keeps the quest (0x00c0d6a8) for ConfirmAcceptQuest, then
+    // asks the name cache (0x0067d770) with no callback: a sharer whose name
+    // is not known yet raises nothing, and nothing later does either. This
+    // answered with the guid in hex as the name.
+    if (sharedQuestSharerName_.empty()) {
+        LOG_INFO("SMSG_QUEST_CONFIRM_ACCEPT: questId=", sharedQuestId_,
+                 " sharer's name unknown - no QUEST_ACCEPT_CONFIRM (0x0058bc50)");
+        return;
+    }
     // No chat line: 0x006cbc50 -> 0x0058bc50 only raises QUEST_ACCEPT_CONFIRM,
     // whose popup says who and what. This printed an English line as well.
     // Who and what, in that order: uiparent.lua hands both straight to

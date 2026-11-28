@@ -4613,11 +4613,13 @@ static int lua_GetRewardText(lua_State* L) {
     return pushQuestText(L, gh ? &gh->questFrameTexts().reward : nullptr);
 }
 
-// GetGossipText() → the body of the gossip window
+// GetGossipText() → the body of the gossip window (0x0058a900: the buffer
+// 0x00c00ef0 the last gossip's text was written to, never cleared - it
+// outlives the window and a quest giver's list after it).
 static int lua_GetGossipText(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isGossipWindowOpen()) { lua_pushstring(L, ""); return 1; }
-    return pushQuestText(L, &gh->getNpcText(gh->getCurrentGossip().titleTextId));
+    if (!gh) { lua_pushstring(L, ""); return 1; }
+    return pushQuestText(L, &gh->getNpcText(gh->gossipTables().titleTextId));
 }
 
 // GetRewardMoney() → coin the quest pays out.
@@ -5462,8 +5464,12 @@ void registerQuestLuaAPI(lua_State* L) {
                 // side by side holding 0xffffffff and 0x0fffffff in .data, which
                 // is a min/max pair before anything has been seen, not a range).
                 //
-                // The window's subject guid is the one the details packet names -
-                // parsed here as QuestDetailsData::npcGuid - and the client's bit
+                // The window's subject guid is 0x00c0d648, which every quest
+                // frame packet writes (0x0058c5a0: the giver's list, details,
+                // progress and reward alike) and only leaving the world clears
+                // (QuestFrameTexts::giver) - so a reward page opened straight
+                // from a board names the board, not the last details' giver.
+                // The client's bit
                 // test says it expects that guid to be able to name an item or a
                 // game object, which is the shape a quest opened from one has: a
                 // bounty hunt posted on a board, a quest started by a letter. The
@@ -5484,7 +5490,7 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"GetQuestBackgroundMaterial", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return luaReturnNil(L);
-            const uint64_t subject = gh->getQuestDetails().npcGuid;
+            const uint64_t subject = gh->questFrameTexts().giver;
             uint32_t material = 0;
             if (const uint32_t entry = gh->getItemIdByGuid(subject); entry != 0) {
                 const auto* info = gh->getItemInfo(entry);
@@ -5493,7 +5499,11 @@ void registerQuestLuaAPI(lua_State* L) {
                        entity && entity->getType() == game::ObjectType::GAMEOBJECT) {
                 const auto* go = gh->getCachedGameObjectInfo(
                     std::static_pointer_cast<game::GameObject>(entity)->getEntry());
-                if (go && go->type == 9) material = go->data[2];
+                // 0x00710300: the template word 0x00746190 names as field
+                // 0x11 for the type (table 0x00a36f34) - a quest giver's
+                // (type 2, a bounty board) data[2], a text's (9) data[2], a
+                // goober's (10) data[9]; no other type has one.
+                if (go && (go->type == 2 || go->type == 9)) material = go->data[2];
                 else if (go && go->type == 10) material = go->data[9];
             }
             const std::string& name = gh->getPageTextMaterialName(material);
