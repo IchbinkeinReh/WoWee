@@ -5580,11 +5580,31 @@ TEST_CASE("CloseTrade and CancelTrade send the cancel whatever the state (0x0058
     CHECK(ui.is("#seen == 2 and seen[1] == 'PLAYER_TRADE_MONEY' and seen[2] == 'TRADE_CLOSED'"));
     CHECK(ui.is("not seen[3]"));
     // A completed trade: its window's OnHide gives no PLAYER_TRADE_MONEY.
+    // The realm's completion closes as 0x005870a0(0, 0, 1), which sends the
+    // cancel itself (0x00704040).
     status(2, true);
     status(8, false);
-    ui.run("seen = {} CloseTrade()");
     CHECK(cancels() == 4);
+    ui.run("seen = {} CloseTrade()");
+    CHECK(cancels() == 5);
     CHECK(ui.is("#seen == 0"));
+    // The realm's cancel (3) and a failed trade (12) close the same way, with
+    // or without a window.
+    status(3, false);
+    CHECK(cancels() == 6);
+    status(2, true);
+    status(3, false);
+    CHECK(cancels() == 7);
+    status(2, true);
+    {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_TRADE_STATUS));
+        p.writeUInt32(12);
+        p.writeUInt32(0);
+        p.writeUInt8(0);
+        p.writeUInt32(0);
+        s.receive(p);
+    }
+    CHECK(cancels() == 8);
 }
 
 // GuildControlAddRank 0x005cb330 sends only below ten ranks and takes the name

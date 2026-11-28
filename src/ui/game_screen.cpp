@@ -1527,7 +1527,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 case EscapeAction::DeclineQuest:           gameHandler.declineQuest(); break;
                 case EscapeAction::CloseQuestOfferReward:  gameHandler.closeQuestOfferReward(); break;
                 case EscapeAction::CloseQuestRequestItems: gameHandler.closeQuestRequestItems(); break;
-                case EscapeAction::CancelTrade:            gameHandler.cancelTrade(); break;
+                // Without FrameXML only: the interface's Escape hides
+                // TradeFrame, whose OnHide is CloseTrade (0x00587940).
+                case EscapeAction::CancelTrade:            gameHandler.closeTrade(); break;
                 case EscapeAction::None: break;
                 case EscapeAction::AskTheInterface: {
                     // Asked only here, because asking closes things. Everything

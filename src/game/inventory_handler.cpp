@@ -6490,6 +6490,10 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
                 owner_.addonEventCallbackRef()("TRADE_REQUEST_CANCEL", {});
                 if (wasOpen) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
             }
+            // 0x005870a0(0, 0, x) ends with CMSG_CANCEL_TRADE (0x00704040)
+            // whether a window was open or not - also on the realm's own
+            // cancel, completion (8) and failure (12).
+            sendCancelTrade();
             owner_.addUIInfoMessage(uiText("ERR_TRADE_CANCELLED", "Trade cancelled."));
             break;
         }
@@ -6527,6 +6531,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
                 fireBagUpdates();
                 owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
             }
+            sendCancelTrade();   // 0x005870a0(0, 0, 1) -> 0x00704040
             owner_.addUIInfoMessage(uiText("ERR_TRADE_COMPLETE", "Trade complete."));
             break;
         case 9:   // the partner's acceptance taken back
@@ -6595,6 +6600,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
                     error(err.key, err.enUS);
             }
             if (wasOpen && owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
+            sendCancelTrade();   // 0x005870a0(0, 0, 0) -> 0x00704040
             break;
         }
         case 14:  // IGNORE_YOU
