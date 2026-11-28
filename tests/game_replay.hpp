@@ -61,6 +61,15 @@ struct GameHandlerTestAccess {
         return gh.pendingIncomingPackets_.size() + (gh.entityController_->hasPendingUpdateObjectWork() ? 1 : 0);
     }
     static void enterWorld(GameHandler& gh) { gh.setState(WorldState::IN_WORLD); }
+    // A BattlemasterList row, as the DBC would give it (no asset manager here).
+    static void addBattlemaster(GameHandler& gh, uint32_t id, uint32_t instanceType) {
+        gh.battlemasterListLoaded_ = true;
+        GameHandler::BattlemasterEntry e;
+        e.id = id;
+        e.instanceType = instanceType;
+        e.maxGroupSize = 5;
+        gh.battlemasterList_[id] = e;
+    }
     static void setSocket(GameHandler& gh, std::unique_ptr<network::WorldSocket> socket) {
         gh.socket = std::move(socket);
     }

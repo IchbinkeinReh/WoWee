@@ -150,6 +150,11 @@ public:
     void reportPvpAfk(uint64_t playerGuid);
     void joinBattlefield(uint64_t battlemasterGuid, uint32_t bgTypeId,
                          uint32_t instanceId, bool asGroup);
+    /// An arena's queue (0x0054cc70 with BattlemasterList InstanceType 4):
+    /// CMSG_BATTLEMASTER_JOIN_ARENA - the battlemaster, a byte for the
+    /// bracket (0 2v2, 1 3v3, 2 5v5), the group byte, the rated byte.
+    /// `bgTypeId` only marks the join as waiting for its status.
+    void joinArena(uint64_t battlemasterGuid, uint32_t bgTypeId, uint8_t bracket, bool asGroup, bool rated);
     [[nodiscard]] const std::array<BgQueueSlot, 3>& getBgQueues() const { return bgQueues_; }
     /// Whole seconds left on one queue slot's invitation, 0 for a slot that has
     /// none running. The client's GetBattlefieldPortExpiration (0x00549b80).

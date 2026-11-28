@@ -2920,6 +2920,11 @@ void GameHandler::joinBattlefield(uint64_t battlemasterGuid, uint32_t bgTypeId,
     if (socialHandler_) socialHandler_->joinBattlefield(battlemasterGuid, bgTypeId, instanceId, asGroup);
 }
 
+void GameHandler::joinArena(uint64_t battlemasterGuid, uint32_t bgTypeId, uint8_t bracket, bool asGroup,
+                            bool rated) {
+    if (socialHandler_) socialHandler_->joinArena(battlemasterGuid, bgTypeId, bracket, asGroup, rated);
+}
+
 void GameHandler::leaveBattlefield() {
     if (socialHandler_) socialHandler_->leaveBattlefield();
 }

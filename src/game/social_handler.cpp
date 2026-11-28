@@ -4952,6 +4952,23 @@ void SocialHandler::joinBattlefield(uint64_t battlemasterGuid, uint32_t bgTypeId
     bgJoinWaitSec_ = 5.0f;
 }
 
+// 0x0054cc70, the arena branch: opcode 0x2ee + 0x6a, the battlemaster, the
+// bracket as a byte where the battleground has its type and instance, then
+// the group byte and the rated byte (T467: the arena join went out as a
+// battleground's and the realm queued nothing).
+void SocialHandler::joinArena(uint64_t battlemasterGuid, uint32_t bgTypeId, uint8_t bracket, bool asGroup,
+                              bool rated) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_BATTLEMASTER_JOIN_ARENA));
+    packet.writeUInt64(battlemasterGuid);
+    packet.writeUInt8(bracket);
+    packet.writeUInt8(asGroup ? 1 : 0);
+    packet.writeUInt8(rated ? 1 : 0);
+    owner_.getSocket()->send(packet);
+    bgJoinPendingType_ = bgTypeId;
+    bgJoinWaitSec_ = 5.0f;
+}
+
 // CMSG_BATTLEFIELD_LIST: ask which instances of one battleground are running.
 // The reply is SMSG_BATTLEFIELD_LIST, which this client already handles - it
 // just had no way to ask, because nothing reached the frame that asks.

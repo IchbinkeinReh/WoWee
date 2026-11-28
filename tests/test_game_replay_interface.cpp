@@ -4327,6 +4327,54 @@ TEST_CASE("UnitLevel without a unit is a usage error", "[replay][interface]") {
     CHECK(ui.is("select(2, pcall(UnitLevel)):find('Usage: UnitLevel', 1, true) ~= nil"));
 }
 
+// T467: 0x0054cc70 sends an arena's join (BattlemasterList InstanceType 4)
+// as CMSG_BATTLEMASTER_JOIN_ARENA - battlemaster, bracket byte (index - 1),
+// group byte, rated byte - and a battleground's as CMSG_BATTLEMASTER_JOIN.
+TEST_CASE("an arena is joined with the arena's packet (T467)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    Interface ui(s);
+    s.setConnected(true);
+    auto& gh = s.handler();
+    wowee::game::GameHandlerTestAccess::addBattlemaster(gh, 6, 4);
+    wowee::game::GameHandlerTestAccess::addBattlemaster(gh, 2, 3);
+    constexpr uint64_t kMaster = 0xF130004DC8001132ull;
+    const auto list = [&](uint32_t type) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_BATTLEFIELD_LIST));
+        p.writeUInt64(kMaster);
+        p.writeUInt8(0);
+        p.writeUInt32(type);
+        p.writeUInt8(0); p.writeUInt8(0);
+        p.writeUInt8(0);
+        p.writeUInt32(0); p.writeUInt32(0); p.writeUInt32(0);
+        p.writeUInt8(0);
+        p.writeUInt32(0);
+        s.receive(p);
+    };
+    list(6);
+    ui.run("JoinBattlefield(1)");   // ArenaFrame: a 2v2 skirmish, selection 4 - 3
+    REQUIRE(s.sent().of(Opcode::CMSG_BATTLEMASTER_JOIN_ARENA).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_BATTLEMASTER_JOIN).empty());
+    auto skirmish = s.sent().of(Opcode::CMSG_BATTLEMASTER_JOIN_ARENA).back();
+    CHECK(skirmish.readUInt64() == kMaster);
+    CHECK(skirmish.readUInt8() == 0);
+    CHECK(skirmish.readUInt8() == 0);
+    CHECK(skirmish.readUInt8() == 0);
+    CHECK(skirmish.getRemainingSize() == 0);
+    ui.run("JoinBattlefield(2, 1, 1)");   // rated 3v3 as a group
+    REQUIRE(s.sent().of(Opcode::CMSG_BATTLEMASTER_JOIN_ARENA).size() == 2);
+    auto rated = s.sent().of(Opcode::CMSG_BATTLEMASTER_JOIN_ARENA).back();
+    CHECK(rated.readUInt64() == kMaster);
+    CHECK(rated.readUInt8() == 1);
+    CHECK(rated.readUInt8() == 1);
+    CHECK(rated.readUInt8() == 1);
+    // A battleground: the battleground's packet.
+    list(2);
+    ui.run("JoinBattlefield(0)");
+    CHECK(s.sent().of(Opcode::CMSG_BATTLEMASTER_JOIN).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_BATTLEMASTER_JOIN_ARENA).size() == 2);
+}
+
 // T463: the giver's quest list is a quest page (0x006d0240 -> 0x0058c5a0 with
 // 0): CloseQuest lets it go with QUEST_FINISHED (0x0058ca70), once.
 TEST_CASE("CloseQuest closes a giver's quest list (T463)", "[replay][interface]") {

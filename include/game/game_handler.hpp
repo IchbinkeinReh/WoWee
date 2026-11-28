@@ -943,6 +943,8 @@ public:
     void reportPvpAfk(uint64_t playerGuid);
     void joinBattlefield(uint64_t battlemasterGuid, uint32_t bgTypeId,
                          uint32_t instanceId, bool asGroup);
+    /// CMSG_BATTLEMASTER_JOIN_ARENA (0x0054cc70's arena branch).
+    void joinArena(uint64_t battlemasterGuid, uint32_t bgTypeId, uint8_t bracket, bool asGroup, bool rated);
     const std::array<BgQueueSlot, 3>& getBgQueues() const override;
     /// Whole seconds a queue slot's invitation still has, 0 when none is running.
     int32_t battlefieldPortExpirationSec(size_t slot) const;

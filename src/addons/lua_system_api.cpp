@@ -7739,17 +7739,9 @@ static int lua_SetSelectedBattlefield(lua_State* L) {
 // `(-isArena & 0x6a) + 0x2ee`, so 0x2ee CMSG_BATTLEMASTER_JOIN becomes 0x358
 // CMSG_BATTLEMASTER_JOIN_ARENA, and the two packets differ in more than the
 // number - the arena one is guid, then a *byte* for the bracket index instead
-// of the instance dword, then the group byte, then the rated byte. Nothing
-// here can take that branch: the worker decides it before looking at any
-// argument, by reading the selected type id out of a table of battleground
-// records and testing record +0x24 == 4. That table is filled at load time and
-// nothing on this client's wire writes it - objdump over the whole image finds
-// the record array referenced from eight sites, all of them inside this same
-// battleground code, and SMSG_BATTLEFIELD_LIST's reader (0x0054e390) consumes
-// guid, from-where byte, type dword, two level bytes, one flag byte, three
-// reward dwords, an optional second reward block, then the running instances -
-// no type field in it. So an arena queue is a missing table plus a missing
-// packet, and the third argument has nowhere honest to go.
+// of the instance dword, then the group byte, then the rated byte. The worker
+// decides it before looking at any argument: the selected type's
+// BattlemasterList row (0x00ad3274, by 0x00bea53c), InstanceType (+0x24) == 4.
 // JoinBattlefield's refusals before it asks (0x0054cc70): queued as a group,
 // a party with more others in it than the battleground's MaxGroupSize, or a
 // raid with more members, is ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY; and a
@@ -7805,6 +7797,19 @@ static int lua_JoinBattlefield(lua_State* L) {
     // The battlemaster the list came from (0x00bea568), none for the panel's.
     const auto* list = gh->lastBattlefieldList();
     const uint64_t battlemaster = list ? list->battlemasterGuid : 0;
+    // An arena (BattlemasterList InstanceType 4, the record 0x0054cc70 reads
+    // by 0x00bea53c): CMSG_BATTLEMASTER_JOIN_ARENA with index - 1 as the
+    // bracket byte (ArenaFrame passes selection - 3 for a skirmish,
+    // selection with 1, 1 for a rated match) and the third argument as the
+    // rated byte (T467).
+    if (const auto* row = gh->getBattlemasterInfo(bgTypeId); row && row->instanceType == 4) {
+        const bool rated = luaClientSwitchArg(L, 3, false);
+        const auto bracket = static_cast<uint8_t>(index - 1);
+        LOG_WARNING("CMSG_BATTLEMASTER_JOIN_ARENA: bracket=", static_cast<int>(bracket), " asGroup=", asGroup,
+                    " rated=", rated, " battlemaster=0x", std::hex, battlemaster, std::dec);
+        if (battlefieldJoinAllowed(gh, bgTypeId, asGroup)) gh->joinArena(battlemaster, bgTypeId, bracket, asGroup, rated);
+        return 0;
+    }
     LOG_WARNING("CMSG_BATTLEMASTER_JOIN: bgTypeId=", bgTypeId, " instance=", instanceId,
              " asGroup=", asGroup, " battlemaster=0x", std::hex, battlemaster, std::dec);
     if (battlefieldJoinAllowed(gh, bgTypeId, asGroup))
