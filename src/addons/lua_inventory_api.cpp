@@ -1331,8 +1331,10 @@ static int lua_GetCoinText(lua_State* L) {
         {"GOLD_AMOUNT", 10000}, {"SILVER_AMOUNT", 100}, {"COPPER_AMOUNT", 1}}};
     std::string out;
     for (const auto& [token, unit] : kCoins) {
-        const int32_t count = amount < unit ? 0 : amount / unit;
-        if (count != 0) amount %= unit;
+        // 0x007e7c70: gold and silver only from an amount at least their
+        // size; copper is whatever is left, a negative amount included.
+        const int32_t count = unit == 1 ? amount : (amount < unit ? 0 : amount / unit);
+        if (count != 0 && unit != 1) amount %= unit;
         if (count == 0) continue;
         lua_getglobal(L, token);
         const char* format = lua_isstring(L, -1) ? lua_tostring(L, -1) : token;
@@ -2382,8 +2384,8 @@ std::string coinTextureText(lua_State* L, int32_t amount, int height) {
         {"GOLD_AMOUNT_TEXTURE", 10000}, {"SILVER_AMOUNT_TEXTURE", 100}, {"COPPER_AMOUNT_TEXTURE", 1}};
     std::string out;
     for (const auto& [key, unit] : kCoins) {
-        int32_t count = 0;
-        if (amount >= unit) { count = amount / unit; amount %= unit; }
+        int32_t count = unit == 1 ? amount : 0;  // copper: what is left, negative too (0x007e7c70)
+        if (unit != 1 && amount >= unit) { count = amount / unit; amount %= unit; }
         if (count == 0) continue;
         if (!out.empty()) out += ' ';
         out += piece(key, count);
