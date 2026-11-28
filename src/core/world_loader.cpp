@@ -1766,7 +1766,15 @@ void WorldLoader::relocateOnLoadedMap(uint32_t mapId, float x, float y, float z)
         // Streams about the camera, which the teleport already put there, and
         // queues the old place's tiles for unloading.
         terrainMgr->update(*camera, 0.016f);
-        finalized += terrainMgr->processOneReadyTile();
+        // A long tile draws the screen as it goes (as the map load's loop,
+        // T460), with the bar it had.
+        finalized += terrainMgr->processOneReadyTile([&] {
+            app_.beatWatchdog();
+            if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/false);
+            if (!screenOk) return;
+            screen.render();
+            window_->swapBuffers();
+        });
 
         settled = 0;
         for (const auto& [tx, ty] : area)
