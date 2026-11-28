@@ -557,6 +557,36 @@ TEST_CASE("Two lights in one place become the stronger one", "[rt_lights]") {
     CHECK(lights[1].color.r == Catch::Approx(0.5f));
 }
 
+// U28: an instance portal's two emitter lights 0.03 yards apart at one x, both
+// at the glow's strength ceiling; which one was kept - its reach 19 or 64
+// yards - followed the order they came in, and changed from frame to frame.
+TEST_CASE("Of two lights as strong in one place the farther reaching is kept, whatever the order (U28)",
+          "[rt_lights]") {
+    using wowee::rendering::rt_lights::PointLight;
+    using wowee::rendering::rt_lights::keepOneLightPerPlace;
+    PointLight shortReach, longReach, other;
+    shortReach.position = glm::vec3(-6062.27f, -2955.0f, 218.60f);
+    shortReach.color = glm::vec3(0.31f, 0.37f, 0.42f);
+    shortReach.attenuationEnd = 8.25f;
+    longReach = shortReach;
+    longReach.position.z = 218.63f;
+    longReach.attenuationEnd = 27.6f;
+    other.position = glm::vec3(-6062.27f, -2940.0f, 218.6f);
+    other.color = glm::vec3(0.3f);
+    other.attenuationEnd = 5.0f;
+    const std::vector<std::vector<PointLight>> orders{{shortReach, longReach, other},
+                                                      {longReach, shortReach, other},
+                                                      {other, shortReach, longReach},
+                                                      {other, longReach, shortReach}};
+    for (std::vector<PointLight> lights : orders) {
+        keepOneLightPerPlace(lights);
+        REQUIRE(lights.size() == 2);
+        const PointLight& portal = lights[0].position.y < -2950.0f ? lights[0] : lights[1];
+        CHECK(portal.attenuationEnd == 27.6f);
+        CHECK(portal.position.z == 218.63f);
+    }
+}
+
 // T443: a brazier's three parts a tenth of a yard apart came and went as the
 // frame's spacing crossed kCoincidentLights - keepOneLightPerPlace kept the
 // first part alone, a third of the light gone in a step.

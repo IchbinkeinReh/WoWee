@@ -2,7 +2,7 @@
 
 /// The light of what glows: a model's or a building's emissive surfaces - its
 /// unlit and additive batches, glow cards, lava, crystals, lamp glass
-/// - and a particle emitter's live particles. The original
+/// - and a particle emitter's particles. The original
 /// lights nothing with either; RtLighting does, in its modes only, beside the
 /// lights the files carry (rt_point_lights.hpp).
 ///
@@ -10,9 +10,9 @@
 /// triangles binned by place into a few patches, each with its area, its
 /// middle and its colour - the glowing texture's mean (VkTexture::averageColor,
 /// from the BLP's small mip) times the batch's colour. Per frame each patch
-/// near the camera is one light. An emitter's glow is gathered from its live
-/// particles while they are written out for drawing, so one light per emitter
-/// costs a few additions per particle.
+/// near the camera is one light. An emitter's glow is its steady state - its
+/// rate, lifespan and tracks over a particle's life (steadyParticleGlow) -
+/// and it shines while any of its particles is drawn.
 ///
 /// Pure: the parts here are what tests/test_rt_glow.cpp checks.
 
@@ -324,34 +324,73 @@ inline void capTotalStrength(std::vector<PointLight>& lights, size_t first, floa
     for (size_t i = first; i < lights.size(); ++i) lights[i].color *= scale;
 }
 
-/// One emitter's live particles, summed as they are written out
-/// (M2Renderer::prepareM2Particles).
+/// One emitter's glow in its steady state (U28): what its particles give on
+/// average while it emits at its rate - so many alive at a time (rate x
+/// lifespan), each over its life by its colour (times its texture's mean),
+/// alpha and size - not the particles alive this frame. Summed from those
+/// alive, an emitter whose few large particles came and went lit by fits,
+/// and two of an instance portal's emitters in one place, whose strengths
+/// met at the ceiling, gave its light the one's reach or the other's from
+/// frame to frame. Where the light stands is the particles' mean path
+/// (rt_particle_lights.hpp), worked out from the emitter as well; whether it
+/// shines at all is whether any of its particles is drawn (`shown`), as a
+/// light follows only what is seen of its source.
 struct ParticleGlow {
-    glm::vec3 weightedPosition{0.0f};
     glm::vec3 weightedColor{0.0f};
     float weight = 0.0f;  // the area its particles emit over, by alpha and blend
-    uint32_t count = 0;
+    /// Its particles drawn this frame. What it lights is not counted by them.
+    uint32_t shown = 0;
 
-    /// One particle at `position`, its colour (times its texture's mean),
-    /// alpha and half size, and its emitter's particleGlowWeight.
-    void add(const glm::vec3& position, const glm::vec3& color, float alpha, float halfSize, float blendWeight) {
-        const float w = std::max(alpha, 0.0f) * 4.0f * halfSize * halfSize * blendWeight;
+    /// One sample of its particles' life: `many` of them at a time with this
+    /// colour (times the texture's mean), alpha and half size, its emitter's
+    /// particleGlowWeight.
+    void addSample(const glm::vec3& color, float alpha, float halfSize, float blendWeight, float many) {
+        const float w = std::max(alpha, 0.0f) * 4.0f * halfSize * halfSize * blendWeight * many;
         if (!(w > 0.0f) || !std::isfinite(w)) return;
-        weightedPosition += position * w;
         weightedColor += color * w;
         weight += w;
-        ++count;
     }
 
-    /// Its light: at the middle of its particles, of their mean colour, as
-    /// large as they are together. `scale`: the instance's size over its
-    /// model's, which raises the reach's ceiling as it does a glow's.
-    [[nodiscard]] std::optional<PointLight> light(float scale = 1.0f) const {
-        if (!(weight > 0.0f)) return std::nullopt;
-        PointLight l = glowLight(weightedPosition / weight, weightedColor / weight, weight, Source::Particle, scale);
+    /// Its light at `position`, of its particles' mean colour, as large as
+    /// they are together on average - nothing while none of them is drawn.
+    /// `scale`: the instance's size over its model's, which raises the
+    /// reach's ceiling as it does a glow's.
+    [[nodiscard]] std::optional<PointLight> light(const glm::vec3& position, float scale = 1.0f) const {
+        if (shown == 0 || !(weight > 0.0f)) return std::nullopt;
+        PointLight l = glowLight(position, weightedColor / weight, weight, Source::Particle, scale);
         l.color *= kParticleGain;
         return l;
     }
 };
+
+/// How many samples of a particle's life steadyParticleGlow takes.
+inline constexpr int kParticleGlowSamples = 16;
+
+/// What a size spread (the file's scale variation) leaves on a particle's
+/// area on average: its size times 1 + a roll of -1..1 times the spread, the
+/// mean of that square.
+inline float sizeVaryMeanArea(float spread) {
+    if (!std::isfinite(spread)) return 1.0f;
+    return 1.0f + spread * spread / 3.0f;
+}
+
+/// An emitter's steady glow (ParticleGlow): `perSecond` particles a second
+/// living `life` seconds, `areaShare` what the twinkle and the size spread
+/// leave of their area on average, and at a share 0..1 of a particle's life
+/// its colour `colorAt(share)` (times the texture's mean), alpha
+/// `alphaAt(share)` and half size `halfSizeAt(share)` in world yards.
+template <class ColorAt, class AlphaAt, class HalfSizeAt>
+ParticleGlow steadyParticleGlow(float perSecond, float life, float blendWeight, float areaShare, ColorAt&& colorAt,
+                                AlphaAt&& alphaAt, HalfSizeAt&& halfSizeAt) {
+    ParticleGlow g;
+    const float many = std::max(perSecond, 0.0f) * std::max(life, 0.0f) * std::max(areaShare, 0.0f);
+    if (!(many > 0.0f) || !std::isfinite(many) || !(blendWeight > 0.0f)) return g;
+    for (int i = 0; i < kParticleGlowSamples; ++i) {
+        const float share = (static_cast<float>(i) + 0.5f) / static_cast<float>(kParticleGlowSamples);
+        g.addSample(colorAt(share), alphaAt(share), halfSizeAt(share), blendWeight,
+                    many / static_cast<float>(kParticleGlowSamples));
+    }
+    return g;
+}
 
 }  // namespace wowee::rendering::rt_lights

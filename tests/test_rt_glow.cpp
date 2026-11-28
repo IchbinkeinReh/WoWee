@@ -6,6 +6,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/rt_glow.hpp"
+#include "test_support.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -103,28 +104,64 @@ TEST_CASE("A glow's light grows with it and stays bounded", "[rt_glow]") {
     CHECK(brightest(glowLight(glm::vec3(0.0f), warm, NAN, Source::Emissive).color) == 0.0f);
 }
 
-TEST_CASE("An emitter's light sits among its particles, of their colour", "[rt_glow]") {
-    ParticleGlow g;
-    CHECK_FALSE(g.light().has_value());
-    g.add(glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.0f), 1.0f, 0.1f, 1.0f);
-    g.add(glm::vec3(2.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.0f), 1.0f, 0.1f, 1.0f);
-    // An invisible one counts for nothing.
-    g.add(glm::vec3(100.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), 0.0f, 0.5f, 1.0f);
-    CHECK(g.count == 2u);
-    const auto l = g.light();
+TEST_CASE("An emitter's light is its steady state, at the place it is given", "[rt_glow]") {
+    const auto orange = [](float) { return glm::vec3(1.0f, 0.5f, 0.0f); };
+    const auto opaque = [](float) { return 1.0f; };
+    const auto small = [](float) { return 0.1f; };
+    // Twenty particles a second living a tenth of a second: two at a time.
+    ParticleGlow g = steadyParticleGlow(20.0f, 0.1f, 1.0f, 1.0f, orange, opaque, small);
+    CHECK(g.weight == Catch::Approx(2.0f * 4.0f * 0.1f * 0.1f));
+    // Nothing while none of its particles is drawn.
+    CHECK_FALSE(g.light(glm::vec3(1.0f, 0.0f, 1.0f)).has_value());
+    g.shown = 1;
+    const auto l = g.light(glm::vec3(1.0f, 0.0f, 1.0f));
     REQUIRE(l.has_value());
     CHECK(l->source == Source::Particle);
     CHECK(l->position.x == Catch::Approx(1.0f));
     CHECK(l->position.z == Catch::Approx(1.0f));
     CHECK(l->color.b == Catch::Approx(0.0f));
     CHECK(l->color.r > l->color.g);
+    // However many are drawn this frame, the same light (U28).
+    ParticleGlow many = g;
+    many.shown = 40;
+    CHECK(many.light(glm::vec3(1.0f, 0.0f, 1.0f))->attenuationEnd == l->attenuationEnd);
+    CHECK(many.light(glm::vec3(1.0f, 0.0f, 1.0f))->color == l->color);
 
-    // More of them, or bigger, light more and farther.
-    ParticleGlow more = g;
-    for (int i = 0; i < 20; ++i) more.add(glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.0f), 1.0f, 0.1f, 1.0f);
-    CHECK(more.light()->attenuationEnd > l->attenuationEnd);
-    CHECK(more.light()->attenuationEnd <= kGlowMaxReach);
-    CHECK(brightest(more.light()->color) <= kParticleGain * kGlowMaxStrength + 1e-4f);
+    // A higher rate, or bigger particles, light more and farther.
+    ParticleGlow more = steadyParticleGlow(220.0f, 0.1f, 1.0f, 1.0f, orange, opaque, small);
+    more.shown = 1;
+    CHECK(more.light(glm::vec3(0.0f))->attenuationEnd > l->attenuationEnd);
+    CHECK(more.light(glm::vec3(0.0f))->attenuationEnd <= kGlowMaxReach);
+    CHECK(brightest(more.light(glm::vec3(0.0f))->color) <= kParticleGain * kGlowMaxStrength + 1e-4f);
+    // Over its life: alpha fading out halves what a whole-life one gives, and
+    // its colour is weighted by what of it shows.
+    const ParticleGlow fading = steadyParticleGlow(20.0f, 0.1f, 1.0f, 1.0f, orange,
+                                                   [](float share) { return 1.0f - share; }, small);
+    CHECK(fading.weight == Catch::Approx(0.5f * g.weight));
+    const ParticleGlow turning = steadyParticleGlow(
+        20.0f, 0.1f, 1.0f, 1.0f, [](float share) { return share < 0.5f ? glm::vec3(1, 0, 0) : glm::vec3(0, 0, 1); },
+        [](float share) { return share < 0.5f ? 1.0f : 0.0f; }, small);
+    CHECK(turning.weightedColor.b == Catch::Approx(0.0f));
+    // Nothing for nothing emitted, nothing lived, nothing blended in.
+    CHECK(steadyParticleGlow(0.0f, 1.0f, 1.0f, 1.0f, orange, opaque, small).weight == 0.0f);
+    CHECK(steadyParticleGlow(10.0f, 0.0f, 1.0f, 1.0f, orange, opaque, small).weight == 0.0f);
+    CHECK(steadyParticleGlow(10.0f, 1.0f, 0.0f, 1.0f, orange, opaque, small).weight == 0.0f);
+    CHECK(steadyParticleGlow(NAN, 1.0f, 1.0f, 1.0f, orange, opaque, small).weight == 0.0f);
+    // A size spread of s leaves 1 + s^2 / 3 of the area on average.
+    CHECK(sizeVaryMeanArea(0.0f) == 1.0f);
+    CHECK(sizeVaryMeanArea(0.6f) == Catch::Approx(1.12f));
+}
+
+TEST_CASE("The particle pass lights an emitter by its steady state, not its live particles (U28)", "[rt_glow]") {
+    const std::string src = wowee::test::slurp("src/rendering/m2_renderer_particles.cpp");
+    REQUIRE_FALSE(src.empty());
+    const size_t pass = src.find("void M2Renderer::prepareM2Particles()");
+    REQUIRE(pass != std::string::npos);
+    const std::string body = src.substr(pass);
+    // The live particles only say whether it is shown.
+    CHECK(body.find("].shown;") != std::string::npos);
+    CHECK(body.find("steadyEmitterGlow(inst, gpu, ei, modelAlpha)") != std::string::npos);
+    CHECK(body.find("rtEmitterGlowScratch_[static_cast<size_t>(p.emitterIndex)].add(") == std::string::npos);
 }
 
 TEST_CASE("A model's emitters together are capped at a fire's strength", "[rt_glow]") {
@@ -248,10 +285,11 @@ TEST_CASE("a glow placed larger than its model reaches farther", "[rt_glow]") {
 TEST_CASE("an emitter's light reaches by the root of its instance's size (T469)", "[rt_glow]") {
     // AQ20's exit portal, instanceportal_green.m2 placed at 5.46 (MDDF): its
     // two emitters' particles, large and bright enough for the ceiling.
-    ParticleGlow glow;
-    for (int i = 0; i < 200; ++i)
-        glow.add(glm::vec3(0.0f, 0.0f, 10.0f), glm::vec3(0.1f, 0.45f, 0.06f), 1.0f, 0.97f * 5.46f, 1.0f);
-    const auto l = glow.light(5.46f);
+    ParticleGlow glow = steadyParticleGlow(
+        200.0f, 1.0f, 1.0f, 1.0f, [](float) { return glm::vec3(0.1f, 0.45f, 0.06f); }, [](float) { return 1.0f; },
+        [](float) { return 0.97f * 5.46f; });
+    glow.shown = 1;
+    const auto l = glow.light(glm::vec3(0.0f, 0.0f, 10.0f), 5.46f);
     REQUIRE(l);
     // 16 x sqrt(5.46) = 37.4 yards, not 16 x 5.46 = 87; the 86 seen in the
     // MCP's rt_lights is this times the tester's Debug Glow particle reach

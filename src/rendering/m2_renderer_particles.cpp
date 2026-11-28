@@ -348,6 +348,54 @@ std::optional<M2Renderer::ParticleMeanPath> M2Renderer::particleMeanPath(const M
     return path;
 }
 
+rt_lights::ParticleGlow M2Renderer::steadyEmitterGlow(const M2Instance& inst, const M2ModelGPU& gpu,
+                                                      size_t emitterIndex, float modelAlpha) const {
+    if (emitterIndex >= gpu.particleEmitters.size()) return {};
+    const auto& em = gpu.particleEmitters[emitterIndex];
+    // Off, it emits nothing (emitParticles), and what it lights is nothing.
+    if (!em.enabled || m2_track::sampleFloat(em.enabledTrack, inst.currentSequenceIndex, inst.animTime,
+                                             inst.globalSequenceTime, gpu.globalSequenceDurations, 1.0f) < 0.5f)
+        return {};
+    const auto track = [&](const pipeline::M2AnimationTrack& t) {
+        return interpFloat(t, inst.animTime, inst.globalSequenceTime, inst.currentSequenceIndex,
+                           gpu.globalSequenceDurations);
+    };
+    // Its rate as emitParticles takes it, the roll of its spread at its mean
+    // (none): times the density asked for and the thinning by distance.
+    glm::mat4 world = inst.modelMatrix;
+    if (em.bone < inst.boneMatrices.size()) world = world * inst.boneMatrices[em.bone];
+    float rate = track(em.emissionRate) * particleDensity_;
+    if (!gpu.isSpellKit) {
+        const glm::vec3 emitterPos(world * glm::vec4(em.position, 1.0f));
+        rate *= m2_particle::emissionDistanceFactor(glm::length(emitterPos - cachedCamPos_));
+    }
+    const float life = track(em.lifespan);
+    // Its colour keys, or the display's ParticleColor slot's in their place.
+    const glm::vec3* colorOverride = (inst.hasParticleColors && em.particleColorIndex >= 11 &&
+                                      em.particleColorIndex <= 13)
+        ? &inst.particleColors[(em.particleColorIndex - 11u) * 3u] : nullptr;
+    pipeline::M2FBlock overrideBlock;
+    if (colorOverride) {
+        overrideBlock.timestamps = em.particleColor.timestamps.size() == 3 ? em.particleColor.timestamps
+                                                                           : std::vector<float>{0.0f, 0.5f, 1.0f};
+        overrideBlock.vec3Values.assign(colorOverride, colorOverride + 3);
+    }
+    const VkTexture* tex = emitterIndex < gpu.particleTextures.size() ? gpu.particleTextures[emitterIndex] : nullptr;
+    const glm::vec3 texel = tex ? tex->averageColor() * tex->alphaCoverage() : glm::vec3(1.0f);
+    // Size times the emitter's world scale where it is flagged 0x20, as drawn.
+    const float sizeScale = (em.flags & 0x20) ? glm::length(glm::vec3(world[0])) : 1.0f;
+    const float areaShare = m2_particle::twinkleMeanArea(em.twinklePercent, em.twinkleScaleMin, em.twinkleScaleMax) *
+                            rt_lights::sizeVaryMeanArea(em.scaleVary.x);
+    return rt_lights::steadyParticleGlow(
+        rate, life, rt_lights::particleGlowWeight(em.blendingType, (em.flags & 0x1) != 0), areaShare,
+        [&](float share) {
+            return (colorOverride ? interpFBlockVec3(overrideBlock, share) : interpFBlockVec3(em.particleColor, share)) *
+                   texel;
+        },
+        [&](float share) { return std::min(interpFBlockFloat(em.particleAlpha, share), 1.0f) * modelAlpha; },
+        [&](float share) { return interpFBlockFloat(em.particleScale, share) * sizeScale; });
+}
+
 void M2Renderer::updateParticles(M2Instance& inst, float dt) {
     if (!inst.cachedModel) return;
     const auto& gpu = *inst.cachedModel;
@@ -446,7 +494,8 @@ void M2Renderer::prepareM2Particles() {
         const auto& gpu = *inst.cachedModel;
 
         // One light per emitter for the ray traced lighting (rt_lights::
-        // ParticleGlow), summed as its particles are written below: for the
+        // ParticleGlow), its emitter's steady state, shining while any of its
+        // particles is drawn below (U28): for the
         // instances near the camera whose model gives no light otherwise (an
         // M2 light, a fire's, a lamp's - each of those the light of its
         // flame, which the flame's particles are). A model whose batches glow
@@ -459,7 +508,6 @@ void M2Renderer::prepareM2Particles() {
                                 !gpu.isTorch && !gpu.isLamp;
         if (glowLights) rtEmitterGlowScratch_.assign(gpu.particleEmitters.size(), rt_lights::ParticleGlow{});
         float emitterGlowWeight = 0.0f;
-        glm::vec3 emitterGlowTexel(1.0f);
 
 
         // Cache the last emitter's per-emitter state so adjacent particles
@@ -591,10 +639,7 @@ void M2Renderer::prepareM2Particles() {
                                    static_cast<uint32_t>(cachedTilesY);
                 cachedBlendType = cachedEm->blendingType;
                 if (glowLights) {
-                    // What its texture shows on average, by how much of it.
                     emitterGlowWeight = rt_lights::particleGlowWeight(cachedBlendType, (cachedEm->flags & 0x1) != 0);
-                    emitterGlowTexel = cachedTex ? cachedTex->averageColor() * cachedTex->alphaCoverage()
-                                                 : glm::vec3(1.0f);
                 }
                 // Lit unless flagged 0x1, for blends 0-4 (FUN_0081fb10); fogged
                 // by blend - black for the adds, the fog's colour for opaque,
@@ -680,9 +725,10 @@ void M2Renderer::prepareM2Particles() {
                                      em.twinkleScaleMax, p.twinkleSeed, p.life);
             if (!twinkle.shown) continue;
             const float scale = rawScale * twinkle.size;
-            if (glowLights && emitterGlowWeight > 0.0f) {
-                rtEmitterGlowScratch_[static_cast<size_t>(p.emitterIndex)].add(
-                    pWorld, color * emitterGlowTexel, alpha, scale * p.sizeVary * cachedModelScale, emitterGlowWeight);
+            // Whether its light shines: a particle of it is drawn. How
+            // strong and where is the emitter's steady state, below.
+            if (glowLights && emitterGlowWeight > 0.0f && alpha > 0.0f) {
+                ++rtEmitterGlowScratch_[static_cast<size_t>(p.emitterIndex)].shown;
             }
 
             if (vbWritten >= particleCapacity_) {
@@ -781,15 +827,24 @@ void M2Renderer::prepareM2Particles() {
             const std::vector<float> weights = rt_lights::particleLightWeights(particleLightsPerEmitter_);
             const int perEmitter = static_cast<int>(weights.size());
             for (size_t ei = 0; ei < rtEmitterGlowScratch_.size(); ++ei) {
-                const rt_lights::ParticleGlow& glow = rtEmitterGlowScratch_[ei];
-                auto l = glow.light(modelScale);
+                if (rtEmitterGlowScratch_[ei].shown == 0) continue;
+                const rt_lights::ParticleGlow glow = steadyEmitterGlow(inst, gpu, ei, modelAlpha);
+                // Its place on the particles' mean path, or the emitter's
+                // own where that cannot be worked out.
+                const auto path = particleMeanPath(inst, gpu, ei);
+                glm::vec3 centre = path ? path->at(0.5f * path->life) : glm::vec3(0.0f);
+                if (!path) {
+                    const auto& em = gpu.particleEmitters[ei];
+                    glm::mat4 world = inst.modelMatrix;
+                    if (em.bone < inst.boneMatrices.size()) world = world * inst.boneMatrices[em.bone];
+                    centre = glm::vec3(world * glm::vec4(em.position, 1.0f));
+                }
+                auto l = glow.light(centre, modelScale);
                 if (!l) continue;
                 l->color *= fade;
                 // On the particles' mean path (rt_particle_lights.hpp): at
                 // ages L * i / (N + 1), the youngest the strongest, together
-                // the one light's strength. Where the path cannot be worked
-                // out, the one light at the particles' middle as before.
-                const auto path = particleMeanPath(inst, gpu, ei);
+                // the one light's strength.
                 if (!path) {
                     rtParticleLights_.push_back(*l);
                     continue;

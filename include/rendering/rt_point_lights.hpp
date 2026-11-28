@@ -407,18 +407,34 @@ inline constexpr float kCoincidentLights = 0.1f;
 /// Of lights standing in one place, the strongest alone. What is left for this
 /// is what no one source can see: the map placing one fire twice, a crystal's
 /// glow and the sparks over it. Summed, a doodad placed twice would burn double.
+/// Which one is kept depends on nothing but the lights themselves (U28): the
+/// stronger, between two as strong the one reaching farther, then by place.
+/// An instance portal's two emitters stand 0.03 yards apart at one x, both at
+/// the glow's strength ceiling; sorted by x alone, in whatever order they came,
+/// the one kept and its reach (19 or 64 yards) changed from frame to frame.
+template <class Light>
+[[nodiscard]] bool outshines(const Light& a, const Light& b) {
+    const float sa = std::max(a.color.r, std::max(a.color.g, a.color.b));
+    const float sb = std::max(b.color.r, std::max(b.color.g, b.color.b));
+    if (sa != sb) return sa > sb;
+    if (a.attenuationEnd != b.attenuationEnd) return a.attenuationEnd > b.attenuationEnd;
+    if (a.position.x != b.position.x) return a.position.x < b.position.x;
+    if (a.position.y != b.position.y) return a.position.y < b.position.y;
+    return a.position.z < b.position.z;
+}
 template <class Light>
 void keepOneLightPerPlace(std::vector<Light>& lights) {
-    std::sort(lights.begin(), lights.end(),
-              [](const Light& a, const Light& b) { return a.position.x < b.position.x; });
-    const auto strength = [](const Light& l) { return std::max(l.color.r, std::max(l.color.g, l.color.b)); };
+    std::sort(lights.begin(), lights.end(), [](const Light& a, const Light& b) {
+        if (a.position.x != b.position.x) return a.position.x < b.position.x;
+        return outshines(a, b);
+    });
     size_t kept = 0;
     for (size_t i = 0; i < lights.size(); ++i) {
         bool merged = false;
         for (size_t k = kept; k-- > 0;) {
             if (lights[i].position.x - lights[k].position.x >= kCoincidentLights) break;
             if (!coincide(lights[i].position, lights[k].position)) continue;
-            if (strength(lights[i]) > strength(lights[k])) lights[k] = lights[i];
+            if (outshines(lights[i], lights[k])) lights[k] = lights[i];
             merged = true;
             break;
         }

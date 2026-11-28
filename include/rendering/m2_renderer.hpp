@@ -1915,8 +1915,8 @@ private:
     float interpFloat(const pipeline::M2AnimationTrack& track, float animTime,
                       float globalTime, int seqIdx,
                       const std::vector<uint32_t>& globalSeqDurations) const;
-    float interpFBlockFloat(const pipeline::M2FBlock& fb, float lifeRatio);
-    glm::vec3 interpFBlockVec3(const pipeline::M2FBlock& fb, float lifeRatio);
+    static float interpFBlockFloat(const pipeline::M2FBlock& fb, float lifeRatio);
+    static glm::vec3 interpFBlockVec3(const pipeline::M2FBlock& fb, float lifeRatio);
     void emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt);
     void updateParticles(M2Instance& inst, float dt);
     /// An emitter's particles' mean path this frame (rt_particle_lights.hpp),
@@ -1936,6 +1936,12 @@ private:
     };
     std::optional<ParticleMeanPath> particleMeanPath(const M2Instance& inst, const M2ModelGPU& gpu,
                                                      size_t emitterIndex) const;
+    /// An emitter's glow in its steady state (rt_lights::steadyParticleGlow,
+    /// U28): its rate as emitParticles takes it this frame without the roll,
+    /// its tracks over a particle's life, `modelAlpha` on the alpha as the
+    /// particles are drawn. `shown` is left 0.
+    rt_lights::ParticleGlow steadyEmitterGlow(const M2Instance& inst, const M2ModelGPU& gpu, size_t emitterIndex,
+                                              float modelAlpha) const;
     /// A model's own light into `out`, split along its emitters' particle
     /// paths with "Point lights per particle light" above one.
     void pushAlongParticles(const rt_lights::PointLight& light, const M2ModelGPU& model, const M2Instance& inst,
