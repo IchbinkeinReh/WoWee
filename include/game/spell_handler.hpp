@@ -784,6 +784,14 @@ public:
     /// A cast the client refuses itself, shown as its failure is
     /// (0x00808200): the result's line on the error frame.
     void reportLocalCastFailure(uint32_t spellId, uint8_t result);
+    /// A cast the client refuses itself (0x00808200 with the cast object
+    /// 0x0080cce0 made, its count taken then by 0x00805010): the line as
+    /// showPlayerCastFailure gives it, then the cast's end event for the
+    /// player under a count of its own (0x007fecc0) - UNIT_SPELLCAST_FAILED,
+    /// _FAILED_QUIET for DONT_REPORT - and never the running cast's stop.
+    void refuseOwnCast(uint32_t spellId, uint8_t result, const std::string& text, uint32_t miscArg = 0) const;
+    /// Only that end event (0x00808200's tail: 0x007fecc0).
+    void raiseOwnRefusal(uint32_t spellId, uint8_t result) const;
     /// The character's line for the player's failed cast: its game error's
     /// (cast_failure::gameError), where the client's table gives it one
     /// (0x00808200 -> 0x005216f0 -> 0x00986d00). REAGENTS for -2 is
@@ -976,7 +984,8 @@ private:
     /// which keeps its button until then; true when the stance bar changed.
     bool noteBookRemoved(uint32_t spellId, bool replaced = false);
     void clearBookRecords();
-    uint8_t castCount_ = 0;
+    // Mutable: a refusal said from a const check takes its count too.
+    mutable uint8_t castCount_ = 0;
     AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter
     /// The cast count of the player's cast the server last started: the
     /// running cast a cancel ends (0x00806200).

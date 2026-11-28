@@ -1382,7 +1382,7 @@ SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterG
                 // The player's cast reports it as 0x00808200 does; a pet's
                 // is only shown.
                 const std::string text = castFailureMessage(owner_, spellId, fail, -1, 0, 0);
-                if (casterGuid == owner_.getPlayerGuid()) showPlayerCastFailure(spellId, fail, text);
+                if (casterGuid == owner_.getPlayerGuid()) refuseOwnCast(spellId, fail, text);
                 else owner_.addUIError(text);
             }
             out.outOfReach = true;
@@ -1418,7 +1418,28 @@ bool SpellHandler::auraLetsSpell(uint64_t unit, uint32_t spellId) const {
 }
 
 void SpellHandler::reportLocalCastFailure(uint32_t spellId, uint8_t result) {
-    showPlayerCastFailure(spellId, result, castFailureMessage(owner_, spellId, result, -1, 0, 0));
+    refuseOwnCast(spellId, result, castFailureMessage(owner_, spellId, result, -1, 0, 0));
+}
+
+void SpellHandler::refuseOwnCast(uint32_t spellId, uint8_t result, const std::string& text, uint32_t miscArg) const {
+    showPlayerCastFailure(spellId, result, text, miscArg);
+    raiseOwnRefusal(spellId, result);
+}
+
+void SpellHandler::raiseOwnRefusal(uint32_t spellId, uint8_t result) const {
+    // 0x00808200 ends with 0x007fecc0 for the caster it finds, the player:
+    // the event its reason picks, with the refused cast's own count - taken
+    // when 0x0080cce0 made the cast (0x00805010(1)), so the next cast's is
+    // one on. Its stop (0x00726200) only for the unit's shown count, which
+    // a new count never is; a press beside a running cast leaves that bar.
+    const uint64_t me = owner_.getPlayerGuid();
+    if (me == 0) return;
+    loadSpellNameCache();
+    if (owner_.spellNameCacheRef().find(spellId) == owner_.spellNameCacheRef().end()) return;
+    const uint8_t castCount = cast_check::nextCastCount(castCount_);
+    const std::string event(cast_failure::castEventName(cast_failure::castEvent(result)));
+    for (const auto& unitId : owner_.unitTokensForGuid(me))
+        owner_.fireAddonEvent(event, spellcastArgs(unitId, spellId, castCount));
 }
 
 void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result, uint32_t miscArg) const {
@@ -1487,13 +1508,15 @@ void SpellHandler::showNamedCastFailure(uint32_t spellId, uint8_t result, int po
                            miscArg != cast_failure::kNoReagentNamed;
     const auto* info = namesItem ? owner_.getItemInfo(miscArg) : nullptr;
     if (!namesItem || (info && info->valid)) {
-        showPlayerCastFailure(spellId, result, castFailureMessage(owner_, spellId, result, powerType, miscArg),
-                              miscArg);
+        refuseOwnCast(spellId, result, castFailureMessage(owner_, spellId, result, powerType, miscArg), miscArg);
         return;
     }
     // The fizzle and the three-second hold now (0x00808200 before its
     // switch); the line itself from the callback, which does not ask the hold.
+    // The cast ends DONT_REPORT meanwhile (0x0067ca30 found nothing ->
+    // 0x008055c0 -> 0x007fecc0 with 0x1b): UNIT_SPELLCAST_FAILED_QUIET.
     showPlayerCastFailure(spellId, result, std::string());
+    raiseOwnRefusal(spellId, cast_check::kDontReport);
     static uint32_t localWaits = 0;
     owner_.askItemThen(miscArg, "local cast failure " + std::to_string(++localWaits),
                        [this, spellId, result, powerType, miscArg](bool found) {
@@ -1523,8 +1546,11 @@ void SpellHandler::spellTargetUnit(uint64_t unitGuid) {
         const std::string text =
             castFailureMessage(owner_, unitTarget_.spellId, unit_target::kFailedOutOfRange, -1, 0, 0);
         if (unitTarget_.caster == owner_.getPlayerGuid())
-            showPlayerCastFailure(unitTarget_.spellId, unit_target::kFailedOutOfRange, text);
+            refuseOwnCast(unitTarget_.spellId, unit_target::kFailedOutOfRange, text);
         else owner_.addUIError(text);
+        // The failed cast is the one the cursor held (0x00d3f4e4), so
+        // 0x007fecc0 puts the cursor down with it.
+        cancelGroundTargeting();
         return;
     }
     const auto t = takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, true);
@@ -2648,8 +2674,8 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
             unit_target::noUnitFailure(it->second.attr, it->second.attrEx5, 0, true,
                                        owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0,
                                        false) == unit_target::kFailedMainhand) {
-            showPlayerCastFailure(spellId, unit_target::kFailedMainhand,
-                                  castFailureMessage(owner_, spellId, unit_target::kFailedMainhand, -1, 0, 0));
+            refuseOwnCast(spellId, unit_target::kFailedMainhand,
+                          castFailureMessage(owner_, spellId, unit_target::kFailedMainhand, -1, 0, 0));
             return;
         }
         if (owner_.isAwaitingItemTarget()) {
@@ -2979,8 +3005,8 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid, uint64_
         if (self) {
             uint32_t arg = 0, arg2 = 0;
             if (const uint8_t code = weaponMissing(spellId, *self, arg, arg2); code != 0) {
-                showPlayerCastFailure(spellId, code,
-                                      castFailureMessage(owner_, spellId, code, static_cast<int32_t>(e.powerType), arg, arg2));
+                refuseOwnCast(spellId, code,
+                              castFailureMessage(owner_, spellId, code, static_cast<int32_t>(e.powerType), arg, arg2));
                 return false;
             }
         }
@@ -3013,8 +3039,8 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid, uint64_
         case cast_check::GameError::None: break;
     }
     if (r.code == 0) return true;
-    showPlayerCastFailure(spellId, r.code,
-                          castFailureMessage(owner_, spellId, r.code, static_cast<int32_t>(e.powerType), r.arg));
+    refuseOwnCast(spellId, r.code,
+                  castFailureMessage(owner_, spellId, r.code, static_cast<int32_t>(e.powerType), r.arg));
     return false;
 }
 
@@ -4008,7 +4034,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     if (const uint8_t fail = unit_target::noUnitFailure(spell.attr, spell.attrEx5, required, byPlayer, mainhand,
                                                         owner_.getTargetGuid() != 0, asked)) {
         const std::string text = castFailureMessage(owner_, spellId, fail, -1, 0, 0);
-        if (byPlayer) showPlayerCastFailure(spellId, fail, text);
+        if (byPlayer) refuseOwnCast(spellId, fail, text);
         else owner_.addUIError(text);
         return;
     }

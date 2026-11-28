@@ -2914,8 +2914,10 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
 
     // The spell's item class and subclass, and its inventory types, before
     // anything else (0x005210d0): an item outside them is a bad target,
-    // SPELL_FAILED_BAD_TARGETS through 0x00808200, the cursor still waiting
-    // and nothing sent (T342: a firestone on a healthstone went to the realm).
+    // SPELL_FAILED_BAD_TARGETS through 0x00808200 and nothing sent (T342: a
+    // firestone on a healthstone went to the realm). The failed cast is the
+    // one the cursor holds (0x007fd640 = 0x00d3f4e4), so 0x00808200's
+    // 0x007fecc0 puts the cursor down with it and 0x008054f0 frees the cast.
     {
         const auto& cache = owner_.spellNameCacheRef();
         const uint32_t targetEntry = owner_.getItemEntryByGuid(targetItemGuid);
@@ -2924,6 +2926,7 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
             unit_target::badItemTarget(it->second.equippedItemClass, it->second.equippedItemSubClassMask,
                                        it->second.equippedItemInventoryTypes, targetInfo->itemClass,
                                        targetInfo->subClass, targetInfo->inventoryType)) {
+            cancelItemTargeting();
             if (auto* spells = owner_.getSpellHandler()) spells->reportLocalCastFailure(pending.spellId, 0x0c);
             return;
         }
@@ -2944,8 +2947,10 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
                 if (effect == 158 && (targetInfo->itemFlags & 0x20000000u) == 0) refusal = 0x10;
             }
             // As the class check above: 0x005210d0 says it through
-            // 0x00808200 alike, and the cursor still waits (T347).
+            // 0x00808200 alike, and the cursor goes down for each (T347:
+            // alike, but not waiting - 0x007fecc0 clears 0x00d3f4e4).
             if (refusal != 0) {
+                cancelItemTargeting();
                 if (auto* spells = owner_.getSpellHandler()) spells->reportLocalCastFailure(pending.spellId, refusal);
                 return;
             }

@@ -2703,10 +2703,15 @@ TEST_CASE("a buff the player's spellsteal could take is stealable", "[replay][in
 // T347: 0x005210d0 refuses an item outside the spell's item class
 // (SPELL_FAILED_BAD_TARGETS) and one milling or prospecting cannot take
 // (CANT_BE_MILLED / _PROSPECTED) the same way: 0x00808200 says it, nothing is
-// sent, and the cursor still waits. The milling refusal put it down.
-TEST_CASE("an item milling cannot take leaves the cursor waiting", "[replay][interface]") {
+// sent. The refused cast is the one the cursor holds (0x007fd640), so
+// 0x00808200's 0x007fecc0 raises UNIT_SPELLCAST_FAILED for the player and puts
+// the cursor down; BG: the cursor had been left waiting.
+TEST_CASE("an item milling cannot take ends the waiting cast", "[replay][interface]") {
     Session s;
     s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("failed = {} local f = CreateFrame('Frame') f:RegisterEvent('UNIT_SPELLCAST_FAILED') "
+           "f:SetScript('OnEvent', function(self, e, unit, name) failed[#failed + 1] = unit .. ':' .. name end)");
     auto& gh = s.handler();
     constexpr uint64_t kTusk = 0x4000000000000901ull;
     constexpr uint32_t kTuskEntry = 3169, kMilling = 51005, kProspecting = 31252;
@@ -2725,10 +2730,10 @@ TEST_CASE("an item milling cannot take leaves the cursor waiting", "[replay][int
         gh.beginSpellItemTargeting(spell, "spell");
         REQUIRE(gh.isAwaitingItemTarget());
         gh.completeItemUseOnItem(kTusk);
-        CHECK(gh.isAwaitingItemTarget());
+        CHECK_FALSE(gh.isAwaitingItemTarget());
         CHECK(s.sent().of(Opcode::CMSG_CAST_SPELL).empty());
-        gh.cancelItemTargeting();
     }
+    CHECK(ui.is("#failed == 2 and failed[1] == 'player:Milling' and failed[2] == 'player:Prospecting'"));
 }
 
 // T339 (c): the video panel's "full screen glow" box writes ffxGlow, which the
@@ -5358,12 +5363,23 @@ TEST_CASE("the reagent -2 with full bags is said as ERR_INV_FULL (0x00808200)", 
         carryForAuction(s, slot, 0x4000000000000D00ull + static_cast<uint64_t>(slot), 2589, 1);
     ui.run("errs = {} local g = CreateFrame('Frame') g:RegisterEvent('UI_ERROR_MESSAGE') "
            "g:SetScript('OnEvent', function(_, _, m) errs[#errs + 1] = m end)");
+    // ... and, as every refusal 0x00808200 says for the player, the cast ends
+    // through 0x007fecc0: UNIT_SPELLCAST_FAILED with the refused cast's own
+    // count (0x00805010 took one), no STOP.
+    ui.run("ends = {} local h = CreateFrame('Frame') h:RegisterEvent('UNIT_SPELLCAST_FAILED') "
+           "h:RegisterEvent('UNIT_SPELLCAST_STOP') h:SetScript('OnEvent', function(_, e, unit, name, rank, id) "
+           "ends[#ends + 1] = e .. ':' .. unit .. ':' .. name .. ':' .. tostring(id) end)");
     const auto queries = s.sent().of(Opcode::CMSG_ITEM_QUERY_SINGLE).size();
     ui.run("CastSpellByID(" + std::to_string(kStone) + ")");
     CHECK(s.sent().of(Opcode::CMSG_CAST_SPELL).size() == 0);
     CHECK(s.sent().of(Opcode::CMSG_ITEM_QUERY_SINGLE).size() == queries);
     REQUIRE(ui.is("#errs == 1"));
     CHECK(ui.is("errs[1] == (ERR_INV_FULL or 'Inventory is full.')"));
+    REQUIRE(ui.is("#ends == 1"));
+    CHECK(ui.is("ends[1]:match('^UNIT_SPELLCAST_FAILED:player:Create Healthstone:%d+$') ~= nil"));
+    ui.run("CastSpellByID(" + std::to_string(kStone) + ")");
+    REQUIRE(ui.is("#ends == 2"));
+    CHECK(ui.is("tonumber(ends[2]:match('(%d+)$')) == tonumber(ends[1]:match('(%d+)$')) + 1"));
 }
 
 // T438: 0x0080cce0 asks 0x008091d0 before the unit and the cursor: a reagent
