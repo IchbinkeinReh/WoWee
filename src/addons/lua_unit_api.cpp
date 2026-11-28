@@ -3178,7 +3178,10 @@ static int lua_SetNextBarberShopStyle(lua_State* L) {
         auto* svc = getLuaServices(L);
         if (!svc || !svc->barberCanAlterSkin || !svc->barberCanAlterSkin()) return 0;
     }
-    const int direction = lua_isnoneornil(L, 2) ? -1 : 1;
+    // The second argument is 'backward' (0x00815500(L, 2, 0) -> 0x0052fc80:
+    // false steps +1 (0x004f0490), true -1 (0x004f0630)). BarberShopUI's
+    // Prev arrow passes 1, its Next arrow nothing (T461: they were swapped).
+    const int direction = luaClientSwitchArg(L, 2, false) ? -1 : 1;
     if (auto* svc = getLuaServices(L); svc && svc->setNextBarberStyle) {
         svc->setNextBarberStyle(selector, direction);
     }

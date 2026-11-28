@@ -4957,6 +4957,26 @@ TEST_CASE("the barber's skin row is nothing for a race without one (T404)", "[re
     CHECK(ui.is("select('#', GetBarberShopStyleInfo(4)) == 4"));
 }
 
+// T461: SetNextBarberShopStyle(type[, backward]) (0x0052fdd0 -> 0x0052fc80):
+// no second argument steps forward (the Next arrow), a true one back (Prev's 1).
+TEST_CASE("the barber's second argument steps backward (T461)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    std::vector<std::pair<int, int>> steps;
+    wowee::addons::LuaServices services;
+    services.setNextBarberStyle = [&](int selector, int direction) { steps.emplace_back(selector, direction); };
+    ui.engine.setLuaServices(services);
+    ui.run("SetNextBarberShopStyle(1) SetNextBarberShopStyle(2, 1) SetNextBarberShopStyle(3, nil)"
+           " SetNextBarberShopStyle(1, false) SetNextBarberShopStyle(2, 0)");
+    REQUIRE(steps.size() == 5);
+    CHECK(steps[0] == std::make_pair(1, 1));
+    CHECK(steps[1] == std::make_pair(2, -1));
+    CHECK(steps[2] == std::make_pair(3, 1));
+    CHECK(steps[3] == std::make_pair(1, 1));
+    CHECK(steps[4] == std::make_pair(2, 1));
+}
+
 // FIXER X (W's open item, 0x005a9e20): IsUsableAction's slot test lets a slot
 // that casts nothing (0x005a8c30 = 0) - a macro showing no spell, an item
 // without a use spell, an equipment set - be used only while the player has
