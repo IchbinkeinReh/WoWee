@@ -3361,6 +3361,17 @@ struct QuestRewardItem {
     uint32_t choiceSlot = 0;  // Original reward slot index from server payload
 };
 
+/// The quest window's texts as GetTitleText/GetQuestText/GetObjectiveText/
+/// GetProgressText/GetRewardText read them (0x0058bd10..0x0058bdb0): static
+/// buffers each packet writes its own of - the title by the details, progress
+/// and reward packets alike (0x0058dd50/0x0058ba80, an empty one as " "), the
+/// texts by 0x0058c5a0 (an empty one as " ") and the objective by 0x0058c720
+/// (an empty one clears it). Closing the window leaves them; a giver's
+/// greeting list clears them all (0x0058b720), as does leaving the world.
+struct QuestFrameTexts {
+    std::string title, quest, objective, progress, reward;
+};
+
 /** SMSG_QUESTGIVER_QUEST_DETAILS data (simplified) */
 struct QuestDetailsData {
     uint64_t npcGuid = 0;

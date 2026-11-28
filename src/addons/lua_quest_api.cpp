@@ -4597,37 +4597,29 @@ uint32_t questFrameRewardSpell(game::GameHandler* gh) {
     return s.spell != 0 ? s.spell : s.spellCast;
 }
 
-// GetTitleText() → the quest's name, whichever panel is showing it
+// GetTitleText/GetQuestText/GetObjectiveText/GetProgressText/GetRewardText
+// (0x0058bd10, 0x0058bd50, 0x0058bd70, 0x0058bd90, 0x0058bdb0): the texts
+// the last quest packets left, whether or not the window is still open
+// (QuestFrameTexts). They answered '' once it closed.
 static int lua_GetTitleText(lua_State* L) {
-    return pushQuestText(L, currentQuestSource(getGameHandler(L)).title);
+    auto* gh = getGameHandler(L);
+    return pushQuestText(L, gh ? &gh->questFrameTexts().title : nullptr);
 }
-
-// GetQuestText() → what the quest giver says when offering it
 static int lua_GetQuestText(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isQuestDetailsOpen()) { lua_pushstring(L, ""); return 1; }
-    return pushQuestText(L, &gh->getQuestDetails().details);
+    return pushQuestText(L, gh ? &gh->questFrameTexts().quest : nullptr);
 }
-
-// GetObjectiveText() → what the quest asks for
 static int lua_GetObjectiveText(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isQuestDetailsOpen()) { lua_pushstring(L, ""); return 1; }
-    return pushQuestText(L, &gh->getQuestDetails().objectives);
+    return pushQuestText(L, gh ? &gh->questFrameTexts().objective : nullptr);
 }
-
-// GetProgressText() → what is said while the quest is still unfinished
 static int lua_GetProgressText(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isQuestRequestItemsOpen()) { lua_pushstring(L, ""); return 1; }
-    return pushQuestText(L, &gh->getQuestRequestItems().completionText);
+    return pushQuestText(L, gh ? &gh->questFrameTexts().progress : nullptr);
 }
-
-// GetRewardText() → what is said on handing it in
 static int lua_GetRewardText(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isQuestOfferRewardOpen()) { lua_pushstring(L, ""); return 1; }
-    return pushQuestText(L, &gh->getQuestOfferReward().rewardText);
+    return pushQuestText(L, gh ? &gh->questFrameTexts().reward : nullptr);
 }
 
 // GetGossipText() → the body of the gossip window

@@ -64,6 +64,8 @@ public:
     /// SMSG_QUESTGIVER_QUEST_LIST. Empty when the window came from gossip
     /// instead, which carries its text as an npc-text id rather than inline.
     [[nodiscard]] const std::string& getQuestGreeting() const { return questGreeting_; }
+    /// The quest window's texts, kept after it closes (QuestFrameTexts).
+    [[nodiscard]] const QuestFrameTexts& questFrameTexts() const { return questFrameTexts_; }
     /// The quest giver's list (QUEST_GREETING) is the window open.
     [[nodiscard]] bool isQuestGreetingOpen() const { return gossipWindowOpen_ && gossipIsQuestGreeting_; }
 
@@ -410,6 +412,7 @@ public:
         selectedQuestId_ = 0;  // 0x005e71a0
         pendingQuestQueryIds_.clear();
         npcQuestStatus_.clear();
+        questFrameTexts_ = QuestFrameTexts{};
     }
 
     /// 0x006d50c0: every quest giver's status asked at once, a bare
@@ -447,6 +450,7 @@ private:
     bool gossipIsQuestGreeting_ = false;
     GossipMessageData currentGossip_;
     std::string questGreeting_;
+    QuestFrameTexts questFrameTexts_;
     std::vector<GossipPoi> gossipPois_;
     QuestPoiIconList questPoiIcons_;
 

@@ -2383,6 +2383,7 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
     // GetGreetingText had nothing to answer with and the greeting panel was
     // blank over a list that was otherwise correct.
     questGreeting_ = normalizeWowTextTokens(packet.readString());
+    questFrameTexts_ = QuestFrameTexts{};  // 0x0058c5a0 kind 0 -> 0x0058b720
     // The giver's (delay, emote) pair (0x006d0240 -> 0x0071a260).
     std::vector<DialogEmote> listEmotes;
     if (packet.hasRemaining(8)) {
@@ -2794,6 +2795,9 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     }
     currentQuestDetails_ = data;
     questFrameFlags_ = data.questFlags;
+    questFrameTexts_.title = data.title.empty() ? " " : data.title;
+    questFrameTexts_.quest = data.details.empty() ? " " : data.details;
+    questFrameTexts_.objective = data.objectives;
     for (auto& q : questLog_) {
         if (q.questId != data.questId) continue;
         if (!data.title.empty() && (isPlaceholderQuestTitle(q.title) || data.title.size() >= q.title.size())) {
@@ -2832,6 +2836,8 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
 
     currentQuestRequestItems_ = data;
     questFrameFlags_ = data.questFlags;
+    questFrameTexts_.title = data.title.empty() ? " " : data.title;
+    questFrameTexts_.progress = data.completionText.empty() ? " " : data.completionText;
     questRequestItemsOpen_ = true;
     questRewardRequested_ = false;
     questPageLeft_ = false;
@@ -2897,6 +2903,8 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     }
     currentQuestOfferReward_ = data;
     questFrameFlags_ = data.questFlags;
+    questFrameTexts_.title = data.title.empty() ? " " : data.title;
+    questFrameTexts_.reward = data.rewardText.empty() ? " " : data.rewardText;
     questOfferRewardOpen_ = true;
     questPageLeft_ = false;
     questRequestItemsOpen_ = false;

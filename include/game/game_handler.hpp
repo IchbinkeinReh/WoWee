@@ -3610,6 +3610,8 @@ public:
     /// What a quest giver says over its list of quests, when the window came
     /// from SMSG_QUESTGIVER_QUEST_LIST rather than from gossip.
     const std::string& getQuestGreeting() const;
+    /// The quest window's texts, which outlive the window (QuestFrameTexts).
+    const QuestFrameTexts& questFrameTexts() const;
     bool isQuestDetailsOpen();
     /// Whether the reward item names asked for when the details arrived have
     /// had time to come back. Only this client's own quest window asks - see

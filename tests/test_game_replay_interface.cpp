@@ -4046,6 +4046,36 @@ TEST_CASE("the progress page keeps its data after CompleteQuest (0x0058cf40)", "
     CHECK(ui.is("GetTitleText() == 'Stich des Skorpiden'"));
 }
 
+// GetTitleText/GetProgressText (0x0058bd10/0x0058bd90) read static buffers
+// the packets wrote: closing the window keeps them, a giver's greeting list
+// clears them (0x0058b720).
+TEST_CASE("the quest texts outlive the quest window (0x0058bd10)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_REQUEST_ITEMS));
+    p.writeUInt64(0xF130000C3E000001ull);
+    p.writeUInt32(789);
+    p.writeString("Stich des Skorpiden");
+    p.writeString("Text");
+    s.receive(p);
+    REQUIRE(ui.is("GetProgressText() == 'Text'"));
+    ui.run("CloseQuest()");
+    CHECK(ui.is("GetTitleText() == 'Stich des Skorpiden'"));
+    CHECK(ui.is("GetProgressText() == 'Text'"));
+    CHECK(ui.is("GetRewardText() == ''"));
+    wowee::network::Packet l(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_LIST));
+    l.writeUInt64(0xF130000C3E000001ull);
+    l.writeString("Hallo");
+    l.writeUInt32(0);
+    l.writeUInt32(0);
+    l.writeUInt8(0);
+    s.receive(l);
+    CHECK(ui.is("GetTitleText() == ''"));
+    CHECK(ui.is("GetProgressText() == ''"));
+}
+
 // T388: the login's roster arrives before this client's interface is built;
 // once it is, the roster's events are raised for it.
 TEST_CASE("an interface built after the roster hears the group (T388)", "[replay][interface]") {
