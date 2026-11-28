@@ -7858,6 +7858,7 @@ std::vector<MemoryEntry> Renderer::memoryOfWorld(const std::vector<MemoryEntry>&
         world.push_back({buf, 0, cs.dbcBytes});
     }
     if (vkCtx) {
+        WOWEE_STEP_TIMER("memory: upload staging");
         const auto us = vkCtx->uploadStats();
         std::snprintf(buf, sizeof(buf), "Upload staging (%zu buffers, %zu batches in flight, %zu deferred frees)",
                       us.stagingBuffers, us.batchesInFlight, us.deferredCleanups);
@@ -7877,15 +7878,26 @@ std::vector<MemoryEntry> Renderer::memoryOfRt() const {
 
 std::vector<MemoryEntry> Renderer::memoryOwners(const std::vector<MemoryEntry>& extra) const {
     std::vector<MemoryEntry> out;
-    const auto pm = core::MemoryMonitor::processMemory();
+    core::MemoryMonitor::ProcessMemory pm;
+    {
+        WOWEE_STEP_TIMER("memory: process counters");
+        pm = core::MemoryMonitor::processMemory();
+    }
     out.push_back({"Process, private", 0, pm.privateBytes});
     out.push_back({"Process, resident", 0, pm.residentBytes});
     out.push_back({"Process, resident and its own", 0, pm.residentPrivateBytes});
     out.push_back({"Process, resident pages of mapped files", 0, pm.residentSharedBytes});
-    const auto heap = core::MemoryMonitor::heapUse();
+    core::MemoryMonitor::HeapUse heap;
+    {
+        // Every heap walked block by block (HeapSummary, under each heap's
+        // lock) and the whole address space by VirtualQuery.
+        WOWEE_STEP_TIMER("memory: heap sums and address space");
+        heap = core::MemoryMonitor::heapUse();
+    }
     out.push_back({"Heaps, given out", 0, heap.allocatedBytes});
     out.push_back({"Heaps, held", 0, heap.committedBytes});
     if (vkCtx && vkCtx->getAllocator()) {
+        WOWEE_STEP_TIMER("memory: Vulkan heap budgets");
         const VkPhysicalDeviceMemoryProperties* props = nullptr;
         vmaGetMemoryProperties(vkCtx->getAllocator(), &props);
         VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};

@@ -35,6 +35,7 @@
 #include "core/profiler.hpp"
 #include "core/frame_profiler.hpp"
 #include "core/slow_step.hpp"
+#include <future>
 #include "core/npc_interaction_callback_handler.hpp"
 #include "core/audio_callback_handler.hpp"
 #include "core/entity_spawn_callback_handler.hpp"
@@ -4749,18 +4750,42 @@ std::vector<rendering::MemoryEntry> Application::memoryExtras(bool collectLuaFir
     return extra;
 }
 
-void Application::logMemory(const char* stage, const std::string& what) {
+void Application::logMemory(const char* stage, const std::string& what, const std::function<void()>& keepScreen) {
     if (!renderer) return;
     const auto start = std::chrono::steady_clock::now();
     (void)core::takeSlowestStep();
     std::vector<rendering::MemoryEntry> extras;
     {
+        // The Lua state is the main thread's: its part is counted here.
         WOWEE_STEP_TIMER("memory: Lua, sounds, music, spawner");
         extras = memoryExtras(false);
     }
-    const auto lines = memoryGrowth_.note(stage, renderer->memoryOwners(extras));
+    core::SlowestStep slowest = core::takeSlowestStep();
+    std::vector<rendering::MemoryEntry> owners;
+    if (keepScreen) {
+        // T458: inside a map change the report stood 1.5-6 s behind a frozen
+        // loading screen (the heap sums walk every block of every heap, and
+        // the address space walk every page table of the mapped archives).
+        // It is counted on a helper thread while this one keeps drawing the
+        // loading screen; nothing it reads is changed by the loading screen,
+        // and the cleanup it is a snapshot for waits for it.
+        core::SlowestStep helperSlowest;
+        auto counted = std::async(std::launch::async, [this, &extras, &helperSlowest] {
+            (void)core::takeSlowestStep();
+            auto out = renderer->memoryOwners(extras);
+            helperSlowest = core::takeSlowestStep();
+            return out;
+        });
+        while (counted.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) keepScreen();
+        owners = counted.get();
+        if (helperSlowest.name && (!slowest.name || helperSlowest.ms > slowest.ms)) slowest = helperSlowest;
+    } else {
+        owners = renderer->memoryOwners(extras);
+        const core::SlowestStep s = core::takeSlowestStep();
+        if (s.name && (!slowest.name || s.ms > slowest.ms)) slowest = s;
+    }
+    const auto lines = memoryGrowth_.note(stage, owners);
     const float tookMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
-    const core::SlowestStep slowest = core::takeSlowestStep();
     LOG_WARNING("Memory, ", what, " (entities ",
                 gameHandler ? gameHandler->getEntityManager().getEntities().size() : size_t{0}, "):");
     // T458: a map change's report stood 5-6 s behind a frozen loading screen.

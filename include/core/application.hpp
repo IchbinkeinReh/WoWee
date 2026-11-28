@@ -28,6 +28,7 @@ namespace wowee::rendering { class ModelFrameView; }
 #ifndef WOWEE_MOBILE
 #include "mcp/options.hpp"
 #endif
+#include <functional>
 #include <memory>
 #include <map>
 #include <string>
@@ -225,8 +226,10 @@ public:
     [[nodiscard]] std::vector<rendering::MemoryEntry> memoryExtras(bool collectLuaFirst);
     /// What holds memory at a point of a map change, to the log: every owner
     /// of some size and how much it grew since the first and the last time at
-    /// this point.
-    void logMemory(const char* stage, const std::string& what);
+    /// this point. With keepScreen, the renderer's owners are counted on a
+    /// helper thread while keepScreen (a loading screen frame) runs every
+    /// 50 ms on this one.
+    void logMemory(const char* stage, const std::string& what, const std::function<void()>& keepScreen = {});
 
     // Appearance composer access
     AppearanceComposer* getAppearanceComposer() { return appearanceComposer_.get(); }

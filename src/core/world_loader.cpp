@@ -860,7 +860,10 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // What the old map came to, and what is left of it once it is gone:
         // the memory log of every map change, behind the loading screen.
         const std::string changeName = std::to_string(static_cast<int32_t>(loadedMapId_)) + " -> " + std::to_string(mapId);
-        app_.logMemory("before", "map " + changeName + ", before the old one is cleared");
+        // Counted beside the loading screen, which is drawn while it counts
+        // (T458: 1.5-6 s with no frame while it was counted here).
+        const auto keepScreen = [&showProgress] { showProgress("Entering world...", 0.0f); };
+        app_.logMemory("before", "map " + changeName + ", before the old one is cleared", keepScreen);
         // The screen drawn again between the cleanup's steps, as 0x0040a920
         // draws per progress step (T458: 5-6 s spans with no frame here).
         showProgress("Entering world...", 0.0f);
@@ -962,7 +965,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // Force player character re-spawn on new map
         app_.playerCharacterSpawned = false;
         showProgress("Entering world...", 0.0f);
-        app_.logMemory("cleared", "map " + changeName + ", the old one cleared");
+        app_.logMemory("cleared", "map " + changeName + ", the old one cleared", keepScreen);
         showProgress("Entering world...", 0.0f);
     }
 
