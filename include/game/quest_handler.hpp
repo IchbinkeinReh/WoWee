@@ -249,6 +249,10 @@ public:
     /// back). Nobody else's answer does - the frame takes the event as a reason
     /// to draw its rewards again, with none of them chosen.
     void awaitQuestItem(uint32_t itemId) { questItemsAwaited_.insert(itemId); }
+    /// GetQuestLogRewardInfo/GetQuestLogChoiceInfo asked for an item still
+    /// out: its answer raises QUEST_LOG_UPDATE (their lookup's callback
+    /// 0x005dea40 -> 0x00615020(0x125)), so the log draws its rewards again.
+    void awaitLogRewardItem(uint32_t itemId) { logRewardItemsAwaited_.insert(itemId); }
     void questItemAnswered(uint32_t itemId);
     /// The log as the interface counts it, headers and all (quest_log_rows.hpp).
     [[nodiscard]] QuestLogRows<QuestLogEntry> questLogRows() const;
@@ -407,6 +411,7 @@ public:
         slotsSeen_ = false;
         questSlotWatch_.clear();
         questItemsAwaited_.clear();
+        logRewardItemsAwaited_.clear();
         pendingQuestAddedNotices_.clear();
         questLog_.clear();
         selectedQuestId_ = 0;  // 0x005e71a0
@@ -498,6 +503,7 @@ private:
     bool slotsSeen_ = false;
     QuestSlotWatch questSlotWatch_;
     std::unordered_set<uint32_t> questItemsAwaited_;
+    std::unordered_set<uint32_t> logRewardItemsAwaited_;
     std::set<int32_t> collapsedQuestGroups_;
     /// What SMSG_QUEST_QUERY_RESPONSE told of a quest: its QuestInfo type
     /// (+0x14) and title.

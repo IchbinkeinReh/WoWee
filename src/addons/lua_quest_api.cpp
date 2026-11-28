@@ -4355,26 +4355,47 @@ static bool rewardUsable(const game::GameHandler& gh, const game::ItemQueryRespo
     return !info || gh.judgeItemRequirements(*info).usable();
 }
 
-/// One reward, described the way every reward button reads it.
-template <typename Container>
-static int pushRewardAt(lua_State* L, game::GameHandler* gh,
-                        const Container& list, int index) {
-    if (!gh || index < 1) { return luaReturnNil(L); }
-    int seen = 0;
-    for (const auto& r : list) {
-        if (r.itemId == 0) continue;
-        if (++seen != index) continue;
-        const auto* info = gh->getItemInfo(r.itemId);
-        lua_pushstring(L, info ? info->name.c_str() : "");
-        lua_pushstring(L, gh->getItemIconPath(
-            info && info->displayInfoId ? info->displayInfoId : r.displayInfoId).c_str());
-        lua_pushnumber(L, r.count);
-        // -1 for an item not known yet, and usable as 1 or nil (0x005e4660).
-        lua_pushnumber(L, info ? static_cast<double>(info->quality) : -1.0);
-        luaPushOneOrNil(L, rewardUsable(*gh, info));
+/// GetQuestLogRewardInfo / GetQuestLogChoiceInfo (0x005e4490 / 0x005e4660):
+/// the selected quest's slot by its raw place - the index less one, below 4
+/// (rewards, quest record +0x54) or 6 (choices, +0x74), empty slots counted
+/// as places too. An item in the cache: its name, its icon, the slot's count,
+/// its quality (-1 where it is no equipment, InventoryType +0x28 being 0) and
+/// usable as 1 or nil (0x006dc3f0). Anything else - no quest, a place out of
+/// range, an empty slot, an item not in the cache yet - is nil, nil, 1, 0,
+/// nil; the cache's answer for that item raises QUEST_LOG_UPDATE (the lookup's
+/// callback 0x005dea40 -> 0x00615020(0x125)).
+template <size_t N>
+static int pushLogRewardSlot(lua_State* L, game::GameHandler* gh,
+                             const std::array<game::QuestRewardItem, N>* list) {
+    const long long place = static_cast<long long>(lua_tonumber(L, 1)) - 1;  // 0x0088b9c0 truncates
+    const game::QuestRewardItem* slot =
+        list && place >= 0 && place < static_cast<long long>(N) ? &(*list)[static_cast<size_t>(place)] : nullptr;
+    const game::ItemQueryResponseData* info = nullptr;
+    if (gh && slot && slot->itemId != 0) {
+        info = gh->getItemInfo(slot->itemId);
+        if (info && !info->valid) info = nullptr;
+        if (!info) {
+            gh->queryItemInfo(slot->itemId, 0);
+            if (auto* quests = gh->getQuestHandler()) quests->awaitLogRewardItem(slot->itemId);
+        }
+    }
+    if (!info) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 1);
+        lua_pushnumber(L, 0);
+        lua_pushnil(L);
         return 5;
     }
-    return luaReturnNil(L);
+    std::string icon = info->displayInfoId != 0 ? gh->getItemIconPath(info->displayInfoId) : std::string();
+    if (icon.empty() && slot->displayInfoId != 0) icon = gh->getItemIconPath(slot->displayInfoId);
+    if (icon.empty()) icon = "Interface\\Icons\\INV_Misc_QuestionMark";
+    lua_pushstring(L, info->name.c_str());
+    lua_pushstring(L, icon.c_str());
+    lua_pushnumber(L, static_cast<double>(slot->count));
+    lua_pushnumber(L, info->inventoryType == 0 ? -1.0 : static_cast<double>(info->quality));
+    luaPushOneOrNil(L, rewardUsable(*gh, info));
+    return 5;
 }
 
 // GetSuggestedGroupNum() / GetQuestLogGroupNum() → how many players a quest
@@ -4415,32 +4436,42 @@ static int lua_GetQuestLogGroupNum(lua_State* L) {
     return 1;
 }
 
+// GetNumQuestLogRewards (0x005df150) / GetNumQuestLogChoices (0x005df1d0):
+// the filled slots before the first empty one, as the Info calls above index
+// them. The rewards' loop sets its answer only on reaching an empty slot, so
+// a quest with all four reward slots filled answers 0 in 12340 (checked in
+// the disassembly: 0x005df1a0 jumps past the store); the choices' six count
+// up to 6.
 static int lua_GetNumQuestLogRewards(lua_State* L) {
     const auto* q = selectedLogEntry(getGameHandler(L));
-    lua_pushnumber(L, q ? countRewards(&q->rewardItems) : 0);
+    int n = 0;
+    if (q) {
+        size_t i = 0;
+        while (i < q->rewardItems.size() && q->rewardItems[i].itemId != 0) ++i;
+        n = i < q->rewardItems.size() ? static_cast<int>(i) : 0;
+    }
+    lua_pushnumber(L, n);
     return 1;
 }
 
 static int lua_GetNumQuestLogChoices(lua_State* L) {
     const auto* q = selectedLogEntry(getGameHandler(L));
-    lua_pushnumber(L, q ? countRewards(&q->rewardChoiceItems) : 0);
+    size_t i = 0;
+    if (q) while (i < q->rewardChoiceItems.size() && q->rewardChoiceItems[i].itemId != 0) ++i;
+    lua_pushnumber(L, static_cast<double>(i));
     return 1;
 }
 
 static int lua_GetQuestLogRewardInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* q = selectedLogEntry(gh);
-    if (!q) { return luaReturnNil(L); }
-    return pushRewardAt(L, gh, q->rewardItems,
-                        static_cast<int>(luaL_optnumber(L, 1, 0)));
+    return pushLogRewardSlot(L, gh, q ? &q->rewardItems : nullptr);
 }
 
 static int lua_GetQuestLogChoiceInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* q = selectedLogEntry(gh);
-    if (!q) { return luaReturnNil(L); }
-    return pushRewardAt(L, gh, q->rewardChoiceItems,
-                        static_cast<int>(luaL_optnumber(L, 1, 0)));
+    return pushLogRewardSlot(L, gh, q ? &q->rewardChoiceItems : nullptr);
 }
 
 // GetQuestLogItemLink(type, index) → a reward of the selected quest, as a link.
@@ -4454,29 +4485,22 @@ static int lua_GetQuestLogItemLink(lua_State* L) {
         return luaL_error(L, "Usage: GetQuestLogItemLink(\"type\", index)");
     auto* gh = getGameHandler(L);
     const auto* q = selectedLogEntry(gh);
-    const char* type = luaL_optstring(L, 1, "reward");
-    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (!gh || !q || index < 1) { return luaReturnNil(L); }
-
-    // The two lists are fixed arrays of different lengths, so they are walked
-    // by a template rather than bound to one reference.
-    const auto linkAt = [&](const auto& list) -> int {
-        int seen = 0;
-        for (const auto& r : list) {
-            if (r.itemId == 0) continue;
-            if (++seen != index) continue;
-            const auto* info = gh->getItemInfo(r.itemId);
-            const std::string name = info ? info->name : "";
-            if (name.empty()) break;
-            lua_pushstring(L, game::buildItemLink(r.itemId,
-                                                  info ? info->quality : 1u,
-                                                  name, gh->getPlayerLevel()).c_str());
-            return 1;
-        }
-        return luaReturnNil(L);
-    };
-    return (std::string(type) == "choice") ? linkAt(q->rewardChoiceItems)
-                                           : linkAt(q->rewardItems);
+    // 0x005df250: the type without case ("choice" below 6, "reward" below 4,
+    // anything else nil) and the slot by its raw place, as
+    // GetQuestLogRewardInfo/GetQuestLogChoiceInfo (0x005e4490/0x005e4660);
+    // only an item in the cache has a link.
+    std::string type = lua_tostring(L, 1);
+    toLowerInPlace(type);
+    const long long place = static_cast<long long>(lua_tonumber(L, 2)) - 1;  // 0x0088b9c0 truncates
+    if (!gh || !q || type.empty() || place < 0) return luaReturnNil(L);
+    const game::QuestRewardItem* slot = nullptr;
+    if (type == "choice" && place < 6) slot = &q->rewardChoiceItems[static_cast<size_t>(place)];
+    else if (type == "reward" && place < 4) slot = &q->rewardItems[static_cast<size_t>(place)];
+    if (!slot || slot->itemId == 0) return luaReturnNil(L);
+    const auto* info = gh->getItemInfo(slot->itemId);
+    if (!info || !info->valid || info->name.empty()) return luaReturnNil(L);
+    lua_pushstring(L, game::buildItemLink(slot->itemId, info->quality, info->name, gh->getPlayerLevel()).c_str());
+    return 1;
 }
 
 // Nil for the same reason GetQuestSpellLink is: nothing this client parses

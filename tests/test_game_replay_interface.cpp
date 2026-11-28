@@ -6868,3 +6868,45 @@ TEST_CASE("UnitRangedDamage asks for a unit", "[replay][interface]") {
     CHECK(ui.is("select(6, UnitRangedDamage('player')) == 1"));
     CHECK(ui.is("strfind(select(2, pcall(UnitRangedDamage)), 'Usage: UnitRangedDamage', 1, true) ~= nil"));
 }
+
+// FIXER AX: the quest log's rewards by their raw slot (0x005e4490/0x005e4660,
+// GetQuestLogItemLink 0x005df250), counted up to the first empty one
+// (0x005df150/0x005df1d0), and an item not in the cache answered nil, nil, 1,
+// 0, nil until its record raises QUEST_LOG_UPDATE (0x005dea40).
+TEST_CASE("the quest log's rewards are read by their raw slot", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    Interface ui(s);
+    auto* quests = s.handler().getQuestHandler();
+    quests->addQuestToLocalLogIfMissing(911, "Quest", "");
+    for (auto& q : quests->questLogRef()) {
+        q.level = 78;
+        q.rewardItems[1] = {.itemId = 25002, .count = 3};
+        q.rewardChoiceItems[0] = {.itemId = 25003, .count = 1};
+        q.rewardChoiceItems[1] = {.itemId = 25004, .count = 2};
+    }
+    ui.run("for i = 1, GetNumQuestLogEntries() do local _, _, _, _, h = GetQuestLogTitle(i) "
+           "if not h then SelectQuestLogEntry(i) end end");
+    ui.run("updates = 0 f = CreateFrame('Frame') f:RegisterEvent('QUEST_LOG_UPDATE') "
+           "f:SetScript('OnEvent', function() updates = updates + 1 end)");
+    // An empty first slot ends the count; the second is still slot 2.
+    CHECK(ui.is("GetNumQuestLogRewards() == 0"));
+    CHECK(ui.is("GetNumQuestLogChoices() == 2"));
+    ui.run("n, t, c, q, u = GetQuestLogRewardInfo(2) k = select('#', GetQuestLogRewardInfo(2))");
+    CHECK(ui.is("k == 5 and n == nil and t == nil and c == 1 and q == 0 and u == nil"));
+    CHECK(ui.is("select(3, GetQuestLogRewardInfo(1)) == 1 and select(3, GetQuestLogRewardInfo(5)) == 1"));
+    CHECK(ui.is("GetQuestLogItemLink('reward', 2) == nil"));
+    answerItem(s, 25002, "Kalynastachel");
+    CHECK(ui.is("updates == 1"));
+    ui.run("n, t, c, q, u = GetQuestLogRewardInfo(2)");
+    CHECK(ui.is("n == 'Kalynastachel' and type(t) == 'string' and c == 3 and q == -1 and u == 1"));
+    CHECK(ui.is("GetQuestLogItemLink('REWARD', 2):find('Hitem:25002', 1, true) ~= nil"));
+    CHECK(ui.is("GetQuestLogItemLink('reward', 1) == nil and GetQuestLogItemLink('other', 2) == nil"));
+    // An answer nobody waited for raises nothing.
+    answerItem(s, 25002, "Kalynastachel");
+    CHECK(ui.is("updates == 1"));
+    // All four reward slots filled: 0x005df150 never stores its count.
+    for (auto& q : quests->questLogRef())
+        for (uint32_t i = 0; i < 4; ++i) q.rewardItems[i] = {.itemId = 25010 + i, .count = 1};
+    CHECK(ui.is("GetNumQuestLogRewards() == 0"));
+}

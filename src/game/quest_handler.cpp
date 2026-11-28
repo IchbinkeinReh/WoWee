@@ -101,8 +101,11 @@ QuestGiverStatus QuestHandler::getQuestGiverStatus(uint64_t guid) const {
 }
 
 void QuestHandler::questItemAnswered(uint32_t itemId) {
-    if (questItemsAwaited_.erase(itemId) == 0) return;
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_ITEM_UPDATE", {});
+    const bool window = questItemsAwaited_.erase(itemId) > 0;
+    const bool log = logRewardItemsAwaited_.erase(itemId) > 0;
+    if (!owner_.addonEventCallbackRef()) return;
+    if (window) owner_.addonEventCallbackRef()("QUEST_ITEM_UPDATE", {});
+    if (log) owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
 }
 
 QuestLogRows<QuestHandler::QuestLogEntry> QuestHandler::questLogRows() const {
