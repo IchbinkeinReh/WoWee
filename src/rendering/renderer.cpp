@@ -2796,23 +2796,37 @@ void Renderer::updatePlayerArea() {
     // camera stood in a building's bounding box, which beside a house it does.
     playerIndoors_ = !game::outdoors::outdoors(playerPlace_, gh->getAreaFlags(groundArea));
     // Which group decided it, once per change: the building's id, the
-    // group's index, its MOGP flags (0x8 exterior, 0x40 exterior lit, 0x2000
-    // interior) and its WMOAreaTable row's flags.
+    // group's index, its flags as the root's MOGI lists them (0x8 exterior,
+    // 0x40 exterior lit, 0x2000 interior; the group file's MOGP word adds
+    // bits such as 0x1/0x4/0x800 the indoors answer does not read) and its
+    // WMOAreaTable row's flags. Keyed by the building instance too, so a step
+    // from one building's group n to another's prints a line.
     {
         const auto& p = playerPlace_;
+        uint32_t wmoId = 0, instanceId = 0, group = 0;
+        if (p.inGroup) {
+            instanceId = playerLinks_.front().instanceId;
+            group = playerLinks_.front().group;
+            if (wmoRenderer)
+                if (const auto g = wmoRenderer->groupArea(playerLinks_.front())) wmoId = g->wmoId;
+        }
         const uint64_t key = (uint64_t(p.inGroup) << 63) ^ (uint64_t(p.groupFlags) << 20) ^
                              (uint64_t(p.hasRow ? p.rowFlags + 1 : 0) << 8) ^ uint64_t(playerIndoors_) ^
-                             (p.inGroup ? (uint64_t(playerLinks_.front().group) << 40) : 0);
+                             (uint64_t(group) << 40) ^ (uint64_t(instanceId) * 0x9E3779B97F4A7C15ull) ^
+                             (p.inGroup ? 0 : uint64_t(groundArea) << 1);
         if (key != playerPlaceLogKey_) {
             playerPlaceLogKey_ = key;
-            uint32_t wmoId = 0;
-            if (p.inGroup && wmoRenderer)
-                if (const auto g = wmoRenderer->groupArea(playerLinks_.front())) wmoId = g->wmoId;
-            LOG_INFO("Player place: ", playerIndoors_ ? "indoors" : "outdoors", p.inGroup ? " in WMO " : " on ground area ",
-                     p.inGroup ? wmoId : groundArea, p.inGroup ? " group " : "",
-                     p.inGroup ? std::to_string(playerLinks_.front().group) : std::string(), std::hex,
-                     p.inGroup ? " flags 0x" : "", p.inGroup ? p.groupFlags : 0u,
-                     p.hasRow ? " row flags 0x" : " no row", p.hasRow ? p.rowFlags : 0u, std::dec);
+            char text[160];
+            if (p.inGroup) {
+                std::snprintf(text, sizeof(text), "in WMO %u (instance %u) group %u MOGI flags 0x%x", wmoId,
+                              instanceId, group, p.groupFlags);
+            } else {
+                std::snprintf(text, sizeof(text), "on ground area %u", groundArea);
+            }
+            char row[40];
+            if (p.hasRow) std::snprintf(row, sizeof(row), ", row flags 0x%x", p.rowFlags);
+            else std::snprintf(row, sizeof(row), ", no row");
+            LOG_INFO("Player place: ", playerIndoors_ ? "indoors " : "outdoors ", text, row);
         }
     }
     // A moving building's group names nothing (0x00782560 and 0x007a13e0
