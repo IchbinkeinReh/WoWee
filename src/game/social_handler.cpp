@@ -5906,8 +5906,10 @@ void SocialHandler::handleLfgPlayerReward(network::Packet& packet) {
     // the one shape that sweep cannot see.
     if (!packet.hasRemaining(4 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 1)) return;
     LfgCompletionReward reward;
-    reward.randomDungeonId = packet.readUInt32();
-    reward.dungeonId       = packet.readUInt32();
+    // The slots carry the dungeon's type in the high byte (type << 24 | id),
+    // which 0x00557e40 masks off before it looks the row up.
+    reward.randomDungeonId = packet.readUInt32() & 0x00FFFFFFu;
+    reward.dungeonId       = packet.readUInt32() & 0x00FFFFFFu;
     reward.done            = packet.readUInt8() != 0;
     // 0x0055bdc0 names the four after it: strangers, base money, base XP,
     // variable money, variable XP - the variable parts paid per stranger.
@@ -5916,6 +5918,9 @@ void SocialHandler::handleLfgPlayerReward(network::Packet& packet) {
     reward.xp              = packet.readUInt32();
     const uint32_t varMoney = packet.readUInt32();
     const uint32_t varXp    = packet.readUInt32();
+    reward.strangers = strangers;
+    reward.varMoney = varMoney;
+    reward.varXp = varXp;
     const uint8_t itemNum = packet.readUInt8();
     for (uint8_t i = 0; i < itemNum && packet.hasRemaining(12); ++i) {
         LfgCompletionReward::Item item;

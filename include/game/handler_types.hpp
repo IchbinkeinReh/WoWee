@@ -486,6 +486,12 @@ struct LfgCompletionReward {
     bool done = false;
     uint32_t money = 0;            ///< copper
     uint32_t xp = 0;
+    /// 0x00acdc24 / 0x00acdc30 / 0x00acdc34: the strangers in the group and
+    /// the money and experience paid per stranger, which
+    /// GetLFGCompletionReward hands the toast (0x00557e40).
+    uint32_t strangers = 0;
+    uint32_t varMoney = 0;
+    uint32_t varXp = 0;
     std::vector<Item> items;
     bool valid = false;
 };

@@ -4576,6 +4576,67 @@ TEST_CASE("an arena is joined with the arena's packet (T467)", "[replay][interfa
     CHECK(s.sent().of(Opcode::CMSG_BATTLEMASTER_JOIN_ARENA).size() == 2);
 }
 
+// SetSelectedBattlefield keeps the instance's number (0x0054bb40 ->
+// 0x00bea538), GetSelectedBattlefield where it stands in the list now
+// (0x0054bbd0): a new list moves it, one without it answers 0.
+TEST_CASE("the selected battlefield is its instance, found again in each list (0x0054bbd0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    Interface ui(s);
+    s.setConnected(true);
+    wowee::game::GameHandlerTestAccess::addBattlemaster(s.handler(), 2, 3);
+    const auto list = [&](std::initializer_list<uint32_t> instances) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_BATTLEFIELD_LIST));
+        p.writeUInt64(0xF130004DC8001132ull);
+        p.writeUInt8(0);
+        p.writeUInt32(2);
+        p.writeUInt8(0); p.writeUInt8(0);
+        p.writeUInt8(0);
+        p.writeUInt32(0); p.writeUInt32(0); p.writeUInt32(0);
+        p.writeUInt8(0);
+        p.writeUInt32(static_cast<uint32_t>(instances.size()));
+        for (uint32_t id : instances) p.writeUInt32(id);
+        s.receive(p);
+    };
+    list({11, 12, 13});
+    REQUIRE(ui.is("GetNumBattlefields() == 3"));
+    CHECK(ui.is("GetSelectedBattlefield() == 0"));
+    ui.run("SetSelectedBattlefield(2)");
+    CHECK(ui.is("GetSelectedBattlefield() == 2"));
+    list({12, 13});
+    CHECK(ui.is("GetSelectedBattlefield() == 1"));   // instance 12 moved up
+    list({13});
+    CHECK(ui.is("GetSelectedBattlefield() == 0"));   // gone
+    ui.run("SetSelectedBattlefield(5)");
+    CHECK(ui.is("GetSelectedBattlefield() == 0"));
+    CHECK(ui.is("not pcall(SetSelectedBattlefield)"));
+}
+
+// GetLFGCompletionReward (0x00557e40) answers nothing before a reward and
+// hands the toast the base and per-stranger money and experience and the
+// strangers that SMSG_LFG_PLAYER_REWARD carried (0x00acdc24..34).
+TEST_CASE("the dungeon reward carries the strangers' share (0x00557e40)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    Interface ui(s);
+    s.setConnected(true);
+    CHECK(ui.is("select('#', GetLFGCompletionReward()) == 0"));
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_LFG_PLAYER_REWARD));
+    p.writeUInt32((6u << 24) | 262u);  // the random slot, type in the high byte
+    p.writeUInt32((1u << 24) | 205u);  // the dungeon done
+    p.writeUInt8(1);
+    for (uint32_t v : {2u, 1000u, 500u, 30u, 20u}) p.writeUInt32(v);  // strangers, money, xp, per stranger
+    p.writeUInt8(0);
+    s.receive(p);
+    REQUIRE(ui.is("select('#', GetLFGCompletionReward()) == 9"));
+    CHECK(ui.is("select(4, GetLFGCompletionReward()) == 1000"));
+    CHECK(ui.is("select(5, GetLFGCompletionReward()) == 30"));
+    CHECK(ui.is("select(6, GetLFGCompletionReward()) == 500"));
+    CHECK(ui.is("select(7, GetLFGCompletionReward()) == 20"));
+    CHECK(ui.is("select(8, GetLFGCompletionReward()) == 2"));
+    CHECK(ui.is("select(9, GetLFGCompletionReward()) == 0"));
+}
+
 // T463: the giver's quest list is a quest page (0x006d0240 -> 0x0058c5a0 with
 // 0): CloseQuest lets it go with QUEST_FINISHED (0x0058ca70), once.
 TEST_CASE("CloseQuest closes a giver's quest list (T463)", "[replay][interface]") {

@@ -7712,10 +7712,28 @@ static int lua_RequestBattlegroundInstanceInfo(lua_State* L) {
 // the server understands as no preference - the list opens on it, and nothing
 // here queues for a specific instance regardless. This is the selection the
 // interface is showing, not an instruction to the server.
-static int& selectedBattlefield() { static int selected = 0; return selected; }
+//
+// 12340 keeps the instance's number, not the row (0x00bea538): Set stores
+// the list's index-th instance id, 0 past it (0x0054bb40, the index rounded);
+// Get answers where that instance stands in the list now, from one, 0 where
+// it is not in it (0x0054bbd0) - so a new list moves the highlight with the
+// instance, or takes it away. (12340 clears it with the world, 0x0054ca50;
+// kept here, an old number only matches a list that has it again.)
+static uint32_t& selectedBattlefield() { static uint32_t instance = 0; return instance; }
 
 static int lua_GetSelectedBattlefield(lua_State* L) {
-    lua_pushnumber(L, selectedBattlefield());
+    auto* gh = getGameHandler(L);
+    const auto* list = gh ? gh->lastBattlefieldList() : nullptr;
+    int at = 0;
+    if (list) {
+        for (size_t i = 0; i < list->instanceIds.size(); ++i) {
+            if (list->instanceIds[i] == selectedBattlefield()) {
+                at = static_cast<int>(i) + 1;
+                break;
+            }
+        }
+    }
+    lua_pushnumber(L, at);
     return 1;
 }
 
@@ -7723,7 +7741,12 @@ static int lua_GetSelectedBattlefield(lua_State* L) {
 // to exist before it has to do anything.
 static int lua_SetSelectedBattlefield(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedBattlefield(index)");   // 0x0054bb40
-    selectedBattlefield() = static_cast<int>(luaL_optnumber(L, 1, 0));
+    auto* gh = getGameHandler(L);
+    const auto* list = gh ? gh->lastBattlefieldList() : nullptr;
+    const long long index = std::llround(lua_tonumber(L, 1));
+    selectedBattlefield() = list && index >= 1 && index <= static_cast<long long>(list->instanceIds.size())
+                                ? list->instanceIds[static_cast<size_t>(index - 1)]
+                                : 0u;
     return 0;
 }
 
@@ -7838,13 +7861,11 @@ static int lua_JoinBattlefield(lua_State* L) {
 static int lua_GetLFGCompletionReward(lua_State* L) {
     auto* gh = getGameHandler(L);
     const game::LfgCompletionReward* r = gh ? &gh->getLfgCompletionReward() : nullptr;
-    if (!r || !r->valid) {
-        lua_pushnil(L);      // 1: name
-        lua_pushnil(L);      // 2: typeID
-        lua_pushnil(L);      // 3: textureFilename
-        for (int i = 0; i < 6; ++i) lua_pushnumber(L, 0);
-        return 9;
-    }
+    // 0x00557e40: nothing at all before a reward came, or for a slot that
+    // names no LFGDungeons row; else the row's name, type and texture, the
+    // base and per-stranger money and experience, the strangers and the
+    // items.
+    if (!r || !r->valid || r->dungeonId == 0) return 0;
     // The dungeon finished, not the random entry queued for: the toast names
     // the instance the player actually walked out of.
     const game::LfgDungeon* d = nullptr;
@@ -7861,11 +7882,11 @@ static int lua_GetLFGCompletionReward(lua_State* L) {
     name.empty() ? lua_pushnil(L) : lua_pushstring(L, name.c_str());          // 1
     d ? lua_pushinteger(L, static_cast<lua_Integer>(d->typeId)) : lua_pushnil(L);  // 2
     texture.empty() ? lua_pushnil(L) : lua_pushstring(L, texture.c_str());    // 3
-    lua_pushnumber(L, static_cast<double>(r->money));  // 4: moneyBase
-    lua_pushnumber(L, 0);                              // 5: moneyVar
-    lua_pushnumber(L, static_cast<double>(r->xp));     // 6: experienceBase
-    lua_pushnumber(L, 0);                              // 7: experienceVar
-    lua_pushnumber(L, 0);                              // 8: numStrangers
+    lua_pushnumber(L, static_cast<double>(static_cast<int32_t>(r->money)));    // 4: moneyBase
+    lua_pushnumber(L, static_cast<double>(static_cast<int32_t>(r->varMoney))); // 5: moneyVar
+    lua_pushnumber(L, static_cast<double>(static_cast<int32_t>(r->xp)));       // 6: experienceBase
+    lua_pushnumber(L, static_cast<double>(static_cast<int32_t>(r->varXp)));    // 7: experienceVar
+    lua_pushnumber(L, static_cast<double>(r->strangers));                      // 8: numStrangers
     lua_pushnumber(L, static_cast<double>(r->items.size()));  // 9: numRewards
     return 9;
 }
