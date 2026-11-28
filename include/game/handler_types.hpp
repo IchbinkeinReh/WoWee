@@ -212,6 +212,11 @@ struct BgQueueSlot {
     uint32_t inviteTimeout = 80;
     uint32_t avgWaitTimeSec = 0;
     uint32_t timeInQueueSec = 0;
+    /// The two as the status packet carries them, in milliseconds (record
+    /// +0x2c, and +0x30 = the clock less the time waited); both zero unless
+    /// the slot is queued (0x0054ae40).
+    uint32_t avgWaitTimeMs = 0;
+    uint32_t timeInQueueMs = 0;
     // The level range comes with the status, so a queued battleground can say
     // what it is without the available-battleground list having arrived - that
     // list only turns up at a battlemaster, and the interface asks for the range

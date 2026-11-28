@@ -964,6 +964,9 @@ public:
     const BgScoreboardData* getBgScoreboard() const override;
     /// SetBattlefieldScoreFaction's filter (0x00acd170): -1 both, 0, 1.
     int& battlefieldScoreFactionRef();
+    /// Set/GetSelectedBattlefield's instance id (0x00bea538), cleared with the
+    /// score on a world load (0x0054ca50).
+    uint32_t& selectedBattlefieldRef();
     /// 0x00528010 -> 0x0054ca50: the score state cleared on a world load.
     void clearBattlefieldScore();
 

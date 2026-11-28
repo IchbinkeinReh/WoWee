@@ -4413,25 +4413,39 @@ void registerUnitLuaAPI(lua_State* L) {
                 //
                 // The status tokens are the four the interface compares against
                 // and the ids are AzerothCore's BattlegroundStatus: 1 waiting in
-                // the queue, 2 invited and waiting to accept, 3 in progress, 4
-                // ending. Four reads as active because the battleground is
-                // still the one the player is standing in.
+                // the queue, 2 invited and waiting to accept, 3 in progress; any
+                // other id is "error", as 0x0054bc30 has it.
                 {"GetBattlefieldStatus", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldStatus(index)");   // 0x0054bc30
             auto* gh = getGameHandler(L);
-            const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
+            // The index rounded; one past the slots answers nil, nil, 0, 0,
+            // 0, 0, nil - no status word at all.
+            const long long idx = std::llround(lua_tonumber(L, 1));
+            if (!gh || idx < 1 || idx > static_cast<long long>(gh->getBgQueues().size())) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
+                lua_pushnil(L);
+                return 7;
+            }
             const char* status = "none";
             std::string mapName;
             uint32_t minLevel = 0, maxLevel = 0, instanceId = 0;
             uint8_t teamSize = 0;
             bool isRated = false;
-            if (gh && idx >= 1 && idx <= 3) {
+            {
                 const auto& q = gh->getBgQueues()[static_cast<size_t>(idx) - 1];
+                // 0 none, 1 queued, 2 confirm, 3 active, anything else
+                // "error" (0x0054bc30 - a 4 is not read as active).
                 switch (q.statusId) {
+                    case 0: break;
                     case 1: status = "queued";  break;
                     case 2: status = "confirm"; break;
-                    case 3: case 4: status = "active"; break;
-                    default: break;
+                    case 3: status = "active"; break;
+                    default: status = "error"; break;
                 }
                 if (q.statusId != 0) {
                     mapName = q.bgName;

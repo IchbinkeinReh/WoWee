@@ -5444,6 +5444,11 @@ int& GameHandler::battlefieldScoreFactionRef() {
     return socialHandler_ ? socialHandler_->battlefieldScoreFactionRef() : none;
 }
 
+uint32_t& GameHandler::selectedBattlefieldRef() {
+    static uint32_t none = 0;
+    return socialHandler_ ? socialHandler_->selectedBattlefieldRef() : (none = 0);
+}
+
 void GameHandler::clearBattlefieldScore() {
     if (socialHandler_) socialHandler_->clearBattlefieldScore();
 }

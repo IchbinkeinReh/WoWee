@@ -4731,10 +4731,22 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
         bgQueues_[queueSlot].maxLevel = status.maxLevel;
         bgQueues_[queueSlot].instanceId = status.instanceId;
         bgQueues_[queueSlot].isRated = status.isRated;
+        // 0x0054ae40: a queued slot takes the average wait and stamps the
+        // clock less the time waited (+0x2c, +0x30); any other state zeroes
+        // both, so GetBattlefieldEstimatedWaitTime / GetBattlefieldTimeWaited
+        // answer 0 once invited or inside.
         if (statusId == 1) {
             bgQueues_[queueSlot].avgWaitTimeSec = avgWaitSec;
             bgQueues_[queueSlot].timeInQueueSec = timeInQueueSec;
+            bgQueues_[queueSlot].avgWaitTimeMs = status.avgWaitMs;
+            bgQueues_[queueSlot].timeInQueueMs = status.timeInQueueMs;
             bgQueues_[queueSlot].queueTimeReceivedAt = std::chrono::steady_clock::now();
+        } else {
+            bgQueues_[queueSlot].avgWaitTimeSec = 0;
+            bgQueues_[queueSlot].timeInQueueSec = 0;
+            bgQueues_[queueSlot].avgWaitTimeMs = 0;
+            bgQueues_[queueSlot].timeInQueueMs = 0;
+            bgQueues_[queueSlot].queueTimeReceivedAt = {};
         }
         if (statusId == 2 && !wasInvite) { bgQueues_[queueSlot].inviteTimeout = inviteTimeout; bgQueues_[queueSlot].inviteReceivedTime = std::chrono::steady_clock::now(); }
         // The invitation's end as one absolute stamp per slot, which is how the
@@ -6792,6 +6804,15 @@ void SocialHandler::clearBattlefieldScore() {
     ++bgScoreGeneration_;   // a name answer for the old board changes nothing
     bgScorePending_ = 0;
     bgScoreFaction_ = -1;
+    // The same reset's battlemaster part: no instance selected, no
+    // battleground, levels or battlemaster - the list's rewards and its
+    // instance ids are left (0x00bea548.., 0x00bea5c0/c4 are not touched).
+    selectedBattlefield_ = 0;
+    lastBattlefieldList_.bgTypeId = 0;
+    lastBattlefieldList_.minLevel = 0;
+    lastBattlefieldList_.maxLevel = 0;
+    lastBattlefieldList_.battlemasterGuid = 0;
+    battlemasterGuid_ = 0;
 }
 
 void SocialHandler::resetForWorldEntry() {

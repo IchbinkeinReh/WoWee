@@ -284,10 +284,15 @@ public:
     /// dungeon finder (0x0055d440).
     void resetForWorldEntry();
     /// 0x00528010 -> 0x0054ca50 on every world load: the scoreboard's rows,
-    /// winner and counts gone, the faction filter back to both (-1).
+    /// winner and counts gone, the faction filter back to both (-1); and the
+    /// battlemaster list's head - the selected instance (0x00bea538), the
+    /// battleground and its levels (0x00bea53c..0x00bea544), the battlemaster
+    /// (0x00bea568). Its rewards and instances stay as the client keeps them.
     void clearBattlefieldScore();
     /// SetBattlefieldScoreFaction's filter (0x00acd170): -1 both, 0, 1.
     int& battlefieldScoreFactionRef() { return bgScoreFaction_; }
+    /// Set/GetSelectedBattlefield's instance id (0x00bea538), 0 for none.
+    uint32_t& selectedBattlefieldRef() { return selectedBattlefield_; }
     void clearGuildMembership() {
         inGuild_ = false;
         joinedGuildName_.clear();
@@ -1147,6 +1152,7 @@ private:
     uint32_t battlefieldMapId_ = 0;
     uint64_t battlemasterGuid_ = 0;
     BattlefieldListData lastBattlefieldList_;
+    uint32_t selectedBattlefield_ = 0;   // 0x00bea538
     std::vector<AvailableBgInfo> availableBgs_;
     BgScoreboardData bgScoreboard_;
     /// UPDATE_BATTLEFIELD_SCORE waits for every row's name (0x0054ca30

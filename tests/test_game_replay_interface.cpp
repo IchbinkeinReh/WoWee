@@ -4610,6 +4610,22 @@ TEST_CASE("the selected battlefield is its instance, found again in each list (0
     ui.run("SetSelectedBattlefield(5)");
     CHECK(ui.is("GetSelectedBattlefield() == 0"));
     CHECK(ui.is("not pcall(SetSelectedBattlefield)"));
+    // A world load clears the selection with the score (0x00528010 ->
+    // 0x0054ca50 zeroes 0x00bea538): a list holding the instance again does
+    // not bring the highlight back.
+    list({11, 12, 13});
+    ui.run("SetSelectedBattlefield(3)");
+    REQUIRE(ui.is("GetSelectedBattlefield() == 3"));
+    s.handler().setWorldEntryCallback([](uint32_t, float, float, float, bool) {});
+    wowee::network::Packet world(wowee::game::wireOpcode(Opcode::SMSG_NEW_WORLD));
+    world.writeUInt32(1);
+    for (const float v : {-1431.29f, -68.57f, 156.87f, 0.4f}) world.writeFloat(v);
+    s.receive(world);
+    s.handler().setWorldEntryCallback({});
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 80}});
+    CHECK(ui.is("GetSelectedBattlefield() == 0"));
+    list({11, 12, 13});
+    CHECK(ui.is("GetSelectedBattlefield() == 0"));
 }
 
 // GetLFGCompletionReward (0x00557e40) answers nothing before a reward and
@@ -5718,6 +5734,36 @@ TEST_CASE("leaving a battleground queue waits for the realm (T407)", "[replay][i
     s.receive(bgStatus(0, kWarsongRecord, 2, 489));
     ui.run("AcceptBattlefieldPort(1, 1)");
     CHECK(ui.is("GetBattlefieldStatus(1) == 'confirm'"));
+}
+
+// The queue clocks (FIXER BF review): 0x0054ae40 keeps the average wait as it
+// came in ms (+0x2c) and stamps the clock less the time waited (+0x30) only
+// for a queued slot, zeroing both for any other state; 0x00549d30 /
+// 0x00549dd0 answer them, the index rounded. GetBattlefieldStatus
+// (0x0054bc30) answers nil past the slots and "error" for an unknown state.
+TEST_CASE("the queue clocks are the queued status's own (0x00549dd0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto queued = bgStatus(0, kWarsongRecord, 1, 0);
+    queued.writeUInt32(61234); queued.writeUInt32(1500);   // average wait, time queued (ms)
+    s.receive(queued);
+    REQUIRE(ui.is("GetBattlefieldStatus(1) == 'queued'"));
+    CHECK(ui.is("GetBattlefieldEstimatedWaitTime(1) == 61234"));
+    CHECK(ui.is("GetBattlefieldTimeWaited(1) >= 1500 and GetBattlefieldTimeWaited(1) < 61500"));
+    CHECK(ui.is("GetBattlefieldEstimatedWaitTime(1.4) == 61234"));
+    CHECK(ui.is("GetBattlefieldEstimatedWaitTime(1.6) == 0"));   // rounds to slot 2
+    CHECK(ui.is("GetBattlefieldStatus(0.6) == 'queued'"));
+    CHECK(ui.is("GetBattlefieldStatus(0) == nil and select(3, GetBattlefieldStatus(0)) == 0"));
+    CHECK(ui.is("GetBattlefieldStatus(99) == nil"));
+    // Invited: both clocks gone.
+    s.receive(bgStatus(0, kWarsongRecord, 2, 489));
+    REQUIRE(ui.is("GetBattlefieldStatus(1) == 'confirm'"));
+    CHECK(ui.is("GetBattlefieldEstimatedWaitTime(1) == 0"));
+    CHECK(ui.is("GetBattlefieldTimeWaited(1) == 0"));
+    // An unknown state is "error", not read as a battle under way.
+    s.receive(bgStatus(0, kWarsongRecord, 4, 0));
+    CHECK(ui.is("GetBattlefieldStatus(1) == 'error'"));
 }
 
 // T412 (FIXER Z): GetLatestThreeSenders (0x0056f3a0) names each letter as

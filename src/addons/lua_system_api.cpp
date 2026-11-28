@@ -6,6 +6,7 @@
 #include "rendering/world_map/coordinate_projection.hpp"
 #include "game/battleground_rules.hpp"
 #include "game/spell_visual_choice.hpp"
+#include "game/game_utils.hpp"
 #include <chrono>
 #include <algorithm>
 #include <cctype>
@@ -7123,6 +7124,10 @@ static int lua_GetBattlefieldInstanceInfo(lua_State* L) {
 static uint32_t currentBattlefieldType(game::GameHandler* gh) {
     if (!gh) return 0;
     if (const auto* list = gh->lastBattlefieldList(); list && list->bgTypeId != 0) return list->bgTypeId;
+    // 3.3.5a keeps every list there, and a world load empties the type
+    // (0x0054ca50): none then. The kept lists are the older clients' only
+    // record.
+    if (!game::isPreWotlk()) return 0;
     const auto& bgs = gh->getAvailableBgs();
     return bgs.empty() ? 0 : bgs.back().bgTypeId;
 }
@@ -7717,9 +7722,12 @@ static int lua_RequestBattlegroundInstanceInfo(lua_State* L) {
 // the list's index-th instance id, 0 past it (0x0054bb40, the index rounded);
 // Get answers where that instance stands in the list now, from one, 0 where
 // it is not in it (0x0054bbd0) - so a new list moves the highlight with the
-// instance, or takes it away. (12340 clears it with the world, 0x0054ca50;
-// kept here, an old number only matches a list that has it again.)
-static uint32_t& selectedBattlefield() { static uint32_t instance = 0; return instance; }
+// instance, or takes it away. The world's reset clears it (0x00528010 ->
+// 0x0054ca50), so it lives with the list in the social handler.
+static uint32_t& selectedBattlefield(game::GameHandler* gh) {
+    static uint32_t none = 0;
+    return gh ? gh->selectedBattlefieldRef() : (none = 0);
+}
 
 static int lua_GetSelectedBattlefield(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -7727,7 +7735,7 @@ static int lua_GetSelectedBattlefield(lua_State* L) {
     int at = 0;
     if (list) {
         for (size_t i = 0; i < list->instanceIds.size(); ++i) {
-            if (list->instanceIds[i] == selectedBattlefield()) {
+            if (list->instanceIds[i] == selectedBattlefield(gh)) {
                 at = static_cast<int>(i) + 1;
                 break;
             }
@@ -7744,7 +7752,7 @@ static int lua_SetSelectedBattlefield(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* list = gh ? gh->lastBattlefieldList() : nullptr;
     const long long index = std::llround(lua_tonumber(L, 1));
-    selectedBattlefield() = list && index >= 1 && index <= static_cast<long long>(list->instanceIds.size())
+    selectedBattlefield(gh) = list && index >= 1 && index <= static_cast<long long>(list->instanceIds.size())
                                 ? list->instanceIds[static_cast<size_t>(index - 1)]
                                 : 0u;
     return 0;
@@ -9465,18 +9473,17 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetBattlefieldTimeWaited", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldTimeWaited(index)");   // 0x00549dd0
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
-            // Counted on from the server's last word, which comes about once
-            // a minute - answered as it stood, the minimap tooltip's time in
-            // queue sat still for a minute and then jumped.
+            // The index rounded; the clock less the stamp the status left
+            // (the packet's time waited, in ms, counted on from its arrival),
+            // 0 where there is no stamp - every slot not queued.
+            const long long index = std::llround(lua_tonumber(L, 1));
             double ms = 0.0;
-            if (gh && index >= 1 && index <= 3) {
+            if (gh && index >= 1 && index <= static_cast<long long>(gh->getBgQueues().size())) {
                 const auto& q = gh->getBgQueues()[static_cast<size_t>(index - 1)];
-                ms = q.timeInQueueSec * 1000.0;
-                if (q.statusId == 1 &&
-                    q.queueTimeReceivedAt != std::chrono::steady_clock::time_point{}) {
-                    ms += std::chrono::duration<double, std::milli>(
-                              std::chrono::steady_clock::now() - q.queueTimeReceivedAt).count();
+                if (q.queueTimeReceivedAt != std::chrono::steady_clock::time_point{}) {
+                    ms = static_cast<double>(static_cast<uint32_t>(
+                        q.timeInQueueMs + static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                              std::chrono::steady_clock::now() - q.queueTimeReceivedAt).count())));
                 }
             }
             lua_pushnumber(L, ms);
@@ -9485,10 +9492,12 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetBattlefieldEstimatedWaitTime", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldEstimatedWaitTime(index)");   // 0x00549d30
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
+            // The packet's average wait as it came, in ms (+0x2c), the index
+            // rounded; 0 for a slot not queued.
+            const long long index = std::llround(lua_tonumber(L, 1));
             double ms = 0.0;
-            if (gh && index >= 1 && index <= 3)
-                ms = gh->getBgQueues()[static_cast<size_t>(index - 1)].avgWaitTimeSec * 1000.0;
+            if (gh && index >= 1 && index <= static_cast<long long>(gh->getBgQueues().size()))
+                ms = gh->getBgQueues()[static_cast<size_t>(index - 1)].avgWaitTimeMs;
             lua_pushnumber(L, ms);
             return 1;
         }},
