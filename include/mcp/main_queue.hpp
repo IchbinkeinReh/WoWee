@@ -36,13 +36,18 @@ public:
     /// `make` is run on the game's thread, for what it reads is the game's.
     /// Waits up to `patience` for the call to end; past that the call is
     /// cancelled.
-    Outcome submit(std::function<std::shared_ptr<Script>()> make, bool hands, std::chrono::milliseconds patience);
+    /// `duringLoad`: it may be run by pump's loading-only form as well.
+    Outcome submit(std::function<std::shared_ptr<Script>()> make, bool hands, std::chrono::milliseconds patience,
+                   bool duringLoad = false);
 
     /// The game's loop, once a frame: for `budget` at most, though always one
     /// step of one call. `now` in seconds. True where a call someone waits
     /// for was worked on: the player's hands at work, which keeps the client
     /// from going idle (Input::noteHardwareEvent) as a key press does.
-    bool pump(double now, std::chrono::microseconds budget);
+    /// `loadingOnly`: from inside the world's load, which stands the loop
+    /// still - only the calls submitted `duringLoad` that press nothing; the
+    /// others wait for the loop.
+    bool pump(double now, std::chrono::microseconds budget, bool loadingOnly = false);
 
     /// No more calls; the ones waiting are told so. From the game's thread.
     void close();
@@ -60,6 +65,7 @@ private:
         std::function<std::shared_ptr<Script>()> make;
         std::shared_ptr<Script> script;
         bool hands = false;
+        bool duringLoad = false;
         bool abandoned = false;  ///< nobody waits for it any more
         bool over = false;
     };

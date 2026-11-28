@@ -307,6 +307,15 @@ public:
     void setGlobalWmoMapArea(uint32_t areaId) { globalWmoMapArea_ = areaId; }
     /// What 0x0077fbf0 reads of where the player stands (updatePlayerArea).
     const game::outdoors::Place& getPlayerPlace() const { return playerPlace_; }
+    /// Which building group that place is (the 'Player place' log line's):
+    /// the WMO id, its placed instance and the group's index; zeros on the
+    /// ground.
+    struct PlayerPlaceGroup {
+        uint32_t wmoId = 0;
+        uint32_t instanceId = 0;
+        uint32_t group = 0;
+    };
+    const PlayerPlaceGroup& getPlayerPlaceGroup() const { return playerPlaceGroup_; }
     VkContext* getVkContext() const { return vkCtx; }
     VkDescriptorSetLayout getPerFrameSetLayout() const { return perFrameSetLayout; }
     /// What a per-frame set allocated elsewhere binds at binding 2: a fog
@@ -1716,6 +1725,7 @@ private:
     uint32_t cameraLiquidType_ = 0;
     bool playerLinkIndoors_ = false;
     game::outdoors::Place playerPlace_;
+    PlayerPlaceGroup playerPlaceGroup_;
     uint64_t playerPlaceLogKey_ = ~0ull;  ///< the last place logged (updatePlayerArea)
     game::zone_area::Texts zoneTexts_;
     bool zoneTextsKnown_ = false;

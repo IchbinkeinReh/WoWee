@@ -7304,6 +7304,18 @@ void Application::update(float deltaTime) {
     }
 }
 
+void Application::pumpMcpWhileLoading(const char* status, float progress) {
+#ifndef WOWEE_MOBILE
+    if (!mcp_) return;
+    if (status) mcpLoadingStatus_ = status;
+    if (progress >= 0.0f) mcpLoadingProgress_ = progress;
+    mcp_->pumpWhileLoading(mcpLoadingStatus_.c_str(), mcpLoadingProgress_);
+#else
+    (void)status;
+    (void)progress;
+#endif
+}
+
 void Application::beatWatchdog() {
     watchdogHeartbeatMs_.store(
         std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -21,6 +21,7 @@
 #include "mcp/ui_view.hpp"
 #include "mcp/game_view.hpp"
 #include "mcp/lua_json.hpp"
+#include "mcp/object_fields.hpp"
 #include "mcp/schema.hpp"
 #include "mcp/tool_context.hpp"
 #include "rendering/camera.hpp"
@@ -167,8 +168,34 @@ if #mirror > 0 then out.timers = mirror end
 return out
 )lua";
 
+/// Behind the loading screen, from inside the world's load: what can be
+/// read without the world (no renderer, no interface, no Lua).
+json stateWhileLoading(ToolContext& context) {
+    auto* gh = context.app.getGameHandler();
+    json out = {{"client", clientState(context)},
+                {"frame", context.frame},
+                {"loading", true},
+                {"loading_screen", {{"status", context.loadingStatus},
+                                    {"progress", rounded(context.loadingProgress, 3)}}}};
+    if (gh) out["map"] = gh->getCurrentMapId();
+    json errors = json::array();
+    for (const auto& e : context.log.after(0, 5, [](const LogLine& l) {
+             return l.level >= static_cast<int>(core::kLogLevelError);
+         })) {
+        errors.push_back({{"seq", e.seq}, {"text", e.value.text.substr(0, 200)}});
+    }
+    out["recent_errors"] = std::move(errors);
+    out["cursors"] = {{"log", context.log.last()},
+                      {"events", context.events.last()},
+                      {"chat", context.chat.last()},
+                      {"combat_log", context.combat.last()},
+                      {"refused", context.refusals.last()}};
+    return out;
+}
+
 json stateOf(ToolContext& context, const json& args) {
     (void)args;
+    if (context.loading) return stateWhileLoading(context);
     auto& app = context.app;
     json out = {{"client", clientState(context)},
                 {"frame", context.frame},
@@ -236,6 +263,19 @@ json stateOf(ToolContext& context, const json& args) {
     if (renderer) {
         if (const auto h = rendering::liquid_query::surfaceOverUnit(renderer->liquidWorld(), me))
             place["water_over_feet"] = rounded(*h - me.z, 2);
+        // The building group IsIndoors reads (the log's 'Player place' line).
+        const auto& p = renderer->getPlayerPlace();
+        const auto& g = renderer->getPlayerPlaceGroup();
+        place["player_place"] = object_fields::placeJson({.known = p.known,
+                                                          .indoors = renderer->isPlayerIndoors(),
+                                                          .inGroup = p.inGroup,
+                                                          .wmoId = g.wmoId,
+                                                          .instanceId = g.instanceId,
+                                                          .group = g.group,
+                                                          .groupFlags = p.groupFlags,
+                                                          .hasRow = p.hasRow,
+                                                          .rowFlags = p.rowFlags,
+                                                          .groundArea = p.groundArea});
     }
     out["place"] = std::move(place);
 
@@ -430,8 +470,13 @@ void addStateTools(Toolbox& box) {
                            "loading screen is up, the transport it is on, position "
                            "(.gps coordinates), facing, zone, speed and movement flags, camera, clock and weather, "
                            "health, power, casting, auras, target, fps, recent errors, the settings this server's doing has "
-                           "changed since it started (settings_changed), and the cursors of the logs.",
+                           "changed since it started (settings_changed), the building group the player stands in "
+                           "(place.player_place: WMO id, instance, group, MOGI flags, WMOAreaTable row flags, "
+                           "indoors - or on_ground with the ground's area), and the cursors of the logs. While the "
+                           "world loads it answers too, briefly: loading true, the loading screen's status and "
+                           "progress, the map, recent errors and the cursors.",
                            schema::object({}), stateOf, Tool::Where::Anywhere));
+    box.back().duringLoad = true;
     box.push_back(lookTool("server_info",
                            "What this server was started to allow, and what it has refused (packets and acts towards "
                            "other players).",

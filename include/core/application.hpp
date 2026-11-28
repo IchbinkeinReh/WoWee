@@ -111,6 +111,10 @@ public:
     /// keeps presenting frames itself (e.g. the world load) so it is not mistaken
     /// for a hung main loop.
     void beatWatchdog();
+    /// From the same long work behind the loading screen: the MCP server's
+    /// calls that answer then (`state`), with the screen's status line and
+    /// progress (null / below 0 keep the last). Nothing without --mcp.
+    void pumpMcpWhileLoading(const char* status = nullptr, float progress = -1.0f);
 
     // State management
     [[nodiscard]] AppState getState() const { return state; }
@@ -420,6 +424,9 @@ private:
     /// Null unless the client was started with --mcp.
     mcp::Options mcpOptions_;
     std::unique_ptr<mcp::Server> mcp_;
+    /// The loading screen's last status and progress, for pumpMcpWhileLoading.
+    std::string mcpLoadingStatus_;
+    float mcpLoadingProgress_ = 0.0f;
 #endif
 
     game::GameServices gameServices_;

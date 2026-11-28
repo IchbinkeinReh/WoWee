@@ -2713,6 +2713,7 @@ void Renderer::updatePlayerArea() {
     playerLinkIndoors_ = false;
     playerIndoors_ = false;
     playerPlace_ = {};
+    playerPlaceGroup_ = {};
     // Out of the world the texts go back to nothing, as leaving it clears the
     // client's (0x00529160, from 0x00406510) - so the first area after
     // entering again is a new area, as it is on a new map.
@@ -2811,6 +2812,7 @@ void Renderer::updatePlayerArea() {
             if (wmoRenderer)
                 if (const auto g = wmoRenderer->groupArea(playerLinks_.front())) wmoId = g->wmoId;
         }
+        playerPlaceGroup_ = {.wmoId = wmoId, .instanceId = instanceId, .group = group};
         const uint64_t key = (uint64_t(p.inGroup) << 63) ^ (uint64_t(p.groupFlags) << 20) ^
                              (uint64_t(p.hasRow ? p.rowFlags + 1 : 0) << 8) ^ uint64_t(playerIndoors_) ^
                              (uint64_t(group) << 40) ^ (uint64_t(instanceId) * 0x9E3779B97F4A7C15ull) ^

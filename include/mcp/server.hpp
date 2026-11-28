@@ -39,6 +39,10 @@ public:
     /// few milliseconds.
     /// True where a call was worked on this frame (MainQueue::pump).
     bool pump(float deltaTime);
+    /// From inside the world's load, at each step its screen is drawn: the
+    /// calls that answer then (Tool::duringLoad - `state`), with the screen's
+    /// status and progress. Nothing while pump is under way.
+    void pumpWhileLoading(const char* status, float progress);
     /// Each event off the queue, before anything else has it. True drops it.
     bool filterEvent(const SDL_Event& event);
     /// With the frame drawn and not yet shown to the next: a picture of it,
@@ -70,6 +74,7 @@ private:
 
     Options options_;
     ToolContext context_;
+    bool pumping_ = false;  ///< pump runs (a load begun by a call's step must not pump again)
     std::thread::id gameThread_;
     Toolbox tools_;
     MainQueue queue_;

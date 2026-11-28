@@ -16,6 +16,7 @@
 #include "mcp/http_server.hpp"
 #include "mcp/image.hpp"
 #include "mcp/main_queue.hpp"
+#include "mcp/object_fields.hpp"
 #include "mcp/object_kind.hpp"
 #include "mcp/ring_log.hpp"
 #include "mcp/script.hpp"
@@ -353,6 +354,128 @@ TEST_CASE("the end of the client is the end of every call", "[mcp][queue]") {
     caller.join();
     CHECK(queue.submit([] { return std::make_shared<Script>(); }, false, 10s).kind ==
           MainQueue::Outcome::Kind::Closed);
+}
+
+// Behind the loading screen the loop stands still in the world's load, which
+// pumps only the calls that may answer then (`state`); the rest wait for the
+// loop (tester's wish: state timed out during loading screens).
+TEST_CASE("while the world loads, only the calls marked for it are run", "[mcp][queue]") {
+    MainQueue queue;
+    std::atomic<int> answered{0};
+    const auto make = [&] {
+        auto s = std::make_shared<Script>();
+        s->then([&](Script& script) {
+            ++answered;
+            return script.done(1);
+        });
+        return s;
+    };
+    std::thread loadAnswer([&] {
+        CHECK(queue.submit(make, false, 5s, /*duringLoad=*/true).kind == MainQueue::Outcome::Kind::Finished);
+    });
+    std::thread waitsForLoop([&] {
+        CHECK(queue.submit(make, false, 5s).kind == MainQueue::Outcome::Kind::Finished);
+    });
+    // Hands are never run from inside a load, whatever they ask.
+    std::thread hands([&] {
+        CHECK(queue.submit(make, true, 5s, /*duringLoad=*/true).kind == MainQueue::Outcome::Kind::Finished);
+    });
+    for (int i = 0; i < 200 && answered < 1; ++i) {
+        queue.pump(0.0, 4ms, /*loadingOnly=*/true);
+        std::this_thread::sleep_for(2ms);
+    }
+    loadAnswer.join();
+    // Some more loading steps: the other two stay waiting.
+    for (int i = 0; i < 20; ++i) {
+        queue.pump(0.0, 4ms, /*loadingOnly=*/true);
+        std::this_thread::sleep_for(2ms);
+    }
+    CHECK(answered == 1);
+    for (int i = 0; i < 200 && answered < 3; ++i) {
+        queue.pump(0.0, 4ms);
+        std::this_thread::sleep_for(2ms);
+    }
+    waitsForLoop.join();
+    hands.join();
+    CHECK(answered == 3);
+}
+
+TEST_CASE("a game object's update fields and template are told by name", "[mcp][entity]") {
+    using namespace object_fields;
+    Fields f;
+    f.hasFlags = true;
+    f.flags = 0x24;  // interact_cond | no_despawn
+    f.hasBytes1 = true;
+    f.bytes1 = 0xFF000601;  // state 1, type 6 (trap), art kit 0, progress 255
+    f.hasDynamic = true;
+    f.dynamic = 0x80000009;
+    f.hasScale = true;
+    const float scale = 2.5f;
+    std::memcpy(&f.scaleBits, &scale, sizeof(scale));
+    const json j = fieldsJson(f);
+    CHECK(j["flags"] == "0x24");
+    CHECK(j["flag_names"] == json::array({"interact_cond", "no_despawn"}));
+    CHECK(j["state"] == 1);
+    CHECK(j["type"] == 6);
+    CHECK(j["type_name"] == "trap");
+    CHECK(j["art_kit"] == 0);
+    CHECK(j["anim_progress"] == 255);
+    CHECK(j["dynamic_names"] == json::array({"activate", "sparkle"}));
+    CHECK(j["path_progress"] == 0x8000);
+    CHECK(j["scale"] == 2.5);
+    CHECK_FALSE(j.contains("faction"));  // not sent, not said
+    CHECK(fieldsJson(Fields{}).empty());
+
+    uint32_t data[24] = {};
+    data[0] = 7;
+    data[2] = 9;
+    const json t = templateJson(30, data, true, 1.5f, 2233, {0, 37888, 0, 0, 0, 0});
+    CHECK(t["type"] == 30);
+    CHECK(t["type_name"] == "aura_generator");
+    CHECK(t["data"] == json::array({7, 0, 9}));
+    CHECK(t["display"] == 2233);
+    CHECK(t["size"] == 1.5);
+    CHECK(t["quest_items"] == json::array({37888}));
+    CHECK_FALSE(templateJson(3, data, false, 1.0f, 1, {}).contains("data"));
+}
+
+TEST_CASE("a unit the realm shows a game master alone says why", "[mcp][entity]") {
+    using namespace object_fields;
+    GmSight s;
+    s.displayId = kGmTriggerDisplay;
+    CHECK(gmOnlyReasons(s).empty());  // not a GM: nothing to say
+    s.playerIsGm = true;
+    CHECK(gmOnlyReasons(s).size() == 1);
+    s.displayId = 1234;
+    CHECK(gmOnlyReasons(s).empty());
+    s.stealthAura = true;
+    s.invisibilityAura = true;
+    CHECK(gmOnlyReasons(s).size() == 2);
+    s = GmSight{.playerIsGm = true, .npcFlags = kNpcFlagSpiritHealer};
+    CHECK(gmOnlyReasons(s).size() == 1);
+    s.playerDeadOrGhost = true;  // the dead see it anyway
+    CHECK(gmOnlyReasons(s).empty());
+}
+
+TEST_CASE("the player's place says its building group or the ground", "[mcp][state]") {
+    using namespace object_fields;
+    CHECK(placeJson(PlaceIn{}).is_null());
+    const json in = placeJson({.known = true, .indoors = true, .inGroup = true, .wmoId = 5094, .instanceId = 3,
+                               .group = 12, .groupFlags = 0x2000, .groundArea = 4100});
+    CHECK(in["indoors"] == true);
+    CHECK(in["wmo"] == 5094);
+    CHECK(in["instance"] == 3);
+    CHECK(in["group"] == 12);
+    CHECK(in["group_flags"] == "0x2000");
+    CHECK(in["exterior"] == false);
+    CHECK_FALSE(in.contains("row_flags"));
+    const json out = placeJson({.known = true, .groundArea = 4100, });
+    CHECK(out["on_ground"] == true);
+    CHECK(out["indoors"] == false);
+    CHECK(out["ground_area"] == 4100);
+    CHECK_FALSE(out.contains("wmo"));
+    CHECK(placeJson({.known = true, .inGroup = true, .groupFlags = 0x8, .hasRow = true, .rowFlags = 4})["row_flags"] ==
+          "0x4");
 }
 
 TEST_CASE("steps put first come first", "[mcp][script]") {

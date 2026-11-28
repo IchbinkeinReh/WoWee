@@ -7,10 +7,11 @@
 namespace wowee::mcp {
 
 MainQueue::Outcome MainQueue::submit(std::function<std::shared_ptr<Script>()> make, bool hands,
-                                     std::chrono::milliseconds patience) {
+                                     std::chrono::milliseconds patience, bool duringLoad) {
     auto call = std::make_shared<Call>();
     call->make = std::move(make);
     call->hands = hands;
+    call->duringLoad = duringLoad && !hands;
     std::unique_lock<std::mutex> lock(mutex_);
     if (closed_) return {.kind = Outcome::Kind::Closed, .script = nullptr};
     if (calls_.size() >= kMostWaiting) return {.kind = Outcome::Kind::Busy, .script = nullptr};
@@ -25,7 +26,7 @@ MainQueue::Outcome MainQueue::submit(std::function<std::shared_ptr<Script>()> ma
     return {.kind = Outcome::Kind::Finished, .script = call->script};
 }
 
-bool MainQueue::pump(double now, std::chrono::microseconds budget) {
+bool MainQueue::pump(double now, std::chrono::microseconds budget, bool loadingOnly) {
     const auto start = std::chrono::steady_clock::now();
     std::vector<std::shared_ptr<Call>> todo;
     {
@@ -34,6 +35,7 @@ bool MainQueue::pump(double now, std::chrono::microseconds budget) {
         if (calls_.empty()) return false;
         bool handsTaken = false;
         for (const auto& call : calls_) {
+            if (loadingOnly && !call->duringLoad) continue;
             // The first that presses something has the hands; the others wait
             // their turn. What nobody waits for is gone through to be ended.
             if (call->hands && !call->abandoned) {

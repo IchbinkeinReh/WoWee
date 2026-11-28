@@ -180,7 +180,21 @@ bool Server::pump(float deltaTime) {
         nextSecrets_ = context_.now + 2.0;
         refreshSecrets();
     }
-    return queue_.pump(context_.now, kFrameBudget);
+    pumping_ = true;
+    const bool worked = queue_.pump(context_.now, kFrameBudget);
+    pumping_ = false;
+    return worked;
+}
+
+void Server::pumpWhileLoading(const char* status, float progress) {
+    if (pumping_ || std::this_thread::get_id() != gameThread_) return;
+    pumping_ = true;
+    context_.loading = true;
+    context_.loadingStatus = status ? status : "";
+    context_.loadingProgress = progress;
+    queue_.pump(context_.now, kFrameBudget, /*loadingOnly=*/true);
+    context_.loading = false;
+    pumping_ = false;
 }
 
 bool Server::filterEvent(const SDL_Event& event) {
@@ -268,7 +282,8 @@ ToolAnswer Server::call(const std::string& name, const json& arguments) {
     const Tool& tool = *it;
     const double patience = tool.patienceOf ? tool.patienceOf(arguments) : tool.patience;
     auto outcome = queue_.submit([this, &tool, arguments] { return makeScript(tool, arguments); }, tool.hands,
-                                 std::chrono::milliseconds(static_cast<long long>(patience * 1000.0)));
+                                 std::chrono::milliseconds(static_cast<long long>(patience * 1000.0)),
+                                 tool.duringLoad);
     ToolAnswer answer = answerOf(tool, std::move(outcome), patience);
     const std::lock_guard<std::mutex> lock(redactMutex_);
     redactor_.apply(answer.value);

@@ -659,6 +659,7 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                 // so it must beat the watchdog itself or the whole tile stream reads
                 // as a hung main loop.
                 app_.beatWatchdog();
+                app_.pumpMcpWhileLoading();
                 SDL_Event event;
                 while (SDL_PollEvent(&event)) {
                     if (event.type == SDL_EVENT_QUIT) {
@@ -840,6 +841,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // own frames. Beat the watchdog so it does not read a healthy load as a hang
         // and force-release the player's mouse capture.
         app_.beatWatchdog();
+        app_.pumpMcpWhileLoading(msg, progress);
         // 0x0040a920 -> 0x00408520: each progress step, a keep-alive once the
         // thirty seconds are up.
         if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/false);
@@ -1747,6 +1749,7 @@ void WorldLoader::relocateOnLoadedMap(uint32_t mapId, float x, float y, float z)
     while (true) {
         ++frames;
         app_.beatWatchdog();
+        app_.pumpMcpWhileLoading();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {

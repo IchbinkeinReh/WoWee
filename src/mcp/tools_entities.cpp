@@ -50,6 +50,7 @@ bool filterKeeps(const json& e, const std::string& filter) {
     if (filter == "lootable") return flag("lootable");
     if (filter == "usable") return flag("usable");
     if (filter == "dead") return flag("dead");
+    if (filter == "gm_only") return flag("gm_only");
     if (filter == "alive") return e.contains("hp") && !flag("dead");
     // A role: "vendor", "trainer", ...
     if (e.contains("roles")) {
@@ -124,13 +125,14 @@ void addEntityTools(Toolbox& box) {
         "entities",
         "What the client has round the player, nearest first: guid, name, distance in yards, bearing in degrees "
         "clockwise from the facing (0 ahead, 90 right), level, health, reaction, npc roles, quest mark (! or ?), "
-        "lootable, usable. kind players also lists the units the realm plays as players (battleground bots: "
-        "realm_player true).",
+        "lootable, usable, gm_only (a unit the realm shows the player only as a game master: a trigger's GM model, "
+        "stealthed or invisible, a spirit healer while alive - gm_only_why says which). kind players also lists the "
+        "units the realm plays as players (battleground bots: realm_player true).",
         object({optional("kind", choice("which kind", {"all", "units", "players", "objects", "corpses", "dynamic", "transports"})),
                 optional("radius", number("yards, 60 by default", 1, 500)),
                 optional("limit", integer("how many, 20 by default", 1, 500)),
                 optional("name", text("only names with this in them", 64)),
-                optional("filter", text("hostile, attackable, friendly, npc, quest, lootable, usable, dead, alive, or a "
+                optional("filter", text("hostile, attackable, friendly, npc, quest, lootable, usable, dead, alive, gm_only, or a "
                                         "role: vendor, trainer, questgiver, flightmaster, innkeeper, banker, ...",
                                         24)),
                 optional("line_of_sight", flag("also say whether the player sees it"))}),
@@ -138,7 +140,9 @@ void addEntityTools(Toolbox& box) {
     box.push_back(lookTool(
         "entity",
         "One entity in full: flags, auras, speed, owner, line of sight, where it is on the screen and the point a "
-        "click would pick it at.",
+        "click would pick it at; for a game object its update fields (fields: GAMEOBJECT_FLAGS, BYTES_1's state, "
+        "type, art kit and animation progress, DYNAMIC, faction, level, scale) and the template the realm answered "
+        "(template: type, data words, size, quest items; null before the answer).",
         object({optional("guid", guid("0x...")), optional("name", text("the nearest with this in its name", 64)),
                 optional("unit", text("target, player, pet, mouseover, focus, npc", 16))}),
         entityDetail));

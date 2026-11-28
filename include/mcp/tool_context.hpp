@@ -79,6 +79,12 @@ struct ToolContext {
     uint64_t frame = 0;
     /// Set by the quit tool while it ends the client.
     bool quitting = false;
+    /// While the world loads behind its screen and the game's loop stands
+    /// still: only the calls that may answer then are run (Tool::duringLoad),
+    /// with the screen's status line and progress.
+    bool loading = false;
+    std::string loadingStatus;
+    float loadingProgress = 0.0f;
 };
 
 struct Tool {
@@ -89,6 +95,9 @@ struct Tool {
     Where where = Where::World;
     /// Presses something: one at a time, and counted as the server's doing.
     bool hands = false;
+    /// Answers behind a loading screen too, while the world loads (looks
+    /// only; ToolContext::loading says it is so).
+    bool duringLoad = false;
     /// How long a call may take, in seconds.
     double patience = 15.0;
     /// The same, where the arguments say.

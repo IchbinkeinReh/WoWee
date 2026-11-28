@@ -63,9 +63,9 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 
 | Tool | |
 |---|---|
-| `state` | where the client is (login, char_select, entering_world, in_world, dead, ghost), whether a loading screen is up (`loading`: the realm has the character in the world, and the player does not see it yet), the player, its place and the transport it is on, movement flags, camera, clock, weather, auras, target, recent errors, the cursors of the logs |
+| `state` | where the client is (login, char_select, entering_world, in_world, dead, ghost), whether a loading screen is up (`loading`: the realm has the character in the world, and the player does not see it yet), the player, its place and the transport it is on, the building group it stands in (`place.player_place`: `wmo`, `instance`, `group`, `group_flags` as the root's MOGI lists them, `exterior`, `row_flags` of its WMOAreaTable row, `indoors` - or `on_ground` with `ground_area`; the log's 'Player place' line), movement flags, camera, clock, weather, auras, target, recent errors, the cursors of the logs. While the world loads it still answers, briefly: `loading` true, `loading_screen` (status, progress), `map`, recent errors and the cursors |
 | `actions` | what can be done now, each with the tool and the arguments that do it |
-| `entities`, `entity` | what is about, nearest first, with filters; one in full, with where a click would pick it |
+| `entities`, `entity` | what is about, nearest first, with filters; one in full, with where a click would pick it. A unit the realm shows the player only because it is a game master (PLAYER_FLAGS 0x8) has `gm_only` and `gm_only_why` (filter `gm_only`) - by the realm's rules, which the client is not told: a trigger's GM model (display 17519), a stealthed (aura 16) or invisible (aura 18) unit, a spirit healer or guide while the player lives. `entity` of a game object gives its update fields (`fields`: GAMEOBJECT_FLAGS with names, BYTES_1's `state`, `type`, `art_kit`, `anim_progress`, DYNAMIC with names and path progress, `faction`, `level`, `scale` - each only where the realm sent it) and the template the realm answered (`template`: `type`, `data` words to the last non-zero, `size`, `display`, `quest_items`; null until the answer came) |
 | `terrain`, `look_around`, `raycast`, `path` | the ground, the ways that are open, what a line meets, the way `walk_to` would take - out of the faces the character itself is moved against, those of game objects (lifts, ships, doors) where they are now among them, by name |
 | `ui`, `ui_at` | windows, dialogs, tooltips, error texts; one window's texts and controls; what is under a point |
 | `inventory`, `spellbook`, `action_bars`, `quest_log`, `character`, `map` | asked of the interface's own functions |
@@ -111,7 +111,8 @@ the recorder.
 
 Calls are put in a queue by the connection's thread and run by the game's loop, for at most four milliseconds a frame
 (always one step of one call). During a loading screen the loop does not run; a call waits, and says so when its time
-is up. Pictures are read back from the GPU on the game's thread and cut, shrunk and encoded on the caller's.
+is up - all but `state`, which the world's load runs itself at each step it draws its screen (and never a call that
+presses something). Pictures are read back from the GPU on the game's thread and cut, shrunk and encoded on the caller's.
 
 The window need not have the keyboard: without it the client draws at most `maxFPSBk` (30) frames a second, and a turn
 by keys is six degrees a frame, which is why `turn` finishes with the mouse. Minimised, everything but the interface

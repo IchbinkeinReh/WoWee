@@ -20,6 +20,8 @@
 #include "game/protocol_constants.hpp"
 #include "game/quest_giver_status.hpp"
 #include "game/transport_manager.hpp"
+#include "game/update_field_table.hpp"
+#include "mcp/object_fields.hpp"
 #include "mcp/object_kind.hpp"
 #include "mcp/tool_context.hpp"
 #include "mcp/world_probe.hpp"
@@ -96,6 +98,40 @@ const char* questMark(game::QuestGiverStatus status) {
         case S::LOW_LEVEL_REWARD_REP: return "?";
         default: return nullptr;
     }
+}
+
+/// A field where the realm sent it.
+bool fieldOf(const game::Entity& e, game::UF field, uint32_t& value) {
+    const uint16_t index = game::fieldIndex(field);
+    if (index == 0xFFFF || !e.hasField(index)) return false;
+    value = e.getField(index);
+    return true;
+}
+
+/// Whether the player is a game master (PLAYER_FLAGS 0x8, .gm on).
+bool playerIsGm(const game::GameHandler& gh) {
+    const auto me = gh.getEntityManager().getEntity(gh.getPlayerGuid());
+    uint32_t flags = 0;
+    return me && fieldOf(*me, game::UF::PLAYER_FLAGS, flags) && (flags & 0x8u) != 0;
+}
+
+/// Why the realm shows this unit to the player only as a GM; empty where
+/// nothing says so (mcp/object_fields.hpp).
+json gmOnlyOf(const game::GameHandler& gh, const game::Unit& u) {
+    object_fields::GmSight s;
+    s.playerIsGm = playerIsGm(gh);
+    if (!s.playerIsGm) return json::array();
+    s.playerDeadOrGhost = gh.isPlayerDead() || gh.isPlayerGhost();
+    s.displayId = u.getDisplayId();
+    s.npcFlags = u.getNpcFlags();
+    if (const auto* slots = gh.getUnitAuras(u.getGuid())) {
+        for (const auto& a : *slots) {
+            if (a.isEmpty()) continue;
+            if (gh.spellAppliesAura(a.spellId, 16)) s.stealthAura = true;
+            if (gh.spellAppliesAura(a.spellId, 18)) s.invisibilityAura = true;
+        }
+    }
+    return object_fields::gmOnlyReasons(s);
 }
 
 }  // namespace
@@ -372,6 +408,12 @@ json entityJson(ToolContext& context, const game::Entity& entity, bool detail) {
                               {"left", rounded(cast->timeRemaining, 1)}};
         }
         if (u.getMountDisplayId() != 0) out["mounted"] = true;
+        if (!self) {
+            if (json why = gmOnlyOf(*gh, u); !why.empty()) {
+                out["gm_only"] = true;
+                out["gm_only_why"] = std::move(why);
+            }
+        }
         // What its model plays (0x00717260: the upper body's own animation,
         // else the body's), by AnimationData.dbc id (tester's wish).
         if (auto* renderer = context.app.getRenderer()) {
@@ -427,6 +469,21 @@ json entityJson(ToolContext& context, const game::Entity& entity, bool detail) {
             out["display"] = g.getDisplayId();
             out["pointer"] = pointer.tracked;
             out["draws_nothing"] = context.app.gameObjectDrawsNothing(entity.getGuid());
+            // Its update fields and its template (tester's wish, U27).
+            object_fields::Fields f;
+            f.hasFlags = fieldOf(entity, game::UF::GAMEOBJECT_FLAGS, f.flags);
+            f.hasBytes1 = fieldOf(entity, game::UF::GAMEOBJECT_BYTES_1, f.bytes1);
+            f.hasDynamic = fieldOf(entity, game::UF::GAMEOBJECT_DYNAMIC, f.dynamic);
+            f.hasFaction = fieldOf(entity, game::UF::GAMEOBJECT_FACTION, f.faction);
+            f.hasLevel = fieldOf(entity, game::UF::GAMEOBJECT_LEVEL, f.level);
+            f.hasScale = fieldOf(entity, game::UF::OBJECT_FIELD_SCALE_X, f.scaleBits);
+            out["fields"] = object_fields::fieldsJson(f);
+            if (const auto* info = gh->getCachedGameObjectInfo(g.getEntry())) {
+                out["template"] = object_fields::templateJson(info->type, info->data, info->hasData, info->size,
+                                                              info->displayId, info->questItems);
+            } else {
+                out["template"] = nullptr;
+            }
         }
     }
     if (detail) {
