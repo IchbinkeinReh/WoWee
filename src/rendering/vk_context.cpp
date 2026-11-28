@@ -1,10 +1,12 @@
 #define VMA_IMPLEMENTATION
 #include <set>
 #include <thread>
+#include <chrono>
 #include <mutex>
 #include <memory>
 #include "rendering/vk_context.hpp"
 #include "rendering/gpu_park.hpp"
+#include "rendering/frame_gpu_ledger.hpp"
 #include "core/platform.hpp"
 
 #include <fstream>
@@ -130,6 +132,19 @@ VkContext::~VkContext() {
 bool VkContext::initialize(SDL_Window* window) {
     LOG_INFO("Initializing Vulkan context");
     sdlWindow_ = window;
+    {
+#ifdef WOWEE_MOBILE
+        constexpr bool kMobile = true;
+#else
+        constexpr bool kMobile = false;
+#endif
+        const uint64_t cap = FrameGpuLedger::defaultCapBytes(kMobile, std::getenv("WOWEE_FRAME_UPLOAD_MB"));
+        frameGpuLedger().setCapBytes(cap);
+        if (cap != 0) {
+            LOG_WARNING("Tile uploads in play: at most ", cap >> 20,
+                        " MB started a frame (WOWEE_FRAME_UPLOAD_MB; a started step finishes)");
+        }
+    }
 
     if (!createInstance(window)) return false;
     if (!createSurface(window)) return false;
@@ -3418,6 +3433,7 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     static int beginFrameCounter = 0;
     beginFrameCounter++;
     VkResult fenceResult;
+    const auto fenceWaitStart = std::chrono::steady_clock::now();
     {
         // The number that tells a GPU-bound frame from a CPU-bound one: the GPU
         // still has the frame from two frames ago, and the CPU sits here until it
@@ -3444,6 +3460,9 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
         noteDeviceLost("beginFrame frame-slot wait", fenceResult);
         return VK_NULL_HANDLE;
     }
+
+    const double fenceWaitMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - fenceWaitStart).count();
 
     // Any work queued for this frame slot is now guaranteed to be unused by the GPU.
     runDeferredCleanup(currentFrame);
@@ -3537,10 +3556,14 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     // If async upload batches are still in flight (submitted to the transfer queue),
     // wait for their fences and insert a memory barrier so the graphics queue sees
     // the completed layout transitions and transfer writes.
+    double uploadWaitMs = 0.0;
     if (!inFlightBatches_.empty()) {
         {
             WOWEE_PROFILE_SCOPE("wait: texture/mesh uploads", Wait);
+            const auto uploadWaitStart = std::chrono::steady_clock::now();
             waitAllUploads();
+            uploadWaitMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - uploadWaitStart).count();
         }
 
         VkMemoryBarrier2 memBarrier{};
@@ -3555,7 +3578,26 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
         cmdPipelineBarrier2(frame.prologueBuffer, memDep);
     }
 
+    noteFrameGpuWait(beginFrameCounter, fenceWaitMs, uploadWaitMs);
     return frame.commandBuffer;
+}
+
+// What the frames this beginFrame waited on handed the GPU, said when the wait
+// was long (frame_gpu_ledger.hpp, U25): a GPU frame of most of a second is how
+// the phone's device loss began, and the log could not say what it carried.
+void VkContext::noteFrameGpuWait(int frameNo, double fenceWaitMs, double uploadWaitMs) {
+    FrameGpuLedger& ledger = frameGpuLedger();
+    ledger.closeFrame();
+    static const auto start = std::chrono::steady_clock::now();
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    if (!ledger.shouldReport(fenceWaitMs + uploadWaitMs, now)) return;
+    LOG_WARNING("Heavy GPU frame: beginFrame[", frameNo, "] waited ", fenceWaitMs,
+                " ms on the frame fence and ", uploadWaitMs, " ms on upload batches (",
+                static_cast<int>(msaaSamples_), "x MSAA, ", swapchainExtent.width, "x",
+                swapchainExtent.height, "). Handed to the GPU by the last frame: ",
+                ledger.lastFrame().describe(), "; by the one before: ",
+                ledger.frameBeforeLast().describe(),
+                " - said again only if worse or after 30 s");
 }
 
 void VkContext::endAbandonedFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
@@ -3669,10 +3711,37 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     submitInfo.signalSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size());
     submitInfo.pSignalSemaphores = signalSemaphores.data();
 
+    // On a phone the prologue (the frame's start and the shadow cascades) is
+    // a submission of its own. MoltenVK makes one Metal command buffer per
+    // submission, and iOS ends a command buffer that holds the GPU too long
+    // and loses the device (U25: one frame of ~0.8 s, then the loss); two
+    // halves each run shorter. Same queue, same order, nothing else changes:
+    // the prologue does not touch the swapchain image, so the acquire wait
+    // stays on the second half, which signals what the whole did.
+    // WOWEE_SPLIT_FRAME_SUBMIT=0/1 overrides it.
+#ifdef WOWEE_MOBILE
+    static const bool splitSubmit = core::envFlagEnabled("WOWEE_SPLIT_FRAME_SUBMIT", true);
+#else
+    static const bool splitSubmit = core::envFlagEnabled("WOWEE_SPLIT_FRAME_SUBMIT", false);
+#endif
+    VkSubmitInfo submits[2]{};
+    uint32_t submitCount = 1;
+    submits[0] = submitInfo;
+    if (splitSubmit) {
+        submits[0] = VkSubmitInfo{};
+        submits[0].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submits[0].commandBufferCount = 1;
+        submits[0].pCommandBuffers = &frame.prologueBuffer;
+        submits[1] = submitInfo;
+        submits[1].commandBufferCount = 1;
+        submits[1].pCommandBuffers = &cmd;
+        submitCount = 2;
+    }
+
     VkResult submitResult;
     {
         WOWEE_PROFILE_SCOPE("submit", Cpu);
-        submitResult = queueSubmit(graphicsQueue, 1, &submitInfo,
+        submitResult = queueSubmit(graphicsQueue, submitCount, submits,
                                      frameTimeline_ != VK_NULL_HANDLE ? VK_NULL_HANDLE
                                                                       : frame.inFlightFence);
     }
@@ -3802,10 +3871,16 @@ GpuPark& gpuPark() {
     return park;
 }
 
+FrameGpuLedger& frameGpuLedger() {
+    static FrameGpuLedger ledger;
+    return ledger;
+}
+
 VkResult queueSubmit(VkQueue queue, uint32_t count, const VkSubmitInfo* submits, VkFence fence) {
     // In the background no thread but the main one submits (gpu_park.hpp):
     // iOS loses the device over a command buffer committed there.
     gpuPark().waitIfParked();
+    frameGpuLedger().addSubmit();
     const std::lock_guard<std::mutex> lock{queueAccessMutex()};
     return vkQueueSubmit(queue, count, submits, fence);
 }
@@ -4239,6 +4314,7 @@ void VkContext::endUploadBatch() {
         return v && *v && *v != '0';
     }();
     VkQueue targetQueue = (hasDedicatedTransfer_ && asyncUploadQueue) ? transferQueue_ : graphicsQueue;
+    frameGpuLedger().addUploadBatch();
     noteDeviceLost("async upload batch submit", queueSubmit(targetQueue, 1, &submitInfo, fence));
 
     // Said once, with the handle, because these are the only fences created
@@ -4339,6 +4415,7 @@ void VkContext::endUploadBatchSync() {
     // Both checked. These were the only unchecked waits between a world load
     // and the first frame's submit, so a device lost in one of them was first
     // reported by that submit, one stage later and with no name attached.
+    frameGpuLedger().addUploadBatch();
     noteDeviceLost("sync upload batch submit", queueSubmit(targetQueue, 1, &submitInfo, batchFence));
     noteDeviceLost("sync upload batch wait",
                    vkWaitForFences(device, 1, &batchFence, VK_TRUE, UINT64_MAX));
@@ -4448,6 +4525,7 @@ VkContext::UploadStats VkContext::uploadStats() const {
 }
 
 void VkContext::deferStagingCleanup(AllocatedBuffer staging) {
+    frameGpuLedger().addUploadBytes(staging.info.size);
     batchStagingBuffers_.push_back(staging);
 }
 

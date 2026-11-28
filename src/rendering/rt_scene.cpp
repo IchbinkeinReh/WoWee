@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
 #include "rendering/vk_texture.hpp"
+#include "rendering/frame_gpu_ledger.hpp"
 
 #include <glm/gtc/packing.hpp>
 
@@ -787,6 +788,7 @@ void RtScene::stage(VkCommandBuffer cmd, VkBuffer dst, VkDeviceSize dstOffset, c
                                            VMA_MEMORY_USAGE_CPU_ONLY);
     if (!staging.buffer) return;
     std::memcpy(staging.info.pMappedData, data, size);
+    frameGpuLedger().addUploadBytes(size);
     VkBufferCopy region{0, dstOffset, size};
     vkCmdCopyBuffer(cmd, staging.buffer, dst, 1, &region);
     VmaAllocator alloc = ctx_->getAllocator();
@@ -812,6 +814,7 @@ void RtScene::ensurePoolCapacity(VkCommandBuffer cmd, GpuPool& pool, uint32_t ne
     if (pool.buffer.buffer && pool.alloc.capacity() > 0) {
         VkBufferCopy region{0, 0, VkDeviceSize(pool.alloc.capacity()) * pool.elementSize};
         vkCmdCopyBuffer(cmd, pool.buffer.buffer, grown.buffer, 1, &region);
+        frameGpuLedger().addRtPoolGrow();
         VmaAllocator alloc = ctx_->getAllocator();
         AllocatedBuffer old = pool.buffer;
         if (immediate_ && immediatePools_) {
@@ -887,6 +890,7 @@ void RtScene::packTriangles(VkCommandBuffer cmd) {
     ctx_->deferAfterAllFrameFences([alloc, old]() mutable { destroyBuffer(alloc, old); });
     triPool_.buffer = packed;
     triPool_.alloc = std::move(ranges);
+    frameGpuLedger().addRtPoolGrow();
     ++triEpoch_;
     ++descriptorGeneration_;
     meshTableDirty_ = true;
@@ -918,6 +922,7 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
     }
     pendingMeshes_.erase(pendingMeshes_.begin(), pendingMeshes_.begin() + consumed);
     if (batch.empty()) return;
+    frameGpuLedger().addRtTriangles(built);
 
     // Allocate everything first: a pool growth copies the old contents, and
     // that copy has to precede the uploads into it.

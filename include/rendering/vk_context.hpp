@@ -236,6 +236,9 @@ public:
     std::string dumpAllocatorJson() const;
     void pollUploadBatches();    // Check completed async uploads, free staging buffers
     void waitAllUploads();       // Block until all in-flight uploads complete
+    /// beginFrame's GPU waits, and what the frames waited on carried when
+    /// they were long (frame_gpu_ledger.hpp).
+    void noteFrameGpuWait(int frameNo, double fenceWaitMs, double uploadWaitMs);
 
     // Defer resource destruction until it is safe with multiple frames in flight.
     //

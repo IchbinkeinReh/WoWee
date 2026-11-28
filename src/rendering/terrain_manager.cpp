@@ -1,4 +1,5 @@
 #include "rendering/terrain_manager.hpp"
+#include "rendering/frame_gpu_ledger.hpp"
 #include "rendering/collision_facets.hpp"
 #include "rendering/model_memory.hpp"
 #include <new>
@@ -1763,6 +1764,11 @@ void TerrainManager::processReadyTiles() {
         float elapsed = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - budgetStart).count();
         if (elapsed >= budgetMs) break;
+        // The time budget bounds the CPU, not what the GPU is handed: on a
+        // phone a frame stops starting steps once it has staged its share of
+        // uploads (frame_gpu_ledger.hpp, U25), so a city's textures and mips
+        // reach the GPU over several frames rather than in one batch.
+        if (rendering::frameGpuLedger().overUploadCap()) break;
     }
 
     if (vkCtx) vkCtx->endUploadBatch();  // Async - submits but doesn't wait

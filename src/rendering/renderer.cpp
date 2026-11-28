@@ -50,6 +50,7 @@
 #include "rendering/lighting_manager.hpp"
 #include "core/profiler.hpp"
 #include "core/frame_profiler.hpp"
+#include "core/slow_step.hpp"
 #include "core/thread_pool.hpp"
 #include "rendering/built_beside.hpp"
 #include "rendering/sky_system.hpp"
@@ -3052,7 +3053,7 @@ void Renderer::update(float deltaTime) {
 
     if (cameraController) {
         auto cameraStart = std::chrono::steady_clock::now();
-        WOWEE_PROFILE_SCOPE("camera + movement", Cpu);
+        WOWEE_PROFILE_SCOPE("camera + movement", Cpu); WOWEE_STEP_TIMER("camera + movement");
         cameraController->update(deltaTime);
         // A cinematic's camera over the controller's (game/cinematic.hpp).
         if (cinematicView_ && camera) {
@@ -3126,7 +3127,7 @@ void Renderer::update(float deltaTime) {
     // texts changing, as the client raises them (0x005204c0), rather than on
     // the camera entering a building's box - Dalaran's streets are inside a
     // dozen, and every one of them fired ZONE_CHANGED_INDOORS.
-    { WOWEE_PROFILE_SCOPE("player area", Cpu); updatePlayerArea(); }
+    { WOWEE_PROFILE_SCOPE("player area", Cpu); WOWEE_STEP_TIMER("player area"); updatePlayerArea(); }
 
     // Update lighting system
     if (lightingManager) {
@@ -3218,7 +3219,7 @@ void Renderer::update(float deltaTime) {
             // PLAYER_FLAGS (the player's +0x1008 fields, +8) has 0x10,
             // PLAYER_FLAGS_GHOST.
             if (wmoRenderer && camera && !ghost) {
-                WOWEE_PROFILE_SCOPE("interior fog", Cpu);
+                WOWEE_PROFILE_SCOPE("interior fog", Cpu); WOWEE_STEP_TIMER("interior fog");
                 if (auto f = wmoRenderer->interiorFogAt(camera->getPosition())) {
                     interiorFog = LightingManager::InteriorFog{
                         .end = f->end, .startScalar = f->startScalar, .color = f->color,
@@ -3229,8 +3230,8 @@ void Renderer::update(float deltaTime) {
             }
             lightingManager->setInteriorFog(interiorFog);
         }
-        WOWEE_PROFILE_SCOPE("lighting", Cpu);
-        { WOWEE_PROFILE_SCOPE("lighting: zone", Cpu);
+        WOWEE_PROFILE_SCOPE("lighting", Cpu); WOWEE_STEP_TIMER("lighting");
+        { WOWEE_PROFILE_SCOPE("lighting: zone", Cpu); WOWEE_STEP_TIMER("lighting: zone");
         lightingManager->update(characterPosition, mapId,
                                 gameTime, weatherIntensity, cameraLiquid, screenEffectLightOverride_);
         }
@@ -3244,7 +3245,7 @@ void Renderer::update(float deltaTime) {
             if (camera) {
                 Frustum frustum;
                 frustum.extractFromMatrix(camera->getProjectionMatrix() * camera->getViewMatrix());
-                WOWEE_PROFILE_SCOPE("wmo interior pass", Cpu);
+                WOWEE_PROFILE_SCOPE("wmo interior pass", Cpu); WOWEE_STEP_TIMER("wmo interior pass");
                 wmoRenderer->updateInteriorPass(camera->getPosition(), &frustum);
                 const glm::vec3 eye = camera->getPosition();
                 wmoRenderer->setCameraGround(terrainManager && !terrainManager->isHoleAt(eye.x, eye.y)
@@ -3290,7 +3291,7 @@ void Renderer::update(float deltaTime) {
             const float glare = skySystem ? 1.0f - skySystem->getSunGlareDim() : 1.0f;
             const float frameAmbient = glare * std::max(lightingTune_.ambient, 0.0f);
             const float frameDirect = glare * std::max(lightingTune_.sun, 0.0f);
-            { WOWEE_PROFILE_SCOPE("lighting: characters", Cpu);
+            { WOWEE_PROFILE_SCOPE("lighting: characters", Cpu); WOWEE_STEP_TIMER("lighting: characters");
             if (characterRenderer) {
                 characterRenderer->refreshInteriorLights(
                     [&](const glm::vec3& feet) {
@@ -3300,7 +3301,7 @@ void Renderer::update(float deltaTime) {
                     frameAmbient, frameDirect);
             }
             }
-            WOWEE_PROFILE_SCOPE("lighting: game objects", Cpu);
+            WOWEE_PROFILE_SCOPE("lighting: game objects", Cpu); WOWEE_STEP_TIMER("lighting: game objects");
             if (m2Renderer) {
                 m2Renderer->refreshGameObjectLights(
                     [&](const glm::vec3& feet, float startZ) { return objectFloor(feet, startZ, false); },
@@ -3462,7 +3463,7 @@ void Renderer::update(float deltaTime) {
 
         // Update animation based on movement state (delegated to AnimationController §4.2)
         if (animationController_) {
-            WOWEE_PROFILE_SCOPE("player animation", Cpu);
+            WOWEE_PROFILE_SCOPE("player animation", Cpu); WOWEE_STEP_TIMER("player animation");
             animationController_->setDeltaTime(deltaTime);
             animationController_->updateCharacterAnimation();
         }
@@ -3479,7 +3480,7 @@ void Renderer::update(float deltaTime) {
         }
         terrainManager->setStreamFocus(focus);
         auto terrStart = std::chrono::steady_clock::now();
-        terrainManager->update(*camera, deltaTime);
+        { WOWEE_STEP_TIMER("terrain streaming"); terrainManager->update(*camera, deltaTime); }
         float terrMs = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - terrStart).count();
         if (terrMs > 50.0f) {
@@ -3489,14 +3490,14 @@ void Renderer::update(float deltaTime) {
 
     // Update sky system (skybox time, star twinkle, clouds, celestial moon phases)
     if (skySystem) {
-        WOWEE_PROFILE_SCOPE("sky", Cpu);
+        WOWEE_PROFILE_SCOPE("sky", Cpu); WOWEE_STEP_TIMER("sky");
         skySystem->update(deltaTime);
     }
     if (updateSkyboxLayers() && skyboxModelRenderer_ && camera) {
         skyboxModelRenderer_->update(deltaTime, camera->getPosition(),
             camera->getProjectionMatrix() * camera->getViewMatrix());
     }
-    { WOWEE_PROFILE_SCOPE("stars", Cpu); updateStarsModel(deltaTime); }
+    { WOWEE_PROFILE_SCOPE("stars", Cpu); WOWEE_STEP_TIMER("stars"); updateStarsModel(deltaTime); }
 
     if (waterMotes_ && camera) waterMotes_->update(deltaTime, *camera, cameraLiquidType_);
     // Update weather particles
@@ -3511,7 +3512,7 @@ void Renderer::update(float deltaTime) {
         in.riding = animationController_ && animationController_->isTaxiFlight();
         in.viewportWidth = activeRenderExtent_.width ? activeRenderExtent_.width
                                                      : (vkCtx ? vkCtx->getSwapchainExtent().width : 0);
-        WOWEE_PROFILE_SCOPE("weather", Cpu);
+        WOWEE_PROFILE_SCOPE("weather", Cpu); WOWEE_STEP_TIMER("weather");
         weather->update(in);
         // Not drawn while the camera is inside a building or a cave - an
         // interior group (MOGP 0x2000), as the sun's glare and the minimap
@@ -3560,7 +3561,7 @@ void Renderer::update(float deltaTime) {
 
     // Update swim effects
     if (swimEffects && camera && cameraController && waterRenderer) {
-        WOWEE_PROFILE_SCOPE("swim effects", Cpu);
+        WOWEE_PROFILE_SCOPE("swim effects", Cpu); WOWEE_STEP_TIMER("swim effects");
         swimEffects->setSurfaceRipplesShown(!waterRenderer->rtWaterDrawn());
         swimEffects->setCameraRideOffset(cameraRideOffset_);
         swimEffects->update(*camera, *cameraController, *waterRenderer, liquidWorld(), deltaTime);
@@ -3606,7 +3607,7 @@ void Renderer::update(float deltaTime) {
 
         const float yawRad = glm::radians(cameraController->getYaw());
         const glm::vec2 travelDir(std::sin(yawRad), -std::cos(yawRad));
-        WOWEE_PROFILE_SCOPE("water wake", Cpu);
+        WOWEE_PROFILE_SCOPE("water wake", Cpu); WOWEE_STEP_TIMER("water wake");
         // The other units in the traced water (unitInRtWater): the client's
         // every unit in liquid ripples (0x0071cba0, SwimEffects), and with
         // its ripples not drawn over the traced water they disturb it as the
@@ -3777,7 +3778,7 @@ void Renderer::update(float deltaTime) {
         levelUpEffect->update(deltaTime);
     }
     // Update transient spell visual instances (delegated to SpellVisualSystem §4.4)
-    { WOWEE_PROFILE_SCOPE("spell visuals", Cpu); if (spellVisualSystem_) spellVisualSystem_->update(deltaTime); }
+    { WOWEE_PROFILE_SCOPE("spell visuals", Cpu); WOWEE_STEP_TIMER("spell visuals"); if (spellVisualSystem_) spellVisualSystem_->update(deltaTime); }
 
 
     // Launch M2 doodad animation on background thread (overlaps with character animation + audio)
@@ -3796,7 +3797,7 @@ void Renderer::update(float deltaTime) {
 
     // Update character animations (runs in parallel with M2 animation above)
     if (characterRenderer && camera) {
-        WOWEE_PROFILE_SCOPE("animation: characters", Cpu);
+        WOWEE_PROFILE_SCOPE("animation: characters", Cpu); WOWEE_STEP_TIMER("animation: characters");
         const glm::mat4 viewProjection = camera->getViewProjectionMatrix();
         characterRenderer->update(deltaTime, camera->getPosition(), &viewProjection);
     }
@@ -3812,7 +3813,7 @@ void Renderer::update(float deltaTime) {
     // the useful overlap with character animation and audio above, but finish
     // structural M2 work before any main-thread collision query.
     if (m2AnimLaunched) {
-        WOWEE_PROFILE_SCOPE("join m2 animation", Cpu);
+        WOWEE_PROFILE_SCOPE("join m2 animation", Cpu); WOWEE_STEP_TIMER("join m2 animation");
         try { m2AnimFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("M2 animation worker: ", e.what()); }
         m2AnimLaunched = false;
@@ -3821,7 +3822,7 @@ void Renderer::update(float deltaTime) {
     // animated, and only then their particles stepped: a torch's flame on a
     // running bearer's hand emits from the hand as it is drawn this frame.
     if (m2Renderer) {
-        WOWEE_PROFILE_SCOPE("particle twins", Cpu);
+        WOWEE_PROFILE_SCOPE("particle twins", Cpu); WOWEE_STEP_TIMER("particle twins");
         if (particleTwinPoser_) particleTwinPoser_();
         m2Renderer->stepPosedParticles(deltaTime);
     }
@@ -3846,7 +3847,7 @@ void Renderer::update(float deltaTime) {
     }
 
     // Footsteps: age visual prints, then let authored footfall events add new ones.
-    { WOWEE_PROFILE_SCOPE("footprints", Cpu); if (footprintRenderer) footprintRenderer->update(deltaTime); }
+    { WOWEE_PROFILE_SCOPE("footprints", Cpu); WOWEE_STEP_TIMER("footprints"); if (footprintRenderer) footprintRenderer->update(deltaTime); }
 
     // The blob shadows under the units (0x007e49e0): with shadowLOD 1 and
     // while extShadowQuality is below 1, which it is here whenever the
@@ -3923,7 +3924,7 @@ void Renderer::update(float deltaTime) {
                                                camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
                                                terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
     }
-    { WOWEE_PROFILE_SCOPE("footsteps", Cpu); if (animationController_) animationController_->updateFootsteps(deltaTime); }
+    { WOWEE_PROFILE_SCOPE("footsteps", Cpu); WOWEE_STEP_TIMER("footsteps"); if (animationController_) animationController_->updateFootsteps(deltaTime); }
 
     // Activity SFX + mount ambient sounds: delegated to AnimationController (§4.2)
 
@@ -3954,7 +3955,7 @@ void Renderer::update(float deltaTime) {
         zctx.screenEffectAmbienceId = screenEffectAmbience_;
         zctx.screenEffectZoneMusicId = screenEffectZoneMusic_;
         zctx.assetManager = core::Application::getInstance().getAssetManager();
-        WOWEE_PROFILE_SCOPE("zone audio", Cpu);
+        WOWEE_PROFILE_SCOPE("zone audio", Cpu); WOWEE_STEP_TIMER("zone audio");
         audioCoordinator_->updateZoneAudio(zctx);
     }
 
@@ -3981,7 +3982,7 @@ void Renderer::update(float deltaTime) {
     if (modelCleanupTimer >= 5.0f) {
         // Both can wait for the device to go idle when there is something to
         // free, which shows up as a worst-case spike every five seconds.
-        WOWEE_PROFILE_SCOPE("model cache cleanup (every 5s)", Cpu);
+        WOWEE_PROFILE_SCOPE("model cache cleanup (every 5s)", Cpu); WOWEE_STEP_TIMER("model cache cleanup (every 5s)");
         if (wmoRenderer) {
             wmoRenderer->cleanupUnusedModels();
         }

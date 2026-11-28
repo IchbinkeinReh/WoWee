@@ -10,6 +10,7 @@
 #include "rendering/wmo_vertex.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/wmo_renderer.hpp"
+#include "rendering/frame_gpu_ledger.hpp"
 #include "rendering/model_memory.hpp"
 #include <cstdio>
 #include "pipeline/wmo_open_air_room.hpp"
@@ -2552,7 +2553,8 @@ void WMORenderer::processNormalMapBackfill() {
     std::unordered_map<VkTexture*, const TextureCacheEntry*> filled;
     int uploads = 0;
     for (auto it = normalMapJobs_.begin(); it != normalMapJobs_.end();) {
-        if (uploads >= 2 || it->result.wait_for(0s) != std::future_status::ready) {
+        if (uploads >= 2 || frameGpuLedger().overUploadCap() ||
+            it->result.wait_for(0s) != std::future_status::ready) {
             ++it;
             continue;
         }

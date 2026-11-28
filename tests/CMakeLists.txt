@@ -357,6 +357,12 @@ wowee_add_test(test_data_prompt
 wowee_add_test(test_gpu_park
     SOURCES test_gpu_park.cpp)
 
+# ── test_frame_gpu_ledger ────────────────────────────────────
+# What a frame handed the GPU, the phone's per-frame upload cap and the
+# slowest step of a slow stage (U25, the iOS device loss after a 0.8 s frame).
+wowee_add_test(test_frame_gpu_ledger
+    SOURCES test_frame_gpu_ledger.cpp)
+
 # ── test_log_privacy ────────────────────────────────────────
 # The home directory, and with it the account name, written as ~ in the log.
 wowee_add_test(test_log_privacy

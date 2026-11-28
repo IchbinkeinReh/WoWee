@@ -34,6 +34,7 @@
 #include "ui/minimap_projection.hpp"
 #include "core/profiler.hpp"
 #include "core/frame_profiler.hpp"
+#include "core/slow_step.hpp"
 #include "core/npc_interaction_callback_handler.hpp"
 #include "core/audio_callback_handler.hpp"
 #include "core/entity_spawn_callback_handler.hpp"
@@ -7220,6 +7221,7 @@ void Application::update(float deltaTime) {
     if (renderer && state == AppState::IN_GAME) {
         auto rendererUpdateStart = std::chrono::steady_clock::now();
         WOWEE_PROFILE_SCOPE("renderer->update", Cpu);
+        (void)core::takeSlowestStep();
         try {
             renderer->update(deltaTime);
         } catch (const std::bad_alloc& e) {
@@ -7231,8 +7233,16 @@ void Application::update(float deltaTime) {
         }
         float ruMs = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - rendererUpdateStart).count();
+        const core::SlowestStep slowest = core::takeSlowestStep();
         if (ruMs > 50.0f) {
-            LOG_WARNING("SLOW update stage 'renderer->update': ", ruMs, "ms");
+            // Which step it was (core/slow_step.hpp): the U25 log had 518 ms
+            // here and nothing to say where.
+            if (slowest.name) {
+                LOG_WARNING("SLOW update stage 'renderer->update': ", ruMs, "ms (slowest step '",
+                            slowest.name, "' ", slowest.ms, "ms)");
+            } else {
+                LOG_WARNING("SLOW update stage 'renderer->update': ", ruMs, "ms");
+            }
         }
     }
     {
