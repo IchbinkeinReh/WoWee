@@ -98,6 +98,17 @@ TEST_CASE("one flag carrier is drawn with the flag its team holds", "[wire_posit
     CHECK(bf::texture(-1, kWarsong) == nullptr);
 }
 
+// 0x0054cf60 (RequestBattlefieldPositions, 0x0054dcb0): not again for 5000 ms
+// after one went. WoWee asked once a second.
+TEST_CASE("a battleground's positions are asked for once in five seconds", "[wire_positions]") {
+    using namespace std::chrono;
+    const auto t0 = steady_clock::now();
+    CHECK(wowee::game::bg_flag::positionRequestDue(std::nullopt, t0));
+    CHECK_FALSE(wowee::game::bg_flag::positionRequestDue(t0, t0 + milliseconds(1000)));
+    CHECK_FALSE(wowee::game::bg_flag::positionRequestDue(t0, t0 + milliseconds(4999)));
+    CHECK(wowee::game::bg_flag::positionRequestDue(t0, t0 + milliseconds(5000)));
+}
+
 TEST_CASE("a battleground's flag carriers are kept last first", "[wire_positions]") {
     // 0x0054b3f0 reads the carriers into its slots counting down: of two,
     // the one written first is the second. One team position, kept in order.

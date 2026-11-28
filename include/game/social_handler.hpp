@@ -200,9 +200,10 @@ public:
     ///
     /// MSG_BATTLEGROUND_PLAYER_POSITIONS is a request the server answers with
     /// the same opcode - the reply was already parsed here and nothing ever
-    /// asked, so the list it fills stayed empty for both maps. Throttled
-    /// because the interface calls it from WorldMapFrame_OnUpdate, which is
-    /// every frame the map is open.
+    /// asked, so the list it fills stayed empty for both maps. Throttled as
+    /// 0x0054cf60 is, to one per 5 s (bg_flag::positionRequestDue), because
+    /// the interface calls it from WorldMapFrame_OnUpdate, every frame the
+    /// map is open.
     void requestBattlefieldPositions();
     /// Ask the server to resend the friend, ignore and mute lists.
     ///
@@ -1150,7 +1151,7 @@ private:
     uint32_t bgScoreGeneration_ = 0;
     int bgScoreFaction_ = -1;
     std::vector<BgPlayerPosition> bgPlayerPositions_;
-    std::chrono::steady_clock::time_point lastBgPositionRequest_{};
+    std::optional<std::chrono::steady_clock::time_point> lastBgPositionRequest_;
     std::chrono::steady_clock::time_point lastContactListRequest_{};
 
     // LFG / Dungeon Finder

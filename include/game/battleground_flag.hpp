@@ -10,6 +10,7 @@
 // (0x00549670) and on the other one when it is not. On Eye of the Storm (map
 // 566) the index is the other way round.
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <glm/glm.hpp>
@@ -58,6 +59,17 @@ std::optional<glm::vec2> mapPosition(std::optional<glm::vec2> carrierInSight, co
         return glm::vec2(u, v);
     if (project(packet.x, packet.y, u, v)) return glm::vec2(u, v);
     return std::nullopt;
+}
+
+/// MSG_BATTLEGROUND_PLAYER_POSITIONS is asked for by 0x0054cf60 - the Lua
+/// RequestBattlefieldPositions (0x0054dcb0 is a call to it) and the HUD's own
+/// per-frame update (0x00848d50) alike: an empty packet, only with an active
+/// battlefield slot, and not again for 5000 ms after one went (0x00bea5b4 =
+/// now + 5000). `last` is when the previous one went, none before the first.
+inline constexpr std::chrono::milliseconds kPositionRequestInterval{5000};
+inline bool positionRequestDue(std::optional<std::chrono::steady_clock::time_point> last,
+                               std::chrono::steady_clock::time_point now) {
+    return !last || now - *last >= kPositionRequestInterval;
 }
 
 }  // namespace wowee::game::bg_flag

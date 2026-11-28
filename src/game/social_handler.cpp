@@ -6,6 +6,7 @@
 #include "core/local_time.hpp"
 #include "game/item_text.hpp"
 #include "game/social_handler.hpp"
+#include "game/battleground_flag.hpp"
 #include "core/config_paths.hpp"
 #include <string_view>
 #include "addons/lua_api_registrations.hpp"
@@ -7616,10 +7617,12 @@ void SocialHandler::requestBattlefieldPositions() {
     // Only in one. AzerothCore drops the request outright when the player has
     // no battleground, so asking anywhere else is bytes for nothing.
     if (!owner_.isBattlegroundMap(owner_.getCurrentMapId())) return;
-    // Once a second. The interface asks from WorldMapFrame_OnUpdate, so an
-    // unthrottled send is one packet per frame for as long as the map is open.
+    // Once in 5 s (0x0054cf60: 0x00bea5b4 = now + 5000). The interface asks
+    // from WorldMapFrame_OnUpdate, so an unthrottled send is one packet per
+    // frame for as long as the map is open; this sent one a second, five
+    // times the original's rate.
     const auto now = std::chrono::steady_clock::now();
-    if (now - lastBgPositionRequest_ < std::chrono::seconds(1)) return;
+    if (!bg_flag::positionRequestDue(lastBgPositionRequest_, now)) return;
     lastBgPositionRequest_ = now;
     network::Packet pkt(wireOpcode(Opcode::MSG_BATTLEGROUND_PLAYER_POSITIONS));
     owner_.getSocket()->send(pkt);
