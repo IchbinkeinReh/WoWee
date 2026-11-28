@@ -244,3 +244,19 @@ TEST_CASE("a glow placed larger than its model reaches farther", "[rt_glow]") {
     CHECK(glowLight(glm::vec3(0.0f), green, 400.0f, Source::Emissive, NAN).attenuationEnd ==
           Catch::Approx(kGlowMaxReach));
 }
+
+TEST_CASE("an emitter's light reaches by the root of its instance's size (T469)", "[rt_glow]") {
+    // AQ20's exit portal, instanceportal_green.m2 placed at 5.46 (MDDF): its
+    // two emitters' particles, large and bright enough for the ceiling.
+    ParticleGlow glow;
+    for (int i = 0; i < 200; ++i)
+        glow.add(glm::vec3(0.0f, 0.0f, 10.0f), glm::vec3(0.1f, 0.45f, 0.06f), 1.0f, 0.97f * 5.46f, 1.0f);
+    const auto l = glow.light(5.46f);
+    REQUIRE(l);
+    // 16 x sqrt(5.46) = 37.4 yards, not 16 x 5.46 = 87; the 86 seen in the
+    // MCP's rt_lights is this times the tester's Debug Glow particle reach
+    // slider (dbg_particle_light_reach=230, Renderer's sourceReach).
+    CHECK(l->attenuationEnd == Catch::Approx(kGlowMaxReach * std::sqrt(5.46f)));
+    CHECK(l->attenuationEnd < 38.0f);
+    CHECK(l->source == Source::Particle);
+}
