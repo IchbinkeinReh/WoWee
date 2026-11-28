@@ -638,6 +638,23 @@ bool npcWithinInteractRange(game::GameHandler* gh, uint64_t npcGuid) {
     return dx * dx + dy * dy + dz * dz <= range * range;
 }
 
+/// The spirit healer's own test before its activation is sent (0x006db010):
+/// its UNIT_FIELD_BOUNDINGRADIUS, not the combat reach, plus four yards, in
+/// three dimensions; an unknown healer is out of range.
+static bool spiritHealerWithinActivateRange(game::GameHandler* gh, uint64_t healerGuid) {
+    if (!gh || healerGuid == 0) return false;
+    auto npc = gh->getEntityManager().getEntity(healerGuid);
+    auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (!npc || !player) return false;
+    const float dx = player->getX() - npc->getX();
+    const float dy = player->getY() - npc->getY();
+    const float dz = player->getZ() - npc->getZ();
+    float radius = 0.0f;
+    if (auto unit = std::dynamic_pointer_cast<game::Unit>(npc)) radius = unit->getBoundingRadius();
+    const float range = radius + 4.0f;
+    return dx * dx + dy * dy + dz * dz <= range * range;
+}
+
 /// Whose group roster entry the text names, which is how `0x00520190` answers
 /// the group verbs: the unit tokens first, and then the text matched case-blind
 /// against the group's own list - the party's members besides the player when it
@@ -4287,10 +4304,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // activateSpiritHealer had exactly one caller, this client's
                 // own gossip window, so with gossip handed over nothing could
                 // reach it and standing at a spirit healer did nothing.
+                // 0x0051b6a0 -> 0x006db010(guid 0): only a ghost, and only
+                // within the remembered healer's UNIT_FIELD_BOUNDINGRADIUS
+                // (+0xf0 of its fields) + 4 yards, measured in 3D; else nothing
+                // is sent (CMSG_SPIRIT_HEALER_ACTIVATE 0x21c).
                 {"AcceptXPLoss", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) {
                 const uint64_t healer = gh->resurrectCasterGuidRef();
-                if (healer) gh->activateSpiritHealer(healer);
+                if (healer && gh->isPlayerGhost() && spiritHealerWithinActivateRange(gh, healer))
+                    gh->activateSpiritHealer(healer);
                 gh->resurrectRequestPendingRef() = false;
             }
             return 0;
