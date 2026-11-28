@@ -7500,7 +7500,6 @@ private:
     // ---- Guild state ----
     std::unordered_map<uint32_t, std::string> guildNameCache_;  // guildId → guild name
     std::unordered_set<uint32_t> pendingGuildNameQueries_;      // in-flight guild queries
-    PetitionInfo petitionInfo_;
 
     uint64_t activeCharacterGuid_ = 0;
     Race playerRace_ = Race::HUMAN;
