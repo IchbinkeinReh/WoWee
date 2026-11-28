@@ -6085,6 +6085,9 @@ const LfgListRow* GameHandler::getLfgListRow(uint32_t index) const {
 uint32_t GameHandler::getLfgBrowserRowCount() const {
     return socialHandler_ ? socialHandler_->getLfgBrowserRowCount() : 0;
 }
+uint32_t GameHandler::getLfgBrowserTotal() const {
+    return socialHandler_ ? socialHandler_->getLfgBrowserTotal() : 0;
+}
 
 const LfgBrowserRow* GameHandler::getLfgBrowserRow(uint32_t index) const {
     return socialHandler_ ? socialHandler_->getLfgBrowserRow(index) : nullptr;
@@ -6273,6 +6276,10 @@ const std::string& GameHandler::getLfgBootTargetName() const {
     if (socialHandler_) return socialHandler_->getLfgBootTargetName();
     static const std::string empty;
     return empty;
+}
+
+uint64_t GameHandler::getLfgBootVictimGuid() const {
+    return socialHandler_ ? socialHandler_->getLfgBootVictimGuid() : 0;
 }
 
 const std::string& GameHandler::getLfgBootReason() const {

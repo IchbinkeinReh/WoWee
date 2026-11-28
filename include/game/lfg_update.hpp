@@ -233,9 +233,16 @@ struct LfgListRow {
  *
  * `matched`, when given, says whether the packet was for the held list at all:
  * one that is not is read no further, and the client touches nothing for it.
+ *
+ * `totals`, when given, receives the uint32 after each block's count - [0] after
+ * the group records' (0x00beaaa4), [1] after the listings' (0x00beaaa0). The copy
+ * the panel shows takes both (0x0055b1a0 param_1[2], [3]) and
+ * SearchLFGGetNumResults answers their sum as its second number (0x00553ba0).
+ * Each is written only when it was read.
  */
 bool parseLfgList(network::Packet& packet, uint32_t heldListId,
-                  std::vector<LfgListRow>& rows, bool* wholeList = nullptr, bool* matched = nullptr);
+                  std::vector<LfgListRow>& rows, bool* wholeList = nullptr, bool* matched = nullptr,
+                  uint32_t* totals = nullptr);
 
 /**
  * The client's gate on the names its list rows are waiting for (0x005528a0).

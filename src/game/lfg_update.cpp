@@ -190,7 +190,8 @@ bool parseLfgPartyLocks(network::Packet& packet, std::vector<LfgMemberLocks>& ou
 }
 
 bool parseLfgList(network::Packet& packet, uint32_t heldListId,
-                  std::vector<LfgListRow>& rows, bool* wholeList, bool* matched) {
+                  std::vector<LfgListRow>& rows, bool* wholeList, bool* matched,
+                  uint32_t* totals) {
     if (matched) *matched = false;
     if (!packet.hasRemaining(4 + 4 + 1)) return false;
     const uint32_t typeId = packet.readUInt32();
@@ -346,17 +347,24 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
     // clear, and the LFG module's init sets it (0x0055d440:10772). That swap is
     // `buildLfgBrowserRows`' `listingsFirst`. Each block's count is
     // followed by one more uint32 — the client keeps it at 0x00beaaa4 and
-    // 0x00beaaa0 (0x0055b770:9733, 9847), and grepping every read of those two
-    // globals in the whole decompile turns up nothing: written, never read. It
-    // still occupies its four bytes on the wire, so it goes here.
+    // 0x00beaaa0 (0x0055b770:9733, 9847). Those are fields +0xc and +8 of the
+    // received list (0x00beaa98); the copy the panel shows takes them along
+    // (0x0055b1a0: param_1[2], [3] -> 0x00beab28 / 0x00beab2c), and their sum is
+    // SearchLFGGetNumResults' second number, the total (0x00553ba0).
     const uint32_t playerCount = in.u32();
-    in.u32();
+    {
+        const uint32_t total = in.u32();
+        if (totals && in.ok) totals[0] = total;
+    }
     for (uint32_t i = 0; i < playerCount && in.ok; ++i) {
         const uint64_t g = in.u64();
         readFields(rowFor(g, false), false);
     }
     const uint32_t listingCount = in.u32();
-    in.u32();
+    {
+        const uint32_t total = in.u32();
+        if (totals && in.ok) totals[1] = total;
+    }
     for (uint32_t i = 0; i < listingCount && in.ok; ++i) {
         const uint64_t g = in.u64();
         readFields(rowFor(g, true), true);
@@ -388,12 +396,15 @@ std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& ro
         row.player = i;
         for (uint32_t k = 0; k < rows.size(); ++k)
             if (owner[k] == i) row.members.push_back(k);
-        // The getter hands back a null listing for a player with none - which the row
-        // getter turns into no values at all (0x00555fd0:4850-4852), so there is no
-        // such row.
-        if (row.members.empty()) continue;
-        row.listing = row.members.front();
-        row.members.erase(row.members.begin());
+        // A group record with no member is still a row of its array: 0x00553530
+        // returns 1 with a null listing for it (+0x138 == 0), it is counted by
+        // SearchLFGGetNumResults (0x00553ba0: +0x6c + +0x7c, the arrays' sizes),
+        // and only the row getter answers nothing for it (0x00555fd0). Its listing
+        // stays kLfgNoRow.
+        if (!row.members.empty()) {
+            row.listing = row.members.front();
+            row.members.erase(row.members.begin());
+        }
         players.push_back(std::move(row));
     }
     // The array of listings belonging to no one, which is where a listing whose
@@ -498,8 +509,8 @@ int compareLfgBrowserRows(const LfgBrowserRow& a, const LfgBrowserRow& b,
     // The side each comparator actually reads: a player row is read through its
     // listing, member[0] (0x00555a70:4560-4571 resolves it the way the getter does),
     // and a row of the other array *is* its listing. A row whose listing is missing
-    // sorts ahead of one that has it, which is the client's -1 / 0 at :4572-4577;
-    // buildLfgBrowserRows never makes such a row.
+    // sorts ahead of one that has it, which is the client's -1 / 0 at :4572-4577 -
+    // a group record none of whose listings has come.
     const LfgListRow* left = rowAt(a.listing);
     const LfgListRow* right = rowAt(b.listing);
     if (!left) return right ? -1 : 0;

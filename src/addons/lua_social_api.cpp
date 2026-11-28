@@ -1896,24 +1896,8 @@ static int lua_ClosePetition(lua_State* L) {
 // log entry reads "3 days ago" rather than a calendar date.
 static int lua_GetNumGuildEvents(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // Asked for the first time it is wanted, because nothing else asks.
-    //
-    // The whole chain is here - MSG_GUILD_EVENT_LOG_QUERY goes out,
-    // handleGuildEventLog reads the reply and fires GUILD_EVENT_LOG_UPDATE,
-    // and friendsframe registers for it - with one link missing at each end.
-    // FrameXML would have made the request from ToggleGuildEventLog, and
-    // Blizzard commented that line out, so opening the tab asked nobody for
-    // anything and drew an empty log.
-    //
-    // GuildEventLog_Update calls this first, so the tab opening is what sends
-    // it: empty log, request, reply, event, and the update runs again with
-    // entries. Once per session, so a guild with genuinely no events does not
-    // ask again every time the tab is drawn.
-    static bool asked = false;
-    if (gh && !asked && gh->getGuildEventLog().empty() && gh->isInGuild()) {
-        asked = true;
-        gh->requestGuildEventLog();
-    }
+    // 0x005ca350 only counts (0x00c22acc); the request is the tab's own
+    // OnShow="QueryGuildEventLog" (friendsframe.xml:4726).
     lua_pushnumber(L, gh ? static_cast<double>(gh->getGuildEventLog().size()) : 0.0);
     return 1;
 }

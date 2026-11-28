@@ -5723,7 +5723,7 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
     const uint32_t previousWindow = lfgListWindowId_;
     bool wholeList = false;
     bool matched = false;
-    parseLfgList(packet, lfgJoinedListId_, lfgListRows_, &wholeList, &matched);
+    parseLfgList(packet, lfgJoinedListId_, lfgListRows_, &wholeList, &matched, lfgListTotals_);
     // An update for a list other than the one held - one already left: the
     // client returns before it touches the window (0x0055b770:9691-9694), and
     // marking the window current here kept the first real packet of the new
@@ -5753,6 +5753,8 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
 
 void SocialHandler::refreshLfgList() {
     lfgShownRows_ = lfgListRows_;
+    lfgShownTotals_[0] = lfgListTotals_[0];
+    lfgShownTotals_[1] = lfgListTotals_[1];
     // A row is a player record plus the listing attached to it, and the
     // pairing is what 0x00553530 does when the interface asks for an index.
     rebuildLfgBrowserRows();
@@ -5831,6 +5833,8 @@ void SocialHandler::clearLfgListWindow() {
     lfgNamesAsked_.clear();
     lfgPendingNames_ = 0;
     lfgListWindowId_ = 0;
+    lfgListTotals_[0] = lfgListTotals_[1] = 0;
+    lfgShownTotals_[0] = lfgShownTotals_[1] = 0;
 }
 
 void SocialHandler::fireLfgListChanged() {
@@ -7785,7 +7789,8 @@ void SocialHandler::requestGuildEventLog() {
 void SocialHandler::handleGuildEventLog(network::Packet& packet) {
     auto rem = [&]() { return packet.getRemainingSize(); };
     if (rem() < 1) return;
-    const uint8_t count = packet.readUInt8();
+    // 0x005ca6a0 keeps at most 100 entries (a larger count reads 100).
+    const uint8_t count = std::min<uint8_t>(packet.readUInt8(), 100);
     guildEventLog_.clear();
     guildEventLog_.reserve(count);
     for (uint8_t i = 0; i < count; ++i) {

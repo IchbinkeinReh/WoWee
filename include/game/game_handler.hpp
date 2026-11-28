@@ -3214,6 +3214,7 @@ public:
     /// its listing (0x00553530). The count is SearchLFGGetNumResults' answer, and
     /// the pair's index fields name rows of getLfgListRow.
     uint32_t getLfgBrowserRowCount() const;
+    uint32_t getLfgBrowserTotal() const;
     const LfgBrowserRow* getLfgBrowserRow(uint32_t index) const;
     std::string getCurrentLfgDungeonName() const;
     std::string getMapName(uint32_t mapId) const;
@@ -3290,6 +3291,7 @@ public:
     uint32_t getLfgBootTimeLeft() const;
     uint32_t getLfgBootNeeded() const;
     const std::string& getLfgBootTargetName() const;
+    uint64_t getLfgBootVictimGuid() const;
     const std::string& getLfgBootReason() const;
     using LfgRoleCheckDungeon = game::LfgRoleCheckDungeon;
     const std::vector<LfgRoleCheckDungeon>& getLfgRoleCheckDungeons() const;

@@ -5085,12 +5085,24 @@ void registerActionLuaAPI(lua_State* L) {
                 //
                 // The second is that predicate on the pet handle, and the pet
                 // handle is what 0x005d3960 asks it of - not the player.
+                //
+                // 0x005d3960: the pet record's unit must be in view, not a
+                // player (a charmed one), and carry a UNIT_FIELD_PETNUMBER -
+                // else nil, nil, whatever the second would have said.
                 {"HasPetUI", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const bool has = gh && gh->hasPet();
-            luaPushOneOrNil(L, has ? 1 : 0);
-            const bool hunterPet = hunterPetOf(gh, resolveUnit(L, "pet"));
-            luaPushOneOrNil(L, hunterPet ? 1 : 0);
+            const auto entity = gh && gh->getPetGuid() != 0
+                ? gh->getEntityManager().getEntity(gh->getPetGuid()) : nullptr;
+            const auto* pet = entity && entity->isUnit() && entity->getType() != game::ObjectType::PLAYER
+                ? static_cast<const game::Unit*>(entity.get()) : nullptr;
+            const uint16_t number = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
+            if (!pet || number == 0xFFFF || pet->getField(number) == 0) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                return 2;
+            }
+            lua_pushnumber(L, 1.0);
+            luaPushOneOrNil(L, hunterPetOf(gh, pet) ? 1 : 0);
             return 2;
         }},
                 // Happiness, for a hunter's pet only. Nil is the honest answer

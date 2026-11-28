@@ -6602,15 +6602,22 @@ static int lua_GetLFGRoleUpdateMember(lua_State* L) {
 }
 
 static int lua_IsListedInLFR(lua_State* L) {
-    // The listed state is the joined raid-browser list, and this client sets it
-    // when the browser's dropdown asks (0x00beaa14, written by 0x00558ed0 and
-    // cleared by 0x00558f90 and by the search update's false byte) - it is not
-    // one of the queue states, and no packet on its own ever said "listed".
-    // LfgState::RaidBrowser was the answer here and nothing ever set it, which
-    // is why FrameXML's GetLFGMode could not return "listed" at all: its
-    // precedence tests the queue first and this flag after.
+    // 0x005586d0: the server's LFG record (the party's in a group, else the
+    // player's - 0x00acdac0 / 0x00acd9a0, which SMSG_LFG_UPDATE_PARTY /
+    // _PLAYER fill) through 0x00557260: its first byte set and one of its
+    // dungeons an LFGDungeons row of type 2, a raid. Not the raid browser's
+    // search list (0x00beaa14), which only says which list is browsed.
     auto* gh = getGameHandler(L);
-    const bool listed = gh != nullptr && gh->getLfgJoinedListId() != 0;
+    const game::LfgUpdateBody* rec = gh ? gh->getLfgServerRecord() : nullptr;
+    bool listed = false;
+    if (rec && rec->extraInfo) {
+        for (const uint32_t slot : rec->dungeons) {
+            const uint32_t id = slot & 0xffffffu;
+            for (const auto& d : gh->getLfgDungeons())
+                if (d.id == id && d.typeId == 2) { listed = true; break; }
+            if (listed) break;
+        }
+    }
     lua_pushboolean(L, listed ? 1 : 0);
     return 1;
 }
@@ -10046,8 +10053,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // listens for it, so answering nothing here was the one link
                 // missing at this end - and FrameXML's own call to it is
                 // commented out, which is the link missing at the other.
+                // 0x005cc470: MSG_GUILD_EVENT_LOG_QUERY only for a player in a
+                // guild (PLAYER_GUILDID set).
                 {"QueryGuildEventLog", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->requestGuildEventLog();
+            if (auto* gh = getGameHandler(L); gh && gh->isInGuild()) gh->requestGuildEventLog();
             return 0;
         }},
                 {"RegisterForSave",          lua_RegisterForSave},
@@ -10282,9 +10291,13 @@ void registerSystemLuaAPI(lua_State* L) {
             // Only when both are carried, for the reason the accessor gives:
             // one carrier cannot be told from the other, and the loop this
             // bounds draws a named flag texture per entry.
+            // 0x0054a0e0: two when the second carrier slot holds a guid, one
+            // when only the first does (0x0054b3f0 fills them from the last
+            // back and clears the second for a single carrier).
             auto* gh = getGameHandler(L);
-            const int n = bgCount(gh, 1);
-            lua_pushnumber(L, n == 2 ? 2 : 0);
+            const auto* first = bgEntryAt(gh, 1, 1);
+            const auto* second = bgEntryAt(gh, 1, 2);
+            lua_pushnumber(L, second && second->guid != 0 ? 2 : (first && first->guid != 0 ? 1 : 0));
             return 1;
         }},
                 {"GetBattlefieldFlagPosition",     lua_GetBattlefieldFlagPosition},
@@ -10555,9 +10568,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // first for warlocks and the second for everyone else.
                 {"HasPetSpells", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushnil(L); return 1; }
+            // 0x0053dd30: nil, nil without pet spells.
+            if (!gh) { lua_pushnil(L); lua_pushnil(L); return 2; }
             const auto spells = gh->getPetBookSpells();
-            if (spells.empty()) { lua_pushnil(L); return 1; }
+            if (spells.empty()) { lua_pushnil(L); lua_pushnil(L); return 2; }
             lua_pushnumber(L, static_cast<lua_Number>(spells.size()));
             constexpr uint8_t kWarlock = 9;
             lua_pushstring(L, gh->getPlayerClass() == kWarlock ? "DEMON" : "PET");

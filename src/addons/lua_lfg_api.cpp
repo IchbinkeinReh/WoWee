@@ -579,9 +579,10 @@ void registerLfgLuaAPI(lua_State* L) {
         if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGRoleUpdateSlot(index)");   // 0x00554690
         auto* gh = getGameHandler(L);
         const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-        if (!gh || index < 1) return luaReturnNil(L);
+        // Nothing at all past the slots (0x00554690).
+        if (!gh || index < 1) return 0;
         const auto& dungeons = gh->getLfgRoleCheckDungeons();
-        if (index > static_cast<int>(dungeons.size())) return luaReturnNil(L);
+        if (index > static_cast<int>(dungeons.size())) return 0;
         const auto& d = dungeons[static_cast<size_t>(index) - 1];
         lua_pushnumber(L, d.typeId);
         lua_pushnumber(L, d.dungeonId);
@@ -860,16 +861,19 @@ void registerLfgLuaAPI(lua_State* L) {
     // already answered from one it has not.
     {"GetLFGBootProposal", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
-        if (!gh || !gh->isLfgBootInProgress()) return luaReturnNil(L);
+        // 0x00554a60: false alone while no vote runs.
+        if (!gh || !gh->isLfgBootInProgress()) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
         lua_pushboolean(L, 1);
         lua_pushboolean(L, gh->hasLfgBootVoted() ? 1 : 0);
         lua_pushboolean(L, gh->getLfgBootMyVote() ? 1 : 0);
-        // Sent as it is even when the guid has not resolved yet. lfdframe gates
-        // the popup on this being truthy, and an empty string is truthy in Lua
-        // - so a name still in flight costs a blank in the question rather than
-        // the vote itself, and the victim is a party member whose name the
-        // roster almost always already has.
-        lua_pushstring(L, gh->getLfgBootTargetName().c_str());
+        // The victim's name as the name cache answers it at the call
+        // (0x0067d770 with no callback), nil while it is not known.
+        const std::string target = gh->lookupName(gh->getLfgBootVictimGuid());
+        if (target.empty()) lua_pushnil(L);
+        else lua_pushstring(L, target.c_str());
         lua_pushnumber(L, gh->getLfgBootTotal());
         lua_pushnumber(L, gh->getLfgBootVotes());
         lua_pushnumber(L, gh->getLfgBootTimeLeft());
@@ -1023,7 +1027,7 @@ void registerLfgLuaAPI(lua_State* L) {
             }
             best = d;
         }
-        if (!best) return luaReturnNil(L);
+        if (!best) return 0;   // 0x00553120: no values without a choice
         lua_pushinteger(L, static_cast<lua_Integer>(best->id));
         return 1;
     }},
@@ -1277,12 +1281,14 @@ void registerLfgLuaAPI(lua_State* L) {
     // client's own getter pushes from that record, 0x00555fd0 for the fourteen
     // below. Where that getter falls back, this falls back the same way:
     //
-    //   SearchLFGGetNumResults    the rows shown, then the total. The client's
-    //                             second number is the sum of two counters whose
-    //                             writers were never read (0x00beab28, 0x00beab2c),
-    //                             so both numbers here are the rows held; both are
-    //                             zero while no list is held, which is the client's
-    //                             own guard on 0x00beab20.
+    //   SearchLFGGetNumResults    the rows shown (both arrays' sizes, +0x6c and
+    //                             +0x7c of the shown copy, member-less group
+    //                             records included), then the total: the sum of
+    //                             the two uint32s the list packet carries after
+    //                             its block counts (0x00beaaa4/0x00beaaa0, copied
+    //                             to 0x00beab2c/0x00beab28 by 0x0055b1a0). Both
+    //                             are zero while no list is held, which is the
+    //                             client's own guard on 0x00beab20 (0x00553ba0).
     //   SearchLFGGetResults       fourteen of the thirty-eight this getter pushes
     //                             (0x005529e0 adds 28 values that lfrframe.lua:539
     //                             never asks for), at the row index the UI passes
@@ -1323,11 +1329,9 @@ void registerLfgLuaAPI(lua_State* L) {
     //                             decompile, and which record field answers
     //                             isLeader / isTank / isHealer / isDamage is not
     //                             established.
-    //                             A row is answered for an index the client would
-    //                             have hidden — a player record with no listing
-    //                             attached, for which 0x00555fd0 returns no values
-    //                             and lfrframe.lua would SetText a nil — never:
-    //                             buildLfgBrowserRows drops those pairs outright.
+    //                             A group record with no listing attached is a
+    //                             row the count includes; 0x00555fd0 returns no
+    //                             values for it, and so does this.
     //   SearchLFGGetPartyResults  the six lfrframe.lua:628 names, in that getter's
     //                             order (name, level, relationship, className,
     //                             areaName, comment — the two name fields swap
@@ -1349,9 +1353,9 @@ void registerLfgLuaAPI(lua_State* L) {
     //                             three names but reads two of them.
     {"SearchLFGGetNumResults",     [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
-        const uint32_t rows = gh ? gh->getLfgBrowserRowCount() : 0;
-        lua_pushinteger(L, rows);
-        lua_pushinteger(L, rows);
+        // 0x00553ba0 pushes both as unsigned doubles.
+        lua_pushnumber(L, gh ? static_cast<double>(gh->getLfgBrowserRowCount()) : 0.0);
+        lua_pushnumber(L, gh ? static_cast<double>(gh->getLfgBrowserTotal()) : 0.0);
         return 2;
     }},
     {"SearchLFGGetResults",        [](lua_State* L) -> int {

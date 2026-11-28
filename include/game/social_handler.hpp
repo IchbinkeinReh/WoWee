@@ -706,6 +706,13 @@ public:
     [[nodiscard]] uint32_t getLfgBrowserRowCount() const {
         return lfgListWindowId_ == 0 ? 0 : static_cast<uint32_t>(lfgBrowserRows_.size());
     }
+    /// SearchLFGGetNumResults' second number: the sum of the two totals the list
+    /// packet carries after its block counts, as the shown copy holds them
+    /// (0x00553ba0: 0x00beab28 + 0x00beab2c, wrapping as uint32); zero while no
+    /// list is held.
+    [[nodiscard]] uint32_t getLfgBrowserTotal() const {
+        return lfgListWindowId_ == 0 ? 0 : lfgShownTotals_[0] + lfgShownTotals_[1];
+    }
     /// One of those pairs by index from zero, or null past the end. Its index
     /// fields name entries of getLfgListRow, and stay valid until the next list
     /// packet, which rebuilds both.
@@ -1182,6 +1189,11 @@ private:
     /// RefreshLFGList asks (0x0055b1a0). Every packet in between updates the
     /// received rows only.
     std::vector<LfgListRow> lfgShownRows_;
+    /// The totals after the two block counts of the list packet (0x00beaaa4,
+    /// 0x00beaaa0), as received and as copied with the shown rows (0x00beab2c,
+    /// 0x00beab28).
+    uint32_t lfgListTotals_[2] = {0, 0};
+    uint32_t lfgShownTotals_[2] = {0, 0};
     /// Those rows paired into the rows the browse panel can show, rebuilt whenever
     /// the rows are (buildLfgBrowserRows, then sortLfgBrowserRows). Held beside them
     /// rather than derived at query time so that the index fields of one never

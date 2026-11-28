@@ -5418,6 +5418,93 @@ TEST_CASE("BuyStableSlot only what can be bought, StablePet without a pet (0x005
     CHECK(s.sent().of(Opcode::CMSG_STABLE_PET).size() == 1);
 }
 
+// 0x005a19c0 also sends without a stable master while the player's aura-type
+// bitset holds 292, SPELL_AURA_OPEN_STABLE (+0xf44 & 0x10, built by 0x00727e70
+// from the effects a slot's flags 1/2/4 mark); 0x005a17f0 then asks for the list
+// again after a pet stabled/unstabled or a slot bought (8, 9, 10), the last one
+// counting the slot.
+TEST_CASE("the Open Stable aura reaches the stable without a master (0x005a19c0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    constexpr uint32_t kOpen = 62757;
+    auto& e = s.handler().spellNameCacheRef()[kOpen];
+    e.name = "Call Stabled Pet";
+    e.effectIds[1] = 6;
+    e.effectAuraIds[1] = 292;
+    const auto aura = [&](uint8_t flags) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+        p.writePackedGuid(Session::kPlayerGuid);
+        p.writeUInt8(0);
+        p.writeUInt32(kOpen);
+        p.writeUInt8(flags);
+        p.writeUInt8(80);
+        p.writeUInt8(0);
+        s.receive(p);
+    };
+    const auto stables = [&] { return s.sent().of(Opcode::CMSG_STABLE_PET).size(); };
+    const auto lists = [&] { return s.sent().of(Opcode::MSG_LIST_STABLED_PETS).size(); };
+    const auto result = [&](uint8_t r) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_STABLE_RESULT));
+        p.writeUInt8(r);
+        s.receive(p);
+    };
+    ui.run("StablePet()");
+    CHECK(stables() == 0);           // no master, no aura
+    aura(0x10 | 0x08 | 0x01);        // effect 0 marked, but the 292 is effect 1
+    ui.run("StablePet()");
+    CHECK(stables() == 0);
+    result(0x09);
+    CHECK(lists() == 0);
+    aura(0x10 | 0x08 | 0x02);        // effect 1 marked: the bit is set
+    ui.run("StablePet()");
+    CHECK(stables() == 1);
+    const size_t before = lists();
+    result(0x01);                    // money: said, no list asked
+    CHECK(lists() == before);
+    const uint8_t slots = s.handler().getStableSlots();
+    result(0x0A);                    // slot bought: counted, list asked
+    CHECK(s.handler().getStableSlots() == slots + 1);
+    CHECK(lists() == before + 1);
+    result(0x08);
+    result(0x09);
+    CHECK(lists() == before + 3);
+}
+
+// Shapes of a few answers without their state, as 12340 gives them:
+// HasPetUI nil, nil without a pet record's unit (0x005d3960); HasPetSpells
+// nil, nil (0x0053dd30); GetRandomDungeonBestChoice and GetLFGRoleUpdateSlot
+// nothing at all (0x00553120, 0x00554690); GetLFGBootProposal false alone
+// (0x00554a60); IsListedInLFR false (0x005586d0); the guild event log asked
+// only by QueryGuildEventLog, and only in a guild (0x005ca350, 0x005cc470);
+// one flag carrier counted as one (0x0054a0e0).
+TEST_CASE("empty answers keep the 12340 shapes (HasPetUI, LFG, guild log, flags)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    CHECK(ui.is("select('#', HasPetUI()) == 2 and HasPetUI() == nil and select(2, HasPetUI()) == nil"));
+    CHECK(ui.is("select('#', HasPetSpells()) == 2 and HasPetSpells() == nil"));
+    CHECK(ui.is("select('#', GetRandomDungeonBestChoice()) == 0"));
+    CHECK(ui.is("select('#', GetLFGRoleUpdateSlot(1)) == 0"));
+    CHECK(ui.is("select('#', GetLFGBootProposal()) == 1 and GetLFGBootProposal() == false"));
+    CHECK(ui.is("IsListedInLFR() == false"));
+    const auto logAsks = [&] { return s.sent().of(Opcode::MSG_GUILD_EVENT_LOG_QUERY).size(); };
+    CHECK(ui.is("GetNumGuildEvents() == 0"));
+    ui.run("QueryGuildEventLog()");
+    CHECK(logAsks() == 0);   // not in a guild
+    CHECK(ui.is("GetNumBattlefieldFlagPositions() == 0"));
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::MSG_BATTLEGROUND_PLAYER_POSITIONS));
+    p.writeUInt32(0);
+    p.writeUInt32(1);
+    p.writeUInt64(0x0000000000000042ull);
+    p.writeFloat(1.0f);
+    p.writeFloat(2.0f);
+    s.receive(p);
+    CHECK(ui.is("GetNumBattlefieldFlagPositions() == 1"));
+}
+
 // GetGlyphLink (0x005b7740) answers nothing at all past the six sockets or
 // for a talent group the player does not have.
 TEST_CASE("GetGlyphLink answers nothing out of range (0x005b7740)", "[replay][interface]") {

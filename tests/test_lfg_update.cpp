@@ -336,7 +336,7 @@ TEST_CASE("A whole raid browser list reads both record kinds", "[lfg]") {
     p.writeUInt8(0);
     p.writeUInt32(1);              // one player row
     p.writeUInt32(7);              // and the uint32 after it: kept at 0x00beaaa4,
-    p.writeUInt64(0x100);          //   written by the client and never read
+    p.writeUInt64(0x100);          //   a part of SearchLFGGetNumResults' total
     p.writeUInt32(0x2 | 0x10 | 0x80);
     writeComment(p, "need ranged");
     p.writeUInt8(1); p.writeUInt8(0); p.writeUInt8(1);  // +0x124..0x126
@@ -354,8 +354,13 @@ TEST_CASE("A whole raid browser list reads both record kinds", "[lfg]") {
     p.writeUInt32(0b11);           // +0x1a0: the encounter mask
 
     std::vector<LfgListRow> rows;
-    REQUIRE(parseLfgList(p, kLfrList, rows));
+    uint32_t totals[2] = {0, 0};
+    REQUIRE(parseLfgList(p, kLfrList, rows, nullptr, nullptr, totals));
     CHECK(p.getRemainingSize() == 0);
+    // The two uint32s after the block counts, which the shown copy takes along
+    // (0x0055b1a0) and 0x00553ba0 adds up as the total.
+    CHECK(totals[0] == 7);
+    CHECK(totals[1] == 9);
     REQUIRE(rows.size() == 2);     // arrival order: the players come first
 
     REQUIRE(rows[0].isListing == false);
@@ -560,13 +565,13 @@ TEST_CASE("Rows are paired into the rows the browse panel shows", "[lfg]") {
     const uint32_t group = add(0x100, false);            // a group's player record
     const uint32_t own = add(0x200, true, 0x100);        // its first listing
     const uint32_t mate = add(0x201, true, 0x100);       // and another member
-    add(0x300, false);                                  // a player with nothing listed
+    const uint32_t bare = add(0x300, false);             // a player with nothing listed
     const uint32_t solo = add(0x400, true);              // a listing in no group
     const uint32_t orphan = add(0x500, true, 0x999);     // one whose group never came
     const uint32_t atListing = add(0x600, true, 0x200);  // one naming a listing, which
 
     const auto shown = buildLfgBrowserRows(rows, true);
-    REQUIRE(shown.size() == 4);                          //   has nowhere to attach
+    REQUIRE(shown.size() == 5);                          //   has nowhere to attach
 
     CHECK(shown[0].listing == solo);                     // the array of listings that
     CHECK(shown[0].player == kLfgNoRow);                 //   belong to no one comes
@@ -577,22 +582,30 @@ TEST_CASE("Rows are paired into the rows the browse panel shows", "[lfg]") {
     CHECK(shown[3].listing == own);                      // listing is member[0] itself
     REQUIRE(shown[3].members.size() == 1);
     CHECK(shown[3].members[0] == mate);                  // party results start at [1]
+    CHECK(shown[4].player == bare);                      // and the group record none of
+    CHECK(shown[4].listing == kLfgNoRow);                //   whose listings came, counted
 
     // Clearing that byte walks the player array first instead (0x00553530:2831),
     // which is what a "group" header click flips to.
     const auto swapped = buildLfgBrowserRows(rows, false);
-    REQUIRE(swapped.size() == 4);
+    REQUIRE(swapped.size() == 5);
     CHECK(swapped[0].player == group);
-    CHECK(swapped[1].listing == solo);
-    CHECK(swapped[2].listing == orphan);
-    CHECK(swapped[3].listing == atListing);
+    CHECK(swapped[1].player == bare);
+    CHECK(swapped[2].listing == solo);
+    CHECK(swapped[3].listing == orphan);
+    CHECK(swapped[4].listing == atListing);
 
-    // A player record with no listing attached is no row at all: 0x00553530 hands
-    // back a null listing for it and 0x00555fd0 returns no values, so the panel
-    // never sees the index and never SetTexts a nil.
+    // A group record with no listing attached is still a row of its array:
+    // 0x00553530 returns 1 with a null listing for it, SearchLFGGetNumResults
+    // counts it (0x00553ba0: the arrays' sizes), and only the row getter
+    // 0x00555fd0 answers nothing for it.
     rows.clear();
-    add(0x100, false);
-    CHECK(buildLfgBrowserRows(rows, true).empty());
+    const uint32_t lone = add(0x100, false);
+    const auto alone = buildLfgBrowserRows(rows, true);
+    REQUIRE(alone.size() == 1);
+    CHECK(alone[0].player == lone);
+    CHECK(alone[0].listing == kLfgNoRow);
+    CHECK(alone[0].members.empty());
 }
 
 TEST_CASE("A column header makes its key primary, and a second click reverses it", "[lfg]") {
