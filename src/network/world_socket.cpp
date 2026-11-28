@@ -227,8 +227,14 @@ void WorldSocket::recordRecentPacket(bool outbound, uint16_t opcode, uint16_t pa
     // Every packet's opcode and size at info level, for a trace without the
     // whole debug log (tester's wish): WOWEE_PACKET_LOG=1. Names and sizes
     // only - what is in them stays out of the log.
+    // Sends (TX) and receives (RX) alike; the session's authentication
+    // packets (CMSG_AUTH_SESSION, SMSG_AUTH_CHALLENGE / _RESPONSE) are never
+    // named in it, not even by opcode.
     static const bool kPacketLog = core::envFlagEnabled("WOWEE_PACKET_LOG", false);
-    if (kPacketLog) {
+    // 0x1EC-0x1EE are those three on the 3.3.5a wire, also before an opcode
+    // table is active.
+    if (kPacketLog && !(opcode >= 0x1EC && opcode <= 0x1EE) &&
+        std::strstr(opcodeNameForTrace(opcode), "_AUTH_") == nullptr) {
         LOG_INFO("WS ", outbound ? "TX" : "RX", " opcode=0x", std::hex, opcode, std::dec,
                  " logical=", opcodeNameForTrace(opcode), " payload=", payloadLen);
     }
