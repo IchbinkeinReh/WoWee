@@ -13,6 +13,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "game/grey_triviality.hpp"
 #include "game/interface_text.hpp"
+#include "game/client_text_copy.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -3087,18 +3088,25 @@ void registerSocialLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->disbandGuild();
             return 0;
         }},
+                // GuildControlAddRank(name) (0x005cb330): a non-empty name is
+                // taken as 0x007e1830(name, buf, 16, 64, 1) takes it (no '|',
+                // one line, cut at the 16th character) and CMSG_GUILD_ADD_RANK
+                // goes only while the guild has fewer than ten ranks
+                // (DAT_00c22ab8).
                 {"GuildControlAddRank", [](lua_State* L) -> int {
-            // 0x005cb330
             if (!lua_isstring(L, 1))
                 return luaL_error(L, "Usage: GuildControlAddRank(name)");
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
-            if (gh && name && *name) gh->addGuildRank(name);
+            if (gh && name && *name && guildRankCount(gh) < 10)
+                gh->addGuildRank(game::clientTextCopy(name, 0x10, 0x40, true));
             return 0;
         }},
+                // GuildControlDelRank() (0x005cb3f0): CMSG_GUILD_DEL_RANK only
+                // while the guild has more than five ranks.
                 {"GuildControlDelRank", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->delGuildRank();
+            if (gh && guildRankCount(gh) > 5) gh->delGuildRank();
             return 0;
         }},
                 // GuildControlSetRankFlag(checkboxIndex, checked) - stage one
@@ -3133,10 +3141,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // "unchanged", it is revoked - which is why the staging copy is
                 // seeded from the rank as it stands when the panel selects it,
                 // and only what the panel edits moves.
+                //
+                // 0x005cb170: the name taken as GuildControlAddRank takes it,
+                // and the packet only for a rank the guild has (the edited
+                // index below DAT_00c22ab8).
                 {"GuildControlSaveRank", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
-            if (gh && name && *name) gh->saveGuildRank(name);
+            if (gh && name && *name && gh->getSelectedGuildRank() <= guildRankCount(gh))
+                gh->saveGuildRank(game::clientTextCopy(name, 0x10, 0x40, true));
             return 0;
         }},
                 // JoinPermanentChannel(name, password, frameId, permanent)

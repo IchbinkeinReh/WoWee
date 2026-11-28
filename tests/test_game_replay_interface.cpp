@@ -5549,6 +5549,55 @@ TEST_CASE("GUILD_EVENT_LOG_UPDATE waits for the log's names (0x005ca6a0)", "[rep
     CHECK(ui.is("logUpdates == 2"));
 }
 
+// GuildControlAddRank 0x005cb330 sends only below ten ranks and takes the name
+// as 0x007e1830(name, buf, 16, 64, 1); GuildControlDelRank 0x005cb3f0 only
+// above five; GuildControlSaveRank 0x005cb170 only for a rank the guild has.
+// None of them asks for the roster (the realm's rank event does that).
+TEST_CASE("guild rank edits are sent only within the rank limits (0x005cb330)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    auto& gh = s.handler();
+    wowee::game::Character self;
+    self.guid = Session::kPlayerGuid;
+    self.guildId = 5;
+    gh.charactersRef().push_back(self);
+    gh.setActiveCharacterGuid(self.guid);
+    const auto roster = [&s](uint32_t ranks) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_GUILD_ROSTER));
+        p.writeUInt32(0);
+        p.writeString("");
+        p.writeString("");
+        p.writeUInt32(ranks);
+        for (uint32_t r = 0; r < ranks; ++r)
+            for (int i = 0; i < 14; ++i) p.writeUInt32(0);
+        s.receive(p);
+    };
+    roster(5);
+    REQUIRE(ui.is("GuildControlGetNumRanks() == 5"));
+    ui.run("GuildControlDelRank()");
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_DEL_RANK).empty());
+    ui.run("GuildControlAddRank('Ab|cffNeu\\nZweite')");
+    ui.run("GuildControlAddRank('abcdefghijklmnopqrst')");
+    auto added = s.sent().of(Opcode::CMSG_GUILD_ADD_RANK);
+    REQUIRE(added.size() == 2);
+    CHECK(added[0].readString() == "AbcffNeu");
+    CHECK(added[1].readString() == "abcdefghijklmno");
+    ui.run("GuildControlSetRank(6) GuildControlSaveRank('Neu')");
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_RANK).empty());
+    ui.run("GuildControlSetRank(5) GuildControlSaveRank('Neu')");
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_RANK).size() == 1);
+
+    roster(10);
+    REQUIRE(ui.is("GuildControlGetNumRanks() == 10"));
+    ui.run("GuildControlAddRank('Elf')");
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_ADD_RANK).size() == 2);
+    ui.run("GuildControlDelRank()");
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_DEL_RANK).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_ROSTER).empty());
+}
+
 // GetGlyphLink (0x005b7740) answers nothing at all past the six sockets or
 // for a talent group the player does not have.
 TEST_CASE("GetGlyphLink answers nothing out of range (0x005b7740)", "[replay][interface]") {

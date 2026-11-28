@@ -2187,14 +2187,12 @@ void SocialHandler::addGuildRank(const std::string& rankName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GuildAddRankPacket::build(rankName);
     owner_.getSocket()->send(packet);
-    requestGuildRoster();
 }
 
 void SocialHandler::deleteGuildRank() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GuildDelRankPacket::build();
     owner_.getSocket()->send(packet);
-    requestGuildRoster();
 }
 
 void SocialHandler::requestPetitionShowlist(uint64_t npcGuid) {
@@ -2654,7 +2652,6 @@ void SocialHandler::delGuildRank() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GuildDelRankPacket::build();
     owner_.getSocket()->send(packet);
-    requestGuildRoster();
 }
 
 void SocialHandler::setLootMethod(uint8_t method, uint64_t masterGuid, uint8_t threshold) {
@@ -3554,7 +3551,6 @@ void SocialHandler::saveGuildRank(uint32_t rankId, uint32_t rights, const std::s
         packet.writeUInt32(tabSlots ? tabSlots[t] : 0);
     }
     owner_.getSocket()->send(packet);
-    requestGuildRoster();
 }
 
 uint32_t SocialHandler::getPlayerGuildRankField() const {
