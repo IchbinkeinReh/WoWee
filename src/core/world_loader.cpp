@@ -686,7 +686,15 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                 // the frames saved went into a longer upload wait per batch.)
                 {
                     const auto finStart = std::chrono::steady_clock::now();
-                    finalizedTiles += terrainMgr->processOneReadyTile();
+                    // A long tile draws the screen as it goes (T460: 1.1-2.4 s
+                    // tiles with no frame), with the bar and text it had.
+                    finalizedTiles += terrainMgr->processOneReadyTile([&] {
+                        app_.beatWatchdog();
+                        if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/false);
+                        if (!loadingScreenOk) return;
+                        loadingScreen->render();
+                        window_->swapBuffers();
+                    });
                     finalizeSec += std::chrono::duration<double>(std::chrono::steady_clock::now() - finStart).count();
                 }
 

@@ -475,7 +475,9 @@ public:
 
     /** Process one ready tile (for loading screens with per-tile progress updates) */
     /// The loading screen's: finalizes one ready tile whole; 1 if it did.
-    int processOneReadyTile();
+    /// `between`, when given, runs every ~100 ms of a long tile, its upload
+    /// batch submitted first (T460: tiles of 1.1-2.4 s with no frame drawn).
+    int processOneReadyTile(const std::function<void()>& between = {});
     /// What the workers did since the last call, for the loading screen's
     /// report: seconds spent preparing tiles (all workers together), and how
     /// often one waited because the ready queue was full - the main thread,

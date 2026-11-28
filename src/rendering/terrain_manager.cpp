@@ -1835,7 +1835,7 @@ void TerrainManager::takeReadyTile(bool keepReach) {
     if (room) queueCV.notify_all();
 }
 
-int TerrainManager::processOneReadyTile() {
+int TerrainManager::processOneReadyTile(const std::function<void()>& between) {
     takeReadyTile(/*keepReach=*/false);
     // Finalize ONE tile completely, then return so caller can update the screen
     if (!finalizingTiles_.empty()) {
@@ -1844,7 +1844,19 @@ int TerrainManager::processOneReadyTile() {
 
         auto& ft = finalizingTiles_.front();
         const auto finStart = std::chrono::steady_clock::now();
-        while (!advanceFinalization(ft)) {}
+        auto lastDrawn = finStart;
+        while (!advanceFinalization(ft)) {
+            if (!between) continue;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastDrawn < std::chrono::milliseconds(100)) continue;
+            // What the steps so far recorded is submitted and waited on
+            // before the screen draws, and a new batch opened after it: the
+            // caller's frame records nothing into this thread's batch.
+            if (vkCtx) vkCtx->endUploadBatchSync();
+            between();
+            if (vkCtx) vkCtx->beginUploadBatch();
+            lastDrawn = std::chrono::steady_clock::now();
+        }
         const double finMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - finStart).count();
         if (finMs > 200.0 && ft.pending) {
