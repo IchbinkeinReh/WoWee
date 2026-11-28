@@ -371,8 +371,11 @@ wowee_add_test(test_background_release
 
 # ── test_log_privacy ────────────────────────────────────────
 # The home directory, and with it the account name, written as ~ in the log.
-wowee_add_test(test_log_privacy
-    SOURCES test_log_privacy.cpp)
+# The account name kept out of the auth packets' log lines too.
+wowee_add_packet_test(test_log_privacy
+    SOURCES ${CMAKE_SOURCE_DIR}/src/auth/auth_packets.cpp
+            ${CMAKE_SOURCE_DIR}/src/auth/auth_opcodes.cpp
+            ${CMAKE_SOURCE_DIR}/src/auth/big_num.cpp)
 
 # ── test_asset_profiles ─────────────────────────────────────
 # The asset sets on offer. Pinned because the upgrades used to be written per

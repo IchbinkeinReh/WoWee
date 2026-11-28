@@ -141,7 +141,7 @@ network::Packet AuthSessionPacket::build(uint32_t build,
     std::transform(upperAccount.begin(), upperAccount.end(),
                    upperAccount.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
 
-    LOG_INFO("Building CMSG_AUTH_SESSION for account: ", upperAccount);
+    LOG_INFO("Building CMSG_AUTH_SESSION");   // the account is not logged
 
     // Compute authentication hash
     auto authHash = computeAuthHash(upperAccount, clientSeed, serverSeed, sessionKey);
@@ -295,7 +295,7 @@ std::vector<uint8_t> AuthSessionPacket::computeAuthHash(
     // DEBUG - a debug log is still a file that gets attached to bug reports.
     // The digest is what goes out on the wire, so it is safe and is the value
     // actually worth comparing against the server's.
-    LOG_DEBUG("AUTH HASH: account='", accountName, "' clientSeed=0x", std::hex, clientSeed,
+    LOG_DEBUG("AUTH HASH: clientSeed=0x", std::hex, clientSeed,
               " serverSeed=0x", serverSeed, std::dec, " sessionKey=", sessionKey.size(),
               " bytes input=", hashInput.size(), " bytes");
 

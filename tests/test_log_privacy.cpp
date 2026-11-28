@@ -6,8 +6,17 @@
 #include "catch_amalgamated.hpp"
 #include "core/log_location.hpp"
 #include "core/log_privacy.hpp"
+#include "core/logger.hpp"
+#include "auth/auth_packets.hpp"
+#include "game/world_packets.hpp"
+#include "core/application.hpp"
 
 #include <string>
+#include <vector>
+
+namespace wowee::core {
+Application* Application::instance = nullptr;
+}
 
 using wowee::core::redactHome;
 
@@ -53,4 +62,32 @@ TEST_CASE("an app bundle logs to the per-user directory", "[log_privacy][log_loc
     CHECK(logToPerUserDirectory("/private/var/containers/Bundle/Application/X/wowee.app/wowee", false));
     CHECK_FALSE(logToPerUserDirectory("/home/sam/wowee/build/bin/wowee", false));
     CHECK_FALSE(logToPerUserDirectory("C:/Games/wowee/wowee.exe", false));
+}
+
+// Tester 50 (V688 f): 'Building CMSG_AUTH_SESSION for account: <name>' put
+// the account name into every client log. Neither login packet, built at
+// the most talkative level, names it.
+namespace {
+std::vector<std::string>& capturedLines() {
+    static std::vector<std::string> lines;
+    return lines;
+}
+void captureLine(int, const std::string& message) { capturedLines().push_back(message); }
+}  // namespace
+
+TEST_CASE("the login packets never log the account name", "[log_privacy]") {
+    auto& logger = wowee::core::Logger::getInstance();
+    logger.setLogLevel(wowee::core::LogLevel::DEBUG);
+    capturedLines().clear();
+    logger.setTap(&captureLine);
+    (void)wowee::auth::LogonChallengePacket::build("zzprivacyacct");
+    (void)wowee::game::AuthSessionPacket::build(12340, "zzprivacyacct", 1u,
+                                                std::vector<uint8_t>(40, 7), 2u);
+    logger.setTap(nullptr);
+    REQUIRE_FALSE(capturedLines().empty());
+    for (const auto& line : capturedLines()) {
+        INFO(line);
+        CHECK(line.find("ZZPRIVACYACCT") == std::string::npos);
+        CHECK(line.find("zzprivacyacct") == std::string::npos);
+    }
 }

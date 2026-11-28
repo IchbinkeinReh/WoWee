@@ -165,7 +165,6 @@ bool GameHandler::connect(const std::string& host,
     LOG_INFO("========================================");
     LOG_INFO("Host: ", host);
     LOG_INFO("Port: ", port);
-    LOG_INFO("Account: ", accountName);
     LOG_INFO("Build: ", build);
 
     // Store authentication data

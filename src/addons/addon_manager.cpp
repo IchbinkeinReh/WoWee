@@ -788,8 +788,8 @@ void AddonManager::copySavedVariables(const TocFile& addon) {
     if (!client || !*client) return;
     if (!client_sv::hasAccountFolder(client, clientAccount_)) {
         if (!loggedNoWtfAccount_) {
-            LOG_INFO("AddonManager: the client's WTF has no folder for account '", client_sv::upper(clientAccount_),
-                     "' - no saved variables copied from it");
+            LOG_INFO("AddonManager: the client's WTF has no folder for this account"
+                     " - no saved variables copied from it");
             loggedNoWtfAccount_ = true;
         }
         return;

@@ -134,7 +134,7 @@ network::Packet LogonChallengePacket::build(const std::string& account, const Cl
     packet.writeBytes(reinterpret_cast<const uint8_t*>(upperAccount.c_str()),
                       upperAccount.length());
 
-    LOG_DEBUG("Built LOGON_CHALLENGE packet for account: ", upperAccount);
+    LOG_DEBUG("Built LOGON_CHALLENGE packet");   // the account is not logged
     LOG_DEBUG("  Payload size: ", payloadSize, " bytes");
     LOG_DEBUG("  Total size: ", packet.getSize(), " bytes");
 
