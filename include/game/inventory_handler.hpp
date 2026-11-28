@@ -895,6 +895,10 @@ public:
     void requestOwnerAuctions();
     void requestBidderAuctions(uint32_t page);
     [[nodiscard]] bool auctionListMayBeAsked(int list) const;
+    /// The same without the auction house open: only the list's answers due
+    /// and its wait (0x0059c740, CanSendAuctionQuery - which neither the
+    /// close 0x0059f150 nor anything else of an open house enters; T472).
+    [[nodiscard]] bool auctionListThrottleAllows(int list) const;
     bool isAuctionHouseOpen() const { return auctionOpen_; }
     uint64_t getAuctioneerGuid() const { return auctioneerGuid_; }
     /// The open house's AuctionHouse.dbc row, 0 with none open.
@@ -938,6 +942,14 @@ public:
     const TrainerListData& getTrainerSpells() const { return currentTrainerList_; }
     void trainSpell(uint32_t spellId);
     void closeTrainer();
+    /// The rows the trainer list showed (0x00c0e4a8, written by the list's
+    /// rebuild 0x00594ba0): GetNumTrainerServices answers it after the close
+    /// too, until the world is left. Noted by the interface as it counts.
+    void noteTrainerShown(uint32_t rows) { trainerShownKept_ = rows; }
+    [[nodiscard]] uint32_t trainerShownKept() const { return trainerShownKept_; }
+    /// Leaving the world (0x00528010 -> 0x00593cc0): the trainer's type and
+    /// greeting go too, which the close keeps.
+    void forgetTrainer();
     const std::vector<TrainerTab>& getTrainerTabs() const { return trainerTabs_; }
     void resetTradeState();
 
@@ -1441,6 +1453,7 @@ private:
     bool trainerWindowOpen_ = false;
     TrainerListData currentTrainerList_;
     uint64_t trainerListSerial_ = 0;
+    uint32_t trainerShownKept_ = 0;
     std::vector<TrainerTab> trainerTabs_;
 
     // ---- Equipment set state ----

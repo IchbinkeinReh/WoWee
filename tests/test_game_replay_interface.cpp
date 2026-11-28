@@ -4279,6 +4279,50 @@ TEST_CASE("the quest texts outlive the quest window (0x0058bd10)", "[replay][int
     CHECK(ui.is("GetGreetingText():find('Seid gegruesst, ', 1, true) == 1"));
 }
 
+// T471: CloseTrainer (0x00594370 -> 0x005940e0(0)) zeroes the guid and the
+// list sizes only; the shown count 0xc0e4a8 (GetNumTrainerServices
+// 0x00593d10), the type 0xc0e498 (IsTradeskillTrainer 0x00593d50) and the
+// greeting 0xc0dc90 (0x00593d90) stay until the world is left (0x00593cc0).
+TEST_CASE("the trainer's count, type and greeting outlive the window (0x00593d10)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 10}});
+    Interface ui(s);
+    s.setConnected(true);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_TRAINER_LIST));
+    p.writeUInt64(0xF130001FC0003EEBull);
+    p.writeUInt32(2);  // a tradeskill trainer
+    p.writeUInt32(2);
+    for (uint32_t spell : {2580u, 2575u}) {
+        p.writeUInt32(spell);
+        p.writeUInt8(0);
+        for (uint32_t v : {10u, 0u, 0u}) p.writeUInt32(v);
+        p.writeUInt8(1);
+        for (uint32_t v : {0u, 0u, 0u, 0u, 0u}) p.writeUInt32(v);
+    }
+    p.writeString("Grabt tief, $N");
+    s.receive(p);
+    REQUIRE(ui.is("IsTradeskillTrainer() == 1"));
+    ui.run("shownOpen = GetNumTrainerServices()");
+    ui.run("CloseTrainer()");
+    CHECK(ui.is("GetNumTrainerServices() == shownOpen"));
+    CHECK(ui.is("IsTradeskillTrainer() == 1"));
+    CHECK(ui.is("GetTrainerGreetingText():find('Grabt tief, ', 1, true) == 1"));
+    // The rows themselves go with the list's size (0xc0e4a0).
+    CHECK(ui.is("select(3, GetTrainerServiceInfo(1)) == nil"));
+}
+
+// T472: CanSendAuctionQuery (0x0059c740) asks the throttle alone - no open
+// auction house (0xc0f3e8) - so it answers 1 before any house was opened.
+TEST_CASE("CanSendAuctionQuery asks only the throttle (0x0059c740)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("CanSendAuctionQuery() == 1"));
+    CHECK(ui.is("CanSendAuctionQuery('list') == 1"));
+    CHECK(ui.is("CanSendAuctionQuery('owner') == 1"));
+    CHECK(ui.is("CanSendAuctionQuery('nothing') == nil"));
+}
+
 // GetNumAvailableQuests / GetNumActiveQuests (0x0058bdd0 / 0x0058be00) and
 // the titles and levels beside them read the greeting's own two tables
 // (counts 0x00c0d69c / 0x00c0d6a0), which only SMSG_QUESTGIVER_QUEST_LIST

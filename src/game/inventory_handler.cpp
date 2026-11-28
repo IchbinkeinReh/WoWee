@@ -3890,8 +3890,23 @@ void InventoryHandler::trainSpell(uint32_t spellId) {
 void InventoryHandler::closeTrainer() {
     trainerWindowOpen_ = false;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRAINER_CLOSED", {});
+    // 0x00594370 -> 0x005940e0(0): the guid and the list sizes go
+    // (0xc0e490/94, 0xc0e4a0/a4); the trainer's type 0xc0e498 (written only
+    // on open), its greeting 0xc0dc90 and the shown count 0xc0e4a8 stay
+    // until the world is left (T471).
+    TrainerListData kept;
+    kept.trainerType = currentTrainerList_.trainerType;
+    kept.greeting = std::move(currentTrainerList_.greeting);
+    currentTrainerList_ = std::move(kept);
+    trainerTabs_.clear();
+}
+
+void InventoryHandler::forgetTrainer() {
+    // 0x00593cc0: guid, type, sizes and the greeting buffer.
+    trainerWindowOpen_ = false;
     currentTrainerList_ = TrainerListData{};
     trainerTabs_.clear();
+    trainerShownKept_ = 0;
 }
 
 void InventoryHandler::categorizeTrainerSpells() {
@@ -5802,7 +5817,11 @@ void InventoryHandler::requestPendingSales() {
 }
 
 bool InventoryHandler::auctionListMayBeAsked(int list) const {
-    if (!auctionOpen_ || list < 0 || list > 2) return false;
+    return auctionOpen_ && auctionListThrottleAllows(list);
+}
+
+bool InventoryHandler::auctionListThrottleAllows(int list) const {
+    if (list < 0 || list > 2) return false;
     if (list == 0) return auctionSearchDelayTimer_ <= 0.0f;
     if ((list == 1 ? bidderListAnswersDue_ : ownerListAnswersDue_) > 0) return false;
     const uint64_t asked = auctionAskedMs_[static_cast<size_t>(list)];

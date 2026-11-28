@@ -7894,8 +7894,10 @@ void registerInventoryLuaAPI(lua_State* L) {
                 toLowerInPlace(which);
                 list = which == "list" ? 0 : which == "bidder" ? 1 : which == "owner" ? 2 : 3;
             }
-            const bool may = gh && gh->auctionListMayBeAsked(list);
+            // No test of an open auction house (T472): 1 after the close
+            // and before any was opened, by the throttle alone.
             const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            const bool may = inv && inv->auctionListThrottleAllows(list);
             luaPushOneOrNil(L, may);
             luaPushOneOrNil(L, may && inv && inv->auctionGetAllAllowed());
             return 2;

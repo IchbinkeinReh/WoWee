@@ -4,6 +4,7 @@
 #include "addons/row_selection.hpp"
 #include "core/local_time.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/achievement_list.hpp"
 #include "game/achievement_progress.hpp"
 #include "game/quest_log_rows.hpp"
@@ -6373,8 +6374,19 @@ void registerQuestLuaAPI(lua_State* L) {
                 // counts in that order, and reaches past the shown rows to the
                 // hidden ones, as the client's does.
                 {"GetNumTrainerServices", [](lua_State* L) -> int {
-            // 0x00593d10: the rows that show.
-            lua_pushnumber(L, trainerList(L).visibleCount());
+            // 0x00593d10: the rows that show (0xc0e4a8), which the close
+            // leaves as they were until the world is left (T471).
+            auto* gh = getGameHandler(L);
+            auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            const auto& list = trainerList(L);
+            uint32_t shown = 0;
+            if (gh && gh->getTrainerSpells().serial != 0) {
+                shown = static_cast<uint32_t>(list.visibleCount());
+                if (inv) inv->noteTrainerShown(shown);
+            } else if (inv) {
+                shown = inv->trainerShownKept();
+            }
+            lua_pushnumber(L, shown);
             return 1;
         }},
                 // GetTrainerServiceInfo(index) (0x00595090) → name, rank,

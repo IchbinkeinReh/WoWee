@@ -626,6 +626,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     // forwards there, so clearing the copies here cleared nothing anyone
     // looks at and the previous character's quests stayed in the log.
     if (questHandler_) questHandler_->clearQuestStateForCharacterSwitch();
+    if (inventoryHandler_) inventoryHandler_->forgetTrainer();  // 0x00528010 -> 0x00593cc0
     pendingLoginQuestResync_ = false;
     pendingLoginQuestResyncTimeout_ = 0.0f;
     if (questHandler_) {
