@@ -9963,11 +9963,10 @@ void SpellHandler::requestStabledPetList() {
 }
 
 void SpellHandler::stablePet() {
+    // 0x005a19c0 asks for the stable master alone, not for a pet: without
+    // one the request goes out all the same and the realm's answer
+    // (SMSG_STABLE_RESULT) is what is said.
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0) return;
-    if (owner_.petGuidRef() == 0) {
-        // Silent, as StablePet (0x005a19c0) is without a pet. This was English.
-        return;
-    }
     auto pkt = StablePetPacket::build(owner_.stableMasterGuidRef());
     owner_.getSocket()->send(pkt);
     LOG_INFO("Sent CMSG_STABLE_PET");
@@ -9980,11 +9979,31 @@ void SpellHandler::stablePet() {
 void SpellHandler::buyStableSlot() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
         owner_.stableMasterGuidRef() == 0) return;
+    // 0x005a1bd0 sends only while fewer than four slots are bought
+    // (0x00c0f6cc != 4), the next one has a StableSlotPrices row (id slots +
+    // 1) and the player holds its Cost (+4, 0x0051a2b0) - else nothing.
+    const uint32_t slots = owner_.getStableSlots();
+    if (slots == 4) return;
+    const auto price = stableSlotPrice(slots + 1);
+    if (!price || owner_.getMoneyCopper() < *price) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_BUY_STABLE_SLOT));
     pkt.writeUInt64(owner_.stableMasterGuidRef());
     owner_.getSocket()->send(pkt);
     LOG_INFO("Sent CMSG_BUY_STABLE_SLOT to npc=0x", std::hex,
              owner_.stableMasterGuidRef(), std::dec);
+}
+
+std::optional<uint32_t> SpellHandler::stableSlotPrice(uint32_t slot) const {
+    if (!stableSlotPrices_) {
+        auto* am = owner_.services().assetManager;
+        if (!am || !am->isInitialized()) return std::nullopt;
+        stableSlotPrices_.emplace();
+        if (const auto dbc = am->loadDBCOptional("StableSlotPrices.dbc"); dbc && dbc->getFieldCount() >= 2)
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                (*stableSlotPrices_)[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, 1);
+    }
+    if (const auto it = stableSlotPrices_->find(slot); it != stableSlotPrices_->end()) return it->second;
+    return std::nullopt;
 }
 
 // Abandoning is not dismissing. Dismiss puts a hunter's pet away and it can be

@@ -6904,33 +6904,42 @@ void registerQuestLuaAPI(lua_State* L) {
                 // name inside the brackets is the GlyphProperties row's *spell*
                 // name: the row's SpellID (+4) fetched out of the Spell table,
                 // because the properties id and the spell id are different
-                // numbers and only one of them names anything. A glyph whose
-                // spell cannot be named therefore answers no link at all rather
-                // than a link called "Glyph", which is what the panel would
-                // otherwise insert into chat; and the pair is read back in the
+                // numbers and only one of them names anything. A glyph with
+                // no spell row answers an empty string rather than a link
+                // called "Glyph" (see BG below); and the pair is read back in the
                 // same order by SetHyperlink - see the glyph branch there.
+                //
+                // BG (0x005b7740): the index rounded; the talent group the
+                // second argument's number less one (0x005c57d0), else the
+                // active one, and one the player has (0x005c6080) - out of
+                // range, no player or no such group: nothing at all. With
+                // either row missing 0x0061e650 answers "" (0x009e14ff), not
+                // nil - an empty socket included.
                 {"GetGlyphLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const int spec  = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (!gh || index < 1 || index > game::GameHandler::MAX_GLYPH_SLOTS) {
-                lua_pushnil(L);
-                return 1;
-            }
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetGlyphLink(index[, talentGroup])");
+            const long index = std::lround(lua_tonumber(L, 1));
+            if (!gh || index < 1 || index > game::GameHandler::MAX_GLYPH_SLOTS) return 0;
+            const int group = lua_isnumber(L, 2) ? static_cast<int>(lua_tointeger(L, 2)) - 1
+                                                 : static_cast<int>(gh->getActiveTalentSpec());
+            if (group < 0 || group >= static_cast<int>(gh->getTalentGroupCount())) return 0;
             std::array<uint32_t, 6> slotIds{}, inFields{};
             uint32_t enabled = 0;
-            if (!gh->getGlyphSocketFields(slotIds, inFields, enabled)) {
-                lua_pushnil(L);
-                return 1;
-            }
-            const auto& glyphs = (spec >= 1 && spec <= 2)
-                ? gh->getGlyphs(static_cast<uint8_t>(spec - 1)) : gh->getGlyphs();
+            if (!gh->getGlyphSocketFields(slotIds, inFields, enabled)) return 0;
+            const auto& glyphs = gh->getGlyphs(static_cast<uint8_t>(group));
             const size_t i = static_cast<size_t>(index - 1);
             const uint32_t propertiesId = glyphs[i];
-            if (propertiesId == 0) { lua_pushnil(L); return 1; }
             gh->ensureGlyphPropertiesLoaded();
-            const std::string name = gh->getSpellName(gh->getGlyphSpellId(propertiesId));
-            if (name.empty()) { lua_pushnil(L); return 1; }
+            uint32_t slotType = 0;
+            const uint32_t glyphSpell = propertiesId != 0 ? gh->getGlyphSpellId(propertiesId) : 0u;
+            (void)gh->getSpellName(glyphSpell);  // the Spell rows, loaded on first ask
+            const auto spellRow = gh->spellNameCacheRef().find(glyphSpell);
+            if (glyphSpell == 0 || spellRow == gh->spellNameCacheRef().end() ||
+                !gh->getGlyphSlotType(slotIds[i], slotType)) {
+                lua_pushstring(L, "");
+                return 1;
+            }
+            const std::string& name = spellRow->second.name;
             const std::string link = "|cff66bbff|Hglyph:" + std::to_string(slotIds[i]) +
                                      ":" + std::to_string(propertiesId) + "|h[" + name +
                                      "]|h|r";

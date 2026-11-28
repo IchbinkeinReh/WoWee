@@ -780,6 +780,8 @@ public:
 
     /// Buy the next stable slot from the stable master currently open.
     void buyStableSlot();
+    /// For tests: the StableSlotPrices rows (slot id -> Cost).
+    void setStableSlotPrices(std::unordered_map<uint32_t, uint32_t> prices) { stableSlotPrices_ = std::move(prices); }
 
     /// A cast the client refuses itself, shown as its failure is
     /// (0x00808200): the result's line on the error frame.
@@ -1033,6 +1035,9 @@ private:
     /// the const reach test reports through it.
     mutable cast_failure::RepeatHold failureHold_;
     mutable std::optional<ResistanceSounds> resistanceSounds_;
+    // StableSlotPrices.dbc Cost by slot id, read on the first purchase.
+    mutable std::optional<std::unordered_map<uint32_t, uint32_t>> stableSlotPrices_;
+    [[nodiscard]] std::optional<uint32_t> stableSlotPrice(uint32_t slot) const;
     std::unordered_map<uint32_t, std::string> skillLineVerbs_;
     /// 0x00af5274: the casts whose missile still flies.
     spell_missiles::InFlightList missilesInFlight_;

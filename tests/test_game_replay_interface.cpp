@@ -5382,6 +5382,54 @@ TEST_CASE("the reagent -2 with full bags is said as ERR_INV_FULL (0x00808200)", 
     CHECK(ui.is("tonumber(ends[2]:match('(%d+)$')) == tonumber(ends[1]:match('(%d+)$')) + 1"));
 }
 
+// BuyStableSlot (0x005a1bd0) asks for a stable master, fewer than four
+// slots, a StableSlotPrices row for the next and its Cost in the purse;
+// StablePet (0x005a19c0) for the stable master alone, no pet.
+TEST_CASE("BuyStableSlot only what can be bought, StablePet without a pet (0x005a1bd0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::PLAYER_FIELD_COINAGE, 5000}});
+    s.setConnected(true);
+    Interface ui(s);
+    s.handler().getSpellHandler()->setStableSlotPrices({{2, 500}, {3, 50000}, {5, 1}});
+    constexpr uint64_t kMaster = 0xF130000AB0000077ull;
+    const auto list = [&](uint8_t slots) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::MSG_LIST_STABLED_PETS));
+        p.writeUInt64(kMaster);
+        p.writeUInt8(0);
+        p.writeUInt8(slots);
+        s.receive(p);
+    };
+    const auto buys = [&] { return s.sent().of(Opcode::CMSG_BUY_STABLE_SLOT).size(); };
+    ui.run("BuyStableSlot()");
+    CHECK(buys() == 0);  // no stable master yet
+    list(1);
+    ui.run("BuyStableSlot()");
+    CHECK(buys() == 1);  // slot 2 for 500
+    list(2);
+    ui.run("BuyStableSlot()");
+    CHECK(buys() == 1);  // slot 3 costs more than 5000
+    list(4);
+    ui.run("BuyStableSlot()");
+    CHECK(buys() == 1);  // four bought: none, whatever row 5 says
+    list(3);
+    ui.run("BuyStableSlot()");
+    CHECK(buys() == 1);  // no row 4
+    ui.run("StablePet()");
+    CHECK(s.sent().of(Opcode::CMSG_STABLE_PET).size() == 1);
+}
+
+// GetGlyphLink (0x005b7740) answers nothing at all past the six sockets or
+// for a talent group the player does not have.
+TEST_CASE("GetGlyphLink answers nothing out of range (0x005b7740)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select('#', GetGlyphLink(7)) == 0"));
+    CHECK(ui.is("select('#', GetGlyphLink(0)) == 0"));
+    CHECK(ui.is("select('#', GetGlyphLink(1, 3)) == 0"));
+    CHECK(ui.is("not pcall(GetGlyphLink)"));
+}
+
 // T438: 0x0080cce0 asks 0x008091d0 before the unit and the cursor: a reagent
 // not carried fails the cast there (SPELL_FAILED_REAGENTS with the item), so
 // no CMSG_CAST_SPELL goes out and UNIT_SPELLCAST_SENT is not raised. With the
