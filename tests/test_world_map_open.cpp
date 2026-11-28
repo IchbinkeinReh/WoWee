@@ -212,6 +212,17 @@ TEST_CASE("an instance opens where its entrance is shown", "[world_map][open]") 
     CHECK_FALSE(DataRepository::entranceShown(transforms, Entrance{}).valid);
 }
 
+// T474: 0x00547170 picks the entrance's zone from the continent's ZMP cell,
+// rows by X and columns by Y (0.5 - c / 34133.33, truncated) - Uldaman's
+// entrance (-6060.18, -2955.0) is row 86, column 75 - not from the first
+// WorldMapArea rectangle holding it (Loch Modan's reaches there too).
+TEST_CASE("an instance's entrance zone is its ZMP cell (0x00547170)", "[world_map][open]") {
+    CHECK(DataRepository::zmpCellAtServer(-6060.18f, -2955.0f) == 86 * 128 + 75);
+    CHECK(DataRepository::zmpCellAtServer(0.0f, 0.0f) == 64 * 128 + 64);
+    CHECK(DataRepository::zmpCellAtServer(17066.0f, 17066.0f) == 0);
+    CHECK(DataRepository::zmpCellAtServer(-17100.0f, 0.0f) == -1);
+}
+
 // 0x00547170: SetMapToCurrentZone sets the map at once, and the last call counts.
 TEST_CASE("a map the interface has set stays where it is", "[world_map]") {
     MapOpening m;

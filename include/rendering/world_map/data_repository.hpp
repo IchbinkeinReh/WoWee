@@ -6,6 +6,7 @@
 #include "game/world_map_transforms.hpp"
 #include "rendering/world_map/continent_list.hpp"
 #include "rendering/world_map/world_map_types.hpp"
+#include <algorithm>
 #include <unordered_map>
 #include <optional>
 #include <string>
@@ -93,6 +94,22 @@ public:
 
     /// Look up zone index from an AreaTable ID (from ZMP). Returns -1 if not found.
     [[nodiscard]] int zoneIndexForAreaId(uint32_t areaId) const;
+    /// The zone 12340 opens for a map-less instance (0x00547170 "Inside
+    /// Instance"): the ZMP cell at the entrance's server X/Y, its area's
+    /// parent where it has one. -1 for none.
+    [[nodiscard]] int zmpZoneAtServer(float serverX, float serverY) const;
+    /// That cell's index (row * 128 + column), -1 off the grid: rows by X and
+    /// columns by Y, each from 0.5 - coordinate / 34133.33 (2.9296876e-05),
+    /// truncated (0x00547170 sets control word 0xc00); outside 0..1 none.
+    [[nodiscard]] static int zmpCellAtServer(float serverX, float serverY) {
+        constexpr float kPerYard = 2.9296876e-05f;
+        const float rowF = 0.5f - serverX * kPerYard;
+        const float colF = 0.5f - serverY * kPerYard;
+        if (!(rowF >= 0.0f && rowF <= 1.0f && colF >= 0.0f && colF <= 1.0f)) return -1;
+        const int row = std::min(static_cast<int>(rowF * 128.0f), ZMP_SIZE - 1);
+        const int col = std::min(static_cast<int>(colF * 128.0f), ZMP_SIZE - 1);
+        return row * ZMP_SIZE + col;
+    }
 
     /// Convert a render-space position from a physical map into the currently
     /// loaded display map using WorldMapTransforms.dbc.
@@ -162,6 +179,8 @@ private:
     bool zmpLoaded_ = false;
     // AreaID → zone index (zones_ vector) for quick resolution
     std::unordered_map<uint32_t, int> areaIdToZoneIdx_;
+    // AreaTable ParentAreaID by area, for the ZMP cells (0x00547eb0).
+    std::unordered_map<uint32_t, uint32_t> parentByAreaId_;
     // ZMP-derived bounding boxes per zone index (UV coords on display)
     std::unordered_map<int, ZmpRect> zmpZoneBounds_;
 

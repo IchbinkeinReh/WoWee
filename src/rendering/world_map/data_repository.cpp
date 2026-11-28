@@ -30,6 +30,7 @@ void DataRepository::clear() {
     explorationLevelByAreaId_.clear();
     areaNameByAreaId_.clear();
     areaIdToZoneIdx_.clear();
+    parentByAreaId_.clear();
     zmpZoneBounds_.clear();
     zmpGrid_.fill(0);
     zmpLoaded_ = false;
@@ -178,6 +179,7 @@ void DataRepository::loadZones(const std::string& mapName,
             if (areaId != 0)
                 mapIdByAreaId_[areaId] = areaDbc->getUInt32(i, atL ? (*atL)["MapID"] : 1);
             if (parentArea != 0) childBitsByParent[parentArea].push_back(exploreFlag);
+            if (areaId != 0 && parentArea != 0) parentByAreaId_[areaId] = parentArea;
             // Cache area display name (field 11 = AreaName_lang enUS)
             if (areaId != 0 && fieldCount > 11) {
                 std::string areaDispName = areaDbc->getString(i, 11);
@@ -641,6 +643,21 @@ int DataRepository::zoneIndexForAreaId(uint32_t areaId) const {
         }
     }
     return -1;
+}
+
+int DataRepository::zmpZoneAtServer(float serverX, float serverY) const {
+    // 0x00547170 "Inside Instance": the cell of the continent's grid at the
+    // (transformed) entrance.
+    const int cell = zmpLoaded_ ? zmpCellAtServer(serverX, serverY) : -1;
+    if (cell < 0) return -1;
+    uint32_t areaId = zmpGrid_[static_cast<size_t>(cell)];
+    if (areaId == 0) return -1;
+    // The loader (0x00547eb0's zmp pass) stores the WorldMapArea row of the
+    // cell's area, or of its parent where AreaTable names one (+8), on this
+    // continent - one step, no overlay search.
+    if (const auto p = parentByAreaId_.find(areaId); p != parentByAreaId_.end()) areaId = p->second;
+    const auto it = areaIdToZoneIdx_.find(areaId);
+    return it != areaIdToZoneIdx_.end() ? it->second : -1;
 }
 
 void DataRepository::loadPOIs(pipeline::AssetManager& assetManager) {

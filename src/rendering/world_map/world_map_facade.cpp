@@ -135,6 +135,7 @@ struct WorldMapFacade::Impl {
     // none of its own. The player is not on that map and is not drawn on it.
     bool showingEntrance = false;
     glm::vec3 entrancePos{0.0f};   // render space, while showingEntrance
+    glm::vec2 entranceServer{0.0f};  // the same in server X/Y (the ZMP's)
     uint32_t entranceMapId = 0;
 
     // Which floor of the area being shown is selected, as the client holds it:
@@ -492,8 +493,18 @@ void WorldMapFacade::Impl::recenter(const glm::vec3& playerRenderPos) {
     // In render space, which keeps the server's order.
     const glm::vec3 entrancePos = core::coords::canonicalToRender(
         core::coords::serverToCanonical(glm::vec3(entrance.x, entrance.y, 0.0f)));
+    const glm::vec2 entranceServer(entrance.x, entrance.y);
+    // The zone shown for the entrance (0x00547170): the continent's ZMP cell
+    // under it ("Inside Instance"); with none there, the WorldMapArea row of
+    // the player's own zone on that continent ("Normal Map"), else the
+    // continent. Not the first zone rectangle holding the point - Uldaman's
+    // entrance lies in Loch Modan's rectangle too (T474).
+    const auto entranceZone = [&](const glm::vec2& at) {
+        const int z = d.data.zmpZoneAtServer(at.x, at.y);
+        return z >= 0 ? z : findZoneByAreaId(d.data.zones(), d.playerZoneId);
+    };
     int playerZone = d.showingEntrance
-        ? findZoneForPlayer(d.data.zones(), d.entrancePos, 0)
+        ? entranceZone(d.entranceServer)
         : findZoneForPlayer(d.data.zones(), displayPlayerRenderPos, d.playerZoneId);
     // A zone on this continent that has no map of its own - Hyjal, in
     // 3.3.5 - opens the continent, as the real client does. Left to the
@@ -551,7 +562,8 @@ void WorldMapFacade::Impl::recenter(const glm::vec3& playerRenderPos) {
             d.showingEntrance = true;
             d.entrancePos = entrancePos;
             d.entranceMapId = entranceMapId;
-            playerZone = findZoneForPlayer(d.data.zones(), entrancePos, 0);
+            d.entranceServer = entranceServer;
+            playerZone = entranceZone(entranceServer);
             displayPlayerRenderPos = displayedPlayerPosition();
         } else {
             displayPlayerRenderPos = displayedPlayerPosition();
