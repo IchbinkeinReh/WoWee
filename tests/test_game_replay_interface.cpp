@@ -21,6 +21,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "rendering/animation/emote_registry.hpp"
 #include "ui/framexml_emitter.hpp"
+#include "ui/window_manager.hpp"
 #include "ui/widget_tree.hpp"
 #include "ui/xml_parser.hpp"
 
@@ -3342,6 +3343,36 @@ TEST_CASE("PLAYER_BYTES reach the drawn character record (V659)", "[replay][inte
     CHECK(ch->facialFeatures == 3);
 }
 
+// V661: the realm's paid PLAYER_BYTES arrive before the stand-up; leaving the
+// chair (takeBarberLeft -> barberResetSelections) put the pre-visit styles
+// back on the record, and nothing redrew the paid ones after. 0x0052e9f0
+// resets to the unit's current values.
+TEST_CASE("leaving the barber's chair keeps the paid style (V661)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    auto& gh = s.handler();
+    wowee::game::GameHandlerTestAccess::setCharacter(gh, "A", "Locki", Session::kPlayerGuid + 1);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x000F0000}}));
+    const auto state = [&](uint8_t v) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_STANDSTATE_UPDATE));
+        p.writeUInt8(v);
+        s.receive(p);
+    };
+    s.receive(wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_ENABLE_BARBER_SHOP)));
+    state(5);
+    REQUIRE(gh.isBarberShopOpen());
+    wowee::ui::WindowManager wm;
+    (void)wm.barberSelection(gh);   // the chair's state, from the unit's fields
+    // Paid: the realm's new hair style and colour, then the stand-up.
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x01000000}}));
+    state(0);
+    REQUIRE(gh.takeBarberLeft());
+    wm.barberResetSelections(gh);
+    const auto* ch = gh.getActiveCharacter();
+    REQUIRE(ch != nullptr);
+    CHECK(ch->appearanceBytes == 0x01000000u);
+}
+
 // T364: PickupInventoryItem takes the bank's slots (40-67) and its bags'
 // slots (68-74) while a banker is open (0x005e7c00, 0x005e85d0 refuses them
 // only with none open). It did nothing for any slot past 23.
@@ -4201,6 +4232,16 @@ TEST_CASE("the quest texts outlive the quest window (0x0058bd10)", "[replay][int
     CHECK(ui.is("GetGreetingText() == 'Hallo'"));
     ui.run("CloseQuest()");
     CHECK(ui.is("GetGreetingText() == 'Hallo'"));
+    // T465: the player's name and the rest filled in (0x0058c5a0 -> 0x00579590).
+    wowee::network::Packet n(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_LIST));
+    n.writeUInt64(0xF130000C3E000001ull);
+    n.writeString("Seid gegruesst, $N");
+    n.writeUInt32(0);
+    n.writeUInt32(0);
+    n.writeUInt8(0);
+    s.receive(n);
+    CHECK(ui.is("GetGreetingText():find('$N', 1, true) == nil"));
+    CHECK(ui.is("GetGreetingText():find('Seid gegruesst, ', 1, true) == 1"));
 }
 
 // GetNumQuestRewards/Choices, GetRewardMoney, GetRewardXP and
@@ -4214,7 +4255,7 @@ TEST_CASE("the quest frame's rewards outlive the window (0x0058c190)", "[replay]
                    {UF::UNIT_FIELD_LEVEL, 10}});
     Interface ui(s);
     s.setConnected(true);
-    auto offer = [&](int32_t money) {
+    auto offer = [&](int32_t money, uint32_t spell = 0, uint32_t title = 0) {
         wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_OFFER_REWARD));
         p.writeUInt64(0xF130000C3E000001ull);
         p.writeUInt32(300);
@@ -4231,10 +4272,18 @@ TEST_CASE("the quest frame's rewards outlive the window (0x0058c190)", "[replay]
         p.writeUInt32(35953); p.writeUInt32(2); p.writeUInt32(9003);
         p.writeUInt32(static_cast<uint32_t>(money));
         p.writeUInt32(20000);
-        for (int i = 0; i < 25; ++i) p.writeUInt32(0);
+        // Honour, its multiplier, a spare word, the spell shown, the spell
+        // cast, the title, then the rest.
+        for (int i = 0; i < 3; ++i) p.writeUInt32(0);
+        p.writeUInt32(spell);
+        p.writeUInt32(0);
+        p.writeUInt32(title);
+        for (int i = 0; i < 19; ++i) p.writeUInt32(0);
         s.receive(p);
     };
-    offer(47400);
+    constexpr uint32_t kRewardSpell = 33389;
+    s.handler().spellNameCacheRef()[kRewardSpell].name = "Lehrling Reiten";
+    offer(47400, kRewardSpell, 42);
     REQUIRE(s.handler().isQuestOfferRewardOpen());
     ui.run("CloseQuest()");
     REQUIRE_FALSE(s.handler().isQuestOfferRewardOpen());
@@ -4243,6 +4292,12 @@ TEST_CASE("the quest frame's rewards outlive the window (0x0058c190)", "[replay]
     CHECK(ui.is("GetRewardMoney() == 47400"));
     CHECK(ui.is("GetRewardXP() == 20000"));
     CHECK(ui.is("GetQuestMoneyToGet() == 0"));
+    // GetRewardSpell/GetQuestSpellLink/GetRewardTitle (0x0058d670/0x0058dab0/
+    // 0x0058d810) read 0x00c0d680/0x00c0d688, kept after the close too.
+    CHECK(s.handler().questFrameRewards().spell == kRewardSpell);
+    CHECK(s.handler().questFrameRewards().title == 42u);
+    CHECK(ui.is("select(2, GetRewardSpell()) == 'Lehrling Reiten'"));
+    CHECK(ui.is("GetQuestSpellLink() ~= nil"));
     wowee::network::Packet r(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_REQUEST_ITEMS));
     r.writeUInt64(0xF130000C3E000001ull);
     r.writeUInt32(789);
@@ -4257,6 +4312,19 @@ TEST_CASE("the quest frame's rewards outlive the window (0x0058c190)", "[replay]
     offer(-500);
     CHECK(ui.is("GetRewardMoney() == 0"));
     CHECK(ui.is("GetQuestMoneyToGet() == 500"));
+}
+
+// UnitLevel (0x0060f9e0): anything but a string (or a number, which Lua
+// takes as one) is 'Usage: UnitLevel("unit")', no answer for the player.
+TEST_CASE("UnitLevel without a unit is a usage error", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 12}});
+    Interface ui(s);
+    CHECK(ui.is("UnitLevel('player') == 12"));
+    CHECK(ui.is("not pcall(UnitLevel)"));
+    CHECK(ui.is("not pcall(UnitLevel, nil)"));
+    CHECK(ui.is("not pcall(UnitLevel, {})"));
+    CHECK(ui.is("select(2, pcall(UnitLevel)):find('Usage: UnitLevel', 1, true) ~= nil"));
 }
 
 // T463: the giver's quest list is a quest page (0x006d0240 -> 0x0058c5a0 with

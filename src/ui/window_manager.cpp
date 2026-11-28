@@ -297,6 +297,13 @@ uint32_t WindowManager::barberTotalCostCopper(game::GameHandler& gameHandler) {
 
 void WindowManager::barberResetSelections(game::GameHandler& gameHandler) {
     ensureBarberState(gameHandler);
+    // Out of the chair (the stand-up's takeBarberLeft): ensureBarberState has
+    // just put the unit's own fields back on the model (0x0052e9f0 resets to
+    // the unit's current values) and dropped the state. Re-previewing the
+    // pre-visit selections from here drew the hair the player had just paid
+    // to change - the realm's new PLAYER_BYTES had come before the stand-up,
+    // so nothing redrew it after (V661).
+    if (!gameHandler.isBarberShopOpen()) return;
     const auto* ch = gameHandler.getActiveCharacter();
     if (!ch) return;
     const uint32_t raceId = static_cast<uint32_t>(ch->race);
