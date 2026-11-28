@@ -10484,8 +10484,8 @@ void registerSystemLuaAPI(lua_State* L) {
             switch (setting) {
                 case 1: on = gh && gh->isInInstance(); break;
                 case 2: on = gh && !gh->getPartyData().members.empty(); break;
-                case 3: on = true; break;
-                default: on = false; break;   // 0, and anything unrecognised
+                case 0: on = false; break;
+                default: on = true; break;    // 3 and anything else (0x00519df0)
             }
             luaPushOneOrNil(L, on ? 1 : 0);
             return 1;

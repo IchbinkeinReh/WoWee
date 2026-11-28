@@ -5410,8 +5410,11 @@ void registerSocialLuaAPI(lua_State* L) {
                 // away. Distance to the innkeeper is not tracked, and staying
                 // up is the lesser wrong - the server refuses a bind from too
                 // far off anyway.
+                // 0x0051bf90 -> 0x006d2120 with no guid: the binder held
+                // (0x00c9eb20), sent only while within its reach + 4 yards.
                 {"ConfirmBinder", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->confirmBinder();
+            auto* gh = getGameHandler(L);
+            if (gh && npcWithinInteractRange(gh, gh->getBinderGuid())) gh->confirmBinder();
             return 0;
         }},
                 // Both are asked from the confirmation's own OnUpdate and both

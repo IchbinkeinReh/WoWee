@@ -2095,16 +2095,15 @@ void SocialHandler::promoteGuildMember(const std::string& playerName) {
     // The guild commands go out silently and the server's answer is what is
     // said - SMSG_GUILD_EVENT or SMSG_GUILD_COMMAND_RESULT. These printed
     // "Promoting X...", "Demoting X...", "Leaving guild...", "Inviting X to
-    // guild..." and refused an empty name in English.
-    if (playerName.empty()) return;
+    // guild..." and refused an empty name in English. 0x00522bc0 sends an
+    // empty name as it is.
     auto packet = GuildPromotePacket::build(playerName);
     owner_.getSocket()->send(packet);
 }
 
 void SocialHandler::demoteGuildMember(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) return;
-    auto packet = GuildDemotePacket::build(playerName);
+    auto packet = GuildDemotePacket::build(playerName);   // 0x00522c90: "" too
     owner_.getSocket()->send(packet);
 }
 

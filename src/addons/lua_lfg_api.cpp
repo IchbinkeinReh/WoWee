@@ -40,6 +40,7 @@
 #include "game/game_utils.hpp"
 #include "game/lfg_roles.hpp"
 #include "game/interface_text.hpp"
+#include "core/app_clock.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -51,6 +52,18 @@
 namespace wowee::addons {
 
 namespace {
+
+/// The lock-info asks' throttle (0x005569d0): the count goes up on every ask;
+/// past two, an ask within ten seconds of the stamp is refused, a later one
+/// resets count and stamp and goes.
+bool lfdLockAskAllowed(int& count, double& stamp) {
+    if (++count <= 2) return true;
+    const double now = core::appTimeSeconds();
+    if (now - stamp < 10.0) return false;
+    stamp = now;
+    count = 0;
+    return true;
+}
 
 /// FrameXML numbers a category header with the negative of its group id, and
 /// keeps headers and dungeons in one key space - LFGIsIDHeader is `id < 0`,
@@ -941,13 +954,24 @@ void registerLfgLuaAPI(lua_State* L) {
         if (auto* gh = getGameHandler(L)) gh->lfgLeaveLocal();
         return 0;
     }},
+    // 0x005569d0 / 0x00556a50: each its own counter and stamp (0x00acdd60 /
+    // 0x00beabb8, 0x00acdd64 / 0x00beabbc) - more than two asks within ten
+    // seconds of the last reset are held back; true when the request went.
     {"RequestLFDPlayerLockInfo", [](lua_State* L) -> int {
+        static int count = 0;
+        static double stamp = 0.0;
+        if (!lfdLockAskAllowed(count, stamp)) { lua_pushboolean(L, 0); return 1; }
         if (auto* gh = getGameHandler(L)) gh->requestLfgPlayerLockInfo();
-        return 0;
+        lua_pushboolean(L, 1);
+        return 1;
     }},
     {"RequestLFDPartyLockInfo", [](lua_State* L) -> int {
+        static int count = 0;
+        static double stamp = 0.0;
+        if (!lfdLockAskAllowed(count, stamp)) { lua_pushboolean(L, 0); return 1; }
         if (auto* gh = getGameHandler(L)) gh->requestLfgPartyLockInfo();
-        return 0;
+        lua_pushboolean(L, 1);
+        return 1;
     }},
     // GetLFGDungeonRewardLink(dungeonID, index) → the item link for a reward,
     // which shift-clicking a reward icon puts in chat. Same row
