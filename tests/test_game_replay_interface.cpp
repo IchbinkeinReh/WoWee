@@ -7379,8 +7379,9 @@ TEST_CASE("the quest log's rewards are read by their raw slot", "[replay][interf
     // An answer nobody waited for raises nothing.
     answerItem(s, 25002, "Kalynastachel");
     CHECK(ui.is("updates == 1"));
-    // All four reward slots filled: 0x005df150 never stores its count.
+    // All four reward slots filled: 12340's 0x005df150 never stores its
+    // count and answers 0; WoWee answers 4 (user decision 2026-11-28).
     for (auto& q : quests->questLogRef())
         for (uint32_t i = 0; i < 4; ++i) q.rewardItems[i] = {.itemId = 25010 + i, .count = 1};
-    CHECK(ui.is("GetNumQuestLogRewards() == 0"));
+    CHECK(ui.is("GetNumQuestLogRewards() == 4"));
 }

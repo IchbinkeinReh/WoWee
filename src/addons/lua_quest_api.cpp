@@ -4441,19 +4441,16 @@ static int lua_GetQuestLogGroupNum(lua_State* L) {
 
 // GetNumQuestLogRewards (0x005df150) / GetNumQuestLogChoices (0x005df1d0):
 // the filled slots before the first empty one, as the Info calls above index
-// them. The rewards' loop sets its answer only on reaching an empty slot, so
-// a quest with all four reward slots filled answers 0 in 12340 (checked in
-// the disassembly: 0x005df1a0 jumps past the store); the choices' six count
-// up to 6.
+// them; the choices' six count up to 6.
+// WoWee departure (user decision 2026-11-28): a quest with all four reward
+// slots filled answers 4. 12340's rewards loop sets its answer only on
+// reaching an empty slot (0x005df1a0 jumps past the store), so there it
+// answers 0 and the log shows none of the four rewards.
 static int lua_GetNumQuestLogRewards(lua_State* L) {
     const auto* q = selectedLogEntry(getGameHandler(L));
-    int n = 0;
-    if (q) {
-        size_t i = 0;
-        while (i < q->rewardItems.size() && q->rewardItems[i].itemId != 0) ++i;
-        n = i < q->rewardItems.size() ? static_cast<int>(i) : 0;
-    }
-    lua_pushnumber(L, n);
+    size_t i = 0;
+    if (q) while (i < q->rewardItems.size() && q->rewardItems[i].itemId != 0) ++i;
+    lua_pushnumber(L, static_cast<double>(i));
     return 1;
 }
 
