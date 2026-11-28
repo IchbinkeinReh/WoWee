@@ -7796,6 +7796,7 @@ void InventoryHandler::rebuildOnlineInventory() {
         owner_.inventoryRef().setBagSpecial(bagIdx, bagTemplate &&
             (bagTemplate->itemClass == 11 ||
              (bagTemplate->itemClass == 1 && bagTemplate->subClass != 0)));
+        owner_.inventoryRef().setBagQuiver(bagIdx, bagTemplate && bagTemplate->itemClass == 11);
 
         // Also set bagSlots on the equipped bag item (for UI display)
         auto& bagEquipSlot = owner_.inventoryRef().getEquipSlot(static_cast<EquipSlot>(Inventory::FIRST_BAG_EQUIP_SLOT + bagIdx));

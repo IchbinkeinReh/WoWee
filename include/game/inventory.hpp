@@ -288,9 +288,18 @@ public:
             for (int i = 0; i < getBankBagSize(b); ++i) take(getBankBagSlot(b, i));
         }
     }
+    /// The reagent "item" -2 a spell names for "a free bag slot" (Create
+    /// Healthstone, quest combines): 0x00754d00 answers it by 0x00754470.
+    static constexpr uint32_t kFreeSlotReagent = 0xFFFFFFFEu;
+    /// 0x00754470: the empty slots of the backpack and of the bags worn that
+    /// are containers (Item.dbc class 1, profession bags too - not a quiver).
+    [[nodiscard]] uint32_t freeBagSlots() const;
+    void setBagQuiver(int bagIndex, bool quiver);
+
     /// 0x00754d00: how many of the item those hold, an occupied slot being
-    /// at least one.
+    /// at least one; for -2 the free bag slots (T473).
     [[nodiscard]] uint32_t countCarried(uint32_t itemId) const {
+        if (itemId == kFreeSlotReagent) return freeBagSlots();
         uint32_t n = 0;
         forEachCarried([&](const ItemDef& d) {
             if (d.itemId == itemId) n += d.stackCount > 0 ? d.stackCount : 1;
@@ -417,6 +426,7 @@ private:
     struct BagData {
         int size = 0;
         bool special = false;  // Quiver/ammo pouch/profession bag - restricted contents
+        bool quiver = false;   // Item.dbc class 11: not a container for 0x00754470
         ItemSlot bagItem;  // The bag item itself (for icon/name/tooltip)
         std::array<ItemSlot, MAX_BAG_SIZE> slots{};
     };

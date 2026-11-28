@@ -823,7 +823,7 @@ int32_t spellReagentCasts(game::GameHandler* gh, uint32_t spell) {
     if (spellKnownToClient(gh, spell) && gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
         for (const auto& r : gh->spellNameCacheRef().at(spell).reagents) {
             const auto need = static_cast<int32_t>(r.count);
-            if (r.itemId == 0 || r.itemId == 0xFFFFFFFEu || need <= 0) continue;
+            if (r.itemId == 0 || r.itemId == game::Inventory::kFreeSlotReagent || need <= 0) continue;
             casts = std::min(casts, static_cast<int32_t>(gh->getInventory().countCarried(r.itemId)) / need);
         }
     }

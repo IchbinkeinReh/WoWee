@@ -137,6 +137,23 @@ void Inventory::swapBagContents(int bagA, int bagB) {
     std::swap(bags[bagA], bags[bagB]);
 }
 
+void Inventory::setBagQuiver(int bagIndex, bool quiver) {
+    if (bagIndex < 0 || bagIndex >= NUM_BAG_SLOTS) return;
+    bags[bagIndex].quiver = quiver;
+}
+
+uint32_t Inventory::freeBagSlots() const {
+    uint32_t n = 0;
+    for (const auto& s : backpack)
+        if (s.empty()) ++n;
+    for (const auto& b : bags) {
+        if (b.quiver) continue;
+        for (int i = 0; i < b.size; ++i)
+            if (b.slots[i].empty()) ++n;
+    }
+    return n;
+}
+
 int Inventory::findFreeBackpackSlot() const {
     for (int i = 0; i < BACKPACK_SLOTS; i++) {
         if (backpack[i].empty()) return i;

@@ -77,3 +77,23 @@ TEST_CASE("zero-stack slots each count once", "[inventory-count]") {
     inv.setBagSlot(0, 0, item(7005, 0));
     CHECK(inv.countItem(7005) == 2);
 }
+
+// T473: the reagent -2 of Create Healthstone and the quest combines is "one
+// free bag slot" - 0x00754d00 answers it with 0x00754470's count of the empty
+// slots in the backpack and in the worn containers (not a quiver).
+TEST_CASE("the reagent -2 is counted as the free bag slots", "[inventory-count]") {
+    Inventory inv;
+    const uint32_t backpack = static_cast<uint32_t>(inv.getBackpackSize());
+    CHECK(inv.countCarried(Inventory::kFreeSlotReagent) == backpack);
+    inv.setBackpackSlot(0, item(6265, 1));
+    CHECK(inv.countCarried(Inventory::kFreeSlotReagent) == backpack - 1);
+    inv.setBagSize(0, 4);
+    inv.setBagSlot(0, 1, item(4306, 3));
+    CHECK(inv.countCarried(Inventory::kFreeSlotReagent) == backpack - 1 + 3);
+    inv.setBagSize(1, 6);
+    inv.setBagQuiver(1, true);
+    CHECK(inv.countCarried(Inventory::kFreeSlotReagent) == backpack - 1 + 3);
+    for (int i = 0; i < inv.getBackpackSize(); ++i) inv.setBackpackSlot(i, item(4306, 1));
+    for (int i = 0; i < 4; ++i) inv.setBagSlot(0, i, item(4306, 1));
+    CHECK(inv.countCarried(Inventory::kFreeSlotReagent) == 0);
+}
