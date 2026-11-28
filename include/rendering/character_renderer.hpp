@@ -334,6 +334,9 @@ public:
     [[nodiscard]] bool hasTexture(const std::string& path) const;
     void rememberSharedItemModel(const std::string& key, uint32_t modelId);
     [[nodiscard]] const pipeline::M2Model* getInstanceModelData(uint32_t instanceId) const;
+    /// The geosets an instance draws (setActiveGeosets), sorted; empty for
+    /// none known or one that draws all (MCP player_look).
+    [[nodiscard]] std::vector<uint16_t> instanceActiveGeosets(uint32_t instanceId) const;
     void setActiveGeosets(uint32_t instanceId, const std::unordered_set<uint16_t>& geosets);
     /// Opt an instance into the Skin Extra head-detail batch. Only a character
     /// whose type 8 slot has been filled from CharSections should ask for it.

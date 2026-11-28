@@ -167,6 +167,28 @@ TEST_CASE("every composite places the head's layers on the face", "[char_section
     CHECK(processing.find("charRenderer->setFaceRegionLayer(path, lower)") != std::string::npos);
 }
 
+// U26: the composite with gear pasted a head layer at its own size. Human
+// facial hair and scalp art is 128x64 / 128x32 against a 512 body's 256x128 /
+// 256x64 face regions, so it sat in the regions' top-left quarter and its
+// black texels and goatee lay over the eyes, nose and mouth of the human
+// illusion. Both composites fit a region layer to its region's size, as
+// 12340's 0x004f08a0 grows a smaller section 2x.
+TEST_CASE("every composite fits a head layer to its region's size", "[char_sections]") {
+    const std::string renderer = sourceText("src/rendering/character_renderer.cpp");
+    REQUIRE_FALSE(renderer.empty());
+    const size_t regions = renderer.find("VkTexture* CharacterRenderer::compositeWithRegions(");
+    REQUIRE(regions != std::string::npos);
+    const size_t gear = renderer.find("// Expected region sizes on the 256x256 base atlas", regions);
+    REQUIRE(gear != std::string::npos);
+    const std::string heads = renderer.substr(regions, gear - regions);
+    CHECK(heads.find("blitOverlayResampled(composite, width, height, overlay, dstX, dstY, wantW, wantH)") !=
+          std::string::npos);
+    CHECK(heads.find("const int wantW = region.w * coordScale;") != std::string::npos);
+    const size_t first = renderer.find("VkTexture* CharacterRenderer::compositeTextures(");
+    REQUIRE(first != std::string::npos);
+    CHECK(renderer.find("blitOverlayResampled(composite, width, height, overlay,", first) < regions);
+}
+
 // T334: the wind rider and gryphon cubs (displays 30413/30412) were answered
 // with the taxi models before CreatureDisplayInfo was asked, so the cub was a
 // white grown-up wyvern. 12340 names a creature's model by its display row

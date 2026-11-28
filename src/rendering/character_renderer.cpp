@@ -1916,33 +1916,38 @@ VkTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath,
             // WoW 256-scale atlas coordinates (from CharComponentTextureSections):
             // the same regions compositeTextures places by, the face's sections
             // (beards, scalp art) on the face where a caller said so.
-            int dstX = 0, dstY = 0;
-
             // Scale factor from 256-base coordinates to actual canvas size
             int coordScale = width / 256;
             if (coordScale < 1) coordScale = 1;
-            bool useScale = true;
 
             if (const AtlasRegion256 region = layerRegionOf(faceRegionLayers_, ul); region.known) {
-                dstX = region.x;
-                dstY = region.y;
+                // Into its region at the region's size, whatever size it was
+                // authored at, as compositeTextures places it: 12340 pastes a
+                // section smaller than its region grown 2x (0x004f08a0 ->
+                // 0x004ef9d0). Pasted at its own size, the human facial hair
+                // and scalp art (128x64 and 128x32 against a 512 body) sat in
+                // the top-left quarter of the face's regions - its black,
+                // mostly hidden texels and the goatee's opaque ones over the
+                // eyes, nose and mouth (U26, the human illusion's face).
+                const int dstX = region.x * coordScale;
+                const int dstY = region.y * coordScale;
+                const int wantW = region.w * coordScale;
+                const int wantH = region.h * coordScale;
+                if (overlay.width == wantW && overlay.height == wantH) {
+                    blitOverlay(composite, width, height, overlay, dstX, dstY);
+                } else {
+                    blitOverlayResampled(composite, width, height, overlay, dstX, dstY, wantW, wantH);
+                }
             } else {
                 // Fallback: center overlay on canvas (already in canvas coords)
-                dstX = (width - overlay.width) / 2;
-                dstY = (height - overlay.height) / 2;
-                useScale = false;
-            }
-
-            if (useScale) {
-                dstX *= coordScale;
-                dstY *= coordScale;
-            }
-
-            if (upscaled) {
-                // Overlay is 256-base sized, needs 2x texel scaling for 512 canvas
-                blitOverlayScaled2x(composite, width, height, overlay, dstX, dstY);
-            } else {
-                blitOverlay(composite, width, height, overlay, dstX, dstY);
+                const int dstX = (width - overlay.width) / 2;
+                const int dstY = (height - overlay.height) / 2;
+                if (upscaled) {
+                    // Overlay is 256-base sized, needs 2x texel scaling for 512 canvas
+                    blitOverlayScaled2x(composite, width, height, overlay, dstX, dstY);
+                } else {
+                    blitOverlay(composite, width, height, overlay, dstX, dstY);
+                }
             }
         }
     }
@@ -5893,6 +5898,14 @@ const pipeline::M2Model* CharacterRenderer::getInstanceModelData(uint32_t instan
     auto instIt = instances.find(instanceId);
     if (instIt == instances.end()) return nullptr;
     return getModelData(instIt->second.modelId);
+}
+
+std::vector<uint16_t> CharacterRenderer::instanceActiveGeosets(uint32_t instanceId) const {
+    auto instIt = instances.find(instanceId);
+    if (instIt == instances.end()) return {};
+    std::vector<uint16_t> out(instIt->second.activeGeosets.begin(), instIt->second.activeGeosets.end());
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 void CharacterRenderer::startFadeIn(uint32_t instanceId, float durationSeconds) {
