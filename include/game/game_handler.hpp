@@ -5747,6 +5747,12 @@ public:
         const uint32_t left = elapsed >= static_cast<long long>(ms) ? 0u : ms - static_cast<uint32_t>(elapsed);
         return {left, it->second.temporaryEnchantCharges};
     }
+    /// Whether the temporary enchant's duration field is set: 0x005eaca0 pushes
+    /// nil for the time left when it is 0 (0x005e8290 reads the field itself).
+    bool itemTempEnchantHasDuration(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it != onlineItems_.end() && it->second.temporaryEnchantMs != 0;
+    }
     // Returns the socket gem enchant IDs (3 slots; 0 = empty socket) for an item by GUID.
     /// The enchant in the item's prismatic slot (ITEM_FIELD_ENCHANTMENT 6):
     /// a socket added to it, a belt buckle's (0x006277f0's walk).

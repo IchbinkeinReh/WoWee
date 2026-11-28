@@ -5545,7 +5545,10 @@ static int lua_GetWeaponEnchantInfo(lua_State* L) {
         }
         const auto [ms, charges] = gh->getItemTempEnchantTime(guid);
         lua_pushnumber(L, 1);
-        lua_pushnumber(L, ms);
+        // The time left only while the duration field is set (0x005e8290 != 0);
+        // a temporary enchant without a duration answers nil, not 0.
+        if (gh->itemTempEnchantHasDuration(guid)) lua_pushnumber(L, ms);
+        else lua_pushnil(L);
         lua_pushnumber(L, charges);
     }
     return 6;
