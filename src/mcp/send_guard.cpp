@@ -447,6 +447,9 @@ bool gmWordsAllowed(const std::vector<std::string>& w, const std::string& ownNam
         return args >= 1 && isNumberOrLink(sub) && (args == 1 || !isNumber(sub));
     }
     if (verb == "morph") return args == 1 && isNumber(sub);
+    // The zone's weather (`.wchange TYPE GRADE`: type 0 fine, 1 rain, 2 snow,
+    // 3 storm; grade 0..1), for V670 - set back to the zone's own after.
+    if (verb == "wchange") return args == 2 && isNumber(sub) && isNumber(w[2]) && sub[0] != '-' && w[2][0] != '-';
     if (verb == "go") {
         return isOneOf(sub, {"xyz", "zonexy", "grid", "creature", "gameobject", "taxinode", "trigger", "graveyard",
                              "quest"});

@@ -365,7 +365,7 @@ TEST_CASE("the commands that reach further are not", "[mcp][gm]") {
           ".server shutdown 1", ".reload all", ".npc add 1", ".npc delete", ".gobject delete 1", ".gobject add 1",
           ".lookup player account x", ".lookup player ip 1.2.3.4", ".guild invite", ".group leader Other",
           ".character delete", ".character rename", ".mute Other", ".gm list", ".gm ingame", ".whispers on",
-          ".cast dist 1", ".wchange 1 1", ".event start 1", ".instance reset", ".quest add 1 Other", ".modify gender 1",
+          ".cast dist 1", ".wchange", ".wchange 1", ".wchange 1 1 Other", ".wchange -1 1", ".event start 1", ".instance reset", ".quest add 1 Other", ".modify gender 1",
           ".bf start 1", ".groupsummon Other", ".recall Other", ".unknown"}) {
         INFO(command);
         CHECK_FALSE(gives(command));
@@ -453,7 +453,7 @@ TEST_CASE("no command that does something is given with anything else selected",
         ".cooldown", ".levelup", ".respawn", ".save", ".learn 6603", ".LEARN all", ".unlearn 6603", ".additem 6948",
         ".morph 1", ".go xyz 1 2 3", ".tele Orgrimmar", ".gm on", ".gm fly on", ".modify hp 100", ".mod speed 5",
         ".modify money 1", ".quest add 783", ".cast 133", ".cast self 133", ".cast back 133", ".instance unbind all",
-        "!aura 5782"};
+        ".wchange 1 0.5", "!aura 5782"};
     const std::vector<std::string> tells = {".npc info", ".npc near", ".gobject info", ".gobject near 5",
                                             ".gobj target", ".gps", ".lookup item Linen", ".distance", ".help",
                                             ".help aura", ".commands", ".server info"};

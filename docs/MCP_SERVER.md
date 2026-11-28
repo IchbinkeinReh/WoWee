@@ -151,7 +151,7 @@ family of an opcode's name, with what only asks, declines or cancels let through
 
 A whisper to the own character goes out. One that is a game master's command has to be on a list: `.gps .revive .die
 .dismount .demorph .combatstop .maxskill .cooldown .levelup .respawn .save .distance` bare or with the own name; `.aura
-.unaura .learn .unlearn ID|all`, `.additem ID` (`.additem OWNNAME ID COUNT` for a count), `.morph ID`, `.go xyz|creature|gameobject|...`, `.tele PLACE`, `.gm
+.unaura .learn .unlearn ID|all`, `.additem ID` (`.additem OWNNAME ID COUNT` for a count), `.morph ID`, `.wchange TYPE GRADE` (the zone's weather: 0 fine, 1 rain, 2 snow, 3 storm, grade 0-1 - set it back after), `.go xyz|creature|gameobject|...`, `.tele PLACE`, `.gm
 on|off|fly|visible`, `.modify ...`, `.quest add|complete|remove|reward ID`, `.npc info|near`, `.gobject
 info|near|target`, `.cast ID|self|back`, `.lookup` (not `player`), `.server info|motd`, `.instance listbinds|unbind`,
 `.guild create "NAME"` (or with the own name before the quoted guild name; the character leads it), `.guild delete
