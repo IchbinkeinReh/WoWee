@@ -5052,8 +5052,10 @@ static int lua_GetInventorySlotInfo(lua_State* L) {
     // 0x005e7d60: PaperDollItemFrame.dbc (ItemButtonName, SlotIcon,
     // SlotNumber), the name matched without regard to case - the slot, its
     // icon as the file names it, and 1 for the ranged slot (18) else nil.
-    // A name the file does not have is the client's error.
-    const char* name = luaL_checkstring(L, 1);
+    // A name the file does not have - or no name at all - is the client's
+    // error.
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Invalid inventory slot in GetInventorySlotInfo");
+    const char* name = lua_tostring(L, 1);
     auto* gh = getGameHandler(L);
     auto* am = gh ? gh->services().assetManager : nullptr;
     auto dbc = am && am->isInitialized() ? am->loadDBC("PaperDollItemFrame.dbc") : nullptr;
