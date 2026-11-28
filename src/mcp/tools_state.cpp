@@ -26,6 +26,7 @@
 #include "mcp/tool_context.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
+#include "rendering/character_renderer.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
@@ -453,7 +454,29 @@ json rtLightsOf(ToolContext& context, const json& args) {
 
 }  // namespace
 
+/// The player's own character instance as drawn (U26): its model, the
+/// geosets it draws, and the layers its body texture was composited from.
+json playerLookOf(ToolContext& context, const json&) {
+    auto* renderer = context.app.getRenderer();
+    if (!renderer) throw ToolError("no renderer");
+    auto* chars = renderer->getCharacterRenderer();
+    const uint32_t instance = renderer->getCharacterInstanceId();
+    if (!chars || instance == 0) throw ToolError("no player character instance");
+    json out;
+    const auto* model = chars->getInstanceModelData(instance);
+    out["model"] = model ? model->name : std::string();
+    out["shown_as_display"] = renderer->characterShownAsDisplay();
+    out["geosets"] = chars->instanceActiveGeosets(instance);
+    out["body_skin"] = context.app.getBodySkinPath();
+    out["base_layers"] = context.app.getUnderwearPaths();
+    return out;
+}
+
 void addStateTools(Toolbox& box) {
+    box.push_back(lookTool("player_look",
+                           "The player's character model as drawn: the model file, the geosets it draws and the "
+                           "layers its body texture is composited from (skin, face, facial hair, scalp, underwear).",
+                           schema::object({}), playerLookOf));
     box.push_back(lookTool("rt_lights",
                            "The ray traced point lights near the camera as the last frame had them, nearest first: "
                            "kind, model, place, distance, final strength and colour, reach, a fire's visible flame "

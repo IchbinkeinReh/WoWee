@@ -75,6 +75,7 @@ character faces (0 ahead, 90 right). Pixels are the window's, from the top left.
 | `wait` | for an event, a window, a text, a chat line or a state, or for a time |
 | `server_info` | what the server may do and what it has refused |
 | `rt_lights` | the ray traced point lights near the camera as the last frame had them: kind, model, place, final strength, reach, a fire's visible flame share, kept by the light budget or merged into its source's one light, or why it was dropped (`dropped`: too faint, reach too short, too far, out of view); `sources`: per source its lights listed and kept and `why` it gives fewer this frame (no flames or glow shown, model lights off by their tracks, no emitter on, split parts summed or joined with a light in the same place, merged by the budget, dropped); the eye adaptation's exposure |
+| `player_look` | the player's character model as drawn: the model file, whether a display stands in for it, the geosets it draws (sorted) and the layers its body texture is composited from (body skin, face, facial hair, scalp, underwear) |
 
 **To act** (these press something, one at a time):
 
