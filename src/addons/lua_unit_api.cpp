@@ -2019,9 +2019,30 @@ static int lua_IsMounted(lua_State* L) {
     return 1;
 }
 
+// IsFlying() (0x00612500): the FLYING movement flag (0x2000000) alone - not
+// CAN_FLY with it - of the player, or, while the player sits in a vehicle
+// (its vehicle record's state 3, as UnitInVehicle), of that vehicle; a
+// vehicle not in sight answers nil. Read off the player while seated, a
+// passenger on a flying drake was never flying.
 static int lua_IsFlying(lua_State* L) {
     auto* gh = getGameHandler(L);
-    luaPushOneOrNil(L, gh && gh->isPlayerFlying());
+    bool flying = false;
+    if (gh) {
+        constexpr uint32_t kFlying = static_cast<uint32_t>(game::MovementFlags::FLYING);
+        const uint64_t player = gh->getPlayerGuid();
+        if (gh->vehicleRoster().seatState(player) == 3) {
+            const auto p = gh->vehicleRoster().passenger(player);
+            const uint64_t vehicle = p ? p->vehicleGuid : 0;
+            if (vehicle != 0 && vehicle == gh->activeMover()) {
+                flying = (gh->getMovementInfo().flags & kFlying) != 0;
+            } else if (const auto e = vehicle ? gh->getEntityManager().getEntity(vehicle) : nullptr) {
+                flying = (e->getReportedMoveFlags() & kFlying) != 0;
+            }
+        } else {
+            flying = (gh->playerMovementInfo().flags & kFlying) != 0;
+        }
+    }
+    luaPushOneOrNil(L, flying);
     return 1;
 }
 
