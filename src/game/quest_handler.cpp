@@ -3,6 +3,7 @@
 #include "ui/framexml_takeover.hpp"
 #include "game/item_text.hpp"
 #include "game/quest_handler.hpp"
+#include "game/text_tokens.hpp"
 #include "game/quest_query_layout.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -2395,8 +2396,10 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
     // blank over a list that was otherwise correct.
     questGreeting_ = normalizeWowTextTokens(packet.readString());
     questFrameTexts_ = QuestFrameTexts{};  // 0x0058c5a0 kind 0 -> 0x0058b720
-    // ...which then writes the list's text, kept after the window closes.
-    questFrameTexts_.greeting = questGreeting_.empty() ? " " : questGreeting_;
+    // ...which then writes the list's text, kept after the window closes -
+    // run through 0x00579590 first, as every quest text: $N, $C, $R, $G...
+    // are the player's (T465).
+    questFrameTexts_.greeting = questGreeting_.empty() ? " " : resolveTextTokens(questGreeting_, owner_);
     // The giver's (delay, emote) pair (0x006d0240 -> 0x0071a260).
     std::vector<DialogEmote> listEmotes;
     if (packet.hasRemaining(8)) {
@@ -2812,7 +2815,8 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     questFrameTexts_.quest = data.details.empty() ? " " : data.details;
     questFrameTexts_.objective = data.objectives;
     writeQuestFrameRewards(data.rewardItems, data.rewardChoiceItems, data.rewardMoney, data.rewardXp,
-                           data.rewardHonor, data.rewardTalents, data.rewardArenaPoints);
+                           data.rewardHonor, data.rewardTalents, data.rewardArenaPoints, data.rewardSpellId,
+                           data.rewardSpellCastId, data.rewardTitleId);
     for (auto& q : questLog_) {
         if (q.questId != data.questId) continue;
         if (!data.title.empty() && (isPlaceholderQuestTitle(q.title) || data.title.size() >= q.title.size())) {
@@ -2844,7 +2848,8 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
 void QuestHandler::writeQuestFrameRewards(const std::vector<QuestRewardItem>& rewards,
                                           const std::vector<QuestRewardItem>& choices,
                                           int32_t money, uint32_t xp, uint32_t honor,
-                                          uint32_t talents, uint32_t arenaPoints) {
+                                          uint32_t talents, uint32_t arenaPoints,
+                                          uint32_t spell, uint32_t spellCast, uint32_t title) {
     auto& f = questFrameRewards_;
     // 0x0058dd50 -> 0x0058b7d0: every slot, required ones included, cleared.
     f.rewards.clear();
@@ -2862,6 +2867,9 @@ void QuestHandler::writeQuestFrameRewards(const std::vector<QuestRewardItem>& re
     f.honor = honor;  // the parser already took the wire's tenths off
     f.talents = talents;
     f.arenaPoints = arenaPoints;
+    f.spell = spell;
+    f.spellCast = spellCast;
+    f.title = title;
 }
 
 void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
@@ -2951,7 +2959,8 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     questFrameTexts_.title = data.title.empty() ? " " : data.title;
     questFrameTexts_.reward = data.rewardText.empty() ? " " : data.rewardText;
     writeQuestFrameRewards(data.fixedRewards, data.choiceRewards, data.rewardMoney, data.rewardXp,
-                           data.rewardHonor, data.rewardTalents, data.rewardArenaPoints);
+                           data.rewardHonor, data.rewardTalents, data.rewardArenaPoints, data.rewardSpellId,
+                           data.rewardSpellCastId, data.rewardTitleId);
     questOfferRewardOpen_ = true;
     questPageLeft_ = false;
     questRequestItemsOpen_ = false;

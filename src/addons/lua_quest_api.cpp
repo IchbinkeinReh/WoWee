@@ -4562,48 +4562,11 @@ static int lua_GetQuestLogRequiredMoney(lua_State* L) {
 
 // --- The quest giver's own dialog ---
 //
-// WoW's quest-giver functions do not name which quest they mean: GetTitleText
-// and the reward accessors serve the dialog and the quest log both, and answer
-// for whichever is in front. A dialog is in front while it is open - the
-// reward panel over the progress panel over the offer, in the order the server
-// walks a player through them - and the log's selection answers otherwise.
+// The quest giver's functions read the quest frame's own buffers, which the
+// packets write and the window's close leaves alone (QuestFrameTexts,
+// QuestFrameRewards); none of them asks which dialog is in front.
 
 namespace {
-
-struct QuestSource {
-    const std::string* title = nullptr;
-    const std::vector<game::QuestRewardItem>* rewards = nullptr;
-    const std::vector<game::QuestRewardItem>* choices = nullptr;
-    /// Signed, because the packet's money word is one field for a payout or a
-    /// cost and the sign says which (0x0058dd50 splits it the same way the quest
-    /// log does).
-    int32_t money = 0;
-    uint32_t xp = 0;
-    uint32_t honor = 0;
-    uint32_t talents = 0;
-    uint32_t arenaPoints = 0;
-    uint32_t spell = 0;
-    uint32_t spellCast = 0;
-    uint32_t rewardTitle = 0;
-};
-
-QuestSource currentQuestSource(game::GameHandler* gh) {
-    QuestSource s;
-    if (!gh) return s;
-    if (gh->isQuestOfferRewardOpen()) {
-        const auto& d = gh->getQuestOfferReward();
-        s = {&d.title, &d.fixedRewards, &d.choiceRewards, d.rewardMoney, d.rewardXp, d.rewardHonor,
-             d.rewardTalents, d.rewardArenaPoints, d.rewardSpellId, d.rewardSpellCastId, d.rewardTitleId};
-    } else if (gh->isQuestRequestItemsOpen()) {
-        const auto& d = gh->getQuestRequestItems();
-        s.title = &d.title;
-    } else if (gh->isQuestDetailsOpen()) {
-        const auto& d = gh->getQuestDetails();
-        s = {&d.title, &d.rewardItems, &d.rewardChoiceItems, d.rewardMoney, d.rewardXp, d.rewardHonor,
-             d.rewardTalents, d.rewardArenaPoints, d.rewardSpellId, d.rewardSpellCastId, d.rewardTitleId};
-    }
-    return s;
-}
 
 /// Counts only the filled slots: the server pads a reward list to a fixed
 /// width, and a row drawn for an empty one is a blank button the player can
@@ -4619,9 +4582,10 @@ int pushQuestText(lua_State* L, const std::string* s) {
 
 }  // namespace
 
+// 0x006263e0 builds 0x00c0d680, the spell shown - the buffer 0x0058dd50
+// wrote, open window or not (QuestFrameRewards).
 uint32_t questFrameRewardSpell(game::GameHandler* gh) {
-    const QuestSource s = currentQuestSource(gh);
-    return s.spell != 0 ? s.spell : s.spellCast;
+    return gh ? gh->questFrameRewards().spell : 0u;
 }
 
 // GetTitleText/GetQuestText/GetObjectiveText/GetProgressText/GetRewardText
@@ -4879,23 +4843,27 @@ static int lua_GetQuestItemLink(lua_State* L) {
     return luaReturnNil(L);
 }
 
-// GetRewardSpell() (0x0058d670) and GetRewardTitle() (0x0058d810): of the page
-// shown, the giver's offer or its reward (0x0058dd50 sets both alike).
+// GetRewardSpell() (0x0058d670) and GetRewardTitle() (0x0058d810): what the
+// last details or reward packet left (0x0058dd50 writes 0x00c0d680/684/688,
+// nothing clears them), the window open or not (QuestFrameRewards). They
+// answered nil once it closed.
 static int lua_GetQuestRewardSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const QuestSource s = currentQuestSource(gh);
-    return pushRewardSpell(L, gh, s.spell, s.spellCast);
+    if (!gh) return pushRewardSpell(L, gh, 0, 0);
+    const auto& f = gh->questFrameRewards();
+    return pushRewardSpell(L, gh, f.spell, f.spellCast);
 }
 
 static int lua_GetQuestRewardTitle(lua_State* L) {
     auto* gh = getGameHandler(L);
-    return pushRewardTitle(L, gh, currentQuestSource(gh).rewardTitle);
+    return pushRewardTitle(L, gh, gh ? gh->questFrameRewards().title : 0u);
 }
 
-// GetQuestSpellLink() (0x0058dab0): that spell as a link, nil without one.
+// GetQuestSpellLink() (0x0058dab0): that spell (0x00c0d680) as a link, nil
+// without one.
 static int lua_GetQuestSpellLink(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t spell = currentQuestSource(gh).spell;
+    const uint32_t spell = gh ? gh->questFrameRewards().spell : 0u;
     const std::string name = gh && spell != 0 ? gh->getSpellName(spell) : std::string();
     if (name.empty()) return luaReturnNil(L);
     lua_pushstring(L, game::spellChatLink(spell, name).c_str());

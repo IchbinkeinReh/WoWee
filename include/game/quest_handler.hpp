@@ -473,7 +473,8 @@ private:
     void writeQuestFrameRewards(const std::vector<QuestRewardItem>& rewards,
                                 const std::vector<QuestRewardItem>& choices,
                                 int32_t money, uint32_t xp, uint32_t honor,
-                                uint32_t talents, uint32_t arenaPoints);
+                                uint32_t talents, uint32_t arenaPoints,
+                                uint32_t spell, uint32_t spellCast, uint32_t title);
     std::vector<GossipPoi> gossipPois_;
     QuestPoiIconList questPoiIcons_;
 

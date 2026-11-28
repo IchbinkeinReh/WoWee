@@ -3398,6 +3398,13 @@ struct QuestFrameRewards {
     uint32_t honor = 0;
     uint32_t talents = 0;
     uint32_t arenaPoints = 0;
+    /// GetRewardSpell (0x0058d670: 0x00c0d680 shown, 0x00c0d684 cast),
+    /// GetQuestSpellLink (0x0058dab0), SetQuestRewardSpell (0x006263e0) and
+    /// GetRewardTitle (0x0058d810: 0x00c0d688): written by 0x0058dd50 only,
+    /// never cleared - they outlive the window too.
+    uint32_t spell = 0;
+    uint32_t spellCast = 0;
+    uint32_t title = 0;
 };
 
 /** SMSG_QUESTGIVER_QUEST_DETAILS data (simplified) */
