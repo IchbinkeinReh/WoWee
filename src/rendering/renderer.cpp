@@ -2795,6 +2795,26 @@ void Renderer::updatePlayerArea() {
     // IsIndoors (0x00612300 -> 0x0071b7f0 -> 0x0077fbf0). It was whether the
     // camera stood in a building's bounding box, which beside a house it does.
     playerIndoors_ = !game::outdoors::outdoors(playerPlace_, gh->getAreaFlags(groundArea));
+    // Which group decided it, once per change: the building's id, the
+    // group's index, its MOGP flags (0x8 exterior, 0x40 exterior lit, 0x2000
+    // interior) and its WMOAreaTable row's flags.
+    {
+        const auto& p = playerPlace_;
+        const uint64_t key = (uint64_t(p.inGroup) << 63) ^ (uint64_t(p.groupFlags) << 20) ^
+                             (uint64_t(p.hasRow ? p.rowFlags + 1 : 0) << 8) ^ uint64_t(playerIndoors_) ^
+                             (p.inGroup ? (uint64_t(playerLinks_.front().group) << 40) : 0);
+        if (key != playerPlaceLogKey_) {
+            playerPlaceLogKey_ = key;
+            uint32_t wmoId = 0;
+            if (p.inGroup && wmoRenderer)
+                if (const auto g = wmoRenderer->groupArea(playerLinks_.front())) wmoId = g->wmoId;
+            LOG_INFO("Player place: ", playerIndoors_ ? "indoors" : "outdoors", p.inGroup ? " in WMO " : " on ground area ",
+                     p.inGroup ? wmoId : groundArea, p.inGroup ? " group " : "",
+                     p.inGroup ? std::to_string(playerLinks_.front().group) : std::string(), std::hex,
+                     p.inGroup ? " flags 0x" : "", p.inGroup ? p.groupFlags : 0u,
+                     p.hasRow ? " row flags 0x" : " no row", p.hasRow ? p.rowFlags : 0u, std::dec);
+        }
+    }
     // A moving building's group names nothing (0x00782560 and 0x007a13e0
     // pass over map objects with 0x400).
     const bool linkedStill = linked && !linked->dynamic;

@@ -1715,6 +1715,7 @@ private:
     uint32_t cameraLiquidType_ = 0;
     bool playerLinkIndoors_ = false;
     game::outdoors::Place playerPlace_;
+    uint64_t playerPlaceLogKey_ = ~0ull;  ///< the last place logged (updatePlayerArea)
     game::zone_area::Texts zoneTexts_;
     bool zoneTextsKnown_ = false;
     uint32_t globalWmoMapArea_ = 0;
