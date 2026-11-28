@@ -3277,7 +3277,7 @@ TEST_CASE("a haircut leaves the barber's window open", "[replay][interface]") {
     REQUIRE(s.handler().previewPlayerAppearance(0x0A0B0C0D, 7));
     uint32_t bytes = 0;
     uint8_t facial = 0xFF;
-    REQUIRE(s.handler().playerAppearanceFromFields(bytes, facial));
+    REQUIRE(s.handler().getPlayerAppearanceFromFields(bytes, facial));
     CHECK(bytes == 0x01020304u);
     CHECK(facial == 0);
 }

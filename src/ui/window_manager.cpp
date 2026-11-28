@@ -126,7 +126,7 @@ void WindowManager::ensureBarberState(game::GameHandler& gameHandler) {
             barberPreviewActive_ = false;
             uint32_t bytes = barberOrigAppearanceBytes_;
             uint8_t facial = barberOrigFacialHair_;
-            (void)gameHandler.playerAppearanceFromFields(bytes, facial);
+            (void)gameHandler.getPlayerAppearanceFromFields(bytes, facial);
             gameHandler.previewPlayerAppearance(bytes, facial);
         }
         barberInitialized_ = false;
@@ -146,7 +146,7 @@ void WindowManager::ensureBarberState(game::GameHandler& gameHandler) {
     // character record can still hold an older appearance (T462).
     uint32_t wornBytes = ch->appearanceBytes;
     uint8_t wornFacial = ch->facialFeatures;
-    (void)gameHandler.playerAppearanceFromFields(wornBytes, wornFacial);
+    (void)gameHandler.getPlayerAppearanceFromFields(wornBytes, wornFacial);
     if (wornBytes != ch->appearanceBytes || wornFacial != ch->facialFeatures) {
         gameHandler.previewPlayerAppearance(wornBytes, wornFacial);
     }

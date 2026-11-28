@@ -5926,7 +5926,7 @@ public:
     /// False before the player's fields have arrived. The barber starts from
     /// these and puts them back when the chair is left (0x0052e9f0), so a
     /// paid style stays whatever the character record held.
-    bool playerAppearanceFromFields(uint32_t& appearanceBytes, uint8_t& facialFeatures) const;
+    bool getPlayerAppearanceFromFields(uint32_t& appearanceBytes, uint8_t& facialFeatures) const;
     auto& updateFieldTableRef() { return updateFieldTable_; }
     auto& lastPlayerFieldsRef() { return lastPlayerFields_; }
     auto& timeSinceLastPingRef() { return timeSinceLastPing; }

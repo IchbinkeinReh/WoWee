@@ -2400,7 +2400,7 @@ UnitStats GameHandler::playerStats() const {
     return out;
 }
 
-bool GameHandler::playerAppearanceFromFields(uint32_t& appearanceBytes, uint8_t& facialFeatures) const {
+bool GameHandler::getPlayerAppearanceFromFields(uint32_t& appearanceBytes, uint8_t& facialFeatures) const {
     if (lastPlayerFields_.empty()) return false;
     const uint16_t bytes = fieldIndex(UF::PLAYER_BYTES);
     const uint16_t bytes2 = fieldIndex(UF::PLAYER_BYTES_2);
