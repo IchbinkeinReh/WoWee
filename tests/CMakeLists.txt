@@ -363,6 +363,12 @@ wowee_add_test(test_gpu_park
 wowee_add_test(test_frame_gpu_ledger
     SOURCES test_frame_gpu_ledger.cpp)
 
+# ── test_background_release ─────────────────────────────────
+# The old map's CPU data freed on the release worker, not in front of the
+# loading screen (V650: CharacterRenderer::clear, the terrain soft reset).
+wowee_add_test(test_background_release
+    SOURCES test_background_release.cpp)
+
 # ── test_log_privacy ────────────────────────────────────────
 # The home directory, and with it the account name, written as ~ in the log.
 wowee_add_test(test_log_privacy

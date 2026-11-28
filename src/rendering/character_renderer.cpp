@@ -35,6 +35,7 @@
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/rider_mount.hpp"
 #include "core/thread_pool.hpp"
+#include "core/background_release.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/bone_slots.hpp"
 #include "rendering/vk_texture.hpp"
@@ -862,8 +863,11 @@ void CharacterRenderer::clear() {
         completedNormalMaps_.clear();
     }
 
+    using Clock = std::chrono::steady_clock;
+    const auto clearStart = Clock::now();
     ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
     VkDevice device = vkCtx_->getDevice();
+    const auto idleDone = Clock::now();
 
     // Destroy GPU resources for all models
     for (auto& pair : models) {
@@ -884,6 +888,17 @@ void CharacterRenderer::clear() {
             if (entry.normalHeightMap) entry.normalHeightMap->destroy(dev, vma);
         }
     }
+    const auto gpuFreed = Clock::now();
+    // What is left of the models and textures is CPU data alone - each
+    // model's animation tracks are thousands of heap blocks, 643 models after
+    // Dalaran some 1.4 s of frees with no loading screen drawn (V650). Their
+    // GPU objects are gone above; the rest is freed on the release worker.
+    struct OldCpuData {
+        decltype(models) oldModels;
+        decltype(textureCache) oldTextures;
+    };
+    core::releaseInBackground(OldCpuData{std::move(models), std::move(textureCache)});
+    models.clear();
     textureCache.clear();
     texturePropsByPtr_.clear();
     normalMapByTexPtr_.clear();
@@ -933,6 +948,11 @@ void CharacterRenderer::clear() {
         if (boneDescPoolGeneration_) boneDescPoolGeneration_->fetch_add(1, std::memory_order_relaxed);
         vkResetDescriptorPool(device, boneDescPool_, 0);
     }
+    const auto ms = [](Clock::duration d) { return std::chrono::duration_cast<std::chrono::milliseconds>(d).count(); };
+    const auto clearEnd = Clock::now();
+    LOG_INFO("CharacterRenderer::clear took ", ms(clearEnd - clearStart), " ms (device idle ", ms(idleDone - clearStart),
+             ", GPU frees ", ms(gpuFreed - idleDone), ", the rest ", ms(clearEnd - gpuFreed),
+             "; CPU data freed on the release worker)");
 }
 
 void CharacterRenderer::createFallbackTextures(VkDevice device) {

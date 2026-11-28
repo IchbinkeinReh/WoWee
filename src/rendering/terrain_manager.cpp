@@ -23,6 +23,7 @@
 #include "rendering/doodad_model_plan.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/camera.hpp"
+#include "core/background_release.hpp"
 #include "core/coordinates.hpp"
 #include "pipeline/wowee_terrain_loader.hpp"
 #include "pipeline/wowee_model.hpp"
@@ -1988,13 +1989,31 @@ void TerrainManager::stopWorkers() {
 }
 
 void TerrainManager::softReset() {
+    using Clock = std::chrono::steady_clock;
+    const auto resetStart = Clock::now();
+    // The old map's tiles - prepared, cached, finalizing and loaded - are CPU
+    // data alone once their GPU parts are gone: meshes, decoded textures,
+    // parsed models, gigabytes in a city's cache. Freed here they held the
+    // loading screen about a second (V650); they go to the release worker.
+    struct OldTiles {
+        std::vector<std::shared_ptr<PendingTile>> prepared;
+        decltype(tileCache_) cached;
+        decltype(loadedTiles) loaded;
+    };
+    OldTiles old;
     // Clear queues (workers may still be running - they'll find empty queues)
     {
         std::lock_guard<std::mutex> lock(queueMutex);
         loadQueue.clear();
-        while (!readyQueue.empty()) readyQueue.pop();
+        while (!readyQueue.empty()) {
+            old.prepared.push_back(std::move(readyQueue.front()));
+            readyQueue.pop();
+        }
     }
     pendingTiles.clear();
+    for (auto& ft : finalizingTiles_) {
+        if (ft.pending) old.prepared.push_back(std::move(ft.pending));
+    }
     finalizingTiles_.clear();
     placedDoodadIds.clear();
     placedWmoIds.clear();
@@ -2009,14 +2028,18 @@ void TerrainManager::softReset() {
     // a different map with overlapping coordinates would produce wrong geometry.
     {
         std::lock_guard<std::mutex> lock(tileCacheMutex_);
+        old.cached = std::move(tileCache_);
         tileCache_.clear();
         tileCacheLru_.clear();
     }
 
     LOG_INFO("Soft-resetting terrain (clearing tiles + water + cache, workers stay alive)");
     for (const auto& [tc, t] : loadedTiles) noteGroundChange(t->minX, t->minY, t->maxX, t->maxY);
+    old.loaded = std::move(loadedTiles);
     loadedTiles.clear();
     failedTiles.clear();
+    const size_t oldTileCount = old.prepared.size() + old.cached.size() + old.loaded.size();
+    core::releaseInBackground(std::move(old));
 
     currentTile = {.x = -1, .y = -1};
     haveLoadRect_ = false;
@@ -2028,6 +2051,9 @@ void TerrainManager::softReset() {
     if (waterRenderer) {
         waterRenderer->clear();
     }
+    LOG_INFO("Terrain soft reset took ",
+             std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - resetStart).count(), " ms (",
+             oldTileCount, " tiles' CPU data freed on the release worker)");
 }
 
 std::string TerrainManager::describeStreamState() {
