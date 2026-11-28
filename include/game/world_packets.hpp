@@ -3373,6 +3373,16 @@ struct QuestFrameTexts {
     /// GetGreetingText (0x0058bd30, 0x00c0cc48): the giver's list's text,
     /// written by 0x0058c5a0 kind 0 (an empty one as " ").
     std::string greeting;
+    /// The giver's list as GetNumAvailableQuests / GetNumActiveQuests
+    /// (0x0058bdd0 / 0x0058be00, counts 0x00c0d69c / 0x00c0d6a0) and the
+    /// titles, levels and flags beside them (0x0058be30, 0x0058bed0,
+    /// 0x0058bf70, 0x0058dbc0...) read it: 0x006d0240 puts each quest of
+    /// SMSG_QUESTGIVER_QUEST_LIST into one of two 0x214-byte tables - icon 3
+    /// or 4 the active one (0x00c01868, 0x0058ba00), any other the available
+    /// one (0x00c05ae8, 0x0058b990) - after 0x0058c5a0 kind 0 emptied both
+    /// with the texts (0x0058b720). The window's close and a gossip after it
+    /// leave them.
+    std::vector<GossipQuestItem> greetingQuests;
 };
 
 /// The quest window's item slots and numbers, as GetNumQuestRewards /

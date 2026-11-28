@@ -2438,6 +2438,9 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
         }
     }
 
+    // The greeting's own two tables (0x006d0240 -> 0x0058ba00 / 0x0058b990),
+    // which outlive the window and any gossip after it.
+    questFrameTexts_.greetingQuests = data.quests;
     closeLeftQuestPage();
     currentGossip_ = std::move(data);
     gossipWindowOpen_ = true;

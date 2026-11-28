@@ -1511,14 +1511,27 @@ bool gossipQuestIsComplete(game::GameHandler* gh, const game::GossipQuestItem& q
     return false;
 }
 
+/// Which list a quest index means: the gossip window's (GetGossip*,
+/// SelectGossip*) or the quest frame's greeting list (GetNumAvailableQuests,
+/// GetAvailableTitle, SelectAvailableQuest...). 12340 keeps the latter in its
+/// own tables, which SMSG_QUESTGIVER_QUEST_LIST alone writes and which outlive
+/// the window and any gossip after it (QuestFrameTexts::greetingQuests).
+enum class QuestList { Gossip, Greeting };
+
+const std::vector<game::GossipQuestItem>& questListOf(game::GameHandler* gh, QuestList list) {
+    return list == QuestList::Greeting ? gh->questFrameTexts().greetingQuests
+                                       : gh->getCurrentGossip().quests;
+}
+
 /// The i-th quest of one kind, or null past the end. One walk shared by
 /// everything that indexes these lists, so they cannot disagree about which
 /// quest is second.
-const game::GossipQuestItem* gossipQuestAt(lua_State* L, bool available, int index) {
+const game::GossipQuestItem* gossipQuestAt(lua_State* L, bool available, int index,
+                                           QuestList list = QuestList::Greeting) {
     auto* gh = getGameHandler(L);
     if (!gh || index < 1) return nullptr;
     int seen = 0;
-    for (const auto& q : gh->getCurrentGossip().quests) {
+    for (const auto& q : questListOf(gh, list)) {
         const bool matches = available ? gossipQuestIsAvailable(q.questIcon)
                                        : gossipQuestIsActive(q.questIcon);
         if (matches && ++seen == index) return &q;
@@ -1559,11 +1572,11 @@ static int lua_GreetingQuestLevel(lua_State* L) {
     return 1;
 }
 
-int countGossipQuests(lua_State* L, bool available) {
+int countGossipQuests(lua_State* L, bool available, QuestList list) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     int n = 0;
-    for (const auto& q : gh->getCurrentGossip().quests) {
+    for (const auto& q : questListOf(gh, list)) {
         if (available ? gossipQuestIsAvailable(q.questIcon)
                       : gossipQuestIsActive(q.questIcon)) ++n;
     }
@@ -1589,12 +1602,12 @@ int pushGossipQuestTitle(lua_State* L, bool available) {
 /// Index into whichever of the two lists the caller means, then ask for that
 /// quest by id - the position in the filtered list is not the position in the
 /// packet, so the id is the only thing safe to send.
-int selectGossipQuestAt(lua_State* L, bool available) {
+int selectGossipQuestAt(lua_State* L, bool available, QuestList list) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) return 0;
     int seen = 0;
-    for (const auto& q : gh->getCurrentGossip().quests) {
+    for (const auto& q : questListOf(gh, list)) {
         const bool matches = available ? gossipQuestIsAvailable(q.questIcon)
                                        : gossipQuestIsActive(q.questIcon);
         if (!matches) continue;
@@ -4121,11 +4134,11 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"SelectGossipAvailableQuest", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectGossipAvailableQuest(index)");   // 0x0058b600
-            return selectGossipQuestAt(L, /*available=*/true);
+            return selectGossipQuestAt(L, /*available=*/true, QuestList::Gossip);
         }},
                 {"SelectGossipActiveQuest", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectGossipActiveQuest(index)");   // 0x0058b670
-            return selectGossipQuestAt(L, /*available=*/false);
+            return selectGossipQuestAt(L, /*available=*/false, QuestList::Gossip);
         }},
                 // The greeting panel, shown when a quest giver has several
                 // quests and nothing else to say. It reads the same list as the
@@ -4140,12 +4153,15 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushstring(L, gh ? gh->questFrameTexts().greeting.c_str() : "");
             return 1;
         }},
+                // GetNumAvailableQuests / GetNumActiveQuests (0x0058bdd0 /
+                // 0x0058be00): the counts 0x00c0d69c / 0x00c0d6a0 of the
+                // greeting's two tables, kept after the window closes.
                 {"GetNumAvailableQuests", [](lua_State* L) -> int {
-            lua_pushnumber(L, countGossipQuests(L, /*available=*/true));
+            lua_pushnumber(L, countGossipQuests(L, /*available=*/true, QuestList::Greeting));
             return 1;
         }},
                 {"GetNumActiveQuests", [](lua_State* L) -> int {
-            lua_pushnumber(L, countGossipQuests(L, /*available=*/false));
+            lua_pushnumber(L, countGossipQuests(L, /*available=*/false, QuestList::Greeting));
             return 1;
         }},
                 {"GetAvailableTitle", [](lua_State* L) -> int {
@@ -4158,7 +4174,7 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"SelectAvailableQuest", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectAvailableQuest(index)");   // 0x0058d4d0
-            return selectGossipQuestAt(L, /*available=*/true);
+            return selectGossipQuestAt(L, /*available=*/true, QuestList::Greeting);
         }},
                 {"SelectActiveQuest", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectActiveQuest(index)");   // 0x0058d540
@@ -4166,7 +4182,7 @@ void registerSocialLuaAPI(lua_State* L) {
             // tutorial 0x21 as it hands the quest in.
             if (auto* gh = getGameHandler(L); gh && lua_isnumber(L, 1) && lua_tonumber(L, 1) >= 1)
                 gh->triggerTutorial(0x21);
-            return selectGossipQuestAt(L, /*available=*/false);
+            return selectGossipQuestAt(L, /*available=*/false, QuestList::Greeting);
         }},
                 // Greys the title of a quest the player has outlevelled, by
                 // the client's own table rather than the server's formula.
@@ -4605,14 +4621,14 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!gh) { return luaReturnZero(L); }
             // 0x0058a960 -> 0x0058a5d0: every icon but 3 and 4, the same split
             // as the list itself (the count left icon 3 in both lists).
-            lua_pushnumber(L, countGossipQuests(L, /*available=*/true));
+            lua_pushnumber(L, countGossipQuests(L, /*available=*/true, QuestList::Gossip));
             return 1;
         }},
                 {"GetNumGossipActiveQuests", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) { return luaReturnZero(L); }
             // 0x0058a9a0 -> 0x0058a6c0: icon 3 or 4.
-            lua_pushnumber(L, countGossipQuests(L, /*available=*/false));
+            lua_pushnumber(L, countGossipQuests(L, /*available=*/false, QuestList::Gossip));
             return 1;
         }},
                 {"CloseGossip", [](lua_State* L) -> int {

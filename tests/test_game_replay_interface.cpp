@@ -4244,6 +4244,61 @@ TEST_CASE("the quest texts outlive the quest window (0x0058bd10)", "[replay][int
     CHECK(ui.is("GetGreetingText():find('Seid gegruesst, ', 1, true) == 1"));
 }
 
+// GetNumAvailableQuests / GetNumActiveQuests (0x0058bdd0 / 0x0058be00) and
+// the titles and levels beside them read the greeting's own two tables
+// (counts 0x00c0d69c / 0x00c0d6a0), which only SMSG_QUESTGIVER_QUEST_LIST
+// writes (0x006d0240, emptied first by 0x0058b720): they outlive the
+// window and a gossip after it.
+TEST_CASE("the quest greeting's list outlives the window (0x0058bdd0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::UNIT_FIELD_LEVEL, 10}});
+    Interface ui(s);
+    s.setConnected(true);
+    auto list = [&](std::initializer_list<std::pair<uint32_t, const char*>> quests) {
+        wowee::network::Packet l(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_LIST));
+        l.writeUInt64(0xF130000C3E000001ull);
+        l.writeString("Hallo");
+        l.writeUInt32(0);
+        l.writeUInt32(0);
+        l.writeUInt8(static_cast<uint8_t>(quests.size()));
+        uint32_t id = 700;
+        for (const auto& [icon, title] : quests) {
+            for (uint32_t v : {id++, icon, 12u, 0u}) l.writeUInt32(v);
+            l.writeUInt8(0);
+            l.writeString(title);
+        }
+        s.receive(l);
+    };
+    list({{2, "Angeboten"}, {4, "Angenommen"}, {0, "Schlicht"}});
+    REQUIRE(ui.is("GetNumAvailableQuests() == 2"));
+    REQUIRE(ui.is("GetNumActiveQuests() == 1"));
+    ui.run("CloseQuest()");
+    CHECK(ui.is("GetNumAvailableQuests() == 2"));
+    CHECK(ui.is("GetNumActiveQuests() == 1"));
+    CHECK(ui.is("GetAvailableTitle(2) == 'Schlicht'"));
+    CHECK(ui.is("GetActiveTitle(1) == 'Angenommen'"));
+    CHECK(ui.is("GetAvailableLevel(1) == 12"));
+    // A gossip has tables of its own (0x0058a5d0 / 0x0058a6c0).
+    wowee::network::Packet gossip(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_MESSAGE));
+    gossip.writeUInt64(0xF130000BEC00150Full);
+    for (uint32_t v : {0u, 1u, 0u}) gossip.writeUInt32(v);
+    gossip.writeUInt32(1);
+    for (uint32_t v : {900u, 3u, 10u, 0u}) gossip.writeUInt32(v);
+    gossip.writeUInt8(0);
+    gossip.writeString("Geplauder");
+    s.receive(gossip);
+    REQUIRE(ui.is("GetNumGossipActiveQuests() == 1"));
+    CHECK(ui.is("GetNumAvailableQuests() == 2"));
+    CHECK(ui.is("GetNumActiveQuests() == 1"));
+    CHECK(ui.is("GetAvailableTitle(1) == 'Angeboten'"));
+    // The next list replaces them.
+    list({});
+    CHECK(ui.is("GetNumAvailableQuests() == 0"));
+    CHECK(ui.is("GetNumActiveQuests() == 0"));
+    CHECK(ui.is("GetAvailableTitle(1) == nil"));
+}
+
 // GetNumQuestRewards/Choices, GetRewardMoney, GetRewardXP and
 // GetQuestMoneyToGet (0x0058c190/0x0058c1f0/0x0058c0b0/0x0058c0e0/0x0058c160)
 // read the quest frame's slots and globals: the reward packet writes them
