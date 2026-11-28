@@ -21,6 +21,21 @@ struct Place {
     uint32_t groundArea = 0;  ///< 0x007a0490: the terrain chunk's area under the player
 };
 
+/// 0x007c25d0: whether a building's group is asked for the faces on the
+/// line down from the player (0x007c2700, for 0x007c2a70's links and the
+/// floor under a unit), by its MOGI flags (0x007ae7b0). Never one with 0x80,
+/// 0x10000 or 0x400000; a still building's exterior group (0x8) wherever
+/// the line meets its box (0x007ae880); an interior group, and any group of
+/// a moving building (the map object's 0x400), only while the line starts
+/// in its MOGI box (0x007ae920 -> 0x0075b5b0, edges included). Without the
+/// last test a room's face under the feet linked the player to the room
+/// from above its box - from its roof - and called that indoors.
+[[nodiscard]] constexpr bool groupAskedAlong(uint32_t mogiFlags, bool moving, bool startInBox) {
+    if ((mogiFlags & 0x410080u) != 0) return false;
+    if (!moving && (mogiFlags & 0x8u) != 0) return true;
+    return startInBox;
+}
+
 /// 0x0077fbf0: in a building group, its WMOAreaTable row's 0x4 outdoors and
 /// 0x2 indoors, else the group's exterior flag (0x8); out of one, the
 /// ground's AreaTable Flags - 0x4000000 outdoors, 0x2000000 indoors - and

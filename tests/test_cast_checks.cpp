@@ -353,6 +353,33 @@ TEST_CASE("indoors is the building group's, else the ground's area (0x0077fbf0)"
     REQUIRE(outdoors(p, 0));
 }
 
+TEST_CASE("the line down asks an interior group only from inside its box (0x007c25d0)", "[cast_checks]") {
+    using namespace wowee::game::outdoors;
+    // A still building's exterior group: wherever the line meets it.
+    REQUIRE(groupAskedAlong(0x8, false, false));
+    REQUIRE(groupAskedAlong(0x8, false, true));
+    // An interior group only while the line starts in its box: the Culling
+    // of Stratholme's entrance cave (oldstrat_inn.wmo, wmo 5094, group 12
+    // 'exterior', MOGI 0x2000) holds the arrival street, so the player there
+    // is linked to it - indoors, as 12340 has it - but not from above it.
+    REQUIRE(groupAskedAlong(0x2000, false, true));
+    REQUIRE_FALSE(groupAskedAlong(0x2000, false, false));
+    // A moving building's groups, exterior or not, only from inside.
+    REQUIRE_FALSE(groupAskedAlong(0x8, true, false));
+    REQUIRE(groupAskedAlong(0x8, true, true));
+    // 0x80, 0x10000 and 0x400000 are never asked.
+    REQUIRE_FALSE(groupAskedAlong(0x8 | 0x80, false, true));
+    REQUIRE_FALSE(groupAskedAlong(0x2000 | 0x10000, false, true));
+    REQUIRE_FALSE(groupAskedAlong(0x400000, false, true));
+    // Linked to that interior group with its rows' flags 0, it is indoors.
+    Place cave;
+    cave.inGroup = true;
+    cave.groupFlags = 0x2805;
+    cave.hasRow = true;
+    cave.rowFlags = 0;
+    REQUIRE_FALSE(outdoors(cave, 0));
+}
+
 TEST_CASE("cast count runs 1..255 and never sends 0 (0x00805010)", "[cast_checks]") {
     uint8_t last = 0;
     REQUIRE(nextCastCount(last) == 1);

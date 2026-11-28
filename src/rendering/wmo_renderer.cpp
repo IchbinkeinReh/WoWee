@@ -10,6 +10,7 @@
 #include "rendering/wmo_vertex.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/wmo_renderer.hpp"
+#include "game/outdoors.hpp"
 #include "rendering/frame_gpu_ledger.hpp"
 #include "rendering/model_memory.hpp"
 #include <cstdio>
@@ -4670,7 +4671,7 @@ WMORenderer::Links WMORenderer::linksAlong(const glm::vec3& start, float endZ) c
                                out.collides = hit;
                            if ((mopy & 0x24u) != 0 && (!out.drawn || dist < out.drawn->dist))
                                out.drawn = hit;
-                       });
+                       }, /*startInBox=*/true);
     return out;
 }
 
@@ -4869,11 +4870,14 @@ bool WMORenderer::isInsideInteriorWMO(float glX, float glY, float glZ) const {
 
 template <typename FaceFilter, typename OnHit>
 void WMORenderer::walkTrianglesAlong(const glm::vec3& start, float endZ, uint32_t groupSkip,
-                                     FaceFilter&& takesFace, OnHit&& onHit) const {
+                                     FaceFilter&& takesFace, OnHit&& onHit, bool startInBox) const {
     // The triangles met going straight from `start` to `endZ`, across every
     // WMO there (0x007c2700 asks each, 0x007c25d0 each group), each with how
     // far along the line it was met. Groups with any of `groupSkip` are
-    // passed over, and faces `takesFace` turns down are not tested.
+    // passed over, and faces `takesFace` turns down are not tested. With
+    // `startInBox`, 0x007c25d0's own choice of groups as well: an interior
+    // group, or any of a moving building, only while `start` lies in its
+    // MOGI box (game::outdoors::groupAskedAlong).
     const float reach = std::abs(start.z - endZ);
     if (reach <= 0.0f) return;
     const float sign = endZ < start.z ? -1.0f : 1.0f;
@@ -4891,6 +4895,15 @@ void WMORenderer::walkTrianglesAlong(const glm::vec3& start, float endZ, uint32_
             glm::normalize(glm::vec3(instance.invModelMatrix * glm::vec4(0.0f, 0.0f, sign, 0.0f)));
         for (const auto& group : model.groups) {
             if (group.groupFlags & groupSkip) continue;
+            if (startInBox) {
+                const bool info = group.groupIndex < model.minimapGroups.size();
+                const uint32_t flags = info ? model.minimapGroups[group.groupIndex].flags : group.groupFlags;
+                const glm::vec3 lo = info ? model.minimapGroups[group.groupIndex].min : group.boundingBoxMin;
+                const glm::vec3 hi = info ? model.minimapGroups[group.groupIndex].max : group.boundingBoxMax;
+                const bool inBox = glm::all(glm::greaterThanEqual(localOrigin, lo)) &&
+                                   glm::all(glm::lessThanEqual(localOrigin, hi));
+                if (!game::outdoors::groupAskedAlong(flags, instance.isTransport, inBox)) continue;
+            }
             if (!trianglesAlongRay(group, localOrigin, localDir, tris)) continue;
             const auto& verts = group.collisionVertices;
             const auto& indices = group.collisionIndices;
@@ -4969,7 +4982,7 @@ std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3&
                            const Hit hit{dist, &model, &group, triStart, hitLocal};
                            if ((mopy & 0x28u) != 0 && dist < collides.dist) collides = hit;
                            if ((mopy & 0x24u) != 0 && dist < drawn.dist) drawn = hit;
-                       });
+                       }, /*startInBox=*/true);
     if (!collides.group && !drawn.group) return std::nullopt;
     ObjectFloor found;
     found.z = start.z + (collides.group ? collides.dist : drawn.dist) * sign;

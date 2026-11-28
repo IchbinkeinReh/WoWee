@@ -1187,10 +1187,11 @@ private:
     /// Every triangle going straight from `start` to `endZ` (floorAlong and
     /// the area queries): `onHit(instance, model, group, triStart, mopy,
     /// dist, hitLocal)` for each face `takesFace(mopy)` lets through, of
-    /// groups with none of `groupSkip`.
+    /// groups with none of `groupSkip` - and with `startInBox`, only those
+    /// 0x007c25d0 asks (game::outdoors::groupAskedAlong).
     template <typename FaceFilter, typename OnHit>
     void walkTrianglesAlong(const glm::vec3& start, float endZ, uint32_t groupSkip,
-                            FaceFilter&& takesFace, OnHit&& onHit) const;
+                            FaceFilter&& takesFace, OnHit&& onHit, bool startInBox = false) const;
 
     // Vulkan context
     VkContext* vkCtx_ = nullptr;
