@@ -7813,7 +7813,32 @@ void SocialHandler::handleGuildEventLog(network::Packet& packet) {
         guildEventLog_.push_back(e);
     }
     LOG_INFO("Guild event log: ", guildEventLog_.size(), " entries");
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GUILD_EVENT_LOG_UPDATE", {});
+    // Each entry's player, and its second where it has one, is asked of the
+    // name cache; one not known yet counts, and its answer counts down
+    // (0x005ca460). GUILD_EVENT_LOG_UPDATE (0x231) fires at once when every
+    // name was known, else when the last answer is in - a log shown before
+    // its names read as rows by nobody. A new log drops the old one's waits
+    // (0x005ca6a0 unregisters them, 0x0067a3a0).
+    const uint32_t generation = ++guildEventLogGeneration_;
+    guildEventLogPending_ = 0;
+    const auto answered = [this, generation]() {
+        if (generation != guildEventLogGeneration_ || guildEventLogPending_ == 0) return;
+        guildEventLogPending_ -= 1;
+        if (guildEventLogPending_ == 0 && owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("GUILD_EVENT_LOG_UPDATE", {});
+    };
+    for (size_t row = 0; row < guildEventLog_.size(); ++row) {
+        const auto& e = guildEventLog_[row];
+        const std::string key = "guild event log " + std::to_string(generation) + ":" + std::to_string(row);
+        for (const auto& [guid, which] : {std::pair<uint64_t, const char*>{e.playerGuid, ":a"},
+                                          std::pair<uint64_t, const char*>{e.otherGuid, ":b"}}) {
+            if (guid == 0 || !owner_.lookupName(guid).empty()) continue;
+            guildEventLogPending_ += 1;
+            owner_.askNameThen(guid, key + which, [answered](bool, const std::string&) { answered(); });
+        }
+    }
+    if (guildEventLogPending_ == 0 && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("GUILD_EVENT_LOG_UPDATE", {});
 }
 
 // CMSG_GMTICKET_SYSTEMSTATUS: is the ticket queue open at all. The reply,

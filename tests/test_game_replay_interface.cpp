@@ -5505,6 +5505,50 @@ TEST_CASE("empty answers keep the 12340 shapes (HasPetUI, LFG, guild log, flags)
     CHECK(ui.is("GetNumBattlefieldFlagPositions() == 1"));
 }
 
+// 0x005ca6a0 asks the name cache for each entry's players and counts those
+// not known (0x00c22ad0); GUILD_EVENT_LOG_UPDATE (0x231) fires at once when
+// none is missing, else from the last answer's callback (0x005ca460).
+TEST_CASE("GUILD_EVENT_LOG_UPDATE waits for the log's names (0x005ca6a0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    ui.run("logUpdates = 0 local f = CreateFrame('Frame') f:RegisterEvent('GUILD_EVENT_LOG_UPDATE') "
+           "f:SetScript('OnEvent', function() logUpdates = logUpdates + 1 end)");
+    constexpr uint64_t kInviter = 0x0000000000000901ull, kJoiner = 0x0000000000000902ull;
+    const auto log = [&] {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::MSG_GUILD_EVENT_LOG_QUERY));
+        p.writeUInt8(2);
+        p.writeUInt8(1);            // invite: two players
+        p.writeUInt64(kInviter);
+        p.writeUInt64(kJoiner);
+        p.writeUInt32(60);
+        p.writeUInt8(2);            // join: one
+        p.writeUInt64(kJoiner);
+        p.writeUInt32(30);
+        s.receive(p);
+    };
+    const auto name = [&](uint64_t guid, const char* text) {
+        wowee::network::Packet answer(wowee::game::wireOpcode(Opcode::SMSG_NAME_QUERY_RESPONSE));
+        answer.writePackedGuid(guid);
+        answer.writeUInt8(0);
+        answer.writeString(text);
+        answer.writeString("");
+        for (int i = 0; i < 4; ++i) answer.writeUInt8(i == 0 ? 2 : 0);
+        s.receive(answer);
+    };
+    log();
+    CHECK(ui.is("logUpdates == 0"));   // three names missing
+    name(kInviter, "Anna");
+    CHECK(ui.is("logUpdates == 0"));
+    name(kJoiner, "Bert");             // answers both of its entries
+    CHECK(ui.is("logUpdates == 1"));
+    CHECK(ui.is("GetNumGuildEvents() == 2"));
+    // Every name known: at once.
+    log();
+    CHECK(ui.is("logUpdates == 2"));
+}
+
 // GetGlyphLink (0x005b7740) answers nothing at all past the six sockets or
 // for a talent group the player does not have.
 TEST_CASE("GetGlyphLink answers nothing out of range (0x005b7740)", "[replay][interface]") {

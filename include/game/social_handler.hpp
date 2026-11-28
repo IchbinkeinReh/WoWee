@@ -1104,6 +1104,10 @@ private:
     /// is not counted against it.
     uint32_t guildBankLogPending_ = 0;
     uint32_t guildBankLogGeneration_ = 0;
+    /// The guild event log's names still asked of the cache (0x00c22ad0),
+    /// and which log they are for: a new log drops the old one's waits.
+    uint32_t guildEventLogPending_ = 0;
+    uint32_t guildEventLogGeneration_ = 0;
     uint32_t instanceDifficulty_ = 0;
     difficulty_change::RaidDifficulty raidDifficulty_;
     difficulty_change::DungeonDifficulty dungeonDifficulty_;
