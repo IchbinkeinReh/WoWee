@@ -3613,6 +3613,8 @@ public:
     const std::string& getQuestGreeting() const;
     /// The quest window's texts, which outlive the window (QuestFrameTexts).
     const QuestFrameTexts& questFrameTexts() const;
+    /// ...and its item slots and numbers (QuestFrameRewards).
+    const QuestFrameRewards& questFrameRewards() const;
     bool isQuestDetailsOpen();
     /// Whether the reward item names asked for when the details arrived have
     /// had time to come back. Only this client's own quest window asks - see

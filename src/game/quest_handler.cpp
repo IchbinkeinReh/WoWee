@@ -9,6 +9,7 @@
 #include "game/entity.hpp"
 #include "game/update_field_table.hpp"
 #include "game/quest_progress.hpp"
+#include "game/quest_rewards.hpp"
 #include "game/npc_text.hpp"
 #include <random>
 #include "game/packet_parsers.hpp"
@@ -2394,6 +2395,8 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
     // blank over a list that was otherwise correct.
     questGreeting_ = normalizeWowTextTokens(packet.readString());
     questFrameTexts_ = QuestFrameTexts{};  // 0x0058c5a0 kind 0 -> 0x0058b720
+    // ...which then writes the list's text, kept after the window closes.
+    questFrameTexts_.greeting = questGreeting_.empty() ? " " : questGreeting_;
     // The giver's (delay, emote) pair (0x006d0240 -> 0x0071a260).
     std::vector<DialogEmote> listEmotes;
     if (packet.hasRemaining(8)) {
@@ -2808,6 +2811,8 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     questFrameTexts_.title = data.title.empty() ? " " : data.title;
     questFrameTexts_.quest = data.details.empty() ? " " : data.details;
     questFrameTexts_.objective = data.objectives;
+    writeQuestFrameRewards(data.rewardItems, data.rewardChoiceItems, data.rewardMoney, data.rewardXp,
+                           data.rewardHonor, data.rewardTalents, data.rewardArenaPoints);
     for (auto& q : questLog_) {
         if (q.questId != data.questId) continue;
         if (!data.title.empty() && (isPlaceholderQuestTitle(q.title) || data.title.size() >= q.title.size())) {
@@ -2836,6 +2841,29 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     queueGiverEmotes(data.npcGuid, data.emotes, false);
 }
 
+void QuestHandler::writeQuestFrameRewards(const std::vector<QuestRewardItem>& rewards,
+                                          const std::vector<QuestRewardItem>& choices,
+                                          int32_t money, uint32_t xp, uint32_t honor,
+                                          uint32_t talents, uint32_t arenaPoints) {
+    auto& f = questFrameRewards_;
+    // 0x0058dd50 -> 0x0058b7d0: every slot, required ones included, cleared.
+    f.rewards.clear();
+    f.choices.clear();
+    f.required.clear();
+    for (const auto& item : rewards)
+        if (item.itemId != 0 && f.rewards.size() < 6) f.rewards.push_back(item);
+    for (const auto& item : choices)
+        if (item.itemId != 0 && f.choices.size() < 6) f.choices.push_back(item);
+    // The money word: negative is money to get and no reward.
+    f.rewardMoney = static_cast<uint32_t>(questDialogMoney(money));
+    f.moneyToGet = money < 0 ? static_cast<uint32_t>(-static_cast<int64_t>(money)) : 0u;
+    // Experience only below PLAYER_FIELD_MAX_LEVEL, else 0.
+    f.xp = questDialogXp(xp, owner_.getPlayerLevel(), owner_.getPlayerMaxLevel());
+    f.honor = honor;  // the parser already took the wire's tenths off
+    f.talents = talents;
+    f.arenaPoints = arenaPoints;
+}
+
 void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     QuestRequestItemsData data;
     if (!QuestRequestItemsParser::parse(packet, data)) {
@@ -2848,6 +2876,13 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     questFrameFlags_ = data.questFlags;
     questFrameTexts_.title = data.title.empty() ? " " : data.title;
     questFrameTexts_.progress = data.completionText.empty() ? " " : data.completionText;
+    // 0x0058ba80: the required items and the money to get; the reward slots
+    // of the last details or reward packet stay.
+    questFrameRewards_.required.clear();
+    for (const auto& item : data.requiredItems)
+        if (item.itemId != 0 && questFrameRewards_.required.size() < 6)
+            questFrameRewards_.required.push_back(item);
+    questFrameRewards_.moneyToGet = data.requiredMoney;
     questRequestItemsOpen_ = true;
     questRewardRequested_ = false;
     questPageLeft_ = false;
@@ -2915,6 +2950,8 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     questFrameFlags_ = data.questFlags;
     questFrameTexts_.title = data.title.empty() ? " " : data.title;
     questFrameTexts_.reward = data.rewardText.empty() ? " " : data.rewardText;
+    writeQuestFrameRewards(data.fixedRewards, data.choiceRewards, data.rewardMoney, data.rewardXp,
+                           data.rewardHonor, data.rewardTalents, data.rewardArenaPoints);
     questOfferRewardOpen_ = true;
     questPageLeft_ = false;
     questRequestItemsOpen_ = false;

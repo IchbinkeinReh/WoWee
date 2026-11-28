@@ -3370,6 +3370,34 @@ struct QuestRewardItem {
 /// greeting list clears them all (0x0058b720), as does leaving the world.
 struct QuestFrameTexts {
     std::string title, quest, objective, progress, reward;
+    /// GetGreetingText (0x0058bd30, 0x00c0cc48): the giver's list's text,
+    /// written by 0x0058c5a0 kind 0 (an empty one as " ").
+    std::string greeting;
+};
+
+/// The quest window's item slots and numbers, as GetNumQuestRewards /
+/// GetNumQuestChoices / GetNumQuestItems (0x0058c190 / 0x0058c1f0 /
+/// 0x0058c250: six 0x24-byte entries at 0x00c01740, ids at +0, +0xc, +0x18,
+/// counted to the first empty one), GetQuestItemInfo/Link, GetRewardMoney
+/// (0x0058c0b0, 0x00c0d670), GetRewardXP (0x0058c0e0, 0x00c0d674) and
+/// GetQuestMoneyToGet (0x0058c160, 0x00c0d6a4) read them: static buffers
+/// that outlive the window. The details and reward packets (0x0058dd50)
+/// clear all slots (0x0058b7d0) and write rewards, choices, the money word
+/// (a negative one is money to get, the reward then 0) and the experience
+/// (0 at the level cap); the progress packet (0x0058ba80) writes the
+/// required items and the money to get. Leaving the world (0x0058b940)
+/// clears the slots and the money to get; nothing else clears them.
+struct QuestFrameRewards {
+    std::vector<QuestRewardItem> rewards, choices, required;  // filled slots only
+    uint32_t rewardMoney = 0;
+    uint32_t moneyToGet = 0;
+    uint32_t xp = 0;
+    /// GetRewardHonor (0x0058c110, 0x00c0d678 / 10), GetRewardTalents
+    /// (0x0058c140, 0x00c0d690), GetRewardArenaPoints (0x0058c4a0,
+    /// 0x00c0d694): written by 0x0058dd50 only, never cleared.
+    uint32_t honor = 0;
+    uint32_t talents = 0;
+    uint32_t arenaPoints = 0;
 };
 
 /** SMSG_QUESTGIVER_QUEST_DETAILS data (simplified) */

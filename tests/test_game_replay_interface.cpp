@@ -3268,9 +3268,24 @@ TEST_CASE("a haircut leaves the barber's window open", "[replay][interface]") {
     REQUIRE(events.size() == 1);
     CHECK(events[0] == "BARBER_SHOP_SUCCESS");
     events.clear();
+    // One watcher per byte (0x006e4780: skin, hair style, hair colour, facial
+    // hair; the face byte has none), each called only when its byte moved.
     s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x01020304}}));
+    CHECK(std::count(events.begin(), events.end(), "BARBER_SHOP_APPEARANCE_APPLIED") == 3);
+    events.clear();
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x01020F04}}));
+    CHECK(events.empty());
+    // The preview writes the character record; the paid bytes arriving
+    // afterwards still move the fields, so the watchers still answer.
+    REQUIRE(s.handler().previewPlayerAppearance(0x07020F04, 0));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x07020F04}}));
+    CHECK(std::count(events.begin(), events.end(), "BARBER_SHOP_APPEARANCE_APPLIED") == 1);
+    events.clear();
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES_2, 0x00000005}}));
     CHECK(std::count(events.begin(), events.end(), "BARBER_SHOP_APPEARANCE_APPLIED") == 1);
     s.handler().setAddonEventCallback(nullptr);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x01020304},
+                                                           {UF::PLAYER_BYTES_2, 0}}));
     // T462: what the unit wears is its fields, whatever a preview wrote to the
     // character record since - the barber starts from them and puts them
     // back on leaving the chair.
@@ -3280,6 +3295,21 @@ TEST_CASE("a haircut leaves the barber's window open", "[replay][interface]") {
     REQUIRE(s.handler().getPlayerAppearanceFromFields(bytes, facial));
     CHECK(bytes == 0x01020304u);
     CHECK(facial == 0);
+}
+
+// V659: the realm's PLAYER_BYTES reach the record the model is drawn from -
+// the active character's, as previewPlayerAppearance and getActiveCharacter
+// key it - even where that record's guid is not the player object's.
+TEST_CASE("PLAYER_BYTES reach the drawn character record (V659)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    wowee::game::GameHandlerTestAccess::setCharacter(s.handler(), "A", "Locki", Session::kPlayerGuid + 1);
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::PLAYER_BYTES, 0x00050000},
+                                                           {UF::PLAYER_BYTES_2, 0x00000003}}));
+    const auto* ch = s.handler().getActiveCharacter();
+    REQUIRE(ch != nullptr);
+    CHECK(ch->appearanceBytes == 0x00050000u);
+    CHECK(ch->facialFeatures == 3);
 }
 
 // T364: PickupInventoryItem takes the bank's slots (40-67) and its bags'
@@ -4137,6 +4167,66 @@ TEST_CASE("the quest texts outlive the quest window (0x0058bd10)", "[replay][int
     s.receive(l);
     CHECK(ui.is("GetTitleText() == ''"));
     CHECK(ui.is("GetProgressText() == ''"));
+    // The list's own text (0x0058bd30) stays after the list closes.
+    CHECK(ui.is("GetGreetingText() == 'Hallo'"));
+    ui.run("CloseQuest()");
+    CHECK(ui.is("GetGreetingText() == 'Hallo'"));
+}
+
+// GetNumQuestRewards/Choices, GetRewardMoney, GetRewardXP and
+// GetQuestMoneyToGet (0x0058c190/0x0058c1f0/0x0058c0b0/0x0058c0e0/0x0058c160)
+// read the quest frame's slots and globals: the reward packet writes them
+// (0x0058dd50), closing the window keeps them, the progress packet
+// (0x0058ba80) writes only its required items and money to get.
+TEST_CASE("the quest frame's rewards outlive the window (0x0058c190)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::UNIT_FIELD_LEVEL, 10}});
+    Interface ui(s);
+    s.setConnected(true);
+    auto offer = [&](int32_t money) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_OFFER_REWARD));
+        p.writeUInt64(0xF130000C3E000001ull);
+        p.writeUInt32(300);
+        p.writeString("Quest");
+        p.writeString("Reward text");
+        p.writeUInt8(1);
+        p.writeUInt32(8);
+        p.writeUInt32(0);
+        p.writeUInt32(0);
+        p.writeUInt32(2);
+        p.writeUInt32(36926); p.writeUInt32(1); p.writeUInt32(9001);
+        p.writeUInt32(36927); p.writeUInt32(1); p.writeUInt32(9002);
+        p.writeUInt32(1);
+        p.writeUInt32(35953); p.writeUInt32(2); p.writeUInt32(9003);
+        p.writeUInt32(static_cast<uint32_t>(money));
+        p.writeUInt32(20000);
+        for (int i = 0; i < 25; ++i) p.writeUInt32(0);
+        s.receive(p);
+    };
+    offer(47400);
+    REQUIRE(s.handler().isQuestOfferRewardOpen());
+    ui.run("CloseQuest()");
+    REQUIRE_FALSE(s.handler().isQuestOfferRewardOpen());
+    CHECK(ui.is("GetNumQuestRewards() == 1"));
+    CHECK(ui.is("GetNumQuestChoices() == 2"));
+    CHECK(ui.is("GetRewardMoney() == 47400"));
+    CHECK(ui.is("GetRewardXP() == 20000"));
+    CHECK(ui.is("GetQuestMoneyToGet() == 0"));
+    wowee::network::Packet r(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_REQUEST_ITEMS));
+    r.writeUInt64(0xF130000C3E000001ull);
+    r.writeUInt32(789);
+    r.writeString("Stich des Skorpiden");
+    r.writeString("Text");
+    s.receive(r);
+    CHECK(ui.is("GetNumQuestRewards() == 1"));
+    CHECK(ui.is("GetNumQuestChoices() == 2"));
+    CHECK(ui.is("GetNumQuestItems() == 0"));
+    ui.run("CloseQuest()");
+    // A charge: money to get, no reward money.
+    offer(-500);
+    CHECK(ui.is("GetRewardMoney() == 0"));
+    CHECK(ui.is("GetQuestMoneyToGet() == 500"));
 }
 
 // T463: the giver's quest list is a quest page (0x006d0240 -> 0x0058c5a0 with

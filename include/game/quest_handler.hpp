@@ -70,6 +70,8 @@ public:
     [[nodiscard]] const std::string& getQuestGreeting() const { return questGreeting_; }
     /// The quest window's texts, kept after it closes (QuestFrameTexts).
     [[nodiscard]] const QuestFrameTexts& questFrameTexts() const { return questFrameTexts_; }
+    /// The quest window's item slots and numbers, kept after it closes.
+    [[nodiscard]] const QuestFrameRewards& questFrameRewards() const { return questFrameRewards_; }
     /// The quest giver's list (QUEST_GREETING) is the window open.
     [[nodiscard]] bool isQuestGreetingOpen() const { return gossipWindowOpen_ && gossipIsQuestGreeting_; }
 
@@ -422,6 +424,12 @@ public:
         pendingQuestQueryIds_.clear();
         npcQuestStatus_.clear();
         questFrameTexts_ = QuestFrameTexts{};
+        // 0x0058b940: the slots (0x0058b7d0) and the money to get; the reward
+        // money and experience globals stay.
+        questFrameRewards_.rewards.clear();
+        questFrameRewards_.choices.clear();
+        questFrameRewards_.required.clear();
+        questFrameRewards_.moneyToGet = 0;
     }
 
     /// 0x006d50c0: every quest giver's status asked at once, a bare
@@ -460,6 +468,12 @@ private:
     GossipMessageData currentGossip_;
     std::string questGreeting_;
     QuestFrameTexts questFrameTexts_;
+    QuestFrameRewards questFrameRewards_;
+    /// 0x0058dd50's part of it, for the details and the reward packet alike.
+    void writeQuestFrameRewards(const std::vector<QuestRewardItem>& rewards,
+                                const std::vector<QuestRewardItem>& choices,
+                                int32_t money, uint32_t xp, uint32_t honor,
+                                uint32_t talents, uint32_t arenaPoints);
     std::vector<GossipPoi> gossipPois_;
     QuestPoiIconList questPoiIcons_;
 

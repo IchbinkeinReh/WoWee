@@ -884,11 +884,14 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     return pushDisplayQuestId(L);
 }
 
-// GetQuestLogQuestText(index) → description, objectives (0x005df190)
+// GetQuestLogQuestText() → description, objectives (0x005e0340): the
+// SELECTED quest's (0x00c23ad8) record, both texts formatted for the player
+// (0x00579590 on +0xe6c / +0x2b4); it reads no argument. Without the record
+// nil, nil. Took an index and answered a single nil.
 static int lua_GetQuestLogQuestText(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const auto* qp = questAtRowOrSelected(L, gh, 1);
-    if (!qp) { return luaReturnNil(L); }
+    const auto* qp = selectedLogEntry(gh);
+    if (!qp) { lua_pushnil(L); lua_pushnil(L); return 2; }
     const auto& q = *qp;
     // The quest giver's own text. It is the third string in the query
     // response and the parser already walked over it to reach the fifth, so
@@ -4660,7 +4663,9 @@ static int lua_GetGossipText(lua_State* L) {
 // is zero (0x0058dd50, writing the global GetRewardMoney reads back). Unsigned, a
 // quest that charges answered four billion copper.
 static int lua_GetRewardMoney(lua_State* L) {
-    lua_pushnumber(L, game::questDialogMoney(currentQuestSource(getGameHandler(L)).money));
+    // 0x0058c0b0: the global, which outlives the window (QuestFrameRewards).
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->questFrameRewards().rewardMoney : 0u);
     return 1;
 }
 
@@ -4670,27 +4675,31 @@ static int lua_GetRewardMoney(lua_State* L) {
 // looking a row up, damping it and rounding it happens here - but the same level
 // cap still shuts the line off: 0x0058dd50 writes its XP global only for a player
 // below PLAYER_FIELD_MAX_LEVEL, and at the cap the global stays zero.
+// 0x0058c0e0 reads that global (QuestFrameRewards), written with the packet
+// and kept after the window closes.
 static int lua_GetRewardXP(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t xp = currentQuestSource(gh).xp;
-    lua_pushnumber(L, gh ? game::questDialogXp(xp, gh->getPlayerLevel(),
-                                               gh->getPlayerMaxLevel())
-                         : 0u);
+    lua_pushnumber(L, gh ? gh->questFrameRewards().xp : 0u);
     return 1;
 }
 // The offer panel's honour, talents and arena points - the quest-giver twins of
 // GetQuestLogReward*, read from the offer packet (which carries all three after
 // the money and XP) rather than the query. Were hard zero.
+// 0x0058c110 / 0x0058c140 / 0x0058c4a0 read globals of the frame that outlive
+// the window (QuestFrameRewards).
 static int lua_GetRewardHonor(lua_State* L) {
-    lua_pushnumber(L, currentQuestSource(getGameHandler(L)).honor);
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->questFrameRewards().honor : 0u);
     return 1;
 }
 static int lua_GetRewardTalents(lua_State* L) {
-    lua_pushnumber(L, currentQuestSource(getGameHandler(L)).talents);
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->questFrameRewards().talents : 0u);
     return 1;
 }
 static int lua_GetRewardArenaPoints(lua_State* L) {
-    lua_pushnumber(L, currentQuestSource(getGameHandler(L)).arenaPoints);
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->questFrameRewards().arenaPoints : 0u);
     return 1;
 }
 
@@ -4698,10 +4707,14 @@ static int lua_GetRewardArenaPoints(lua_State* L) {
 // opposite of the reward and a different field entirely. Some quests ask for
 // money; showing the reward here would tell the player they are being paid
 // when they are being charged.
+//
+// 0x0058c160: a global the progress packet writes (0x0058ba80) and the
+// details/reward packets write from a negative money word (0x0058dd50); it
+// outlives the window (QuestFrameRewards). Answered 0 unless the progress
+// page was open.
 static int lua_GetQuestMoneyToGet(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isQuestRequestItemsOpen()) { lua_pushnumber(L, 0); return 1; }
-    lua_pushnumber(L, gh->getQuestRequestItems().requiredMoney);
+    lua_pushnumber(L, gh ? gh->questFrameRewards().moneyToGet : 0u);
     return 1;
 }
 
@@ -4788,14 +4801,16 @@ static int lua_GetQuestItemInfo(lua_State* L) {
     const long long index = std::llround(number) - 1;
     if (index < 0 || index > 6 || (want != "reward" && want != "choice" && want != "required"))
         return luaL_error(L, kInvalid);
-    const QuestSource s = currentQuestSource(gh);
-
     // Three lists, not two. "required" is what the *progress* page asks for -
-    // the items a quest wants handed in.
+    // the items a quest wants handed in. All three are the frame's slots,
+    // which outlive the window (QuestFrameRewards).
     const std::vector<game::QuestRewardItem>* list = nullptr;
-    if (want == "choice")        list = s.choices;
-    else if (want == "required") list = gh ? &gh->getQuestRequestItems().requiredItems : nullptr;
-    else                         list = s.rewards;
+    if (gh) {
+        const auto& f = gh->questFrameRewards();
+        if (want == "choice")        list = &f.choices;
+        else if (want == "required") list = &f.required;
+        else                         list = &f.rewards;
+    }
 
     const game::QuestRewardItem* slot = nullptr;
     if (list) {
@@ -4836,16 +4851,17 @@ static int lua_GetQuestItemLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* type = luaL_optstring(L, 1, "reward");
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
-    const QuestSource s = currentQuestSource(gh);
-
     // The same three lists GetQuestItemInfo reads (0x0058c2b0 -> 0x0058bbc0):
     // "required" is the progress page's - shift-clicking a required item
     // linked nothing.
     const std::string want(type);
     const std::vector<game::QuestRewardItem>* list = nullptr;
-    if (want == "choice")        list = s.choices;
-    else if (want == "required") list = gh ? &gh->getQuestRequestItems().requiredItems : nullptr;
-    else                         list = s.rewards;
+    if (gh) {
+        const auto& f = gh->questFrameRewards();
+        if (want == "choice")        list = &f.choices;
+        else if (want == "required") list = &f.required;
+        else                         list = &f.rewards;
+    }
     if (!gh || !list || index < 1) { return luaReturnNil(L); }
 
     int seen = 0;
@@ -5372,31 +5388,19 @@ void registerQuestLuaAPI(lua_State* L) {
             pendingAbandonQuest() = 0;
             return 0;
         }},
-                // Both of these answer for the quest giver's dialog while one
-                // is open and for the log's selection otherwise, which is the
-                // same rule the text accessors follow.
+                // 0x0058c190 / 0x0058c1f0: the quest frame's slots, counted to
+                // the first empty one of six (QuestFrameRewards) - kept after
+                // the window closes, never the quest log's (that is
+                // GetNumQuestLogRewards). Answered the log's selection once no
+                // quest page was open.
                 {"GetNumQuestRewards", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { return luaReturnZero(L); }
-            if (const auto* v = currentQuestSource(gh).rewards) {
-                lua_pushnumber(L, countRewards(v));
-                return 1;
-            }
-            const auto* q = gh->getSelectedQuest();
-            if (!q) { return luaReturnZero(L); }
-            lua_pushnumber(L, countRewards(&q->rewardItems));
+            lua_pushnumber(L, gh ? static_cast<double>(gh->questFrameRewards().rewards.size()) : 0.0);
             return 1;
         }},
                 {"GetNumQuestChoices", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { return luaReturnZero(L); }
-            if (const auto* v = currentQuestSource(gh).choices) {
-                lua_pushnumber(L, countRewards(v));
-                return 1;
-            }
-            const auto* q = gh->getSelectedQuest();
-            if (!q) { return luaReturnZero(L); }
-            lua_pushnumber(L, countRewards(&q->rewardChoiceItems));
+            lua_pushnumber(L, gh ? static_cast<double>(gh->questFrameRewards().choices.size()) : 0.0);
             return 1;
         }},
                 {"GetSuggestedGroupNum", lua_GetSuggestedGroupNum},
@@ -5423,13 +5427,10 @@ void registerQuestLuaAPI(lua_State* L) {
                 // `numRequiredItems > 0`, and comparing nil against a number
                 // raises - so opening the progress page of any quest that
                 // takes items took the page down.
+                // 0x0058c250: the frame's required slots (QuestFrameRewards).
                 {"GetNumQuestItems", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushnumber(L, 0); return 1; }
-            const auto& req = gh->getQuestRequestItems().requiredItems;
-            int n = 0;
-            for (const auto& r : req) if (r.itemId != 0) ++n;
-            lua_pushnumber(L, n);
+            lua_pushnumber(L, gh ? static_cast<double>(gh->questFrameRewards().required.size()) : 0.0);
             return 1;
         }},
                 // The parchment behind the quest text, and nil is right for a

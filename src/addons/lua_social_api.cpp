@@ -4131,9 +4131,13 @@ void registerSocialLuaAPI(lua_State* L) {
                 // quests and nothing else to say. It reads the same list as the
                 // gossip window - this client routes both through one - but
                 // asks for it a quest at a time rather than all at once.
+                // GetGreetingText (0x0058bd30): the static buffer the list
+                // wrote (0x0058c5a0 kind 0, an empty text as " "), kept after
+                // the window closes; the next list or leaving the world
+                // replaces it (QuestFrameTexts::greeting).
                 {"GetGreetingText", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushstring(L, gh ? gh->getQuestGreeting().c_str() : "");
+            lua_pushstring(L, gh ? gh->questFrameTexts().greeting.c_str() : "");
             return 1;
         }},
                 {"GetNumAvailableQuests", [](lua_State* L) -> int {

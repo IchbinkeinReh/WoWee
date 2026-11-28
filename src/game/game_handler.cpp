@@ -6716,6 +6716,10 @@ const QuestFrameTexts& GameHandler::questFrameTexts() const {
     static const QuestFrameTexts none;
     return questHandler_ ? questHandler_->questFrameTexts() : none;
 }
+const QuestFrameRewards& GameHandler::questFrameRewards() const {
+    static const QuestFrameRewards none;
+    return questHandler_ ? questHandler_->questFrameRewards() : none;
+}
 const std::string& GameHandler::getNpcText(uint32_t textId) const {
     static const std::string empty;
     if (questHandler_) return questHandler_->getNpcText(textId);
