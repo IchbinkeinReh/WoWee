@@ -6016,10 +6016,22 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
     // the main frame-rate bottleneck.  GPU frustum culling alone provides good
     // draw-call reduction without the per-frame GPU stall.  HiZ can be re-
     // enabled once the pyramid build is moved to an async compute queue.
+    //
+    // The WMO renderer is made beside as well: made here, each of its
+    // pipelines held the loading screen for as long as the driver took over
+    // it (1.3-1.5 s each beside the other two, V650's addendum), the frame
+    // only drawn between pipelines. Taken at once, the screen going meanwhile.
+    const auto pump = [] { pulsePipelineBuiltHook(); };
     if (!wmoRenderer) {
-        wmoRenderer = std::make_unique<WMORenderer>();
-        if (!wmoRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
-            LOG_ERROR("WMORenderer initialization failed");
+        BuiltBeside<WMORenderer> wmoBuilding;
+        wmoBuilding.begin([ctx = vkCtx, layout = perFrameSetLayout,
+                           assetManager]() -> std::unique_ptr<WMORenderer> {
+            auto made = std::make_unique<WMORenderer>();
+            if (!made->initialize(ctx, layout, assetManager))
+                LOG_ERROR("WMORenderer initialization failed");
+            return made;
+        });
+        wmoRenderer = wmoBuilding.takeWaiting(pump);
         wmoRenderer->setRtScene(rtScene_.get());
         setWmoSurfaceDetail(wmoSurfaceDetail_.normalMaps, wmoSurfaceDetail_.strength);
         if (shadowRenderPass != VK_NULL_HANDLE) {
@@ -6028,7 +6040,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         }
     }
 
-    const auto pump = [] { pulsePipelineBuiltHook(); };
     if (m2Building.started()) {
         m2Renderer = m2Building.takeWaiting(pump);
         m2Renderer->setRtScene(rtScene_.get());
