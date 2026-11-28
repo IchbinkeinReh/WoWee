@@ -182,4 +182,12 @@ struct ServiceAsk {
     return mayInteract(a);
 }
 
+/// CONFIRM_XP_LOSS's one "%d" (0x006db010, the spirit healer's hello and
+/// SMSG_SPIRIT_HEALER_CONFIRM): the active player's PLAYER_NEXT_LEVEL_XP
+/// (0x0060a600, field +0x79c) as an x87 fild, times the float 0.05 at
+/// 0x00a31bb0, truncated (_ftol2 0x0088b9c0) - five percent of the level.
+[[nodiscard]] inline int confirmXpLossArg(uint32_t nextLevelXp) {
+    return static_cast<int>(static_cast<double>(static_cast<int32_t>(nextLevelXp)) * static_cast<double>(0.05f));
+}
+
 }  // namespace wowee::game::npc_interaction

@@ -4287,7 +4287,8 @@ void GameHandler::interactWithNpc(uint64_t guid, bool clickToMove) {
                 resurrectCasterName_.clear();
                 resurrectIsSpiritHealer_ = true;
                 resurrectRequestPending_ = true;
-                fireAddonEvent("CONFIRM_XP_LOSS", {});
+                fireAddonEventValues("CONFIRM_XP_LOSS",
+                                     {combat_log::Arg::num(ni::confirmXpLossArg(playerNextLevelXp_))});
             }
             return;
         case ni::Hello::SpiritGuide:

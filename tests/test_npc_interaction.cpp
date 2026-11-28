@@ -141,3 +141,13 @@ TEST_CASE("ghosts, owners, selection and standing", "[npc][service]") {
     a.spellClickable = true;
     CHECK(serviceOffered(a));
 }
+
+TEST_CASE("CONFIRM_XP_LOSS carries five percent of the level's XP (0x006db010)", "[npc][interact]") {
+    // fild PLAYER_NEXT_LEVEL_XP, fmul 0.05f (0x00a31bb0), _ftol2.
+    CHECK(confirmXpLossArg(0) == 0);
+    CHECK(confirmXpLossArg(400) == 20);
+    CHECK(confirmXpLossArg(1999) == 99);
+    // Level 79's 1,606,700 XP: 80335 (0.05f is a hair above 0.05).
+    CHECK(confirmXpLossArg(1606700) == 80335);
+    CHECK(confirmXpLossArg(19) == 0);
+}

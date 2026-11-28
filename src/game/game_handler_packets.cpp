@@ -75,6 +75,7 @@
 #include <limits>
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
+#include "game/npc_interaction.hpp"
 
 
 namespace wowee {
@@ -1363,7 +1364,9 @@ void GameHandler::registerCoreOpcodes() {
             // fired it, and the only thing that could reach
             // activateSpiritHealer was this client's own gossip window, so with
             // gossip handed over there was no way left to accept at all.
-            fireAddonEvent("CONFIRM_XP_LOSS", {});
+            // One "%d", five percent of the level (0x006db010).
+            fireAddonEventValues("CONFIRM_XP_LOSS", {combat_log::Arg::num(
+                npc_interaction::confirmXpLossArg(playerNextLevelXp_))});
         }
     };
     dispatchTable_[Opcode::SMSG_RESURRECT_REQUEST] = [this](network::Packet& packet) {
