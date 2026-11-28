@@ -4419,9 +4419,12 @@ void registerUnitLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldStatus(index)");   // 0x0054bc30
             auto* gh = getGameHandler(L);
             // The index rounded; one past the slots answers nil, nil, 0, 0,
-            // 0, 0, nil - no status word at all.
+            // 0, 0, nil - no status word at all. 3.3.5a has two slots
+            // (0x0054bc30: index - 1 > 1 is past them, MAX_BATTLEFIELD_QUEUES
+            // 2); WoWee's third is the older clients' (V675 b).
             const long long idx = std::llround(lua_tonumber(L, 1));
-            if (!gh || idx < 1 || idx > static_cast<long long>(gh->getBgQueues().size())) {
+            const long long slots = game::isPreWotlk() ? static_cast<long long>(gh ? gh->getBgQueues().size() : 0) : 2;
+            if (!gh || idx < 1 || idx > slots) {
                 lua_pushnil(L);
                 lua_pushnil(L);
                 lua_pushnumber(L, 0);

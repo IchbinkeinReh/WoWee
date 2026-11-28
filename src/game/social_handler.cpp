@@ -4872,6 +4872,8 @@ void SocialHandler::handleBattlefieldList(network::Packet& packet) {
         info.maxLevel = data.maxLevel;
         info.instanceIds = data.instanceIds;
         lastBattlefieldList_ = data;   // 0x00bea53c onward: the list the panel shows
+        LOG_INFO("SMSG_BATTLEFIELD_LIST: bgTypeId=", data.bgTypeId, " instances=", data.instanceIds.size(),
+                 " battlemaster=0x", std::hex, data.battlemasterGuid, std::dec);
         bool updated = false;
         for (auto& existing : availableBgs_) { if (existing.bgTypeId == info.bgTypeId) { existing = std::move(info); updated = true; break; } }
         if (!updated) availableBgs_.push_back(std::move(info));
@@ -6800,6 +6802,8 @@ void SocialHandler::respondInstanceLock(bool accept) {
 }
 
 void SocialHandler::clearBattlefieldScore() {
+    LOG_INFO("Battlefield list and score cleared with the world (0x0054ca50): type was ",
+             lastBattlefieldList_.bgTypeId);
     bgScoreboard_ = BgScoreboardData{};
     ++bgScoreGeneration_;   // a name answer for the old board changes nothing
     bgScorePending_ = 0;
