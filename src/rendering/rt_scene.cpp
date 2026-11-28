@@ -473,7 +473,7 @@ void RtScene::freeImmediateGarbage() {
     immediateGarbage_.shrink_to_fit();
 }
 
-void RtScene::uploadAllPending() {
+void RtScene::uploadAllPending(const std::function<void()>& betweenChunks) {
     if (!ctx_ || !active_) return;
     // From here each submit is waited on, and what only it used - staging,
     // a BLAS's scratch - goes straight after it rather than at frame fences
@@ -542,6 +542,10 @@ void RtScene::uploadAllPending() {
         peakPrivate = std::max(peakPrivate, core::MemoryMonitor::processMemory().privateBytes);
         freeImmediateGarbage();
         if (pendingMeshes_.size() >= pendingBefore) break;  // nothing taken: give up rather than spin
+        // Each chunk is waited on and let go of above, so nothing of this
+        // upload is open while the caller draws (V650: 1.1-1.5 s with no
+        // loading screen frame for a city's scene).
+        if (betweenChunks && !pendingMeshes_.empty()) betweenChunks();
     }
     immediate_ = false;
     // Any left over build again from their source when their turn comes.
@@ -629,8 +633,11 @@ void RtScene::removeMesh(MeshId id) {
     meshRowsTouched_.push_back(id);
     --liveMeshes_;
     liveTriangles_ -= m.triCount;
-    pendingMeshes_.erase(std::remove(pendingMeshes_.begin(), pendingMeshes_.end(), id),
-                         pendingMeshes_.end());
+    // Only a queued mesh is in the list: a map's thousands of uploaded chunks
+    // removed at a map change each scanned it whole for nothing.
+    if (m.queued)
+        pendingMeshes_.erase(std::remove(pendingMeshes_.begin(), pendingMeshes_.end(), id),
+                             pendingMeshes_.end());
 
     // In-flight frames may still trace this mesh. Its pool ranges, BLAS and
     // slot are released only once every frame slot has been fenced.

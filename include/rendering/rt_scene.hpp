@@ -223,8 +223,10 @@ public:
     /// their own that are waited on - rather than a share a frame, which on
     /// entering a city was some four seconds of 100 ms frames (14,000
     /// meshes at 150,000 triangles a frame). For the loading screen, and for
-    /// the frame the tracing is switched on.
-    void uploadAllPending();
+    /// the frame the tracing is switched on. `betweenChunks`, when given,
+    /// runs after each chunk's upload is done (the loading screen drawn, so
+    /// a city's second or so is not one frozen frame).
+    void uploadAllPending(const std::function<void()>& betweenChunks = {});
 
     /// Record uploads and acceleration structure builds for this frame.
     /// Must run outside a render pass and before any trace dispatch.

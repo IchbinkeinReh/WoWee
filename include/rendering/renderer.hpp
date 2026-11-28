@@ -972,7 +972,8 @@ public:
     void setRtLightingMode(int mode);
     /// The ray tracing's pipelines and scene, ready before the loading screen
     /// lets go (RtLighting::warmUp).
-    void warmUpRayTracing();
+    /// `betweenChunks` runs between the scene upload's chunks (RtScene::uploadAllPending).
+    void warmUpRayTracing(const std::function<void()>& betweenChunks = {});
     /// Why the ray traced lighting cannot run on this device at the current
     /// sample count, in the words the settings show; empty when it can. The
     /// mode asked for is then held at off (setRtLightingMode).

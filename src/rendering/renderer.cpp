@@ -7149,13 +7149,13 @@ std::string Renderer::rtUnavailableReason(bool german) const {
     return rt_capability::settingsReason(vkCtx->rtCapability(), german);
 }
 
-void Renderer::warmUpRayTracing() {
+void Renderer::warmUpRayTracing(const std::function<void()>& betweenChunks) {
     if (!rtLighting_ || !rtScene_) return;
     // The meshes the world's renderers have added on the way in; the GPU is
     // the loading screen's to keep busy, and waiting on it here costs the
     // player nothing they would see. Asked first whether they fit.
     rtMemoryGuard();
-    rtLighting_->warmUp();
+    rtLighting_->warmUp(betweenChunks);
 }
 
 void Renderer::setRtLightingMode(int mode) {

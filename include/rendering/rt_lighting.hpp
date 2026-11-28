@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <map>
 #include <utility>
@@ -86,7 +87,7 @@ public:
     /// What the first traced frame would otherwise do over seconds: the
     /// pipelines, and every mesh of the scene built and uploaded. For the
     /// loading screen; nothing while the tracing is off.
-    void warmUp();
+    void warmUp(const std::function<void()>& betweenChunks = {});
     /// Whether a frame can be drawn through the G-buffer pass now: active,
     /// with its images, and the device able to (VkContext::getGbufferRenderPass).
     [[nodiscard]] bool ready() const;

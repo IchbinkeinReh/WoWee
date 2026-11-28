@@ -511,11 +511,11 @@ void RtLighting::destroyGbuffer() {
     ++viewsGeneration_;
 }
 
-void RtLighting::warmUp() {
+void RtLighting::warmUp(const std::function<void()>& betweenChunks) {
     if (mode_ == Mode::Off || !scene_ || ctx_->getGbufferRenderPass() == VK_NULL_HANDLE) return;
     if (!pipelinesReady(true)) return;
     scene_->setActive(true);
-    scene_->uploadAllPending();
+    scene_->uploadAllPending(betweenChunks);
 }
 
 bool RtLighting::ready() const {

@@ -1497,7 +1497,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // passenger's world place is the transport's matrix times the offset).
     if (gameHandler_ && gameHandler_->isOnTransport()) gameHandler_->markTransportArrival();
 
-    renderer_->warmUpRayTracing();
+    // The loading screen drawn between the scene's chunks (V650).
+    renderer_->warmUpRayTracing([&showProgress] { showProgress("Finalizing world sync...", 0.995f); });
 
     // No pan around the player on the way in: the client enters the world with
     // the camera behind the character, where it stays until the player moves
