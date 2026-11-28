@@ -1645,6 +1645,17 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
 bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                                                const PlayerFieldIndices& pfi,
                                                bool isCreate) {
+    // V659: the PLAYER_BYTES writes went to the record whose guid is the
+    // player object's, while the model is rebuilt from the active character's
+    // (activeCharacterGuid_, as previewPlayerAppearance keys it) - a paid
+    // style reached the fields but never the model until a relog.
+    auto drawnCharacterRecord = [this]() -> Character* {
+        const uint64_t active = owner_.getActiveCharacterGuid();
+        const uint64_t guid = active != 0 ? active : owner_.getPlayerGuid();
+        for (auto& ch : owner_.charactersRef())
+            if (ch.guid == guid) return &ch;
+        return nullptr;
+    };
     bool slotsChanged = false;
     // Whether anything the character sheet prints actually moved. The sheet
     // refreshes on events, not on a timer, so a stat that changes without one
@@ -1753,18 +1764,10 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             } else {
                 // Byte 0 (bits 0-7): facial hair / piercings
                 uint8_t facialHair = static_cast<uint8_t>(val & 0xFF);
-                for (auto& ch : owner_.charactersRef()) {
-                    if (ch.guid == owner_.getPlayerGuid()) {
-                        // The player's appearance bytes each have a watcher
-                        // that raises BARBER_SHOP_APPEARANCE_APPLIED when it
-                        // changes (0x006df620, 0x006da7f0, 0x006da870 ->
-                        // 0x0052e4d0): the barber's window redraws its choices.
-                        if (ch.facialFeatures != facialHair)
-                            pendingEvents_.emit("BARBER_SHOP_APPEARANCE_APPLIED", {});
-                        ch.facialFeatures = facialHair;
-                        break;
-                    }
-                }
+                // The record the model is built from, keyed as its reader
+                // (getActiveCharacter) keys it. BARBER_SHOP_APPEARANCE_APPLIED
+                // is raised from the field values in onValuesUpdatePlayer.
+                if (auto* ch = drawnCharacterRecord()) ch->facialFeatures = facialHair;
                 LOG_DEBUG("PLAYER_BYTES_2 (VALUES): raw=0x", std::hex, val, std::dec,
                            " bankBagSlots=", static_cast<int>(bankBagSlots),
                            " facial=", static_cast<int>(facialHair));
@@ -1782,16 +1785,7 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
         // VALUES-only fields: PLAYER_BYTES (appearance) and PLAYER_FLAGS (ghost state)
         else if (!isCreate && pfi.pBytes != 0xFFFF && key == pfi.pBytes) {
             // PLAYER_BYTES changed (barber shop, polymorph, etc.)
-            for (auto& ch : owner_.charactersRef()) {
-                if (ch.guid == owner_.getPlayerGuid()) {
-                    // Skin, face, hair style and colour: the same watchers as
-                    // the facial hair above.
-                    if (ch.appearanceBytes != val)
-                        pendingEvents_.emit("BARBER_SHOP_APPEARANCE_APPLIED", {});
-                    ch.appearanceBytes = val;
-                    break;
-                }
-            }
+            if (auto* ch = drawnCharacterRecord()) ch->appearanceBytes = val;
             if (owner_.appearanceChangedCallbackRef())
                 owner_.appearanceChangedCallbackRef()();
             if (owner_.playerModelRebuildCallbackRef())
@@ -3701,10 +3695,52 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                 range(UF::PLAYER_SKILL_INFO_START, 128, 3, 1, 0x0000FFFFu);
         }
 
+        // The player's appearance bytes, each watched one byte wide (kind 4,
+        // registered at 0x006e4780: +0x14 skin -> 0x006da870, +0x16 hair style
+        // -> 0x006df530, +0x17 hair colour -> 0x006da7f0, +0x18 facial hair ->
+        // 0x006df620; the face byte +0x15 has none). 0x004d5150 calls a
+        // watcher only when its byte differs from the field's old value, and
+        // each one, for the active player, raises BARBER_SHOP_APPEARANCE_APPLIED
+        // (0x0052e4d0, event 0x23d) - once per moved byte. The old value is
+        // the field's, not the character record's (the barber's preview
+        // writes the record).
+        bool appearanceMoved = false;
+        {
+            const auto& last = owner_.lastPlayerFieldsRef();
+            auto movedBytes = [&](UF field, std::initializer_list<int> bytes) {
+                const uint16_t idx = fieldIndex(field);
+                if (idx == 0xFFFF) return 0;
+                const auto now = block.fields.find(idx);
+                if (now == block.fields.end()) return 0;
+                const auto was = last.find(idx);
+                const uint32_t old = was == last.end() ? 0u : was->second;
+                int n = 0;
+                for (const int b : bytes)
+                    if (((old >> (8 * b)) & 0xFFu) != ((now->second >> (8 * b)) & 0xFFu)) ++n;
+                return n;
+            };
+            const int moved = movedBytes(UF::PLAYER_BYTES, {0, 2, 3}) +
+                              movedBytes(UF::PLAYER_BYTES_2, {0});
+            for (int i = 0; i < moved; ++i)
+                pendingEvents_.emit("BARBER_SHOP_APPEARANCE_APPLIED", {});
+            appearanceMoved = moved > 0 || movedBytes(UF::PLAYER_BYTES, {1}) > 0;
+        }
+
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {
             owner_.lastPlayerFieldsRef().insert_or_assign(key, val);
+        }
+        // ...and the same watchers put the moved parts on the model (0x004ea6b0
+        // / 0x004ea3e0 / 0x004ea2f0 / 0x004ea590) from the fields, whatever the
+        // character record held. V659: leaving the barber's chair puts back the
+        // fields as they stand, before the realm's update with the paid style
+        // has come; that update then has to reach the model.
+        if (appearanceMoved) {
+            uint32_t bytes = 0;
+            uint8_t facial = 0;
+            if (owner_.getPlayerAppearanceFromFields(bytes, facial))
+                owner_.previewPlayerAppearance(bytes, facial);
         }
         if (questStatusMoved) {
             if (auto* qh = owner_.getQuestHandler()) {
