@@ -7426,6 +7426,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             }
             return 1;
         }},
+                // 0x005a4410: the current tab byte 0x00c1dc0d plus one.
                 {"GetCurrentGuildBankTab", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushnumber(L, gh ? (gh->getGuildBankActiveTab() + 1) : 1);
@@ -7437,7 +7438,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: SetCurrentTab(tab)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
-            if (gh && tab >= 1) {
+            // Tabs 1..6 only (tab - 1 < 6 unsigned); any other leaves the
+            // current one (0x00c1dc0d) as it was.
+            if (gh && tab >= 1 && tab <= 6) {
                 gh->setGuildBankActiveTab(static_cast<uint8_t>(tab - 1));
             }
             return 0;
@@ -7694,12 +7697,14 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GetNumGuildBankTransactions(tab)");
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
-            lua_pushnumber(L, (gh && tab >= 1)
+            // Rounded; tabs 1..6 and 7, the money log (0x00c1dbf0 + 4 * (tab - 1)).
+            const long tab = std::lround(lua_tonumber(L, 1));
+            lua_pushnumber(L, (gh && tab >= 1 && tab <= 7)
                 ? static_cast<lua_Number>(gh->getGuildBankLog(static_cast<uint8_t>(tab - 1)).size())
                 : 0);
             return 1;
         }},
+                // 0x005a45b0: the money log's count 0x00c1dc08.
                 {"GetNumGuildBankMoneyTransactions", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushnumber(L, gh
@@ -7713,8 +7718,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
                 return luaL_error(L, "Usage: GetGuildBankTransaction(tab, index)");
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
-            const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+            // Both rounded, as 0x005a6dc0 reads them.
+            const int tab = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 2)));
             if (!gh || tab < 1 || index < 1) return 0;
             const auto& log = gh->getGuildBankLog(static_cast<uint8_t>(tab - 1));
             if (index > static_cast<int>(log.size())) return 0;
@@ -7738,7 +7744,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GetGuildBankMoneyTransaction(index)");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));   // rounded
             if (!gh || index < 1) return 0;
             const auto& log = gh->getGuildBankLog(kGuildBankMoneyTab);
             if (index > static_cast<int>(log.size())) return 0;

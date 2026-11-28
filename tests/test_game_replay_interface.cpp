@@ -4309,6 +4309,15 @@ TEST_CASE("the trainer's count, type and greeting outlive the window (0x00593d10
     CHECK(ui.is("GetTrainerGreetingText():find('Grabt tief, ', 1, true) == 1"));
     // The rows themselves go with the list's size (0xc0e4a0).
     CHECK(ui.is("select(3, GetTrainerServiceInfo(1)) == nil"));
+    // The count is the one the last rebuild (0x00594ba0) wrote, not the one
+    // last asked for: folded and asked, unfolded unasked, then closed.
+    s.receive(p);
+    ui.run("shownOpen = GetNumTrainerServices()");
+    ui.run("CollapseTrainerSkillLine(0); shownFolded = GetNumTrainerServices()");
+    REQUIRE(ui.is("shownFolded < shownOpen"));
+    ui.run("ExpandTrainerSkillLine(0)");
+    ui.run("CloseTrainer()");
+    CHECK(ui.is("GetNumTrainerServices() == shownOpen"));
 }
 
 // T472: CanSendAuctionQuery (0x0059c740) asks the throttle alone - no open
@@ -4321,6 +4330,35 @@ TEST_CASE("CanSendAuctionQuery asks only the throttle (0x0059c740)", "[replay][i
     CHECK(ui.is("CanSendAuctionQuery('list') == 1"));
     CHECK(ui.is("CanSendAuctionQuery('owner') == 1"));
     CHECK(ui.is("CanSendAuctionQuery('nothing') == nil"));
+}
+
+// SetCurrentGuildBankTab (0x005a43c0) takes tabs 1..6 only; another leaves
+// the current one (0x00c1dc0d), which GetCurrentGuildBankTab (0x005a4410)
+// answers plus one.
+TEST_CASE("the current guild bank tab is one of six (0x005a43c0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("SetCurrentGuildBankTab(3)");
+    REQUIRE(ui.is("GetCurrentGuildBankTab() == 3"));
+    ui.run("SetCurrentGuildBankTab(9)");
+    CHECK(ui.is("GetCurrentGuildBankTab() == 3"));
+    ui.run("SetCurrentGuildBankTab(0)");
+    CHECK(ui.is("GetCurrentGuildBankTab() == 3"));
+    ui.run("SetCurrentGuildBankTab(6.7)");
+    CHECK(ui.is("GetCurrentGuildBankTab() == 6"));
+}
+
+// GetTradePlayerItemLink / GetTradeTargetItemLink (0x00586d00 / 0x005865f0)
+// answer nothing at all for an empty or unknown slot - no nil.
+TEST_CASE("an empty trade slot has no link at all (0x00586d00)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select('#', GetTradePlayerItemLink(1)) == 0"));
+    CHECK(ui.is("select('#', GetTradeTargetItemLink(1)) == 0"));
+    CHECK(ui.is("select('#', GetTradePlayerItemLink(99)) == 0"));
+    CHECK(ui.is("select('#', GetTradeTargetItemLink(0)) == 0"));
 }
 
 // GetNumAvailableQuests / GetNumActiveQuests (0x0058bdd0 / 0x0058be00) and
@@ -4637,14 +4675,24 @@ TEST_CASE("the dungeon reward carries the strangers' share (0x00557e40)", "[repl
     Interface ui(s);
     s.setConnected(true);
     CHECK(ui.is("select('#', GetLFGCompletionReward()) == 0"));
-    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_LFG_PLAYER_REWARD));
-    p.writeUInt32((6u << 24) | 262u);  // the random slot, type in the high byte
-    p.writeUInt32((1u << 24) | 205u);  // the dungeon done
-    p.writeUInt8(1);
-    for (uint32_t v : {2u, 1000u, 500u, 30u, 20u}) p.writeUInt32(v);  // strangers, money, xp, per stranger
-    p.writeUInt8(0);
-    s.receive(p);
+    const auto reward = [&](uint32_t dungeon) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_LFG_PLAYER_REWARD));
+        p.writeUInt32((6u << 24) | 262u);      // the random slot, type in the high byte
+        p.writeUInt32((1u << 24) | dungeon);   // the dungeon done
+        p.writeUInt8(1);
+        for (uint32_t v : {2u, 1000u, 500u, 30u, 20u}) p.writeUInt32(v);  // strangers, money, xp, per stranger
+        p.writeUInt8(0);
+        s.receive(p);
+    };
+    // A dungeon with no LFGDungeons row: nothing, as before a reward.
+    reward(205);
+    CHECK(ui.is("select('#', GetLFGCompletionReward()) == 0"));
+    wowee::game::GameHandlerTestAccess::addLfgDungeon(s.handler(), 205, "Utgarde Keep", 1, "UtgardeKeep");
+    reward(205);
     REQUIRE(ui.is("select('#', GetLFGCompletionReward()) == 9"));
+    CHECK(ui.is("select(1, GetLFGCompletionReward()) == 'Utgarde Keep'"));
+    CHECK(ui.is("select(2, GetLFGCompletionReward()) == 1"));
+    CHECK(ui.is("select(3, GetLFGCompletionReward()) == 'UtgardeKeep'"));
     CHECK(ui.is("select(4, GetLFGCompletionReward()) == 1000"));
     CHECK(ui.is("select(5, GetLFGCompletionReward()) == 30"));
     CHECK(ui.is("select(6, GetLFGCompletionReward()) == 500"));

@@ -3665,7 +3665,9 @@ static int lua_GetTradeTargetItemInfo(lua_State* L) {
 static int pushTradeLink(lua_State* L, game::GameHandler* gh,
                          const game::GameHandler::TradeSlot& slot) {
     const auto* info = (gh && slot.occupied) ? gh->getItemInfo(slot.itemId) : nullptr;
-    if (!info || info->name.empty()) { return luaReturnNil(L); }
+    // No item, or one not cached: nothing at all (0x00586d00 / 0x005865f0
+    // return 0 values, not a nil).
+    if (!info || info->name.empty()) return 0;
     // The row's own instance numbers, not an empty set: 0x0061e290 is handed
     // the enchant, the three gems, the property and the seed from the trade row
     // (0xca0b80 + 0x0c, 0x10, 0x40 and 0x3c), and the tooltip the trade window
@@ -3682,7 +3684,7 @@ static int lua_GetTradePlayerItemLink(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTradePlayerItemLink(index)");   // 0x00586d00
     auto* gh = getGameHandler(L);
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
+    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return 0;
     return pushTradeLink(L, gh, gh->getMyTradeSlots()[i - 1]);
 }
 
@@ -3690,7 +3692,7 @@ static int lua_GetTradeTargetItemLink(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTradeTargetItemLink(index)");   // 0x005865f0
     auto* gh = getGameHandler(L);
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
+    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return 0;
     return pushTradeLink(L, gh, gh->getPeerTradeSlots()[i - 1]);
 }
 

@@ -3577,6 +3577,12 @@ static game::TrainerServiceList::Lookups trainerLookups(game::GameHandler* gh, b
 
 /// The trainer list as the client keeps it, built from the list the trainer
 /// sent (0x00596450) the first time it is asked for after one arrives.
+/// The shown count each rebuild writes (0xc0e4a8 by 0x00594ba0), kept by the
+/// inventory handler so it outlives CloseTrainer (T471).
+static void noteTrainerShown(game::GameHandler* gh, const game::TrainerServiceList& list) {
+    if (auto* inv = gh ? gh->getInventoryHandler() : nullptr) inv->noteTrainerShown(list.visibleCount());
+}
+
 static game::TrainerServiceList& trainerList(lua_State* L) {
     static game::TrainerServiceList list;
     static uint64_t lastCue = 0;
@@ -3600,6 +3606,7 @@ static game::TrainerServiceList& trainerList(lua_State* L) {
         for (const auto& sp : data.spells) states.push_back(sp.state);
         list.build(data.spells, states, tradeskill, trainerTypeMask(L), trainerLookups(gh, tradeskill));
         lastCue = trainerStateCue(gh);
+        noteTrainerShown(gh, list);
     } else if (data.serial != 0) {
         // Worked out again only once something it reads has changed.
         if (const uint64_t cue = trainerStateCue(gh); cue != lastCue) {
@@ -3608,6 +3615,7 @@ static game::TrainerServiceList& trainerList(lua_State* L) {
                              return clientServiceState(gh, r.service, r.state);
                          },
                          trainerTypeMask(L), trainerLookups(gh, tradeskill));
+            noteTrainerShown(gh, list);
         }
     }
     return list;
@@ -3618,6 +3626,7 @@ static void trainerRefilter(lua_State* L) {
     auto* gh = getGameHandler(L);
     auto& list = trainerList(L);
     list.refilter(trainerTypeMask(L), trainerLookups(gh, list.tradeskill()));
+    noteTrainerShown(gh, list);
     if (gh) gh->fireAddonEvent("TRAINER_UPDATE", {});
 }
 
@@ -6374,18 +6383,12 @@ void registerQuestLuaAPI(lua_State* L) {
                 // counts in that order, and reaches past the shown rows to the
                 // hidden ones, as the client's does.
                 {"GetNumTrainerServices", [](lua_State* L) -> int {
-            // 0x00593d10: the rows that show (0xc0e4a8), which the close
-            // leaves as they were until the world is left (T471).
+            // 0x00593d10: the rows that show (0xc0e4a8) as the last rebuild
+            // wrote them; the close leaves them until the world is left (T471).
             auto* gh = getGameHandler(L);
             auto* inv = gh ? gh->getInventoryHandler() : nullptr;
-            const auto& list = trainerList(L);
-            uint32_t shown = 0;
-            if (gh && gh->getTrainerSpells().serial != 0) {
-                shown = static_cast<uint32_t>(list.visibleCount());
-                if (inv) inv->noteTrainerShown(shown);
-            } else if (inv) {
-                shown = inv->trainerShownKept();
-            }
+            (void)trainerList(L);   // a list come since is built (and counted) first
+            const uint32_t shown = inv ? inv->trainerShownKept() : 0u;
             lua_pushnumber(L, shown);
             return 1;
         }},

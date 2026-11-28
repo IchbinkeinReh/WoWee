@@ -7854,18 +7854,16 @@ static int lua_JoinBattlefield(lua_State* L) {
 //
 // What a finished dungeon finder run paid out, from SMSG_LFG_PLAYER_REWARD.
 //
-// The six counts answer zero rather than nil even with no reward to report,
-// which is the opposite of the usual choice and for the opposite reason: the
-// alert frame does not test them, it does arithmetic with them -
+// The alert frame does not test the six counts, it does arithmetic with
+// them -
 //
 //     local moneyAmount = moneyBase + moneyVar * numStrangers
 //
-// so a nil raises there rather than reading as absent.
+// so 12340 answers either nothing (no reward yet, or no LFGDungeons row for
+// the dungeon done) or all nine.
 //
-// The variable halves are always zero. They are the per-stranger bonus for
-// filling a group with people from other realms, which 3.3.5a's server does not
-// send and this realm could not have anyway; numStrangers is zero to match, so
-// the arithmetic above lands on the base whichever way the frame reads it.
+// The variable halves and numStrangers are SMSG_LFG_PLAYER_REWARD's
+// (0x0055bdc0 case 0x1ff -> 0x00acdc24..34).
 static int lua_GetLFGCompletionReward(lua_State* L) {
     auto* gh = getGameHandler(L);
     const game::LfgCompletionReward* r = gh ? &gh->getLfgCompletionReward() : nullptr;
@@ -7880,16 +7878,18 @@ static int lua_GetLFGCompletionReward(lua_State* L) {
     for (const auto& e : gh->getLfgDungeons()) {
         if (e.id == r->dungeonId) { d = &e; break; }
     }
+    // No row for the slot (0x00ad4050..0x00ad404c bounds, an empty entry):
+    // nothing at all, as before a reward - not nine values with nil names.
+    if (!d) return 0;
     // Pushed once each and in order, rather than an if/else per slot: two
     // pushes on one line read as two return values to anything counting them,
     // this file's own return-order sweep included.
-    const std::string name = (d && !d->name.empty()) ? d->name : std::string();
-    // Appended to "Interface\\LFGFrame\\LFGIcon-" by the frame, so it is the
-    // bare suffix out of LFGDungeons.dbc and not a path.
-    const std::string texture = (d && !d->texture.empty()) ? d->texture : std::string();
-    name.empty() ? lua_pushnil(L) : lua_pushstring(L, name.c_str());          // 1
-    d ? lua_pushinteger(L, static_cast<lua_Integer>(d->typeId)) : lua_pushnil(L);  // 2
-    texture.empty() ? lua_pushnil(L) : lua_pushstring(L, texture.c_str());    // 3
+    // The row's strings as they stand (+4, +0x30). The texture is appended to
+    // "Interface\\LFGFrame\\LFGIcon-" by the frame, so it is the bare suffix
+    // out of LFGDungeons.dbc and not a path.
+    lua_pushstring(L, d->name.c_str());                                        // 1
+    lua_pushinteger(L, static_cast<lua_Integer>(d->typeId));                   // 2 (+0x28)
+    lua_pushstring(L, d->texture.c_str());                                     // 3
     lua_pushnumber(L, static_cast<double>(static_cast<int32_t>(r->money)));    // 4: moneyBase
     lua_pushnumber(L, static_cast<double>(static_cast<int32_t>(r->varMoney))); // 5: moneyVar
     lua_pushnumber(L, static_cast<double>(static_cast<int32_t>(r->xp)));       // 6: experienceBase

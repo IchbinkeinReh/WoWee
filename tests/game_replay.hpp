@@ -70,6 +70,19 @@ struct GameHandlerTestAccess {
         e.maxGroupSize = 5;
         gh.battlemasterList_[id] = e;
     }
+    // An LFGDungeons.dbc row, the file itself left unread (the tests have no
+    // assets): the dungeon list and its name cache hold only these.
+    static void addLfgDungeon(GameHandler& gh, uint32_t id, const std::string& name,
+                              uint32_t typeId, const std::string& texture) {
+        gh.lfgDungeonNameCacheLoaded_ = true;
+        LfgDungeon d;
+        d.id = id;
+        d.name = name;
+        d.typeId = typeId;
+        d.texture = texture;
+        gh.lfgDungeons_.push_back(d);
+        gh.lfgDungeonNameCache_[id] = name;
+    }
     static void setSocket(GameHandler& gh, std::unique_ptr<network::WorldSocket> socket) {
         gh.socket = std::move(socket);
     }
