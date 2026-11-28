@@ -635,8 +635,10 @@ void registerLfgLuaAPI(lua_State* L) {
     // not be answered - and it did not appear either, because LFG_PROPOSAL_SHOW
     // was not fired.
     //
-    // Both answer through 0x00554450, which asks the taint check (kind 9:
-    // insecure code only inside a hardware event).
+    // Both answer through 0x00554450. Only AcceptProposal (0x005545e0) asks
+    // the taint check first (0x005191c0 kind 9: insecure code only inside a
+    // hardware event); RejectProposal (0x00554600) is push 0 / call
+    // 0x00554450 and nothing else.
     {"AcceptProposal", [](lua_State* L) -> int {
         if (!taint::allowed(L, 9)) return 0;
         auto* gh = getGameHandler(L);
@@ -646,7 +648,6 @@ void registerLfgLuaAPI(lua_State* L) {
         return 0;
     }},
     {"RejectProposal", [](lua_State* L) -> int {
-        if (!taint::allowed(L, 9)) return 0;
         auto* gh = getGameHandler(L);
         if (gh && gh->getLfgProposalId() != 0) {
             gh->lfgAcceptProposal(gh->getLfgProposalId(), false);
