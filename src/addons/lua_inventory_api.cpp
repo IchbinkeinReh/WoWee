@@ -6736,6 +6736,21 @@ void registerInventoryLuaAPI(lua_State* L) {
                     lua_pushboolean(L, info && info->scalingStatValue != 0 && gh->isVendorWindowOpen());
                     return 1;
                 }},
+                // 0x00584150: the open merchant's first slot selling this
+                // item id (1-based), for 0x006277f0's merchant-owner lines.
+                {"__WoweeMerchantIndexOfItem", [](lua_State* L) -> int {
+                    auto* gh = getGameHandler(L);
+                    const auto id = static_cast<uint32_t>(lua_tonumber(L, 1));
+                    if (!gh || id == 0 || !gh->isVendorWindowOpen()) return 0;
+                    const auto& items = gh->getVendorItems().items;
+                    for (size_t i = 0; i < items.size(); ++i) {
+                        if (items[i].itemId == id) {
+                            lua_pushnumber(L, static_cast<double>(i + 1));
+                            return 1;
+                        }
+                    }
+                    return 0;
+                }},
                 {"_WoweeContainerItemInstance", lua_WoweeContainerItemInstance},
                 // GetItemSpell(item) → spellName, spellRank
                 //

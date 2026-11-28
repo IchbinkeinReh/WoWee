@@ -15085,12 +15085,16 @@ void LuaEngine::registerCoreAPI() {
         // 0x00631850, offset 3: no worn item - an item that scales with its
         // wearer (template +0xbc), while a merchant is open (0x00bfa3e8) and
         // shift is not given, shown as the merchant sells it (0x006277f0 with
-        // the merchant as owner, 0x0061e740's level 1).
+        // the merchant as owner, 0x0061e740's level 1). With the merchant as
+        // owner the item's extended cost (0x00584150: the merchant's first
+        // slot with that id) adds its arena rating / purchase group lines.
         "    if nth == 3 then\n"
         "        if shift or not __WoweeScalesAtMerchant(id) then return __cmpNo('offset 3: not a scaling item at a merchant', self) end\n"
         "        __WoweeTooltipAtMerchantLevel = true\n"
+        "        __WoweeTooltipMerchantIndex = __WoweeMerchantIndexOfItem(id)\n"
         "        local ok, filled = pcall(self.SetHyperlink, self, link)\n"
         "        __WoweeTooltipAtMerchantLevel = nil\n"
+        "        __WoweeTooltipMerchantIndex = nil\n"
         "        if not ok then error(filled, 0) end\n"
         "        if self:NumLines() == 0 then return __cmpNo('offset 3: no tooltip for the item', self) end\n"
         "        self:Show()\n"

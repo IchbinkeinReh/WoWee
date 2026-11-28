@@ -2921,6 +2921,28 @@ TEST_CASE("an item dropped on a merchant's item is sold", "[replay][interface]")
     CHECK(ui.is("GetCursorInfo() == 'merchant'"));
 }
 
+// The comparison's offset 3 builds its tooltip with the merchant as owner
+// (0x006277f0), whose extended-cost lines come from the merchant's first slot
+// selling that item id (0x00584150): the slot the tooltip is told.
+TEST_CASE("a merchant's slot is found by its item id", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("__WoweeMerchantIndexOfItem(2901) == nil"));
+    constexpr uint64_t kVendor = 0xF130000000000102ull;
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_LIST_INVENTORY));
+    list.writeUInt64(kVendor);
+    list.writeUInt8(3);
+    for (uint32_t id : {2901u, 42943u, 42943u}) {
+        for (uint32_t v : {1u, id, 100u, 0xFFFFFFFFu, 10u, 0u, 1u, 0u}) list.writeUInt32(v);
+    }
+    s.receive(list);
+    REQUIRE(s.handler().getVendorItems().items.size() == 3);
+    CHECK(ui.is("__WoweeMerchantIndexOfItem(2901) == 1"));
+    CHECK(ui.is("__WoweeMerchantIndexOfItem(42943) == 2"));
+    CHECK(ui.is("__WoweeMerchantIndexOfItem(15213) == nil"));
+}
+
 // T350: PetCanBeRenamed (0x005d38c0) reads the pet - the player's first
 // controlled unit, summoned by the player - and its UNIT_CAN_BE_RENAMED bit
 // (UNIT_FIELD_BYTES_2's third byte, 0x01), not a note SMSG_PET_RENAMEABLE
