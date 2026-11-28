@@ -728,9 +728,14 @@ void GameHandler::registerCoreOpcodes() {
             default: break;
         }
         LOG_INFO("SMSG_STABLE_RESULT: result=", static_cast<int>(result));
-        if (stableWindowOpen_ && stableMasterGuid_ != 0 && socket && result <= 0x08) {
-            auto refreshPkt = ListStabledPetsPacket::build(stableMasterGuid_);
-            socket->send(refreshPkt);
+        // 0x005a17f0: 10 (a slot bought) counts the slot, then 8, 9 and 10 (pet
+        // stabled, unstabled, slot bought) ask for the list again - with the
+        // stable master, or without one while an Open Stable aura is on the
+        // player (0x005a1120(0x124)). No other result asks.
+        if (result == 0x0A && stableNumSlots_ < 0xFF) ++stableNumSlots_;
+        if ((result == 0x08 || result == 0x09 || result == 0x0A) && socket &&
+            (stableMasterGuid_ != 0 || (spellHandler_ && spellHandler_->playerHasOpenStableAura()))) {
+            socket->send(ListStabledPetsPacket::build(stableMasterGuid_));
         }
     };
 

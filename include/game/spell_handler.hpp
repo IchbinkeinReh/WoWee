@@ -261,6 +261,12 @@ public:
     /// aura of the player's (aura flag 0x10) is cancelled once for every
     /// effect of it that applies aura 292, SPELL_AURA_OPEN_STABLE.
     void cancelOpenStableAuras();
+    /// The player's aura-type bitset (unit +0xf20..+0xf47, built by 0x00727e70:
+    /// for each aura slot, effect i's aura type when the slot's flag 1 << i is
+    /// set) asked for one type, as 0x005a1120 does. 292 (SPELL_AURA_OPEN_STABLE)
+    /// is +0xf44 & 0x10, the stable reached without a stable master.
+    [[nodiscard]] bool playerHasActiveAuraType(uint32_t auraType);
+    [[nodiscard]] bool playerHasOpenStableAura() { return playerHasActiveAuraType(292); }
 
     // Known spells
     [[nodiscard]] const std::unordered_set<uint32_t>& getKnownSpells() const { return knownSpells_; }

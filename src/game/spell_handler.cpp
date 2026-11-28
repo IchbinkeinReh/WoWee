@@ -4297,6 +4297,18 @@ void SpellHandler::cancelOpenStableAuras() {
     }
 }
 
+bool SpellHandler::playerHasActiveAuraType(uint32_t auraType) {
+    loadSpellNameCache();
+    for (const AuraSlot& aura : playerAuras_) {
+        if (aura.isEmpty()) continue;
+        const auto it = owner_.spellNameCacheRef().find(aura.spellId);
+        if (it == owner_.spellNameCacheRef().end()) continue;
+        for (int i = 0; i < 3; ++i)
+            if ((aura.flags & (1u << i)) != 0 && it->second.effectAuraIds[i] == auraType) return true;
+    }
+    return false;
+}
+
 void SpellHandler::cancelAura(uint32_t spellId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // 0x00802f80: the aura of a form the player is in. The form is left at
@@ -9965,8 +9977,11 @@ void SpellHandler::requestStabledPetList() {
 void SpellHandler::stablePet() {
     // 0x005a19c0 asks for the stable master alone, not for a pet: without
     // one the request goes out all the same and the realm's answer
-    // (SMSG_STABLE_RESULT) is what is said.
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0) return;
+    // (SMSG_STABLE_RESULT) is what is said. The master may be missing too
+    // when the player has an Open Stable aura (+0xf44 & 0x10, aura 292): the
+    // request then names the empty master guid.
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (owner_.stableMasterGuidRef() == 0 && !playerHasOpenStableAura()) return;
     auto pkt = StablePetPacket::build(owner_.stableMasterGuidRef());
     owner_.getSocket()->send(pkt);
     LOG_INFO("Sent CMSG_STABLE_PET");
@@ -10021,14 +10036,17 @@ void SpellHandler::abandonPet() {
         owner_.getSocket()->send(ListStabledPetsPacket::build(owner_.stableMasterGuidRef()));
 }
 
+// ClickStablePet (0x005a1ca0) and UnstablePet (0x005a1ac0) send with whatever
+// stable master guid is held, none included (the Open Stable aura's case): they
+// test the list and the pet, not the master.
 void SpellHandler::swapStablePet(uint32_t petNumber) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0 || petNumber == 0) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || petNumber == 0) return;
     owner_.getSocket()->send(StableSwapPetPacket::build(owner_.stableMasterGuidRef(), petNumber));
     LOG_INFO("Sent CMSG_STABLE_SWAP_PET: petNumber=", petNumber);
 }
 
 void SpellHandler::unstablePet(uint32_t petNumber) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0 || petNumber == 0) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || petNumber == 0) return;
     auto pkt = UnstablePetPacket::build(owner_.stableMasterGuidRef(), petNumber);
     owner_.getSocket()->send(pkt);
     LOG_INFO("Sent CMSG_UNSTABLE_PET: petNumber=", petNumber);
