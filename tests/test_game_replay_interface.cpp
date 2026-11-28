@@ -4139,6 +4139,36 @@ TEST_CASE("the quest texts outlive the quest window (0x0058bd10)", "[replay][int
     CHECK(ui.is("GetProgressText() == ''"));
 }
 
+// T463: the giver's quest list is a quest page (0x006d0240 -> 0x0058c5a0 with
+// 0): CloseQuest lets it go with QUEST_FINISHED (0x0058ca70), once.
+TEST_CASE("CloseQuest closes a giver's quest list (T463)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    s.setConnected(true);
+    ui.run("finished = 0 local f = CreateFrame('Frame') f:RegisterEvent('QUEST_FINISHED') "
+           "f:SetScript('OnEvent', function() finished = finished + 1 end)");
+    wowee::network::Packet l(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_QUEST_LIST));
+    l.writeUInt64(0xF130000D3E000918ull);
+    l.writeString("Hallo");
+    l.writeUInt32(0);
+    l.writeUInt32(0);
+    l.writeUInt8(1);
+    l.writeUInt32(812);
+    l.writeUInt32(2);
+    l.writeUInt32(10);
+    l.writeUInt32(0);
+    l.writeUInt8(0);
+    l.writeString("Quest");
+    s.receive(l);
+    REQUIRE(s.handler().getQuestHandler()->isQuestGreetingOpen());
+    ui.run("CloseQuest()");
+    CHECK_FALSE(s.handler().getQuestHandler()->isQuestGreetingOpen());
+    CHECK(ui.is("finished == 1"));
+    ui.run("CloseQuest()");
+    CHECK(ui.is("finished == 1"));
+}
+
 // T388: the login's roster arrives before this client's interface is built;
 // once it is, the roster's events are raised for it.
 TEST_CASE("an interface built after the roster hears the group (T388)", "[replay][interface]") {

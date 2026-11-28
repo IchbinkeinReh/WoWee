@@ -55,6 +55,10 @@ public:
     /// client's own window shut and FrameXML's stayed open.
     void dismissQuestDetails(bool announce = true);
     void closeGossip();
+    /// The quest frame's greeting list let go as any quest page is
+    /// (0x0058ca70): the giver cleared and QUEST_FINISHED, which hides
+    /// QuestFrame. Nothing where no greeting is open.
+    void closeQuestGreeting();
     void offerQuestFromItem(uint64_t itemGuid, uint32_t questId);
 
     [[nodiscard]] bool isGossipWindowOpen() const { return gossipWindowOpen_; }

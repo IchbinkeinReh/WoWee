@@ -1466,6 +1466,13 @@ void QuestHandler::closeGossip() {
     questGreeting_.clear();
 }
 
+void QuestHandler::closeQuestGreeting() {
+    if (!isQuestGreetingOpen()) return;
+    closeGossip();
+    gossipIsQuestGreeting_ = false;
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_FINISHED", {});
+}
+
 // 0x0058a550: GOSSIP_CLOSED (0x11c) where a gossip is let go, and not where
 // none is held - the window closing on the event calls CloseGossip itself
 // (GossipFrame_OnHide).

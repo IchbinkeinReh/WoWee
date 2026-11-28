@@ -4440,7 +4440,12 @@ void GameHandler::closeInteractionWindow(go_interaction::Window window) {
             if (isQuestOfferRewardOpen()) closeQuestOfferReward(true);
             break;
         }
-        case Window::Gossip:       if (isGossipWindowOpen()) closeGossip(); break;
+        // The quest giver's list is the quest frame's (0x0058c5a0 with 0):
+        // let go as a quest page, QUEST_FINISHED (T463).
+        case Window::Gossip:
+            if (questHandler_ && questHandler_->isQuestGreetingOpen()) closeQuestGreeting();
+            else if (isGossipWindowOpen()) closeGossip();
+            break;
         case Window::Merchant:     if (isVendorWindowOpen()) closeVendor(); break;
         case Window::Trainer:      if (isTrainerWindowOpen()) closeTrainer(); break;
         case Window::Taxi:         if (isTaxiWindowOpen()) closeTaxi(); break;

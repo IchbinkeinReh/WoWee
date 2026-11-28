@@ -4760,6 +4760,9 @@ static int lua_CloseQuest(lua_State* L) {
     if (gh->isQuestOfferRewardOpen())       gh->closeQuestOfferReward(true);
     else if (gh->isQuestRequestItemsOpen()) gh->closeQuestRequestItems(true);
     else if (gh->isQuestDetailsOpen())      gh->declineQuest(true);
+    // The giver's quest list too (T463): 0x006d0240 stores its giver as
+    // every quest page does (0x0058c5a0 with mode 0).
+    else gh->closeQuestGreeting();
     return 0;
 }
 

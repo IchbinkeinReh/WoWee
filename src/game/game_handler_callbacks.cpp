@@ -5053,6 +5053,10 @@ void GameHandler::closeGossip() {
     if (questHandler_) questHandler_->closeGossip();
 }
 
+void GameHandler::closeQuestGreeting() {
+    if (questHandler_) questHandler_->closeQuestGreeting();
+}
+
 void GameHandler::offerQuestFromItem(uint64_t itemGuid, uint32_t questId) {
     if (questHandler_) questHandler_->offerQuestFromItem(itemGuid, questId);
 }

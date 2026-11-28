@@ -3598,6 +3598,7 @@ public:
     void declineQuest(bool announce = true);
     void leaveQuestPage();
     void closeGossip();
+    void closeQuestGreeting();
     // Quest-starting items: right-click triggers quest offer dialog via questgiver protocol
     void offerQuestFromItem(uint64_t itemGuid, uint32_t questId);
     uint64_t getBagItemGuid(int bagIndex, int slotIndex) const;
