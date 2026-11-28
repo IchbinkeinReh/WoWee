@@ -6217,6 +6217,12 @@ void InventoryHandler::sendCancelTrade() {
     owner_.getSocket()->send(packet);
 }
 
+void InventoryHandler::sendBeginTrade() {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    auto packet = BeginTradePacket::build();
+    owner_.getSocket()->send(packet);
+}
+
 // 0x00587940: PLAYER_TRADE_MONEY unless the last window closed on a completed
 // trade (0xbfa678); with a window open (partner 0xbfa658) it is ended here -
 // the partner let go as the interaction object (0x00518d50), the flag

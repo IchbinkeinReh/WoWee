@@ -178,6 +178,9 @@ public:
     /// CancelTrade() (0x005109e0 -> 0x00704040): CMSG_CANCEL_TRADE alone,
     /// whatever the state; the realm's TRADE_STATUS closes what was open.
     void sendCancelTrade();
+    /// BeginTrade() (0x005109d0 -> 0x00703e00): CMSG_BEGIN_TRADE alone,
+    /// whatever the state.
+    void sendBeginTrade();
     /// CloseTrade() (0x00587940), the trade window's OnHide.
     void closeTrade();
     void setTradeItem(uint8_t tradeSlot, uint8_t srcBag, uint8_t srcSlot);

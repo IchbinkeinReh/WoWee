@@ -3313,8 +3313,18 @@ static int lua_RetrieveCorpse(lua_State* L) {
 }
 
 // Dismount() - what /dismount does
+// 0x0051d170: nothing for a dead player (vtable +0x128), and 0x007412e0
+// sends CMSG_CANCEL_MOUNT_AURA only without UNIT_FLAG_TAXI_FLIGHT
+// (UNIT_FIELD_FLAGS bit 20) - on a flight path it does nothing, where this
+// took the flight's mount off on screen.
 static int lua_Dismount(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->dismount();
+    auto* gh = getGameHandler(L);
+    if (!gh || gh->isPlayerDead() || gh->isPlayerGhost()) return 0;
+    if (const auto self = std::dynamic_pointer_cast<game::Unit>(
+            gh->getEntityManager().getEntity(gh->getPlayerGuid()));
+        self && (self->getUnitFlags() & game::UNIT_FLAG_TAXI_FLIGHT) != 0)
+        return 0;
+    gh->dismount();
     return 0;
 }
 

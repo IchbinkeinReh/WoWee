@@ -5607,6 +5607,66 @@ TEST_CASE("CloseTrade and CancelTrade send the cancel whatever the state (0x0058
     CHECK(cancels() == 8);
 }
 
+// BeginTrade 0x005109d0 and AcceptGuild 0x0051abd0 send their one packet
+// (0x00703e00 / 0x006d4760) whatever the state, and nothing beside it.
+TEST_CASE("BeginTrade and AcceptGuild send their packet alone (0x005109d0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    ui.run("BeginTrade()");
+    CHECK(s.sent().of(Opcode::CMSG_BEGIN_TRADE).size() == 1);
+    ui.run("AcceptGuild()");
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_ACCEPT).size() == 1);
+    CHECK(s.sent().of(Opcode::CMSG_GUILD_ROSTER).empty());
+}
+
+// LeaveParty 0x0052d990 sends CMSG_GROUP_DISBAND (0x006d4540) and keeps the
+// group until the realm answers; SMSG_GROUP_DESTROYED then empties it with
+// ERR_GROUP_DISBANDED (0x006cbe40).
+TEST_CASE("LeaveParty waits for the realm's answer (0x0052d990)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    wowee::network::Packet g(wowee::game::wireOpcode(Opcode::SMSG_GROUP_LIST));
+    g.writeUInt8(0);
+    for (int i = 0; i < 3; ++i) g.writeUInt8(0);
+    g.writeUInt64(0x1234);
+    g.writeUInt32(1);
+    g.writeUInt32(1);
+    g.writeString("Nah");
+    g.writeUInt64(0x1001);
+    g.writeUInt8(1);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt8(0);
+    g.writeUInt64(Session::kPlayerGuid);
+    for (int i = 0; i < 12; ++i) g.writeUInt8(0);
+    s.receive(g);
+    REQUIRE(ui.is("GetNumPartyMembers() == 1"));
+    ui.run("LeaveParty()");
+    CHECK(s.sent().of(Opcode::CMSG_GROUP_DISBAND).size() == 1);
+    CHECK(ui.is("GetNumPartyMembers() == 1"));
+    s.receive(wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_GROUP_DESTROYED)));
+    CHECK(ui.is("GetNumPartyMembers() == 0"));
+}
+
+// Dismount 0x0051d170 -> 0x007412e0: CMSG_CANCEL_MOUNT_AURA, but nothing on a
+// flight path (UNIT_FLAG_TAXI_FLIGHT).
+TEST_CASE("Dismount does nothing on a flight path (0x007412e0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100},
+                   {UF::UNIT_FIELD_FLAGS, 0x00100000}});
+    s.setConnected(true);
+    Interface ui(s);
+    ui.run("Dismount()");
+    CHECK(s.sent().of(Opcode::CMSG_CANCEL_MOUNT_AURA).empty());
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_FLAGS, 0}}));
+    ui.run("Dismount()");
+    CHECK(s.sent().of(Opcode::CMSG_CANCEL_MOUNT_AURA).size() == 1);
+}
+
 // GuildControlAddRank 0x005cb330 sends only below ten ranks and takes the name
 // as 0x007e1830(name, buf, 16, 64, 1); GuildControlDelRank 0x005cb3f0 only
 // above five; GuildControlSaveRank 0x005cb170 only for a rank the guild has.

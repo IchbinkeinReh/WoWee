@@ -3813,8 +3813,11 @@ static int lua_CloseTrade(lua_State* L) {
     return 0;
 }
 
+// BeginTrade 0x005109d0: CMSG_BEGIN_TRADE (0x00703e00) and nothing else,
+// whatever the state - the realm judges (it was sent only for a request
+// this client held as pending).
 static int lua_BeginTrade(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->acceptTradeRequest();
+    if (auto* gh = getGameHandler(L)) gh->sendBeginTrade();
     return 0;
 }
 

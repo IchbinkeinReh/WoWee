@@ -2145,10 +2145,10 @@ void SocialHandler::acceptGuildInvite() {
     joinedGuildName_ = pendingGuildInviteGuildName_;
     auto packet = GuildAcceptPacket::build();
     owner_.getSocket()->send(packet);
-    // ...and the roster, which is what fills the social window's guild tab.
-    // The server sends the join event to the guild rather than a roster to the
-    // joiner, so nothing arrived unless something asked.
-    requestGuildRoster();
+    // AcceptGuild 0x0051abd0 -> 0x006d4760 is CMSG_GUILD_ACCEPT alone: no
+    // CMSG_GUILD_ROSTER. The join's SMSG_GUILD_EVENT raises
+    // GUILD_ROSTER_UPDATE (0x006d92d0 -> 0x005ca0f0(1)) and the guild
+    // panel asks for the roster itself (GuildRoster on show / on the event).
 }
 
 void SocialHandler::declineGuildInvite() {
@@ -2528,13 +2528,10 @@ void SocialHandler::leaveGroup() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GroupDisbandPacket::build();
     owner_.getSocket()->send(packet);
-    // The client fires nothing on the way out: it empties the group only when
-    // the server answers - SMSG_GROUP_DESTROYED for a disband, an empty roster
-    // otherwise - and the events come out of that. This clears on the spot, so
-    // the clear's events have to be fired here.
-    const bool wasRaid = groupIsRaid(partyData.groupType);
-    partyData = GroupListData{};
-    firePartyClearedEvents(wasRaid);
+    // LeaveParty 0x0052d990 -> 0x006d4540 is CMSG_GROUP_DISBAND alone. The
+    // client empties the group only when the realm answers - SMSG_GROUP_DESTROYED
+    // for a disband (with ERR_GROUP_DISBANDED, which an early clear here
+    // swallowed), an empty roster otherwise - and the events come out of that.
 }
 
 void SocialHandler::forgetLfgDungeonOnWorldport(uint32_t mapId) {
@@ -2699,10 +2696,8 @@ void SocialHandler::swapRaidSubgroup(const std::string& firstName, const std::st
 }
 
 void SocialHandler::leaveParty() {
-    // Delegates to leaveGroup which handles both the packet send AND local
-    // state cleanup (clearing partyData, firing addon events). Previously
-    // this method only sent the packet, leaving the client thinking it was
-    // still in a group until the server pushed a group list update.
+    // The same packet as LeaveParty (0x0052d990); the realm's answer empties
+    // the group.
     leaveGroup();
 }
 

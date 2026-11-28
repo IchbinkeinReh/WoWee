@@ -2236,6 +2236,10 @@ void GameHandler::sendCancelTrade() {
     if (inventoryHandler_) inventoryHandler_->sendCancelTrade();
 }
 
+void GameHandler::sendBeginTrade() {
+    if (inventoryHandler_) inventoryHandler_->sendBeginTrade();
+}
+
 void GameHandler::closeTrade() {
     if (inventoryHandler_) inventoryHandler_->closeTrade();
 }
