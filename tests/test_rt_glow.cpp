@@ -161,7 +161,26 @@ TEST_CASE("The particle pass lights an emitter by its steady state, not its live
     // The live particles only say whether it is shown.
     CHECK(body.find("].shown;") != std::string::npos);
     CHECK(body.find("steadyEmitterGlow(inst, gpu, ei, modelAlpha)") != std::string::npos);
+    // T475: the steady glow counts none drawn; the frame's count goes with it.
+    CHECK(body.find("shownEmitterLight(glow, rtEmitterGlowScratch_[ei].shown, centre, modelScale)") !=
+          std::string::npos);
+    CHECK(body.find("glow.light(centre") == std::string::npos);
     CHECK(body.find("rtEmitterGlowScratch_[static_cast<size_t>(p.emitterIndex)].add(") == std::string::npos);
+}
+
+TEST_CASE("A steady glow shines with the particles drawn this frame (T475)", "[rt_glow]") {
+    // About an instance portal's swirl: a few large additive particles.
+    const ParticleGlow steady = steadyParticleGlow(
+        8.0f, 2.0f, particleGlowWeight(4, true), 1.0f, [](float) { return glm::vec3(0.4f, 0.6f, 1.0f); },
+        [](float share) { return share < 0.5f ? 1.0f : 0.5f; }, [](float) { return 2.0f; });
+    REQUIRE(steady.weight > 0.0f);
+    CHECK(steady.shown == 0);
+    CHECK_FALSE(shownEmitterLight(steady, 0, glm::vec3(0.0f)).has_value());
+    const auto l = shownEmitterLight(steady, 3, glm::vec3(0.0f));
+    REQUIRE(l.has_value());
+    CHECK(brightest(l->color) > 0.0f);
+    CHECK(l->attenuationEnd > 0.0f);
+    CHECK(shownEmitterLight(steady, 50, glm::vec3(0.0f))->color == l->color);
 }
 
 TEST_CASE("A model's emitters together are capped at a fire's strength", "[rt_glow]") {

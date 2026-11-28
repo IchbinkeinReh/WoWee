@@ -363,6 +363,15 @@ struct ParticleGlow {
     }
 };
 
+/// An emitter's light this frame: its steady glow (steadyParticleGlow, which
+/// counts no particles drawn) with `shown`, how many of its particles are
+/// drawn now - nothing while none is (T475).
+inline std::optional<PointLight> shownEmitterLight(ParticleGlow steady, uint32_t shown, const glm::vec3& position,
+                                                   float scale = 1.0f) {
+    steady.shown = shown;
+    return steady.light(position, scale);
+}
+
 /// How many samples of a particle's life steadyParticleGlow takes.
 inline constexpr int kParticleGlowSamples = 16;
 

@@ -839,7 +839,10 @@ void M2Renderer::prepareM2Particles() {
                     if (em.bone < inst.boneMatrices.size()) world = world * inst.boneMatrices[em.bone];
                     centre = glm::vec3(world * glm::vec4(em.position, 1.0f));
                 }
-                auto l = glow.light(centre, modelScale);
+                // The steady glow says how strong; the particles drawn this
+                // frame whether it shines (T475: the steady state alone has
+                // none drawn and lit nothing).
+                auto l = rt_lights::shownEmitterLight(glow, rtEmitterGlowScratch_[ei].shown, centre, modelScale);
                 if (!l) continue;
                 l->color *= fade;
                 // On the particles' mean path (rt_particle_lights.hpp): at

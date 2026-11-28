@@ -4,7 +4,11 @@
 
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
+#include "rendering/m2_particle_motion.hpp"
+#include "rendering/rt_fire_color.hpp"
+#include "rendering/rt_glow.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -149,4 +153,47 @@ TEST_CASE("Vanilla peasant wood model parses color alpha ranges", "[m2][color]")
     // exactly 0 for the whole first key span (the renderer culls on <= 0.01).
     REQUIRE(model.colorAlphaTracks[1].interpolationType == 0);
     CHECK(firstAlpha(model, 1, 0) == Catch::Approx(0.0f).margin(0.01f));
+}
+
+// T475: the instance portal's emitters, as the particle pass lights them -
+// steady state from the file's rate, lifespan and tracks, shown while a
+// particle is drawn - give a light. The model is read from Data/ or from
+// WOWEE_TEST_ASSET_ROOT (an extracted client's lower-case tree).
+TEST_CASE("an instance portal's emitters give a steady light (T475)", "[m2][rt_glow]") {
+    const std::string rel = "world/generic/activedoodads/instanceportal/instanceportal.m2";
+    auto data = wowee::test::readFile("Data/expansions/wotlk/" + rel);
+    if (data.empty()) {
+        if (const char* root = std::getenv("WOWEE_TEST_ASSET_ROOT")) {
+            std::ifstream in(std::string(root) + "/" + rel, std::ios::binary);
+            data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+    }
+    if (data.empty()) {
+        SUCCEED("model asset not extracted; optional real-asset coverage skipped");
+        return;
+    }
+    namespace rl = wowee::rendering::rt_lights;
+    const M2Model model = M2Loader::load(data);
+    REQUIRE_FALSE(model.particleEmitters.empty());
+    int lit = 0;
+    for (const auto& em : model.particleEmitters) {
+        const auto at0 = [&](const wowee::pipeline::M2AnimationTrack& tr) {
+            return wowee::rendering::m2_track::sampleFloat(tr, 0, 0.0f, 0.0f, model.globalSequenceDurations, 0.0f);
+        };
+        const float weight = rl::particleGlowWeight(em.blendingType, (em.flags & 0x1) != 0);
+        if (!(weight > 0.0f)) continue;
+        const rl::ParticleGlow steady = rl::steadyParticleGlow(
+            at0(em.emissionRate), at0(em.lifespan), weight,
+            wowee::rendering::m2_particle::twinkleMeanArea(em.twinklePercent, em.twinkleScaleMin,
+                                                           em.twinkleScaleMax) *
+                rl::sizeVaryMeanArea(em.scaleVary.x),
+            [&](float s) { return rl::overLife(em.particleColor.timestamps, em.particleColor.vec3Values, s,
+                                               glm::vec3(1.0f)); },
+            [&](float s) { return std::min(rl::overLife(em.particleAlpha.timestamps, em.particleAlpha.floatValues,
+                                                        s, 1.0f), 1.0f); },
+            [&](float s) { return rl::overLife(em.particleScale.timestamps, em.particleScale.floatValues, s, 1.0f); });
+        const auto l = rl::shownEmitterLight(steady, 1, glm::vec3(0.0f));
+        if (l && std::max(l->color.r, std::max(l->color.g, l->color.b)) > 0.0f && l->attenuationEnd > 0.0f) ++lit;
+    }
+    CHECK(lit >= 1);
 }
