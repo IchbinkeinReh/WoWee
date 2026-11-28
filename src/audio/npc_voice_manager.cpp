@@ -233,6 +233,15 @@ bool NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, size_t slo
     // line is missing, 0x00720860 refuses where the row is.
     const auto kit = kitSlot(displayId, slot);
     if (kit.first == nullptr) {
+        // A kit the display names that is not read yet (its clips still on
+        // the streaming server): the line waits for it a moment (update())
+        // instead of the first click on a new NPC saying nothing (T456).
+        if (const auto d = kitIdByDisplay_.find(displayId);
+            d != kitIdByDisplay_.end() && kitSamples_.find(d->second) == kitSamples_.end() && variant < 0) {
+            pending_ = PendingLine{npcGuid, displayId, slot, position,
+                                   std::chrono::steady_clock::now() + kPendingWindow, true};
+            return false;
+        }
         static int toldNone = 0;
         if (toldNone < 20) {
             ++toldNone;
@@ -332,6 +341,25 @@ void NpcVoiceManager::playClick(uint64_t npcGuid, uint32_t displayId, const glm:
     const auto ask = counter_.ask(npcGuid, irritated.first ? irritated.first->size() : 0);
     if (playSound(npcGuid, displayId, ask.irritated ? 2 : 0, ask.irritated ? static_cast<int32_t>(ask.line) : -1, position))
         counter_.started(ask);
+}
+
+void NpcVoiceManager::update() {
+    if (!pending_.active) return;
+    if (std::chrono::steady_clock::now() > pending_.until || linePlaying(pending_.guid)) {
+        pending_.active = false;
+        return;
+    }
+    const auto d = kitIdByDisplay_.find(pending_.displayId);
+    if (d == kitIdByDisplay_.end()) {
+        pending_.active = false;
+        return;
+    }
+    const PendingLine line = pending_;
+    pending_.active = false;
+    // Asks for the kit's reads again; still not in, and playSound keeps it
+    // pending with a fresh deadline - so the deadline of the first ask holds.
+    playSound(line.guid, line.displayId, line.slot, -1, line.position);
+    if (pending_.active) pending_.until = line.until;
 }
 
 void NpcVoiceManager::playHello(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position) {

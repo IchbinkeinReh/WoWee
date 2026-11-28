@@ -350,6 +350,7 @@ void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {
     // world) and what the last world played goes on until the screen's end
     // stops it (0x00409550).
     if (AudioEngine::instance().isWorldSoundHeld()) return;
+    if (npcVoiceManager_) npcVoiceManager_->update();
     musicTime_ = zone_music::timeIndex(screen_effect_audio::isSoundDaytime(ctx.gameTimeHours));
     updateAmbience(ctx);
     updateMusic(ctx);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <string>
 #include <utility>
 #include <vector>
@@ -56,6 +57,11 @@ public:
     /// The hello as a window opens with it, and the farewell (0x00720860).
     void playHello(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position);
     void playFarewell(uint64_t npcGuid, uint32_t displayId, const glm::vec3& position);
+    /// Once a frame: a hello or click line whose kit was still being read when
+    /// it was asked for (streaming) is spoken once the kit is in, if that is
+    /// within kPendingWindow of the ask; later, it is dropped.
+    void update();
+    static constexpr std::chrono::milliseconds kPendingWindow{1500};
 
     void setVolumeScale(float scale) { volumeScale_ = scale; }
     [[nodiscard]] float getVolumeScale() const { return volumeScale_; }
@@ -104,6 +110,16 @@ private:
     // A kit's loaded clips by NPCSounds id, so a line is read from disk once
     // however many units share the display; an empty slot stays empty.
     std::unordered_map<uint32_t, std::array<std::vector<VoiceSample>, 3>> kitSamples_;
+    // The one line asked for while its kit was still on its way (update()).
+    struct PendingLine {
+        uint64_t guid = 0;
+        uint32_t displayId = 0;
+        size_t slot = 0;
+        glm::vec3 position{0.0f};
+        std::chrono::steady_clock::time_point until{};
+        bool active = false;
+    };
+    PendingLine pending_;
     // Clips of kits still coming from the streaming server.
     pipeline::NoWaitReads reads_;
     // Which file of a kit slot was asked last (-1 for none), so the next ask is
