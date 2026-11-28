@@ -5287,6 +5287,37 @@ TEST_CASE("CastSpellByID casts the pet's spell through the pet (0x0053e060)", "[
     CHECK(actions().size() == 2);
 }
 
+// V674 (b): the reagent -2 is one free bag slot (0x00754d00 -> 0x00754470).
+// With every slot full 0x008091d0 fails REAGENTS naming -2, which 0x00808200
+// says as the game error 0 with an empty argument: ERR_INV_FULL, and no item
+// is asked of the server.
+TEST_CASE("the reagent -2 with full bags is said as ERR_INV_FULL (0x00808200)", "[replay][interface]") {
+    constexpr uint32_t kStone = 6201;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    auto& spell = s.handler().spellNameCacheRef()[kStone];
+    spell.name = "Create Healthstone";
+    spell.reagents[0] = {0xFFFFFFFEu, 1};
+    wowee::network::Packet known(wowee::game::wireOpcode(Opcode::SMSG_INITIAL_SPELLS));
+    known.writeUInt8(0);
+    known.writeUInt16(1);
+    known.writeUInt32(kStone);
+    known.writeUInt16(0);
+    known.writeUInt16(0);
+    s.receive(known);
+    for (int slot = 0; slot < 16; ++slot)
+        carryForAuction(s, slot, 0x4000000000000D00ull + static_cast<uint64_t>(slot), 2589, 1);
+    ui.run("errs = {} local g = CreateFrame('Frame') g:RegisterEvent('UI_ERROR_MESSAGE') "
+           "g:SetScript('OnEvent', function(_, _, m) errs[#errs + 1] = m end)");
+    const auto queries = s.sent().of(Opcode::CMSG_ITEM_QUERY_SINGLE).size();
+    ui.run("CastSpellByID(" + std::to_string(kStone) + ")");
+    CHECK(s.sent().of(Opcode::CMSG_CAST_SPELL).size() == 0);
+    CHECK(s.sent().of(Opcode::CMSG_ITEM_QUERY_SINGLE).size() == queries);
+    REQUIRE(ui.is("#errs == 1"));
+    CHECK(ui.is("errs[1] == (ERR_INV_FULL or 'Inventory is full.')"));
+}
+
 // T438: 0x0080cce0 asks 0x008091d0 before the unit and the cursor: a reagent
 // not carried fails the cast there (SPELL_FAILED_REAGENTS with the item), so
 // no CMSG_CAST_SPELL goes out and UNIT_SPELLCAST_SENT is not raised. With the

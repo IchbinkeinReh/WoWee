@@ -295,7 +295,11 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
         }
         case kCastResultTotems:
         case 0x64: {  // TOTEMS, REAGENTS: the item's name, or nothing at all
-            if (miscArg == cast_failure::kNoReagentNamed) return {};
+            // REAGENTS with -2 - no free bag slot - is the game error 0 with
+            // an empty argument (0x00808200: local_c = 0, then 0x005216f0):
+            // ERR_INV_FULL's line. TOTEMS with -2 finds no item: not said.
+            if (miscArg == cast_failure::kNoReagentNamed)
+                return result == 0x64 ? interfaceString("ERR_INV_FULL", "Inventory is full.") : std::string();
             const std::string name = itemName(miscArg);
             if (name.empty()) return {};
             fill({name});
@@ -1417,7 +1421,13 @@ void SpellHandler::reportLocalCastFailure(uint32_t spellId, uint8_t result) {
     showPlayerCastFailure(spellId, result, castFailureMessage(owner_, spellId, result, -1, 0, 0));
 }
 
-void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result) const {
+void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result, uint32_t miscArg) const {
+    // 0x00808200 case 100 with the item -2: the game error is 0 (ERR_INV_FULL),
+    // not the one 0x00807f10 gives REAGENTS.
+    if (result == 0x64 && miscArg == cast_failure::kNoReagentNamed) {
+        owner_.playGameErrorSound("ERR_INV_FULL");
+        return;
+    }
     owner_.playGameErrorSound(cast_failure::gameError(result, spellRowOf(owner_, spellId)));
 }
 
@@ -1453,7 +1463,8 @@ void SpellHandler::sayPetCastFailure(uint32_t spellId, uint8_t result) const {
     owner_.playGameErrorSound(cast_failure::petGameError(result, spellRowOf(owner_, spellId)));
 }
 
-void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const {
+void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text,
+                                         uint32_t miscArg) const {
     // 0x00808200: its fizzle, however often; SPELL_FAILED_NEED_AMMO (0x34)
     // triggers tutorial 0x2c.
     if (castFailureFizzles(result)) playFizzle(spellId, owner_.getPlayerGuid());
@@ -1464,7 +1475,7 @@ void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const
                                                  .count());
     if (!failureHold_.report(spellId, result, nowMs) || text.empty()) return;
     owner_.addUIError(text);
-    sayCastFailure(spellId, result);
+    sayCastFailure(spellId, result, miscArg);
 }
 
 void SpellHandler::showNamedCastFailure(uint32_t spellId, uint8_t result, int powerType, uint32_t miscArg) {
@@ -1476,7 +1487,8 @@ void SpellHandler::showNamedCastFailure(uint32_t spellId, uint8_t result, int po
                            miscArg != cast_failure::kNoReagentNamed;
     const auto* info = namesItem ? owner_.getItemInfo(miscArg) : nullptr;
     if (!namesItem || (info && info->valid)) {
-        showPlayerCastFailure(spellId, result, castFailureMessage(owner_, spellId, result, powerType, miscArg));
+        showPlayerCastFailure(spellId, result, castFailureMessage(owner_, spellId, result, powerType, miscArg),
+                              miscArg);
         return;
     }
     // The fizzle and the three-second hold now (0x00808200 before its
@@ -4989,7 +5001,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // mana", "That ability isn't ready yet"), the routine ones included -
     // the client speaks those most of all, one line at a time (0x00808200 ->
     // 0x005216f0 -> 0x00986d00).
-    if (!errMsg.empty()) sayCastFailure(data.spellId, data.result);
+    if (!errMsg.empty()) sayCastFailure(data.spellId, data.result, data.miscArg);
 
     // The event goes for any refusal at all, and which one is the reason's
     // doing (0x007fecc0): CHARMED, DONT_REPORT and SPELL_IN_PROGRESS - the

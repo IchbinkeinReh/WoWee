@@ -77,7 +77,8 @@ template <typename Dbc>
 }
 
 /// The item a failure names, whose name comes with its data (0x67ca30): none
-/// for REAGENTS with -2, which is said without a word.
+/// for REAGENTS with -2 (one free bag slot), which 0x00808200 says as the
+/// game error 0, ERR_INV_FULL, with its sound (0x005216f0(0)).
 inline constexpr uint32_t kNoReagentNamed = 0xFFFFFFFEu;
 
 }  // namespace wowee::game::cast_failure

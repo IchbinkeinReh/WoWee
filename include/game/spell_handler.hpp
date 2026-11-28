@@ -786,8 +786,9 @@ public:
     void reportLocalCastFailure(uint32_t spellId, uint8_t result);
     /// The character's line for the player's failed cast: its game error's
     /// (cast_failure::gameError), where the client's table gives it one
-    /// (0x00808200 -> 0x005216f0 -> 0x00986d00).
-    void sayCastFailure(uint32_t spellId, uint8_t result) const;
+    /// (0x00808200 -> 0x005216f0 -> 0x00986d00). REAGENTS for -2 is
+    /// ERR_INV_FULL's.
+    void sayCastFailure(uint32_t spellId, uint8_t result, uint32_t miscArg = 0) const;
     /// UNIT_AURA for a unit, and what hangs on the player's.
     void announceAuras(uint64_t guid) const;
     /// The fizzle of a spell that failed, at a unit (0x004cff30).
@@ -800,7 +801,8 @@ public:
     /// The player's own refusal, as 0x00808200 shows it: on the error line
     /// with the character's line, unless it repeats the last one within
     /// three seconds (cast_failure::RepeatHold). Nothing for empty words.
-    void showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const;
+    void showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text,
+                               uint32_t miscArg = 0) const;
     /// A local refusal that names an item: shown now, or once the item cache
     /// has the item's name (0x00808200 -> 0x0067ca30/0x007fea80).
     void showNamedCastFailure(uint32_t spellId, uint8_t result, int powerType, uint32_t miscArg);
