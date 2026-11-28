@@ -861,6 +861,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // the memory log of every map change, behind the loading screen.
         const std::string changeName = std::to_string(static_cast<int32_t>(loadedMapId_)) + " -> " + std::to_string(mapId);
         app_.logMemory("before", "map " + changeName + ", before the old one is cleared");
+        // The screen drawn again between the cleanup's steps, as 0x0040a920
+        // draws per progress step (T458: 5-6 s spans with no frame here).
+        showProgress("Entering world...", 0.0f);
         // A world rebuilt on the same map (a far move was, before such moves
         // were taken as the client takes them, relocateOnLoadedMap) is to
         // the server nothing that left: what it shows the whole map - Undercity's
@@ -923,6 +926,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             if (auto* m2 = renderer_->getM2Renderer()) {
                 m2->clear();
             }
+            showProgress("Entering world...", 0.0f);
 
             // Full clear of character renderer: removes all instances, models,
             // textures, and resets descriptor pools. This prevents stale GPU
@@ -957,7 +961,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
 
         // Force player character re-spawn on new map
         app_.playerCharacterSpawned = false;
+        showProgress("Entering world...", 0.0f);
         app_.logMemory("cleared", "map " + changeName + ", the old one cleared");
+        showProgress("Entering world...", 0.0f);
     }
 
     // Resolve map folder name from Map.dbc (authoritative for world/instance maps).

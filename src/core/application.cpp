@@ -4751,9 +4751,23 @@ std::vector<rendering::MemoryEntry> Application::memoryExtras(bool collectLuaFir
 
 void Application::logMemory(const char* stage, const std::string& what) {
     if (!renderer) return;
-    const auto lines = memoryGrowth_.note(stage, renderer->memoryOwners(memoryExtras(false)));
+    const auto start = std::chrono::steady_clock::now();
+    (void)core::takeSlowestStep();
+    std::vector<rendering::MemoryEntry> extras;
+    {
+        WOWEE_STEP_TIMER("memory: Lua, sounds, music, spawner");
+        extras = memoryExtras(false);
+    }
+    const auto lines = memoryGrowth_.note(stage, renderer->memoryOwners(extras));
+    const float tookMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
+    const core::SlowestStep slowest = core::takeSlowestStep();
     LOG_WARNING("Memory, ", what, " (entities ",
                 gameHandler ? gameHandler->getEntityManager().getEntities().size() : size_t{0}, "):");
+    // T458: a map change's report stood 5-6 s behind a frozen loading screen.
+    if (tookMs > 200.0f) {
+        LOG_WARNING("Memory report took ", tookMs, " ms (slowest: '", slowest.name ? slowest.name : "?", "' ",
+                    slowest.ms, " ms)");
+    }
     for (const std::string& line : lines) LOG_WARNING("Memory [", stage, "]: ", line);
 }
 

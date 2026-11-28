@@ -7841,12 +7841,15 @@ std::vector<MemoryEntry> Renderer::memoryOfWorld(const std::vector<MemoryEntry>&
     std::vector<MemoryEntry> world;
     char buf[256];
     auto mb = [](uint64_t b) { return double(b) / (1024.0 * 1024.0); };
-    if (terrainRenderer) terrainRenderer->memoryReport(world);
-    if (terrainManager) terrainManager->memoryReport(world);
-    if (m2Renderer) m2Renderer->memoryReport(world);
-    if (wmoRenderer) wmoRenderer->memoryReport(world);
-    if (characterRenderer) characterRenderer->memoryReport(world);
+    // Each timed (core/slow_step.hpp): a map change's report stood 5-6 s
+    // behind a frozen loading screen (T458); logMemory names the slow owner.
+    if (terrainRenderer) { WOWEE_STEP_TIMER("memory: terrain renderer"); terrainRenderer->memoryReport(world); }
+    if (terrainManager) { WOWEE_STEP_TIMER("memory: terrain manager"); terrainManager->memoryReport(world); }
+    if (m2Renderer) { WOWEE_STEP_TIMER("memory: M2 renderer"); m2Renderer->memoryReport(world); }
+    if (wmoRenderer) { WOWEE_STEP_TIMER("memory: WMO renderer"); wmoRenderer->memoryReport(world); }
+    if (characterRenderer) { WOWEE_STEP_TIMER("memory: character renderer"); characterRenderer->memoryReport(world); }
     if (cachedAssetManager) {
+        WOWEE_STEP_TIMER("memory: asset cache");
         const auto cs = cachedAssetManager->cacheStats();
         std::snprintf(buf, sizeof(buf), "File cache (%zu files, budget %.0f MB, %zu hits / %zu reads)", cs.fileCount,
                       mb(cs.fileBudget), cs.fileHits, cs.fileHits + cs.fileMisses);
@@ -7866,8 +7869,8 @@ std::vector<MemoryEntry> Renderer::memoryOfWorld(const std::vector<MemoryEntry>&
 
 std::vector<MemoryEntry> Renderer::memoryOfRt() const {
     std::vector<MemoryEntry> owners;
-    if (rtScene_) rtScene_->memoryReport(owners);
-    if (rtLighting_) rtLighting_->memoryReport(owners);
+    if (rtScene_) { WOWEE_STEP_TIMER("memory: RT scene"); rtScene_->memoryReport(owners); }
+    if (rtLighting_) { WOWEE_STEP_TIMER("memory: RT lighting"); rtLighting_->memoryReport(owners); }
     owners.push_back({"RT hit textures, copies kept by the textures", 0, VkTexture::rtDetailBytes()});
     return owners;
 }
