@@ -1034,20 +1034,21 @@ bool Renderer::initialize(core::Window* win) {
     weather->setGroundQuery([this, tiles](float x, float y, float z) -> std::optional<float> {
         WOWEE_PROFILE_SCOPE("weather: ground query", Cpu);
         if (terrainManager && !terrainManager->isTileLoadedAt(x, y)) return std::nullopt;
-        float h = -std::numeric_limits<float>::infinity();
-        auto take = [&](std::optional<float> v) {
-            if (v && *v <= z + 200.0f && *v >= z - 200.0f) h = std::max(h, *v);
-        };
-        if (terrainManager) take(terrainManager->getHeightAt(x, y));
-        if (waterRenderer) take(waterRenderer->getNearestWaterHeightAt(x, y, z, 200.0f));
+        // 0x007ade10 (client_weather::GroundAnswer): the terrain wherever it
+        // stands - the hill over a cave stops the drops however high it is -
+        // and the highest of the rest within 200 yards of the asking height.
+        client_weather::GroundAnswer answer{.askZ = z};
+        if (terrainManager) answer.terrain(terrainManager->getHeightAt(x, y));
+        if (waterRenderer) answer.inSegment(waterRenderer->getNearestWaterHeightAt(x, y, z, 200.0f));
         if (wmoRenderer) {
             const glm::vec3 top(x, y, z + 200.0f), bottom(x, y, z - 200.0f);
             if (const auto t = wmoRenderer->segmentHit(top, bottom, 0x08))
-                take(top.z + (bottom.z - top.z) * *t);
+                answer.inSegment(top.z + (bottom.z - top.z) * *t);
         }
         // The models' collision (0x0081e110): their floor query reaches a few
         // yards around where it is asked, so ask it just over the ground found.
-        if (m2Renderer && std::isfinite(h)) {
+        if (m2Renderer && answer.any()) {
+            const float h = answer.height;
             constexpr float kTile = 32.0f;
             const int tx = static_cast<int>(std::floor(x / kTile));
             const int ty = static_cast<int>(std::floor(y / kTile));
@@ -1062,9 +1063,9 @@ bool Renderer::initialize(core::Window* win) {
                                                   glm::vec3((tx + 1) * kTile, (ty + 1) * kTile, tile.zHi),
                                                   tile.doodads);
             }
-            take(m2Renderer->getFloorHeightAmong(tile.doodads, x, y, askZ));
+            answer.inSegment(m2Renderer->getFloorHeightAmong(tile.doodads, x, y, askZ));
         }
-        return std::isfinite(h) ? h : z - 200.0f;
+        return answer.result();
     }, [this, tiles, changes] {
         // What came or went: its cells are asked again, and the doodads
         // gathered for the 32-yard tiles under it are gathered afresh, or a
@@ -3548,19 +3549,19 @@ void Renderer::update(float deltaTime) {
                                                      : (vkCtx ? vkCtx->getSwapchainExtent().width : 0);
         WOWEE_PROFILE_SCOPE("weather", Cpu); WOWEE_STEP_TIMER("weather");
         weather->update(in);
-        // Not drawn while the camera is inside a building or a cave - an
-        // interior group (MOGP 0x2000), as the sun's glare and the minimap
-        // decide it. The drops are traced against the ground over them,
-        // which a cave's hill or a roof stops, but a cell asked before what
-        // covers it had arrived, or asked from far above it, could let them
-        // fall inside: rain streaked past the yetis in Darrow Hill's cave.
-        // Still updated, so they are there on stepping out.
+        // Drawn wherever the camera is, as 12340 draws it (0x0078ca50 from
+        // the world frame, no indoors test): rain stays out of a building or
+        // a cave because each drop is traced against the highest surface over
+        // its cell - the roof, the hill's terrain over a cave (0x00784c60,
+        // 0x00783ce0, 0x007ade10; HeightCache), not by hiding the weather.
+        // The camera's interior group is kept for the rain's rings on water
+        // alone (rain_ripple, a WoWee-only RT effect).
         const bool indoors = wmoRenderer && wmoRenderer->isInsideInteriorWMO(in.cameraPosition.x,
                                                                              in.cameraPosition.y,
                                                                              in.cameraPosition.z);
         if (indoors != weatherIndoors_) {
             weatherIndoors_ = indoors;
-            LOG_WARNING("Weather: ", indoors ? "hidden, the camera is indoors" : "shown, the camera is outdoors");
+            LOG_INFO("Weather: the camera is ", indoors ? "indoors" : "outdoors", " (rain rings on water only)");
         }
     }
 
@@ -5240,7 +5241,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 waterRenderer->render(cmd, perFrameSet, *camera, globalTime, false, frameIdx);
                 sceneMark(cmd, kMarkWater, "water");
             }
-            if (weather && camera && !weatherIndoors_) weather->render(cmd, perFrameSet);
+            if (weather && camera) weather->render(cmd, perFrameSet);
             if (waterMotes_ && camera) waterMotes_->render(cmd, perFrameSet);
             if (lightning && camera && lightning->isEnabled()) lightning->render(cmd, perFrameSet);
             if (swimEffects && camera && !swimEffectsDrawWithWater_) {
@@ -5413,7 +5414,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             waterRenderer->render(currentCmd, perFrameSet, *camera, globalTime, false, frameIdx);
             sceneMark(currentCmd, kMarkWater, "water");
         }
-        if (weather && camera && !weatherIndoors_) weather->render(currentCmd, perFrameSet);
+        if (weather && camera) weather->render(currentCmd, perFrameSet);
         if (waterMotes_ && camera) waterMotes_->render(currentCmd, perFrameSet);
         if (lightning && camera && lightning->isEnabled()) lightning->render(currentCmd, perFrameSet);
         if (swimEffects && camera && !swimEffectsDrawWithWater_) {

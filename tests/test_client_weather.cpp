@@ -457,3 +457,50 @@ TEST_CASE("the weather's light is its intensity, held to 0.25, times the row's +
     w.set(cw::Effect::Snow, 0.1f, 0.5f, true, cw::Effect::None, 400.0);
     CHECK(w.value(400.0) == Catch::Approx(0.05f));
 }
+
+TEST_CASE("a cell's ground is the terrain wherever it stands, the rest within 200 yards (0x007ade10)",
+          "[weather]") {
+    // The hill over a cave, 260 yards above where a drop asks from inside it.
+    cw::GroundAnswer cave{.askZ = 0.0f};
+    cave.terrain(260.0f);
+    cave.inSegment(-2.0f);  // the cave's floor
+    CHECK(cave.result() == Catch::Approx(260.0f));
+    // A roof within the segment over the floor it stands on.
+    cw::GroundAnswer house{.askZ = 30.0f};
+    house.terrain(0.0f);
+    house.inSegment(12.0f);
+    CHECK(house.result() == Catch::Approx(12.0f));
+    // Something past the segment's 200 yards is not met; the terrain is.
+    cw::GroundAnswer far{.askZ = 0.0f};
+    far.inSegment(250.0f);
+    CHECK_FALSE(far.any());
+    CHECK(far.result() == Catch::Approx(-200.0f));
+    far.terrain(-450.0f);
+    CHECK(far.result() == Catch::Approx(-450.0f));
+    // A hole in the terrain gives none.
+    cw::GroundAnswer hole{.askZ = 5.0f};
+    hole.terrain(std::nullopt);
+    CHECK(hole.result() == Catch::Approx(-195.0f));
+}
+
+TEST_CASE("no rain falls in a cave: its hill is the drops' ground, not an indoors test", "[weather]") {
+    // The camera in a cave 40 yards under the hill's surface: every cell's
+    // ground is the hill (the terrain counts however high), so a drop that
+    // would start at the top of the box, inside the hill, is never made.
+    cw::HeightCache ground;
+    ground.setClock(frozenClock);
+    ground.setQuery([](float, float, float z) {
+        cw::GroundAnswer a{.askZ = z};
+        a.terrain(80.0f);    // the hill's top over the cave
+        a.inSegment(-1.0f);  // the cave's floor under the camera
+        return a.result();
+    });
+    ground.recenter({0.0f, 0.0f});
+    cw::SpawnContext ctx;
+    ctx.strength = 1.0f;
+    Sequence rnd{{0.5f, 0.5f, 0.5f, 0.5f, 0.5f}};
+    const cw::Particle p = cw::spawnRain(std::ref(rnd), ctx, ground, 2.0f);
+    CHECK(p.start == 0.0f);
+    CHECK(p.end == 0.0f);
+    CHECK_FALSE(cw::splashes(p, false));
+}

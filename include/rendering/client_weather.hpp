@@ -197,6 +197,26 @@ inline Mat3 leanForWind(const Wind& wind) {
 /// roof that has not arrived yet, and keep doing so for as long as the cell
 /// stayed cached. What arrives or leaves later empties the cells under it
 /// (forget).
+/// One cell's answer as 0x007ade10 builds it from what is asked at (x, y, z):
+/// the terrain's height wherever it stands (0x007ad3b0; none in a hole), the
+/// highest surface the segment from z + 200 down to z - 200 meets (buildings,
+/// liquid, models), the higher of the two; z - 200 with neither. A cave's hill
+/// or a roof is then the cell's ground, and no drop falls under it - the
+/// original's only way of keeping the weather out (the weather draw 0x0078ca50
+/// asks no indoors test).
+struct GroundAnswer {
+    float askZ = 0.0f;
+    float height = -std::numeric_limits<float>::infinity();
+    void terrain(std::optional<float> v) {
+        if (v) height = std::max(height, *v);
+    }
+    void inSegment(std::optional<float> v) {
+        if (v && *v <= askZ + 200.0f && *v >= askZ - 200.0f) height = std::max(height, *v);
+    }
+    [[nodiscard]] bool any() const { return std::isfinite(height); }
+    [[nodiscard]] float result() const { return any() ? height : askZ - 200.0f; }
+};
+
 class HeightCache {
 public:
     /// Highest surface at (x, y) between z + 200 and z - 200, or z - 200;

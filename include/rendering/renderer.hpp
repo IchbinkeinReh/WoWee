@@ -808,8 +808,9 @@ private:
     uint32_t farClipMapId_ = 0;
     /// The last SMSG_WEATHER handed to the weather (GameHandler::getWeatherSerial).
     uint32_t weatherSerialSeen_ = 0;
-    /// The camera in an interior WMO group this frame: the weather is not
-    /// drawn (see update).
+    /// The camera in an interior WMO group this frame: only the rain's rings
+    /// on water (rain_ripple) are left out; the weather itself is drawn, kept
+    /// out of buildings and caves by its drops' ground (see update).
     bool weatherIndoors_ = false;
     /// Weather::lightValue as this frame's lighting took it.
     float weatherLight_ = 0.0f;
