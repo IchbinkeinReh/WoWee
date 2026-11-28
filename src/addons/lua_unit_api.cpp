@@ -1060,8 +1060,15 @@ static int lua_UnitArmor(lua_State* L) {
 /// client answers any unit (TYPEMASK_UNIT), and a creature's resistances
 /// simply arrive as zero.
 static int lua_UnitResistance(lua_State* L) {
+    // 0x006101a0: a unit string and a number, else the usage line; the index
+    // truncated to unsigned (0x0088b9c0), above 6 (a negative one too) an
+    // error of its own.
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: UnitResistance(\"unit\", resistanceIndex)");
+    const auto index = static_cast<uint32_t>(static_cast<int64_t>(lua_tonumber(L, 2)));
+    if (index > 6) return luaL_error(L, "Invalid resistance index in UnitResistance");
     auto* gh = getGameHandler(L);
-    const int school = static_cast<int>(luaL_optnumber(L, 2, 0));
+    const int school = static_cast<int>(index);
     std::string who(luaL_optstring(L, 1, "player"));
     toLowerInPlace(who);
 
@@ -2596,12 +2603,9 @@ static int lua_UnitDamage(lua_State* L) {
 /// was handed a swing speed it never had.
 ///
 /// The three bonuses are the per-school PLAYER_FIELD_MOD_DAMAGE_DONE_* run
-/// again, indexed by the school of the shot's spell - which is the part of the
-/// client's answer that needs the shot itself, and is not modelled here. They
-/// stay the client's own no-bonus answers, 0, 0 and 1, as they are for every
-/// unit but the active player (TYPEMASK_PLAYER and the active player's own
-/// fields).
+/// again, indexed by the school of the ranged weapon's damage (see below).
 static int lua_UnitRangedDamage(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitRangedDamage(\"unit\")");  // 0x00610550
     auto* gh = getGameHandler(L);
     std::string who(luaL_optstring(L, 1, "player"));
     toLowerInPlace(who);
@@ -2624,12 +2628,40 @@ static int lua_UnitRangedDamage(lua_State* L) {
         const double swing = (ap > 0) ? (ap / 14.0) * swingSpeed : 0.0;
         lo = hi = swing;
     }
+    // The bonuses: for the active player its PLAYER_FIELD_MOD_DAMAGE_DONE_POS,
+    // _NEG and _PCT at the school of the ranged weapon's first damage entry
+    // with a minimum above 0 (0x00610550: the visible ranged item's template,
+    // +0xc0 minimums, +0xd0 types) - a wand's shadow or fire school, so a
+    // caster's spell damage shows beside the wand's. Other units keep the
+    // no-bonus answers (the client's 0.0 percent for another player is left
+    // at 1.0, as UnitDamage does, for the sheet's divide).
+    double pos = 0.0, neg = 0.0, percent = 1.0;
+    if (gh && unit && unit->getGuid() == gh->getPlayerGuid()) {
+        uint16_t school = 0;
+        if (const auto* ranged = wornWeapon(gh, game::EquipSlot::RANGED)) {
+            for (const auto& d : ranged->damages) {
+                if (d.min > 0.0f) { school = static_cast<uint16_t>(d.type < 7 ? d.type : 0); break; }
+            }
+        }
+        const uint16_t posIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_POS);
+        const uint16_t negIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_NEG);
+        const uint16_t pctIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT);
+        if (posIndex != 0xFFFF) pos = static_cast<int32_t>(unit->getField(static_cast<uint16_t>(posIndex + school)));
+        if (negIndex != 0xFFFF) neg = static_cast<int32_t>(unit->getField(static_cast<uint16_t>(negIndex + school)));
+        if (pctIndex != 0xFFFF && unit->hasField(static_cast<uint16_t>(pctIndex + school))) {
+            const uint32_t bits = unit->getField(static_cast<uint16_t>(pctIndex + school));
+            float f = 0.0f;
+            std::memcpy(&f, &bits, sizeof(f));
+            percent = f;
+        }
+        if (!(percent > 0.0)) percent = 1.0;
+    }
     lua_pushnumber(L, speed);
     lua_pushnumber(L, lo);
     lua_pushnumber(L, hi);
-    lua_pushnumber(L, 0.0);
-    lua_pushnumber(L, 0.0);
-    lua_pushnumber(L, 1.0);
+    lua_pushnumber(L, pos);
+    lua_pushnumber(L, neg);
+    lua_pushnumber(L, percent);
     return 6;
 }
 

@@ -6763,3 +6763,46 @@ TEST_CASE("tooltip lines take what is not a string as no text", "[replay][interf
     CHECK(ui.is("pcall(tip.AddLine, tip, 12)"));
     CHECK(ui.is("tip:NumLines() == 2"));
 }
+
+// 0x007e7c70 splits gold and silver only off an amount at least their size;
+// copper is what is left, a negative amount too - so GetCoinText(-250) is
+// copper alone, and so is the coin texture string (0x007e7d80, 0x007e7e10).
+TEST_CASE("GetCoinText leaves a negative amount to copper", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("GOLD_AMOUNT, SILVER_AMOUNT, COPPER_AMOUNT = '%d G', '%d S', '%d C'");
+    ui.run("COPPER_AMOUNT_TEXTURE, SILVER_AMOUNT_TEXTURE, GOLD_AMOUNT_TEXTURE = '%dc', '%ds', '%dg'");
+    CHECK(ui.is("GetCoinText(123456) == '12 G, 34 S, 56 C'"));
+    CHECK(ui.is("GetCoinText(10000, '/') == '1 G'"));
+    CHECK(ui.is("GetCoinText(0) == ''"));
+    CHECK(ui.is("GetCoinText(-250) == '-250 C'"));
+    CHECK(ui.is("GetCoinTextureString(-250) == '-250c'"));
+    CHECK(ui.is("GetCoinTextureString(0) == '0c'"));
+    CHECK(ui.is("GetCoinTextureString(10203) == '1g 2s 3c'"));
+}
+
+// 0x006101a0: a unit string and a number, the index 0-6 (a negative one is a
+// huge unsigned), else an error; any unit gets four numbers.
+TEST_CASE("UnitResistance refuses a bad index", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select('#', UnitResistance('player', 6)) == 4"));
+    CHECK(ui.is("select('#', UnitResistance('target', 2)) == 4"));
+    CHECK(ui.is("strfind(select(2, pcall(UnitResistance, 'player', 7)), 'Invalid resistance index', 1, true) ~= nil"));
+    CHECK(ui.is("strfind(select(2, pcall(UnitResistance, 'player', -1)), 'Invalid resistance index', 1, true) ~= nil"));
+    CHECK(ui.is("strfind(select(2, pcall(UnitResistance, 'player')), 'Usage: UnitResistance', 1, true) ~= nil"));
+    CHECK(ui.is("strfind(select(2, pcall(UnitResistance)), 'Usage: UnitResistance', 1, true) ~= nil"));
+}
+
+// 0x00610550: a unit string or the usage line; six answers, the last the
+// percent (1 with no modifier sent).
+TEST_CASE("UnitRangedDamage asks for a unit", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    CHECK(ui.is("select('#', UnitRangedDamage('player')) == 6"));
+    CHECK(ui.is("select(6, UnitRangedDamage('player')) == 1"));
+    CHECK(ui.is("strfind(select(2, pcall(UnitRangedDamage)), 'Usage: UnitRangedDamage', 1, true) ~= nil"));
+}
