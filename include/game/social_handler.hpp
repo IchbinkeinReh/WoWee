@@ -345,8 +345,11 @@ public:
     /// A charter's petition; asked for, once, where it is not known yet.
     const Petition* petition(uint32_t id, uint64_t itemGuid);
     [[nodiscard]] bool hasPetitionSignaturesUI() const { return petitionInfo_.showUI; }
-    void clearPetitionSignaturesUI() { petitionInfo_.showUI = false; }
-    void signPetition(uint64_t petitionGuid);
+    /// ClosePetition (0x005cf020 -> 0x005ceef0(0)): the charter shown is let
+    /// go - declined (MSG_PETITION_DECLINE) when it is someone else's, known
+    /// and not signed here - and PETITION_CLOSED raised.
+    void closePetition();
+    void signPetition(uint64_t petitionGuid, uint8_t slot = 1);
     void turnInPetition(uint64_t petitionGuid, bool blankDesign = false);
     /// An arena charter with its banner (0x006dd680): background colour,
     /// icon, icon colour, border, border colour.

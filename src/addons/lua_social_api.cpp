@@ -1324,8 +1324,14 @@ static int lua_AddOrRemoveFriend(lua_State* L) {
     const std::string name = luaL_optstring(L, 1, "");
     const std::string note = luaL_optstring(L, 2, "");
     if (!gh || name.empty()) return 0;
+    // 0x006b7b70 -> 0x006b6e10: a friend whose name matches without case
+    // (0x0076ea40) is removed, else the name is added.
+    std::string wanted = name;
+    toLowerInPlace(wanted);
     for (const auto& c : gh->getContacts()) {
-        if (c.isFriend() && c.name == name) { gh->removeFriend(name); return 0; }
+        std::string have = c.name;
+        toLowerInPlace(have);
+        if (c.isFriend() && have == wanted) { gh->removeFriend(c.name); return 0; }
     }
     gh->addFriend(name, note);
     return 0;
@@ -1335,8 +1341,13 @@ static int lua_AddOrDelIgnore(lua_State* L) {
     auto* gh = getGameHandler(L);
     const std::string name = luaL_optstring(L, 1, "");
     if (!gh || name.empty()) return 0;
+    // 0x006b6ba0 -> 0x006b5de0: the same match without case (0x0076ea40).
+    std::string wanted = name;
+    toLowerInPlace(wanted);
     for (const auto& c : gh->getContacts()) {
-        if (c.isIgnored() && c.name == name) { gh->removeIgnore(name); return 0; }
+        std::string have = c.name;
+        toLowerInPlace(have);
+        if (c.isIgnored() && have == wanted) { gh->removeIgnore(c.name); return 0; }
     }
     gh->addIgnore(name);
     return 0;
@@ -1825,7 +1836,9 @@ static int lua_GetPetitionNameInfo(lua_State* L) {
 
 static int lua_SignPetition(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (const auto* info = shownPetition(L); gh && info) gh->signPetition(info->petitionGuid);
+    // 0x005cf140: the slot rounded, 1 without a number.
+    const uint8_t slot = lua_isnumber(L, 1) ? static_cast<uint8_t>(std::lrint(lua_tonumber(L, 1))) : 1;
+    if (const auto* info = shownPetition(L); gh && info) gh->signPetition(info->petitionGuid, slot);
     return 0;
 }
 
@@ -1879,8 +1892,11 @@ static int lua_OfferPetition(lua_State* L) {
     return 0;
 }
 
+// ClosePetition 0x005cf020 -> 0x005ceef0(0): this cleared a copy nothing
+// read, so the charter stayed shown, an unsigned one was never declined and
+// PETITION_CLOSED never came.
 static int lua_ClosePetition(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->clearPetitionSignaturesUI();
+    if (auto* gh = getGameHandler(L)) gh->closePetition();
     return 0;
 }
 

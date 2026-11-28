@@ -5667,6 +5667,73 @@ TEST_CASE("Dismount does nothing on a flight path (0x007412e0)", "[replay][inter
     CHECK(s.sent().of(Opcode::CMSG_CANCEL_MOUNT_AURA).size() == 1);
 }
 
+// ClosePetition 0x005cf020 -> 0x005ceef0(0): someone else's charter, known and
+// not signed, is declined (MSG_PETITION_DECLINE with its guid); a signed or
+// own one is only let go. PETITION_CLOSED either way. SignPetition
+// (0x005cf140) sends the slot, 1 without one.
+TEST_CASE("ClosePetition declines an unsigned charter (0x005ceef0)", "[replay][interface]") {
+    constexpr uint64_t kOther = 0x1001, kCharter = 0x4000000000000444ull;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    s.setConnected(true);
+    Interface ui(s);
+    ui.run("closed = 0 local f = CreateFrame('Frame') f:RegisterEvent('PETITION_CLOSED') "
+           "f:SetScript('OnEvent', function() closed = closed + 1 end)");
+    const auto show = [&](uint64_t owner) {
+        wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_PETITION_SHOW_SIGNATURES));
+        list.writeUInt64(kCharter);
+        list.writeUInt64(owner);
+        list.writeUInt32(77);
+        list.writeUInt8(0);
+        s.receive(list);
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_PETITION_QUERY_RESPONSE));
+        p.writeUInt32(77);
+        p.writeUInt64(owner);
+        p.writeString("The Seven");
+        p.writeUInt8(0);
+        for (uint32_t v : {9u, 9u, 0u}) p.writeUInt32(v);
+        s.receive(p);
+    };
+    const auto declines = [&] { return s.sent().of(Opcode::MSG_PETITION_DECLINE); };
+    show(kOther);
+    ui.run("ClosePetition()");
+    REQUIRE(declines().size() == 1);
+    CHECK(declines()[0].readUInt64() == kCharter);
+    CHECK(ui.is("closed == 1"));
+    ui.run("ClosePetition()");          // nothing shown any more
+    CHECK(declines().size() == 1);
+    CHECK(ui.is("closed == 1"));
+    show(kOther);
+    ui.run("SignPetition() ClosePetition()");
+    auto signs = s.sent().of(Opcode::CMSG_PETITION_SIGN);
+    REQUIRE(signs.size() == 1);
+    CHECK(signs[0].readUInt64() == kCharter);
+    CHECK(signs[0].readUInt8() == 1);
+    CHECK(declines().size() == 1);
+    CHECK(ui.is("closed == 2"));
+    show(Session::kPlayerGuid);
+    ui.run("ClosePetition()");
+    CHECK(declines().size() == 1);
+    CHECK(ui.is("closed == 3"));
+    // A new charter shown closes the one before (0x006d6dda -> 0x005ceef0).
+    show(kOther);
+    show(kOther);
+    CHECK(declines().size() == 2);
+    CHECK(ui.is("closed == 4"));
+}
+
+// StopTradeSkillRepeat 0x005da2e0: UPDATE_TRADESKILL_RECAST only when a
+// repeat was set; nothing without one.
+TEST_CASE("StopTradeSkillRepeat says so only with a repeat set (0x005da2e0)", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("recast = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_TRADESKILL_RECAST') "
+           "f:SetScript('OnEvent', function() recast = recast + 1 end)");
+    ui.run("StopTradeSkillRepeat()");
+    CHECK(ui.is("recast == 0"));
+}
+
 // GuildControlAddRank 0x005cb330 sends only below ten ranks and takes the name
 // as 0x007e1830(name, buf, 16, 64, 1); GuildControlDelRank 0x005cb3f0 only
 // above five; GuildControlSaveRank 0x005cb170 only for a rank the guild has.

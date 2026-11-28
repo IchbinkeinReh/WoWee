@@ -4277,9 +4277,13 @@ void SpellHandler::startCraftQueue(uint32_t spellId, int count) {
     castSpell(spellId, 0);
 }
 
+// StopTradeSkillRepeat 0x005da2e0: with a repeat set (0x00c235d4 /
+// 0x00c235dc) both cleared and UPDATE_TRADESKILL_RECAST (0x1b7) raised.
 void SpellHandler::cancelCraftQueue() {
+    const bool had = craftQueueSpellId_ != 0 || craftQueueRemaining_ != 0;
     craftQueueSpellId_ = 0;
     craftQueueRemaining_ = 0;
+    if (had) owner_.fireAddonEvent("UPDATE_TRADESKILL_RECAST", {});
 }
 
 void SpellHandler::cancelOpenStableAuras() {
@@ -4417,7 +4421,6 @@ void SpellHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uin
 void SpellHandler::endCraftRepeat() {
     if (craftQueueRemaining_ <= 0) return;
     cancelCraftQueue();
-    owner_.fireAddonEvent("UPDATE_TRADESKILL_RECAST", {});
 }
 
 // 0x005de120

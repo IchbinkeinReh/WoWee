@@ -4055,8 +4055,12 @@ void GameHandler::buyPetition(uint64_t npcGuid, const std::string& guildName,
     if (socialHandler_) socialHandler_->buyPetition(npcGuid, guildName, clientIndex);
 }
 
-void GameHandler::signPetition(uint64_t petitionGuid) {
-    if (socialHandler_) socialHandler_->signPetition(petitionGuid);
+void GameHandler::signPetition(uint64_t petitionGuid, uint8_t slot) {
+    if (socialHandler_) socialHandler_->signPetition(petitionGuid, slot);
+}
+
+void GameHandler::closePetition() {
+    if (socialHandler_) socialHandler_->closePetition();
 }
 
 void GameHandler::turnInArenaPetition(uint64_t petitionGuid, const std::array<uint32_t, 5>& design) {

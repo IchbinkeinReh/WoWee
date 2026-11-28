@@ -2208,12 +2208,35 @@ void SocialHandler::buyPetition(uint64_t npcGuid, const std::string& guildName,
     owner_.getSocket()->send(packet);
 }
 
-void SocialHandler::signPetition(uint64_t petitionGuid) {
+// SignPetition([slot]) 0x005cf140: CMSG_PETITION_SIGN with the charter shown
+// and the slot rounded, 1 without one; the charter counts as signed here
+// (0x00c22b34 = 1), so closing it declines nothing.
+void SocialHandler::signPetition(uint64_t petitionGuid, uint8_t slot) {
     if (!owner_.getSocket() || owner_.getState() != WorldState::IN_WORLD) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_PETITION_SIGN));
     pkt.writeUInt64(petitionGuid);
-    pkt.writeUInt8(0);
+    pkt.writeUInt8(slot);
     owner_.getSocket()->send(pkt);
+    if (petitionInfo_.petitionGuid == petitionGuid) petitionInfo_.signedHere = true;
+}
+
+// 0x005ceef0(0, ...): with a charter shown, one known (the petition record
+// 0x00c22b40), not signed (0x00c22b34) and not the player's own (record +8)
+// is declined - MSG_PETITION_DECLINE (0x1c2) with its guid, which tells the
+// owner ERR_PETITION_DECLINED_S - then the charter is let go and
+// PETITION_CLOSED (0x17e) raised. ClosePetition (0x005cf020) and a new
+// charter shown (0x006d6dda) both come through here.
+void SocialHandler::closePetition() {
+    if (petitionInfo_.petitionGuid == 0) return;
+    if (!petitionInfo_.signedHere && petitionInfo_.queried &&
+        petitionInfo_.ownerGuid != owner_.getPlayerGuid() &&
+        owner_.getSocket() && owner_.getState() == WorldState::IN_WORLD) {
+        network::Packet decline(wireOpcode(Opcode::MSG_PETITION_DECLINE));
+        decline.writeUInt64(petitionInfo_.petitionGuid);
+        owner_.getSocket()->send(decline);
+    }
+    petitionInfo_ = PetitionInfo{};
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_CLOSED", {});
 }
 
 void SocialHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
@@ -4058,6 +4081,8 @@ void SocialHandler::handlePetitionQueryResponse(network::Packet& packet) {
 void SocialHandler::handlePetitionShowSignatures(network::Packet& packet) {
     auto rem = [&]() { return packet.getRemainingSize(); };
     if (rem() < 21) return;
+    // The charter shown before is closed first (0x006d6dda -> 0x005ceef0).
+    closePetition();
     petitionInfo_ = PetitionInfo{};
     petitionInfo_.petitionGuid = packet.readUInt64();
     petitionInfo_.ownerGuid    = packet.readUInt64();

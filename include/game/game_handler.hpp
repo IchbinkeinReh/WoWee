@@ -1379,8 +1379,8 @@ public:
     using PetitionInfo = game::PetitionInfo;
     const PetitionInfo& getPetitionInfo() const;
     bool hasPetitionSignaturesUI() const;
-    void clearPetitionSignaturesUI() { petitionInfo_.showUI = false; }
-    void signPetition(uint64_t petitionGuid);
+    void closePetition();
+    void signPetition(uint64_t petitionGuid, uint8_t slot = 1);
     /// CMSG_TURN_IN_PETITION. With blankDesign the five tabard words follow
     /// at -1, as TurnInPetition sends them (0x005a2600).
     void turnInPetition(uint64_t petitionGuid, bool blankDesign = false);

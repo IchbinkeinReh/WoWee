@@ -365,6 +365,9 @@ struct PetitionInfo {
     /// Signers' names asked for and not yet answered, found or not: the
     /// client counts down on every answer (0x005cebf0).
     uint32_t namesPending = 0;
+    /// SignPetition went for this charter (0x005cf140 sets 0x00c22b34); a
+    /// charter closed unsigned is declined (0x005ceef0).
+    bool signedHere = false;
 };
 
 /// One dungeon of an LFG role check: its id, and the type packed into the top

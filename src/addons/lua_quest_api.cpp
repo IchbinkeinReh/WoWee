@@ -5358,11 +5358,10 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"AbandonQuest", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const uint32_t questId = lua_isnoneornil(L, 1)
-                ? pendingAbandonQuest()
-                : static_cast<uint32_t>(luaL_checknumber(L, 1));
+            // 0x005e4060 -> 0x005e0cc0: the quest SetAbandonQuest set
+            // (0x00c23adc) and no argument; it stays set.
+            const uint32_t questId = pendingAbandonQuest();
             if (questId != 0) gh->abandonQuest(questId);
-            pendingAbandonQuest() = 0;
             return 0;
         }},
                 // 0x0058c190 / 0x0058c1f0: the quest frame's slots, counted to
