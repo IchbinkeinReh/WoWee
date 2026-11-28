@@ -4365,7 +4365,13 @@ static int lua_GetItemTooltipData(lua_State* L) {
     if (info->scalingStatValue != 0) {
         const uint32_t ssdMax = scalingStatMaxLevel(gh, info->scalingStatDistribution);
         const int req = static_cast<int>(info->requiredLevel);
-        const int player = static_cast<int>(gh->getPlayerLevel());
+        // The third shopping tooltip at a merchant (0x00631850 offset 3 ->
+        // 0x006277f0 with its 15th argument 1): 0x0061e740 takes level 1 in
+        // place of the player's, so the item shows at its lowest level.
+        lua_getglobal(L, "__WoweeTooltipAtMerchantLevel");
+        const bool atMerchant = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        const int player = atMerchant ? 1 : static_cast<int>(gh->getPlayerLevel());
         int shown = player;
         if (ssdMax != 0) {
             const int top = static_cast<int>(ssdMax);
@@ -6720,6 +6726,16 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"IsDressableItem",   lua_IsDressableItem},
                 {"GetItemQualityColor", lua_GetItemQualityColor},
                 {"_GetItemTooltipData", lua_GetItemTooltipData},
+                // 0x00631850, offset 3: an item that scales with its wearer
+                // (template +0xbc, ScalingStatValue) while a merchant is open
+                // (0x00bfa3e8).
+                {"__WoweeScalesAtMerchant", [](lua_State* L) -> int {
+                    auto* gh = getGameHandler(L);
+                    const auto id = static_cast<uint32_t>(lua_tonumber(L, 1));
+                    const auto* info = gh && id != 0 ? gh->getItemInfo(id) : nullptr;
+                    lua_pushboolean(L, info && info->scalingStatValue != 0 && gh->isVendorWindowOpen());
+                    return 1;
+                }},
                 {"_WoweeContainerItemInstance", lua_WoweeContainerItemInstance},
                 // GetItemSpell(item) → spellName, spellRank
                 //

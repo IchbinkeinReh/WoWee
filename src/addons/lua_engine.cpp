@@ -15082,6 +15082,20 @@ void LuaEngine::registerCoreAPI() {
         "    if not equipSlot or equipSlot == '' then return __cmpNo('GetItemInfo gave no equip slot', self) end\n"
         "    local slot\n"
         "    local nth = index or 1\n"
+        // 0x00631850, offset 3: no worn item - an item that scales with its
+        // wearer (template +0xbc), while a merchant is open (0x00bfa3e8) and
+        // shift is not given, shown as the merchant sells it (0x006277f0 with
+        // the merchant as owner, 0x0061e740's level 1).
+        "    if nth == 3 then\n"
+        "        if shift or not __WoweeScalesAtMerchant(id) then return __cmpNo('offset 3: not a scaling item at a merchant', self) end\n"
+        "        __WoweeTooltipAtMerchantLevel = true\n"
+        "        local ok, filled = pcall(self.SetHyperlink, self, link)\n"
+        "        __WoweeTooltipAtMerchantLevel = nil\n"
+        "        if not ok then error(filled, 0) end\n"
+        "        if self:NumLines() == 0 then return __cmpNo('offset 3: no tooltip for the item', self) end\n"
+        "        self:Show()\n"
+        "        return 1\n"
+        "    end\n"
         // 0x00631850, the hands (mask 0x18000: one-handers, two-handers, main
         // and off hand weapons): with both hands holding something the first
         // tooltip is the off hand and the second the main hand; with one, the
