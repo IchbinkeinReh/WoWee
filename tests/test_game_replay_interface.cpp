@@ -1514,6 +1514,38 @@ TEST_CASE("an item's comparison shows what is worn", "[replay][interface]") {
     CHECK(ui.is("money == 90"));
 }
 
+// 0x00631850: which worn item each of the three comparison tooltips shows.
+// The hands: off hand first, then main hand, when both hold something; a
+// shield against the off hand or a two-hander; a bag never (its slot bits
+// 19-22 lie past the walk's 0-18).
+TEST_CASE("the comparison picks the worn items as 0x00631850", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    ui.run("kinds = {'INVTYPE_2HWEAPON', 'INVTYPE_SHIELD', 'INVTYPE_BAG', 'INVTYPE_WEAPON', 'INVTYPE_FINGER'} "
+           "GetItemInfo = function(id) id = tonumber(id) or tonumber(tostring(id):match('item:(%d+)')) "
+           "  return 'x', 'l', 1, 1, 1, '', '', 1, kinds[id] end "
+           "worn = {} GetInventoryItemLink = function(u, slot) return worn[slot] end "
+           "tip = CreateFrame('GameTooltip', 'PlayCompareHands', UIParent) "
+           "tip.SetInventoryItem = function(self, u, slot) got = slot return 1 end "
+           "function cmp(id, n) got = nil local r = tip:SetHyperlinkCompareItem('item:' .. id .. ':0', n) "
+           "  return r and got end");
+    ui.run("worn[16] = 'item:4:0' worn[17] = 'item:4:0'");
+    CHECK(ui.is("cmp(1, 1) == 17 and cmp(1, 2) == 16 and not cmp(1, 3)"));
+    CHECK(ui.is("cmp(4, 1) == 17 and cmp(4, 2) == 16"));
+    ui.run("worn[17] = nil");
+    CHECK(ui.is("cmp(1, 1) == 16 and not cmp(1, 2)"));
+    CHECK(ui.is("not cmp(2, 1)"));
+    ui.run("worn[16] = 'item:1:0'");
+    CHECK(ui.is("cmp(2, 1) == 16"));
+    ui.run("worn[17] = 'item:2:0'");
+    CHECK(ui.is("cmp(2, 1) == 17 and not cmp(2, 2)"));
+    ui.run("worn[20] = 'item:3:0'");
+    CHECK(ui.is("not cmp(3, 1)"));
+    ui.run("worn[12] = 'item:5:0'");
+    CHECK(ui.is("cmp(5, 1) == 12 and not cmp(5, 2)"));
+}
+
 // T301: 0x0056f770, 0x0056f8d0: a letter that was emptied is deleted.
 TEST_CASE("a letter emptied of all it held is deleted", "[replay][interface]") {
     struct Letter {

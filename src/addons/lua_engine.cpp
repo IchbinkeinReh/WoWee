@@ -15031,20 +15031,15 @@ void LuaEngine::registerCoreAPI() {
         "    INVTYPE_SHIELD = {17}, INVTYPE_RANGED = {18},\n"
         "    INVTYPE_RANGEDRIGHT = {18}, INVTYPE_THROWN = {18},\n"
         "    INVTYPE_RELIC = {18}, INVTYPE_TABARD = {19},\n"
-        // A bag is compared against the bags being worn, which is four slots
-        // rather than the one or two everything above has. The table had no
-        // entry at all, so hovering a bag refused before it reached the worn
-        // item - reported by the log as "no slot mapping for INVTYPE_BAG",
-        // which is the first thing the named refusals answered.
-        //
-        // WoW's slot ids, as the rest of this table uses: the tabard is 19 and
-        // the four bags follow it.
-        "    INVTYPE_BAG = {20, 21, 22, 23},\n"
+        // No bags: 0x00631850 walks the slot bits 0-18 of the type's mask
+        // (0x00a2d288) and a bag's are 19-22, so a bag is never compared.
         "}\n"
         // Nine ways to refuse and, until now, no way to tell them apart: the
         // symptom of every one is that holding shift does nothing. Said once
         // per reason, because this runs on every tooltip the interface builds
         // and a line per hover would bury the log it is meant to explain.
+        "__WoweeCompareHands = {INVTYPE_WEAPON = true, INVTYPE_2HWEAPON = true,\n"
+        "    INVTYPE_WEAPONMAINHAND = true, INVTYPE_WEAPONOFFHAND = true}\n"
         "local __cmpSaid = {}\n"
         // A local, not a global: with the missing-API fallback on, an
         // undefined global answers with a truthy stand-in, so `if not
@@ -15085,15 +15080,38 @@ void LuaEngine::registerCoreAPI() {
         "    if not id then return __cmpNo('link carries no item id', self) end\n"
         "    local _, _, _, _, _, _, _, _, equipSlot = GetItemInfo(id)\n"
         "    if not equipSlot or equipSlot == '' then return __cmpNo('GetItemInfo gave no equip slot', self) end\n"
-        "    local slots = __WoweeCompareSlots[equipSlot]\n"
-        "    if not slots then return __cmpNo('no slot mapping for ' .. tostring(equipSlot), self) end\n"
-        // 0x00631850: the index-th of the fitting slots that hold something
-        // - an empty first ring slot does not stop the second being compared.
-        "    local slot, seen = nil, 0\n"
-        "    for _, s in ipairs(slots) do\n"
-        "        if GetInventoryItemLink('player', s) then\n"
-        "            seen = seen + 1\n"
-        "            if seen == (index or 1) then slot = s break end\n"
+        "    local slot\n"
+        "    local nth = index or 1\n"
+        // 0x00631850, the hands (mask 0x18000: one-handers, two-handers, main
+        // and off hand weapons): with both hands holding something the first
+        // tooltip is the off hand and the second the main hand; with one, the
+        // first is that one and there is no second. Shields and things held
+        // in the off hand (mask 0x10000 only): the off hand, else a
+        // two-hander in the main hand (0x00707280 == 17).
+        "    if __WoweeCompareHands[equipSlot] then\n"
+        "        local mh, oh = GetInventoryItemLink('player', 16), GetInventoryItemLink('player', 17)\n"
+        "        if mh and oh then\n"
+        "            if nth == 1 then slot = 17 elseif nth == 2 then slot = 16 end\n"
+        "        elseif nth == 1 then\n"
+        "            slot = (mh and 16) or (oh and 17) or nil\n"
+        "        end\n"
+        "    elseif equipSlot == 'INVTYPE_SHIELD' or equipSlot == 'INVTYPE_HOLDABLE' then\n"
+        "        if nth == 1 then\n"
+        "            local mh = GetInventoryItemLink('player', 16)\n"
+        "            if GetInventoryItemLink('player', 17) then slot = 17\n"
+        "            elseif mh and select(9, GetItemInfo(mh)) == 'INVTYPE_2HWEAPON' then slot = 16 end\n"
+        "        end\n"
+        "    else\n"
+        "        local slots = __WoweeCompareSlots[equipSlot]\n"
+        "        if not slots then return __cmpNo('no slot mapping for ' .. tostring(equipSlot), self) end\n"
+        // The index-th of the fitting slots that hold something - an empty
+        // first ring slot does not stop the second being compared.
+        "        local seen = 0\n"
+        "        for _, s in ipairs(slots) do\n"
+        "            if GetInventoryItemLink('player', s) then\n"
+        "                seen = seen + 1\n"
+        "                if seen == nth then slot = s break end\n"
+        "            end\n"
         "        end\n"
         "    end\n"
         "    if not slot then return __cmpNo('no slot at compare index', self) end\n"
