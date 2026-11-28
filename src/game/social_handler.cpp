@@ -2839,6 +2839,9 @@ void SocialHandler::requestPartyMemberStats(uint64_t guid) {
 
 void SocialHandler::playerLeftSight(uint64_t guid) {
     if (guid == owner_.getPlayerGuid()) return;
+    // 0x006e6020: the charter shown is closed as ClosePetition closes it
+    // (0x005ceef0) when the player going is its owner (0x00c22b28).
+    if (petitionInfo_.petitionGuid != 0 && guid == petitionInfo_.ownerGuid) closePetition();
     for (const auto& m : partyData.members) {
         if (m.guid == guid) {
             requestPartyMemberStats(guid);

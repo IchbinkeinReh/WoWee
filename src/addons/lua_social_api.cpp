@@ -2275,7 +2275,7 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"CloseGuildRegistrar", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->closePetitionVendor();
+            if (auto* gh = getGameHandler(L)) gh->closeRegistrarWindow(true);   // 0x00599f00
             return 0;
         }},
                 // What the charter costs, in copper, as the offer said. This
@@ -2392,10 +2392,12 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 // The petition *vendor* - the guild master or arena
                 // registrar offering a charter - as opposed to the charter
-                // itself, which ClosePetition above shuts. Both windows read
-                // different state, so closing one has to close the other.
+                // itself, which ClosePetition above shuts. 0x005a24f0 lets
+                // go of the arena registrar only (0x00c0f7c8) and says
+                // PETITION_VENDOR_CLOSED; the guild registrar's window is
+                // CloseGuildRegistrar's.
                 {"ClosePetitionVendor", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->closePetitionVendor();
+            if (auto* gh = getGameHandler(L)) gh->closeRegistrarWindow(false);
             return 0;
         }},
                 // HasFilledPetition() (0x005a2820 -> 0x006dd680 with no team

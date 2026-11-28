@@ -5775,6 +5775,24 @@ TEST_CASE("ClosePetition declines an unsigned charter (0x005ceef0)", "[replay][i
     show(kOther);
     CHECK(declines().size() == 2);
     CHECK(ui.is("closed == 4"));
+    // Its owner's player object going away closes it too (0x006e6020 ->
+    // 0x005ceef0): declined, PETITION_CLOSED; another player's going does not.
+    s.receive(UpdateObject().create(kOther, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    s.receive(UpdateObject().create(0x1002, wowee::game::ObjectType::PLAYER,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}}));
+    const auto destroy = [&](uint64_t guid) {
+        wowee::network::Packet gone(wowee::game::wireOpcode(Opcode::SMSG_DESTROY_OBJECT));
+        gone.writeUInt64(guid);
+        gone.writeUInt8(0);
+        s.receive(gone);
+    };
+    destroy(0x1002);
+    CHECK(declines().size() == 2);
+    CHECK(ui.is("closed == 4"));
+    destroy(kOther);
+    CHECK(declines().size() == 3);
+    CHECK(ui.is("closed == 5"));
 }
 
 // StopTradeSkillRepeat 0x005da2e0: UPDATE_TRADESKILL_RECAST only when a

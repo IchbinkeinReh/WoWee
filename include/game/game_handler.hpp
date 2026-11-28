@@ -1331,6 +1331,11 @@ public:
     bool hasGuildInfoData() const;
     bool hasPetitionShowlist() const;
     void closePetitionVendor();
+    /// ClosePetitionVendor (0x005a24f0, the arena registrar's 0x00c0f7c8,
+    /// PETITION_VENDOR_CLOSED) and CloseGuildRegistrar (0x00599f00, the guild
+    /// registrar's 0x00c0e570, GUILD_REGISTRAR_CLOSED) each close only their
+    /// own window.
+    void closeRegistrarWindow(bool guildRegistrar);
     void acceptArenaTeamInvite();
     void declineArenaTeamInvite();
     void arenaTeamInvite(uint32_t teamId, const std::string& name);
@@ -3064,8 +3069,8 @@ public:
     uint32_t getSummonAreaId() const { return summonAreaId_; }
     float getSummonTimeoutSec() const { return summonTimeoutSec_; }
     void acceptSummon();
-    /// A player gone from the world here: a group member's stats are asked
-    /// for (SocialHandler::playerLeftSight).
+    /// A player gone from the world here (0x006e6020): a group member's stats are asked
+    /// for, a charter it owns is closed (SocialHandler::playerLeftSight).
     void playerLeftSight(uint64_t guid);
     void declineSummon();
     void tickSummonTimeout(float dt) {

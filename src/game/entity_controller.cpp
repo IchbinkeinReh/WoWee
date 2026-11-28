@@ -246,6 +246,8 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
         LOG_DEBUG("Entity went out of range: 0x", std::hex, guid, std::dec);
         if (entity->isUnit() && owner_.getCombatHandler()) owner_.getCombatHandler()->unitLeavesView(guid);
         else if (guid == owner_.getTargetGuid()) owner_.setTargetGuidRaw(0);
+        // The player object's teardown (0x006e6020) whether or not a renderer listens.
+        if (entity->getType() == ObjectType::PLAYER) owner_.playerLeftSight(guid);
         // Trigger despawn callbacks before removing entity
         if (entity->getType() == ObjectType::UNIT && owner_.creatureDespawnCallbackRef()) {
             owner_.creatureDespawnCallbackRef()(guid);
@@ -258,7 +260,6 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             owner_.inspectedPlayerItemEntriesRef().erase(guid);
             owner_.inspectedPlayerItemInstancesRef().erase(guid);
             owner_.pendingAutoInspectRef().erase(guid);
-            owner_.playerLeftSight(guid);
         } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
             owner_.gameObjectDestroyCallbackRef()(guid);   // 0x004d7230
         } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
@@ -4570,6 +4571,7 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
             destroyedUnit = true;
             owner_.getCombatHandler()->unitLeavesView(data.guid);
         }
+        if (entity && entity->getType() == ObjectType::PLAYER) owner_.playerLeftSight(data.guid);   // 0x006e6020
         if (entity) {
             if (entity->getType() == ObjectType::UNIT && owner_.creatureDespawnCallbackRef()) {
                 owner_.creatureDespawnCallbackRef()(data.guid);
@@ -4583,7 +4585,6 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 owner_.inspectedPlayerItemEntriesRef().erase(data.guid);
                 owner_.inspectedPlayerItemInstancesRef().erase(data.guid);
                 owner_.pendingAutoInspectRef().erase(data.guid);
-                owner_.playerLeftSight(data.guid);
             } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
                 owner_.gameObjectDestroyCallbackRef()(data.guid);   // 0x004d7610
             } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {

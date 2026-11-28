@@ -5756,6 +5756,12 @@ void GameHandler::closePetitionVendor() {
     if (socialHandler_) socialHandler_->closePetitionVendor();
 }
 
+void GameHandler::closeRegistrarWindow(bool guildRegistrar) {
+    if (socialHandler_ && socialHandler_->hasPetitionShowlist() &&
+        socialHandler_->isGuildRegistrar() == guildRegistrar)
+        socialHandler_->closePetitionVendor();
+}
+
 uint32_t GameHandler::getPetitionCost() const {
     return socialHandler_ ? socialHandler_->getPetitionCost() : 0;
 }
