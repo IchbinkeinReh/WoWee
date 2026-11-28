@@ -620,7 +620,7 @@ int setAllAddOnsEnabled(lua_State* L, bool enabled) {
 /// shuts the dialog the instant it opens. Closing on ignorance would bring
 /// that back for any npc briefly missing from the entity list.
 /// Whether the player is close enough to the npc a dialog names
-/// (0x006d1fc0, 0x006d2070, 0x006d2290): within the npc's combat reach
+/// (0x006d1fc0, 0x006d2070, 0x006d2290, 0x006db010): within the npc's combat reach
 /// (UNIT_FIELD_COMBATREACH) plus four yards, measured in three dimensions.
 /// An npc that is not known here - none named, or out of sight - is not in
 /// range: the client's lookup finds nothing and answers no.
@@ -635,23 +635,6 @@ bool npcWithinInteractRange(game::GameHandler* gh, uint64_t npcGuid) {
     float reach = 0.0f;
     if (auto unit = std::dynamic_pointer_cast<game::Unit>(npc)) reach = unit->getCombatReach();
     const float range = reach + 4.0f;
-    return dx * dx + dy * dy + dz * dz <= range * range;
-}
-
-/// The spirit healer's own test before its activation is sent (0x006db010):
-/// its UNIT_FIELD_BOUNDINGRADIUS, not the combat reach, plus four yards, in
-/// three dimensions; an unknown healer is out of range.
-static bool spiritHealerWithinActivateRange(game::GameHandler* gh, uint64_t healerGuid) {
-    if (!gh || healerGuid == 0) return false;
-    auto npc = gh->getEntityManager().getEntity(healerGuid);
-    auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-    if (!npc || !player) return false;
-    const float dx = player->getX() - npc->getX();
-    const float dy = player->getY() - npc->getY();
-    const float dz = player->getZ() - npc->getZ();
-    float radius = 0.0f;
-    if (auto unit = std::dynamic_pointer_cast<game::Unit>(npc)) radius = unit->getBoundingRadius();
-    const float range = radius + 4.0f;
     return dx * dx + dy * dy + dz * dz <= range * range;
 }
 
@@ -4305,13 +4288,13 @@ void registerSocialLuaAPI(lua_State* L) {
                 // own gossip window, so with gossip handed over nothing could
                 // reach it and standing at a spirit healer did nothing.
                 // 0x0051b6a0 -> 0x006db010(guid 0): only a ghost, and only
-                // within the remembered healer's UNIT_FIELD_BOUNDINGRADIUS
-                // (+0xf0 of its fields) + 4 yards, measured in 3D; else nothing
+                // within the remembered healer's UNIT_FIELD_COMBATREACH
+                // (+0xf0 of its fields, wire 66) + 4 yards, measured in 3D; else nothing
                 // is sent (CMSG_SPIRIT_HEALER_ACTIVATE 0x21c).
                 {"AcceptXPLoss", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) {
                 const uint64_t healer = gh->resurrectCasterGuidRef();
-                if (healer && gh->isPlayerGhost() && spiritHealerWithinActivateRange(gh, healer))
+                if (healer && gh->isPlayerGhost() && npcWithinInteractRange(gh, healer))
                     gh->activateSpiritHealer(healer);
                 gh->resurrectRequestPendingRef() = false;
             }
