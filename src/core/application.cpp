@@ -4406,33 +4406,6 @@ void Application::connectWorldHooks() {
     }
     connectClickToMoveHooks();
     if (gameHandler) {
-        gameHandler->setFaceCameraProvider([this]() -> float {
-            // Turn the character to the camera's look direction and report it in
-            // canonical space (same camera-yaw→canonical mapping as the per-frame
-            // orientation sync). Lets a fishing cast drop the bobber in front of
-            // where the player is aiming even while standing still.
-            if (!renderer || !renderer->getCameraController())
-                return gameHandler ? gameHandler->getMovementInfo().orientation : 0.0f;
-            // Use the CAMERA's live look yaw (getYaw), not getFacingYaw: the latter is
-            // the character's facing, which is NOT updated by left-mouse orbit, so while
-            // aiming at the water standing still it is stale. Turn the character to the
-            // camera aim and use the same yaw→canonical mapping the (working) melee
-            // facing uses, so the bobber lands where the player is looking.
-            float camYawDeg = renderer->getCameraController()->getYaw();
-            renderer->setCharacterYaw(camYawDeg);
-            renderer->getCameraController()->setFacingYaw(camYawDeg);
-            // "Face land to fish" ⇒ the bobber landed 180° opposite the aim, so the
-            // canonical is a half-turn off here (getYaw's zero is opposite the look
-            // vector). Add the half-turn so the bobber lands where the camera looks.
-            float canon = core::coords::normalizeAngleRad(glm::radians(360.0f - camYawDeg));
-            LOG_WARNING("[FISH-AIM] getYaw=", camYawDeg,
-                        " getFacingYaw=", renderer->getCameraController()->getFacingYaw(),
-                        " charYaw=", renderer->getCharacterYaw(),
-                        " canonicalDeg=", canon * 57.29578f,
-                        " serverYawDeg=", core::coords::canonicalToServerYaw(canon) * 57.29578f);
-            return canon;
-        });
-
         // The player's own movement events, as the client animates the unit
         // it moves (0x00741xxx -> 0x0073ed10).
         gameHandler->setMoverEventCallback([this](game::Opcode op, uint32_t flagsBefore, bool launchedBefore) {
